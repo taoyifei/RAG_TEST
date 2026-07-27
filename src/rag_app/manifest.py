@@ -1,0 +1,488 @@
+"""索引 manifest 历史、兼容性门禁与原子导出。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import sqlite3
+import tempfile
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+
+from rag_app.contracts import IndexManifest
+
+__all__ = ["ManifestRepository", "ManifestState", "StoredManifest"]
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS index_manifests (
+    collection_name TEXT PRIMARY KEY,
+    pipeline_fingerprint TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    state TEXT NOT NULL,
+    snapshot_name TEXT NOT NULL,
+    snapshot_checksum TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    activated_at TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_manifest
+ON index_manifests(state)
+WHERE state = 'active';
+
+CREATE TABLE IF NOT EXISTS manifest_revisions (
+    manifest_sha256 TEXT PRIMARY KEY,
+    collection_name TEXT NOT NULL,
+    pipeline_fingerprint TEXT NOT NULL,
+    manifest_json TEXT NOT NULL,
+    snapshot_name TEXT NOT NULL,
+    snapshot_checksum TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    activated_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_manifest_revisions_collection
+ON manifest_revisions(collection_name, created_at);
+"""
+_SHA256_HEX_LENGTH = 64
+
+
+class ManifestState(StrEnum):
+    """manifest 生命周期。"""
+
+    STAGING = "staging"
+    ACTIVE = "active"
+    RETIRED = "retired"
+
+
+@dataclass(frozen=True, slots=True)
+class StoredManifest:
+    """持久化 manifest 及其恢复证据。"""
+
+    manifest: IndexManifest
+    manifest_sha256: str
+    state: ManifestState
+    snapshot_name: str
+    snapshot_checksum: str
+
+
+class ManifestRepository:
+    """在 SQLite 中保存不可变索引 manifest 历史。"""
+
+    def __init__(self, database_path: Path) -> None:
+        """保存与任务表共享的 SQLite 路径。
+
+        Args:
+            database_path: SQLite WAL 数据库文件。
+
+        """
+        self._database_path = database_path
+
+    def initialize(self) -> None:
+        """初始化 manifest schema。"""
+        self._database_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connect() as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.executescript(_SCHEMA)
+
+    def stage(
+        self,
+        manifest: IndexManifest,
+        *,
+        snapshot_name: str,
+        snapshot_checksum: str,
+    ) -> StoredManifest:
+        """幂等保存尚未通过 alias 公布的 manifest。
+
+        Args:
+            manifest: 完整 pipeline 与来源清单。
+            snapshot_name: alias 切换前创建的 snapshot 文件名。
+            snapshot_checksum: Qdrant 返回的 snapshot SHA256。
+
+        Returns:
+            新建或内容完全相同的 manifest 记录。
+
+        Raises:
+            ValueError: snapshot 标识不安全，或 collection 已绑定其他内容。
+
+        """
+        _validate_snapshot(snapshot_name, snapshot_checksum)
+        serialized = _serialize_manifest(manifest)
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO index_manifests (
+                    collection_name, pipeline_fingerprint, manifest_json,
+                    manifest_sha256, state, snapshot_name,
+                    snapshot_checksum, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    manifest.collection_name,
+                    manifest.pipeline_fingerprint,
+                    serialized,
+                    digest,
+                    ManifestState.STAGING.value,
+                    snapshot_name,
+                    snapshot_checksum,
+                    manifest.created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO manifest_revisions (
+                    manifest_sha256, collection_name, pipeline_fingerprint,
+                    manifest_json, snapshot_name, snapshot_checksum,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    digest,
+                    manifest.collection_name,
+                    manifest.pipeline_fingerprint,
+                    serialized,
+                    snapshot_name,
+                    snapshot_checksum,
+                    manifest.created_at.isoformat(),
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE collection_name = ?
+                """,
+                (manifest.collection_name,),
+            ).fetchone()
+            stored = _stored_from_row(_require_row(row))
+            if (
+                stored.manifest_sha256 != digest
+                or stored.snapshot_name != snapshot_name
+                or stored.snapshot_checksum != snapshot_checksum
+            ):
+                connection.rollback()
+                raise ValueError(
+                    "collection 已绑定不同 manifest 或 snapshot。"
+                )
+            connection.commit()
+        return stored
+
+    def activate(self, collection_name: str) -> None:
+        """原子激活 alias 已指向的 staging manifest。
+
+        Args:
+            collection_name: 已完成 Qdrant alias 切换的物理 collection。
+
+        Raises:
+            LookupError: collection 没有 staging 或 active manifest。
+
+        """
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT state FROM index_manifests
+                WHERE collection_name = ?
+                """,
+                (collection_name,),
+            ).fetchone()
+            if row is None or row["state"] not in (
+                ManifestState.STAGING.value,
+                ManifestState.ACTIVE.value,
+            ):
+                connection.rollback()
+                raise LookupError("待激活 manifest 不存在。")
+            if row["state"] == ManifestState.ACTIVE.value:
+                connection.commit()
+                return
+            connection.execute(
+                """
+                UPDATE index_manifests
+                SET state = ?
+                WHERE state = ?
+                """,
+                (
+                    ManifestState.RETIRED.value,
+                    ManifestState.ACTIVE.value,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE index_manifests
+                SET state = ?, activated_at = CURRENT_TIMESTAMP
+                WHERE collection_name = ?
+                """,
+                (ManifestState.ACTIVE.value, collection_name),
+            )
+            connection.execute(
+                """
+                UPDATE manifest_revisions
+                SET activated_at = CURRENT_TIMESTAMP
+                WHERE manifest_sha256 = (
+                    SELECT manifest_sha256 FROM index_manifests
+                    WHERE collection_name = ?
+                )
+                """,
+                (collection_name,),
+            )
+            connection.commit()
+
+    def record_active_revision(
+        self,
+        manifest: IndexManifest,
+        *,
+        snapshot_name: str,
+        snapshot_checksum: str,
+    ) -> StoredManifest:
+        """为同一活动 collection 原子追加增量 manifest 修订。
+
+        Args:
+            manifest: 增量完成后的完整来源清单。
+            snapshot_name: 更新后创建的 Qdrant snapshot。
+            snapshot_checksum: snapshot 的 SHA256。
+
+        Returns:
+            更新后的活动 manifest。
+
+        Raises:
+            LookupError: collection 当前不是活动索引。
+            ValueError: pipeline 或 snapshot 不兼容。
+
+        """
+        _validate_snapshot(snapshot_name, snapshot_checksum)
+        serialized = _serialize_manifest(manifest)
+        digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                """
+                SELECT pipeline_fingerprint FROM index_manifests
+                WHERE collection_name = ? AND state = ?
+                """,
+                (
+                    manifest.collection_name,
+                    ManifestState.ACTIVE.value,
+                ),
+            ).fetchone()
+            if current is None:
+                connection.rollback()
+                raise LookupError(
+                    "增量 manifest 对应的活动 collection 不存在。"
+                )
+            if str(current["pipeline_fingerprint"]) != (
+                manifest.pipeline_fingerprint
+            ):
+                connection.rollback()
+                raise ValueError("增量 manifest pipeline 不兼容。")
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO manifest_revisions (
+                    manifest_sha256, collection_name, pipeline_fingerprint,
+                    manifest_json, snapshot_name, snapshot_checksum,
+                    created_at, activated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    digest,
+                    manifest.collection_name,
+                    manifest.pipeline_fingerprint,
+                    serialized,
+                    snapshot_name,
+                    snapshot_checksum,
+                    manifest.created_at.isoformat(),
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE index_manifests
+                SET manifest_json = ?, manifest_sha256 = ?,
+                    snapshot_name = ?, snapshot_checksum = ?,
+                    created_at = ?, activated_at = CURRENT_TIMESTAMP
+                WHERE collection_name = ? AND state = ?
+                """,
+                (
+                    serialized,
+                    digest,
+                    snapshot_name,
+                    snapshot_checksum,
+                    manifest.created_at.isoformat(),
+                    manifest.collection_name,
+                    ManifestState.ACTIVE.value,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE collection_name = ? AND state = ?
+                """,
+                (
+                    manifest.collection_name,
+                    ManifestState.ACTIVE.value,
+                ),
+            ).fetchone()
+            connection.commit()
+        return _stored_from_row(_require_row(row))
+
+    def count_revisions(self, collection_name: str) -> int:
+        """返回物理 collection 的不可变 manifest 修订数。
+
+        Args:
+            collection_name: 物理 collection 名。
+
+        Returns:
+            去重后的历史修订数。
+
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) FROM manifest_revisions
+                WHERE collection_name = ?
+                """,
+                (collection_name,),
+            ).fetchone()
+        return int(_require_row(row)[0])
+
+    def get_active(self) -> StoredManifest | None:
+        """返回当前活动 manifest。"""
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE state = ?
+                """,
+                (ManifestState.ACTIVE.value,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _stored_from_row(row)
+
+    def get(self, collection_name: str) -> StoredManifest | None:
+        """按物理 collection 读取 manifest。
+
+        Args:
+            collection_name: 物理 collection 名。
+
+        Returns:
+            已持久化记录；不存在时返回 None。
+
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE collection_name = ?
+                """,
+                (collection_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _stored_from_row(row)
+
+    def require_compatible(
+        self,
+        *,
+        collection_name: str,
+        pipeline_fingerprint: str,
+    ) -> StoredManifest:
+        """要求启动配置与活动 manifest 完全兼容。
+
+        Args:
+            collection_name: alias 当前指向的物理 collection。
+            pipeline_fingerprint: 运行时 pipeline 指纹。
+
+        Returns:
+            已验证的活动 manifest。
+
+        Raises:
+            ValueError: 没有活动 manifest 或任一契约不一致。
+
+        """
+        active = self.get_active()
+        if active is None:
+            raise ValueError("没有 active manifest，拒绝启动。")
+        if active.manifest.collection_name != collection_name:
+            raise ValueError("active collection 与运行时配置不一致。")
+        if active.manifest.pipeline_fingerprint != pipeline_fingerprint:
+            raise ValueError("active pipeline 与运行时配置不一致。")
+        return active
+
+    def export_active(self, target: Path) -> str:
+        """把活动 manifest 原子导出为规范 JSON。
+
+        Args:
+            target: 导出的 JSON 文件。
+
+        Returns:
+            导出字节的 SHA256。
+
+        Raises:
+            LookupError: 没有活动 manifest。
+
+        """
+        active = self.get_active()
+        if active is None:
+            raise LookupError("没有可导出的 active manifest。")
+        payload = (active.manifest.model_dump_json(indent=2) + "\n").encode()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.name}.",
+                delete=False,
+            ) as temporary:
+                temporary.write(payload)
+                temporary.flush()
+                os.fsync(temporary.fileno())
+                temporary_path = Path(temporary.name)
+            temporary_path.replace(target)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+        return hashlib.sha256(payload).hexdigest()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self._database_path, timeout=10.0)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=10000")
+        return connection
+
+
+def _serialize_manifest(manifest: IndexManifest) -> str:
+    payload = manifest.model_dump(mode="json")
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _stored_from_row(row: sqlite3.Row) -> StoredManifest:
+    return StoredManifest(
+        manifest=IndexManifest.model_validate_json(str(row["manifest_json"])),
+        manifest_sha256=str(row["manifest_sha256"]),
+        state=ManifestState(str(row["state"])),
+        snapshot_name=str(row["snapshot_name"]),
+        snapshot_checksum=str(row["snapshot_checksum"]),
+    )
+
+
+def _require_row(row: sqlite3.Row | None) -> sqlite3.Row:
+    if row is None:
+        raise RuntimeError("SQLite 未返回预期 manifest 行。")
+    return row
+
+
+def _validate_snapshot(name: str, checksum: str) -> None:
+    if not name.endswith(".snapshot") or "/" in name or "\\" in name:
+        raise ValueError("snapshot_name 必须是安全文件名。")
+    if len(checksum) != _SHA256_HEX_LENGTH or any(
+        character not in "0123456789abcdef" for character in checksum
+    ):
+        raise ValueError("snapshot_checksum 必须是 64 位小写十六进制。")
