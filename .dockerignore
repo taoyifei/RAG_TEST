@@ -1,0 +1,16 @@
+.git
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.venv
+__pycache__
+*.py[cod]
+artifacts
+docs
+evaluation
+tests
+design
+scripts
+deployment/*.tar
+deployment/*.tar.gz
+deployment/sbom
