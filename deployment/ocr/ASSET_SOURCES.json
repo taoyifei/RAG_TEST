@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "paddleocr_version": "3.5.0",
+  "engine": "paddle_static",
+  "license": "Apache-2.0",
+  "assets": [
+    {
+      "name": "PP-OCRv5_server_det_infer.tar",
+      "kind": "model_archive",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_det_infer.tar",
+      "sha256": "22a33e0ba6a21425ea4192da03bf4395c9a0c67902bd924b7328fc859073045d",
+      "bytes": 88340480,
+      "top_level_directory": "PP-OCRv5_server_det_infer"
+    },
+    {
+      "name": "PP-OCRv5_server_rec_infer.tar",
+      "kind": "model_archive",
+      "url": "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/PP-OCRv5_server_rec_infer.tar",
+      "sha256": "d99be2ffd348943ab52876179168be4fb5b14f5f0812f2ae4c76d89ec2ea750a",
+      "bytes": 84869120,
+      "top_level_directory": "PP-OCRv5_server_rec_infer"
+    },
+    {
+      "name": "PaddleOCR-LICENSE.txt",
+      "kind": "license",
+      "url": "https://raw.githubusercontent.com/PaddlePaddle/PaddleOCR/v3.5.0/LICENSE",
+      "sha256": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e",
+      "bytes": 11376,
+      "spdx": "Apache-2.0"
+    }
+  ]
+}

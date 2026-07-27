@@ -1,0 +1,98 @@
+:root {
+  color: #18201c;
+  background: #eef2ed;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  width: min(760px, calc(100% - 32px));
+  margin: 40px auto;
+}
+
+header,
+section {
+  margin-bottom: 18px;
+  padding: 22px;
+  border: 1px solid #c8d1c9;
+  border-radius: 8px;
+  background: #fff;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  font-size: 1.7rem;
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+.eyebrow {
+  color: #35614b;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+label {
+  display: block;
+  margin: 14px 0 6px;
+  font-weight: 650;
+}
+
+input,
+textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #8b9990;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+button {
+  padding: 10px 16px;
+  border: 1px solid #234b37;
+  border-radius: 4px;
+  color: #fff;
+  background: #234b37;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  color: #234b37;
+  background: #fff;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.citation {
+  margin-top: 12px;
+  padding: 12px;
+  border-left: 3px solid #759c87;
+  background: #f5f7f4;
+}
+
+.citation code {
+  overflow-wrap: anywhere;
+}

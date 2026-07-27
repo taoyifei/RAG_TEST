@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "parser_revision": "docx-parser-v1",
+  "ocr_model": "PaddleOCR-3.5.0/PP-OCRv5_server_det+rec",
+  "ocr_revision": "paddleocr-3.5.0-ppocrv5-server-det-rec-paddle-static",
+  "chunker_revision": "structural-v1-provisional",
+  "chunker_parameters": [
+    [
+      "hard_max_tokens",
+      "512"
+    ],
+    [
+      "overlap_tokens",
+      "64"
+    ],
+    [
+      "target_tokens",
+      "384"
+    ]
+  ],
+  "embedding_model": "Qwen3-Embedding-0.6B",
+  "embedding_revision": "pending-server-verification",
+  "embedding_dimension": 1024,
+  "sparse_model": "qdrant/bm25",
+  "sparse_revision": "sha256:1d55f95e952af834de5d4bdf2e321438eca4bee9f05dd309f2029236703e8b12",
+  "index_revision": "qdrant-v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
+  "reranker_model": "Qwen3-Reranker-0.6B",
+  "reranker_revision": "pending-server-verification",
+  "llm_revisions": [
+    [
+      "llm-a.example.invalid:8000",
+      "pending-server-verification"
+    ],
+    [
+      "llm-a.example.invalid:8001",
+      "pending-server-verification"
+    ],
+    [
+      "llm-b.example.invalid:8000",
+      "pending-server-verification"
+    ],
+    [
+      "llm-b.example.invalid:8001",
+      "pending-server-verification"
+    ]
+  ],
+  "prompt_revision": "sha256:c2bd7c9e46ac6c9b0f05b6f32f409cdc6ea6a0246e35831ee5c03aacb55d6042"
+}

@@ -1,0 +1,10 @@
+{
+  "image": "paddlepaddle/paddle:3.3.0-gpu-cuda12.6-cudnn9.5",
+  "digest": "sha256:bb84347b6365c2980347cf784fc8be3eaa903472f5c40129cb65aaa634ebd776",
+  "os": "linux",
+  "architecture": "amd64",
+  "python_version": "3.10",
+  "paddlepaddle_version": "3.3.0",
+  "cuda_version": "12.6.3",
+  "cudnn_version": "9.5.1.17"
+}

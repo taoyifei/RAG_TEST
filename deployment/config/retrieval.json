@@ -1,0 +1,31 @@
+{
+  "status": "provisional",
+  "dense_limit": 40,
+  "bm25_limit": 40,
+  "rrf_rank_constant": 60,
+  "candidate_limit": 24,
+  "final_limit": 6,
+  "max_final_limit": 8,
+  "query_instruction": "检索与用户问题相关的企业规范原文证据",
+  "max_history_turns": 3,
+  "history_token_budget": 512,
+  "max_question_tokens": 512,
+  "rewrite_output_tokens": 128,
+  "max_evidence_tokens": 4096,
+  "low_ocr_threshold": 0.8,
+  "answer_output_tokens": 1024,
+  "repair_output_tokens": 1024,
+  "conversation_ttl_seconds": 1800,
+  "bm25_tokenizer": "multilingual",
+  "bm25_language": "none",
+  "allowed_statuses": [
+    "active",
+    "unspecified"
+  ],
+  "allowed_authority_levels": [
+    "official",
+    "unspecified"
+  ],
+  "soft_route_min_confidence": 0.75,
+  "soft_routes": []
+}

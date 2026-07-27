@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>DOCX 证据问答</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">DOCX RAG 验收壳</p>
+        <h1>只发布通过引用校验的回答</h1>
+      </header>
+      <section aria-labelledby="ask-title">
+        <h2 id="ask-title">提问</h2>
+        <label for="token">查询令牌</label>
+        <input id="token" type="password" autocomplete="off">
+        <label for="question">问题</label>
+        <textarea id="question" rows="5" maxlength="4000"></textarea>
+        <div class="actions">
+          <button id="ask" type="button">提交问题</button>
+          <button id="clear" type="button" class="secondary">清空会话</button>
+        </div>
+      </section>
+      <section aria-labelledby="status-title" aria-live="polite">
+        <h2 id="status-title">阶段状态</h2>
+        <ol id="stages"></ol>
+      </section>
+      <section aria-labelledby="answer-title" aria-live="polite">
+        <h2 id="answer-title">最终回答</h2>
+        <p id="answer">尚未提问。</p>
+        <div id="citations"></div>
+        <div class="actions" aria-label="回答反馈">
+          <button id="feedback-useful" type="button" disabled>有用</button>
+          <button id="feedback-not-useful" type="button" class="secondary" disabled>没用</button>
+        </div>
+      </section>
+    </main>
+    <script src="/assets/app.js" defer></script>
+  </body>
+</html>

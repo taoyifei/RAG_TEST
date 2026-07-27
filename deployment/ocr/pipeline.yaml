@@ -1,0 +1,15 @@
+pipeline_name: PaddleOCR
+version: "3.5.0"
+engine: paddle
+device: gpu:0
+precision: fp32
+enable_hpi: false
+use_tensorrt: false
+enable_mkldnn: false
+use_doc_orientation_classify: false
+use_doc_unwarping: false
+use_textline_orientation: false
+text_detection_model_name: PP-OCRv5_server_det
+text_detection_model_dir: /opt/rag-ocr/models/PP-OCRv5_server_det_infer
+text_recognition_model_name: PP-OCRv5_server_rec
+text_recognition_model_dir: /opt/rag-ocr/models/PP-OCRv5_server_rec_infer
