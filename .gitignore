@@ -16,6 +16,7 @@ docs/
 evaluation/frozen/
 evaluation/results/
 design/evidence/
+design/adr/
 design/acceptance-and-offline-deployment-*.md
 deployment/wheelhouse/
 deployment/assets/tokenizers/
