@@ -15,6 +15,11 @@ from rag_app.chunking import (
     Utf8TokenCounter,
 )
 from rag_app.clients.model_services import EmbeddingResult
+from rag_app.clients.resilience import (
+    ExternalRequestRejectedError,
+    ExternalServiceUnavailableError,
+)
+from rag_app.contracts import DocumentMetadata
 from rag_app.index.build import (
     DocxBuildConfig,
     DocxBuildServices,
@@ -27,6 +32,13 @@ from rag_app.parsers import DocxParser
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
 from rag_app.state import StateStore
 from rag_app.state.models import SourceVersion, VersionState
+
+_DEFAULT_METADATA = DocumentMetadata(
+    document_status="active",
+    authority_level="official",
+    effective_from=None,
+    effective_to=None,
+)
 
 
 class _DeterministicEmbedder:
@@ -77,6 +89,41 @@ class _OcrClient:
             height=20,
             elapsed_ms=2,
         )
+
+
+class _FlakyOcrClient(_OcrClient):
+    """首次不可用、后续恢复的 OCR 接缝替身。"""
+
+    def recognize(
+        self,
+        media_bytes: bytes,
+        *,
+        media_type: str,
+        media_sha256: str,
+    ) -> OcrResponse:
+        if self.calls == 0:
+            self.calls += 1
+            raise ExternalServiceUnavailableError("OCR 暂时不可用。")
+        return super().recognize(
+            media_bytes,
+            media_type=media_type,
+            media_sha256=media_sha256,
+        )
+
+
+class _RejectedOcrClient(_OcrClient):
+    """始终返回终态请求拒绝的 OCR 接缝替身。"""
+
+    def recognize(
+        self,
+        media_bytes: bytes,
+        *,
+        media_type: str,
+        media_sha256: str,
+    ) -> OcrResponse:
+        del media_bytes, media_type, media_sha256
+        self.calls += 1
+        raise ExternalRequestRejectedError("OCR 请求被拒绝。")
 
 
 def _write_synthetic_docx(path: Path, *, image_count: int) -> None:
@@ -133,11 +180,16 @@ def test_build_all_docx_without_running_ocr(tmp_path: Path) -> None:
         Utf8TokenCounter(),
         pipeline_fingerprint=pipeline_fingerprint,
     )
+    discovered_sources = discover_docx_sources(docs_dir)
     builder = DocxChunkBuilder(
         config=DocxBuildConfig(
             input_root=docs_dir,
             ocr_revision="unselected",
             embedding_instruction="测试契约，不调用外部模型",
+            metadata_by_source={
+                source.source_path: _DEFAULT_METADATA
+                for source in discovered_sources
+            },
         ),
         services=DocxBuildServices(
             parser=DocxParser(),
@@ -152,7 +204,7 @@ def test_build_all_docx_without_running_ocr(tmp_path: Path) -> None:
     )
 
     indexed: list[IndexedChunk] = []
-    for discovered in discover_docx_sources(docs_dir):
+    for discovered in discovered_sources:
         version = SourceVersion(
             source_id=f"src_{discovered.content_sha256[:32]}",
             doc_version=f"sha256:{discovered.content_sha256}",
@@ -212,6 +264,9 @@ def test_builder_calls_ocr_once_and_indexes_image_evidence(
             input_root=input_root,
             ocr_revision=DEFAULT_OCR_REVISION,
             embedding_instruction="公开合成测试",
+            metadata_by_source={
+                discovered.source_path: _DEFAULT_METADATA
+            },
             minimum_ocr_confidence=0.80,
         ),
         services=DocxBuildServices(
@@ -243,6 +298,7 @@ def test_builder_calls_ocr_once_and_indexes_image_evidence(
     )
 
     chunks = builder(discovered.source_path, version)
+    cached_chunks = builder(discovered.source_path, version)
 
     assert ocr_client.calls == 1
     assert state.count_ocr_results(
@@ -254,3 +310,128 @@ def test_builder_calls_ocr_once_and_indexes_image_evidence(
         and item.chunk.text == "公开合成 OCR 文本"
         for item in chunks
     )
+    assert cached_chunks == chunks
+
+
+def test_builder_retries_transient_ocr_failure(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    _write_synthetic_docx(input_root / "synthetic.docx", image_count=1)
+    discovered = discover_docx_sources(input_root)[0]
+    state = StateStore(tmp_path / "state.sqlite3")
+    state.initialize()
+    fingerprint = "sha256:" + ("3" * 64)
+    ocr_client = _FlakyOcrClient()
+    builder = DocxChunkBuilder(
+        config=DocxBuildConfig(
+            input_root=input_root,
+            ocr_revision=DEFAULT_OCR_REVISION,
+            embedding_instruction="公开合成测试",
+            metadata_by_source={
+                discovered.source_path: _DEFAULT_METADATA
+            },
+        ),
+        services=DocxBuildServices(
+            parser=DocxParser(),
+            chunker=Chunker(
+                ChunkerConfig(128, 256, 32),
+                Utf8TokenCounter(),
+                pipeline_fingerprint=fingerprint,
+            ),
+            embedder=_DeterministicEmbedder(),
+            sparse_encoder=QdrantBm25Encoder(
+                tokenizer="multilingual",
+                language="none",
+            ),
+            state=state,
+            ocr_client=ocr_client,
+        ),
+    )
+    version = SourceVersion(
+        source_id=f"src_{discovered.content_sha256[:32]}",
+        doc_version=f"sha256:{discovered.content_sha256}",
+        content_sha256=discovered.content_sha256,
+        source_path=discovered.source_path,
+        pipeline_fingerprint=fingerprint,
+        state=VersionState.STAGING,
+        job_id="job_retry",
+        chunk_count=None,
+        error_code=None,
+    )
+
+    first = builder(discovered.source_path, version)
+    second = builder(discovered.source_path, version)
+
+    assert not any(item.chunk.contains_ocr for item in first)
+    assert any(item.chunk.contains_ocr for item in second)
+    assert ocr_client.calls == 2
+    assert state.count_ocr_results(
+        ocr_revision=DEFAULT_OCR_REVISION,
+        state="succeeded",
+    ) == 1
+    assert state.count_ocr_results(
+        ocr_revision=DEFAULT_OCR_REVISION,
+        error_code="OCR_SERVICE_UNAVAILABLE",
+    ) == 0
+
+
+def test_builder_keeps_terminal_ocr_rejection_cached(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    _write_synthetic_docx(input_root / "synthetic.docx", image_count=1)
+    discovered = discover_docx_sources(input_root)[0]
+    state = StateStore(tmp_path / "state.sqlite3")
+    state.initialize()
+    fingerprint = "sha256:" + ("4" * 64)
+    ocr_client = _RejectedOcrClient()
+    builder = DocxChunkBuilder(
+        config=DocxBuildConfig(
+            input_root=input_root,
+            ocr_revision=DEFAULT_OCR_REVISION,
+            embedding_instruction="公开合成测试",
+            metadata_by_source={
+                discovered.source_path: _DEFAULT_METADATA
+            },
+        ),
+        services=DocxBuildServices(
+            parser=DocxParser(),
+            chunker=Chunker(
+                ChunkerConfig(128, 256, 32),
+                Utf8TokenCounter(),
+                pipeline_fingerprint=fingerprint,
+            ),
+            embedder=_DeterministicEmbedder(),
+            sparse_encoder=QdrantBm25Encoder(
+                tokenizer="multilingual",
+                language="none",
+            ),
+            state=state,
+            ocr_client=ocr_client,
+        ),
+    )
+    version = SourceVersion(
+        source_id=f"src_{discovered.content_sha256[:32]}",
+        doc_version=f"sha256:{discovered.content_sha256}",
+        content_sha256=discovered.content_sha256,
+        source_path=discovered.source_path,
+        pipeline_fingerprint=fingerprint,
+        state=VersionState.STAGING,
+        job_id="job_rejected",
+        chunk_count=None,
+        error_code=None,
+    )
+
+    first = builder(discovered.source_path, version)
+    second = builder(discovered.source_path, version)
+
+    assert not any(item.chunk.contains_ocr for item in first)
+    assert not any(item.chunk.contains_ocr for item in second)
+    assert ocr_client.calls == 1
+    assert state.count_ocr_results(
+        ocr_revision=DEFAULT_OCR_REVISION,
+        error_code="OCR_REQUEST_REJECTED",
+    ) == 1

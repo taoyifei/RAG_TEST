@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 import httpx
 from qdrant_client import QdrantClient
 
-from rag_app.clients.model_services import TeiEmbeddingClient
+from rag_app.clients.model_services import (
+    EmbeddingClientConfig,
+    TeiEmbeddingClient,
+)
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
 from rag_app.contracts import Chunk, ElementKind, Locator
 from rag_app.index import IndexedChunk, QdrantIndex
@@ -16,9 +19,24 @@ from rag_app.retrieval.hybrid import (
     HybridRetriever,
 )
 from rag_app.retrieval.rewrite import QueryVariants
+from rag_app.retrieval.routing import SoftRouteDecision
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64
+
+
+class _RecordingRouter:
+    def __init__(self) -> None:
+        self.questions: list[str] = []
+
+    def route(self, question: str) -> SoftRouteDecision:
+        self.questions.append(question)
+        return SoftRouteDecision(
+            route_id=None,
+            source_ids=(),
+            confidence=0.0,
+            routed=False,
+        )
 
 
 def _qdrant() -> QdrantClient:
@@ -38,7 +56,13 @@ def _embedding() -> TeiEmbeddingClient:
             vector = [0.0] * 1024
             vector[0 if "独立" in text else 1] = 1.0
             vectors.append({"index": index, "embedding": vector})
-        return httpx.Response(200, json={"data": vectors})
+        return httpx.Response(
+            200,
+            json={
+                "model": "Qwen3-Embedding-0.6B",
+                "data": vectors,
+            },
+        )
 
     return TeiEmbeddingClient(
         ResilientHttpPool(
@@ -51,9 +75,12 @@ def _embedding() -> TeiEmbeddingClient:
                 max_concurrency=1,
             ),
         ),
-        dimension=1024,
-        max_batch_size=8,
-        max_batch_chars=1000,
+        config=EmbeddingClientConfig(
+            model="Qwen3-Embedding-0.6B",
+            dimension=1024,
+            max_batch_size=8,
+            max_batch_chars=1000,
+        ),
         api_token=None,
     )
 
@@ -83,8 +110,10 @@ def _chunk(
             ),
         ),
         content_sha256=digest_character * 64,
-        document_status="published",
+        document_status="active",
         authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return IndexedChunk(
         chunk=chunk,
@@ -118,15 +147,17 @@ def test_hybrid_retriever_keeps_original_and_rewritten_channels() -> None:
                 item.chunk.source_id,
                 item.chunk.doc_version,
             )
+        router = _RecordingRouter()
         retriever = HybridRetriever(
             HybridRetrievalServices(
                 index=index,
                 embedding=_embedding(),
                 bm25=bm25,
                 metadata_policy=MetadataPolicy(
-                    allowed_statuses=("published",),
+                    allowed_statuses=("active",),
                     allowed_authority_levels=("official",),
                 ),
+                router=router,
             ),
             HybridRetrievalConfig(
                 dense_limit=40,
@@ -139,7 +170,11 @@ def test_hybrid_retriever_keeps_original_and_rewritten_channels() -> None:
 
         result = retriever.retrieve(
             QueryVariants(
-                queries=("其中负责人是谁？", "独立：需求快验负责人是谁？"),
+                queries=(
+                    "其中负责人是谁？",
+                    "独立：需求快验负责人是谁？",
+                ),
+                resolved_query="独立：需求快验负责人是谁？",
                 rewritten=True,
                 call=None,
             ),
@@ -153,6 +188,7 @@ def test_hybrid_retriever_keeps_original_and_rewritten_channels() -> None:
         assert result.query_count == 2
         assert result.embedding_calls == 1
         assert result.route_fallback is True
+        assert router.questions == ["独立：需求快验负责人是谁？"]
         assert {
             channel
             for item in result.candidates

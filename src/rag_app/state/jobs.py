@@ -267,6 +267,9 @@ class JobStore:
             worker_id: 当前租约所有者。
             error_code: None 表示成功，否则记录无原文错误码并失败。
 
+        Returns:
+            无返回值。
+
         Raises:
             LookupError: worker 不持有该运行中租约。
 

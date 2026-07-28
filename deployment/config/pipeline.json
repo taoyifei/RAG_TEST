@@ -1,8 +1,9 @@
 {
-  "schema_version": "1",
-  "parser_revision": "docx-parser-v1",
+  "schema_version": "2",
+  "parser_revision": "docx-parser-v3",
   "ocr_model": "PaddleOCR-3.5.0/PP-OCRv5_server_det+rec",
   "ocr_revision": "paddleocr-3.5.0-ppocrv5-server-det-rec-paddle-static",
+  "ocr_minimum_confidence": 0.8,
   "chunker_revision": "structural-v1-provisional",
   "chunker_parameters": [
     [
@@ -21,11 +22,17 @@
   "embedding_model": "Qwen3-Embedding-0.6B",
   "embedding_revision": "pending-server-verification",
   "embedding_dimension": 1024,
+  "embedding_tokenizer_sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+  "document_embedding_instruction": "",
   "sparse_model": "qdrant/bm25",
   "sparse_revision": "sha256:1d55f95e952af834de5d4bdf2e321438eca4bee9f05dd309f2029236703e8b12",
+  "sparse_tokenizer": "multilingual",
+  "sparse_language": "none",
   "index_revision": "qdrant-v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
+  "corpus_policy_sha256": "1079f1dae19d0e134f5660234eab9961e68adbb6724ea8d6f0de81db42646c61",
   "reranker_model": "Qwen3-Reranker-0.6B",
   "reranker_revision": "pending-server-verification",
+  "llm_model": "Qwen/Qwen3-8B-AWQ",
   "llm_revisions": [
     [
       "llm-a.example.invalid:8000",
@@ -44,5 +51,6 @@
       "pending-server-verification"
     ]
   ],
-  "prompt_revision": "sha256:c2bd7c9e46ac6c9b0f05b6f32f409cdc6ea6a0246e35831ee5c03aacb55d6042"
+  "prompt_revision": "sha256:9fc5318f48fe38a5941cf6b8738c9725dcc3aebaa5f55bc4b698ecf55e4398d7",
+  "llm_tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
 }

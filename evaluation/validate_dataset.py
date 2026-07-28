@@ -10,7 +10,15 @@ from evaluation.dataset import load_dataset, verify_source_evidence
 
 
 def main() -> int:
-    """执行只读核验并输出不含题目原文的计数。"""
+    """执行只读核验并输出不含题目原文的计数。
+
+    Args:
+        无参数；命令行选项从当前进程读取。
+
+    Returns:
+        核验成功时返回 0。
+
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--docs", type=Path, required=True)

@@ -76,6 +76,7 @@ class ResilientHttpPool:
         *,
         client: httpx.Client,
         policy: ResiliencePolicy,
+        validator: Callable[[object], object] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """冻结端点与韧性参数。
@@ -84,6 +85,7 @@ class ResilientHttpPool:
             endpoints: 至少一个 http/https 基础 URL。
             client: 已配置独立超时的 httpx 客户端。
             policy: 有界重试、熔断和并发策略。
+            validator: 可选的服务级响应 schema 校验器。
             clock: 可测试的单调时钟。
 
         Raises:
@@ -98,6 +100,7 @@ class ResilientHttpPool:
         self._states = [_EndpointState(item) for item in normalized]
         self._client = client
         self._policy = policy
+        self._validator = validator
         self._semaphore = threading.BoundedSemaphore(policy.max_concurrency)
         self._clock = clock
         self._lock = threading.Lock()
@@ -110,6 +113,7 @@ class ResilientHttpPool:
         *,
         payload: object | None,
         headers: Mapping[str, str] | None = None,
+        validator: Callable[[object], object] | None = None,
     ) -> HttpJsonResponse:
         """请求 JSON，并只对网络错误和瞬态状态码切换端点。
 
@@ -118,6 +122,7 @@ class ResilientHttpPool:
             path: 以 `/` 开头且不含完整主机的路径。
             payload: JSON 请求体；不会写入异常消息。
             headers: 可选请求头；不会写入返回审计信息。
+            validator: 覆盖服务级校验器的本次响应 schema 校验器。
 
         Returns:
             JSON 内容、所用端点、重试数与耗时。
@@ -144,8 +149,8 @@ class ResilientHttpPool:
                         json=payload,
                         headers=headers,
                     )
-                except httpx.HTTPError as error:
-                    last_reason = type(error).__name__
+                except httpx.HTTPError:
+                    last_reason = "HTTP_TRANSPORT"
                     self._record_failure(state)
                     continue
                 if response.status_code in _TRANSIENT_STATUSES:
@@ -162,6 +167,20 @@ class ResilientHttpPool:
                     last_reason = "INVALID_JSON"
                     self._record_failure(state)
                     continue
+                active_validator = (
+                    validator
+                    if validator is not None
+                    else self._validator
+                )
+                if active_validator is not None:
+                    try:
+                        response_payload = active_validator(
+                            response_payload
+                        )
+                    except (OverflowError, TypeError, ValueError):
+                        last_reason = "INVALID_RESPONSE_SCHEMA"
+                        self._record_failure(state)
+                        continue
                 self._record_success(state)
                 return HttpJsonResponse(
                     endpoint=state.base_url,

@@ -1,6 +1,9 @@
 FROM paddlepaddle/paddle:3.3.0-gpu-cuda12.6-cudnn9.5@sha256:bb84347b6365c2980347cf784fc8be3eaa903472f5c40129cb65aaa634ebd776
 
 ARG TARGETARCH
+ARG VCS_REF
+
+LABEL org.opencontainers.image.revision="${VCS_REF}"
 
 ENV HOME=/tmp \
     HF_HUB_OFFLINE=1 \
@@ -31,12 +34,17 @@ RUN test "${TARGETARCH}" = "amd64" \
     && rm -rf /tmp/wheelhouse /tmp/requirements.lock /tmp/WHEELS.sha256
 
 COPY deployment/ocr/assets/models/ /opt/rag-ocr/models/
+COPY deployment/ocr/MODELS.sha256 /opt/rag-ocr/MODELS.sha256
 COPY deployment/ocr/assets/licenses/ /opt/rag-ocr/licenses/
 COPY deployment/ocr/pipeline.yaml /opt/rag-ocr/pipeline.yaml
 COPY src/rag_app/__init__.py /opt/rag-ocr/src/rag_app/__init__.py
 COPY src/rag_app/ocr/ /opt/rag-ocr/src/rag_app/ocr/
 
 RUN groupadd --gid 10001 ragocr \
+    && test "$(printf '%s' "${VCS_REF}" | wc -c)" -eq 40 \
+    && printf '%s' "${VCS_REF}" | grep -Eq '^[0-9a-f]{40}$' \
+    && cd /opt/rag-ocr \
+    && sha256sum --check MODELS.sha256 \
     && useradd \
         --uid 10001 \
         --gid 10001 \

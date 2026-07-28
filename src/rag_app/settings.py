@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from enum import StrEnum
 from pathlib import Path
@@ -16,6 +17,9 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from rag_app.contracts import AuthorityLevel, DocumentStatus, PipelineSpec
+from rag_app.strict_json import load_json_file
 
 __all__ = [
     "ConfigurationState",
@@ -91,10 +95,9 @@ class RetrievalSettings(BaseModel):
     conversation_ttl_seconds: int = Field(gt=0)
     bm25_tokenizer: str = "multilingual"
     bm25_language: str = "none"
-    allowed_statuses: tuple[str, ...] = ("active",)
-    allowed_authority_levels: tuple[str, ...] = (
-        "official",
-        "unspecified",
+    allowed_statuses: tuple[DocumentStatus, ...] = Field(min_length=1)
+    allowed_authority_levels: tuple[AuthorityLevel, ...] = Field(
+        min_length=1
     )
     soft_route_min_confidence: float = Field(
         default=0.75,
@@ -118,6 +121,12 @@ class RetrievalSettings(BaseModel):
         route_ids = tuple(route.route_id for route in self.soft_routes)
         if len(set(route_ids)) != len(route_ids):
             raise ValueError("soft_routes 的 route_id 不能重复。")
+        if len(set(self.allowed_statuses)) != len(self.allowed_statuses):
+            raise ValueError("allowed_statuses 不能重复。")
+        if len(set(self.allowed_authority_levels)) != len(
+            self.allowed_authority_levels
+        ):
+            raise ValueError("allowed_authority_levels 不能重复。")
         return self
 
     @classmethod
@@ -131,7 +140,93 @@ class RetrievalSettings(BaseModel):
             已完成 schema 校验的配置。
 
         """
-        return cls.model_validate_json(path.read_text(encoding="utf-8"))
+        return cls.model_validate(
+            load_json_file(path, label="retrieval")
+        )
+
+    def serving_fingerprint(self, pipeline: PipelineSpec) -> str:
+        """计算查询服务配置的规范化指纹。
+
+        Args:
+            pipeline: 提供索引指纹和模型版本的 pipeline 契约。
+
+        Returns:
+            带算法前缀的 SHA256 服务指纹。
+
+        """
+        routes = [
+            {
+                "route_id": route.route_id,
+                "keywords": sorted(route.keywords),
+                "source_ids": sorted(route.source_ids),
+            }
+            for route in sorted(
+                self.soft_routes,
+                key=lambda route: route.route_id,
+            )
+        ]
+        payload = {
+            "index_fingerprint": pipeline.fingerprint(),
+            "query_instruction": self.query_instruction,
+            "rewrite": {
+                "max_history_turns": self.max_history_turns,
+                "history_token_budget": self.history_token_budget,
+                "max_question_tokens": self.max_question_tokens,
+                "output_tokens": self.rewrite_output_tokens,
+                "conversation_ttl_seconds": (
+                    self.conversation_ttl_seconds
+                ),
+            },
+            "retrieval": {
+                "dense_limit": self.dense_limit,
+                "bm25_limit": self.bm25_limit,
+                "rrf_rank_constant": self.rrf_rank_constant,
+                "candidate_limit": self.candidate_limit,
+            },
+            "metadata_filter": {
+                "allowed_statuses": sorted(self.allowed_statuses),
+                "allowed_authority_levels": sorted(
+                    self.allowed_authority_levels
+                ),
+            },
+            "soft_routing": {
+                "minimum_confidence": self.soft_route_min_confidence,
+                "routes": routes,
+            },
+            "reranker": {
+                "model": pipeline.reranker_model,
+                "revision": pipeline.reranker_revision,
+                "candidate_limit": self.candidate_limit,
+                "final_limit": self.final_limit,
+                "max_final_limit": self.max_final_limit,
+            },
+            "neighbors": {"max_items": self.max_final_limit},
+            "evidence": {
+                "max_tokens": self.max_evidence_tokens,
+                "max_items": self.max_final_limit,
+                "low_ocr_threshold": self.low_ocr_threshold,
+            },
+            "output": {
+                "answer_tokens": self.answer_output_tokens,
+                "repair_tokens": self.repair_output_tokens,
+            },
+            "llm": {
+                "model": pipeline.llm_model,
+                "revisions": sorted(pipeline.llm_revisions),
+                "prompt_revision": pipeline.prompt_revision,
+                "tokenizer_sha256": pipeline.llm_tokenizer_sha256,
+            },
+        }
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return (
+            "sha256:"
+            f"{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+        )
 
 
 class RuntimeSettings(BaseSettings):
@@ -152,6 +247,9 @@ class RuntimeSettings(BaseSettings):
     manifest_database: Path
     pipeline_path: Path
     retrieval_path: Path
+    corpus_policy_path: Path = Path(
+        "/app/deployment/config/corpus-policy.json"
+    )
     frontend_dir: Path
     llm_tokenizer_path: Path
     embedding_tokenizer_path: Path = Path(
@@ -182,7 +280,9 @@ class RuntimeSettings(BaseSettings):
     max_attempts: int = Field(default=4, ge=1, le=8)
     failure_threshold: int = Field(default=2, ge=1, le=8)
     cooldown_seconds: float = Field(default=30.0, gt=0)
-    max_model_concurrency: int = Field(default=5, ge=1, le=32)
+    max_embedding_concurrency: int = Field(default=4, ge=1, le=32)
+    max_reranker_concurrency: int = Field(default=4, ge=1, le=32)
+    max_llm_concurrency: int = Field(default=4, ge=1, le=32)
     max_ocr_concurrency: int = Field(default=1, ge=1, le=1)
     embedding_max_batch_size: int = Field(default=32, ge=1, le=256)
     embedding_max_batch_chars: int = Field(default=131_072, ge=1)
@@ -205,19 +305,51 @@ class RuntimeSettings(BaseSettings):
         return self
 
     def embedding_endpoint_urls(self) -> tuple[str, ...]:
-        """返回规范化 embedding 端点。"""
+        """返回规范化 embedding 端点。
+
+        Args:
+            无参数；解析当前 embedding 配置。
+
+        Returns:
+            非空且去除尾斜杠的端点元组。
+
+        """
         return _parse_endpoint_list(self.embedding_endpoints)
 
     def reranker_endpoint_urls(self) -> tuple[str, ...]:
-        """返回规范化 reranker 端点。"""
+        """返回规范化 reranker 端点。
+
+        Args:
+            无参数；解析当前 reranker 配置。
+
+        Returns:
+            非空且去除尾斜杠的端点元组。
+
+        """
         return _parse_endpoint_list(self.reranker_endpoints)
 
     def llm_endpoint_urls(self) -> tuple[str, ...]:
-        """返回规范化 LLM 端点。"""
+        """返回规范化 LLM 端点。
+
+        Args:
+            无参数；解析当前 LLM 配置。
+
+        Returns:
+            非空且去除尾斜杠的端点元组。
+
+        """
         return _parse_endpoint_list(self.llm_endpoints)
 
     def ocr_endpoint_urls(self) -> tuple[str, ...]:
-        """返回规范化 OCR 端点。"""
+        """返回规范化 OCR 端点。
+
+        Args:
+            无参数；解析当前 OCR 配置。
+
+        Returns:
+            非空且去除尾斜杠的端点元组。
+
+        """
         return _parse_endpoint_list(self.ocr_endpoints)
 
 

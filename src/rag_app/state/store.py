@@ -516,6 +516,9 @@ class StateStore(JobStore):
         Args:
             reference: 带来源版本、稳定元素 ID 和媒体摘要的图片引用。
 
+        Returns:
+            无返回值。
+
         """
         with self._connect() as connection:
             connection.execute(
@@ -612,7 +615,7 @@ class StateStore(JobStore):
             ).fetchone()
         if row is None:
             return None
-        return OcrResult(
+        result = OcrResult(
             media_sha256=str(row["media_sha256"]),
             ocr_revision=str(row["ocr_revision"]),
             state=str(row["state"]),
@@ -624,6 +627,12 @@ class StateStore(JobStore):
                 None if row["error_code"] is None else str(row["error_code"])
             ),
         )
+        if (
+            result.state == "failed"
+            and result.error_code == "OCR_SERVICE_UNAVAILABLE"
+        ):
+            return None
+        return result
 
     def count_ocr_results(
         self,

@@ -19,12 +19,10 @@
   "bm25_tokenizer": "multilingual",
   "bm25_language": "none",
   "allowed_statuses": [
-    "active",
-    "unspecified"
+    "active"
   ],
   "allowed_authority_levels": [
-    "official",
-    "unspecified"
+    "official"
   ],
   "soft_route_min_confidence": 0.75,
   "soft_routes": []

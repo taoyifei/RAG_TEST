@@ -32,7 +32,15 @@ class FeedbackStore:
         self._database_path = database_path
 
     def initialize(self) -> None:
-        """初始化反馈表与 WAL 模式。"""
+        """初始化反馈表与 WAL 模式。
+
+        Args:
+            无参数；初始化当前数据库路径。
+
+        Returns:
+            无返回值。
+
+        """
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -51,6 +59,9 @@ class FeedbackStore:
             trace_id: 最终回答的 32 位十六进制追踪标识。
             useful: 用户选择的有用或没用信号。
             now: 带时区的记录时间。
+
+        Returns:
+            无返回值。
 
         Raises:
             ValueError: trace ID 或时间无效。
@@ -77,7 +88,15 @@ class FeedbackStore:
             )
 
     def counts(self) -> dict[str, int]:
-        """返回有用、没用和去重后的反馈总数。"""
+        """返回有用、没用和去重后的反馈总数。
+
+        Args:
+            无参数；聚合当前反馈表。
+
+        Returns:
+            有用、没用和去重后的反馈计数。
+
+        """
         with self._connect() as connection:
             row = connection.execute(
                 """

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Literal
 
 from rag_app.clients.model_services import ExternalCallAudit
@@ -123,6 +124,10 @@ class BufferedLlmClient:
             "/v1/chat/completions",
             payload=payload,
             headers=self._headers,
+            validator=partial(
+                _validate_generation,
+                expected_model=self._model,
+            ),
         )
         content, model, usage = _parse_generation(
             response.payload,
@@ -166,6 +171,15 @@ def _parse_generation(
         raise ValueError("LLM message content 为空。")
     usage = _parse_usage(payload.get("usage"))
     return content, expected_model, usage
+
+
+def _validate_generation(
+    payload: object,
+    *,
+    expected_model: str,
+) -> object:
+    _parse_generation(payload, expected_model=expected_model)
+    return payload
 
 
 def _parse_usage(raw_usage: object) -> TokenUsage:

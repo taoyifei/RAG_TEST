@@ -57,6 +57,11 @@ def test_runtime_settings_parse_bounded_endpoint_lists(
         "http://llm-2:8000",
     )
     assert settings.query_token.get_secret_value() not in repr(settings)
+    assert settings.max_embedding_concurrency == 4
+    assert settings.max_reranker_concurrency == 4
+    assert settings.max_llm_concurrency == 4
+    assert settings.max_ocr_concurrency == 1
+    assert not hasattr(settings, "max_model_concurrency")
 
 
 def test_provisional_retrieval_config_is_not_ready(tmp_path: Path) -> None:
@@ -79,9 +84,11 @@ def test_provisional_retrieval_config_is_not_ready(tmp_path: Path) -> None:
                 "max_evidence_tokens": 4096,
                 "low_ocr_threshold": 0.8,
                 "answer_output_tokens": 1024,
-                "repair_output_tokens": 1024,
-                "conversation_ttl_seconds": 1800,
-            }
+                    "repair_output_tokens": 1024,
+                    "conversation_ttl_seconds": 1800,
+                    "allowed_statuses": ["active"],
+                    "allowed_authority_levels": ["official"],
+                }
         ),
         encoding="utf-8",
     )

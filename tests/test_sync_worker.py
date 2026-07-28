@@ -53,6 +53,10 @@ def _chunks(path: str, version: SourceVersion) -> list[IndexedChunk]:
             ),
         ),
         content_sha256=version.content_sha256,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return [
         IndexedChunk(

@@ -19,6 +19,8 @@ design/evidence/
 design/adr/
 design/acceptance-and-offline-deployment-*.md
 deployment/wheelhouse/
+deployment/runtime/wheelhouse/
+deployment/runtime/WHEELS.sha256
 deployment/assets/tokenizers/
 deployment/assets/ocr/
 deployment/ocr/assets/
@@ -34,6 +36,8 @@ models/
 *.log
 logs/
 *Zone.Identifier*
+/src/CACHEDIR.TAG
+/src/missing_stubs
 *.onnx
 *.pdmodel
 *.pdiparams

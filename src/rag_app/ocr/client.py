@@ -65,7 +65,9 @@ class OcrClient:
             与请求媒体和 revision 完全匹配的 OCR 结果。
 
         Raises:
-            ValueError: 输入摘要、大小、类型或服务响应不符合契约。
+            ValueError: 输入摘要、大小或类型不符合请求契约。
+            ExternalRequestRejectedError: OCR 服务明确拒绝请求。
+            ExternalServiceUnavailableError: 所有端点均不可用或响应无效。
 
         """
         if not media_bytes or len(media_bytes) > self._max_input_bytes:
@@ -79,16 +81,21 @@ class OcrClient:
             media_type=media_type,
             content_base64=base64.b64encode(media_bytes).decode("ascii"),
         )
+
+        def _validate_response(payload: object) -> object:
+            result = OcrResponse.model_validate(payload)
+            if (
+                result.media_sha256 != media_sha256
+                or result.ocr_revision != self._revision
+            ):
+                raise ValueError("OCR 响应缓存键与请求不一致。")
+            return result
+
         response = self._pool.request_json(
             "POST",
             "/v1/ocr",
             payload=request.model_dump(mode="json"),
             headers=self._headers,
+            validator=_validate_response,
         )
-        result = OcrResponse.model_validate(response.payload)
-        if (
-            result.media_sha256 != media_sha256
-            or result.ocr_revision != self._revision
-        ):
-            raise ValueError("OCR 响应缓存键与请求不一致。")
-        return result
+        return OcrResponse.model_validate(response.payload)

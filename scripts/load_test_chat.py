@@ -18,10 +18,13 @@ from typing import cast
 
 import httpx
 
-from evaluation.metrics import (
-    ActiveEvidenceManifest,
+from evaluation.active_state import (
+    add_active_state_arguments,
+    load_trusted_active_evidence,
+)
+from rag_app.active_evidence import (
     ActiveEvidenceRecord,
-    load_active_evidence_manifest,
+    TrustedActiveEvidence,
 )
 
 _MAX_ERROR_RATE = 0.01
@@ -71,7 +74,7 @@ class _LoadRuntime:
     url: str
     token: str
     cases: tuple[LoadCase, ...]
-    active_manifest: ActiveEvidenceManifest
+    active_manifest: TrustedActiveEvidence
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,9 +100,7 @@ def main() -> int:
     """
     arguments = _arguments()
     cases = _load_cases(arguments.dataset)
-    active_manifest = load_active_evidence_manifest(
-        arguments.active_evidence_manifest
-    )
+    active_manifest = load_trusted_active_evidence(arguments)
     runtime = _LoadRuntime(
         url=arguments.url,
         token=arguments.token,
@@ -237,14 +238,14 @@ def classify_final(
     final: Mapping[str, object],
     *,
     expected_answerable: bool | None,
-    active_evidence_manifest: ActiveEvidenceManifest,
+    active_evidence_manifest: TrustedActiveEvidence,
 ) -> RequestOutcome:
     """校验最终事件并按可回答性分类。
 
     Args:
         final: NDJSON 中最后一条 final 事件。
         expected_answerable: 目标题的冻结可回答性；历史预热为 `None`。
-        active_evidence_manifest: 独立活动证据清单。
+        active_evidence_manifest: 现场验证链产生的可信活动证据。
 
     Returns:
         回答、正确/错误拒答、无效引用或协议错误之一。
@@ -291,11 +292,7 @@ def _arguments() -> argparse.Namespace:
         type=Path,
         default=Path("evaluation/frozen/dataset.json"),
     )
-    parser.add_argument(
-        "--active-evidence-manifest",
-        type=Path,
-        default=Path("evaluation/results/active-evidence.json"),
-    )
+    add_active_state_arguments(parser)
     parser.add_argument("--concurrency", type=int, default=5)
     parser.add_argument("--duration-seconds", type=int, default=1800)
     parser.add_argument(
@@ -473,13 +470,13 @@ def _request_result(
 
 def _citations_are_valid(
     final: Mapping[str, object],
-    manifest: ActiveEvidenceManifest,
+    manifest: TrustedActiveEvidence,
 ) -> bool:
     claims = final.get("claims")
     if not isinstance(claims, list) or not claims:
         return False
     active_records = {
-        record.chunk_id: record for record in manifest.records
+        record.chunk_id: record for record in manifest.manifest.records
     }
     evidence_ids: set[str] = set()
     for claim in claims:

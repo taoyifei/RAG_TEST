@@ -29,8 +29,9 @@ class _Rewriter:
         assert question == "当前问题"
         assert previous_questions == ("历史问题",)
         return QueryVariants(
-            queries=(question,),
-            rewritten=False,
+            queries=(question, "独立问题"),
+            resolved_query="独立问题",
+            rewritten=True,
             call=None,
         )
 
@@ -42,7 +43,8 @@ class _Retriever:
         *,
         as_of: datetime,
     ) -> HybridRetrievalResult:
-        assert variants.queries == ("当前问题",)
+        assert variants.queries == ("当前问题", "独立问题")
+        assert variants.resolved_query == "独立问题"
         assert as_of.tzinfo is not None
         return HybridRetrievalResult(
             candidates=(),
@@ -57,7 +59,7 @@ class _Reranker:
         query: str,
         candidates: tuple[object, ...],
     ) -> RerankStageResult:
-        assert query == "当前问题"
+        assert query == "独立问题"
         assert candidates == ()
         return RerankStageResult(hits=(), call=None)
 
@@ -129,6 +131,7 @@ def test_query_service_emits_only_stage_metadata_and_appends_question(
     )
 
     assert outcome.answer.refusal_code == RefusalCode.NO_EVIDENCE
+    assert outcome.rewritten is True
     assert [event.stage for event in events] == [
         StageName.REWRITE,
         StageName.RETRIEVE,

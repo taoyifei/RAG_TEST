@@ -4,7 +4,11 @@ import httpx
 import pytest
 
 from rag_app.clients.llm import BufferedLlmClient, ChatMessage
-from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
+from rag_app.clients.resilience import (
+    ExternalServiceUnavailableError,
+    ResiliencePolicy,
+    ResilientHttpPool,
+)
 
 
 def _policy() -> ResiliencePolicy:
@@ -115,8 +119,58 @@ def test_buffered_llm_rejects_truncated_generation() -> None:
         max_context_tokens=8192,
         api_token=None,
     )
-    with pytest.raises(ValueError, match="finish_reason"):
+    with pytest.raises(
+        ExternalServiceUnavailableError,
+        match="INVALID_RESPONSE_SCHEMA",
+    ):
         client.generate(
             (ChatMessage(role="user", content="问题"),),
             max_output_tokens=128,
         )
+
+
+def test_llm_schema_error_fails_over_before_completion() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host or ""
+        calls.append(host)
+        finish_reason = "length" if host == "bad" else "stop"
+        return httpx.Response(
+            200,
+            json={
+                "model": "Qwen/Qwen3-8B-AWQ",
+                "choices": [
+                    {
+                        "finish_reason": finish_reason,
+                        "message": {"content": "完整答案"},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 4,
+                    "total_tokens": 14,
+                },
+            },
+        )
+
+    client = BufferedLlmClient(
+        ResilientHttpPool(
+            ("http://bad", "http://good"),
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            policy=_policy(),
+        ),
+        model="Qwen/Qwen3-8B-AWQ",
+        max_context_tokens=8192,
+        api_token=None,
+    )
+
+    result = client.generate(
+        (ChatMessage(role="user", content="问题"),),
+        max_output_tokens=128,
+    )
+
+    assert result.content == "完整答案"
+    assert result.call.endpoint == "http://good"
+    assert result.call.retry_count == 1
+    assert calls == ["bad", "good"]

@@ -20,9 +20,18 @@ class StructuredAuditLogger:
 
     logger: logging.Logger
     pipeline_fingerprint: str
+    serving_fingerprint: str | None = None
 
     def query_stage(self, event: StageEvent) -> None:
-        """记录不含业务内容的查询阶段。"""
+        """记录不含业务内容的查询阶段。
+
+        Args:
+            event: 非敏感阶段事件。
+
+        Returns:
+            无返回值。
+
+        """
         self._write(
             {
                 "event": "query_stage",
@@ -34,7 +43,15 @@ class StructuredAuditLogger:
         )
 
     def query_outcome(self, outcome: QueryOutcome) -> None:
-        """记录回答状态、引用 chunk 和外部调用元数据。"""
+        """记录回答状态、引用 chunk 和外部调用元数据。
+
+        Args:
+            outcome: 已完成引用校验的查询结果。
+
+        Returns:
+            无返回值。
+
+        """
         chunk_ids = sorted(
             {
                 support.chunk_id
@@ -68,7 +85,16 @@ class StructuredAuditLogger:
             )
 
     def query_failed(self, trace_id: str, error_code: str) -> None:
-        """记录不含异常文本的查询失败码。"""
+        """记录不含异常文本的查询失败码。
+
+        Args:
+            trace_id: 本次请求的追踪标识。
+            error_code: 稳定且不含正文的失败类别。
+
+        Returns:
+            无返回值。
+
+        """
         self._write(
             {
                 "event": "query_failed",
@@ -78,7 +104,15 @@ class StructuredAuditLogger:
         )
 
     def index_job(self, job: Job) -> None:
-        """记录不含幂等键与租约身份的索引任务状态。"""
+        """记录不含幂等键与租约身份的索引任务状态。
+
+        Args:
+            job: 当前索引任务状态。
+
+        Returns:
+            无返回值。
+
+        """
         self._write(
             {
                 "event": "index_job",
@@ -96,6 +130,8 @@ class StructuredAuditLogger:
             "pipeline_fingerprint": self.pipeline_fingerprint,
             **fields,
         }
+        if self.serving_fingerprint is not None:
+            record["serving_fingerprint"] = self.serving_fingerprint
         self.logger.info(
             json.dumps(
                 record,

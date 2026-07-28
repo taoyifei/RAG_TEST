@@ -10,6 +10,12 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from evaluation.dataset import EvaluationCase, EvaluationDataset
+from rag_app.active_evidence import (
+    ActiveEvidenceManifest,
+    ActiveEvidenceRecord,
+    TrustedActiveEvidence,
+    load_active_evidence_manifest,
+)
 
 __all__ = [
     "ActiveEvidenceManifest",
@@ -21,35 +27,6 @@ __all__ = [
     "load_active_evidence_manifest",
     "load_results",
 ]
-
-
-class ActiveEvidenceRecord(BaseModel):
-    """活动索引中一条可引用证据的规范内容。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    chunk_id: str = Field(min_length=1)
-    source_path: str = Field(min_length=1)
-    locator: str = Field(min_length=1)
-    text: str = Field(min_length=1)
-
-
-class ActiveEvidenceManifest(BaseModel):
-    """由活动索引导出的独立证据清单。"""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    pipeline_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    records: tuple[ActiveEvidenceRecord, ...]
-
-    @model_validator(mode="after")
-    def _validate_unique_chunk_ids(self) -> Self:
-        """拒绝同一逻辑 chunk ID 对应多条活动内容。"""
-        identifiers = [record.chunk_id for record in self.records]
-        if len(set(identifiers)) != len(identifiers):
-            raise ValueError("活动证据清单含重复 chunk_id。")
-        return self
 
 
 class RankedEvidence(BaseModel):
@@ -133,7 +110,15 @@ class EvaluationReport:
 
     @property
     def passed(self) -> bool:
-        """返回是否满足全部门槛且无缺失。"""
+        """返回是否满足全部门槛且无缺失。
+
+        Args:
+            无参数；使用当前报告中的指标和缺失项。
+
+        Returns:
+            全部门槛通过且输入完整时为真。
+
+        """
         return (
             not self.missing_result_ids
             and not self.manual_review_missing_ids
@@ -142,7 +127,15 @@ class EvaluationReport:
 
 
 def load_results(path: Path) -> tuple[QueryEvaluationResult, ...]:
-    """读取 JSONL 管线结果。"""
+    """读取 JSONL 管线结果。
+
+    Args:
+        path: 管线结果 JSONL 路径。
+
+    Returns:
+        按文件顺序解析的查询评测结果。
+
+    """
     results = []
     for line_number, line in enumerate(
         path.read_text("utf-8").splitlines(),
@@ -157,26 +150,11 @@ def load_results(path: Path) -> tuple[QueryEvaluationResult, ...]:
     return tuple(results)
 
 
-def load_active_evidence_manifest(path: Path) -> ActiveEvidenceManifest:
-    """读取活动索引导出的证据清单。
-
-    Args:
-        path: 活动证据 JSON 文件路径。
-
-    Returns:
-        已验证唯一 chunk ID 的活动证据清单。
-
-    """
-    return ActiveEvidenceManifest.model_validate_json(
-        path.read_text(encoding="utf-8")
-    )
-
-
 def evaluate_results(
     dataset: EvaluationDataset,
     results: tuple[QueryEvaluationResult, ...],
     *,
-    active_evidence_manifest: ActiveEvidenceManifest,
+    active_evidence_manifest: TrustedActiveEvidence,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
 ) -> EvaluationReport:
     """评估全部非阻塞题，禁止缺题或重复题。
@@ -184,7 +162,7 @@ def evaluate_results(
     Args:
         dataset: 人工冻结题集。
         results: 实际管线输出和人工评分。
-        active_evidence_manifest: 独立导出的活动索引证据清单。
+        active_evidence_manifest: 现场验证链产生的可信活动证据。
         thresholds: 完成条件阈值。
 
     Returns:
@@ -192,8 +170,11 @@ def evaluate_results(
 
     Raises:
         ValueError: 结果含重复题号或未知题号。
+        TypeError: 调用方传入自由构造的证据 JSON。
 
     """
+    if not isinstance(active_evidence_manifest, TrustedActiveEvidence):
+        raise TypeError("生产评分必须使用可信活动证据。")
     result_by_id = _unique_results(results)
     evaluable = tuple(
         case
@@ -225,7 +206,7 @@ def evaluate_results(
     )
     active_records = {
         record.chunk_id: record
-        for record in active_evidence_manifest.records
+        for record in active_evidence_manifest.manifest.records
     }
     metrics = _calculate_metrics(
         reviewed,

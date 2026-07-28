@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from tokenizers import Tokenizer
 
 from rag_app.contracts import (
     Chunk,
+    DocumentMetadata,
     Element,
     ElementKind,
     OcrState,
@@ -24,6 +26,8 @@ __all__ = [
     "TokenCounter",
     "Utf8TokenCounter",
 ]
+
+_MISSING_METADATA = object()
 
 
 class TokenCounter(Protocol):
@@ -152,6 +156,8 @@ class Chunker:
         source_id: str,
         doc_version: str,
         elements: list[Element],
+        *,
+        metadata: DocumentMetadata | object = _MISSING_METADATA,
     ) -> list[Chunk]:
         """将有文本证据的元素切分成稳定分块。
 
@@ -159,16 +165,25 @@ class Chunker:
             source_id: manifest 持久保存的来源标识。
             doc_version: 基于内容摘要的当前文档版本。
             elements: 按原文顺序排列的元素。
+            metadata: 在创建 chunk 前解析完成的文档级元数据。
 
         Returns:
             可写入索引的分块；未完成或失败的 OCR 图片不产生证据。
 
         """
+        if not isinstance(metadata, DocumentMetadata):
+            raise TypeError("metadata 必须显式提供完整 DocumentMetadata。")
         chunks: list[Chunk] = []
         for element in elements:
             if not _is_evidence(element):
                 continue
-            for segment in self._segments_for_element(element):
+            for segment_index, segment in enumerate(
+                self._segments_for_element(element),
+                start=1,
+            ):
+                locator = element.locator.model_copy(
+                    update={"segment_index": segment_index}
+                )
                 content_sha256 = hashlib.sha256(
                     segment.encode("utf-8")
                 ).hexdigest()
@@ -177,7 +192,7 @@ class Chunker:
                     Chunk(
                         chunk_id=stable_chunk_id(
                             source_id,
-                            element.locator,
+                            locator,
                             segment,
                         ),
                         source_id=source_id,
@@ -186,8 +201,22 @@ class Chunker:
                         text=segment,
                         embedding_text=_embedding_text(element, segment),
                         element_kind=element.kind,
-                        locators=(element.locator,),
+                        locators=(locator,),
                         content_sha256=content_sha256,
+                        document_status=(
+                            metadata.document_status
+                        ),
+                        authority_level=(
+                            metadata.authority_level
+                        ),
+                        effective_from=cast(
+                            datetime | None,
+                            _rfc3339_input(metadata.effective_from),
+                        ),
+                        effective_to=cast(
+                            datetime | None,
+                            _rfc3339_input(metadata.effective_to),
+                        ),
                         contains_ocr=is_ocr,
                         minimum_ocr_confidence=(
                             element.ocr_confidence if is_ocr else None
@@ -262,7 +291,7 @@ class Chunker:
 
 
 def _is_evidence(element: Element) -> bool:
-    if not element.text:
+    if not element.text.strip():
         return False
     if element.kind != ElementKind.IMAGE:
         return True
@@ -277,6 +306,12 @@ def _embedding_text(element: Element, segment: str) -> str:
     if not heading_context or segment == heading_context:
         return segment
     return f"{heading_context}\n{segment}"
+
+
+def _rfc3339_input(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
 
 
 def _with_neighbors(chunks: list[Chunk]) -> list[Chunk]:

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
-from dataclasses import dataclass
+import threading
+from contextlib import ExitStack
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -14,9 +18,14 @@ from qdrant_client import QdrantClient
 from rag_app.api import ApiServices, create_app
 from rag_app.chunking import HuggingFaceTokenCounter
 from rag_app.clients.llm import BufferedLlmClient
-from rag_app.clients.model_services import RerankerClient, TeiEmbeddingClient
+from rag_app.clients.model_services import (
+    EmbeddingClientConfig,
+    RerankerClient,
+    TeiEmbeddingClient,
+)
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
 from rag_app.contracts import PipelineSpec
+from rag_app.corpus_policy import CorpusPolicy
 from rag_app.generation.answer import AnswerConfig, AnswerGenerator
 from rag_app.generation.evidence import EvidenceAssembler, EvidenceConfig
 from rag_app.health import (
@@ -29,6 +38,8 @@ from rag_app.health import (
 from rag_app.index import QdrantIndex
 from rag_app.manifest import ManifestRepository
 from rag_app.observability import StructuredAuditLogger
+from rag_app.parsers.docx import DocxParser
+from rag_app.query_executor import QueryExecutor
 from rag_app.query_service import QueryDependencies, QueryService
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
 from rag_app.retrieval.filters import MetadataPolicy
@@ -45,11 +56,14 @@ from rag_app.settings import RetrievalSettings, RuntimeSettings
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
+from rag_app.strict_json import load_json_file
 
 __all__ = ["RuntimeBundle", "build_runtime", "load_pipeline"]
 
+_PIPELINE_CONFIG_FIELDS = frozenset(PipelineSpec.model_fields)
 
-@dataclass(frozen=True, slots=True)
+
+@dataclass(slots=True)
 class RuntimeBundle:
     """应用及需要保持存活的网络客户端。"""
 
@@ -57,12 +71,35 @@ class RuntimeBundle:
     settings: RuntimeSettings
     qdrant: QdrantClient
     http_clients: tuple[httpx.Client, ...]
+    readiness: ReadinessService
+    query_executor: QueryExecutor
+    _close_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
+    _closed: bool = field(default=False, init=False, repr=False)
 
     def close(self) -> None:
-        """关闭本进程拥有的外部连接。"""
-        for client in self.http_clients:
-            client.close()
-        self.qdrant.close()
+        """关闭本进程拥有的外部连接。
+
+        Args:
+            无参数；关闭当前运行时持有的资源。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        with ExitStack() as close_stack:
+            close_stack.callback(self.qdrant.close)
+            for client in reversed(self.http_clients):
+                close_stack.callback(client.close)
+            close_stack.callback(self.readiness.close)
+            close_stack.callback(self.query_executor.close)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +123,19 @@ def load_pipeline(path: Path) -> PipelineSpec:
     Returns:
         不可变 PipelineSpec。
 
+    Raises:
+        ValueError: JSON 不是对象或缺少显式 pipeline 字段。
+
     """
-    return PipelineSpec.model_validate_json(path.read_text(encoding="utf-8"))
+    payload = load_json_file(path, label="pipeline")
+    if not isinstance(payload, dict):
+        raise ValueError("pipeline 配置必须是 JSON object。")
+    missing = sorted(_PIPELINE_CONFIG_FIELDS - set(payload))
+    if missing:
+        raise ValueError(
+            f"pipeline 配置缺少显式字段：{','.join(missing)}"
+        )
+    return PipelineSpec.model_validate(payload)
 
 
 def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
@@ -105,13 +153,33 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
     """
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
+    _validate_runtime_contract(settings, pipeline, retrieval)
+    with ExitStack() as rollback:
+        bundle = _assemble_runtime(
+            settings,
+            pipeline,
+            retrieval,
+            rollback,
+        )
+        rollback.pop_all()
+        return bundle
+
+
+def _assemble_runtime(
+    settings: RuntimeSettings,
+    pipeline: PipelineSpec,
+    retrieval: RetrievalSettings,
+    rollback: ExitStack,
+) -> RuntimeBundle:
     fingerprint = pipeline.fingerprint()
+    serving_fingerprint = retrieval.serving_fingerprint(pipeline)
     qdrant = QdrantClient(
         url=settings.qdrant_url.rstrip("/"),
         api_key=settings.qdrant_api_key.get_secret_value(),
         timeout=math.ceil(settings.embedding_timeout_seconds),
         prefer_grpc=False,
     )
+    rollback.callback(qdrant.close)
     index = QdrantIndex(
         qdrant,
         collection_name=settings.qdrant_alias,
@@ -127,23 +195,33 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
         pipeline_fingerprint=fingerprint,
     )
 
-    clients = _build_http_clients(settings)
+    clients = _build_http_clients(settings, rollback)
     embedding_pool = _pool(
         settings.embedding_endpoint_urls(),
         clients[0],
         settings,
+        max_concurrency=settings.max_embedding_concurrency,
     )
     reranker_pool = _pool(
         settings.reranker_endpoint_urls(),
         clients[1],
         settings,
+        max_concurrency=settings.max_reranker_concurrency,
     )
-    llm_pool = _pool(settings.llm_endpoint_urls(), clients[2], settings)
+    llm_pool = _pool(
+        settings.llm_endpoint_urls(),
+        clients[2],
+        settings,
+        max_concurrency=settings.max_llm_concurrency,
+    )
     embedding = TeiEmbeddingClient(
         embedding_pool,
-        dimension=pipeline.embedding_dimension,
-        max_batch_size=settings.embedding_max_batch_size,
-        max_batch_chars=settings.embedding_max_batch_chars,
+        config=EmbeddingClientConfig(
+            model=settings.embedding_model,
+            dimension=pipeline.embedding_dimension,
+            max_batch_size=settings.embedding_max_batch_size,
+            max_batch_chars=settings.embedding_max_batch_chars,
+        ),
         api_token=_secret(settings.embedding_api_token),
     )
     reranker = RerankerClient(
@@ -211,9 +289,13 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
             ),
         )
     )
+    rollback.callback(readiness.close)
+    query_executor = QueryExecutor()
+    rollback.callback(query_executor.close)
     logger = StructuredAuditLogger(
         logging.getLogger("rag_app.audit"),
         fingerprint,
+        serving_fingerprint,
     )
     app = create_app(
         ApiServices(
@@ -221,6 +303,7 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
             query_token=settings.query_token.get_secret_value(),
             admin_token=settings.admin_token.get_secret_value(),
             query=query,
+            query_executor=query_executor,
             conversations=conversations,
             jobs=jobs,
             feedback=feedback,
@@ -229,11 +312,14 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
             audit=logger,
         )
     )
+    readiness.start()
     return RuntimeBundle(
         app=app,
         settings=settings,
         qdrant=qdrant,
         http_clients=clients,
+        readiness=readiness,
+        query_executor=query_executor,
     )
 
 
@@ -328,6 +414,7 @@ def _build_query_service(
 
 def _build_http_clients(
     settings: RuntimeSettings,
+    rollback: ExitStack,
 ) -> tuple[httpx.Client, ...]:
     pairs = (
         (settings.embedding_timeout_seconds, settings.embedding_api_token),
@@ -335,14 +422,35 @@ def _build_http_clients(
         (settings.llm_timeout_seconds, settings.llm_api_token),
     )
     request_clients = tuple(
-        _http_client(settings, timeout, token)
+        _registered_http_client(
+            settings,
+            timeout,
+            token,
+            rollback,
+        )
         for timeout, token in pairs
     )
     health_clients = tuple(
-        _http_client(settings, min(timeout, 5.0), token)
+        _registered_http_client(
+            settings,
+            min(timeout, 5.0),
+            token,
+            rollback,
+        )
         for timeout, token in pairs
     )
     return (*request_clients, *health_clients)
+
+
+def _registered_http_client(
+    settings: RuntimeSettings,
+    timeout: float,
+    token: object,
+    rollback: ExitStack,
+) -> httpx.Client:
+    client = _http_client(settings, timeout, token)
+    rollback.callback(client.close)
+    return client
 
 
 def _http_client(
@@ -369,6 +477,8 @@ def _pool(
     endpoints: tuple[str, ...],
     client: httpx.Client,
     settings: RuntimeSettings,
+    *,
+    max_concurrency: int,
 ) -> ResilientHttpPool:
     return ResilientHttpPool(
         endpoints,
@@ -377,7 +487,7 @@ def _pool(
             max_attempts=settings.max_attempts,
             failure_threshold=settings.failure_threshold,
             cooldown_seconds=settings.cooldown_seconds,
-            max_concurrency=settings.max_model_concurrency,
+            max_concurrency=max_concurrency,
         ),
     )
 
@@ -388,6 +498,96 @@ def _secret(value: object) -> str | None:
         return None
     secret = get_secret_value()
     return secret if isinstance(secret, str) and secret else None
+
+
+def _validate_runtime_contract(
+    settings: RuntimeSettings,
+    pipeline: PipelineSpec,
+    retrieval: RetrievalSettings,
+) -> None:
+    if DocxParser.version != pipeline.parser_revision:
+        raise ValueError("parser revision 与实际 DocxParser 不一致。")
+    _require_file_sha256(
+        settings.embedding_tokenizer_path,
+        pipeline.embedding_tokenizer_sha256,
+        "embedding tokenizer",
+    )
+    _require_file_sha256(
+        settings.llm_tokenizer_path,
+        pipeline.llm_tokenizer_sha256,
+        "LLM tokenizer",
+    )
+    corpus_policy = CorpusPolicy.load(settings.corpus_policy_path)
+    if corpus_policy.semantic_sha256() != pipeline.corpus_policy_sha256:
+        raise ValueError("corpus policy SHA256 与 pipeline 不一致。")
+    expected_models = (
+        (
+            "embedding",
+            settings.embedding_model,
+            pipeline.embedding_model,
+        ),
+        (
+            "reranker",
+            settings.reranker_model,
+            pipeline.reranker_model,
+        ),
+        ("LLM", settings.llm_model, pipeline.llm_model),
+    )
+    for name, configured, expected in expected_models:
+        if configured != expected:
+            raise ValueError(f"{name} model ID 与 pipeline 不一致。")
+    _require_sparse_contract(pipeline, retrieval)
+    if retrieval.low_ocr_threshold != pipeline.ocr_minimum_confidence:
+        raise ValueError("OCR minimum confidence 与 pipeline 不一致。")
+    if pipeline.prompt_revision != _actual_prompt_revision():
+        raise ValueError("prompt revision 与实际实现不一致。")
+
+
+def _require_sparse_contract(
+    pipeline: PipelineSpec,
+    retrieval: RetrievalSettings,
+) -> None:
+    if (
+        retrieval.bm25_tokenizer != pipeline.sparse_tokenizer
+        or retrieval.bm25_language != pipeline.sparse_language
+    ):
+        raise ValueError("BM25 tokenizer/language 与 pipeline 不一致。")
+    encoder = QdrantBm25Encoder(
+        tokenizer=pipeline.sparse_tokenizer,
+        language=pipeline.sparse_language,
+    )
+    if encoder.revision() != pipeline.sparse_revision:
+        raise ValueError("BM25 revision 与实际实现不一致。")
+
+
+def _actual_prompt_revision() -> str:
+    rewriter = object.__new__(QueryRewriter)
+    answerer = object.__new__(AnswerGenerator)
+    canonical = json.dumps(
+        {
+            "answer": answerer.revision(),
+            "rewrite": rewriter.revision(),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return (
+        "sha256:"
+        f"{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+    )
+
+
+def _require_file_sha256(
+    path: Path,
+    expected_sha256: str,
+    label: str,
+) -> None:
+    try:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError(f"{label} 文件不可读。") from error
+    if actual != expected_sha256:
+        raise ValueError(f"{label} SHA256 与 pipeline 不一致。")
 
 
 def _reject_incompatible_active_index(

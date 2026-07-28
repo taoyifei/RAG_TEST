@@ -272,7 +272,15 @@ class AnswerGenerator:
             )
 
     def revision(self) -> str:
-        """返回回答 prompt 与 JSON Schema 的规范化 SHA256。"""
+        """返回回答 prompt 与 JSON Schema 的规范化 SHA256。
+
+        Args:
+            无参数；使用当前回答协议常量。
+
+        Returns:
+            带算法前缀的规范化 SHA256。
+
+        """
         serialized = json.dumps(
             {
                 "response_format": _RESPONSE_FORMAT,

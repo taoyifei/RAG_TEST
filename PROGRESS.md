@@ -1,5 +1,460 @@
 # DOCX RAG 交付进度
 
+## 2026-07-28 正式镜像前本地阻塞修复：目标、顺序与风险（8 行）
+
+1. 只修全仓 docstring、真实 DOCX 边界、严格配置、OCR cache key、查询准入和资源回收。
+2. 先重建任务 0 基线，再严格按任务 1→5 逐项红测、修复、专项绿测。
+3. 默认 docstring 必须覆盖完整 roots，纯 docstring 改动必须通过去除 docstring 后 AST 对比。
+4. Parser v3 必须保留内部控制字符、展开普通内容控件、审计 TOC 并拒绝未知证据结构。
+5. pipeline schema/元数据词表/RFC3339/重复 JSON key 必须在任何外部资源前 fail closed。
+6. OCR 必须按每次请求的 media SHA+revision 做端点级校验；错误结果不得永久缓存。
+7. 查询固定运行 4、排队 8、总容量 12，关闭顺序必须先收敛查询再关闭底层客户端。
+8. 最大风险是真实 DOCX XML 边界、构造中途所有权转移和断开流生成器的容量释放。
+
+## 2026-07-28 新目标任务 0：事实基线
+
+- Git 基线：HEAD
+  `dd997ad517b6b49c2f1a22429e84d35b6ed8d835`；tracked=157、
+  untracked=20、modified/deleted=68、完整 status=88、staged=0；当前 diff
+  `68 files changed, 3348 insertions(+), 740 deletions(-)`，延续上一目标未提交树。
+- 受保护摘要中 `docs`、frozen、results、evidence、既有验收文件及参考仓库
+  HEAD/tree/tracked 聚合均与既有基线一致；`artifacts` 当前聚合为
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`，
+  与冻结值 `ee2ec...` 不一致，已置顶写入 `BLOCKED.md`，未修改该目录。
+- 基线门禁：compileall、Ruff、strict mypy
+  `Success: no issues found in 78 source files`、pytest
+  `186 passed, 22 warnings in 87.11s`（skipped=0）均退出 0。
+- 当前 docstring 默认命令输出 `missing_google_sections=0`，但它只检查 changed；
+  `--all` 退出 1 并输出 `missing_google_sections=40`，证明默认全仓语义和严格
+  callable 规则均未实现。
+- 指定 DOCX 审计命令退出 1：
+  `ModuleNotFoundError: No module named 'rag_app'`；安全聚合只读核验为
+  documents=6、headings=226、paragraphs=591、tables=71、
+  image references=132、unique media=126、blank paragraphs=12，未输出正文或名称。
+- 四个 shell、Compose config、`git diff --check`、应用 8 项、OCR 总清单
+  69 项、wheels 59 项、models 6 项及冻结集 1 项资产校验均退出 0。
+- 临时 index release-safety 退出 0：tracked candidate=175、六类和总
+  violations=0；真实 index 前后 SHA 均为
+  `5babd6f4638dbf36aec00991569b3dd240f5e7bfb1fbc1d0eeba5541a6508cbf`。
+- 调用点：请求级 `threading.Thread` 在 `api/stream.py`，另有 readiness 后台线程；
+  `BoundedSemaphore` 仅在 resilience/OCR service；Chunker metadata 仍可为 None；
+  配置读取含 pipeline/retrieval/corpus 三套独立 JSON 路径；worker OCR validator
+  只校验固定 revision；index fingerprint 当前未序列化 schema_version。
+
+## 2026-07-28 新目标任务 1：全仓 Google Python Style 门禁
+
+- [x] 先新增 `tests/test_google_docstrings.py`；定向红测退出 1，
+  `5 failed`，分别证明旧实现漏检完全无 docstring、无参数、`None` 返回、
+  无返回注解、中文章节、嵌套 callable，且默认仍错误缩小到 changed、
+  不识别显式 `--changed`。
+- [x] 检查器默认固定扫描 `src/rag_app`、`evaluation`、`scripts`，只允许
+  `--changed` 缩小；`--all` 为同义兼容选项。缺 docstring 同时报告
+  docstring/Args/Returns，所有发现稳定排序并保留汇总计数。
+- [x] 新规则首次全量退出 1 并暴露 `missing_google_sections=111`；分批只补
+  中文 Google docstring 后，默认和 `--changed` 均退出 0，输出
+  `missing_google_sections=0`；检查器定向测试为 `5 passed in 0.09s`。
+- [x] 对本阶段 30 个只改 docstring 的文件，剥离模块、类、同步/异步函数
+  docstring 后比较修改前后 AST SHA256：`docstring_only_files=30`、
+  `ast_mismatches=0`。
+- [x] README 的 compileall 已包含 evaluation，并写明默认全仓与显式
+  `--changed`、临时 `GIT_INDEX_FILE` 发布扫描，以及禁止含
+  `__pycache__`/`.pyc`/`.pyo` 的审查 ZIP、Git 候选和 build context。
+- [x] 阶段绿测：compileall、Ruff、strict mypy
+  `Success: no issues found in 78 source files`、`git diff --check`、
+  `git diff --cached --quiet` 均退出 0；全量 pytest
+  `191 passed, 22 warnings in 84.06s`，skipped=0，未新增 warning 类别。
+
+## 2026-07-28 新目标任务 2：DOCX 结构边界与 Parser v3
+
+- [x] Parser/Chunk/内容控件红测退出 1，摘要为 `8 failed, 18 passed`；
+  失败覆盖纯 `w:tab/w:br` 段落及其空 embedding、普通顶层内容控件漏读、
+  TOC 无审计、未知文本/图片节点静默忽略，以及 Chunker/Chunk 接受纯空白。
+- [x] 新增按 document order 递归展开的 block iterator：`p/tbl` 保留既有
+  语义，普通 `w:sdtContent` 展开，明确标记 `Table of Contents` 的控件跳过
+  并计数；未知节点无证据时计数，有非空 `w:t`、图片关系或表格时抛
+  `UnsafeDocxError`，不扩展其他 OOXML 范围。
+- [x] `_paragraph_text()` 继续保留有效文本内部 tab/换行，但最终
+  `text.strip()` 为空即返回空串；Parser、Chunker 和 Chunk 契约三层阻止
+  纯空白证据。专项绿测为 `26 passed in 0.38s`。
+- [x] `audit_docx_inputs.py` 直接命令的导入路径已修复，输出仅含计数；
+  `.venv/bin/python scripts/audit_docx_inputs.py docs` 退出 0：
+  documents=6、headings=226、paragraphs=579、tables=71、
+  image_references=132、unique_media=126、blank_text_elements=0、
+  toc_controls_skipped=3、ordinary_controls_parsed=0、
+  unsupported_nodes=15、unsupported_content_with_evidence=0。
+- [x] Parser revision 固定为 `docx-parser-v3`，pipeline 与
+  `ASSETS.sha256` 已同步。新增 v2 preflight 反测先因构造 Qdrant 退出 1；
+  修复后 runtime/worker 在 Qdrant、SQLite、HTTP 前拒绝 v2，
+  `tests/test_runtime_preflight.py` 为 `15 passed, 1 warning`。
+- [x] 阶段回归：全量 pytest `200 passed, 22 warnings in 79.03s`、
+  skipped=0；Ruff、strict mypy（78 source files）、compileall、默认及
+  `--changed` docstring、`git diff --check`、8 项应用资产 SHA 均退出 0。
+
+## 2026-07-28 索引兼容契约修复：目标、顺序与风险（8 行）
+
+1. 仅修复索引/服务指纹、语料元数据、改写传递、端点韧性、readiness 与稳定 ID/解析盲区。
+2. 先完成任务 0 事实基线，再按任务 1→5 逐项执行红测、修复和专项绿测。
+3. index fingerprint 只描述索引兼容性；serving fingerprint 只用于启动诊断和审计。
+4. corpus policy 是新索引元数据的唯一来源，语义变化只能通过新 collection 全量重建。
+5. resolved query 只驱动软路由和 rerank，原问题仍参与召回并用于最终回答。
+6. 每个端点尝试必须包含响应 schema 校验；聊天请求只读 readiness 内存快照。
+7. 新 locator 必须消除重复标题、分段和媒体引用碰撞，并补齐表格及嵌套表格图片。
+8. 最大风险是旧索引兼容判断、启动前 fail-closed 次序和 DOCX XML 出现顺序被间接测试掩盖。
+
+## 2026-07-28 任务 0：事实基线
+
+- Git：`git rev-parse HEAD` 退出 0，HEAD 为
+  `dd997ad517b6b49c2f1a22429e84d35b6ed8d835`；tracked=157、
+  untracked=15、staged=0，`git diff --cached --stat` 为空。
+- 完整 `git status --short`：修改
+  `.gitignore`、`BLOCKED.md`、`Dockerfile`、`PROGRESS.md`、`README.md`、
+  `deployment/{.env.example,README.md,compose.yaml,deploy.sh,package.sh,rollback.sh,verify-offline.sh}`、
+  `deployment/ocr/Dockerfile`、`design/public/{asset-assembly.md,paddleocr-offline-deployment.md}`、
+  `evaluation/{evaluate.py,metrics.py}`、`scripts/load_test_chat.py`、
+  `src/rag_app/{__init__.py,manifest.py}`、`src/rag_app/ocr/{__init__.py,main.py,paddle_engine.py}`、
+  `src/rag_app/state/store.py` 及 9 个既有测试；删除
+  `src/{CACHEDIR.TAG,missing_stubs}`；新增
+  `Dockerfile.dockerignore`、`deployment/ocr/{Dockerfile.dockerignore,MODELS.sha256}`、
+  `design/public/offline-build-and-server-deployment.md`、
+  `evaluation/active_state.py`、4 个 scripts、`src/rag_app/active_evidence.py`
+  及 7 个测试/fixture 文件。该状态与上一目标交付树一致。
+- 受保护输入聚合 SHA256 复核退出 0：`docs`
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  `artifacts` `ee2ec74eb8cb39e7676ce66deae57e47525e6f69be818d567d40d711553a6415`；
+  `evaluation/frozen`
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  `evaluation/results`
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  `design/evidence`
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`；
+  既有验收文件
+  `9e596c21953d3181992db3b4c96beb55d7d8c1ce368a0eea9b742a915105f6ab`。
+- 只读参考仓库复核退出 0：HEAD
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5`、tree
+  `84a0a960426da37111a93a806242543c61a881a9`、tracked 聚合
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`，
+  `git status --short` 为空。
+- ignored/受控资产复核：应用 7 项、OCR 总清单 69 项、OCR wheels 59 项、
+  OCR models 6 项、冻结集 1 项均逐项 `OK`；两个 tokenizer SHA 分别为
+  `aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4`
+  和 `def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a`。
+- 基线门禁均退出 0：compileall；Ruff `All checks passed!`；strict mypy
+  `Success: no issues found in 77 source files`；pytest
+  `136 passed, 19 warnings in 71.59s`、skipped=0；严格 docstring
+  `missing_google_sections=0`；4 个 shell、Compose、`git diff --check` 均通过。
+- 临时 Git index 首次因 PowerShell 吞掉 Bash 变量而得到 0 文件并失败；
+  改用显式 `/tmp/rag-task0-index-8f02879f` 后退出 0：
+  `tracked_files=170`、六类违规及总违规均为 0；真实 index 前后均为
+  `5babd6f4638dbf36aec00991569b3dd240f5e7bfb1fbc1d0eeba5541a6508cbf`。
+- 资产组合命令首次因错误相对目录在冻结集步骤退出 1；拆分后
+  `evaluation/frozen/MANIFEST.sha256` 输出 `dataset.json: OK` 并退出 0。
+- 调用点搜索前两次因 Windows `rg` 回退/PowerShell 管道解释退出 1；改用
+  PowerShell `Select-String` 后退出 0。`pipeline.fingerprint()` 位于
+  `contracts.py:222`、`worker_runtime.py:140`、`assets.py:71`、
+  `runtime.py:108`、`job_runner.py:94`，以及 11 个测试/fixture 和
+  `evaluation/chunking_experiment.py:82`；`pipeline_fingerprint` 生产代码分布于
+  contracts、active_evidence、observability、chunking、manifest、assets、
+  health、runtime、API、state、index 和 CLI。
+- 其余调用点：`max_model_concurrency` 位于 `settings.py:185`、
+  `worker_runtime.py:111`、`runtime.py:380`；`QueryVariants` 位于
+  `rewrite.py:82/116/138/180`、`hybrid.py:95` 和 query/hybrid 测试；
+  readiness 实际调用为 `api/app.py:126/148`，探针调用为
+  `health.py:261`；`stable_chunk_id()` 定义/生产调用位于
+  `contracts.py:297`、`active_evidence.py:423`、`chunking.py:178`，
+  另有 active-evidence/contracts 测试调用。
+
+## 2026-07-28 任务 1：index/serving fingerprint 与启动前契约
+
+- [x] 红测一：`pytest -q tests/test_pipeline_contracts.py` 退出 1，
+  `2 failed, 2 passed`；旧实现把 prompt/reranker/LLM 纳入索引指纹，且没有
+  `serving_fingerprint()`。
+- [x] 红测二：`pytest -q tests/test_runtime_preflight.py` 退出 1，
+  `7 failed`；tokenizer、parser、BM25、prompt 和 model ID 错配均先构造
+  Qdrant 客户端，证明没有启动前 fail-closed。
+- [x] `PipelineSpec.index_fingerprint()` 只序列化 parser、OCR、chunker、
+  embedding tokenizer/文档 instruction、BM25、Qdrant revision 和 corpus
+  policy 摘要；兼容入口 `fingerprint()` 返回同一索引指纹。
+- [x] `RetrievalSettings.serving_fingerprint()` 覆盖 index fingerprint、
+  改写/召回/RRF/metadata/软路由、reranker/相邻块/证据与输出预算、LLM、
+  prompt 和 LLM tokenizer；`status`、字段顺序和 JSON 排版不进入语义摘要。
+- [x] `load_pipeline()` 要求 JSON 显式提供全部字段并拒绝未知字段；manifest、
+  Qdrant payload、任务及活动证据的 `pipeline_fingerprint` 未改名，仍只保存
+  index fingerprint；serving fingerprint 仅进入结构化审计日志。
+- [x] runtime 在 Qdrant/SQLite/HTTP 客户端创建前校验两个 tokenizer 文件 SHA、
+  BM25 tokenizer/language/revision、embedding/reranker/LLM model ID 和实际
+  QueryRewriter+AnswerGenerator prompt 组合；worker 同阶段校验 embedding
+  tokenizer/model、DocxParser、BM25 及 OCR 置信度契约。
+- [x] worker 的 `DocxBuildConfig.embedding_instruction` 已改为
+  `pipeline.document_embedding_instruction`，不再硬编码空串；专项测试直接
+  捕获构建配置并证明非空指令能完整传递。
+- [x] 旧版“全字段 pipeline”指纹被 `IndexManifest` 明确拒绝；配置固定
+  LLM tokenizer SHA
+  `aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4`
+  与 embedding tokenizer SHA
+  `def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a`。
+- [x] 行为绿测最终 `19 passed, 1 warning in 1.05s`；专项 Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 5 source files`。扩展回归首次因误写不存在的
+  `tests/test_runtime_query_integration.py` 在收集前退出 4；改用实际文件后
+  `25 passed, 1 warning in 2.06s`。
+- [x] worker 指令测试首次因夹具不是合法 tokenizer 退出 1，并伴随 Ruff
+  两项 `B009`；改成真实最小 tokenizer 和明确类型后转为上述 19 项全绿。
+
+## 2026-07-28 任务 2：唯一 corpus policy 元数据来源
+
+- [x] 红测：`pytest -q tests/test_corpus_policy.py` 退出 2，收集阶段
+  `ImportError: cannot import name 'DocumentMetadata'`，证明旧实现没有语料
+  元数据契约或 policy 加载器。
+- [x] 新增严格只读 `deployment/config/corpus-policy.json`：
+  schema v1、`active/official` 默认值、空有效期和空覆盖，不含真实私有文档名；
+  `RuntimeSettings.corpus_policy_path` 默认指向镜像内固定路径。
+- [x] `CorpusPolicy` 拒绝未知/重复 JSON 字段、绝对路径、`..`、反斜杠、
+  非规范路径、重复项、大小写折叠冲突、符号链接、越界、多余覆盖、
+  无时区/倒置日期和 `unspecified`；覆盖只能命中本次发现的 DOCX。
+- [x] policy 语义摘要把日期规范化到 UTC、按路径排序并忽略 JSON 排版；
+  当前摘要为
+  `1079f1dae19d0e134f5660234eab9961e68adbb6724ea8d6f0de81db42646c61`，
+  与 pipeline 显式字段一致，语义变化会改变 index fingerprint。
+- [x] worker 在 Qdrant、SQLite 和 embedding 客户端创建前发现 DOCX、验证
+  policy 摘要及全部覆盖；未知覆盖专项证明 Qdrant/embedding 尚未构造即失败。
+  runtime 同样在外部资源创建前验证 policy 文件和摘要。
+- [x] `DocxChunkBuilder` 要求每个 source 有已解析元数据，并在调用 Chunker
+  创建 chunk 前传入；Chunk/Qdrant payload 完整保存 status、authority 和
+  两个有效期，新 chunk 契约拒绝 `unspecified`。
+- [x] 真实 Qdrant metadata filter 使用 `active/official`，证明默认活动文档
+  可检索，draft、过期和非权威文档被排除；checked-in retrieval filter 已移除
+  `unspecified`。
+- [x] 真实 Qdrant 全量/增量反向测试证明：policy 摘要变化后的增量任务失败，
+  alias 仍指向旧 collection 且旧点数不变；随后全量任务创建不同物理
+  collection 并原子切换 alias，未原地修改旧 payload。
+- [x] 绿测：策略/前置失败/DOCX build/metadata/Qdrant job/fingerprint 合计
+  `42 passed, 5 warnings in 19.11s`；Ruff `All checks passed!`；
+  strict mypy `Success: no issues found in 7 source files`；更新后的 8 项
+  `deployment/ASSETS.sha256` 全部 `OK`。
+
+## 2026-07-28 任务 3：resolved query 传播边界
+
+- [x] 红测：改写、查询服务和混合检索专项退出 1，
+  `3 failed, 2 passed, 1 warning in 3.66s`；旧触发器把普通直问中的“该”
+  误判为上下文依赖，reranker 和软路由都收到原问题。
+- [x] `QueryVariants` 现在显式携带唯一 `resolved_query` 并校验语义：
+  未改写时等于原问题，成功改写时等于第二个且唯一的独立问题；失败回退仍只
+  保留原问题。
+- [x] 触发器只保留明确的代词/省略信号，普通“设备过热该如何处理”和
+  “变压器油温过高怎么办呢”不调用 LLM；“昨天那个跳闸的怎么处理”和
+  “3号主变那个告警呢”在有历史时改写，无历史时不调用。
+- [x] soft route 与 reranker 只接收 `resolved_query`；dense/BM25 仍保留
+  原问题和独立改写问题两个通道；最终 AnswerGenerator 仍接收用户原问题。
+- [x] QueryRewriter prompt revision 更新为
+  `sha256:aafa8168c32451b266bc78e3ca4719830870c2a5568ef5475f3242d7bc553efe`，
+  组合 prompt revision 更新为
+  `sha256:9fc5318f48fe38a5941cf6b8738c9725dcc3aebaa5f55bc4b698ecf55e4398d7`；
+  pipeline 资产摘要同步更新并 8/8 `OK`。
+- [x] 绿测：定向回归
+  `29 passed, 2 warnings in 4.01s`；Ruff `All checks passed!`；
+  strict mypy `Success: no issues found in 5 source files`。Ruff 首轮唯一红灯为
+  `QueryVariants` 的查询数量魔法数字，改为具名常量后全绿。
+
+## 2026-07-28 任务 4：端点级 schema 韧性与缓存 readiness
+
+- [x] 主红测退出 1，`18 failed, 13 passed, 1 warning in 1.66s`：
+  `request_json()` 尚无 validator，embedding 无 model 契约，reranker/LLM/OCR
+  在 pool 成功后才发现坏响应，readiness 每次现场探测，且只有共享
+  `max_model_concurrency`。
+- [x] `ResilientHttpPool` 把 HTTP、JSON 和服务 schema 校验纳入同一次端点
+  attempt；schema 失败计入熔断并切换，只有全通过才记录成功。最终错误只暴露
+  `HTTP_TRANSPORT/HTTP_n/INVALID_JSON/INVALID_RESPONSE_SCHEMA/
+  NO_HEALTHY_ENDPOINT` 等稳定类别，不带请求或响应内容；明确 4xx 立即终止且
+  不切换。
+- [x] embedding 校验 model、条数、完整唯一 index、固定维度、真实数值类型及
+  finite；reranker 校验条数、index 和 `[0,1]` finite score；LLM 校验 model、
+  单 choice、`finish_reason=stop`、非空 content 和一致 usage；worker 的 OCR
+  pool 校验 Pydantic schema 与冻结 revision。
+- [x] wrong-model、错误维度、错误 finish_reason、错误 rerank score 和错误
+  OCR revision 均切到下一端点；全部 schema 错误后端点进入熔断；4xx 反测只
+  调一次。合法 LLM completion 返回后，引用业务校验仍在 pool 外，不会把业务
+  失败当作端点失败重放。
+- [x] 将共享闸门拆为 `max_embedding_concurrency`、
+  `max_reranker_concurrency`、`max_llm_concurrency`，默认均保持 5；
+  `max_ocr_concurrency` 保持且只能为 1，`.env.example` 已列出四项。
+- [x] `ReadinessService.start()` 启动时同步刷新一次，再由唯一后台线程按固定
+  间隔刷新；`/ready` 与 `/api/chat` 只读加锁快照。未刷新、超过 max
+  staleness 和后台异常均 fail closed，异常详情不进入状态。
+- [x] 计数器/假时钟证明连续 ready/chat 不增加探针调用，缓存过期时也不现场
+  探测；线程测试证明后台确实刷新且 `close()` 后终止。RuntimeBundle 顺序测试
+  固定为 readiness stop/join → HTTP clients → Qdrant。
+- [x] 第二个红测拒绝可转换字符串向量，旧实现
+  `Failed: DID NOT RAISE ExternalServiceUnavailableError`；改为只接受 JSON
+  number 后转绿。
+- [x] 绿测扩展回归 `52 passed, 3 warnings in 4.75s`；专项 Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 7 source files`。Ruff 首轮仅
+  `TeiEmbeddingClient.__init__` 参数过多，收敛为
+  `EmbeddingClientConfig` 后全绿。
+
+## 2026-07-28 任务 5：完整 Locator、稳定 ID 与表格图片
+
+- [x] 红测退出 1，`9 failed, 16 passed, 8 warnings in 23.27s`：
+  Locator 丢弃 heading/segment 字段，相同长文本的 5 个重叠 segment 只得到
+  1 个 chunk ID，重复标题碰撞，tab/换行被拼接，表格与嵌套表格两张图片均
+  漏失，Qdrant locator payload 也没有新字段。
+- [x] `Locator` 新增可持久化 `heading_index`、`segment_index`，两者进入
+  `logical_key()`；display 在存在时增加“标题N/片段N”，没有引入页码或修改
+  既有 HTTP API schema。
+- [x] `DocxParser.version` 更新为 `docx-parser-v2`；每个标题按文档顺序编号，
+  后续段落、表格和图片继承当前标题编号。pipeline parser revision 与资产
+  SHA 已同步，旧 `docx-parser-v1` 在 Qdrant/HTTP/SQLite 构造前被拒绝。
+- [x] Chunker 对每个元素的全部 segment（含唯一 segment）从 1 稳定编号，
+  再用完整 locator 计算 chunk ID 并写入 payload；重复相同/overlap 文本的
+  ID 全唯一，纯文件重命名仍不改变 element/chunk ID。
+- [x] DOCX 图片关系改为单次 XML document-order 查询；正文段落、正文表格
+  单元格及嵌套表格图片均被发现。相同媒体的多次关系引用保留 image locator
+  1/2/3 和唯一 element ID，媒体 SHA 相同，后续相同 OCR 文本仍得到两个唯一
+  chunk ID，未改变按媒体 SHA 的 OCR 缓存键。
+- [x] 段落 XML 按节点顺序保留 `w:tab` 为 `\t`、`w:br/w:cr` 为 `\n`；
+  未扩展页眉页脚、脚注、批注、文本框、SmartArt、OLE 或 EMF 转换。
+- [x] Qdrant payload 的 locator JSON 由完整模型导出；active evidence 要求
+  新字段存在，并用新 logical key 重算 chunk ID。真实 Qdrant 反测删除两个
+  字段后导出失败；新 locator 正常分页导出。
+- [x] 相同输入重复解析/切块结果完全一致；重复标题、重复 segment、重复媒体
+  的 element/chunk ID 均唯一；表格图片、嵌套图片、tab/换行、重命名均有
+  明确断言。
+- [x] 最终专项行为回归 `50 passed, 9 warnings in 24.43s`；Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 4 source files`；8 项应用资产 SHA 全部 `OK`。
+
+## 2026-07-28 索引契约修复最终验收
+
+- [x] 第二轮完整门禁均退出 0：
+  `.venv/bin/python -m compileall -q src tests scripts evaluation`；
+  全仓 Ruff `All checks passed!`；strict mypy
+  `Success: no issues found in 78 source files`；全量 pytest
+  `186 passed, 22 warnings in 80.96s`、skipped=0，超过任务 0 的 136 项基线。
+- [x] Google docstring 首次误用 `--all` 扫描到 65 个任务 0 基线之外的历史
+  缺口并退出 1；按基线相同的“本工作树新增/修改非测试 Python”严格口径运行，
+  首次为 25 项，本轮白名单内补齐后
+  `.venv/bin/python scripts/check_google_docstrings.py` 输出
+  `missing_google_sections=0` 并退出 0；未修改白名单外历史文件。
+- [x] `bash -n deployment/{deploy,package,rollback,verify-offline}.sh`、
+  `docker compose --env-file deployment/.env.example -f
+  deployment/compose.yaml config -q`、`git diff --check` 均退出 0。
+- [x] 受控资产全部通过：应用 8 项、OCR 总清单 69 项、wheels 59 项、
+  models 6 项、冻结集 1 项全部 `OK`；pipeline 新 SHA 为
+  `4c4dfcd972d8f43dfbb16c4a8f29bc641979d90a27634d2200ff22b8ec9a4835`。
+- [x] 临时 Git index 发布安全扫描退出 0：tracked candidate=175，
+  private path/network/local path/secret/binary/large file 和总 violations 均为
+  0；真实 `.git/index` 前后 SHA 均为
+  `5babd6f4638dbf36aec00991569b3dd240f5e7bfb1fbc1d0eeba5541a6508cbf`。
+- [x] 受保护摘要与任务 0 完全一致：`docs`
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  `artifacts` `ee2ec74eb8cb39e7676ce66deae57e47525e6f69be818d567d40d711553a6415`；
+  frozen `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`；
+  验收文件 `9e596c21953d3181992db3b4c96beb55d7d8c1ce368a0eea9b742a915105f6ab`。
+- [x] 只读参考仓库仍为 HEAD
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5`、tree
+  `84a0a960426da37111a93a806242543c61a881a9`、tracked 聚合
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`，
+  worktree 为空。
+- [x] 当前 HEAD 仍为任务 0 的
+  `dd997ad517b6b49c2f1a22429e84d35b6ed8d835`，staged=0；本目标没有
+  commit/push、联网下载、服务器访问、镜像 build/save/package。外部证据缺口
+  已完整保留在 `BLOCKED.md`。
+
+## 2026-07-28 双包离线交付修复开工回执
+
+1. 当前 HEAD `dd997ad`，main 干净、5 commits、157 tracked、无 remote。
+2. compileall、Ruff、mypy 72 files、四脚本、Compose、冻结 SHA、diff 均退出 0。
+3. pytest `115 passed, 12 warnings in 53.69s`，skipped=0。
+4. release safety：157 tracked，六类违规及总 violations 均为 0。
+5. Python 3.10 导入 OCR 红灯：`enum.StrEnum` ImportError。
+6. 旧 `docx-rag:0.1.0` 为 `f85c569e...`，无 OCI revision label。
+7. 旧 wheel 含 `worker_runtime.py`，但完全缺少 `rag_app/ocr/**`，不得复用。
+8. 顺序：可信根→OCR 隔离→可复现双包→服务器布局/教程→docstring/全门禁。
+9. 最大风险是活动 Qdrant 现场与 SQLite manifest 的跨存储一致性验证。
+
+### 任务 1：活动证据可信根
+
+- [x] 生产 evaluator/load test 已删除自由证据 JSON 输入，改为从活动
+  Qdrant alias、SQLite active manifest 和物理 collection 现场分页生成。
+- [x] 清单固定 collection、index manifest SHA、pipeline、point count、
+  records SHA 和整体 SHA；SQLite manifest、文本、locator/chunk ID 摘要均重算。
+- [x] 协同伪造红证据：新增测试最初
+  `Failed: DID NOT RAISE TypeError`，证明 results+manifest 可一起假通过。
+- [x] 真实 Qdrant 绿证据：跨页无重复、locator/text/hash 篡改、旧
+  collection、旧 pipeline、retired point 与 SQLite 摘要共 `22 passed`；
+  Ruff 全绿，mypy `no issues found in 6 source files`。
+
+### 任务 2：OCR Python 3.10 隔离与结果正确性
+
+- [x] 红证据：完整源码/最小 COPY 树均因 eager import 失败；NumPy bbox 为
+  `(0,0,0,0)`；OCR 服务恢复后的第二次构建仍没有 OCR chunk。
+- [x] `rag_app` 与 `rag_app.ocr` 改为 PEP 562 懒加载；`main` 只在启动时
+  解析第三方依赖。Python 3.10 两种导入硬门禁均通过，最小树无 contracts.py。
+- [x] `rec_boxes` 支持 NumPy `tolist()` 并校验有限数值；瞬态
+  `OCR_SERVICE_UNAVAILABLE` 结果仍留审计状态，但不再作为永久缓存命中。
+- [x] 绿证据：专项 `4 passed`，Ruff 全绿，mypy `no issues found in 2 files`。
+- [x] 现有 OCR 资产 manifest 69 项全部 OK；真实 CPU 冒烟输出：
+  `51 lines / 189 chars / confidence 0.943705 / inference 17.293s`，未输出原文。
+
+### 任务 3：可复现构建与 runtime/corpus 双包
+
+- [x] 新增 Python 3.11 runtime wheel 准备入口；只下载 linux/amd64
+  固定 wheel，重建当前项目 wheel，并硬校验 `ocr/**` 与
+  `worker_runtime.py` 后生成 `WHEELS.sha256`。
+- [x] app Dockerfile 改为实际按 runtime lock 从本地 wheelhouse 安装并
+  `pip check`；app/OCR 均要求 40 位 OCI revision，OCR 构建逐文件校验
+  `MODELS.sha256`。
+- [x] `package.sh` 改为 runtime/corpus 双包；两包均有内部逐文件 manifest
+  和外层 `.tar.gz.sha256`，三张镜像固定分别保存/加载，不遍历任意 tar。
+- [x] 红证据：旧 wheel 缺 OCR、错误模型摘要、错误外层 SHA、路径穿越和旧
+  package revision 契约均失败；绿证据：专项 `8 passed`，Ruff、mypy、
+  四脚本 syntax 与 Compose config 均退出 0。
+- [x] 按目标边界未执行 download/build/save/package；真实产物摘要留给用户
+  按公开手册回填，未把旧 `docx-rag:0.1.0` 当成新候选。
+
+### 任务 4：服务器目录、部署教程与回滚
+
+- [x] Compose 删除 named volumes，改为
+  `RAG_STATE_PATH`、`RAG_QDRANT_PATH`、只读 `RAG_DOCS_PATH` bind mount。
+- [x] 固定 `/data/tyf/RAG` 的 incoming/releases/current/shared/data/
+  backups/logs 布局；env、current 和 rollback 记录均在 release 外。
+- [x] 部署脚本只加载 manifest 点名的三张镜像，复核 linux/amd64 与 OCI
+  revision，再执行 `up -d --no-build --pull never`；回滚不删状态或语料。
+- [x] `design/public/offline-build-and-server-deployment.md` 已覆盖三张固定
+  digest 基础镜像、资产准备、断网构建、双包、`${RAG_SERVER}` 上传、安全
+  解包、权限、GPU/基础设施冒烟、冻结后验收、备份与回滚；不含真实服务器 IP。
+- [x] `design/public/paddleocr-offline-deployment.md` 已补为稳定入口，解决
+  原先 README 引用文件不存在的问题。
+
+### 工程卫生与 Google Python Style
+
+- [x] 删除 tracked `src/CACHEDIR.TAG` 与 `src/missing_stubs`，并仅精确忽略
+  `/src/CACHEDIR.TAG`、`/src/missing_stubs`。
+- [x] 新增 AST 机械门禁；当前新增/修改的非测试 Python 输出
+  `missing_google_sections=0`，未通过拆模块规避检查。
+
+### 2026-07-28 最终本地验收
+
+- [x] 第二轮完整门禁：compileall 退出 0；Ruff `All checks passed!`；
+  mypy `Success: no issues found in 77 source files`；pytest
+  `136 passed, 19 warnings in 69.00s`，skipped=0。
+- [x] 四个 deployment shell `bash -n`、Compose config、Google docstring
+  门禁和 `git diff --check` 均退出 0。
+- [x] app 7 项资源、OCR 总资产 69 项、OCR wheels 59 项、模型 6 项和
+  frozen dataset manifest 全部 SHA256 `OK`。
+- [x] OCR 模型首次因在 `deployment/ocr` 错误相对目录执行而 6 项
+  `FAILED open or read`；修正 package/手册到 `deployment/ocr/assets` 后
+  6/6 `OK`，专项保持全绿。
+- [x] 发布安全候选首次仅命中教程中的个人 WSL 路径 1 项；改为
+  `RAG_REPOSITORY` 后最终复核 170 tracked candidate、六类和总
+  violations 均为 0。
+- [x] 真实只读输入复核仍为 6 DOCX、22,358,173 bytes、71 表格、
+  132 图片引用和 126 唯一媒体；未修改或暂存私有语料。
+- [x] Git index 无改动、remote 为空、push=0；按用户补充要求，本目标完成后
+  保持全部代码未 commit。
+
 ## 2026-07-27 源码发布与 PaddleOCR 开工回执
 
 1. 新目标是源码安全提交、P0 评测可信、PaddleOCR 代码和离线资料齐全。
@@ -689,3 +1144,122 @@
 - [ ] GitHub refs 在线复核因 60 秒超时未完成；本地仓库无 remote、push=0。
 
 具体解除条件和待用户回填证据见 `BLOCKED.md`。
+
+## 2026-07-28 任务 3：严格配置与元数据契约
+
+- [x] 先补 pipeline/retrieval/corpus policy 重复 JSON key、schema version、
+  重复参数/model key、空 revision、非法状态/权威级别、数字及非 RFC3339
+  时间、倒置时间、元数据省略和空过滤集合反测；首次专项为
+  `22 failed`，证明旧实现会覆盖重复 key、接受宽松日期和隐式元数据。
+- [x] 三类配置已统一经 `strict_json.load_json_file` 加载，任意层级重复 key
+  均在 Pydantic 及外部状态前 fail closed；错误不含重复字段名、配置值或路径。
+- [x] pipeline schema 固定为 `2`；schema、parser、元数据词表、OCR、chunker、
+  embedding、sparse、index revision 与 corpus policy 语义摘要均进入规范化
+  index fingerprint。chunker 恰含三个唯一既有 key，LLM model key 唯一，
+  除 document embedding instruction 外所有 model/revision/index 字段非空。
+- [x] 状态词表固定为 `active/draft/retired`，权威级别固定为
+  `official/verified/unverified`；日期仅接受带 `T` 和 `Z`/偏移的 RFC3339
+  字符串或 null。Chunk/Chunker 不再合成元数据，corpus policy 是唯一来源。
+- [x] 首次全量回归暴露旧测试构造缺少新必填元数据：
+  `20 failed, 201 passed, 22 warnings`；只补显式合法 fixture 后专项
+  `56 passed`，相关 strict mypy 为 `83 source files` 无问题。
+- [x] 配置交叉核验输出
+  `policy_digest_matches_pipeline=True`、`pipeline_schema=2`；探针首次误用
+  不存在的 `CorpusPolicy.sha256()` 退出 1，改用公开
+  `semantic_sha256()` 后退出 0。`deployment/ASSETS.sha256` 8 项全部 `OK`。
+- [x] 阶段完整门禁：compileall 退出 0；Ruff `All checks passed!`；mypy
+  `Success: no issues found in 79 source files`；pytest
+  `222 passed, 22 warnings in 83.03s`、skipped=0；默认 docstring
+  `missing_google_sections=0`；四个 shell 和 `git diff --check` 均退出 0。
+- [x] Compose 在未加载必填环境变量时按预期退出 1；显式使用
+  `deployment/.env.example` 后 `docker compose ... config -q` 退出 0。
+
+## 2026-07-28 任务 4：OCR 请求级校验与端点故障转移
+
+- [x] 先新增坏 SHA、坏 revision、缺字段和全端点坏反测；首次定向执行
+  `4 failed, 6 deselected, 1 warning`，坏响应只调用首端点并在客户端末端抛错，
+  证明校验发生得过晚。
+- [x] `OcrClient.recognize()` 现为每次请求向 `request_json()` 传入闭包，
+  在当前 endpoint attempt 内同时校验完整 `OcrResponse`、本次媒体 SHA 和
+  revision；worker 的 revision-only pool validator 及其冗余依赖已删除。
+- [x] 错 SHA、错 revision、非法/缺失 schema、非有限 confidence/bbox 均作为
+  当前端点失败切换下一端点；全部端点无效时稳定抛
+  `ExternalServiceUnavailableError: INVALID_RESPONSE_SCHEMA`，异常不含响应正文
+  或媒体摘要。
+- [x] builder 回归证明 `OCR_SERVICE_UNAVAILABLE` 不形成永久命中，同一媒体与
+  revision 在服务恢复后重试并把旧失败覆盖为 succeeded；成功结果继续复用，
+  `OCR_REQUEST_REJECTED` 仍是终态缓存且不会重复请求。
+- [x] 专项回归 `35 passed, 2 warnings in 2.06s`；阶段完整门禁为 compileall
+  退出 0、Ruff 全绿、mypy `79 source files` 无问题、pytest
+  `228 passed, 22 warnings in 85.57s`、skipped=0；默认及 `--changed`
+  docstring 均为 `missing_google_sections=0`，`git diff --check` 退出 0。
+
+## 2026-07-28 任务 5：有界查询执行与可恢复 runtime 构造
+
+- [x] 执行器红测首次因 `rag_app.query_executor` 不存在而收集失败；新增进程级
+  `QueryExecutor`，固定 max_workers=4、max_queue=8、总容量 12，生产排队上限
+  60 秒，稳定 `Retry-After=5`，关闭后拒绝新任务。
+- [x] 并发反测证明第 5 个查询排队且活动峰值始终为 4，12 个可准入，第 13 个
+  在 0.1 秒内拒绝；排队超时会取消未开始任务，异常后容量恢复，固定 4 个
+  `rag-query-worker` 线程在 close 后全部 join。执行器专项 `6 passed`。
+- [x] API/流红测夹具首次因构造失败后的测试清理缺口超时；修正测试 finally 后
+  得到真实 `3 failed`：ApiServices 和 stream 尚无执行器准入。修复后
+  `/api/chat` 在构造 StreamingResponse 前完成准入，满载/超时均返回 HTTP 429、
+  稳定 Retry-After 且不暴露线程、队列或端点信息。
+- [x] `stream_query` 不再逐请求 `threading.Thread(...).start()`；阶段队列保持
+  有界，流关闭后停止写消息，查询完成再释放容量。success、refusal、异常、
+  generator close 与客户端断开使用同一 finally/worker 收敛路径；排队任务
+  不会提前进入模型客户端或占用模型 semaphore。
+- [x] runtime/worker close 红测首次 `2 failed`，暴露 RuntimeBundle 无 executor
+  所有权且 worker 重复关闭/顺序错误；现已幂等，并按 executor→readiness→HTTP
+  →Qdrant、worker 资源构造逆序关闭。活动查询未结束时 network close 调用为 0。
+- [x] `ExitStack` 已覆盖 Qdrant、部分/完整 HTTP 客户端、readiness、executor
+  和 OCR HTTP 所有权；`create_app`、`readiness.start`、第三个 HTTP client
+  构造及 worker StateStore.initialize 注入失败均逆序关闭，专项
+  `21 passed`。成功返回后所有权仅属于 RuntimeBundle/WorkerRuntimeBundle。
+- [x] embedding/reranker/LLM 默认并发及 `.env.example`/Compose 显式默认值均
+  改为 4，OCR 保持 1；旧冻结断言产生 `1 failed` 后更新为 4 并转绿。
+  这些运行参数未进入 index 或 serving semantic fingerprint。
+- [x] 任务 5 合集 `40 passed, 2 warnings`；阶段全量门禁为 compileall 退出 0、
+  Ruff 全绿、mypy `80 source files` 无问题、pytest
+  `243 passed, 22 warnings in 85.82s`、skipped=0。默认及 `--changed`
+  docstring 均为 0，四个 shell、Compose、8 项资产 SHA 和
+  `git diff --check` 均退出 0；递归搜索仅 readiness 保留一个显式
+  `threading.Thread`，查询路径只使用固定 ThreadPoolExecutor。
+
+## 2026-07-28 最终本地交付审计
+
+- [x] 为完成条件 9 复核实际 build context 时，发现 OCR 的源码重新纳入规则位于
+  缓存排除之后，可能重新带入本轮门禁生成的缓存；两个
+  `Dockerfile.dockerignore` 均改为在全部 `!` 规则之后再次排除
+  `**/__pycache__/`、`**/*.pyc`、`**/*.pyo`。契约测试
+  `tests/test_ocr_isolation.py` 为 `3 passed in 0.07s`；首次 Ruff 精确报
+  `D413` 一项，补一处 docstring 空行后完整 Ruff 转绿。
+- [x] 最终核心门禁：compileall 退出 0；Ruff `All checks passed!`；strict mypy
+  `Success: no issues found in 80 source files`；全量 pytest
+  `244 passed, 22 warnings in 90.24s`、skipped=0，warning 类别仍仅为既有
+  Starlette TestClient 弃用提示和本地 HTTP Qdrant API key 提示。
+- [x] 默认全仓与显式 `--changed` docstring 检查均输出
+  `missing_google_sections=0`。任务 1 已记录的 30 个 docstring-only 文件
+  去除 docstring 后仍为 `ast_mismatches=0`。
+- [x] 真实 DOCX 最终只读审计退出 0：
+  documents=6、bytes=22358173、headings=226、paragraphs=579、tables=71、
+  image_references=132、unique_media=126、blank_text_elements=0、
+  toc_controls_skipped=3、ordinary_controls_parsed=0、
+  unsupported_nodes=15、unsupported_content_with_evidence=0；未输出文件名、
+  正文、OCR 文本或证据片段。
+- [x] `bash -n deployment/*.sh`、使用 `deployment/.env.example` 的
+  Compose config、`git diff --check` 均退出 0。应用资产 8/8、OCR models
+  6/6、OCR wheels 59/59、OCR 总清单 69/69、冻结集 1/1 均逐项 `OK`。
+  应用资产第一次因错误地从 `deployment/` 解释仓库根相对路径而退出 1；
+  回到仓库根执行同一清单后 8/8 转绿，资产未被修改。
+- [x] 临时 Git index 模拟 `git add -A` 后 release-safety 输出
+  tracked_files=181、binary/large/local-path/private-network/private-path/
+  secret/总 violations 全为 0；候选缓存文件为 0。真实 index 前后 SHA256
+  均为 `5babd6f4638dbf36aec00991569b3dd240f5e7bfb1fbc1d0eeba5541a6508cbf`。
+- [x] 最终本地边界：HEAD 仍为
+  `dd997ad517b6b49c2f1a22429e84d35b6ed8d835`，staged=0；未 commit、未 push、
+  未联网、未 build/save/package、未访问服务器。`docs`、frozen、results、
+  evidence、既有验收文件和参考仓库摘要未漂移；`artifacts` 保持任务 0 发现的
+  只读当前值 `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`，
+  与旧冻结值不一致的阻塞仍置顶保留，未修改或恢复该目录。

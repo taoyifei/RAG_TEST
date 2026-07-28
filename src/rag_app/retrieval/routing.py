@@ -43,7 +43,15 @@ class SoftRouter(Protocol):
     """查询链使用的最小软路由接口。"""
 
     def route(self, question: str) -> SoftRouteDecision:
-        """返回高置信来源范围或空范围全库回退。"""
+        """返回高置信来源范围或空范围全库回退。
+
+        Args:
+            question: 当前用户问题。
+
+        Returns:
+            软路由范围、置信度与回退状态。
+
+        """
 
 
 class KeywordSoftRouter:
@@ -74,7 +82,15 @@ class KeywordSoftRouter:
         self._minimum_confidence = minimum_confidence
 
     def route(self, question: str) -> SoftRouteDecision:
-        """仅在唯一最高分达到阈值时缩小来源范围。"""
+        """仅在唯一最高分达到阈值时缩小来源范围。
+
+        Args:
+            question: 当前用户问题。
+
+        Returns:
+            唯一高置信规则或全库回退决策。
+
+        """
         normalized = question.casefold()
         scored = tuple(
             (

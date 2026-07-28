@@ -78,7 +78,15 @@ class SyncPlanStore:
         self._database_path = database_path
 
     def initialize(self) -> None:
-        """初始化同步计划 schema。"""
+        """初始化同步计划 schema。
+
+        Args:
+            无参数；初始化当前数据库路径。
+
+        Returns:
+            无返回值。
+
+        """
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
 
@@ -88,6 +96,9 @@ class SyncPlanStore:
         Args:
             job_id: 父索引任务。
             plan: 规范排序并带摘要的同步计划。
+
+        Returns:
+            无返回值。
 
         Raises:
             ValueError: 同一 job 已绑定其他计划摘要。
@@ -213,6 +224,9 @@ class SyncPlanStore:
         Args:
             item_id: 持久任务项标识。
 
+        Returns:
+            无返回值。
+
         """
         self._finish(item_id, SyncItemState.SUCCEEDED, error_code=None)
 
@@ -222,6 +236,9 @@ class SyncPlanStore:
         Args:
             item_id: 持久任务项标识。
             error_code: 不含原文的稳定错误码。
+
+        Returns:
+            无返回值。
 
         """
         self._finish(

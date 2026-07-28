@@ -58,7 +58,15 @@ class RerankStageResult:
 
     @property
     def call_count(self) -> int:
-        """返回是否发生一次 reranker 调用。"""
+        """返回是否发生一次 reranker 调用。
+
+        Args:
+            无参数；检查当前重排结果。
+
+        Returns:
+            没有调用为 0，否则为 1。
+
+        """
         return 0 if self.call is None else 1
 
 
@@ -88,7 +96,7 @@ class RerankStage:
         """按模型分重排，RRF 仅稳定打破并列。
 
         Args:
-            query: 始终使用当前原始用户问题。
+            query: 改写成功时使用独立问题，否则使用原始问题。
             candidates: RRF 有序候选。
 
         Returns:

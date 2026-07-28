@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import partial
 
 from rag_app.clients.resilience import (
     HttpJsonResponse,
@@ -11,6 +12,7 @@ from rag_app.clients.resilience import (
 )
 
 __all__ = [
+    "EmbeddingClientConfig",
     "EmbeddingResult",
     "ExternalCallAudit",
     "RerankItem",
@@ -18,6 +20,29 @@ __all__ = [
     "RerankerClient",
     "TeiEmbeddingClient",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingClientConfig:
+    """Embedding 服务的冻结响应与批次契约。"""
+
+    model: str
+    dimension: int
+    max_batch_size: int
+    max_batch_chars: int
+
+    def __post_init__(self) -> None:
+        """拒绝空模型或非正数预算。"""
+        if (
+            not self.model.strip()
+            or min(
+                self.dimension,
+                self.max_batch_size,
+                self.max_batch_chars,
+            )
+            <= 0
+        ):
+            raise ValueError("embedding 模型、维度和批次预算必须有效。")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,30 +85,22 @@ class TeiEmbeddingClient:
         self,
         pool: ResilientHttpPool,
         *,
-        dimension: int,
-        max_batch_size: int,
-        max_batch_chars: int,
+        config: EmbeddingClientConfig,
         api_token: str | None,
     ) -> None:
         """冻结向量维度与请求预算。
 
         Args:
             pool: embedding 专属韧性端点池。
-            dimension: manifest 中的固定向量维度。
-            max_batch_size: 单请求最大文本数。
-            max_batch_chars: 单请求最大字符总数。
+            config: 冻结模型、维度与批次预算。
             api_token: 可选内部 Bearer token。
 
-        Raises:
-            ValueError: 任一数值预算不为正数。
-
         """
-        if min(dimension, max_batch_size, max_batch_chars) <= 0:
-            raise ValueError("embedding 维度和批次预算必须为正数。")
         self._pool = pool
-        self._dimension = dimension
-        self._max_batch_size = max_batch_size
-        self._max_batch_chars = max_batch_chars
+        self._model = config.model
+        self._dimension = config.dimension
+        self._max_batch_size = config.max_batch_size
+        self._max_batch_chars = config.max_batch_chars
         self._headers = _authorization_headers(api_token)
 
     def embed(
@@ -119,15 +136,23 @@ class TeiEmbeddingClient:
                 "POST",
                 "/v1/embeddings",
                 payload={
+                    "model": self._model,
                     "input": list(batch),
                     "truncate": False,
                     "encoding_format": "float",
                 },
                 headers=self._headers,
+                validator=partial(
+                    _validate_embedding_payload,
+                    expected_model=self._model,
+                    expected_count=len(batch),
+                    dimension=self._dimension,
+                ),
             )
             vectors.extend(
                 _parse_embedding_payload(
                     response.payload,
+                    expected_model=self._model,
                     expected_count=len(batch),
                     dimension=self._dimension,
                 )
@@ -191,6 +216,10 @@ class RerankerClient:
                 "truncate": False,
             },
             headers=self._headers,
+            validator=partial(
+                _validate_rerank_payload,
+                expected_count=len(documents),
+            ),
         )
         return RerankResult(
             items=_parse_rerank_payload(
@@ -231,6 +260,7 @@ def _batch_inputs(
 def _parse_embedding_payload(
     payload: object,
     *,
+    expected_model: str,
     expected_count: int,
     dimension: int,
 ) -> tuple[tuple[float, ...], ...]:
@@ -239,6 +269,8 @@ def _parse_embedding_payload(
         list,
     ):
         raise ValueError("embedding 响应缺少 data 列表。")
+    if payload.get("model") != expected_model:
+        raise ValueError("embedding 响应模型与请求不一致。")
     indexed: dict[int, tuple[float, ...]] = {}
     for item in payload["data"]:
         if not isinstance(item, dict):
@@ -251,6 +283,12 @@ def _parse_embedding_payload(
             or not isinstance(raw_vector, list)
         ):
             raise ValueError("embedding 索引或向量格式无效。")
+        if any(
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            for value in raw_vector
+        ):
+            raise ValueError("embedding 向量必须只含数值。")
         vector = tuple(float(value) for value in raw_vector)
         if len(vector) != dimension:
             raise ValueError("embedding 向量维度不一致。")
@@ -262,6 +300,22 @@ def _parse_embedding_payload(
     if set(indexed) != set(range(expected_count)):
         raise ValueError("embedding 响应索引不完整。")
     return tuple(indexed[index] for index in range(expected_count))
+
+
+def _validate_embedding_payload(
+    payload: object,
+    *,
+    expected_model: str,
+    expected_count: int,
+    dimension: int,
+) -> object:
+    _parse_embedding_payload(
+        payload,
+        expected_model=expected_model,
+        expected_count=expected_count,
+        dimension=dimension,
+    )
+    return payload
 
 
 def _parse_rerank_payload(
@@ -296,6 +350,15 @@ def _parse_rerank_payload(
     if set(indexed) != set(range(expected_count)):
         raise ValueError("rerank 响应索引不完整。")
     return tuple(indexed[index] for index in range(expected_count))
+
+
+def _validate_rerank_payload(
+    payload: object,
+    *,
+    expected_count: int,
+) -> object:
+    _parse_rerank_payload(payload, expected_count=expected_count)
+    return payload
 
 
 def _apply_instruction(text: str, instruction: str) -> str:

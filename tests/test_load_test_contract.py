@@ -1,13 +1,19 @@
 """端到端负载验收的固定边界。"""
 
+from pathlib import Path
+
 import pytest
 
-from evaluation.metrics import ActiveEvidenceManifest, ActiveEvidenceRecord
 from scripts import load_test_chat
+from tests.active_evidence_fixtures import (
+    active_evidence_record,
+    trusted_active_evidence,
+)
 
 
 def test_load_test_defaults_to_five_users_for_thirty_minutes(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """默认负载必须覆盖五用户持续三十分钟。"""
     monkeypatch.setattr(
@@ -18,6 +24,12 @@ def test_load_test_defaults_to_five_users_for_thirty_minutes(
             "http://127.0.0.1:8088",
             "--token",
             "test-token",
+            "--qdrant-url",
+            "http://127.0.0.1:6333",
+            "--qdrant-alias",
+            "test-active",
+            "--manifest-database",
+            str(tmp_path / "test-manifest.sqlite3"),
         ],
     )
 
@@ -50,11 +62,9 @@ def test_all_refusals_of_answerable_cases_fail_quality_gate() -> None:
 
 
 def test_invalid_citation_is_not_counted_as_answered() -> None:
-    manifest = ActiveEvidenceManifest(
-        manifest_sha256="a" * 64,
-        pipeline_fingerprint="sha256:" + ("b" * 64),
-        records=(
-            ActiveEvidenceRecord(
+    manifest = trusted_active_evidence(
+        (
+            active_evidence_record(
                 chunk_id="active-chunk",
                 source_path="public.docx",
                 locator="第一章 > 段落1",

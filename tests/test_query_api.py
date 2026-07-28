@@ -1,5 +1,6 @@
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from rag_app.generation.answer import (
     ClaimSupport,
 )
 from rag_app.health import ComponentStatus, ReadinessService
+from rag_app.query_executor import QueryExecutor
 from rag_app.query_service import (
     QueryOutcome,
     StageEvent,
@@ -38,7 +40,7 @@ class _Query:
         conversation_id: str,
         question: str,
         now: datetime,
-        emit: object,
+        emit: Callable[[StageEvent], None],
     ) -> QueryOutcome:
         del conversation_id, now
         assert question == "核验问题"
@@ -91,12 +93,15 @@ def _client(tmp_path: Path) -> tuple[TestClient, str, str]:
     jobs.initialize()
     feedback = FeedbackStore(tmp_path / "state.sqlite3")
     feedback.initialize()
+    readiness = ReadinessService((_ReadyProbe(),))
+    readiness.refresh_once()
     app = create_app(
         ApiServices(
-            readiness=ReadinessService((_ReadyProbe(),)),
+            readiness=readiness,
             query_token=query_token,
             admin_token=admin_token,
             query=_Query(),  # type: ignore[arg-type]
+            query_executor=QueryExecutor(),
             conversations=conversations,
             jobs=jobs,
             feedback=feedback,

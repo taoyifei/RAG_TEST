@@ -26,8 +26,8 @@ def _chunk(
     *,
     status: str,
     authority: str,
-    effective_from: datetime | None = None,
-    effective_to: datetime | None = None,
+    effective_from: str | None = None,
+    effective_to: str | None = None,
 ) -> IndexedChunk:
     digest_character = f"{position:x}"
     text = f"证据-{position}"
@@ -72,20 +72,20 @@ def test_real_qdrant_metadata_filter_excludes_invalid_evidence() -> None:
     chunks = [
         _chunk(
             1,
-            status="published",
+            status="active",
             authority="official",
-            effective_from=datetime(2026, 1, 1, tzinfo=UTC),
-            effective_to=datetime(2026, 12, 31, tzinfo=UTC),
+            effective_from="2026-01-01T00:00:00Z",
+            effective_to="2026-12-31T00:00:00Z",
         ),
         _chunk(
             2,
-            status="published",
+            status="active",
             authority="official",
-            effective_to=datetime(2025, 12, 31, tzinfo=UTC),
+            effective_to="2025-12-31T00:00:00Z",
         ),
         _chunk(3, status="draft", authority="official"),
-        _chunk(4, status="published", authority="unverified"),
-        _chunk(5, status="published", authority="official"),
+        _chunk(4, status="active", authority="unverified"),
+        _chunk(5, status="active", authority="official"),
     ]
     try:
         index.create_collection()
@@ -96,7 +96,7 @@ def test_real_qdrant_metadata_filter_excludes_invalid_evidence() -> None:
                 item.chunk.doc_version,
             )
         policy = MetadataPolicy(
-            allowed_statuses=("published",),
+            allowed_statuses=("active",),
             allowed_authority_levels=("official",),
         )
 

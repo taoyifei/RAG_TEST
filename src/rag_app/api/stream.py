@@ -6,18 +6,19 @@ import json
 import queue
 import threading
 from collections.abc import Iterator
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Final
 
 from rag_app.observability import StructuredAuditLogger
+from rag_app.query_executor import QueryExecutor
 from rag_app.query_service import (
     QueryOutcome,
     QueryService,
     StageEvent,
 )
 
-__all__ = ["stream_query"]
+__all__ = ["QueryStreamRequest", "stream_query"]
 
 _END: Final = object()
 _ERROR_EVENT: Final = {
@@ -26,70 +27,131 @@ _ERROR_EVENT: Final = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class QueryStreamRequest:
+    """一次已通过 HTTP schema 与鉴权的查询上下文。"""
+
+    trace_id: str
+    conversation_id: str
+    question: str
+    audit: StructuredAuditLogger | None = None
+
+
 def stream_query(
     *,
+    executor: QueryExecutor,
     service: QueryService,
-    trace_id: str,
-    conversation_id: str,
-    question: str,
-    audit: StructuredAuditLogger | None = None,
+    request: QueryStreamRequest,
 ) -> Iterator[bytes]:
-    """在后台执行同步查询并逐行发布非敏感事件。
+    """准入同步查询并返回逐行发布非敏感事件的迭代器。
 
     Args:
+        executor: 进程级固定容量查询执行器。
         service: 完整查询链。
-        trace_id: 本次请求追踪标识。
-        conversation_id: 有界 TTL 会话标识。
-        question: 当前原始问题。
-        audit: 可选固定字段结构化日志。
+        request: 已校验的 trace、会话、问题和可选审计依赖。
 
-    Yields:
-        UTF-8 NDJSON 行；最终回答只来自已校验的 QueryOutcome。
+    Returns:
+        UTF-8 NDJSON 迭代器；最终回答只来自已校验的 QueryOutcome。
 
     """
     messages: queue.Queue[StageEvent | QueryOutcome | dict[str, str] | object]
     messages = queue.Queue(maxsize=16)
+    cancelled = threading.Event()
+
+    def put_message(
+        message: StageEvent | QueryOutcome | dict[str, str] | object,
+    ) -> None:
+        """在客户端仍消费时写入有界流队列。
+
+        Args:
+            message: 待发布的阶段、终态或内部结束信号。
+
+        Returns:
+            无返回值；流关闭后直接丢弃后续消息。
+
+        """
+        while not cancelled.is_set():
+            try:
+                messages.put(message, timeout=0.1)
+            except queue.Full:
+                continue
+            return
 
     def run() -> None:
+        """执行同步查询并把阶段或终态写入有界队列。
+
+        Args:
+            无参数；使用外层请求上下文。
+
+        Returns:
+            无返回值。
+
+        """
         try:
             def emit(event: StageEvent) -> None:
-                if audit is not None:
-                    audit.query_stage(event)
-                messages.put(event)
+                """记录并转发一条非敏感阶段事件。
+
+                Args:
+                    event: 当前查询阶段事件。
+
+                Returns:
+                    无返回值。
+
+                """
+                if request.audit is not None:
+                    request.audit.query_stage(event)
+                put_message(event)
 
             outcome = service.ask(
-                trace_id=trace_id,
-                conversation_id=conversation_id,
-                question=question,
+                trace_id=request.trace_id,
+                conversation_id=request.conversation_id,
+                question=request.question,
                 now=datetime.now(UTC),
                 emit=emit,
             )
-            if audit is not None:
-                audit.query_outcome(outcome)
-            messages.put(outcome)
+            if request.audit is not None:
+                request.audit.query_outcome(outcome)
+            put_message(outcome)
         except Exception as error:
-            if audit is not None:
-                audit.query_failed(trace_id, type(error).__name__)
-            messages.put(_ERROR_EVENT)
+            if request.audit is not None:
+                request.audit.query_failed(
+                    request.trace_id,
+                    type(error).__name__,
+                )
+            put_message(_ERROR_EVENT)
         finally:
-            messages.put(_END)
+            put_message(_END)
 
-    threading.Thread(
-        target=run,
-        name=f"rag-query-{trace_id[:8]}",
-        daemon=True,
-    ).start()
+    executor.submit(run)
 
-    while True:
-        message = messages.get()
-        if message is _END:
-            return
-        if isinstance(message, StageEvent):
-            yield _json_line(_stage_payload(message))
-        elif isinstance(message, QueryOutcome):
-            yield _json_line(_final_payload(message))
-        else:
-            yield _json_line(message)
+    def iterate() -> Iterator[bytes]:
+        """消费当前查询的有界消息队列。
+
+        Args:
+            无参数；消费外层查询队列。
+
+        Yields:
+            已编码的 UTF-8 NDJSON 行。
+
+        Returns:
+            查询结束或客户端关闭流后无额外返回值。
+
+        """
+        try:
+            while True:
+                message = messages.get()
+                if message is _END:
+                    return
+                if isinstance(message, StageEvent):
+                    yield _json_line(_stage_payload(message))
+                elif isinstance(message, QueryOutcome):
+                    yield _json_line(_final_payload(message))
+                else:
+                    yield _json_line(message)
+        finally:
+            cancelled.set()
+
+    return iterate()
 
 
 def _stage_payload(event: StageEvent) -> dict[str, object]:

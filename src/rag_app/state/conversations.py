@@ -59,7 +59,15 @@ class ConversationStore:
         self._max_rounds = max_rounds
 
     def initialize(self) -> None:
-        """初始化 TTL 会话表。"""
+        """初始化 TTL 会话表。
+
+        Args:
+            无参数；初始化当前数据库路径。
+
+        Returns:
+            无返回值。
+
+        """
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -206,6 +214,9 @@ class ConversationStore:
 
         Args:
             conversation_id: 客户端会话标识。
+
+        Returns:
+            无返回值。
 
         """
         if (

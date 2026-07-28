@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
-bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-env_file="${1:-${bundle_dir}/.env}"
-compose_file="${bundle_dir}/compose.yaml"
-rollback_file="${bundle_dir}/.rollback-images.env"
+project_root="/data/tyf/RAG"
+env_file="${1:-${project_root}/shared/env/rag.env}"
+shared_env_dir="${project_root}/shared/env"
+rollback_file="${shared_env_dir}/rollback-images.env"
+current_link="${project_root}/current"
 
 rollback_value() {
   local key="$1"
@@ -13,10 +15,19 @@ rollback_value() {
     | tail -n 1
 }
 
-if [[ ! -f "${env_file}" || ! -f "${rollback_file}" ]]; then
-  echo "缺少部署环境或可恢复的上一版镜像记录。" >&2
+if [[ ! -f "${env_file}" || ! -f "${rollback_file}" \
+  || -L "${env_file}" || -L "${rollback_file}" ]]; then
+  echo "缺少外置环境文件或上一版镜像记录。" >&2
   exit 1
 fi
+rollback_release_dir="$(rollback_value ROLLBACK_RELEASE_DIR)"
+if [[ "${rollback_release_dir}" != "${project_root}/releases/"* \
+  || ! -d "${rollback_release_dir}" \
+  || -L "${rollback_release_dir}" ]]; then
+  echo "上一版 release 路径无效。" >&2
+  exit 1
+fi
+compose_file="${rollback_release_dir}/compose.yaml"
 
 rollback_app_image="$(rollback_value ROLLBACK_APP_IMAGE)"
 rollback_ocr_image="$(rollback_value ROLLBACK_OCR_IMAGE)"
@@ -32,16 +43,14 @@ for image in \
   docker image inspect "${image}" >/dev/null
 done
 
-RAG_APP_IMAGE="${rollback_app_image}" \
-RAG_OCR_IMAGE="${rollback_ocr_image}" \
-RAG_QDRANT_IMAGE="${rollback_qdrant_image}" \
-docker compose \
-  --env-file "${env_file}" \
-  -f "${compose_file}" \
+env \
+  RAG_APP_IMAGE="${rollback_app_image}" \
+  RAG_OCR_IMAGE="${rollback_ocr_image}" \
+  RAG_QDRANT_IMAGE="${rollback_qdrant_image}" \
+  docker compose --env-file "${env_file}" -f "${compose_file}" \
   up -d --no-build --pull never
-docker compose \
-  --env-file "${env_file}" \
-  -f "${compose_file}" \
-  ps
+docker compose --env-file "${env_file}" -f "${compose_file}" ps
+ln -s "${rollback_release_dir}" "${current_link}.new"
+mv -T "${current_link}.new" "${current_link}"
 
-echo "容器已切回上一版镜像；rag-state 与 rag-qdrant-data 卷未删除。"
+echo "容器已切回上一版镜像；SQLite、Qdrant 和语料 bind mount 未删除。"

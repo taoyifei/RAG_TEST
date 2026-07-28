@@ -62,7 +62,15 @@ class QdrantIndex:
 
     @property
     def pipeline_fingerprint(self) -> str:
-        """返回该物理 collection 的 pipeline 指纹。"""
+        """返回该物理 collection 的 pipeline 指纹。
+
+        Args:
+            无参数；读取构造时冻结的指纹。
+
+        Returns:
+            当前物理 collection 的 pipeline 指纹。
+
+        """
         return self._pipeline_fingerprint
 
     def create_collection(self) -> None:
@@ -347,6 +355,9 @@ class QdrantIndex:
             source_id: 持久来源标识。
             new_path: 新相对路径。
 
+        Returns:
+            无返回值。
+
         Raises:
             ValueError: 新路径为空或现有 locator payload 损坏。
 
@@ -482,6 +493,9 @@ class QdrantIndex:
             alias_name: 业务查询使用的活动索引别名。
             collection_name: 已存在的目标物理 collection。
 
+        Returns:
+            无返回值。
+
         """
         aliases = self._client.get_aliases().aliases
         operations: list[
@@ -523,6 +537,9 @@ class QdrantIndex:
 
         Args:
             alias_name: 待删除业务别名。
+
+        Returns:
+            无返回值。
 
         """
         if self.alias_target(alias_name) is None:
@@ -567,6 +584,9 @@ class QdrantIndex:
         Args:
             snapshot_name: `create_snapshot` 返回的纯文件名。
             checksum: snapshot 的 64 位小写 SHA256。
+
+        Returns:
+            无返回值。
 
         Raises:
             ValueError: 文件名或摘要不安全。

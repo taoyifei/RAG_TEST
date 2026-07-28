@@ -60,7 +60,15 @@ class QdrantBm25Encoder:
         return self._document(text)
 
     def revision(self) -> str:
-        """返回模型与处理选项的规范化 SHA256。"""
+        """返回模型与处理选项的规范化 SHA256。
+
+        Args:
+            无参数；使用当前编码器的冻结选项。
+
+        Returns:
+            带算法前缀的规范化 SHA256。
+
+        """
         serialized = json.dumps(
             {
                 "model": "qdrant/bm25",

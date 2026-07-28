@@ -21,23 +21,38 @@ PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
 使用 Python 3.11 虚拟环境安装 `requirements.lock` 与开发工具后执行：
 
 ```bash
-.venv/bin/python -m compileall -q src tests scripts
+.venv/bin/python -m compileall -q src tests scripts evaluation
 .venv/bin/ruff check .
 .venv/bin/mypy --no-incremental src evaluation scripts
 .venv/bin/python -m pytest -q
+.venv/bin/python scripts/check_google_docstrings.py
+.venv/bin/python scripts/check_google_docstrings.py --changed
 bash -n deployment/*.sh
 docker compose --env-file deployment/.env.example \
   -f deployment/compose.yaml config -q
 git diff --check
 ```
 
-发布前先暂存候选文件，再运行：
+默认 docstring 命令检查 `src/rag_app`、`evaluation`、`scripts` 全量 Python；
+只有显式 `--changed` 才缩小到当前新增或修改文件。
+
+发布安全检查必须使用临时 Git index，禁止教程或审查流程修改真实 index：
 
 ```bash
-git add -A
-.venv/bin/python scripts/check_release_safety.py
+temporary_index="$(mktemp)"
+rm -f "$temporary_index"
+GIT_INDEX_FILE="$temporary_index" git read-tree HEAD
+GIT_INDEX_FILE="$temporary_index" git add -A
+GIT_INDEX_FILE="$temporary_index" \
+  .venv/bin/python scripts/check_release_safety.py
+rm -f "$temporary_index"
 ```
 
-资产装配见 `design/public/asset-assembly.md`，PaddleOCR 的完整离线流程见
+不得把含 `__pycache__/`、`.pyc` 或 `.pyo` 的审查 ZIP 当作发布源码包；
+Git 候选、Docker build context 和发布源码清单也必须排除这些文件。
+
+资产装配见 `design/public/asset-assembly.md`，联网 WSL 到服务器回滚的
+完整流程见 `design/public/offline-build-and-server-deployment.md`；
+PaddleOCR 兼容入口保留在
 `design/public/paddleocr-offline-deployment.md`。当前生产阻塞项以
 `BLOCKED.md` 为准。

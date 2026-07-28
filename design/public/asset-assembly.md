@@ -3,21 +3,26 @@
 源码仓库不承载私有语料或大型二进制。以下目录必须保持 ignored：
 
 - `docs/`、`evaluation/frozen/`、`evaluation/results/`、`artifacts/`
-- `deployment/wheelhouse/`、`deployment/assets/tokenizers/`
+- `deployment/runtime/wheelhouse/`、`deployment/assets/tokenizers/`
 - `deployment/ocr/assets/`、镜像 tar、SBOM、数据库和日志
 
 ## 应用资产
 
-应用镜像需要 Python 3.11 的 `deployment/wheelhouse/`、两个本地 tokenizer
+应用镜像需要 Python 3.11 的 `deployment/runtime/wheelhouse/`、两个本地
+tokenizer
 以及 `deployment/ASSETS.sha256`。装配者应从经批准的内部来源复制 tokenizer，
 用 `requirements.runtime.lock` 下载 linux/amd64 wheels，构建项目 wheel，
 再从仓库根目录执行：
 
 ```bash
-(cd deployment && sha256sum --check ASSETS.sha256)
+./.venv/bin/python scripts/prepare_runtime_wheels.py
+(cd deployment/runtime/wheelhouse && sha256sum --check ../WHEELS.sha256)
+sha256sum --check deployment/ASSETS.sha256
 docker buildx build --network none --platform linux/amd64 \
-  --load --tag docx-rag:0.1.0 .
-docker run --rm --network none docx-rag:0.1.0 asset-selfcheck
+  --build-arg "VCS_REF=$(git rev-parse HEAD)" \
+  --load --tag "docx-rag:$(git rev-parse --short=12 HEAD)" .
+docker run --rm --network none \
+  "docx-rag:$(git rev-parse --short=12 HEAD)" asset-selfcheck
 ```
 
 如果 tokenizer 或配置有意变更，先更新 pipeline/资产版本，再人工复核并更新

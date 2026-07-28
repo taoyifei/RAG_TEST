@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
-from dataclasses import dataclass
+import threading
+from contextlib import ExitStack
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import httpx
 from qdrant_client import QdrantClient
@@ -13,13 +17,18 @@ from rag_app.chunking import (
     ChunkerConfig,
     HuggingFaceTokenCounter,
 )
-from rag_app.clients.model_services import TeiEmbeddingClient
+from rag_app.clients.model_services import (
+    EmbeddingClientConfig,
+    TeiEmbeddingClient,
+)
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
-from rag_app.contracts import PipelineSpec
+from rag_app.contracts import DocumentMetadata, PipelineSpec
+from rag_app.corpus_policy import CorpusPolicy
 from rag_app.index.build import (
     DocxBuildConfig,
     DocxBuildServices,
     DocxChunkBuilder,
+    discover_docx_sources,
 )
 from rag_app.index.job_runner import (
     IndexJobRunner,
@@ -46,7 +55,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class WorkerRuntimeBundle:
     """单 worker 及其持有的网络资源。"""
 
@@ -55,12 +64,31 @@ class WorkerRuntimeBundle:
     qdrant: QdrantClient
     http_client: httpx.Client
     ocr_http_client: httpx.Client
+    _close_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+    )
+    _closed: bool = field(default=False, init=False, repr=False)
 
     def close(self) -> None:
-        """关闭本进程拥有的连接。"""
-        self.http_client.close()
-        self.ocr_http_client.close()
-        self.qdrant.close()
+        """关闭本进程拥有的连接。
+
+        Args:
+            无参数；关闭当前 worker 持有的资源。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        with ExitStack() as close_stack:
+            close_stack.callback(self.qdrant.close)
+            close_stack.callback(self.http_client.close)
+            close_stack.callback(self.ocr_http_client.close)
 
 
 def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
@@ -79,12 +107,35 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
     require_indexable_configuration(pipeline, retrieval)
+    metadata_by_source = _validate_worker_contract(
+        settings,
+        pipeline,
+        retrieval,
+    )
+    with ExitStack() as rollback:
+        bundle = _assemble_worker_runtime(
+            settings,
+            pipeline,
+            metadata_by_source,
+            rollback,
+        )
+        rollback.pop_all()
+        return bundle
+
+
+def _assemble_worker_runtime(
+    settings: RuntimeSettings,
+    pipeline: PipelineSpec,
+    metadata_by_source: dict[str, DocumentMetadata],
+    rollback: ExitStack,
+) -> WorkerRuntimeBundle:
     qdrant = QdrantClient(
         url=settings.qdrant_url.rstrip("/"),
         api_key=settings.qdrant_api_key.get_secret_value(),
         timeout=math.ceil(settings.embedding_timeout_seconds),
         prefer_grpc=False,
     )
+    rollback.callback(qdrant.close)
     http_client = httpx.Client(
         timeout=httpx.Timeout(
             settings.embedding_timeout_seconds,
@@ -93,6 +144,7 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
         follow_redirects=False,
         trust_env=False,
     )
+    rollback.callback(http_client.close)
     ocr_http_client = httpx.Client(
         timeout=httpx.Timeout(
             settings.ocr_timeout_seconds,
@@ -101,6 +153,7 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
         follow_redirects=False,
         trust_env=False,
     )
+    rollback.callback(ocr_http_client.close)
     pool = ResilientHttpPool(
         settings.embedding_endpoint_urls(),
         client=http_client,
@@ -108,14 +161,17 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
             max_attempts=settings.max_attempts,
             failure_threshold=settings.failure_threshold,
             cooldown_seconds=settings.cooldown_seconds,
-            max_concurrency=settings.max_model_concurrency,
+            max_concurrency=settings.max_embedding_concurrency,
         ),
     )
     embedder = TeiEmbeddingClient(
         pool,
-        dimension=pipeline.embedding_dimension,
-        max_batch_size=settings.embedding_max_batch_size,
-        max_batch_chars=settings.embedding_max_batch_chars,
+        config=EmbeddingClientConfig(
+            model=settings.embedding_model,
+            dimension=pipeline.embedding_dimension,
+            max_batch_size=settings.embedding_max_batch_size,
+            max_batch_chars=settings.embedding_max_batch_chars,
+        ),
         api_token=_secret(settings.embedding_api_token),
     )
     ocr_pool = ResilientHttpPool(
@@ -140,8 +196,8 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
         pipeline_fingerprint=pipeline.fingerprint(),
     )
     sparse = QdrantBm25Encoder(
-        tokenizer=retrieval.bm25_tokenizer,
-        language=retrieval.bm25_language,
+        tokenizer=pipeline.sparse_tokenizer,
+        language=pipeline.sparse_language,
     )
     control = StateStore(settings.state_database)
     control.initialize()
@@ -149,12 +205,26 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
     manifests.initialize()
 
     def build_factory(state: StateStore) -> SyncChunkBuilder:
+        """为一次任务创建绑定状态库的 DOCX 构建器。
+
+        Args:
+            state: 当前任务使用的状态库。
+
+        Returns:
+            配置完整的同步 chunk 构建器。
+
+        """
         return DocxChunkBuilder(
             config=DocxBuildConfig(
                 input_root=settings.input_root,
                 ocr_revision=pipeline.ocr_revision,
-                embedding_instruction="",
-                minimum_ocr_confidence=retrieval.low_ocr_threshold,
+                embedding_instruction=(
+                    pipeline.document_embedding_instruction
+                ),
+                metadata_by_source=metadata_by_source,
+                minimum_ocr_confidence=(
+                    pipeline.ocr_minimum_confidence
+                ),
             ),
             services=DocxBuildServices(
                 parser=DocxParser(),
@@ -198,6 +268,9 @@ def require_indexable_configuration(
     Args:
         pipeline: 待写入 manifest 的完整 pipeline。
         retrieval: 冻结集确定的检索配置。
+
+    Returns:
+        无返回值；校验通过即允许继续构建索引。
 
     Raises:
         ValueError: 配置仍含 provisional、pending 或 unknown 标记。
@@ -245,3 +318,55 @@ def _secret(value: object) -> str | None:
         return None
     secret = get_secret_value()
     return secret if isinstance(secret, str) and secret else None
+
+
+def _validate_worker_contract(
+    settings: RuntimeSettings,
+    pipeline: PipelineSpec,
+    retrieval: RetrievalSettings,
+) -> dict[str, DocumentMetadata]:
+    _require_file_sha256(
+        settings.embedding_tokenizer_path,
+        pipeline.embedding_tokenizer_sha256,
+        "embedding tokenizer",
+    )
+    if settings.embedding_model != pipeline.embedding_model:
+        raise ValueError("embedding model ID 与 pipeline 不一致。")
+    if DocxParser.version != pipeline.parser_revision:
+        raise ValueError("parser revision 与实际 DocxParser 不一致。")
+    if (
+        retrieval.bm25_tokenizer != pipeline.sparse_tokenizer
+        or retrieval.bm25_language != pipeline.sparse_language
+    ):
+        raise ValueError("BM25 tokenizer/language 与 pipeline 不一致。")
+    encoder = QdrantBm25Encoder(
+        tokenizer=pipeline.sparse_tokenizer,
+        language=pipeline.sparse_language,
+    )
+    if encoder.revision() != pipeline.sparse_revision:
+        raise ValueError("BM25 revision 与实际实现不一致。")
+    if retrieval.low_ocr_threshold != pipeline.ocr_minimum_confidence:
+        raise ValueError("OCR minimum confidence 与 pipeline 不一致。")
+    corpus_policy = CorpusPolicy.load(settings.corpus_policy_path)
+    if corpus_policy.semantic_sha256() != pipeline.corpus_policy_sha256:
+        raise ValueError("corpus policy SHA256 与 pipeline 不一致。")
+    discovered = discover_docx_sources(settings.input_root)
+    return corpus_policy.resolve(
+        input_root=settings.input_root,
+        discovered_paths=tuple(
+            source.source_path for source in discovered
+        ),
+    )
+
+
+def _require_file_sha256(
+    path: Path,
+    expected_sha256: str,
+    label: str,
+) -> None:
+    try:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError(f"{label} 文件不可读。") from error
+    if actual != expected_sha256:
+        raise ValueError(f"{label} SHA256 与 pipeline 不一致。")

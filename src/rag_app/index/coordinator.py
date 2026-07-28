@@ -153,6 +153,9 @@ class IndexCoordinator:
         Args:
             source_id: 持久来源标识。
 
+        Returns:
+            无返回值。
+
         """
         self._index.retire_source(source_id)
         self._state.mark_source_deleted(source_id)

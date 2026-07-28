@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -13,7 +14,13 @@ from rag_app.clients.resilience import (
     ExternalRequestRejectedError,
     ExternalServiceUnavailableError,
 )
-from rag_app.contracts import Element, ElementKind, OcrState, Parser
+from rag_app.contracts import (
+    DocumentMetadata,
+    Element,
+    ElementKind,
+    OcrState,
+    Parser,
+)
 from rag_app.index.planner import DiscoveredSource
 from rag_app.index.qdrant import IndexedChunk
 from rag_app.ocr.models import OcrResponse
@@ -45,7 +52,16 @@ class _EmbeddingClient(Protocol):
         *,
         instruction: str,
     ) -> EmbeddingResult:
-        """按输入顺序返回向量。"""
+        """按输入顺序返回向量。
+
+        Args:
+            texts: 待向量化文本。
+            instruction: 冻结的文档 embedding 指令。
+
+        Returns:
+            向量与调用审计。
+
+        """
 
 
 class _OcrClient(Protocol):
@@ -58,7 +74,17 @@ class _OcrClient(Protocol):
         media_type: str,
         media_sha256: str,
     ) -> OcrResponse:
-        """按媒体和 revision 返回严格 OCR 结果。"""
+        """按媒体和 revision 返回严格 OCR 结果。
+
+        Args:
+            media_bytes: 原始媒体字节。
+            media_type: 已验证的媒体 MIME 类型。
+            media_sha256: 原始媒体内容摘要。
+
+        Returns:
+            严格 OCR 响应。
+
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +94,7 @@ class DocxBuildConfig:
     input_root: Path
     ocr_revision: str
     embedding_instruction: str
+    metadata_by_source: Mapping[str, DocumentMetadata]
     minimum_ocr_confidence: float = 0.80
 
 
@@ -107,6 +134,7 @@ class DocxChunkBuilder:
         self._state = services.state
         self._ocr_client = services.ocr_client
         self._ocr_revision = config.ocr_revision
+        self._metadata_by_source = dict(config.metadata_by_source)
         if not 0.0 <= config.minimum_ocr_confidence <= 1.0:
             raise ValueError("OCR 最低置信度必须位于 [0,1]。")
         self._minimum_ocr_confidence = config.minimum_ocr_confidence
@@ -131,6 +159,9 @@ class DocxChunkBuilder:
 
         """
         path = _safe_source_path(self._input_root, source_path)
+        metadata = self._metadata_by_source.get(source_path)
+        if metadata is None:
+            raise ValueError("source_path 缺少已解析的 corpus policy 元数据。")
         before = _file_identity(path)
         if before[0] != version.content_sha256:
             raise ValueError("DOCX 内容摘要与冻结同步计划不一致。")
@@ -144,6 +175,7 @@ class DocxChunkBuilder:
             version.source_id,
             version.doc_version,
             elements,
+            metadata=metadata,
         )
         embeddings = self._embedder.embed(
             tuple(chunk.embedding_text for chunk in chunks),

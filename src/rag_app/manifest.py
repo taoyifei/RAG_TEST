@@ -13,7 +13,12 @@ from pathlib import Path
 
 from rag_app.contracts import IndexManifest
 
-__all__ = ["ManifestRepository", "ManifestState", "StoredManifest"]
+__all__ = [
+    "ManifestRepository",
+    "ManifestState",
+    "StoredManifest",
+    "index_manifest_sha256",
+]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS index_manifests (
@@ -81,7 +86,15 @@ class ManifestRepository:
         self._database_path = database_path
 
     def initialize(self) -> None:
-        """初始化 manifest schema。"""
+        """初始化 manifest schema。
+
+        Args:
+            无参数；初始化当前数据库路径。
+
+        Returns:
+            无返回值。
+
+        """
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -176,6 +189,9 @@ class ManifestRepository:
 
         Args:
             collection_name: 已完成 Qdrant alias 切换的物理 collection。
+
+        Returns:
+            无返回值。
 
         Raises:
             LookupError: collection 没有 staging 或 active manifest。
@@ -348,7 +364,15 @@ class ManifestRepository:
         return int(_require_row(row)[0])
 
     def get_active(self) -> StoredManifest | None:
-        """返回当前活动 manifest。"""
+        """返回当前活动 manifest。
+
+        Args:
+            无参数；查询当前 manifest 数据库。
+
+        Returns:
+            当前活动 manifest；尚未激活索引时为 ``None``。
+
+        """
         with self._connect() as connection:
             row = connection.execute(
                 """
@@ -463,10 +487,30 @@ def _serialize_manifest(manifest: IndexManifest) -> str:
     )
 
 
+def index_manifest_sha256(manifest: IndexManifest) -> str:
+    """重算规范化 index manifest 的 SHA256。
+
+    Args:
+        manifest: 待摘要的索引 manifest。
+
+    Returns:
+        64 位小写十六进制摘要。
+
+    """
+    return hashlib.sha256(
+        _serialize_manifest(manifest).encode("utf-8")
+    ).hexdigest()
+
+
 def _stored_from_row(row: sqlite3.Row) -> StoredManifest:
+    manifest = IndexManifest.model_validate_json(str(row["manifest_json"]))
+    stored_digest = str(row["manifest_sha256"])
+    actual_digest = index_manifest_sha256(manifest)
+    if stored_digest != actual_digest:
+        raise ValueError("SQLite index manifest 摘要校验失败。")
     return StoredManifest(
-        manifest=IndexManifest.model_validate_json(str(row["manifest_json"])),
-        manifest_sha256=str(row["manifest_sha256"]),
+        manifest=manifest,
+        manifest_sha256=stored_digest,
         state=ManifestState(str(row["state"])),
         snapshot_name=str(row["snapshot_name"]),
         snapshot_checksum=str(row["snapshot_checksum"]),

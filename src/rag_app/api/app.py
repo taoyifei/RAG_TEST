@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import uuid
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,9 +18,10 @@ from rag_app.api.schemas import (
     CreateJobRequest,
     FeedbackRequest,
 )
-from rag_app.api.stream import stream_query
+from rag_app.api.stream import QueryStreamRequest, stream_query
 from rag_app.health import ReadinessService
 from rag_app.observability import StructuredAuditLogger
+from rag_app.query_executor import QueryAdmissionError, QueryExecutor
 from rag_app.query_service import QueryService
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
@@ -39,6 +41,7 @@ class ApiServices:
     query_token: str
     admin_token: str
     query: QueryService | None = None
+    query_executor: QueryExecutor | None = None
     conversations: ConversationStore | None = None
     jobs: JobStore | None = None
     feedback: FeedbackStore | None = None
@@ -54,6 +57,7 @@ class ApiServices:
             raise ValueError("查询与管理令牌必须不同。")
         optional = (
             self.query,
+            self.query_executor,
             self.conversations,
             self.jobs,
             self.feedback,
@@ -96,12 +100,28 @@ def create_app(services: ApiServices) -> FastAPI:
 
         @app.get("/", include_in_schema=False)
         def frontend_index() -> FileResponse:
-            """返回固定的本地验收页。"""
+            """返回固定的本地验收页。
+
+            Args:
+                无参数；读取固化的前端资源。
+
+            Returns:
+                本地 HTML 文件响应。
+
+            """
             return FileResponse(frontend_dir / "index.html")
 
         @app.get("/assets/styles.css", include_in_schema=False)
         def frontend_styles() -> FileResponse:
-            """返回固定的本地样式。"""
+            """返回固定的本地样式。
+
+            Args:
+                无参数；读取固化的前端资源。
+
+            Returns:
+                本地 CSS 文件响应。
+
+            """
             return FileResponse(
                 frontend_dir / "styles.css",
                 media_type="text/css",
@@ -109,7 +129,15 @@ def create_app(services: ApiServices) -> FastAPI:
 
         @app.get("/assets/app.js", include_in_schema=False)
         def frontend_script() -> FileResponse:
-            """返回固定的本地脚本。"""
+            """返回固定的本地脚本。
+
+            Args:
+                无参数；读取固化的前端资源。
+
+            Returns:
+                本地 JavaScript 文件响应。
+
+            """
             return FileResponse(
                 frontend_dir / "app.js",
                 media_type="text/javascript",
@@ -117,12 +145,28 @@ def create_app(services: ApiServices) -> FastAPI:
 
     @app.get("/live")
     def live() -> dict[str, str]:
-        """仅表示应用进程可响应。"""
+        """仅表示应用进程可响应。
+
+        Args:
+            无参数；检查当前应用进程。
+
+        Returns:
+            固定的存活状态。
+
+        """
         return {"status": "live"}
 
     @app.get("/ready")
     def ready() -> JSONResponse:
-        """严格汇总所有必需依赖。"""
+        """严格汇总所有必需依赖。
+
+        Args:
+            无参数；读取就绪服务缓存。
+
+        Returns:
+            HTTP 200 或 503 的依赖状态响应。
+
+        """
         report = services.readiness.check()
         payload = {
             "ready": report.ready,
@@ -143,23 +187,30 @@ def create_app(services: ApiServices) -> FastAPI:
             Header(alias="Authorization"),
         ] = None,
     ) -> StreamingResponse:
-        """只流式发阶段状态，最后发布完整校验结果。"""
+        """只流式发阶段状态，最后发布完整校验结果。
+
+        Args:
+            request: 已校验的会话和问题请求。
+            authorization: 查询 API 的 Bearer 认证头。
+
+        Returns:
+            按 NDJSON 输出阶段和最终回答的流响应。
+
+        """
         _require_bearer(authorization, services.query_token)
         if not services.readiness.check().ready:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="service not ready",
             )
-        query = _require_service(services.query)
         trace_id = uuid.uuid4().hex
+        stream = _admit_query_stream(
+            services=services,
+            request=request,
+            trace_id=trace_id,
+        )
         return StreamingResponse(
-            stream_query(
-                service=query,
-                trace_id=trace_id,
-                conversation_id=request.conversation_id,
-                question=request.question,
-                audit=services.audit,
-            ),
+            stream,
             media_type="application/x-ndjson",
             headers={
                 "Cache-Control": "no-store",
@@ -179,7 +230,16 @@ def create_app(services: ApiServices) -> FastAPI:
             Header(alias="Authorization"),
         ] = None,
     ) -> Response:
-        """清空指定会话的历史用户问题。"""
+        """清空指定会话的历史用户问题。
+
+        Args:
+            conversation_id: 待清空的稳定会话标识。
+            authorization: 查询 API 的 Bearer 认证头。
+
+        Returns:
+            HTTP 204 空响应。
+
+        """
         _require_bearer(authorization, services.query_token)
         conversations = _require_service(services.conversations)
         conversations.clear(conversation_id)
@@ -198,7 +258,16 @@ def create_app(services: ApiServices) -> FastAPI:
             Header(alias="Authorization"),
         ] = None,
     ) -> dict[str, object]:
-        """按幂等键创建全量或增量索引任务。"""
+        """按幂等键创建全量或增量索引任务。
+
+        Args:
+            request: 已校验的索引任务请求。
+            authorization: 管理 API 的 Bearer 认证头。
+
+        Returns:
+            不含敏感信息的任务状态。
+
+        """
         _require_bearer(authorization, services.admin_token)
         jobs = _require_service(services.jobs)
         job = jobs.create_job(
@@ -218,7 +287,16 @@ def create_app(services: ApiServices) -> FastAPI:
             Header(alias="Authorization"),
         ] = None,
     ) -> dict[str, object]:
-        """读取索引任务的非敏感状态。"""
+        """读取索引任务的非敏感状态。
+
+        Args:
+            job_id: 待读取的索引任务标识。
+            authorization: 管理 API 的 Bearer 认证头。
+
+        Returns:
+            不含敏感信息的任务状态。
+
+        """
         _require_bearer(authorization, services.admin_token)
         jobs = _require_service(services.jobs)
         try:
@@ -233,6 +311,35 @@ def create_app(services: ApiServices) -> FastAPI:
         return _job_payload(job)
 
     return app
+
+
+def _admit_query_stream(
+    *,
+    services: ApiServices,
+    request: ChatRequest,
+    trace_id: str,
+) -> Iterator[bytes]:
+    query = _require_service(services.query)
+    query_executor = _require_service(services.query_executor)
+    try:
+        return stream_query(
+            executor=query_executor,
+            service=query,
+            request=QueryStreamRequest(
+                trace_id=trace_id,
+                conversation_id=request.conversation_id,
+                question=request.question,
+                audit=services.audit,
+            ),
+        )
+    except QueryAdmissionError as error:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="query capacity unavailable",
+            headers={
+                "Retry-After": str(query_executor.retry_after_seconds)
+            },
+        ) from error
 
 
 def _register_feedback_endpoint(
@@ -252,7 +359,16 @@ def _register_feedback_endpoint(
             Header(alias="Authorization"),
         ] = None,
     ) -> Response:
-        """幂等记录最终回答是否有用，不保存问题或答案。"""
+        """幂等记录最终回答是否有用，不保存问题或答案。
+
+        Args:
+            request: 追踪标识和有用性反馈。
+            authorization: 查询 API 的 Bearer 认证头。
+
+        Returns:
+            HTTP 204 空响应。
+
+        """
         _require_bearer(authorization, services.query_token)
         feedback = _require_service(services.feedback)
         feedback.record(

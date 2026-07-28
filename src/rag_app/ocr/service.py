@@ -73,7 +73,15 @@ class _BoundedRunner:
         )
 
     def run(self, image_bytes: bytes) -> OcrEngineResult:
-        """在闸门和超时内运行一次推理。"""
+        """在闸门和超时内运行一次推理。
+
+        Args:
+            image_bytes: 待识别图片的原始字节。
+
+        Returns:
+            OCR 引擎输出的文本、置信度与版面结果。
+
+        """
         if not self._semaphore.acquire(timeout=_BUSY_WAIT_SECONDS):
             raise _OcrBusyError
         future = self._executor.submit(self._engine.recognize, image_bytes)

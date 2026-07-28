@@ -134,19 +134,43 @@ class HoldoutQuestion(BaseModel):
 
 
 def load_dataset(path: Path) -> EvaluationDataset:
-    """读取完整冻结集，仅供校验器和显式验收使用。"""
+    """读取完整冻结集，仅供校验器和显式验收使用。
+
+    Args:
+        path: 冻结集 JSON 文件路径。
+
+    Returns:
+        通过严格结构校验的完整冻结集。
+
+    """
     return EvaluationDataset.model_validate_json(path.read_text("utf-8"))
 
 
 def load_tuning_cases(path: Path) -> tuple[EvaluationCase, ...]:
-    """只向调参代码返回 tuning 标签。"""
+    """只向调参代码返回 tuning 标签。
+
+    Args:
+        path: 冻结集 JSON 文件路径。
+
+    Returns:
+        按原顺序排列的 tuning 题目。
+
+    """
     return tuple(
         case for case in load_dataset(path).cases if case.split == "tuning"
     )
 
 
 def load_holdout_questions(path: Path) -> tuple[HoldoutQuestion, ...]:
-    """返回不含 expected 标签的 holdout 问题。"""
+    """返回不含 expected 标签的 holdout 问题。
+
+    Args:
+        path: 冻结集 JSON 文件路径。
+
+    Returns:
+        不暴露人工标签的 holdout 查询视图。
+
+    """
     return tuple(
         HoldoutQuestion(
             id=case.id,

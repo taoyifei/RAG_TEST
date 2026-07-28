@@ -55,7 +55,15 @@ class EvidenceItem:
     low_confidence_ocr: bool
 
     def to_prompt_payload(self) -> dict[str, object]:
-        """生成不含 embedding 上下文的 prompt 数据。"""
+        """生成不含 embedding 上下文的 prompt 数据。
+
+        Args:
+            无参数；序列化当前证据项。
+
+        Returns:
+            可直接写入提示词 JSON 的证据对象。
+
+        """
         return {
             "evidence_id": self.evidence_id,
             "chunk_id": self.chunk_id,

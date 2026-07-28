@@ -1,8 +1,20 @@
 from rag_app.chunking import Chunker, ChunkerConfig, Utf8TokenCounter
-from rag_app.contracts import Element, ElementKind, Locator, OcrState
+from rag_app.contracts import (
+    DocumentMetadata,
+    Element,
+    ElementKind,
+    Locator,
+    OcrState,
+)
 
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64
 _SOURCE_ID = "src_" + "1" * 32
+_METADATA = DocumentMetadata(
+    document_status="active",
+    authority_level="official",
+    effective_from=None,
+    effective_to=None,
+)
 
 
 def _paragraph(
@@ -43,6 +55,7 @@ def test_heading_context_is_not_added_to_citation_text() -> None:
         source_id=_SOURCE_ID,
         doc_version="sha256:" + "a" * 64,
         elements=[_paragraph("原文证据", 1)],
+        metadata=_METADATA,
     )[0]
 
     assert chunk.text == "原文证据"
@@ -55,6 +68,7 @@ def test_normal_structure_boundaries_do_not_overlap() -> None:
         source_id=_SOURCE_ID,
         doc_version="sha256:" + "a" * 64,
         elements=[_paragraph("第一段", 1), _paragraph("第二段", 2)],
+        metadata=_METADATA,
     )
 
     assert [chunk.text for chunk in chunks] == ["第一段", "第二段"]
@@ -81,6 +95,7 @@ def test_table_groups_repeat_header_and_preserve_original_rows() -> None:
         source_id=_SOURCE_ID,
         doc_version="sha256:" + "b" * 64,
         elements=[table],
+        metadata=_METADATA,
     )
 
     assert len(chunks) >= 2
@@ -95,6 +110,7 @@ def test_long_element_uses_overlap_but_never_exceeds_hard_max() -> None:
         source_id=_SOURCE_ID,
         doc_version="sha256:" + "c" * 64,
         elements=[_paragraph("abcdefghijklmnopqrstuvwxyz1234567890", 1)],
+        metadata=_METADATA,
     )
 
     assert len(chunks) >= 2

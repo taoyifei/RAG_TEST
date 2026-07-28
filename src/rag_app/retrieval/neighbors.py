@@ -17,7 +17,15 @@ class _ActivePayloadReader(Protocol):
         self,
         chunk_ids: tuple[str, ...],
     ) -> dict[str, dict[str, object]]:
-        """批量读取活动 chunk payload。"""
+        """批量读取活动 chunk payload。
+
+        Args:
+            chunk_ids: 待读取的稳定 chunk ID。
+
+        Returns:
+            以 chunk ID 为键的活动 payload。
+
+        """
 
 
 class NeighborExpander:

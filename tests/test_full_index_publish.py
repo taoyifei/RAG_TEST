@@ -23,12 +23,16 @@ def _client() -> QdrantClient:
 
 def _pipeline() -> PipelineSpec:
     return PipelineSpec(
-        schema_version="1",
+        schema_version="2",
         parser_revision="docx-parser-v1",
         ocr_model="pending-selection",
         ocr_revision="not-deployed",
         chunker_revision="structural-v1",
-        chunker_parameters=(("target", "384"),),
+        chunker_parameters=(
+            ("target_tokens", "384"),
+            ("hard_max_tokens", "512"),
+            ("overlap_tokens", "64"),
+        ),
         embedding_model="Qwen3-Embedding-0.6B",
         embedding_revision="unknown",
         embedding_dimension=1024,
@@ -37,6 +41,7 @@ def _pipeline() -> PipelineSpec:
         index_revision="qdrant-v1.18.3",
         reranker_model="Qwen3-Reranker-0.6B",
         reranker_revision="unknown",
+        llm_model="llm-58-8000",
         llm_revisions=(("llm-58-8000", "unknown"),),
         prompt_revision="strict-citations-v1",
     )

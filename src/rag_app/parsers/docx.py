@@ -6,6 +6,7 @@ import hashlib
 import mimetypes
 import time
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
@@ -14,7 +15,12 @@ from lxml import etree
 
 from rag_app.contracts import Element, ElementKind, Locator, OcrState
 
-__all__ = ["DocxParser", "DocxParserLimits", "UnsafeDocxError"]
+__all__ = [
+    "DocxParseAudit",
+    "DocxParser",
+    "DocxParserLimits",
+    "UnsafeDocxError",
+]
 
 _WORD_NAMESPACE = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 _REL_NAMESPACE = (
@@ -56,9 +62,47 @@ class DocxParserLimits:
 
 
 @dataclass(frozen=True, slots=True)
+class DocxParseAudit:
+    """一次 DOCX 结构边界审计的非敏感计数。"""
+
+    toc_controls_skipped: int
+    ordinary_controls_parsed: int
+    unsupported_nodes: int
+    unsupported_content_with_evidence: int
+
+
+@dataclass(slots=True)
+class _AuditAccumulator:
+    toc_controls_skipped: int = 0
+    ordinary_controls_parsed: int = 0
+    unsupported_nodes: int = 0
+    unsupported_content_with_evidence: int = 0
+
+    def freeze(self) -> DocxParseAudit:
+        """生成不可变的公开审计快照。
+
+        Args:
+            无参数；复制当前累计计数。
+
+        Returns:
+            不含正文和文件名的结构审计计数。
+
+        """
+        return DocxParseAudit(
+            toc_controls_skipped=self.toc_controls_skipped,
+            ordinary_controls_parsed=self.ordinary_controls_parsed,
+            unsupported_nodes=self.unsupported_nodes,
+            unsupported_content_with_evidence=(
+                self.unsupported_content_with_evidence
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class _ElementContext:
     display_path: str
     headings: tuple[str, ...]
+    heading_index: int | None
     doc_sha256: str
     list_level: int | None = None
 
@@ -66,7 +110,7 @@ class _ElementContext:
 class DocxParser:
     """提取 DOCX 标题、段落、表格和受支持图片。"""
 
-    version = "docx-parser-v1"
+    version = "docx-parser-v3"
 
     def __init__(self, limits: DocxParserLimits | None = None) -> None:
         """初始化解析器。
@@ -92,6 +136,28 @@ class DocxParser:
 
         Raises:
             UnsafeDocxError: 文件类型、归档结构或资源用量不安全。
+
+        """
+        elements, _ = self.parse_with_audit(path, display_path=display_path)
+        return elements
+
+    def parse_with_audit(
+        self,
+        path: Path,
+        *,
+        display_path: str,
+    ) -> tuple[list[Element], DocxParseAudit]:
+        """安全解析 DOCX 并返回不含正文的结构计数。
+
+        Args:
+            path: 本地 DOCX 文件。
+            display_path: 写入 Locator 的展示路径。
+
+        Returns:
+            按正文顺序排列的元素和结构边界审计计数。
+
+        Raises:
+            UnsafeDocxError: 文件、归档或正文结构不满足安全边界。
 
         """
         started_at = time.monotonic()
@@ -150,7 +216,7 @@ class DocxParser:
         display_path: str,
         doc_sha256: str,
         started_at: float,
-    ) -> list[Element]:
+    ) -> tuple[list[Element], DocxParseAudit]:
         document_root = _parse_xml(archive.read("word/document.xml"))
         relationships = _read_relationships(archive)
         heading_styles = _read_heading_styles(archive)
@@ -160,21 +226,27 @@ class DocxParser:
 
         elements: list[Element] = []
         headings: list[str] = []
+        heading_index = 0
+        current_heading_index: int | None = None
         paragraph_index = 0
         table_index = 0
         image_index = 0
-        for child in body:
+        audit = _AuditAccumulator()
+        for child in _iter_blocks(body, audit):
             self._check_timeout(started_at)
             local_name = etree.QName(child).localname
             if local_name == "p":
                 text = _paragraph_text(child)
                 heading_level = _heading_level(child, heading_styles)
                 if text and heading_level is not None:
+                    heading_index += 1
+                    current_heading_index = heading_index
                     headings = _updated_headings(headings, heading_level, text)
                     context = _ElementContext(
-                        display_path,
-                        tuple(headings),
-                        doc_sha256,
+                        display_path=display_path,
+                        headings=tuple(headings),
+                        heading_index=current_heading_index,
+                        doc_sha256=doc_sha256,
                     )
                     elements.append(
                         _text_element(
@@ -186,10 +258,11 @@ class DocxParser:
                 elif text:
                     paragraph_index += 1
                     context = _ElementContext(
-                        display_path,
-                        tuple(headings),
-                        doc_sha256,
-                        _list_level(child),
+                        display_path=display_path,
+                        headings=tuple(headings),
+                        heading_index=current_heading_index,
+                        doc_sha256=doc_sha256,
+                        list_level=_list_level(child),
                     )
                     elements.append(
                         _text_element(
@@ -202,9 +275,10 @@ class DocxParser:
                 for relationship_id in _image_relationship_ids(child):
                     image_index += 1
                     context = _ElementContext(
-                        display_path,
-                        tuple(headings),
-                        doc_sha256,
+                        display_path=display_path,
+                        headings=tuple(headings),
+                        heading_index=current_heading_index,
+                        doc_sha256=doc_sha256,
                     )
                     image = _image_element(
                         archive=archive,
@@ -215,15 +289,16 @@ class DocxParser:
                     )
                     if image is not None:
                         elements.append(image)
-            elif local_name == "tbl":
+            else:
                 table_index += 1
+                context = _ElementContext(
+                    display_path=display_path,
+                    headings=tuple(headings),
+                    heading_index=current_heading_index,
+                    doc_sha256=doc_sha256,
+                )
                 table_text = _table_text(child)
                 if table_text:
-                    context = _ElementContext(
-                        display_path,
-                        tuple(headings),
-                        doc_sha256,
-                    )
                     elements.append(
                         _text_element(
                             kind=ElementKind.TABLE,
@@ -232,11 +307,73 @@ class DocxParser:
                             table_index=table_index,
                         )
                     )
-        return elements
+                for relationship_id in _image_relationship_ids(child):
+                    image_index += 1
+                    image = _image_element(
+                        archive=archive,
+                        relationship_id=relationship_id,
+                        relationships=relationships,
+                        context=context,
+                        image_index=image_index,
+                    )
+                    if image is not None:
+                        elements.append(image)
+        return elements, audit.freeze()
 
     def _check_timeout(self, started_at: float) -> None:
         if time.monotonic() - started_at > self._limits.timeout_seconds:
             raise UnsafeDocxError("DOCX 解析耗时超过限制。")
+
+
+def _iter_blocks(
+    container: etree._Element,
+    audit: _AuditAccumulator,
+) -> Iterator[etree._Element]:
+    for child in container:
+        local_name = etree.QName(child).localname
+        if local_name in {"p", "tbl"}:
+            yield child
+            continue
+        if local_name == "sdt":
+            if _is_toc_control(child):
+                audit.toc_controls_skipped += 1
+                continue
+            content = child.find(f"./{{{_WORD_NAMESPACE}}}sdtContent")
+            if content is None:
+                _skip_or_reject_unknown(child, audit)
+                continue
+            audit.ordinary_controls_parsed += 1
+            yield from _iter_blocks(content, audit)
+            continue
+        _skip_or_reject_unknown(child, audit)
+
+
+def _is_toc_control(control: etree._Element) -> bool:
+    return any(
+        value.strip().casefold() == "table of contents"
+        for value in _xpath_strings(
+            control,
+            "./w:sdtPr//w:docPartGallery/@w:val",
+        )
+    )
+
+
+def _skip_or_reject_unknown(
+    node: etree._Element,
+    audit: _AuditAccumulator,
+) -> None:
+    if _contains_indexable_evidence(node):
+        audit.unsupported_content_with_evidence += 1
+        raise UnsafeDocxError("不支持的 DOCX 正文结构包含可索引证据。")
+    audit.unsupported_nodes += 1
+
+
+def _contains_indexable_evidence(node: etree._Element) -> bool:
+    if any(value.strip() for value in _xpath_strings(node, ".//w:t/text()")):
+        return True
+    if _image_relationship_ids(node):
+        return True
+    return bool(node.xpath(".//w:tbl", namespaces=_NAMESPACES))
 
 
 def _validate_archive_path(name: str) -> None:
@@ -347,8 +484,21 @@ def _list_level(paragraph: etree._Element) -> int | None:
 
 
 def _paragraph_text(paragraph: etree._Element) -> str:
-    text_nodes = _xpath_strings(paragraph, ".//w:t/text()")
-    return "".join(text_nodes).strip()
+    parts: list[str] = []
+    for node in paragraph.iter():
+        qualified_name = etree.QName(node)
+        if qualified_name.namespace != _WORD_NAMESPACE:
+            continue
+        if qualified_name.localname == "t" and node.text is not None:
+            parts.append(node.text)
+        elif qualified_name.localname == "tab":
+            parts.append("\t")
+        elif qualified_name.localname in {"br", "cr"}:
+            parts.append("\n")
+    text = "".join(parts)
+    if not text.strip():
+        return ""
+    return text.strip(" ")
 
 
 def _table_text(table: etree._Element) -> str:
@@ -389,6 +539,7 @@ def _text_element(
     locator = Locator(
         file_path=context.display_path,
         heading_path=tuple(item for item in context.headings if item),
+        heading_index=context.heading_index,
         paragraph_index=paragraph_index,
         table_index=table_index,
         fragment=text[:240],
@@ -410,9 +561,10 @@ def _text_element(
 
 
 def _image_relationship_ids(paragraph: etree._Element) -> list[str]:
-    drawing_ids = _xpath_strings(paragraph, ".//a:blip/@r:embed")
-    legacy_ids = _xpath_strings(paragraph, ".//v:imagedata/@r:id")
-    return [*drawing_ids, *legacy_ids]
+    return _xpath_strings(
+        paragraph,
+        ".//a:blip/@r:embed | .//v:imagedata/@r:id",
+    )
 
 
 def _xpath_strings(element: etree._Element, expression: str) -> list[str]:
@@ -444,6 +596,7 @@ def _image_element(
     locator = Locator(
         file_path=context.display_path,
         heading_path=tuple(item for item in context.headings if item),
+        heading_index=context.heading_index,
         image_index=image_index,
         fragment=media_name,
     )

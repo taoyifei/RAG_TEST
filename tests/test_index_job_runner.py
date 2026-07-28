@@ -32,12 +32,16 @@ def _client() -> QdrantClient:
 
 def _pipeline() -> PipelineSpec:
     return PipelineSpec(
-        schema_version="1",
+        schema_version="2",
         parser_revision="docx-parser-v1",
         ocr_model="server-gpu-ocr-unselected",
         ocr_revision="unselected",
         chunker_revision="structural-v1",
-        chunker_parameters=(("target_tokens", "384"),),
+        chunker_parameters=(
+            ("target_tokens", "384"),
+            ("hard_max_tokens", "512"),
+            ("overlap_tokens", "64"),
+        ),
         embedding_model="test-embedding",
         embedding_revision="test-revision",
         embedding_dimension=3,
@@ -46,6 +50,7 @@ def _pipeline() -> PipelineSpec:
         index_revision="qdrant-v1.18.3",
         reranker_model="test-reranker",
         reranker_revision="test-revision",
+        llm_model="test-llm",
         llm_revisions=(("test-llm", "test-revision"),),
         prompt_revision="test-prompt",
     )
@@ -71,6 +76,10 @@ def _build_chunks(
             ),
         ),
         content_sha256=version.content_sha256,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return (
         IndexedChunk(
@@ -159,5 +168,110 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         if target is not None:
             client.delete_collection(target)
         for collection in created_collections:
+            if client.collection_exists(collection):
+                client.delete_collection(collection)
+
+
+def test_policy_change_rejects_incremental_and_requires_new_collection(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-policy-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.docx").write_bytes(b"content")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    old_pipeline = _pipeline().model_copy(
+        update={"corpus_policy_sha256": "a" * 64}
+    )
+    config = JobRunnerConfig(
+        alias_name=alias,
+        input_root=docs,
+        index_state_dir=tmp_path / "indexes",
+        collection_prefix=f"rag-policy-{suffix}",
+        lease_seconds=60,
+    )
+    old_runner = IndexJobRunner(
+        config=config,
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=old_pipeline,
+            build_chunks_factory=lambda _: _build_chunks,
+        ),
+    )
+    collections: set[str] = set()
+    try:
+        old_job = control.create_job(
+            idempotency_key="policy:old:full",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=old_pipeline.fingerprint(),
+        )
+        old_result = old_runner.run_next(worker_id="worker-old")
+        assert old_result is not None
+        assert control.get_job(old_job.job_id).state == JobState.SUCCEEDED
+        collections.add(old_result.collection_name)
+        old_count = client.count(
+            old_result.collection_name,
+            exact=True,
+        ).count
+
+        new_pipeline = old_pipeline.model_copy(
+            update={"corpus_policy_sha256": "b" * 64}
+        )
+        new_runner = IndexJobRunner(
+            config=config,
+            services=JobRunnerServices(
+                control=control,
+                manifests=manifests,
+                qdrant=client,
+                pipeline=new_pipeline,
+                build_chunks_factory=lambda _: _build_chunks,
+            ),
+        )
+        incremental = control.create_job(
+            idempotency_key="policy:new:incremental",
+            kind=JobKind.INCREMENTAL,
+            pipeline_fingerprint=new_pipeline.fingerprint(),
+        )
+        rejected = new_runner.run_next(worker_id="worker-new")
+        assert rejected is not None
+        assert rejected.state == JobState.FAILED
+        assert (
+            control.get_job(incremental.job_id).state
+            == JobState.FAILED
+        )
+        assert client.count(
+            old_result.collection_name,
+            exact=True,
+        ).count == old_count
+        assert any(
+            item.alias_name == alias
+            and item.collection_name == old_result.collection_name
+            for item in client.get_aliases().aliases
+        )
+
+        full = control.create_job(
+            idempotency_key="policy:new:full",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=new_pipeline.fingerprint(),
+        )
+        new_result = new_runner.run_next(worker_id="worker-new")
+        assert new_result is not None
+        assert control.get_job(full.job_id).state == JobState.SUCCEEDED
+        collections.add(new_result.collection_name)
+        assert new_result.collection_name != old_result.collection_name
+        assert any(
+            item.alias_name == alias
+            and item.collection_name == new_result.collection_name
+            for item in client.get_aliases().aliases
+        )
+    finally:
+        for collection in collections:
             if client.collection_exists(collection):
                 client.delete_collection(collection)

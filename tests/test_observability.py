@@ -20,7 +20,11 @@ def test_structured_audit_logs_only_allowlisted_metadata() -> None:
     logger.propagate = False
     logger.setLevel(logging.INFO)
     logger.addHandler(logging.StreamHandler(output))
-    audit = StructuredAuditLogger(logger, "sha256:" + "a" * 64)
+    audit = StructuredAuditLogger(
+        logger,
+        "sha256:" + "a" * 64,
+        "sha256:" + "b" * 64,
+    )
     audit.query_stage(
         StageEvent(
             trace_id="trace-1",
@@ -75,6 +79,8 @@ def test_structured_audit_logs_only_allowlisted_metadata() -> None:
     records = [json.loads(line) for line in text.splitlines()]
     assert records[0]["trace_id"] == "trace-1"
     assert records[0]["stage"] == "rerank"
+    assert records[0]["pipeline_fingerprint"] == "sha256:" + "a" * 64
+    assert records[0]["serving_fingerprint"] == "sha256:" + "b" * 64
     assert records[1]["chunk_ids"] == ["chunk-1"]
     assert records[2]["endpoint"] == "http://192.0.2.10:8000/v1/chat"
     assert records[2]["retry_count"] == 2

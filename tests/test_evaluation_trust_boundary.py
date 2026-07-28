@@ -3,11 +3,14 @@ import pytest
 from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import (
     ActiveEvidenceManifest,
-    ActiveEvidenceRecord,
     PublishedCitation,
     QueryEvaluationResult,
     RankedEvidence,
     evaluate_results,
+)
+from tests.active_evidence_fixtures import (
+    active_evidence_record,
+    trusted_active_evidence,
 )
 from tests.synthetic_evaluation import synthetic_evaluation_dataset
 
@@ -43,7 +46,7 @@ def _result_and_manifest(
         )
         for index, item in enumerate(ranked, start=1):
             evidence_records.append(
-                ActiveEvidenceRecord(
+                active_evidence_record(
                     chunk_id=item.chunk_id,
                     source_path=item.source_path,
                     locator=item.locator,
@@ -65,11 +68,9 @@ def _result_and_manifest(
                 human_reviewer="人工验收员" if answerable else None,
             )
         )
-    manifest = ActiveEvidenceManifest(
-        manifest_sha256="a" * 64,
-        pipeline_fingerprint="sha256:" + ("b" * 64),
-        records=tuple(evidence_records),
-    )
+    manifest = trusted_active_evidence(
+        tuple(evidence_records)
+    ).manifest
     return tuple(results), manifest
 
 
@@ -97,7 +98,7 @@ def test_forged_chunk_id_is_computed_as_invalid() -> None:
     report = evaluate_results(
         dataset,
         tuple(mutable),
-        active_evidence_manifest=manifest,
+        active_evidence_manifest=trusted_active_evidence(manifest.records),
     )
 
     assert report.metrics["invalid_citation_ids"] == 1
@@ -112,3 +113,15 @@ def test_result_cannot_self_report_invalid_citation_count() -> None:
 
     with pytest.raises(ValueError, match="invalid_citation_ids"):
         QueryEvaluationResult.model_validate(payload)
+
+
+def test_results_and_manifest_cannot_be_forged_together() -> None:
+    dataset = synthetic_evaluation_dataset()
+    results, forged_manifest = _result_and_manifest(dataset)
+
+    with pytest.raises(TypeError, match="可信活动证据"):
+        evaluate_results(
+            dataset,
+            results,
+            active_evidence_manifest=forged_manifest,
+        )

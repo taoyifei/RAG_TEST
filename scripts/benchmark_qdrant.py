@@ -15,7 +15,15 @@ from qdrant_client.http import models
 
 
 def main() -> int:
-    """运行可重复的容量基准并写出 JSON 证据。"""
+    """运行可重复的容量基准并写出 JSON 证据。
+
+    Args:
+        无参数；命令行选项从当前进程读取。
+
+    Returns:
+        达到延迟阈值时返回 0，否则返回 1。
+
+    """
     arguments = _arguments()
     client = QdrantClient(
         url=arguments.url,

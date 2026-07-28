@@ -41,6 +41,10 @@ def _indexed(
             ),
         ),
         content_sha256=digest_character * 64,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return IndexedChunk(
         chunk=chunk,

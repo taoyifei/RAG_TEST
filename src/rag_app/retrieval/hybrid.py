@@ -116,7 +116,7 @@ class HybridRetriever:
             instruction=self._config.query_instruction,
         )
         route = (
-            self._router.route(variants.queries[0])
+            self._router.route(variants.resolved_query)
             if self._router is not None
             else SoftRouteDecision(
                 route_id=None,

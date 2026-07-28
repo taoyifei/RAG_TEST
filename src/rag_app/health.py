@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -38,7 +41,15 @@ class HealthProbe(Protocol):
     """必需组件健康探针。"""
 
     def check(self) -> ComponentStatus:
-        """执行有界只读健康检查。"""
+        """执行有界只读健康检查。
+
+        Args:
+            无参数；检查当前探针绑定的组件。
+
+        Returns:
+            非敏感组件健康摘要。
+
+        """
         ...
 
 
@@ -47,7 +58,15 @@ class _FreezableConfiguration(Protocol):
 
     @property
     def status(self) -> object:
-        """返回 provisional 或 frozen 状态。"""
+        """返回 provisional 或 frozen 状态。
+
+        Args:
+            无参数；读取当前配置状态。
+
+        Returns:
+            配置管理状态。
+
+        """
         ...
 
 
@@ -64,7 +83,15 @@ class FrozenConfigurationProbe:
         self._configuration = configuration
 
     def check(self) -> ComponentStatus:
-        """仅当状态明确为 frozen 时返回 ready。"""
+        """仅当状态明确为 frozen 时返回 ready。
+
+        Args:
+            无参数；检查构造时传入的配置。
+
+        Returns:
+            冻结配置健康摘要。
+
+        """
         ready = str(self._configuration.status) == "frozen"
         return ComponentStatus(
             name="retrieval_configuration",
@@ -92,7 +119,15 @@ class QdrantServiceProbe:
         self._client = client
 
     def check(self) -> ComponentStatus:
-        """读取 collection 清单，不创建或修改服务端对象。"""
+        """读取 collection 清单，不创建或修改服务端对象。
+
+        Args:
+            无参数；探测构造时传入的 Qdrant 客户端。
+
+        Returns:
+            Qdrant 可达性健康摘要。
+
+        """
         try:
             self._client.get_collections()
         except Exception:
@@ -138,7 +173,15 @@ class ManifestAliasProbe:
         self._pipeline_fingerprint = pipeline_fingerprint
 
     def check(self) -> ComponentStatus:
-        """只在 alias 与活动 manifest 双向一致时就绪。"""
+        """只在 alias 与活动 manifest 双向一致时就绪。
+
+        Args:
+            无参数；检查当前活动 alias 与 manifest。
+
+        Returns:
+            活动索引兼容性健康摘要。
+
+        """
         try:
             target = self._index.alias_target(self._alias_name)
             if target is None:
@@ -200,7 +243,15 @@ class HttpEndpointProbe:
         self._expected_model = expected_model
 
     def check(self) -> ComponentStatus:
-        """逐端点执行有界只读检查。"""
+        """逐端点执行有界只读检查。
+
+        Args:
+            无参数；检查当前探针的全部模型端点。
+
+        Returns:
+            端点健康数量与就绪结论。
+
+        """
         healthy = sum(
             self._check_endpoint(endpoint) for endpoint in self._endpoints
         )
@@ -240,29 +291,170 @@ class ReadinessReport:
 
 
 class ReadinessService:
-    """只有全部必需组件满足策略时才报告 ready。"""
+    """后台刷新探针，并向请求线程提供有时效的内存快照。"""
 
-    def __init__(self, probes: tuple[HealthProbe, ...]) -> None:
+    def __init__(
+        self,
+        probes: tuple[HealthProbe, ...],
+        *,
+        refresh_interval_seconds: float = 10.0,
+        max_staleness_seconds: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         """冻结必需组件探针。
 
         Args:
             probes: 至少一个有界只读探针。
+            refresh_interval_seconds: 后台固定刷新间隔。
+            max_staleness_seconds: 快照允许的最大年龄。
+            clock: 可测试的单调时钟。
 
         Raises:
-            ValueError: 没有配置必需组件。
+            ValueError: 没有探针或刷新时间参数无效。
 
         """
         if not probes:
             raise ValueError("至少配置一个 readiness 探针。")
+        if min(
+            refresh_interval_seconds,
+            max_staleness_seconds,
+        ) <= 0:
+            raise ValueError("readiness 刷新间隔与时效必须为正数。")
         self._probes = probes
+        self._refresh_interval_seconds = refresh_interval_seconds
+        self._max_staleness_seconds = max_staleness_seconds
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._snapshot: ReadinessReport | None = None
+        self._refreshed_at: float | None = None
 
-    def check(self) -> ReadinessReport:
-        """依次执行探针并汇总严格 AND 结果。"""
-        components = tuple(probe.check() for probe in self._probes)
-        return ReadinessReport(
+    def refresh_once(self) -> None:
+        """执行一次有界探针检查并原子替换内存快照。
+
+        Args:
+            无参数；刷新当前服务绑定的全部探针。
+
+        Returns:
+            无返回值。
+
+        """
+        try:
+            components = tuple(probe.check() for probe in self._probes)
+        except Exception:
+            components = (
+                ComponentStatus(
+                    name="readiness_refresh",
+                    ready=False,
+                    detail="readiness refresh failed",
+                    healthy_endpoints=0,
+                    total_endpoints=1,
+                ),
+            )
+        report = ReadinessReport(
             ready=all(component.ready for component in components),
             components=components,
         )
+        refreshed_at = self._clock()
+        with self._lock:
+            self._snapshot = report
+            self._refreshed_at = refreshed_at
+
+    def start(self) -> None:
+        """同步刷新一次，再启动唯一后台刷新线程。
+
+        Args:
+            无参数；启动当前就绪服务。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+        self.refresh_once()
+        self._stop.clear()
+        thread = threading.Thread(
+            target=self._refresh_loop,
+            name="rag-readiness-refresh",
+            daemon=True,
+        )
+        with self._lock:
+            self._thread = thread
+        thread.start()
+
+    def check(self) -> ReadinessReport:
+        """只读取线程安全快照，过期或未刷新时严格拒绝。
+
+        Args:
+            无参数；读取当前缓存快照。
+
+        Returns:
+            当前有效快照或缓存失败报告。
+
+        """
+        now = self._clock()
+        with self._lock:
+            snapshot = self._snapshot
+            refreshed_at = self._refreshed_at
+        if snapshot is None or refreshed_at is None:
+            return _cache_failure("readiness snapshot was never refreshed")
+        if now - refreshed_at > self._max_staleness_seconds:
+            return _cache_failure("readiness snapshot is stale")
+        return snapshot
+
+    def close(self) -> None:
+        """停止并 join 后台刷新线程。
+
+        Args:
+            无参数；关闭当前就绪服务。
+
+        Returns:
+            无返回值。
+
+        """
+        self._stop.set()
+        with self._lock:
+            thread = self._thread
+        if thread is not None:
+            thread.join()
+        with self._lock:
+            self._thread = None
+
+    def is_running(self) -> bool:
+        """返回后台刷新线程是否仍存活。
+
+        Args:
+            无参数；检查当前后台线程。
+
+        Returns:
+            刷新线程存活时为 `True`。
+
+        """
+        with self._lock:
+            thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def _refresh_loop(self) -> None:
+        while not self._stop.wait(self._refresh_interval_seconds):
+            self.refresh_once()
+
+
+def _cache_failure(detail: str) -> ReadinessReport:
+    return ReadinessReport(
+        ready=False,
+        components=(
+            ComponentStatus(
+                name="readiness_cache",
+                ready=False,
+                detail=detail,
+                healthy_endpoints=0,
+                total_endpoints=1,
+            ),
+        ),
+    )
 
 
 def _contains_model(payload: object, expected_model: str) -> bool:

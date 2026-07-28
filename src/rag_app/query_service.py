@@ -85,7 +85,16 @@ class _StageEmitter:
         stage: StageName,
         metrics: dict[str, int | bool | str],
     ) -> None:
-        """发送不含问题、证据或答案的阶段事件。"""
+        """发送不含问题、证据或答案的阶段事件。
+
+        Args:
+            stage: 当前查询阶段。
+            metrics: 仅含非敏感计数或状态的指标。
+
+        Returns:
+            无返回值。
+
+        """
         self.callback(
             StageEvent(
                 trace_id=self.trace_id,
@@ -184,7 +193,7 @@ class QueryService:
         )
 
         reranked = self._dependencies.reranker.rerank(
-            question,
+            variants.resolved_query,
             retrieval.candidates,
         )
         expanded_hits = self._dependencies.neighbors.expand(reranked.hits)

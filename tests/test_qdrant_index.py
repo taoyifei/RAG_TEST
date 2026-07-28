@@ -49,6 +49,10 @@ def _indexed_chunk(
         element_kind=ElementKind.PARAGRAPH,
         locators=(locator,),
         content_sha256=version_hex * 64,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     dense = [0.0] * _DIMENSION
     dense[0] = 1.0
@@ -84,6 +88,10 @@ def _version_chunk(
             ),
         ),
         content_sha256=version.content_sha256,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return IndexedChunk(
         chunk=chunk,

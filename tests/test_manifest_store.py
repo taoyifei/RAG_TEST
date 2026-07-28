@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,12 +15,16 @@ from rag_app.manifest import ManifestRepository, ManifestState
 
 def _pipeline() -> PipelineSpec:
     return PipelineSpec(
-        schema_version="1",
+        schema_version="2",
         parser_revision="docx-parser-v1",
         ocr_model="pending-selection",
         ocr_revision="not-deployed",
         chunker_revision="structural-v1",
-        chunker_parameters=(("target", "384"), ("hard_max", "512")),
+        chunker_parameters=(
+            ("target_tokens", "384"),
+            ("hard_max_tokens", "512"),
+            ("overlap_tokens", "64"),
+        ),
         embedding_model="Qwen3-Embedding-0.6B",
         embedding_revision="sha256:" + "e" * 64,
         embedding_dimension=1024,
@@ -28,6 +33,7 @@ def _pipeline() -> PipelineSpec:
         index_revision="qdrant-v1.18.3",
         reranker_model="Qwen3-Reranker-0.6B",
         reranker_revision="sha256:" + "r" * 64,
+        llm_model="llm-58-8000",
         llm_revisions=(("llm-58-8000", "unknown"),),
         prompt_revision="strict-citations-v1",
     )
@@ -113,3 +119,28 @@ def test_manifest_rejects_incompatible_runtime(tmp_path: Path) -> None:
             collection_name="rag-other",
             pipeline_fingerprint=manifest.pipeline_fingerprint,
         )
+
+
+def test_manifest_rejects_tampered_sqlite_digest(tmp_path: Path) -> None:
+    database_path = tmp_path / "state.sqlite3"
+    repository = ManifestRepository(database_path)
+    repository.initialize()
+    manifest = _manifest("rag-index")
+    repository.stage(
+        manifest,
+        snapshot_name="index.snapshot",
+        snapshot_checksum="d" * 64,
+    )
+    repository.activate(manifest.collection_name)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            UPDATE index_manifests
+            SET manifest_sha256 = ?
+            WHERE collection_name = ?
+            """,
+            ("0" * 64, manifest.collection_name),
+        )
+
+    with pytest.raises(ValueError, match="摘要"):
+        repository.get_active()

@@ -1,30 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-bundle_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-cd "${bundle_dir}"
+release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+cd "${release_dir}"
 sha256sum -c MANIFEST.sha256
-(
-  cd input
-  sha256sum -c DOCS.sha256
-)
-(
-  cd evaluation
-  sha256sum -c MANIFEST.sha256
-)
 
 if find . -type f -name '*Zone.Identifier*' -print -quit | grep -q .; then
-  echo "离线包包含 Zone.Identifier，拒绝继续。" >&2
-  exit 1
-fi
-if [[ "$(find input -type f -name '*.docx' | wc -l)" -ne 6 ]]; then
-  echo "离线包必须恰有 6 个 DOCX。" >&2
+  echo "runtime 包含 Zone.Identifier，拒绝继续。" >&2
   exit 1
 fi
 
 required_files=(
-  "images/rag-images-linux-amd64.tar"
+  "RELEASE_ID"
+  "SOURCE_REVISION"
+  "QDRANT_SOURCE_IMAGE"
+  "IMAGE_ARCHIVES.tsv"
+  "images/docx-rag-linux-amd64.tar"
+  "images/docx-rag-ocr-linux-amd64.tar"
+  "images/qdrant-linux-amd64.tar"
   "images/docx-rag.inspect.json"
   "images/docx-rag-ocr.inspect.json"
   "images/qdrant.inspect.json"
@@ -37,6 +30,7 @@ required_files=(
   "provenance/ocr/ASSET_SOURCES.json"
   "provenance/ocr/BASE_RUNTIME.json"
   "provenance/ocr/WHEELS.sha256"
+  "provenance/ocr/MODELS.sha256"
   "provenance/ocr/requirements.lock"
   "provenance/ocr/pipeline.yaml"
   "evaluation/runtime/evaluation/evaluate.py"
@@ -44,10 +38,24 @@ required_files=(
   "evaluation/runtime/scripts/load_test_chat.py"
 )
 for path in "${required_files[@]}"; do
-  if [[ ! -s "${path}" ]]; then
-    echo "离线包缺少必要文件：${path}" >&2
+  if [[ ! -s "${path}" || -L "${path}" ]]; then
+    echo "runtime 缺少普通文件：${path}" >&2
     exit 1
   fi
 done
 
-echo "离线包 checksum、输入、OCR 来源、许可证、SBOM 与评测运行时校验通过。"
+if [[ "$(wc -l < IMAGE_ARCHIVES.tsv)" -ne 3 ]]; then
+  echo "IMAGE_ARCHIVES.tsv 必须恰有三行。" >&2
+  exit 1
+fi
+if [[ "$(cut -f1 IMAGE_ARCHIVES.tsv | paste -sd ',')" \
+  != "images/docx-rag-linux-amd64.tar,images/docx-rag-ocr-linux-amd64.tar,images/qdrant-linux-amd64.tar" ]]; then
+  echo "镜像归档白名单或顺序无效。" >&2
+  exit 1
+fi
+if [[ ! "$(cat SOURCE_REVISION)" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "SOURCE_REVISION 无效。" >&2
+  exit 1
+fi
+
+echo "runtime 包逐文件摘要、固定镜像白名单、来源与 SBOM 校验通过。"

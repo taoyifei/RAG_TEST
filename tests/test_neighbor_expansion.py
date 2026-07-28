@@ -52,6 +52,10 @@ def _indexed(
         content_sha256="d" * 64,
         previous_chunk_id=previous,
         next_chunk_id=next_,
+        document_status="active",
+        authority_level="official",
+        effective_from=None,
+        effective_to=None,
     )
     return IndexedChunk(
         chunk=chunk,

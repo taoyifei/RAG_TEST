@@ -175,7 +175,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def build_runtime_fingerprint(settings: RuntimeSettings) -> str:
-    """读取 CLI 创建任务使用的 pipeline 指纹。"""
+    """读取 CLI 创建任务使用的 pipeline 指纹。
+
+    Args:
+        settings: 已完成环境校验的运行设置。
+
+    Returns:
+        当前 pipeline 的稳定指纹。
+
+    """
     return load_pipeline(settings.pipeline_path).fingerprint()
 
 

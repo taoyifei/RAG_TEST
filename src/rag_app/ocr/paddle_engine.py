@@ -23,7 +23,15 @@ class _PaddlePipeline(Protocol):
     """PaddleOCR pipeline 的运行时窄接口。"""
 
     def predict(self, input_data: object) -> Iterable[object]:
-        """对一张内存图片执行预测。"""
+        """对一张内存图片执行预测。
+
+        Args:
+            input_data: 已解码的单张内存图片。
+
+        Returns:
+            PaddleOCR pipeline 的逐项预测结果。
+
+        """
 
 
 class PaddleOcrEngine:
@@ -188,19 +196,37 @@ def _result_payload(result: object) -> Mapping[str, object]:
 
 
 def _bbox(boxes: object, index: int) -> tuple[int, int, int, int]:
-    if (
-        not isinstance(boxes, Sequence)
-        or isinstance(boxes, (str, bytes))
-        or index >= len(boxes)
-    ):
+    box_rows = _sequence_value(boxes)
+    if box_rows is None or index >= len(box_rows):
         return (0, 0, 0, 0)
-    box = boxes[index]
+    box = _sequence_value(box_rows[index])
     if (
-        not isinstance(box, Sequence)
-        or isinstance(box, (str, bytes))
+        box is None
         or len(box) != _BBOX_VALUE_COUNT
-        or not all(isinstance(value, (float, int)) for value in box)
     ):
         return (0, 0, 0, 0)
-    rounded = tuple(round(float(value)) for value in box)
+    numeric_values: list[float] = []
+    for value in box:
+        if not isinstance(value, (float, int)):
+            return (0, 0, 0, 0)
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return (0, 0, 0, 0)
+        numeric_values.append(numeric)
+    rounded = tuple(round(value) for value in numeric_values)
     return cast(tuple[int, int, int, int], rounded)
+
+
+def _sequence_value(value: object) -> Sequence[object] | None:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return cast(Sequence[object], value)
+    to_list = getattr(value, "tolist", None)
+    if not callable(to_list):
+        return None
+    converted = to_list()
+    if isinstance(converted, Sequence) and not isinstance(
+        converted,
+        (str, bytes),
+    ):
+        return cast(Sequence[object], converted)
+    return None
