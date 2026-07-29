@@ -16,6 +16,8 @@ runtime_archive="${artifact_root}/rag-runtime-${release_id}.tar.gz"
 corpus_archive="${artifact_root}/rag-corpus-${corpus_id}.tar.gz"
 runtime_sidecar="${artifact_root}/rag-runtime-${release_id}.tar.gz.sha256"
 corpus_sidecar="${artifact_root}/rag-corpus-${corpus_id}.tar.gz.sha256"
+unpacker="${artifact_root}/offline_bundle.py"
+unpacker_sidecar="${artifact_root}/offline_bundle.py.sha256"
 
 validate_identifier() {
   local value="$1"
@@ -90,7 +92,8 @@ if [[ -n "$(git -C "${repo_root}" status --porcelain)" ]]; then
   exit 1
 fi
 if [[ -e "${runtime_archive}" || -e "${runtime_sidecar}" \
-  || -e "${corpus_archive}" || -e "${corpus_sidecar}" ]]; then
+  || -e "${corpus_archive}" || -e "${corpus_sidecar}" \
+  || -e "${unpacker}" || -e "${unpacker_sidecar}" ]]; then
   echo "双包输出已存在，拒绝覆盖。" >&2
   exit 1
 fi
@@ -103,6 +106,7 @@ if [[ "${qdrant_image_id}" != "${qdrant_image##*@}" ]]; then
   echo "Qdrant 镜像 ID 与固定 digest 不一致。" >&2
   exit 1
 fi
+docker sbom --help >/dev/null
 docker image tag "${qdrant_image}" "${qdrant_runtime_image}"
 (
   cd "${repo_root}/deployment/ocr/assets"
@@ -135,6 +139,7 @@ cp "${repo_root}/deployment/compose.yaml" "${runtime_root}/compose.yaml"
 cp "${repo_root}/deployment/.env.example" "${runtime_root}/.env.example"
 cp "${repo_root}/deployment/deploy.sh" "${runtime_root}/deploy.sh"
 cp "${repo_root}/deployment/rollback.sh" "${runtime_root}/rollback.sh"
+cp "${repo_root}/deployment/backup.sh" "${runtime_root}/backup.sh"
 cp "${repo_root}/deployment/verify-offline.sh" \
   "${runtime_root}/verify-offline.sh"
 cp "${repo_root}/design/public/offline-build-and-server-deployment.md" \
@@ -226,9 +231,10 @@ tar --format=posix -C "${stage}" -czf "${runtime_archive}" runtime
 tar --format=posix -C "${stage}" -czf "${corpus_archive}" corpus
 write_sidecar "${runtime_archive}"
 write_sidecar "${corpus_archive}"
-cp "${repo_root}/scripts/offline_bundle.py" \
-  "${artifact_root}/offline_bundle.py"
+cp "${repo_root}/scripts/offline_bundle.py" "${unpacker}"
+write_sidecar "${unpacker}"
 
-printf 'runtime=%s\nruntime_sha=%s\ncorpus=%s\ncorpus_sha=%s\n' \
+printf 'runtime=%s\nruntime_sha=%s\ncorpus=%s\ncorpus_sha=%s\nunpacker=%s\nunpacker_sha=%s\n' \
   "${runtime_archive}" "${runtime_sidecar}" \
-  "${corpus_archive}" "${corpus_sidecar}"
+  "${corpus_archive}" "${corpus_sidecar}" \
+  "${unpacker}" "${unpacker_sidecar}"

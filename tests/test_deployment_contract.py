@@ -28,7 +28,12 @@ def test_server_scripts_never_build_pull_install_or_delete_volumes() -> None:
     root = Path(__file__).parents[1]
     scripts = tuple(
         (root / "deployment" / name).read_text(encoding="utf-8")
-        for name in ("deploy.sh", "rollback.sh", "verify-offline.sh")
+        for name in (
+            "deploy.sh",
+            "rollback.sh",
+            "verify-offline.sh",
+            "backup.sh",
+        )
     )
     joined = "\n".join(scripts)
 

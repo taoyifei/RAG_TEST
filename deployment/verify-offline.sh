@@ -36,6 +36,7 @@ required_files=(
   "evaluation/runtime/evaluation/evaluate.py"
   "evaluation/runtime/evaluation/metrics.py"
   "evaluation/runtime/scripts/load_test_chat.py"
+  "backup.sh"
 )
 for path in "${required_files[@]}"; do
   if [[ ! -s "${path}" || -L "${path}" ]]; then

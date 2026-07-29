@@ -59,8 +59,12 @@ services:
       - rag-internal
     healthcheck:
       test:
-        - CMD-SHELL
-        - exec 3<>/dev/tcp/127.0.0.1/6333
+        - CMD
+        - /usr/bin/grep
+        - -Eq
+        - ^[[:space:]]*[0-9]+:[[:space:]]+[0-9A-Fa-f]{8}:18BD[[:space:]]+[0-9A-Fa-f]{8}:[0-9A-Fa-f]{4}[[:space:]]+0A[[:space:]]
+        - /proc/net/tcp
+        - /proc/net/tcp6
       interval: 10s
       timeout: 3s
       retries: 12
@@ -132,10 +136,12 @@ services:
       - no-new-privileges:true
 
   rag-worker:
+    profiles:
+      - index
     image: ${RAG_APP_IMAGE:-docx-rag:0.1.0}
     pull_policy: never
     container_name: rag-worker
-    restart: unless-stopped
+    restart: "no"
     command:
       - worker
     depends_on:
