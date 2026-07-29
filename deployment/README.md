@@ -7,7 +7,8 @@
 
 ## 服务器步骤
 
-1. 分别校验 runtime/corpus 外层 SHA256，并用固定解包器验证内部 manifest。
+1. 先用 `offline_bundle.py.sha256` 校验固定解包器，再分别校验
+   runtime/corpus 外层 SHA256 和内部 manifest；解包器摘要失败时禁止执行。
 2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；环境文件保存在
    `/data/tyf/RAG/shared/env/rag.env`。
 3. 设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
@@ -15,8 +16,8 @@
    使用的宿主 GPU ID。
 4. 执行 `bash verify-offline.sh`。
 5. 执行 `bash deploy.sh /data/tyf/RAG/shared/env/rag.env`；脚本先校验，
-   再按白名单 `docker load`，最后运行
-   `docker compose up -d --no-build --pull never`。
+   再按白名单 `docker load`，最后只启动 app、OCR 和 Qdrant。默认 Compose
+   路径不启动 worker。
 6. 检查 Compose、应用存活和容器内 OCR readiness：
 
    ```bash
@@ -28,8 +29,30 @@
      "import urllib.request; print(urllib.request.urlopen(
      'http://127.0.0.1:8090/ready').read().decode())"
    ```
-7. `/ready` 只有在检索参数冻结、活动索引与 manifest 一致且模型健康时返回
-   200。通过管理 API 创建全量任务，由单个 `rag-worker` 串行执行。
+7. 当前 provisional 配置下 `/ready=503` 是正确结果，不得绕过 worker 的严格
+   索引门禁。完成检索参数冻结和模型 revision 核验、生成对应 release 后，显式
+   启动单索引 worker，再通过管理 API 创建任务：
+
+   ```bash
+   docker compose --profile index \
+     --env-file /data/tyf/RAG/shared/env/rag.env \
+     -f /data/tyf/RAG/current/compose.yaml \
+     up -d --no-build --pull never rag-worker
+   ```
+
+`/ready` 只有在活动索引与 manifest 一致且全部模型健康时才返回 200。
+
+升级或回滚前使用当前 release 内的可靠备份脚本；不要手工对运行中的 bind
+mount 执行 `tar -czf`：
+
+```bash
+bash /data/tyf/RAG/current/backup.sh \
+  "$(date -u +%Y%m%dT%H%M%SZ)" \
+  /data/tyf/RAG/shared/env/rag.env
+```
+
+脚本只读取固定的 `data/state` 和 `data/qdrant`，验证归档与 SHA 后原子发布，
+并恢复备份前实际运行的 app、worker、Qdrant 集合。
 
 应用把 Query Trace 单独写入 `/state/traces.sqlite3`；它随现有 state bind
 mount 持久化，但不与任务或 manifest 表共库。管理员通过 `/debug/` 和
@@ -39,9 +62,11 @@ RAG readiness：普通查询捕获失败继续回答，显式 FULL Debug 则在�
 `design/public/trace-observability.md`。
 
 执行 `bash rollback.sh /data/tyf/RAG/shared/env/rag.env` 可切回部署前记录的
-应用、OCR 和 Qdrant 镜像 ID；脚本保留 SQLite/Qdrant bind mount。索引数据
-恢复仍以应用 manifest 中记录的 Qdrant snapshot 为准，不能通过删除数据目录
-回滚。
+应用、OCR 和 Qdrant 镜像 ID。脚本先重验旧 release、Compose、镜像 digest
+与 OCI revision，再按回滚前实际状态决定是否恢复 worker；全部存活与镜像
+检查通过后，才原子持久化共享 env 和 `current`，提交失败会恢复原元数据。
+SQLite/Qdrant bind mount 不会被删除。索引数据恢复仍以应用 manifest 中记录的
+Qdrant snapshot 为准，不能通过删除数据目录回滚。
 
 资产下载、断网构建、双包、GPU 冒烟到回滚的完整命令见
 `design/public/offline-build-and-server-deployment.md`；PaddleOCR 专用入口

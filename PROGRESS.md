@@ -1717,3 +1717,245 @@
 - [x] README、公开可观测性设计、部署说明、完整 PROGRESS/BLOCKED 作为单独文档
   提交；所有外部模型、OCR/GPU/EMF、自动编号、chat-template、旧 artifacts 和
   服务器负载项继续保留，没有因提交而标记为解除。
+
+## 2026-07-29 离线发布链 P0：目标、顺序与最大风险（8 行）
+
+1. 只修 Qdrant healthcheck、worker 启动策略、rollback、sidecar、SBOM 预检和备份。
+2. 顺序固定为事实基线，再按 P0-1 至 P0-6 逐项红测、最小修复和专项绿测。
+3. Qdrant 探针只使用固定 v1.18.3 镜像内实测存在的命令，并做正反真实容器验证。
+4. worker 保留 provisional 严格拒绝门禁，只从默认启动路径移到显式 index profile。
+5. rollback 先验证旧 release/镜像，再原子持久化旧镜像并补偿元数据提交失败。
+6. package 的 SBOM 能力预检先于一切正式输出，解包器使用独立 SHA sidecar。
+7. backup 只提升源数据读取权限，验证归档和 SHA 后才原子发布并恢复原服务集合。
+8. 最大风险是 Shell 事务补偿、fake 命令与真实 Compose/Docker 语义出现偏差。
+
+## 2026-07-29 离线发布链任务 0：事实基线
+
+- [x] HEAD 为预期 `da9240ab48a9f10607210425ee092c7eeb9e0ff2`；初始
+  tracked=204、untracked=0、modified=1、deleted=0、staged=0，完整 status
+  仅为 `BLOCKED.md` 已修改。真实 `.git/index` SHA256 为
+  `47069465c413de9f984caa50008286f70f7a9e505f6817e57a66ce828c2da806`。
+- [x] 保护摘要未漂移：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+- [x] 参考仓库 HEAD/tree/tracked 聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`，
+  status 为空。
+- [x] compileall、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment Shell、默认 Compose config、
+  11/11 应用资产和 `git diff --check` 均退出 0。
+- [ ] 全量 pytest 三轮分别为 `13 failed, 310 passed`、
+  `2 failed, 321 passed`、`1 failed, 322 passed`；第三轮只剩白名单外既有
+  Query Trace 父子结束时间偶发断言，原始证据已置顶写入 `BLOCKED.md`。
+- [x] 临时 Git index 发布扫描为 tracked_files=204、violations=0；真实 index
+  前后 SHA 相同。固定 Qdrant digest 本地存在且为 `amd64/linux`，未 pull。
+- [x] 红基线调用点确认：Qdrant 为 `CMD-SHELL` + `/dev/tcp`；默认 Compose
+  包含 worker 且 worker 为 `restart: unless-stopped`；rollback 仅一次性注入
+  `RAG_*_IMAGE`，未重验旧 release 或持久化 env；解包器无外置 sidecar；
+  `docker sbom` 位于 tag/save 后；公开文档仅有手工 `tar -czf` 备份。
+- [x] 当前 pipeline/retrieval/corpus SHA 分别为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c`、
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3`、
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`；
+  本轮后续以完整 SHA 锁定，不修改 provisional/frozen 状态。
+
+## 2026-07-29 离线发布链任务 1：P0-1 Qdrant healthcheck
+
+- [x] 新增 `tests/test_qdrant_healthcheck.py` 后红测退出 1：
+  `2 failed`；直接证明旧配置仍是 `CMD-SHELL`、`/dev/tcp`，且无法作为确定
+  命令执行。
+- [x] 固定 digest 镜像只读实测包含 `/usr/bin/grep`、`/proc/net/tcp*`；
+  Compose 改用 `CMD` 直接检查 6333 十六进制端口 `18BD` 的 TCP
+  `LISTEN (0A)`，不依赖 shell 扩展，也不受 API key 鉴权影响。
+- [x] 专项绿测为 `2 passed in 0.12s`；默认 Compose config 和
+  `git diff --check` 均退出 0。
+- [x] 使用固定 digest、`--pull never`、API key、无挂载临时容器真实反测：
+  正确端口容器为 `running healthy` 且连续探针 exit=0；错误端口 `FFFE`
+  为 `running unhealthy` 且连续探针 exit=1。两个本轮 health 容器均已精确
+  删除，remaining=0；未删除镜像、卷、网络或其他容器。
+
+## 2026-07-29 离线发布链任务 2：P0-2 worker 启动策略
+
+- [x] 新增 `tests/test_worker_deployment_policy.py` 后红测退出 1：
+  `2 failed, 1 passed`；证明默认 Compose 仍包含 worker，且 worker 没有
+  `index` profile。
+- [x] `rag-worker` 现在只属于显式 `index` profile，继续与 app 使用同一
+  `RAG_APP_IMAGE`，并改为 `restart: "no"`；app/OCR/Qdrant 的 restart
+  策略和 app 依赖关系未变。
+- [x] 默认 Compose services 实测仅为 `rag-qdrant/rag-app/rag-ocr`；显式
+  `--profile index` 才增加 `rag-worker`。默认和 profile Compose config
+  均退出 0。
+- [x] 专项与部署契约绿测为 `7 passed in 0.12s`；pipeline/retrieval SHA
+  仍为 `f61a74b0…` / `267e419f…`，`git diff --check` 退出 0。
+- [x] 两份部署说明已明确 provisional 阶段默认只启动三项核心服务、
+  `/ready=503` 为正确结果；只有冻结参数并核验模型 revision 后，才使用
+  `docker compose --profile index ... rag-worker` 显式启动单索引 worker。
+
+## 2026-07-29 离线发布链任务 3：P0-3 rollback 持久化
+
+- [x] 新增 rollback 契约测试后红测退出 1：`3 failed`；证明旧脚本未重验
+  verify/Compose/OCI 身份、没有持久 env、没有 worker 状态判断和补偿函数。
+- [x] rollback 现在先校验 env/回滚记录为非 symlink 普通文件、旧 release
+  固定路径、旧 `verify-offline.sh`、Compose、三个 `sha256:` 镜像 ID、
+  app/OCR OCI revision 及 Qdrant source digest；任一失败不执行 compose up
+  或修改 env/current/rollback 记录。
+- [x] 仅替换三个 `RAG_*_IMAGE` 和已有的 `RAG_RELEASE_REVISION`；其他 token、
+  路径和配置逐行保留。新旧 env 临时文件均在 shared env 同目录且为 0600，
+  正式 env 不使用 `sed -i`。
+- [x] 回滚前 worker 在运行时首次 up 显式使用 `--profile index` 并验证旧 app
+  image ID；未运行时普通 up 不新增 worker。容器 ID、Compose ps 和 `/live`
+  全绿后才提交 env/current。
+- [x] env 替换、current rename 或提交后持久状态复核失败时，`restore_metadata`
+  原子恢复原 env/current；补偿失败会明确非零。成功后又以正式 env 和
+  `current/compose.yaml` 运行普通 config/up 并复核三镜像，防止重启切回新版。
+- [x] 临时目录 fake docker/curl/mv 测试覆盖旧 verify 失败、镜像缺失、
+  OCI revision 错误、env key 缺失/重复、compose up 失败、容器镜像错误、
+  env replace/current rename/提交后 env 校验失败、普通 restart 持久选择及
+  worker 旧 app 镜像；专项为 `15 passed in 0.92s`。
+- [x] 合并部署契约回归为 `22 passed in 1.10s`；Ruff、rollback
+  `bash -n`、`git diff --check` 均退出 0。未访问服务器或真实执行回滚。
+- [x] 最终调用审计进一步覆盖旧 release 仍为修复前 Compose 的情况：两次
+  rollback up 均显式列出 qdrant/OCR/app，只有原 worker 在运行时才追加
+  worker，避免旧 Compose 默认启动它；新增反测后回归为
+  `22 passed in 1.46s`。
+
+## 2026-07-29 离线发布链任务 4：P0-4 解包器 sidecar
+
+- [x] sidecar 红测退出 1：`2 failed, 4 passed`；证明 package 没有声明外置
+  `offline_bundle.py.sha256`，公开上传/服务器校验流程也缺失该文件。
+- [x] package 正式输出现在同时声明并拒绝覆盖 `offline_bundle.py` 及其
+  `.sha256`，复制后用既有 `write_sidecar` 生成标准 basename
+  `sha256sum` 记录；最终摘要增加 `unpacker` 和 `unpacker_sha`。
+- [x] 正确脚本/sidecar 退出 0；脚本内容、digest、sidecar 文件名三类篡改均
+  非零。公开手册的交付树、上传清单、本地和服务器流程均增加 sidecar，
+  `sha256sum -c offline_bundle.py.sha256` 明确位于 Python 执行之前。
+
+## 2026-07-29 离线发布链任务 5：P0-5 SBOM 预检前置
+
+- [x] fake docker 红测退出 1：`3 failed, 1 passed`；当前源码没有
+  `docker sbom --help`，SBOM 不可用时仍记录到 Qdrant image tag 调用。
+- [x] 三张镜像的纯读取平台/ID/revision 校验完成后，立即执行
+  `docker sbom --help >/dev/null`；它位于 image tag/save、artifact mkdir、
+  runtime/corpus/SBOM 正式输出、tar 和全部 sidecar 之前。
+- [x] fake 反测证明 SBOM 不可用时 tag_count=0、save_count=0、
+  artifacts/不存在、正式归档和 sidecar 均为 0；SBOM 可用时调用顺序为
+  inspect→`sbom --help`→tag，坏 image inspect 则在预检和写入前失败。
+- [x] package/sidecar/deployment 合并回归为 `15 passed in 0.15s`；Ruff、
+  package `bash -n`、`git diff --check` 均退出 0。未真实执行 package、tag、
+  image save 或 SBOM 生成。
+
+## 2026-07-29 离线发布链任务 6：P0-6 可靠备份
+
+- [x] 新增 `tests/test_backup_script.py` 后红测退出 1：`2 failed`，均因
+  `deployment/backup.sh` 不存在，锁定固定源目录、sudo 流、0600、SHA、
+  原子发布、原运行集合恢复和 worker profile 契约。
+- [x] backup 仅接受可选安全 backup ID 与 shared env 路径；state/Qdrant
+  固定为项目根下目录。项目、数据、备份、release 目录均做 realpath、范围、
+  symlink 及祖先 symlink 校验，既有 ID 和路径越界直接拒绝。
+- [x] 记录 app/worker/Qdrant 的实际 `.State.Running` 后，使用显式
+  `--profile index` 停止并确认三项写入服务；OCR 不停止。trap 在成功或失败
+  时只以 `--no-deps` 恢复原来运行的服务，原未运行 worker 不会被新增。
+- [x] state/Qdrant 通过 `sudo tar --format=posix ... -cf - | gzip > *.tmp`
+  流式读取；归档非空、`gzip -t`、`tar -tzf/-tvzf`、固定顶层、无绝对/`..`
+  路径且仅普通文件/目录后才定名。
+- [x] 两个 0600 归档和 0600 manifest 强制归 `SUDO_UID/SUDO_GID` 表示的原
+  调用用户，`sha256sum -c MANIFEST.sha256` 两次通过后才 `mv -T` 原子发布
+  0700 目录。失败临时目录明确标记 incomplete，历史备份从不删除。
+- [x] fake docker/sudo/tar/gzip/curl/sha 测试覆盖 umask/0600、backup 根
+  symlink、既有 ID、state/qdrant 缺失、sudo 流、所有权、空归档、gzip/tar/
+  SHA 失败、归档 symlink、失败恢复、worker 不误启、成功恢复、历史保留、
+  最终目录延迟出现及恢复失败稳定 exit=70 且保留已验证备份。
+- [x] backup 行为专项现为 `14 passed`；与 deployment/package 回归合计
+  `22 passed in 1.61s`，Ruff、全部 deployment `bash -n`、
+  `git diff --check` 均退出 0。
+- [x] `backup.sh` 已进入 runtime 打包和 verify 必需文件；公开手册删除旧手工
+  tar 命令并明确禁止，改为真实部署后执行脚本。本轮未在服务器执行备份、
+  恢复或回滚。
+
+## 2026-07-29 离线发布链：最终调用审计与门禁
+
+- [x] 最终范围为 9 个白名单 tracked 修改和 7 个白名单新文件；`src/**`、
+  `evaluation/**`、docs/artifacts/evidence、三份 deployment config、参考仓库
+  均无改动，deleted=0、staged=0。
+- [x] 调用审计确认生产 Compose 无 `/dev/tcp`/Qdrant `CMD-SHELL`；默认服务
+  仅 qdrant/app/OCR，显式 index profile 才增加 worker；worker 为
+  `restart: "no"`，其他三项 restart 未变。
+- [x] rollback 两次 up 都使用显式服务集合，旧 Compose 也不会误启 worker；
+  package 的 `docker sbom --help` 在 tag/save/正式输出之前，解包器 sidecar
+  与上传校验顺序正确；备份文档只保留禁止手工 tar 的说明和 `backup.sh`。
+- [x] 最终 compileall、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment Shell、默认/profile Compose、
+  11/11 应用资产、`git diff --check` 均退出 0。
+- [x] 六项 P0 与部署契约专项为 `48 passed in 2.57s`，skipped=0；warning=0。
+  固定 Qdrant 正确/错误探针真实为 healthy/unhealthy，相关临时容器及最终
+  `rag-p0-baseline-qdrant` 均已精确删除，remaining=0。
+- [ ] 全量 pytest 最终为 `1 failed, 366 passed, 36 warnings in 163.59s`，
+  skipped=0；warning 类别与任务 0 相同。唯一失败是禁止修改的既有
+  Query Trace 父子结束时间，定向复跑仍 `1 failed in 1.16s`，已置顶阻塞。
+- [x] 最终保护摘要与任务 0 完全一致：docs `36c67e3…`、artifacts
+  `220473c6…`、frozen `63adcd45…`、results `cdb17f0c…`、evidence
+  `05b845b9…`；参考 HEAD/tree/tracked 聚合仍为 `03d51db2…` /
+  `84a0a960…` / `44254dff…`。
+- [x] HEAD 仍为 `da9240ab48a9f10607210425ee092c7eeb9e0ff2`，真实 index
+  SHA256 仍为
+  `47069465c413de9f984caa50008286f70f7a9e505f6817e57a66ce828c2da806`；
+  工作树 tracked=204、modified=9、untracked=7、deleted=0、staged=0。
+- [x] 最终临时 Git index 纳入全部候选后为 tracked_files=211，binary/large/
+  local-path/private-network/private-path/secret/总 violations 全为 0；真实
+  index 前后 SHA256 相同，临时 index 已删除。
+- [x] 明确未执行 build/buildx、image save/load、真实 package、正式双包、
+  SSH/SCP、`.57/.58/.60` 访问、服务器 backup/restore/rollback、
+  commit/push；未 pull、安装依赖或生成服务器构建层。
+
+## 2026-07-29 离线发布链续跑：备份发布竞态审计
+
+- [x] 最终审计复现了检查目标不存在后、`mv -T` 前出现同名空目录的竞态：
+  新增定向反测退出 1，原实现错误返回 0 并覆盖竞态目标。
+- [x] `backup.sh` 改用 GNU `mv -Tn`，并在命令返回 0 后确认临时目录确已
+  消失；目标竞态存在时非零退出、保留明确命名的 incomplete 目录且不发布
+  manifest，不覆盖竞态目标。
+- [x] `tests/test_backup_script.py` 全量回归为 `15 passed in 1.76s`，
+  skipped=0、warning=0；本项未访问服务器或执行真实备份。
+- [x] 纳入六项 P0 与部署契约后专项为 `49 passed in 3.12s`；专项 Ruff、
+  全部 deployment Shell 语法和 `git diff --check` 均退出 0。
+
+## 2026-07-29 离线发布链续跑：最终范围与非全量门禁
+
+- [x] 默认/profile Compose config 均退出 0；服务清单分别为
+  `rag-qdrant/rag-app/rag-ocr` 和追加 `rag-worker`。11/11 应用资产摘要
+  全部 `OK`。
+- [x] compileall 无输出、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`；Shell、Compose、资产与 `git diff --check`
+  均为绿。
+- [x] 保护摘要仍为 docs `36c67e3…`、artifacts `220473c6…`、frozen
+  `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；参考
+  HEAD/tree/tracked 仍为 `03d51db2…` / `84a0a960…` / `44254dff…`，
+  参考工作树为空。
+- [x] 临时 Git index 扫描为 `tracked_files=211`、`violations=0`，真实
+  index 前后均为 `47069465…`，临时文件已清理。当前 status 为 tracked=204、
+  modified=9、untracked=7、deleted=0、staged=0；16/16 条目均命中白名单。
+- [x] 本轮没有新增或保留临时 Qdrant 容器；`docker ps -a --filter
+  name=rag-p0` 输出为空。
+- [ ] 未重跑全量 pytest：此前已经达到任务书规定的三轮完整验收上限，唯一
+  Query Trace 失败仍在白名单外；原始失败与本次 49 项专项绿证据继续置顶保留
+  于 `BLOCKED.md`。
+- [x] 本轮续跑仍未执行 build/buildx、image save/load、真实 package、正式
+  双包、SSH/SCP、`.57/.58/.60`、服务器 backup/restore/rollback、
+  commit/push，也未 pull 或安装依赖。
+
+## 2026-07-29 离线发布链续跑：阻塞终审
+
+- [x] 第三个连续目标回合重新读取任务书、`PROGRESS.md` 和 `BLOCKED.md`；
+  当前 16 个白名单变更、staged=0 和真实 index SHA `47069465…` 均未漂移。
+- [ ] 唯一未满足项仍为全量 pytest 退出 0；修复需要新增
+  `src/rag_app/tracing/**` 或既有 Query Trace 测试的白名单授权，而任务书同时
+  禁止扩大范围并限制完整验收最多三轮。连续三回合均为同一不可绕过阻塞，
+  当前没有剩余的范围内工作可以使该完成条件成立。

@@ -16,6 +16,7 @@ V1 只处理 DOCX。图片 OCR 使用独立的单 GPU PaddleOCR 容器；EMF 不
 ```text
 artifacts/
 ├── offline_bundle.py
+├── offline_bundle.py.sha256
 ├── rag-runtime-<release-id>.tar.gz
 ├── rag-runtime-<release-id>.tar.gz.sha256
 ├── rag-corpus-<corpus-id>.tar.gz
@@ -169,6 +170,7 @@ bash deployment/package.sh
 在 WSL 的全新临时目录验证两个外层摘要、tar 路径和内部逐文件清单：
 
 ```bash
+(cd artifacts && sha256sum -c offline_bundle.py.sha256)
 verify_root="$(mktemp -d)"
 .venv/bin/python artifacts/offline_bundle.py \
   "artifacts/rag-runtime-${release_id}.tar.gz" \
@@ -196,6 +198,7 @@ ssh "<server-user>@${RAG_SERVER}" \
   'install -d -m 0700 /data/tyf/RAG/incoming'
 scp \
   artifacts/offline_bundle.py \
+  artifacts/offline_bundle.py.sha256 \
   "artifacts/rag-runtime-${release_id}.tar.gz" \
   "artifacts/rag-runtime-${release_id}.tar.gz.sha256" \
   "artifacts/rag-corpus-${CORPUS_ID}.tar.gz" \
@@ -212,6 +215,7 @@ scp \
 release_id='<前述 12 位 release-id>'
 CORPUS_ID='frozen-docx-v1'
 cd /data/tyf/RAG/incoming
+sha256sum -c offline_bundle.py.sha256
 sha256sum -c "rag-runtime-${release_id}.tar.gz.sha256"
 sha256sum -c "rag-corpus-${CORPUS_ID}.tar.gz.sha256"
 install -d -m 0700 extracted
@@ -276,7 +280,8 @@ RAG_DOCS_PATH=/data/tyf/RAG/shared/corpora/frozen-docx-v1/docs
 ## 8. 启动与 GPU 冒烟
 
 部署脚本按白名单依次 `docker load` 三个归档，复核平台和 revision，再以
-`--no-build --pull never` 启动。它只创建或更新 `rag-*` 容器和网络。
+`--no-build --pull never` 启动。当前 provisional release 的默认路径只启动
+app、OCR 和 Qdrant，不启动 worker；这时 `/ready=503` 是正确结果。
 
 ```bash
 bash "/data/tyf/RAG/releases/${release_id}/deploy.sh" \
@@ -299,7 +304,18 @@ docker exec rag-ocr python -c \
 ```
 
 OCR 必须报告 GPU 设备且 CUDA 设备数大于 0。随后用管理令牌创建一次全量
-任务；幂等键应包含本次 release 或操作日期：
+任务前，必须先完成检索参数冻结和模型 revision 核验，并在包含冻结配置的新
+release 上显式启动 `index` profile。禁止在服务器上直接修改 provisional
+配置或绕过 worker 的严格索引门禁：
+
+```bash
+docker compose --profile index \
+  --env-file /data/tyf/RAG/shared/env/rag.env \
+  -f "/data/tyf/RAG/releases/${release_id}/compose.yaml" \
+  up -d --no-build --pull never rag-worker
+```
+
+worker 稳定运行后才能创建全量任务；幂等键应包含本次 release 或操作日期：
 
 ```bash
 admin_token='<RAG_ADMIN_TOKEN>'
@@ -401,37 +417,43 @@ docker run --rm --network rag-internal \
 
 ## 10. 备份
 
-完整索引发布已创建并登记 Qdrant collection snapshot。版本升级前还应在停止
-写入后备份 SQLite 与 Qdrant bind mount，避免把运行中的文件直接复制：
+完整索引发布已创建并登记 Qdrant collection snapshot。版本升级前还必须使用
+release 内固定的 `backup.sh` 备份 SQLite 与 Qdrant bind mount。禁止再使用
+手工 `tar -czf` 流程：它无法可靠保证权限提升后的文件所有权、归档完整性和
+失败后的原服务集合恢复。
 
 ```bash
 active_release="$(readlink -f /data/tyf/RAG/current)"
 backup_id="$(date -u +%Y%m%dT%H%M%SZ)"
+bash "${active_release}/backup.sh" \
+  "${backup_id}" \
+  /data/tyf/RAG/shared/env/rag.env
 backup_dir="/data/tyf/RAG/backups/${backup_id}"
-install -d -m 0700 "${backup_dir}"
-docker compose \
-  --env-file /data/tyf/RAG/shared/env/rag.env \
-  -f "${active_release}/compose.yaml" stop rag-worker rag-app rag-qdrant
-tar --format=posix -C /data/tyf/RAG/data \
-  -czf "${backup_dir}/state.tar.gz" state
-tar --format=posix -C /data/tyf/RAG/data \
-  -czf "${backup_dir}/qdrant.tar.gz" qdrant
-(cd "${backup_dir}" && sha256sum state.tar.gz qdrant.tar.gz \
-  > MANIFEST.sha256)
-docker compose \
-  --env-file /data/tyf/RAG/shared/env/rag.env \
-  -f "${active_release}/compose.yaml" \
-  up -d --no-build --pull never
+(cd "${backup_dir}" && sha256sum -c MANIFEST.sha256)
+stat -c '%U:%G %a %n' \
+  "${backup_dir}/state.tar.gz" \
+  "${backup_dir}/qdrant.tar.gz" \
+  "${backup_dir}/MANIFEST.sha256"
 ```
 
-确认两个归档非空、`sha256sum -c MANIFEST.sha256` 通过且服务恢复后，才能
-开始下一版部署。恢复前应先停止三个写入相关容器，并把现有目录保留为另一份
-可回退副本；不得覆盖唯一副本。
+脚本记录 app、worker、Qdrant 备份前的真实运行状态，停止并确认写入服务后，
+通过 `sudo tar | gzip` 只提升源数据读取权限；最终文件归原调用用户所有且权限
+为 0600。两个归档必须非空、gzip/tar 可读、成员路径和类型安全，并通过
+`MANIFEST.sha256` 后才原子发布。成功或失败都会尝试恢复原运行集合；原来未
+运行的 worker 不会被启动。恢复失败时脚本非零退出，但不会删除已经验证成功的
+备份，也不会删除任何历史备份。
+
+本轮 Agent 只实现并使用 fake 命令测试 `backup.sh`，没有在服务器执行备份、
+恢复或回滚。操作人员实际部署后必须运行上述命令并保存退出码、manifest 校验、
+所有权、权限和服务恢复证据，才能开始下一版部署。
 
 ## 11. 回滚
 
 非首次部署会在 `/data/tyf/RAG/shared/env/rollback-images.env` 原子记录上一版
-release 和三个实际镜像 ID。确认该文件存在后执行：
+release 和三个实际镜像 ID。回滚脚本会重新执行旧 release 的
+`verify-offline.sh`，校验 Compose、三个本地镜像、app/OCR OCI revision 和
+Qdrant 固定身份；任一预检失败都不会修改共享 env、`current` 或回滚记录。
+确认该文件存在后执行：
 
 ```bash
 bash "/data/tyf/RAG/releases/${release_id}/rollback.sh" \
@@ -440,7 +462,13 @@ readlink -f /data/tyf/RAG/current
 curl -fsS http://127.0.0.1:8088/live
 ```
 
-回滚只切换容器镜像和上一版 compose，不删除或覆盖 SQLite、Qdrant、语料。
+成功后共享 env 中的 `RAG_APP_IMAGE`、`RAG_OCR_IMAGE`、
+`RAG_QDRANT_IMAGE` 和已有的 `RAG_RELEASE_REVISION` 会持久保存旧 release
+选择；后续普通 Compose up/restart 不会切回新镜像。回滚前实际运行的 worker
+会通过 `index` profile 使用旧 app 镜像恢复，原来未运行的 worker 不会被新增。
+env 与 `current` 任一提交或最终复核失败时，脚本会补偿恢复原元数据。
+
+回滚不删除或覆盖 SQLite、Qdrant、语料。
 如果新版本已执行不兼容的数据迁移或索引变更，应按对应 IndexManifest 记录的
 Qdrant snapshot 恢复；不得通过删除 bind mount 目录实现回滚。
 

@@ -1,5 +1,24 @@
 # 阻塞项
 
+## 2026-07-29 离线发布链任务 0：全量 pytest 三轮未稳定通过
+
+- 命令：`.venv/bin/python -m pytest -q`；三轮退出码均为 `1`。
+- 第一轮在本地 Qdrant 未启动时为 `13 failed, 310 passed, 36 warnings in 204.01s`；失败均为真实 Qdrant 集成用例连接失败。
+- 使用固定 digest、`--pull never`、无挂载临时 Qdrant 后，第二轮为 `2 failed, 321 passed, 36 warnings in 174.44s`：一项请求受本机代理影响超时，另有 Query Trace 父子结束时间相差 20 微秒。
+- 精确重建临时 Qdrant 并设置 `NO_PROXY=127.0.0.1,localhost` 后，第三轮为 `1 failed, 322 passed, 36 warnings in 158.93s`；仅剩 `test_safe_trace_has_complete_tree_without_business_artifacts` 的既有父子时间偶发断言。
+- 该 Query Trace 源码与测试均不在本轮功能白名单，未修改、未放宽断言；按三轮上限停止任务 0 的完整验收，继续六个独立离线发布 P0。最终验收仍必须重新达到至少 323 passed、skipped=0。
+- 六个 P0 完成后的全量验收仍为 `1 failed, 366 passed, 36 warnings in 163.59s`；单独复跑同一用例为 `1 failed in 1.16s`，子 span 比父 span 晚 680 微秒。新增 48 项部署专项独立为 `48 passed in 2.75s`，因此未把白名单外既有失败伪装成本轮回归。
+- 完成条件中的全量 pytest 退出 0 尚未满足；继续修复必须获得修改 `src/rag_app/tracing/**` 或该既有测试的新增授权。本轮没有据此扩大范围。
+- 续跑审计补齐备份发布竞态后，六项 P0 与部署契约专项为
+  `49 passed in 3.12s`，全部非全量门禁仍为绿；由于完整验收已经达到任务书
+  三轮上限，未用额外全量复跑碰运气掩盖上述 Query Trace 阻塞。
+
+## 2026-07-29 离线发布链任务 0：Windows Git UNC safe.directory 拒绝
+
+- 命令（PowerShell UNC 工作目录）：`git status --porcelain=v1`；退出码 `1`。
+- 原始摘要：`fatal: detected dubious ownership in repository at '<WSL UNC repository path>'`；Git 建议全局加入 `safe.directory`。本任务不修改全局 Git 配置，后续基线与验收改用 WSL 仓库内的只读 Git 命令。
+- 影响：无工作区、Git index 或远端状态修改；该环境差异不阻塞任务 0 的其余只读基线。
+
 ## 已解决的任务边界偏差：`evaluation/metrics.py`
 
 - 本目标一方面只列出 `evaluation/{active_state.py,evaluate.py,
