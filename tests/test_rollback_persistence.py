@@ -11,6 +11,7 @@ import pytest
 _APP_IMAGE = "sha256:" + "a" * 64
 _OCR_IMAGE = "sha256:" + "b" * 64
 _QDRANT_IMAGE = "sha256:" + "c" * 64
+_QDRANT_REGISTRY_DIGEST = "sha256:" + "9" * 64
 _SOURCE_REVISION = "1" * 40
 
 
@@ -66,6 +67,7 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
         f"ROLLBACK_APP_IMAGE={_APP_IMAGE}\n"
         f"ROLLBACK_OCR_IMAGE={_OCR_IMAGE}\n"
         f"ROLLBACK_QDRANT_IMAGE={_QDRANT_IMAGE}\n"
+        "ROLLBACK_WORKER_WAS_RUNNING=false\n"
     )
     rollback_file.write_text(original_rollback, encoding="utf-8")
     (old_release / "verify-offline.sh").write_text(
@@ -90,12 +92,25 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
         encoding="ascii",
     )
     (old_release / "QDRANT_SOURCE_IMAGE").write_text(
-        f"qdrant/qdrant:v1.18.3@{_QDRANT_IMAGE}\n",
+        f"qdrant/qdrant:v1.18.3@{_QDRANT_REGISTRY_DIGEST}\n",
+        encoding="ascii",
+    )
+    (old_release / "IMAGE_ARCHIVES.tsv").write_text(
+        "images/docx-rag-linux-amd64.tar\tapp\t"
+        f"{_SOURCE_REVISION}\n"
+        "images/docx-rag-ocr-linux-amd64.tar\tocr\t"
+        f"{_SOURCE_REVISION}\n"
+        "images/qdrant-linux-amd64.tar\tqdrant\t"
+        f"{_QDRANT_IMAGE}\n",
         encoding="ascii",
     )
     (new_release / "compose.yaml").write_text(
         "services: {}\n",
         encoding="utf-8",
+    )
+    (new_release / "SOURCE_REVISION").write_text(
+        f"{'2' * 40}\n",
+        encoding="ascii",
     )
 
     script = tmp_path / "rollback.sh"
@@ -112,11 +127,37 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     binaries.mkdir()
     docker_log = tmp_path / "docker.log"
     state_file = tmp_path / "container-state.env"
+    state_file.write_text(
+        f"APP_IMAGE={'sha256:' + 'd' * 64}\n"
+        f"OCR_IMAGE={'sha256:' + 'e' * 64}\n"
+        f"QDRANT_IMAGE={'sha256:' + 'f' * 64}\n"
+        f"WORKER_IMAGE={'sha256:' + 'd' * 64}\n"
+        "APP_RUNNING=true\n"
+        "OCR_RUNNING=true\n"
+        "QDRANT_RUNNING=true\n"
+        "WORKER_EXISTS=true\n"
+        "WORKER_RUNNING=false\n",
+        encoding="ascii",
+    )
     _write_executable(
         binaries / "docker",
         """#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"
+source "${FAKE_STATE_FILE}"
+write_state() {
+  {
+    printf 'APP_IMAGE=%q\n' "${APP_IMAGE}"
+    printf 'OCR_IMAGE=%q\n' "${OCR_IMAGE}"
+    printf 'QDRANT_IMAGE=%q\n' "${QDRANT_IMAGE}"
+    printf 'WORKER_IMAGE=%q\n' "${WORKER_IMAGE}"
+    printf 'APP_RUNNING=%q\n' "${APP_RUNNING}"
+    printf 'OCR_RUNNING=%q\n' "${OCR_RUNNING}"
+    printf 'QDRANT_RUNNING=%q\n' "${QDRANT_RUNNING}"
+    printf 'WORKER_EXISTS=%q\n' "${WORKER_EXISTS}"
+    printf 'WORKER_RUNNING=%q\n' "${WORKER_RUNNING}"
+  } > "${FAKE_STATE_FILE}"
+}
 if [[ "$1 $2" == "image inspect" ]]; then
   image="${@: -1}"
   if [[ "${FAKE_MISSING_IMAGE:-}" == "${image}" ]]; then
@@ -137,14 +178,22 @@ fi
 if [[ "$1 $2" == "container inspect" ]]; then
   container="${@: -1}"
   if [[ "$*" != *"--format"* ]]; then
-    [[ "${container}" != "rag-worker" || "${FAKE_WORKER_EXISTS:-1}" == "1" ]]
+    [[ "${container}" != "rag-worker" || "${WORKER_EXISTS}" == "true" ]]
     exit
   fi
   if [[ "$*" == *".State.Running"* ]]; then
-    [[ "${FAKE_WORKER_RUNNING:-0}" == "1" ]] && echo true || echo false
+    case "${container}" in
+      rag-app) echo "${APP_RUNNING}" ;;
+      rag-ocr) echo "${OCR_RUNNING}" ;;
+      rag-qdrant) echo "${QDRANT_RUNNING}" ;;
+      rag-worker)
+        [[ "${WORKER_EXISTS}" == "true" ]] || exit 42
+        echo "${WORKER_RUNNING}"
+        ;;
+      *) exit 42 ;;
+    esac
     exit 0
   fi
-  source "${FAKE_STATE_FILE}"
   case "${container}" in
     rag-app) actual="${APP_IMAGE}" ;;
     rag-ocr) actual="${OCR_IMAGE}" ;;
@@ -152,7 +201,8 @@ if [[ "$1 $2" == "container inspect" ]]; then
     rag-worker) actual="${WORKER_IMAGE}" ;;
     *) exit 42 ;;
   esac
-  if [[ "${FAKE_BAD_CONTAINER:-}" == "${container}" ]]; then
+  if [[ "${FAKE_BAD_CONTAINER:-}" == "${container}" \
+    && "${APP_IMAGE}" == "${FAKE_APP_IMAGE}" ]]; then
     actual="sha256:$(printf '%064d' 0)"
   fi
   printf '%s\n' "${actual}"
@@ -170,21 +220,40 @@ if [[ "$1" == "compose" ]]; then
   if [[ "$*" == *" config -q"* || "$*" == *" ps"* ]]; then
     exit 0
   fi
+  if [[ "$*" == *" stop rag-worker"* ]]; then
+    WORKER_RUNNING=false
+    write_state
+    exit 0
+  fi
   if [[ "$*" == *" up -d "* ]]; then
-    if [[ "${FAKE_COMPOSE_UP_FAIL:-0}" == "1" ]]; then
-      exit 43
-    fi
     app="$(awk -F= '$1 == "RAG_APP_IMAGE" {print $2}' "${env_file}")"
     ocr="$(awk -F= '$1 == "RAG_OCR_IMAGE" {print $2}' "${env_file}")"
     qdrant="$(awk -F= '$1 == "RAG_QDRANT_IMAGE" {print $2}' "${env_file}")"
-    {
-      printf 'APP_IMAGE=%q\n' "${app}"
-      printf 'OCR_IMAGE=%q\n' "${ocr}"
-      printf 'QDRANT_IMAGE=%q\n' "${qdrant}"
-      printf 'WORKER_IMAGE=%q\n' "${app}"
-    } > "${FAKE_STATE_FILE}"
+    APP_IMAGE="${app}"
+    OCR_IMAGE="${ocr}"
+    QDRANT_IMAGE="${qdrant}"
+    APP_RUNNING=true
+    OCR_RUNNING=true
+    QDRANT_RUNNING=true
+    if [[ "$*" == *"rag-worker"* ]]; then
+      WORKER_EXISTS=true
+      WORKER_IMAGE="${app}"
+      WORKER_RUNNING=true
+    fi
+    write_state
+    if [[ "${FAKE_COMPOSE_UP_FAIL:-0}" == "1" \
+      && "${app}" == "${FAKE_APP_IMAGE}" ]]; then
+      exit 43
+    fi
     exit 0
   fi
+fi
+if [[ "$1 $2 $3" == "container rm -f" ]]; then
+  WORKER_EXISTS=false
+  WORKER_RUNNING=false
+  WORKER_IMAGE=
+  write_state
+  exit 0
 fi
 exit 44
 """,
@@ -194,6 +263,11 @@ exit 44
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'curl %s\n' "$*" >> "${FAKE_DOCKER_LOG}"
+if [[ "${FAKE_CURL_FAIL_ONCE:-0}" == "1" \
+  && ! -e "${FAKE_CURL_COUNT}" ]]; then
+  : > "${FAKE_CURL_COUNT}"
+  exit 1
+fi
 [[ "${FAKE_CURL_FAIL:-0}" != "1" ]]
 """,
     )
@@ -246,12 +320,21 @@ def _run_rollback(
     sandbox: _Sandbox,
     **overrides: str,
 ) -> subprocess.CompletedProcess[str]:
+    state = sandbox.state_file.read_text(encoding="ascii")
+    if overrides.get("FAKE_WORKER_EXISTS") == "0":
+        state = state.replace("WORKER_EXISTS=true", "WORKER_EXISTS=false")
+    if overrides.get("FAKE_WORKER_RUNNING") == "1":
+        state = state.replace("WORKER_RUNNING=false", "WORKER_RUNNING=true")
+    sandbox.state_file.write_text(state, encoding="ascii")
     environment = os.environ.copy()
     environment.update(
         {
             "PATH": f"{sandbox.script.parent / 'bin'}:/usr/bin:/bin",
             "FAKE_DOCKER_LOG": str(sandbox.docker_log),
             "FAKE_STATE_FILE": str(sandbox.state_file),
+            "FAKE_CURL_COUNT": str(
+                sandbox.script.parent / "curl-failure-used",
+            ),
             "FAKE_ENV_FILE": str(sandbox.env_file),
             "FAKE_CURRENT_LINK": str(sandbox.current_link),
             "FAKE_APP_IMAGE": _APP_IMAGE,
@@ -307,7 +390,8 @@ def test_rollback_preserves_worker_state_and_compensates_metadata() -> None:
 
     assert ".State.Running" in script
     assert "--profile index" in script
-    assert "restore_metadata" in script
+    assert "restore_compensation_runtime" in script
+    assert "restore_compensation_metadata" in script
     assert "verify_persisted_state" in script
     assert 'env \\\n  RAG_APP_IMAGE=' not in script
 
@@ -331,7 +415,6 @@ def test_success_persists_images_and_normal_restart_uses_them(
     assert sandbox.current_link.resolve() == sandbox.old_release
     log = sandbox.docker_log.read_text(encoding="utf-8")
     assert log.count(" up -d --no-build --pull never") == 2
-    assert "--profile index" not in log
     up_calls = [line for line in log.splitlines() if " up -d " in line]
     assert all("rag-worker" not in call for call in up_calls)
     assert (
@@ -344,6 +427,13 @@ def test_running_worker_is_restored_with_old_app_image(
     tmp_path: Path,
 ) -> None:
     sandbox = _prepare_sandbox(tmp_path)
+    sandbox.rollback_file.write_text(
+        sandbox.original_rollback.replace(
+            "ROLLBACK_WORKER_WAS_RUNNING=false",
+            "ROLLBACK_WORKER_WAS_RUNNING=true",
+        ),
+        encoding="utf-8",
+    )
 
     completed = _run_rollback(sandbox, FAKE_WORKER_RUNNING="1")
 
@@ -360,8 +450,8 @@ def test_running_worker_is_restored_with_old_app_image(
         ("verify", ""),
         ("missing_image", ""),
         ("bad_revision", "revision"),
-        ("compose_up", "Compose"),
-        ("container_image", "容器镜像"),
+        ("compose_up", "ROLLBACK_FAILED_RECOVERED"),
+        ("container_image", "ROLLBACK_FAILED_RECOVERED"),
     ),
 )
 def test_precommit_failures_leave_metadata_unchanged(
@@ -452,5 +542,5 @@ def test_post_switch_env_validation_failure_restores_both_paths(
     )
 
     assert completed.returncode != 0
-    assert "已恢复" in completed.stderr
+    assert "ROLLBACK_FAILED_RECOVERED" in completed.stderr
     _assert_original_metadata(sandbox)
