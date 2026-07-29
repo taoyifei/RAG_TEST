@@ -4,7 +4,7 @@
   "ocr_model": "PaddleOCR-3.5.0/PP-OCRv5_server_det+rec",
   "ocr_revision": "paddleocr-3.5.0-ppocrv5-server-det-rec-paddle-static",
   "ocr_minimum_confidence": 0.8,
-  "chunker_revision": "structural-v1-provisional",
+  "chunker_revision": "section-pack-v2-provisional",
   "chunker_parameters": [
     [
       "hard_max_tokens",

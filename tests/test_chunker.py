@@ -67,7 +67,8 @@ def test_chunker_respects_hard_token_limit() -> None:
 
     assert len(chunks) == 2
     assert all(Utf8TokenCounter().count(chunk.text) <= 12 for chunk in chunks)
-    assert chunks[0].text[-3:] == chunks[1].text[:3]
+    assert "".join(chunk.text for chunk in chunks) == "abcdefghijklmnopqrst"
+    assert chunks[0].text[-3:] != chunks[1].text[:3]
     assert [chunk.locators[0].segment_index for chunk in chunks] == [1, 2]
 
 

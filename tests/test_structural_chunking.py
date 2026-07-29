@@ -51,10 +51,23 @@ def _chunker() -> Chunker:
 
 
 def test_heading_context_is_not_added_to_citation_text() -> None:
+    paragraph = _paragraph("原文证据", 1)
+    heading = Element(
+        element_id="heading-1",
+        kind=ElementKind.HEADING,
+        text="范围",
+        locator=Locator(
+            file_path="规范.docx",
+            heading_path=paragraph.locator.heading_path,
+            heading_index=1,
+            fragment="范围",
+        ),
+        content_sha256="a" * 64,
+    )
     chunk = _chunker().chunk(
         source_id=_SOURCE_ID,
         doc_version="sha256:" + "a" * 64,
-        elements=[_paragraph("原文证据", 1)],
+        elements=[heading, paragraph],
         metadata=_METADATA,
     )[0]
 
@@ -71,9 +84,9 @@ def test_normal_structure_boundaries_do_not_overlap() -> None:
         metadata=_METADATA,
     )
 
-    assert [chunk.text for chunk in chunks] == ["第一段", "第二段"]
-    assert chunks[0].next_chunk_id == chunks[1].chunk_id
-    assert chunks[1].previous_chunk_id == chunks[0].chunk_id
+    assert [chunk.text for chunk in chunks] == ["第一段\n\n第二段"]
+    assert chunks[0].previous_chunk_id is None
+    assert chunks[0].next_chunk_id is None
 
 
 def test_table_groups_repeat_header_and_preserve_original_rows() -> None:
@@ -114,7 +127,10 @@ def test_long_element_uses_overlap_but_never_exceeds_hard_max() -> None:
     )
 
     assert len(chunks) >= 2
-    assert chunks[0].text[-6:] == chunks[1].text[:6]
+    assert "".join(chunk.text for chunk in chunks) == (
+        "abcdefghijklmnopqrstuvwxyz1234567890"
+    )
+    assert chunks[0].text[-6:] != chunks[1].text[:6]
     assert all(
         Utf8TokenCounter().count(chunk.text) <= 32 for chunk in chunks
     )

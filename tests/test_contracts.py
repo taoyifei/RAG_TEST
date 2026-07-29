@@ -3,6 +3,9 @@ from pydantic import ValidationError
 
 from rag_app.contracts import (
     Chunk,
+    ChunkIdentity,
+    ChunkRole,
+    ChunkSourceSpan,
     DocumentMetadata,
     Element,
     ElementKind,
@@ -11,6 +14,33 @@ from rag_app.contracts import (
     stable_chunk_id,
     stable_doc_id,
 )
+
+
+def _span(
+    locator: Locator,
+    text: str,
+    *,
+    element_id: str = "element-1",
+) -> ChunkSourceSpan:
+    """构造覆盖完整测试文本的 source span。
+
+    Args:
+        locator: 文本的逻辑位置。
+        text: span 覆盖的完整文本。
+        element_id: 原始元素 ID。
+
+    Returns:
+        覆盖完整文本的 source span。
+
+    """
+    return ChunkSourceSpan(
+        element_id=element_id,
+        locator=locator,
+        start_char=0,
+        end_char=len(text),
+        source_start_char=0,
+        source_end_char=len(text),
+    )
 
 
 def test_locator_is_traceable_without_page_number() -> None:
@@ -43,10 +73,22 @@ def test_stable_ids_survive_file_rename() -> None:
         fragment="稳定内容",
     )
     new_locator = old_locator.model_copy(update={"file_path": "新名称.docx"})
+    old_identity = ChunkIdentity(
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(_span(old_locator, "稳定内容"),),
+    )
+    new_identity = ChunkIdentity(
+        section_id=old_identity.section_id,
+        neighbor_group_id=old_identity.neighbor_group_id,
+        chunk_role=old_identity.chunk_role,
+        source_spans=(_span(new_locator, "稳定内容"),),
+    )
 
     assert old_doc_id == new_doc_id
-    assert stable_chunk_id(old_doc_id, old_locator, "稳定内容") == (
-        stable_chunk_id(new_doc_id, new_locator, "稳定内容")
+    assert stable_chunk_id(old_doc_id, old_identity, "稳定内容") == (
+        stable_chunk_id(new_doc_id, new_identity, "稳定内容")
     )
 
 
@@ -90,6 +132,10 @@ def test_contracts_round_trip() -> None:
         source_id="src_" + "1" * 32,
         doc_version="sha256:" + "b" * 64,
         pipeline_fingerprint="sha256:" + "f" * 64,
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TABLE,
+        source_spans=(_span(locator, element.text),),
         text=element.text,
         embedding_text="标题\n" + element.text,
         element_kind=ElementKind.TABLE,
@@ -118,6 +164,10 @@ def test_chunk_rejects_whitespace_only_content(field: str) -> None:
         "source_id": "src_" + "1" * 32,
         "doc_version": "sha256:" + "b" * 64,
         "pipeline_fingerprint": "sha256:" + "f" * 64,
+        "section_id": "section_" + "a" * 32,
+        "neighbor_group_id": "group_" + "b" * 32,
+        "chunk_role": ChunkRole.TEXT,
+        "source_spans": (_span(locator, "有效文本"),),
         "text": "有效文本",
         "embedding_text": "有效文本",
         "element_kind": ElementKind.PARAGRAPH,
@@ -185,6 +235,10 @@ def test_document_metadata_and_chunk_require_explicit_metadata() -> None:
         "source_id": "src_" + "1" * 32,
         "doc_version": "sha256:" + "b" * 64,
         "pipeline_fingerprint": "sha256:" + "f" * 64,
+        "section_id": "section_" + "a" * 32,
+        "neighbor_group_id": "group_" + "b" * 32,
+        "chunk_role": ChunkRole.TEXT,
+        "source_spans": (_span(locator, "显式元数据"),),
         "text": "显式元数据",
         "embedding_text": "显式元数据",
         "element_kind": ElementKind.PARAGRAPH,

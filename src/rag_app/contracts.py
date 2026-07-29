@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +41,9 @@ __all__ = [
     "DOCUMENT_STATUS_VALUES",
     "AuthorityLevel",
     "Chunk",
+    "ChunkIdentity",
+    "ChunkRole",
+    "ChunkSourceSpan",
     "DocumentMetadata",
     "DocumentStatus",
     "Element",
@@ -54,6 +58,7 @@ __all__ = [
     "content_doc_version",
     "stable_chunk_id",
     "stable_doc_id",
+    "validate_chunk_source_spans",
 ]
 
 
@@ -64,6 +69,14 @@ class ElementKind(StrEnum):
     PARAGRAPH = "paragraph"
     TABLE = "table"
     IMAGE = "image"
+
+
+class ChunkRole(StrEnum):
+    """分块在持久化索引中的结构角色。"""
+
+    TEXT = "text"
+    TABLE = "table"
+    OCR = "ocr"
 
 
 class OcrState(StrEnum):
@@ -135,6 +148,95 @@ class Locator(BaseModel):
             "" if item is None else str(item) for item in indexes
         )
         return "\x1f".join((*self.heading_path, index_text))
+
+
+class ChunkSourceSpan(BaseModel):
+    """Chunk.text 中一段可精确映射回原始元素的字符范围。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    element_id: str = Field(min_length=1)
+    locator: Locator
+    start_char: int = Field(ge=0)
+    end_char: int = Field(gt=0)
+    source_start_char: int = Field(ge=0)
+    source_end_char: int = Field(gt=0)
+    is_repeated: bool = False
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> Self:
+        """校验 chunk 与原始元素字符范围严格前进。
+
+        Args:
+            无参数。
+
+        Returns:
+            已通过字符范围校验的 source span。
+
+        Raises:
+            ValueError: 任一半开区间为空、倒置或长度不一致。
+
+        """
+        if self.end_char <= self.start_char:
+            raise ValueError("source span 在 chunk 中必须是非空半开区间。")
+        if self.source_end_char <= self.source_start_char:
+            raise ValueError("source span 在原始元素中必须是非空半开区间。")
+        if (
+            self.end_char - self.start_char
+            != self.source_end_char - self.source_start_char
+        ):
+            raise ValueError("source span 的 chunk/source 字符长度必须一致。")
+        return self
+
+
+def validate_chunk_source_spans(
+    text: str,
+    locators: tuple[Locator, ...],
+    source_spans: tuple[ChunkSourceSpan, ...],
+) -> None:
+    """校验 chunk 文本、locator 与全部来源字符范围的一致性。
+
+    Args:
+        text: 持久化的 chunk 原文。
+        locators: 按首次出现顺序去重的来源位置。
+        source_spans: 按 chunk 字符位置排列的来源范围。
+
+    Returns:
+        无返回值。
+
+    Raises:
+        ValueError: span 越界、重叠或 locator 顺序不一致。
+
+    """
+    if not source_spans:
+        raise ValueError("source spans 不能为空。")
+    previous_end = 0
+    for span in source_spans:
+        if span.start_char < previous_end:
+            raise ValueError("source spans 必须按位置有序且不得重叠。")
+        if span.end_char > len(text):
+            raise ValueError("source span 超出 Chunk.text 字符范围。")
+        if not text[span.start_char : span.end_char]:
+            raise ValueError("source span 对应文本不能为空。")
+        previous_end = span.end_char
+    expected_locators: list[Locator] = []
+    for span in source_spans:
+        if span.locator not in expected_locators:
+            expected_locators.append(span.locator)
+    if locators != tuple(expected_locators):
+        raise ValueError(
+            "Chunk.locators 必须等于 source spans locator 的有序去重结果。"
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkIdentity:
+    """stable chunk ID 所需的全部结构身份。"""
+
+    section_id: str
+    neighbor_group_id: str
+    chunk_role: ChunkRole
+    source_spans: tuple[ChunkSourceSpan, ...]
 
 
 class Element(BaseModel):
@@ -212,6 +314,10 @@ class Chunk(BaseModel):
     source_id: str = Field(pattern=r"^src_[0-9a-f]{32}$")
     doc_version: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     pipeline_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    section_id: str = Field(pattern=r"^section_[0-9a-f]{32}$")
+    neighbor_group_id: str = Field(pattern=r"^group_[0-9a-f]{32}$")
+    chunk_role: ChunkRole
+    source_spans: tuple[ChunkSourceSpan, ...] = Field(min_length=1)
     text: str = Field(min_length=1)
     embedding_text: str = Field(min_length=1)
     element_kind: ElementKind
@@ -245,6 +351,18 @@ class Chunk(BaseModel):
     @model_validator(mode="after")
     def _validate_document_metadata(self) -> Self:
         _require_ordered_dates(self.effective_from, self.effective_to)
+        validate_chunk_source_spans(
+            self.text,
+            self.locators,
+            self.source_spans,
+        )
+        expected_kind = {
+            ChunkRole.TEXT: ElementKind.PARAGRAPH,
+            ChunkRole.TABLE: ElementKind.TABLE,
+            ChunkRole.OCR: ElementKind.IMAGE,
+        }[self.chunk_role]
+        if self.element_kind != expected_kind:
+            raise ValueError("chunk_role 与 element_kind 不一致。")
         return self
 
 
@@ -486,18 +604,47 @@ def content_doc_version(content_sha256: str) -> str:
     return f"sha256:{content_sha256}"
 
 
-def stable_chunk_id(source_id: str, locator: Locator, text: str) -> str:
-    """由文档、逻辑位置和内容生成稳定分块标识。
+def stable_chunk_id(
+    source_id: str,
+    identity: ChunkIdentity,
+    text: str,
+) -> str:
+    """由 section、neighbor group、全部来源位置和内容生成稳定 ID。
 
     Args:
         source_id: manifest 持久保存的来源标识。
-        locator: 不依赖页码的原文位置。
+        identity: section、neighbor group、role 与全部有序 source spans。
         text: 分块原文。
 
     Returns:
-        文件重命名后不变的分块标识。
+        文件纯重命名后不变的分块标识。
 
     """
-    payload = "\x1e".join((source_id, locator.logical_key(), text))
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    span_payload = [
+        {
+            "element_id": span.element_id,
+            "locator": span.locator.logical_key(),
+            "start_char": span.start_char,
+            "end_char": span.end_char,
+            "source_start_char": span.source_start_char,
+            "source_end_char": span.source_end_char,
+            "is_repeated": span.is_repeated,
+        }
+        for span in identity.source_spans
+    ]
+    payload = {
+        "source_id": source_id,
+        "section_id": identity.section_id,
+        "neighbor_group_id": identity.neighbor_group_id,
+        "chunk_role": identity.chunk_role.value,
+        "source_spans": span_payload,
+        "text": text,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f"chunk_{digest[:32]}"
