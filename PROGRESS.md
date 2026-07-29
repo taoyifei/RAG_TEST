@@ -2116,5 +2116,6 @@
   deploy 事务、`af217a4` rollback 联合补偿、`3c95410` backup 健康恢复。
 - [x] 每个提交前均执行 `git diff --cached --check`；变更行数分别为
   552、129、1024、776、288，全部小于 2000 行，未混入范围外文件。
-- [ ] 审计文档提交完成后推送 `main`，并以远端 `refs/heads/main` 与本地
-  HEAD 完整 SHA 一致作为完成证据。
+- [x] 首次推送退出 0：`4a8d429..42941ed  main -> main`；随后提交本条
+  推送证据并再次推送，最终以远端 `refs/heads/main` 与本地 HEAD 完整 SHA
+  一致作为完成证据。
