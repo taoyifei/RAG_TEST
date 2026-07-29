@@ -6,30 +6,36 @@ import hashlib
 import json
 import os
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-from rag_app.contracts import Locator, SourceRecord, stable_chunk_id
-from rag_app.manifest import ManifestRepository, StoredManifest
+from rag_app.contracts import (
+    ChunkIdentity,
+    ChunkRole,
+    ChunkSourceSpan,
+    Locator,
+    SourceRecord,
+    stable_chunk_id,
+    validate_chunk_source_spans,
+)
+from rag_app.manifest import ManifestState, StoredManifest
 
 __all__ = [
     "ActiveEvidenceExporter",
     "ActiveEvidenceManifest",
     "ActiveEvidenceRecord",
-    "TrustedActiveEvidence",
     "load_active_evidence_manifest",
-    "verify_exported_active_evidence",
     "write_active_evidence_manifest",
 ]
 
 _ACTIVE_STATE = "active"
-_SCHEMA_VERSION = "1"
-_TRUST_MARKER = object()
+_SCHEMA_VERSION = "2"
+_PAYLOAD_SCHEMA_VERSION = "2"
 
 
 class ActiveEvidenceRecord(BaseModel):
@@ -41,7 +47,12 @@ class ActiveEvidenceRecord(BaseModel):
     source_id: str = Field(pattern=r"^src_[0-9a-f]{32}$")
     source_path: str = Field(min_length=1)
     doc_version: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    section_id: str = Field(pattern=r"^section_[0-9a-f]{32}$")
+    neighbor_group_id: str = Field(pattern=r"^group_[0-9a-f]{32}$")
+    chunk_role: ChunkRole
     locator: str = Field(min_length=1)
+    locators: tuple[Locator, ...] = Field(min_length=1)
+    source_spans: tuple[ChunkSourceSpan, ...] = Field(min_length=1)
     text: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
@@ -62,6 +73,16 @@ class ActiveEvidenceRecord(BaseModel):
         expected = hashlib.sha256(self.text.encode("utf-8")).hexdigest()
         if self.content_sha256 != expected:
             raise ValueError("活动证据 text 与 content_sha256 不一致。")
+        validate_chunk_source_spans(
+            self.text,
+            self.locators,
+            self.source_spans,
+        )
+        if any(
+            locator.file_path != self.source_path
+            for locator in self.locators
+        ):
+            raise ValueError("活动证据 locator 与 source_path 不一致。")
         return self
 
 
@@ -70,7 +91,7 @@ class ActiveEvidenceManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: str = Field(pattern=r"^1$")
+    schema_version: str = Field(pattern=r"^2$")
     collection_name: str = Field(min_length=1)
     index_manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     pipeline_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -156,28 +177,27 @@ class ActiveEvidenceManifest(BaseModel):
         return self
 
 
-@dataclass(frozen=True, slots=True)
-class TrustedActiveEvidence:
-    """已与独立活动索引状态绑定的证据。"""
-
-    manifest: ActiveEvidenceManifest
-    _marker: object = field(repr=False)
-
-    def __post_init__(self) -> None:
-        """限制可信包装只能由本模块验证链创建。
+class _ManifestReader(Protocol):
+    def get_active(self) -> StoredManifest | None:
+        """读取唯一活动 manifest。
 
         Args:
             无参数。
 
         Returns:
-            无返回值。
-
-        Raises:
-            TypeError: 调用方绕过验证链直接构造对象。
+            当前活动记录；不存在时返回 None。
 
         """
-        if self._marker is not _TRUST_MARKER:
-            raise TypeError("可信活动证据必须由现场验证链创建。")
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveState:
+    collection_name: str
+    manifest_sha256: str
+    pipeline_fingerprint: str
+    collection_metadata_sha256: str
+    exact_active_count: int
 
 
 class ActiveEvidenceExporter:
@@ -186,7 +206,7 @@ class ActiveEvidenceExporter:
     def __init__(
         self,
         client: QdrantClient,
-        repository: ManifestRepository,
+        repository: _ManifestReader,
         *,
         alias_name: str,
         page_size: int = 256,
@@ -215,52 +235,74 @@ class ActiveEvidenceExporter:
         self._alias_name = alias_name
         self._page_size = page_size
 
-    def export(self) -> TrustedActiveEvidence:
-        """从当前活动现场生成可信证据。
+    def export(self) -> ActiveEvidenceManifest:
+        """从当前活动现场生成一次不可回灌的证据快照。
 
         Args:
             无参数。
 
         Returns:
-            已绑定 alias、manifest、pipeline 和来源版本的证据。
+            已绑定 alias、manifest、pipeline 和来源版本的审计清单。
 
         Raises:
             LookupError: 没有活动 manifest 或 alias。
             ValueError: 跨存储状态、payload 或计数不一致。
 
         """
-        stored = self._repository.get_active()
-        if stored is None:
-            raise LookupError("没有活动 index manifest。")
+        stored = _active_manifest(self._repository)
+        before = self._read_live_state(stored)
+        records = self._scroll_records(
+            before.collection_name,
+            stored,
+        )
+        after_stored = _active_manifest(self._repository)
+        after = self._read_live_state(after_stored)
+        if before != after:
+            raise ValueError("活动证据扫描前后现场状态发生变化。")
+        if before.exact_active_count != len(records):
+            raise ValueError("活动证据分页结果与 Qdrant 精确计数不一致。")
+        return ActiveEvidenceManifest.create(
+            collection_name=before.collection_name,
+            index_manifest_sha256=stored.manifest_sha256,
+            pipeline_fingerprint=stored.manifest.pipeline_fingerprint,
+            records=records,
+        )
+
+    def _read_live_state(self, stored: StoredManifest) -> _LiveState:
         collection_name = _active_collection(
             self._client,
             self._alias_name,
         )
         if collection_name != stored.manifest.collection_name:
-            raise ValueError("活动 alias 与 index manifest collection 不一致。")
-        _validate_collection_pipeline(
+            raise ValueError(
+                "活动 alias 与 index manifest collection 不一致。"
+            )
+        metadata = _collection_metadata(
             self._client,
             collection_name,
-            stored.manifest.pipeline_fingerprint,
         )
-        records = self._scroll_records(
-            collection_name,
-            stored,
-        )
+        pipeline = metadata.get("pipeline_fingerprint")
+        if pipeline != stored.manifest.pipeline_fingerprint:
+            raise ValueError(
+                "Qdrant collection metadata pipeline 不一致。"
+            )
+        if (
+            metadata.get("payload_schema_version")
+            != _PAYLOAD_SCHEMA_VERSION
+        ):
+            raise ValueError("Qdrant collection payload schema 不是 v2。")
         exact_count = self._client.count(
             collection_name=collection_name,
             count_filter=_active_filter(),
             exact=True,
         ).count
-        if exact_count != len(records):
-            raise ValueError("活动证据分页结果与 Qdrant 精确计数不一致。")
-        manifest = ActiveEvidenceManifest.create(
+        return _LiveState(
             collection_name=collection_name,
-            index_manifest_sha256=stored.manifest_sha256,
+            manifest_sha256=stored.manifest_sha256,
             pipeline_fingerprint=stored.manifest.pipeline_fingerprint,
-            records=records,
+            collection_metadata_sha256=_canonical_sha256(metadata),
+            exact_active_count=exact_count,
         )
-        return verify_exported_active_evidence(manifest, stored)
 
     def _scroll_records(
         self,
@@ -309,40 +351,6 @@ class ActiveEvidenceExporter:
         return tuple(records)
 
 
-def verify_exported_active_evidence(
-    manifest: ActiveEvidenceManifest,
-    stored: StoredManifest,
-) -> TrustedActiveEvidence:
-    """把传输清单绑定到独立可信的活动 index manifest。
-
-    Args:
-        manifest: 已通过自身摘要验证的活动证据清单。
-        stored: 从 SQLite 活动状态读取的索引 manifest。
-
-    Returns:
-        可传入 evaluator 和 load test 的可信包装。
-
-    Raises:
-        ValueError: collection、摘要、pipeline 或来源版本不一致。
-
-    """
-    index_manifest = stored.manifest
-    if manifest.collection_name != index_manifest.collection_name:
-        raise ValueError("证据清单 collection 与 index manifest 不一致。")
-    if manifest.index_manifest_sha256 != stored.manifest_sha256:
-        raise ValueError("证据清单未绑定当前 index manifest 摘要。")
-    if manifest.pipeline_fingerprint != index_manifest.pipeline_fingerprint:
-        raise ValueError("证据清单 pipeline 与 index manifest 不一致。")
-    sources = {
-        source.source_id: source
-        for source in index_manifest.sources
-        if source.active
-    }
-    for record in manifest.records:
-        _validate_record_source(record, sources)
-    return TrustedActiveEvidence(manifest=manifest, _marker=_TRUST_MARKER)
-
-
 def load_active_evidence_manifest(path: Path) -> ActiveEvidenceManifest:
     """读取并重算活动证据清单的传输完整性。
 
@@ -359,22 +367,22 @@ def load_active_evidence_manifest(path: Path) -> ActiveEvidenceManifest:
 
 
 def write_active_evidence_manifest(
-    evidence: TrustedActiveEvidence,
+    evidence: ActiveEvidenceManifest,
     path: Path,
 ) -> str:
-    """原子写出可信证据清单。
+    """原子写出只用于审计留痕的证据清单。
 
     Args:
-        evidence: 现场验证链产生的可信证据。
+        evidence: 当前进程现场扫描产生的证据清单。
         path: 审计清单输出路径。
 
     Returns:
         实际文件字节的 SHA256。
 
     """
-    payload = (
-        evidence.manifest.model_dump_json(indent=2) + "\n"
-    ).encode("utf-8")
+    payload = (evidence.model_dump_json(indent=2) + "\n").encode(
+        "utf-8"
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -406,6 +414,9 @@ def _record_from_payload(
     source_id = _required_string(payload, "source_id")
     source_path = _required_string(payload, "source_path")
     doc_version = _required_string(payload, "doc_version")
+    section_id = _required_string(payload, "section_id")
+    neighbor_group_id = _required_string(payload, "neighbor_group_id")
+    raw_chunk_role = _required_string(payload, "chunk_role")
     text = _required_string(payload, "text")
     content_sha256 = _required_string(payload, "content_sha256")
     point_pipeline = _required_string(payload, "pipeline_fingerprint")
@@ -427,7 +438,31 @@ def _record_from_payload(
     locators = tuple(Locator.model_validate(item) for item in raw_locators)
     if any(locator.file_path != source_path for locator in locators):
         raise ValueError("活动 point locator 与 source_path 不一致。")
-    expected_chunk_id = stable_chunk_id(source_id, locators[0], text)
+    raw_source_spans = payload.get("source_spans")
+    if not isinstance(raw_source_spans, list) or not raw_source_spans:
+        raise ValueError("活动 point 缺少 source span 列表。")
+    source_spans = tuple(
+        ChunkSourceSpan.model_validate(item) for item in raw_source_spans
+    )
+    validate_chunk_source_spans(text, locators, source_spans)
+    if any(
+        span.locator.file_path != source_path for span in source_spans
+    ):
+        raise ValueError("活动 point source span 与 source_path 不一致。")
+    try:
+        chunk_role = ChunkRole(raw_chunk_role)
+    except ValueError as error:
+        raise ValueError("活动 point chunk_role 无效。") from error
+    expected_chunk_id = stable_chunk_id(
+        source_id,
+        ChunkIdentity(
+            section_id=section_id,
+            neighbor_group_id=neighbor_group_id,
+            chunk_role=chunk_role,
+            source_spans=source_spans,
+        ),
+        text,
+    )
     if chunk_id != expected_chunk_id:
         raise ValueError("活动 point chunk_id 与 locator/text 不一致。")
     record = ActiveEvidenceRecord(
@@ -435,7 +470,12 @@ def _record_from_payload(
         source_id=source_id,
         source_path=source_path,
         doc_version=doc_version,
+        section_id=section_id,
+        neighbor_group_id=neighbor_group_id,
+        chunk_role=chunk_role,
         locator=locators[0].display(),
+        locators=locators,
+        source_spans=source_spans,
         text=text,
         content_sha256=content_sha256,
     )
@@ -456,6 +496,15 @@ def _validate_record_source(
         raise ValueError("活动 point source_path 与 index manifest 不一致。")
 
 
+def _active_manifest(repository: _ManifestReader) -> StoredManifest:
+    stored = repository.get_active()
+    if stored is None:
+        raise LookupError("没有活动 index manifest。")
+    if stored.state != ManifestState.ACTIVE:
+        raise ValueError("现场读取只接受 ACTIVE index manifest。")
+    return stored
+
+
 def _active_collection(client: QdrantClient, alias_name: str) -> str:
     targets = [
         alias.collection_name
@@ -469,15 +518,15 @@ def _active_collection(client: QdrantClient, alias_name: str) -> str:
     return targets[0]
 
 
-def _validate_collection_pipeline(
+def _collection_metadata(
     client: QdrantClient,
     collection_name: str,
-    pipeline_fingerprint: str,
-) -> None:
+) -> dict[str, object]:
     info = client.get_collection(collection_name)
     metadata = info.config.metadata or {}
-    if metadata.get("pipeline_fingerprint") != pipeline_fingerprint:
-        raise ValueError("Qdrant collection metadata pipeline 不一致。")
+    if not isinstance(metadata, dict):
+        raise ValueError("Qdrant collection metadata schema 无效。")
+    return metadata
 
 
 def _active_filter() -> models.Filter:
@@ -496,6 +545,16 @@ def _required_string(payload: dict[str, object], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"活动 point 缺少字符串字段 {key}。")
     return value
+
+
+def _canonical_sha256(payload: object) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _records_sha256(records: tuple[ActiveEvidenceRecord, ...]) -> str:

@@ -10,12 +10,12 @@ from qdrant_client import QdrantClient
 
 from rag_app.active_evidence import (
     ActiveEvidenceExporter,
-    TrustedActiveEvidence,
+    ActiveEvidenceManifest,
     write_active_evidence_manifest,
 )
-from rag_app.manifest import ManifestRepository
+from rag_app.manifest import ReadOnlyManifestRepository
 
-__all__ = ["add_active_state_arguments", "load_trusted_active_evidence"]
+__all__ = ["add_active_state_arguments", "load_live_active_evidence"]
 
 
 def add_active_state_arguments(parser: argparse.ArgumentParser) -> None:
@@ -43,16 +43,16 @@ def add_active_state_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def load_trusted_active_evidence(
+def load_live_active_evidence(
     arguments: argparse.Namespace,
-) -> TrustedActiveEvidence:
-    """从 alias、SQLite manifest 和 Qdrant 现场生成可信证据。
+) -> ActiveEvidenceManifest:
+    """在当前进程从 alias、只读 SQLite 和 Qdrant 生成现场快照。
 
     Args:
         arguments: 含 `add_active_state_arguments` 所加字段的命令行参数。
 
     Returns:
-        可直接进入 evaluator 或 load test 的可信活动证据。
+        可直接进入本次 evaluator 或 load test 的现场活动证据。
 
     Raises:
         ValueError: API key 环境变量为空。
@@ -62,20 +62,24 @@ def load_trusted_active_evidence(
     api_key = os.environ.get(api_key_name)
     if not api_key:
         raise ValueError(f"环境变量 {api_key_name} 未提供 Qdrant API key。")
-    repository = ManifestRepository(arguments.manifest_database)
-    repository.initialize()
+    repository = ReadOnlyManifestRepository(
+        arguments.manifest_database
+    )
     client = QdrantClient(
         url=str(arguments.qdrant_url),
         api_key=api_key,
         timeout=30,
         check_compatibility=False,
     )
-    evidence = ActiveEvidenceExporter(
-        client,
-        repository,
-        alias_name=str(arguments.qdrant_alias),
-    ).export()
-    output = arguments.active_evidence_output
-    if output is not None:
-        write_active_evidence_manifest(evidence, output)
-    return evidence
+    try:
+        evidence = ActiveEvidenceExporter(
+            client,
+            repository,
+            alias_name=str(arguments.qdrant_alias),
+        ).export()
+        output = arguments.active_evidence_output
+        if output is not None:
+            write_active_evidence_manifest(evidence, output)
+        return evidence
+    finally:
+        client.close()

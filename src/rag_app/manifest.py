@@ -10,12 +10,14 @@ import tempfile
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from urllib.parse import quote
 
 from rag_app.contracts import IndexManifest
 
 __all__ = [
     "ManifestRepository",
     "ManifestState",
+    "ReadOnlyManifestRepository",
     "StoredManifest",
     "index_manifest_sha256",
 ]
@@ -52,6 +54,19 @@ CREATE INDEX IF NOT EXISTS idx_manifest_revisions_collection
 ON manifest_revisions(collection_name, created_at);
 """
 _SHA256_HEX_LENGTH = 64
+_MANIFEST_COLUMNS = frozenset(
+    {
+        "collection_name",
+        "pipeline_fingerprint",
+        "manifest_json",
+        "manifest_sha256",
+        "state",
+        "snapshot_name",
+        "snapshot_checksum",
+        "created_at",
+        "activated_at",
+    }
+)
 
 
 class ManifestState(StrEnum):
@@ -477,6 +492,98 @@ class ManifestRepository:
         return connection
 
 
+class ReadOnlyManifestRepository:
+    """以 SQLite 只读 URI 查询已存在的索引 manifest。"""
+
+    def __init__(self, database_path: Path) -> None:
+        """保存必须已经存在的 SQLite 数据库路径。
+
+        Args:
+            database_path: 操作员指定的现有 manifest 数据库。
+
+        Returns:
+            无返回值。
+
+        """
+        self._database_path = database_path
+
+    def get_active(self) -> StoredManifest | None:
+        """只读返回当前活动 manifest。
+
+        Args:
+            无参数。
+
+        Returns:
+            当前活动 manifest；没有活动行时为 ``None``。
+
+        Raises:
+            sqlite3.Error: 数据库不存在、不可读或 SQLite 查询失败。
+            ValueError: manifest schema 不完整或活动行无效。
+
+        """
+        with self._connect() as connection:
+            _require_manifest_schema(connection)
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE state = ?
+                """,
+                (ManifestState.ACTIVE.value,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _stored_from_row(row)
+
+    def get(self, collection_name: str) -> StoredManifest | None:
+        """只读返回指定物理 collection 的 manifest。
+
+        Args:
+            collection_name: 物理 collection 名。
+
+        Returns:
+            已持久化记录；不存在时返回 ``None``。
+
+        Raises:
+            sqlite3.Error: 数据库不存在、不可读或 SQLite 查询失败。
+            ValueError: manifest schema 不完整或记录无效。
+
+        """
+        with self._connect() as connection:
+            _require_manifest_schema(connection)
+            row = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                WHERE collection_name = ?
+                """,
+                (collection_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        return _stored_from_row(row)
+
+    def _connect(self) -> sqlite3.Connection:
+        path = self._database_path.resolve(strict=False).as_posix()
+        encoded_path = quote(path, safe="/:")
+        connection = sqlite3.connect(
+            f"file:{encoded_path}?mode=ro",
+            timeout=10.0,
+            uri=True,
+        )
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+            connection.execute("PRAGMA busy_timeout=10000")
+            query_only = connection.execute(
+                "PRAGMA query_only"
+            ).fetchone()
+            if query_only is None or int(query_only[0]) != 1:
+                raise ValueError("SQLite 只读连接未启用 query_only。")
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+
 def _serialize_manifest(manifest: IndexManifest) -> str:
     payload = manifest.model_dump(mode="json")
     return json.dumps(
@@ -515,6 +622,25 @@ def _stored_from_row(row: sqlite3.Row) -> StoredManifest:
         snapshot_name=str(row["snapshot_name"]),
         snapshot_checksum=str(row["snapshot_checksum"]),
     )
+
+
+def _require_manifest_schema(connection: sqlite3.Connection) -> None:
+    table = connection.execute(
+        """
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'index_manifests'
+        """
+    ).fetchone()
+    if table is None:
+        raise ValueError("SQLite 缺少 index_manifests schema。")
+    columns = {
+        str(row["name"])
+        for row in connection.execute(
+            "PRAGMA table_info(index_manifests)"
+        ).fetchall()
+    }
+    if not _MANIFEST_COLUMNS.issubset(columns):
+        raise ValueError("SQLite index_manifests schema 不完整。")
 
 
 def _require_row(row: sqlite3.Row | None) -> sqlite3.Row:

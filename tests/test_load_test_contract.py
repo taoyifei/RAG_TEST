@@ -6,8 +6,8 @@ import pytest
 
 from scripts import load_test_chat
 from tests.active_evidence_fixtures import (
+    active_evidence_manifest,
     active_evidence_record,
-    trusted_active_evidence,
 )
 
 
@@ -62,7 +62,7 @@ def test_all_refusals_of_answerable_cases_fail_quality_gate() -> None:
 
 
 def test_invalid_citation_is_not_counted_as_answered() -> None:
-    manifest = trusted_active_evidence(
+    manifest = active_evidence_manifest(
         (
             active_evidence_record(
                 chunk_id="active-chunk",

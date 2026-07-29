@@ -9,7 +9,7 @@ from pathlib import Path
 
 from evaluation.active_state import (
     add_active_state_arguments,
-    load_trusted_active_evidence,
+    load_live_active_evidence,
 )
 from evaluation.dataset import load_dataset
 from evaluation.metrics import (
@@ -36,7 +36,7 @@ def main() -> int:
     report = evaluate_results(
         load_dataset(args.dataset),
         load_results(args.results),
-        active_evidence_manifest=load_trusted_active_evidence(args),
+        active_evidence_manifest=load_live_active_evidence(args),
     )
     print(json.dumps(asdict(report), ensure_ascii=False, sort_keys=True))
     return 0 if report.passed else 1

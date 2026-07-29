@@ -10,9 +10,15 @@ import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-from rag_app.active_evidence import ActiveEvidenceExporter
+from rag_app.active_evidence import (
+    ActiveEvidenceExporter,
+    ActiveEvidenceRecord,
+)
 from rag_app.contracts import (
     Chunk,
+    ChunkIdentity,
+    ChunkRole,
+    ChunkSourceSpan,
     ElementKind,
     IndexManifest,
     Locator,
@@ -21,7 +27,7 @@ from rag_app.contracts import (
     stable_chunk_id,
 )
 from rag_app.index.qdrant import IndexedChunk, QdrantIndex
-from rag_app.manifest import ManifestRepository
+from rag_app.manifest import ManifestRepository, StoredManifest
 
 _API_KEY = "test-only-qdrant-key"
 _DIMENSION = 4
@@ -101,24 +107,67 @@ def _indexed_chunks(
 ) -> tuple[IndexedChunk, ...]:
     indexed = []
     for index in range(1, count + 1):
-        text = f"可信证据第 {index} 条"
-        locator = Locator(
+        first_text = f"可信证据第 {index} 条"
+        second_text = f"补充条款 {index}"
+        text = f"{first_text}；{second_text}"
+        first_locator = Locator(
             file_path="规范.docx",
             heading_path=("总则",),
             heading_index=1,
-            paragraph_index=index,
+            paragraph_index=(index * 2) - 1,
             segment_index=1,
-            fragment=text,
+            fragment=first_text,
+        )
+        second_locator = Locator(
+            file_path="规范.docx",
+            heading_path=("总则",),
+            heading_index=1,
+            paragraph_index=index * 2,
+            segment_index=1,
+            fragment=second_text,
+        )
+        section_id = "section_" + "a" * 32
+        group_id = "group_" + "b" * 32
+        source_spans = (
+            ChunkSourceSpan(
+                element_id=f"element-{index}",
+                locator=first_locator,
+                start_char=0,
+                end_char=len(first_text),
+                source_start_char=0,
+                source_end_char=len(first_text),
+            ),
+            ChunkSourceSpan(
+                element_id=f"element-{index}-second",
+                locator=second_locator,
+                start_char=len(first_text) + 1,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(second_text),
+            ),
         )
         chunk = Chunk(
-            chunk_id=stable_chunk_id(_SOURCE_ID, locator, text),
+            chunk_id=stable_chunk_id(
+                _SOURCE_ID,
+                ChunkIdentity(
+                    section_id=section_id,
+                    neighbor_group_id=group_id,
+                    chunk_role=ChunkRole.TEXT,
+                    source_spans=source_spans,
+                ),
+                text,
+            ),
             source_id=_SOURCE_ID,
             doc_version=_DOC_VERSION,
             pipeline_fingerprint=pipeline_fingerprint,
+            section_id=section_id,
+            neighbor_group_id=group_id,
+            chunk_role=ChunkRole.TEXT,
+            source_spans=source_spans,
             text=text,
             embedding_text=text,
             element_kind=ElementKind.PARAGRAPH,
-            locators=(locator,),
+            locators=(first_locator, second_locator),
             content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
             document_status="active",
             authority_level="official",
@@ -190,21 +239,36 @@ def test_real_qdrant_export_paginates_without_duplicates(
     tmp_path: Path,
 ) -> None:
     with _active_index(tmp_path) as active:
-        trusted = ActiveEvidenceExporter(
+        manifest = ActiveEvidenceExporter(
             active.client,
             active.repository,
             alias_name=active.alias_name,
             page_size=2,
         ).export()
 
-        assert trusted.manifest.point_count == 5
-        assert len(trusted.manifest.records) == 5
+        assert manifest.point_count == 5
+        assert manifest.schema_version == "2"
+        assert len(manifest.records) == 5
         assert {
-            record.chunk_id for record in trusted.manifest.records
+            record.chunk_id for record in manifest.records
         } == set(active.chunk_ids)
+        assert len(manifest.records[0].source_spans) == 2
+        assert len(manifest.records[0].locators) == 2
 
 
-@pytest.mark.parametrize("field", ["locators", "text", "content_sha256"])
+@pytest.mark.parametrize(
+    "field",
+    [
+        "locators",
+        "source_spans_second_locator",
+        "source_spans_later_range",
+        "section_id",
+        "neighbor_group_id",
+        "chunk_role",
+        "text",
+        "content_sha256",
+    ],
+)
 def test_real_qdrant_export_rejects_tampered_payload(
     tmp_path: Path,
     field: str,
@@ -222,6 +286,31 @@ def test_real_qdrant_export_rejects_tampered_payload(
             locators = list(point.payload["locators"])
             locators[0] = {**locators[0], "paragraph_index": 99}
             value: object = locators
+        elif field == "source_spans_second_locator":
+            source_spans = list(point.payload["source_spans"])
+            second = dict(source_spans[1])
+            second_locator = dict(second["locator"])
+            second_locator["paragraph_index"] = 99
+            second["locator"] = second_locator
+            source_spans[1] = second
+            value = source_spans
+            field = "source_spans"
+        elif field == "source_spans_later_range":
+            source_spans = list(point.payload["source_spans"])
+            second = dict(source_spans[1])
+            second["source_start_char"] = (
+                int(second["source_start_char"]) + 1
+            )
+            second["source_end_char"] = int(second["source_end_char"]) + 1
+            source_spans[1] = second
+            value = source_spans
+            field = "source_spans"
+        elif field == "section_id":
+            value = "section_" + "f" * 32
+        elif field == "neighbor_group_id":
+            value = "group_" + "f" * 32
+        elif field == "chunk_role":
+            value = "ocr"
         elif field == "text":
             value = "被篡改的文本"
         else:
@@ -234,6 +323,27 @@ def test_real_qdrant_export_rejects_tampered_payload(
         )
 
         with pytest.raises(ValueError):
+            ActiveEvidenceExporter(
+                active.client,
+                active.repository,
+                alias_name=active.alias_name,
+            ).export()
+
+
+def test_real_qdrant_export_rejects_wrong_payload_schema_metadata(
+    tmp_path: Path,
+) -> None:
+    with _active_index(tmp_path) as active:
+        active.client.update_collection(
+            collection_name=active.index.collection_name,
+            metadata={
+                "pipeline_fingerprint": _pipeline().fingerprint(),
+                "schema_version": "1",
+                "payload_schema_version": "1",
+            },
+        )
+
+        with pytest.raises(ValueError, match="payload schema"):
             ActiveEvidenceExporter(
                 active.client,
                 active.repository,
@@ -293,16 +403,16 @@ def test_real_qdrant_export_excludes_retired_point(
             wait=True,
         )
 
-        trusted = ActiveEvidenceExporter(
+        manifest = ActiveEvidenceExporter(
             active.client,
             active.repository,
             alias_name=active.alias_name,
             page_size=2,
         ).export()
 
-        assert trusted.manifest.point_count == 4
+        assert manifest.point_count == 4
         assert retired_id not in {
-            record.chunk_id for record in trusted.manifest.records
+            record.chunk_id for record in manifest.records
         }
 
 
@@ -336,3 +446,196 @@ def test_real_qdrant_export_rejects_legacy_locator(
                 active.repository,
                 alias_name=active.alias_name,
             ).export()
+
+
+def test_real_qdrant_export_rejects_alias_switch_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实扫描结束前切换 alias 时必须失败关闭。
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+        monkeypatch: pytest 提供的局部替换器。
+
+    Returns:
+        无返回值。
+
+    """
+    with _active_index(tmp_path) as active:
+        alternate = QdrantIndex(
+            active.client,
+            collection_name=f"rag-evidence-alt-{uuid.uuid4().hex}",
+            dense_dimension=_DIMENSION,
+            pipeline_fingerprint=_pipeline().fingerprint(),
+        )
+        alternate.create_collection()
+        exporter = ActiveEvidenceExporter(
+            active.client,
+            active.repository,
+            alias_name=active.alias_name,
+            page_size=2,
+        )
+        original_scan = exporter._scroll_records
+
+        def scan_then_switch(
+            collection_name: str,
+            stored: StoredManifest,
+        ) -> tuple[ActiveEvidenceRecord, ...]:
+            """执行真实分页后切换 alias。
+
+            Args:
+                collection_name: 扫描开始时解析出的物理 collection。
+                stored: 扫描开始时读取的活动 manifest。
+
+            Returns:
+                真实 Qdrant 分页返回的证据记录。
+
+            """
+            records = original_scan(collection_name, stored)
+            active.index.switch_alias_to(
+                active.alias_name,
+                alternate.collection_name,
+            )
+            return records
+
+        monkeypatch.setattr(exporter, "_scroll_records", scan_then_switch)
+        try:
+            with pytest.raises(ValueError, match=r"collection|状态"):
+                exporter.export()
+        finally:
+            active.index.switch_alias(active.alias_name)
+            if active.client.collection_exists(
+                alternate.collection_name
+            ):
+                active.client.delete_collection(
+                    alternate.collection_name
+                )
+
+
+def test_real_qdrant_export_rejects_manifest_switch_during_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实扫描期间 ACTIVE manifest 摘要变化时必须失败关闭。
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+        monkeypatch: pytest 提供的局部替换器。
+
+    Returns:
+        无返回值。
+
+    """
+    with _active_index(tmp_path) as active:
+        exporter = ActiveEvidenceExporter(
+            active.client,
+            active.repository,
+            alias_name=active.alias_name,
+            page_size=2,
+        )
+        original_scan = exporter._scroll_records
+
+        def scan_then_change_manifest(
+            collection_name: str,
+            stored: StoredManifest,
+        ) -> tuple[ActiveEvidenceRecord, ...]:
+            """执行真实分页后写入新的活动 manifest revision。
+
+            Args:
+                collection_name: 扫描开始时解析出的物理 collection。
+                stored: 扫描开始时读取的活动 manifest。
+
+            Returns:
+                真实 Qdrant 分页返回的证据记录。
+
+            """
+            records = original_scan(collection_name, stored)
+            changed = stored.manifest.model_copy(
+                update={
+                    "created_at": datetime(
+                        2026,
+                        7,
+                        29,
+                        tzinfo=UTC,
+                    )
+                }
+            )
+            active.repository.record_active_revision(
+                changed,
+                snapshot_name="changed.snapshot",
+                snapshot_checksum="c" * 64,
+            )
+            return records
+
+        monkeypatch.setattr(
+            exporter,
+            "_scroll_records",
+            scan_then_change_manifest,
+        )
+
+        with pytest.raises(ValueError, match="状态"):
+            exporter.export()
+
+
+def test_real_qdrant_export_rejects_point_count_change_after_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真实扫描结束后活动 point 数变化时必须失败关闭。
+
+    Args:
+        tmp_path: pytest 提供的临时目录。
+        monkeypatch: pytest 提供的局部替换器。
+
+    Returns:
+        无返回值。
+
+    """
+    with _active_index(tmp_path) as active:
+        points, _ = active.client.scroll(
+            collection_name=active.index.collection_name,
+            limit=1,
+            with_payload=False,
+            with_vectors=False,
+        )
+        exporter = ActiveEvidenceExporter(
+            active.client,
+            active.repository,
+            alias_name=active.alias_name,
+            page_size=2,
+        )
+        original_scan = exporter._scroll_records
+
+        def scan_then_delete_point(
+            collection_name: str,
+            stored: StoredManifest,
+        ) -> tuple[ActiveEvidenceRecord, ...]:
+            """执行真实分页后删除一个活动 point。
+
+            Args:
+                collection_name: 扫描开始时解析出的物理 collection。
+                stored: 扫描开始时读取的活动 manifest。
+
+            Returns:
+                删除前真实 Qdrant 分页返回的证据记录。
+
+            """
+            records = original_scan(collection_name, stored)
+            active.client.delete(
+                collection_name=collection_name,
+                points_selector=models.PointIdsList(
+                    points=[points[0].id]
+                ),
+                wait=True,
+            )
+            return records
+
+        monkeypatch.setattr(
+            exporter,
+            "_scroll_records",
+            scan_then_delete_point,
+        )
+
+        with pytest.raises(ValueError, match=r"状态|计数"):
+            exporter.export()

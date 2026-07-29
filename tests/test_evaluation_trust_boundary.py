@@ -1,5 +1,8 @@
+from pathlib import Path
+
 import pytest
 
+from evaluation import evaluate
 from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import (
     ActiveEvidenceManifest,
@@ -9,8 +12,8 @@ from evaluation.metrics import (
     evaluate_results,
 )
 from tests.active_evidence_fixtures import (
+    active_evidence_manifest,
     active_evidence_record,
-    trusted_active_evidence,
 )
 from tests.synthetic_evaluation import synthetic_evaluation_dataset
 
@@ -68,9 +71,7 @@ def _result_and_manifest(
                 human_reviewer="人工验收员" if answerable else None,
             )
         )
-    manifest = trusted_active_evidence(
-        tuple(evidence_records)
-    ).manifest
+    manifest = active_evidence_manifest(tuple(evidence_records))
     return tuple(results), manifest
 
 
@@ -98,7 +99,9 @@ def test_forged_chunk_id_is_computed_as_invalid() -> None:
     report = evaluate_results(
         dataset,
         tuple(mutable),
-        active_evidence_manifest=trusted_active_evidence(manifest.records),
+        active_evidence_manifest=active_evidence_manifest(
+            manifest.records
+        ),
     )
 
     assert report.metrics["invalid_citation_ids"] == 1
@@ -115,13 +118,40 @@ def test_result_cannot_self_report_invalid_citation_count() -> None:
         QueryEvaluationResult.model_validate(payload)
 
 
-def test_results_and_manifest_cannot_be_forged_together() -> None:
-    dataset = synthetic_evaluation_dataset()
-    results, forged_manifest = _result_and_manifest(dataset)
+def test_results_and_audit_manifest_cannot_be_replayed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """生产 evaluator 拒绝 audit manifest 回灌参数。
 
-    with pytest.raises(TypeError, match="可信活动证据"):
-        evaluate_results(
-            dataset,
-            results,
-            active_evidence_manifest=forged_manifest,
-        )
+    Args:
+        tmp_path: pytest 提供的临时目录。
+        monkeypatch: pytest 提供的命令行隔离器。
+
+    Returns:
+        无返回值。
+
+    """
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "evaluate.py",
+            "--dataset",
+            str(tmp_path / "dataset.json"),
+            "--results",
+            str(tmp_path / "results.jsonl"),
+            "--qdrant-url",
+            "http://127.0.0.1:6333",
+            "--qdrant-alias",
+            "rag-active",
+            "--manifest-database",
+            str(tmp_path / "state.sqlite3"),
+            "--active-evidence-input",
+            str(tmp_path / "audit.json"),
+        ],
+    )
+
+    with pytest.raises(SystemExit) as error:
+        evaluate.main()
+
+    assert error.value.code == 2

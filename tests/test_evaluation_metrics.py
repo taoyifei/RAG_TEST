@@ -2,16 +2,16 @@ import pytest
 
 from evaluation.dataset import EvaluationDataset
 from evaluation.metrics import (
+    ActiveEvidenceManifest,
     PublishedCitation,
     QueryEvaluationResult,
     RankedEvidence,
     Thresholds,
     evaluate_results,
 )
-from rag_app.active_evidence import TrustedActiveEvidence
 from tests.active_evidence_fixtures import (
+    active_evidence_manifest,
     active_evidence_record,
-    trusted_active_evidence,
 )
 from tests.synthetic_evaluation import synthetic_evaluation_dataset
 
@@ -62,7 +62,7 @@ def _oracle_results(
 
 def _active_manifest(
     dataset: EvaluationDataset,
-) -> TrustedActiveEvidence:
+) -> ActiveEvidenceManifest:
     records = tuple(
         active_evidence_record(
             chunk_id=f"chunk-{case.id}-{index}",
@@ -74,7 +74,7 @@ def _active_manifest(
         if case.validation_state == "verified_text"
         for index, label in enumerate(case.expected.evidence, start=1)
     )
-    return trusted_active_evidence(records)
+    return active_evidence_manifest(records)
 
 
 def test_evaluator_accepts_complete_human_reviewed_results() -> None:

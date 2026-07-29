@@ -13,8 +13,6 @@ from evaluation.dataset import EvaluationCase, EvaluationDataset
 from rag_app.active_evidence import (
     ActiveEvidenceManifest,
     ActiveEvidenceRecord,
-    TrustedActiveEvidence,
-    load_active_evidence_manifest,
 )
 
 __all__ = [
@@ -24,7 +22,6 @@ __all__ = [
     "QueryEvaluationResult",
     "Thresholds",
     "evaluate_results",
-    "load_active_evidence_manifest",
     "load_results",
 ]
 
@@ -154,7 +151,7 @@ def evaluate_results(
     dataset: EvaluationDataset,
     results: tuple[QueryEvaluationResult, ...],
     *,
-    active_evidence_manifest: TrustedActiveEvidence,
+    active_evidence_manifest: ActiveEvidenceManifest,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
 ) -> EvaluationReport:
     """评估全部非阻塞题，禁止缺题或重复题。
@@ -162,7 +159,7 @@ def evaluate_results(
     Args:
         dataset: 人工冻结题集。
         results: 实际管线输出和人工评分。
-        active_evidence_manifest: 现场验证链产生的可信活动证据。
+        active_evidence_manifest: 当前进程现场扫描产生的活动证据。
         thresholds: 完成条件阈值。
 
     Returns:
@@ -170,11 +167,8 @@ def evaluate_results(
 
     Raises:
         ValueError: 结果含重复题号或未知题号。
-        TypeError: 调用方传入自由构造的证据 JSON。
 
     """
-    if not isinstance(active_evidence_manifest, TrustedActiveEvidence):
-        raise TypeError("生产评分必须使用可信活动证据。")
     result_by_id = _unique_results(results)
     evaluable = tuple(
         case
@@ -206,7 +200,7 @@ def evaluate_results(
     )
     active_records = {
         record.chunk_id: record
-        for record in active_evidence_manifest.manifest.records
+        for record in active_evidence_manifest.records
     }
     metrics = _calculate_metrics(
         reviewed,
@@ -542,7 +536,11 @@ def _matches_active_record(
         return False
     if (
         item.source_path != record.source_path
-        or item.locator != record.locator
+        or item.locator
+        not in {
+            record.locator,
+            *(locator.display() for locator in record.locators),
+        }
     ):
         return False
     return not (
