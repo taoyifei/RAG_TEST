@@ -125,6 +125,15 @@ class TraceSpanSpec:
     duration_ms: int = 0
 
 
+@dataclass(slots=True)
+class _SpanTimeline:
+    """会话内单个 span 的层级和关闭状态。"""
+
+    handle: TraceSpanHandle
+    children: set[str] = field(default_factory=set)
+    finished_at: datetime | None = None
+
+
 class TraceSession:
     """一次查询的有序 span、决策和 FULL artifact 录制上下文。"""
 
@@ -146,6 +155,10 @@ class TraceSession:
         self._recorder = recorder
         self.trace = trace
         self._clock = clock
+        self._wall_anchor = trace.created_at
+        self._monotonic_anchor = clock()
+        self._last_elapsed_ms = 0
+        self._spans: dict[str, _SpanTimeline] = {}
         self._sequence = 0
         self._decision_sequence = 0
         self._finished = False
@@ -188,9 +201,15 @@ class TraceSession:
         Returns:
             供关闭阶段使用的计时状态。
 
+        Raises:
+            RuntimeError: 会话或父 span 已关闭，或父 span 不存在。
+
         """
+        if self._finished:
+            raise RuntimeError("TraceSession 已关闭，不能创建 span。")
+        parent = self._open_parent(parent_span_id)
         self._sequence += 1
-        started_at = datetime.now(UTC)
+        started_at, started_tick = self._timeline_now()
         active = TraceSpanHandle(
             span_id=uuid.uuid4().hex[:16],
             parent_span_id=parent_span_id,
@@ -198,7 +217,7 @@ class TraceSession:
             name=name,
             kind=kind,
             started_at=started_at,
-            started_tick=self._clock(),
+            started_tick=started_tick,
         )
         self._recorder.put_span(
             SpanRecord(
@@ -219,6 +238,9 @@ class TraceSession:
             ),
             strict=self.strict,
         )
+        self._spans[active.span_id] = _SpanTimeline(handle=active)
+        if parent is not None:
+            parent.children.add(active.span_id)
         return active
 
     def finish_span(
@@ -235,17 +257,25 @@ class TraceSession:
         Returns:
             无返回值。
 
+        Raises:
+            RuntimeError: span 不属于当前会话、已经关闭或仍有活动后代。
+
         """
         if finish.status is SpanStatus.RUNNING:
             raise ValueError("finish_span 不能使用 RUNNING。")
-        wall_finished_at = datetime.now(UTC)
-        duration_ms = max(
-            0,
-            math.ceil(
-                (wall_finished_at - active.started_at).total_seconds() * 1000
-            ),
-        )
-        finished_at = active.started_at + timedelta(milliseconds=duration_ms)
+        timeline = self._require_open_span(active)
+        descendants = self._descendants(active.span_id)
+        if any(item.finished_at is None for item in descendants):
+            raise RuntimeError("父 span 关闭前仍有活动后代。")
+        finished_at, _ = self._timeline_now()
+        recorded_finishes = [
+            item.finished_at
+            for item in descendants
+            if item.finished_at is not None
+        ]
+        if recorded_finishes:
+            finished_at = max(finished_at, *recorded_finishes)
+        duration_ms = _duration_ms(active.started_at, finished_at)
         self._recorder.put_span(
             SpanRecord(
                 trace_id=self.trace.trace_id,
@@ -265,6 +295,7 @@ class TraceSession:
             ),
             strict=self.strict,
         )
+        timeline.finished_at = finished_at
 
     def completed_span(self, spec: TraceSpanSpec) -> str:
         """保存已完成的确定性子 span。
@@ -275,12 +306,35 @@ class TraceSession:
         Returns:
             新 span ID。
 
+        Raises:
+            RuntimeError: 父 span 不存在或已经关闭。
+
         """
+        parent = self._open_parent(spec.parent_span_id)
+        if parent is None:
+            raise RuntimeError("completed span 必须提供父 span。")
         self._sequence += 1
-        bounded_duration = max(0, spec.duration_ms)
-        finished_at = datetime.now(UTC)
-        started_at = finished_at - timedelta(milliseconds=bounded_duration)
+        reported_duration_ms = max(0, spec.duration_ms)
+        finished_at, finished_tick = self._timeline_now()
+        available_ms = _duration_ms(
+            parent.handle.started_at,
+            finished_at,
+        )
+        duration_ms = min(reported_duration_ms, available_ms)
+        started_at = finished_at - timedelta(milliseconds=duration_ms)
+        attributes = dict(spec.attributes or {})
+        if duration_ms != reported_duration_ms:
+            attributes["reported_duration_ms"] = reported_duration_ms
         span_id = uuid.uuid4().hex[:16]
+        handle = TraceSpanHandle(
+            span_id=span_id,
+            parent_span_id=spec.parent_span_id,
+            sequence=self._sequence,
+            name=spec.name,
+            kind=spec.kind,
+            started_at=started_at,
+            started_tick=finished_tick - duration_ms / 1000,
+        )
         self._recorder.put_span(
             SpanRecord(
                 trace_id=self.trace.trace_id,
@@ -291,16 +345,111 @@ class TraceSession:
                 kind=spec.kind,
                 started_at=started_at,
                 finished_at=finished_at,
-                duration_ms=bounded_duration,
+                duration_ms=duration_ms,
                 status=SpanStatus.OK,
                 reason_code=spec.reason_code,
-                attributes=_json_attributes(spec.attributes),
+                attributes=_json_attributes(attributes),
                 input_artifact_id=None,
                 output_artifact_id=None,
             ),
             strict=self.strict,
         )
+        self._spans[span_id] = _SpanTimeline(
+            handle=handle,
+            finished_at=finished_at,
+        )
+        parent.children.add(span_id)
         return span_id
+
+    def _timeline_now(self) -> tuple[datetime, float]:
+        """从单调时钟推导当前会话时间点。
+
+        Args:
+            无参数；读取初始化时冻结的双时钟锚点。
+
+        Returns:
+            毫秒向上量化后的 wall-clock 时间和对应单调时点。
+
+        """
+        elapsed_seconds = max(0.0, self._clock() - self._monotonic_anchor)
+        elapsed_ms = max(
+            self._last_elapsed_ms,
+            math.ceil(elapsed_seconds * 1000),
+        )
+        self._last_elapsed_ms = elapsed_ms
+        return (
+            self._wall_anchor + timedelta(milliseconds=elapsed_ms),
+            self._monotonic_anchor + elapsed_ms / 1000,
+        )
+
+    def _open_parent(
+        self,
+        parent_span_id: str | None,
+    ) -> _SpanTimeline | None:
+        """返回可接收子 span 的父节点。
+
+        Args:
+            parent_span_id: 父 span ID；仅根 span 可为空。
+
+        Returns:
+            已校验的活动父节点；根 span 返回空。
+
+        Raises:
+            RuntimeError: 根 span 重复、父节点不存在或已经关闭。
+
+        """
+        if parent_span_id is None:
+            if self._spans:
+                raise RuntimeError("TraceSession 只能创建一个根 span。")
+            return None
+        parent = self._spans.get(parent_span_id)
+        if parent is None:
+            raise RuntimeError("父 span 不属于当前 TraceSession。")
+        if parent.finished_at is not None:
+            raise RuntimeError("父 span 已关闭，不能创建 child。")
+        return parent
+
+    def _require_open_span(
+        self,
+        active: TraceSpanHandle,
+    ) -> _SpanTimeline:
+        """校验 handle 对应当前会话中的活动 span。
+
+        Args:
+            active: 调用方持有的 span handle。
+
+        Returns:
+            当前 span 的可变生命周期状态。
+
+        Raises:
+            RuntimeError: handle 不匹配或 span 已经关闭。
+
+        """
+        timeline = self._spans.get(active.span_id)
+        if timeline is None or timeline.handle != active:
+            raise RuntimeError("span handle 不属于当前 TraceSession。")
+        if timeline.finished_at is not None:
+            raise RuntimeError("span 已关闭，不能重复关闭。")
+        return timeline
+
+    def _descendants(self, span_id: str) -> list[_SpanTimeline]:
+        """返回当前已记录的全部后代。
+
+        Args:
+            span_id: 待遍历的父 span ID。
+
+        Returns:
+            深度优先收集的后代生命周期状态。
+
+        """
+        descendants: list[_SpanTimeline] = []
+        pending = list(self._spans[span_id].children)
+        while pending:
+            child_id = pending.pop()
+            child = self._spans[child_id]
+            descendants.append(child)
+            pending.extend(child.children)
+        return descendants
 
     def decision(
         self,
@@ -393,7 +542,6 @@ class TraceSession:
         """
         if self._finished:
             return
-        self._finished = True
         self.finish_span(
             self.root,
             TraceSpanFinish(
@@ -406,16 +554,15 @@ class TraceSession:
                 attributes=attributes,
             ),
         )
-        duration_ms = max(
-            0,
-            math.ceil((self._clock() - self.root.started_tick) * 1000),
-        )
+        self._finished = True
+        root_finished_at = self._spans[self.root.span_id].finished_at
+        if root_finished_at is None:
+            raise RuntimeError("根 span 未完成，不能关闭 Trace。")
         self._recorder.finish_trace(
             self.trace.trace_id,
             TraceFinish(
                 status=status,
-                finished_at=self.trace.created_at
-                + timedelta(milliseconds=duration_ms),
+                finished_at=root_finished_at,
                 refusal_code=refusal_code,
                 error_code=error_code,
             ),
@@ -897,6 +1044,23 @@ class TraceRecorder:
                 "Trace 失败审计回调失败 code=%s",
                 code.value,
             )
+
+
+def _duration_ms(started_at: datetime, finished_at: datetime) -> int:
+    """返回同一毫秒时间轴上的非负区间长度。
+
+    Args:
+        started_at: 带时区开始时点。
+        finished_at: 不早于开始时点的结束时点。
+
+    Returns:
+        与两个时点自洽的非负整毫秒数。
+
+    """
+    return max(
+        0,
+        round((finished_at - started_at).total_seconds() * 1000),
+    )
 
 
 def _json_attributes(
