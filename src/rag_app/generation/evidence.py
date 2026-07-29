@@ -6,7 +6,11 @@ import json
 from dataclasses import dataclass
 
 from rag_app.chunking import TokenCounter
-from rag_app.contracts import Locator
+from rag_app.contracts import (
+    ChunkSourceSpan,
+    Locator,
+    validate_chunk_source_spans,
+)
 from rag_app.retrieval.rerank import RerankedHit
 
 __all__ = [
@@ -52,6 +56,7 @@ class EvidenceItem:
     chunk_id: str
     text: str
     locators: tuple[Locator, ...]
+    source_spans: tuple[ChunkSourceSpan, ...]
     low_confidence_ocr: bool
 
     def to_prompt_payload(self) -> dict[str, object]:
@@ -159,11 +164,18 @@ def _evidence_item(
     payload = ranked.hit.payload
     text = payload.get("text")
     raw_locators = payload.get("locators")
+    raw_source_spans = payload.get("source_spans")
     if not isinstance(text, str) or not text:
         raise ValueError("候选 payload 缺少原文 text。")
     if not isinstance(raw_locators, list) or not raw_locators:
         raise ValueError("候选 payload 缺少 locators。")
+    if not isinstance(raw_source_spans, list) or not raw_source_spans:
+        raise ValueError("候选 payload 缺少 source_spans。")
     locators = tuple(Locator.model_validate(item) for item in raw_locators)
+    source_spans = tuple(
+        ChunkSourceSpan.model_validate(item) for item in raw_source_spans
+    )
+    validate_chunk_source_spans(text, locators, source_spans)
     contains_ocr = payload.get("contains_ocr", False)
     raw_confidence = payload.get("minimum_ocr_confidence")
     if not isinstance(contains_ocr, bool):
@@ -186,6 +198,7 @@ def _evidence_item(
         chunk_id=ranked.hit.chunk_id,
         text=text,
         locators=locators,
+        source_spans=source_spans,
         low_confidence_ocr=low_confidence,
     )
 

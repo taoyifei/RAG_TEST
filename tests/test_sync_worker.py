@@ -5,7 +5,13 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-from rag_app.contracts import Chunk, ElementKind, Locator
+from rag_app.contracts import (
+    Chunk,
+    ChunkRole,
+    ChunkSourceSpan,
+    ElementKind,
+    Locator,
+)
 from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.index.planner import (
     DiscoveredSource,
@@ -37,21 +43,35 @@ def _client() -> QdrantClient:
 
 
 def _chunks(path: str, version: SourceVersion) -> list[IndexedChunk]:
+    text = f"{path}:{version.content_sha256[0]}"
+    locator = Locator(
+        file_path=path,
+        paragraph_index=1,
+        segment_index=1,
+        fragment=path,
+    )
     chunk = Chunk(
         chunk_id=f"chunk_{version.content_sha256[:32]}",
         source_id=version.source_id,
         doc_version=version.doc_version,
         pipeline_fingerprint=version.pipeline_fingerprint,
-        text=f"{path}:{version.content_sha256[0]}",
-        embedding_text=f"{path}:{version.content_sha256[0]}",
-        element_kind=ElementKind.PARAGRAPH,
-        locators=(
-            Locator(
-                file_path=path,
-                paragraph_index=1,
-                fragment=path,
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id="element-sync",
+                locator=locator,
+                start_char=0,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(text),
             ),
         ),
+        text=text,
+        embedding_text=text,
+        element_kind=ElementKind.PARAGRAPH,
+        locators=(locator,),
         content_sha256=version.content_sha256,
         document_status="active",
         authority_level="official",

@@ -19,6 +19,7 @@ _VERSION_STAGING = "staging"
 _VERSION_ACTIVE = "active"
 _VERSION_RETIRED = "retired"
 _SHA256_HEX_LENGTH = 64
+_PAYLOAD_SCHEMA_VERSION = "2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +107,7 @@ class QdrantIndex:
             metadata={
                 "pipeline_fingerprint": self._pipeline_fingerprint,
                 "schema_version": "1",
+                "payload_schema_version": _PAYLOAD_SCHEMA_VERSION,
             },
         )
         for field_name in (
@@ -117,6 +119,9 @@ class QdrantIndex:
             "document_status",
             "authority_level",
             "element_kind",
+            "section_id",
+            "neighbor_group_id",
+            "chunk_role",
         ):
             self._client.create_payload_index(
                 collection_name=self.collection_name,
@@ -381,11 +386,16 @@ class QdrantIndex:
             )
             for record in records:
                 locators = _renamed_locators(record.payload, new_path)
+                source_spans = _renamed_source_spans(
+                    record.payload,
+                    new_path,
+                )
                 self._client.set_payload(
                     collection_name=self.collection_name,
                     payload={
                         "source_path": new_path,
                         "locators": locators,
+                        "source_spans": source_spans,
                     },
                     points=[record.id],
                     wait=True,
@@ -529,7 +539,10 @@ class QdrantIndex:
         """
         for alias in self._client.get_aliases().aliases:
             if alias.alias_name == alias_name:
-                return alias.collection_name
+                target = alias.collection_name
+                if self.collection_name == alias_name:
+                    self.require_compatible_collection(target)
+                return target
         return None
 
     def delete_alias(self, alias_name: str) -> None:
@@ -618,8 +631,30 @@ class QdrantIndex:
             raise RuntimeError("Qdrant 未确认 snapshot 恢复成功。")
         self._validate_existing_collection()
 
-    def _validate_existing_collection(self) -> None:
-        info = self._client.get_collection(self.collection_name)
+    def require_compatible_collection(
+        self,
+        collection_name: str | None = None,
+    ) -> None:
+        """严格校验现有 collection 的向量与 payload schema。
+
+        Args:
+            collection_name: 可选物理 collection；默认使用构造时名称。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: collection 与当前索引契约不兼容。
+
+        """
+        self._validate_existing_collection(collection_name)
+
+    def _validate_existing_collection(
+        self,
+        collection_name: str | None = None,
+    ) -> None:
+        target = collection_name or self.collection_name
+        info = self._client.get_collection(target)
         vectors = info.config.params.vectors
         if not isinstance(vectors, dict):
             raise ValueError("现有 collection 缺少命名 dense 向量。")
@@ -632,6 +667,11 @@ class QdrantIndex:
         metadata = info.config.metadata or {}
         if metadata.get("pipeline_fingerprint") != self._pipeline_fingerprint:
             raise ValueError("现有 collection pipeline 指纹不兼容。")
+        if (
+            metadata.get("payload_schema_version")
+            != _PAYLOAD_SCHEMA_VERSION
+        ):
+            raise ValueError("现有 collection payload schema 不是 v2。")
 
 
 def _chunk_payload(chunk: Chunk, *, version_state: str) -> dict[str, object]:
@@ -641,12 +681,18 @@ def _chunk_payload(chunk: Chunk, *, version_state: str) -> dict[str, object]:
         "source_path": chunk.locators[0].file_path,
         "doc_version": chunk.doc_version,
         "pipeline_fingerprint": chunk.pipeline_fingerprint,
+        "section_id": chunk.section_id,
+        "neighbor_group_id": chunk.neighbor_group_id,
+        "chunk_role": chunk.chunk_role.value,
         "version_state": version_state,
         "text": chunk.text,
         "embedding_text": chunk.embedding_text,
         "element_kind": chunk.element_kind.value,
         "locators": [
             locator.model_dump(mode="json") for locator in chunk.locators
+        ],
+        "source_spans": [
+            span.model_dump(mode="json") for span in chunk.source_spans
         ],
         "content_sha256": chunk.content_sha256,
         "previous_chunk_id": chunk.previous_chunk_id,
@@ -728,4 +774,28 @@ def _renamed_locators(
         locator = {str(key): value for key, value in raw_locator.items()}
         locator["file_path"] = new_path
         renamed.append(locator)
+    return renamed
+
+
+def _renamed_source_spans(
+    payload: dict[str, object] | None,
+    new_path: str,
+) -> list[dict[str, object]]:
+    if payload is None:
+        raise ValueError("Qdrant 点缺少 payload。")
+    raw_spans = payload.get("source_spans")
+    if not isinstance(raw_spans, list) or not raw_spans:
+        raise ValueError("Qdrant 点缺少 source span 列表。")
+    renamed: list[dict[str, object]] = []
+    for raw_span in raw_spans:
+        if not isinstance(raw_span, dict):
+            raise ValueError("Qdrant source span payload 格式无效。")
+        span = {str(key): value for key, value in raw_span.items()}
+        raw_locator = span.get("locator")
+        if not isinstance(raw_locator, dict):
+            raise ValueError("Qdrant source span locator 格式无效。")
+        locator = {str(key): value for key, value in raw_locator.items()}
+        locator["file_path"] = new_path
+        span["locator"] = locator
+        renamed.append(span)
     return renamed

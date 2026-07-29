@@ -66,6 +66,8 @@ class NeighborExpander:
 
         """
         selected = list(ranked_hits[: self._max_items])
+        for selected_hit in selected:
+            _payload_identity(selected_hit.hit.payload)
         if len(selected) >= self._max_items:
             return tuple(selected)
         requests = _neighbor_requests(tuple(selected))
@@ -79,7 +81,10 @@ class NeighborExpander:
             if chunk_id in seen:
                 continue
             payload = payloads.get(chunk_id)
-            if payload is None or not _same_version(seed.hit.payload, payload):
+            if payload is None or not _same_neighbor_group(
+                seed.hit.payload,
+                payload,
+            ):
                 continue
             seen.add(chunk_id)
             selected.append(
@@ -109,15 +114,20 @@ def _neighbor_requests(
     return tuple(requests)
 
 
-def _same_version(
+def _same_neighbor_group(
     seed: dict[str, object],
     neighbor: dict[str, object],
 ) -> bool:
-    source_id = seed.get("source_id")
-    doc_version = seed.get("doc_version")
-    return (
-        isinstance(source_id, str)
-        and isinstance(doc_version, str)
-        and neighbor.get("source_id") == source_id
-        and neighbor.get("doc_version") == doc_version
-    )
+    return _payload_identity(seed) == _payload_identity(neighbor)
+
+
+def _payload_identity(
+    payload: dict[str, object],
+) -> tuple[str, str, str]:
+    values: list[str] = []
+    for field in ("source_id", "doc_version", "neighbor_group_id"):
+        value = payload.get(field)
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"相邻 chunk payload 缺少 {field}。")
+        values.append(value)
+    return values[0], values[1], values[2]

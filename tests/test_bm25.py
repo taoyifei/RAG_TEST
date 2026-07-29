@@ -2,7 +2,13 @@ import uuid
 
 from qdrant_client import QdrantClient
 
-from rag_app.contracts import Chunk, ElementKind, Locator
+from rag_app.contracts import (
+    Chunk,
+    ChunkRole,
+    ChunkSourceSpan,
+    ElementKind,
+    Locator,
+)
 from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
 
@@ -25,21 +31,34 @@ def _indexed(
     encoder: QdrantBm25Encoder,
 ) -> IndexedChunk:
     digest_character = chr(ord("a") + position)
+    locator = Locator(
+        file_path="规范.docx",
+        paragraph_index=position,
+        segment_index=1,
+        fragment=text,
+    )
     chunk = Chunk(
         chunk_id=f"chunk_{position}",
         source_id=f"src_{position:032x}",
         doc_version="sha256:" + digest_character * 64,
         pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        section_id=f"section_{position:032x}",
+        neighbor_group_id=f"group_{position:032x}",
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id=f"element-{position}",
+                locator=locator,
+                start_char=0,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(text),
+            ),
+        ),
         text=text,
         embedding_text=text,
         element_kind=ElementKind.PARAGRAPH,
-        locators=(
-            Locator(
-                file_path="规范.docx",
-                paragraph_index=position,
-                fragment=text,
-            ),
-        ),
+        locators=(locator,),
         content_sha256=digest_character * 64,
         document_status="active",
         authority_level="official",

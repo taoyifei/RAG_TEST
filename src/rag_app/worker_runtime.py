@@ -35,6 +35,7 @@ from rag_app.index.job_runner import (
     JobRunnerConfig,
     JobRunnerServices,
 )
+from rag_app.index.qdrant import QdrantIndex
 from rag_app.index.worker import SyncChunkBuilder
 from rag_app.manifest import ManifestRepository
 from rag_app.ocr.client import OcrClient
@@ -136,6 +137,14 @@ def _assemble_worker_runtime(
         prefer_grpc=False,
     )
     rollback.callback(qdrant.close)
+    manifests = ManifestRepository(settings.manifest_database)
+    manifests.initialize()
+    _reject_incompatible_active_collection(
+        qdrant=qdrant,
+        manifests=manifests,
+        alias_name=settings.qdrant_alias,
+        pipeline=pipeline,
+    )
     http_client = httpx.Client(
         timeout=httpx.Timeout(
             settings.embedding_timeout_seconds,
@@ -201,8 +210,6 @@ def _assemble_worker_runtime(
     )
     control = StateStore(settings.state_database)
     control.initialize()
-    manifests = ManifestRepository(settings.manifest_database)
-    manifests.initialize()
 
     def build_factory(state: StateStore) -> SyncChunkBuilder:
         """为一次任务创建绑定状态库的 DOCX 构建器。
@@ -257,6 +264,48 @@ def _assemble_worker_runtime(
         http_client=http_client,
         ocr_http_client=ocr_http_client,
     )
+
+
+def _reject_incompatible_active_collection(
+    *,
+    qdrant: QdrantClient,
+    manifests: ManifestRepository,
+    alias_name: str,
+    pipeline: PipelineSpec,
+) -> None:
+    """在构造模型客户端前拒绝旧 payload schema 的活动索引。
+
+    Args:
+        qdrant: 已配置鉴权的 Qdrant 客户端。
+        manifests: worker 使用的 manifest 仓库。
+        alias_name: 当前活动索引别名。
+        pipeline: 本进程冻结的 pipeline。
+
+    Returns:
+        无活动 manifest 或全部契约兼容时返回。
+
+    Raises:
+        ValueError: alias、manifest、pipeline 或 payload schema 不兼容。
+
+    """
+    active = manifests.get_active()
+    if active is None:
+        return
+    fingerprint = pipeline.fingerprint()
+    index = QdrantIndex(
+        qdrant,
+        collection_name=active.manifest.collection_name,
+        dense_dimension=pipeline.embedding_dimension,
+        pipeline_fingerprint=fingerprint,
+    )
+    target = index.alias_target(alias_name)
+    if target != active.manifest.collection_name:
+        raise ValueError("worker 活动 alias 与 manifest collection 不一致。")
+    manifests.require_compatible(
+        collection_name=target,
+        pipeline_fingerprint=fingerprint,
+    )
+    index.require_compatible_collection(target)
 
 
 def require_indexable_configuration(

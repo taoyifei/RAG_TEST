@@ -9,7 +9,13 @@ from rag_app.clients.model_services import (
     TeiEmbeddingClient,
 )
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
-from rag_app.contracts import Chunk, ElementKind, Locator
+from rag_app.contracts import (
+    Chunk,
+    ChunkRole,
+    ChunkSourceSpan,
+    ElementKind,
+    Locator,
+)
 from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
 from rag_app.retrieval.filters import MetadataPolicy
@@ -94,21 +100,34 @@ def _chunk(
     digest_character = f"{position:x}"
     dense = [0.0] * 1024
     dense[dense_axis] = 1.0
+    locator = Locator(
+        file_path=f"{position}.docx",
+        paragraph_index=1,
+        segment_index=1,
+        fragment=text,
+    )
     chunk = Chunk(
         chunk_id=f"chunk-{position}",
         source_id=f"src_{position:032x}",
         doc_version="sha256:" + digest_character * 64,
         pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        section_id=f"section_{position:032x}",
+        neighbor_group_id=f"group_{position:032x}",
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id=f"element-{position}",
+                locator=locator,
+                start_char=0,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(text),
+            ),
+        ),
         text=text,
         embedding_text=text,
         element_kind=ElementKind.PARAGRAPH,
-        locators=(
-            Locator(
-                file_path=f"{position}.docx",
-                paragraph_index=1,
-                fragment=text,
-            ),
-        ),
+        locators=(locator,),
         content_sha256=digest_character * 64,
         document_status="active",
         authority_level="official",

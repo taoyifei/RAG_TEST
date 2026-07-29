@@ -8,7 +8,14 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-from rag_app.contracts import Chunk, ElementKind, Locator, PipelineSpec
+from rag_app.contracts import (
+    Chunk,
+    ChunkRole,
+    ChunkSourceSpan,
+    ElementKind,
+    Locator,
+    PipelineSpec,
+)
 from rag_app.index.job_runner import (
     IndexJobRunner,
     JobRunnerConfig,
@@ -60,21 +67,34 @@ def _build_chunks(
     source_path: str,
     version: SourceVersion,
 ) -> tuple[IndexedChunk, ...]:
+    locator = Locator(
+        file_path=source_path,
+        paragraph_index=1,
+        segment_index=1,
+        fragment=source_path,
+    )
     chunk = Chunk(
         chunk_id=f"chunk_{version.content_sha256[:32]}",
         source_id=version.source_id,
         doc_version=version.doc_version,
         pipeline_fingerprint=version.pipeline_fingerprint,
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id="element-index-job",
+                locator=locator,
+                start_char=0,
+                end_char=len(source_path),
+                source_start_char=0,
+                source_end_char=len(source_path),
+            ),
+        ),
         text=source_path,
         embedding_text=source_path,
         element_kind=ElementKind.PARAGRAPH,
-        locators=(
-            Locator(
-                file_path=source_path,
-                paragraph_index=1,
-                fragment=source_path,
-            ),
-        ),
+        locators=(locator,),
         content_sha256=version.content_sha256,
         document_status="active",
         authority_level="official",
@@ -275,3 +295,82 @@ def test_policy_change_rejects_incremental_and_requires_new_collection(
         for collection in collections:
             if client.collection_exists(collection):
                 client.delete_collection(collection)
+
+
+def test_worker_rejects_old_payload_schema_before_chunk_builder(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-schema-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.docx").write_bytes(b"content")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    config = JobRunnerConfig(
+        alias_name=alias,
+        input_root=docs,
+        index_state_dir=tmp_path / "indexes",
+        collection_prefix=f"rag-schema-{suffix}",
+        lease_seconds=60,
+    )
+    initial_runner = IndexJobRunner(
+        config=config,
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: _build_chunks,
+        ),
+    )
+    collection = ""
+    try:
+        control.create_job(
+            idempotency_key="schema:full",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        full_result = initial_runner.run_next(worker_id="worker-full")
+        assert full_result is not None
+        assert full_result.state == JobState.SUCCEEDED
+        collection = full_result.collection_name
+        client.update_collection(
+            collection_name=collection,
+            metadata={"payload_schema_version": "1"},
+        )
+        builder_calls: list[str] = []
+
+        def forbidden_builder(_: StateStore) -> object:
+            builder_calls.append("called")
+            raise AssertionError("旧 payload schema 不得进入 chunk builder。")
+
+        runner = IndexJobRunner(
+            config=config,
+            services=JobRunnerServices(
+                control=control,
+                manifests=manifests,
+                qdrant=client,
+                pipeline=pipeline,
+                build_chunks_factory=forbidden_builder,
+            ),
+        )
+        control.create_job(
+            idempotency_key="schema:incremental",
+            kind=JobKind.INCREMENTAL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+
+        result = runner.run_next(worker_id="worker-incremental")
+
+        assert result is not None
+        assert result.state == JobState.FAILED
+        assert result.error_code == "INDEX_VALUEERROR"
+        assert builder_calls == []
+    finally:
+        if collection and client.collection_exists(collection):
+            client.delete_collection(collection)

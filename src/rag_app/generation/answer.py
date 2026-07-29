@@ -406,12 +406,55 @@ def _validate_support(
     stripped_quote = quote.strip()
     if not stripped_quote or stripped_quote not in item.text:
         raise _ValidationError("QUOTE_NOT_IN_EVIDENCE")
+    locator = _quote_locator(item, stripped_quote)
     return ClaimSupport(
         evidence_id=evidence_id,
         chunk_id=item.chunk_id,
         quote=stripped_quote,
-        locator=item.locators[0].display(),
+        locator=locator,
     )
+
+
+def _quote_locator(item: EvidenceItem, quote: str) -> str:
+    """把全部 quote 出现位置唯一映射到同一个来源 locator。
+
+    Args:
+        item: 已校验 source spans 的证据项。
+        quote: 已确认存在于证据原文的非空逐字引文。
+
+    Returns:
+        唯一包含全部出现位置的 locator 展示文本。
+
+    Raises:
+        _ValidationError: 引文跨 span 或映射到不同 locator。
+
+    """
+    occurrence_starts: list[int] = []
+    search_start = 0
+    while True:
+        occurrence_start = item.text.find(quote, search_start)
+        if occurrence_start < 0:
+            break
+        occurrence_starts.append(occurrence_start)
+        search_start = occurrence_start + 1
+    locators = []
+    quote_length = len(quote)
+    for occurrence_start in occurrence_starts:
+        occurrence_end = occurrence_start + quote_length
+        containing = tuple(
+            span
+            for span in item.source_spans
+            if span.start_char <= occurrence_start
+            and occurrence_end <= span.end_char
+        )
+        if len(containing) != 1:
+            raise _ValidationError("QUOTE_CROSSES_SOURCE_SPAN")
+        locator = containing[0].locator
+        if locator not in locators:
+            locators.append(locator)
+    if len(locators) != 1:
+        raise _ValidationError("AMBIGUOUS_QUOTE_LOCATION")
+    return locators[0].display()
 
 
 def _user_prompt(question: str, evidence: EvidenceBundle) -> str:

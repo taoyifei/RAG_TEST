@@ -14,6 +14,12 @@ def _ranked(
     contains_ocr: bool = False,
     confidence: float | None = None,
 ) -> RerankedHit:
+    locator = {
+        "file_path": "规范.docx",
+        "heading_path": ["总则"],
+        "paragraph_index": 1,
+        "fragment": text[:20],
+    }
     return RerankedHit(
         rank=1,
         rerank_score=0.9,
@@ -25,12 +31,16 @@ def _ranked(
                 "chunk_id": chunk_id,
                 "text": text,
                 "embedding_text": f"标题\n{text}",
-                "locators": [
+                "locators": [locator],
+                "source_spans": [
                     {
-                        "file_path": "规范.docx",
-                        "heading_path": ["总则"],
-                        "paragraph_index": 1,
-                        "fragment": text[:20],
+                        "element_id": f"element-{chunk_id}",
+                        "locator": locator,
+                        "start_char": 0,
+                        "end_char": len(text),
+                        "source_start_char": 0,
+                        "source_end_char": len(text),
+                        "is_repeated": False,
                     }
                 ],
                 "contains_ocr": contains_ocr,
@@ -59,7 +69,9 @@ def test_evidence_assembler_uses_original_text_and_hard_budget() -> None:
     assert len(bundle.items) == 1
     assert bundle.items[0].evidence_id == "E1"
     assert bundle.items[0].text == "原始证据"
+    assert bundle.items[0].source_spans[0].end_char == len("原始证据")
     assert "标题" not in bundle.rendered_json
+    assert "source_spans" not in bundle.rendered_json
     assert (
         Utf8TokenCounter().count(bundle.rendered_json)
         <= bundle.token_count
@@ -108,3 +120,24 @@ def test_evidence_assembler_quarantines_prompt_injection() -> None:
 
     assert bundle.items == ()
     assert bundle.quarantined_chunk_ids == ("chunk-injection",)
+
+
+def test_evidence_assembler_rejects_missing_source_spans() -> None:
+    ranked = _ranked("chunk-invalid", "原始证据")
+    ranked.hit.payload.pop("source_spans")
+
+    assembler = EvidenceAssembler(
+        Utf8TokenCounter(),
+        EvidenceConfig(
+            max_evidence_tokens=1000,
+            max_items=2,
+            low_ocr_threshold=0.8,
+        ),
+    )
+
+    try:
+        assembler.assemble((ranked,))
+    except ValueError as error:
+        assert "source_spans" in str(error)
+    else:
+        raise AssertionError("缺少 source_spans 必须失败关闭。")

@@ -4,7 +4,13 @@ from pathlib import Path
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
-from rag_app.contracts import Chunk, ElementKind, Locator
+from rag_app.contracts import (
+    Chunk,
+    ChunkRole,
+    ChunkSourceSpan,
+    ElementKind,
+    Locator,
+)
 from rag_app.index import (
     IndexCoordinator,
     IndexedChunk,
@@ -37,6 +43,7 @@ def _indexed_chunk(
         file_path="规范.docx",
         heading_path=("总则",),
         paragraph_index=1,
+        segment_index=1,
         fragment=text,
     )
     chunk = Chunk(
@@ -44,6 +51,19 @@ def _indexed_chunk(
         source_id=_SOURCE_ID,
         doc_version="sha256:" + version_hex * 64,
         pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id="element-indexed",
+                locator=locator,
+                start_char=0,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(text),
+            ),
+        ),
         text=text,
         embedding_text=f"总则\n{text}",
         element_kind=ElementKind.PARAGRAPH,
@@ -72,21 +92,34 @@ def _version_chunk(
     *,
     chunk_id: str = "chunk_shared",
 ) -> IndexedChunk:
+    locator = Locator(
+        file_path=version.source_path,
+        paragraph_index=1,
+        segment_index=1,
+        fragment=text,
+    )
     chunk = Chunk(
         chunk_id=chunk_id,
         source_id=version.source_id,
         doc_version=version.doc_version,
         pipeline_fingerprint=version.pipeline_fingerprint,
+        section_id="section_" + "a" * 32,
+        neighbor_group_id="group_" + "b" * 32,
+        chunk_role=ChunkRole.TEXT,
+        source_spans=(
+            ChunkSourceSpan(
+                element_id="element-version",
+                locator=locator,
+                start_char=0,
+                end_char=len(text),
+                source_start_char=0,
+                source_end_char=len(text),
+            ),
+        ),
         text=text,
         embedding_text=text,
         element_kind=ElementKind.PARAGRAPH,
-        locators=(
-            Locator(
-                file_path=version.source_path,
-                paragraph_index=1,
-                fragment=text,
-            ),
-        ),
+        locators=(locator,),
         content_sha256=version.content_sha256,
         document_status="active",
         authority_level="official",
@@ -117,6 +150,9 @@ def test_real_qdrant_staging_activation_and_failure_cleanup() -> None:
     )
     try:
         index.create_collection()
+        info = client.get_collection(collection)
+        assert info.config.metadata is not None
+        assert info.config.metadata["payload_schema_version"] == "2"
         index.stage_chunks(
             [
                 _indexed_chunk("a", "旧版本证据一", 1),
@@ -134,6 +170,12 @@ def test_real_qdrant_staging_activation_and_failure_cleanup() -> None:
         index.activate_source_version(_SOURCE_ID, "sha256:" + "a" * 64)
 
         active = index.query_dense([1.0] + [0.0] * 1023, limit=10)
+        assert active[0].payload["section_id"] == "section_" + "a" * 32
+        assert active[0].payload["neighbor_group_id"] == "group_" + "b" * 32
+        assert active[0].payload["chunk_role"] == "text"
+        assert active[0].payload["source_spans"][0]["element_id"] == (
+            "element-indexed"
+        )
         assert {item.payload["text"] for item in active} == {
             "旧版本证据一",
             "旧版本证据二",
@@ -290,6 +332,12 @@ def test_coordinator_is_idempotent_and_preserves_old_on_failure(
             renamed_points[0].payload["locators"][0]["file_path"]
             == "新规范.docx"
         )
+        assert (
+            renamed_points[0].payload["source_spans"][0]["locator"][
+                "file_path"
+            ]
+            == "新规范.docx"
+        )
 
         failed_job = state.create_job(
             idempotency_key="incremental:failed-update",
@@ -328,6 +376,105 @@ def test_coordinator_is_idempotent_and_preserves_old_on_failure(
         ) == []
         assert state.list_active_sources() == ()
     finally:
+        if client.collection_exists(collection):
+            client.delete_collection(collection)
+
+
+def test_real_qdrant_rejects_collection_without_payload_schema_v2() -> None:
+    client = _client()
+    collection = f"rag-index-legacy-{uuid.uuid4().hex}"
+    try:
+        client.create_collection(
+            collection_name=collection,
+            vectors_config={
+                "dense": models.VectorParams(
+                    size=_DIMENSION,
+                    distance=models.Distance.COSINE,
+                )
+            },
+            sparse_vectors_config={
+                "bm25": models.SparseVectorParams(
+                    modifier=models.Modifier.IDF,
+                )
+            },
+            metadata={"pipeline_fingerprint": _PIPELINE_FINGERPRINT},
+        )
+        index = QdrantIndex(
+            client,
+            collection_name=collection,
+            dense_dimension=_DIMENSION,
+            pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        )
+
+        try:
+            index.require_compatible_collection()
+        except ValueError as error:
+            assert "payload schema" in str(error)
+        else:
+            raise AssertionError("缺少 payload schema v2 必须失败关闭。")
+    finally:
+        if client.collection_exists(collection):
+            client.delete_collection(collection)
+
+
+def test_alias_bound_runtime_rejects_old_payload_schema() -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    collection = f"rag-index-runtime-legacy-{suffix}"
+    alias = f"rag-index-runtime-alias-{suffix}"
+    try:
+        client.create_collection(
+            collection_name=collection,
+            vectors_config={
+                "dense": models.VectorParams(
+                    size=_DIMENSION,
+                    distance=models.Distance.COSINE,
+                )
+            },
+            sparse_vectors_config={
+                "bm25": models.SparseVectorParams(
+                    modifier=models.Modifier.IDF,
+                )
+            },
+            metadata={"pipeline_fingerprint": _PIPELINE_FINGERPRINT},
+        )
+        client.update_collection_aliases(
+            [
+                models.CreateAliasOperation(
+                    create_alias=models.CreateAlias(
+                        collection_name=collection,
+                        alias_name=alias,
+                    )
+                )
+            ]
+        )
+        runtime_index = QdrantIndex(
+            client,
+            collection_name=alias,
+            dense_dimension=_DIMENSION,
+            pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        )
+
+        try:
+            runtime_index.alias_target(alias)
+        except ValueError as error:
+            assert "payload schema" in str(error)
+        else:
+            raise AssertionError(
+                "runtime 绑定 alias 时必须拒绝旧 payload schema。"
+            )
+    finally:
+        aliases = {
+            item.alias_name for item in client.get_aliases().aliases
+        }
+        if alias in aliases:
+            client.update_collection_aliases(
+                [
+                    models.DeleteAliasOperation(
+                        delete_alias=models.DeleteAlias(alias_name=alias)
+                    )
+                ]
+            )
         if client.collection_exists(collection):
             client.delete_collection(collection)
 
