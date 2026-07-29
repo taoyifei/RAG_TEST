@@ -1523,3 +1523,197 @@
 - [x] README、公开分块设计、完整 PROGRESS/BLOCKED 作为最后的文档提交；
   白名单冲突、外部模型/OCR/EMF、自动编号和既有禁网偏差仍保留，不因 commit
   被标记为解除。
+
+## 2026-07-29 Query Trace v1 任务 0：事实基线
+
+- [x] Git 基线符合任务书：HEAD
+  `379210cbd16d36ebbca488014218847d5157e856`，tracked=188、
+  untracked=0、staged=0、完整 `git status --short` 为空；真实 Git index
+  SHA256 为
+  `b91d7c840ac124199364fe14097b742f86c6c0906b50f6a831a58da61ad005db`。
+- [x] 保护摘要未漂移：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`；
+  既有验收文件
+  `9e596c21953d3181992db3b4c96beb55d7d8c1ce368a0eea9b742a915105f6ab`。
+- [x] ignored/参考摘要未漂移：应用资产 8/8、OCR wheels 59/59、
+  OCR models 6/6 和 OCR 总清单均逐项 `OK`；参考仓库 HEAD/tree/tracked 聚合为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`，
+  status 为空。OCR 清单首次在错误目录执行导致 59 个 `FAILED open or read`；
+  更正到 `deployment/ocr/assets/wheelhouse` 后全部通过，未修改资产。
+- [x] 静态/发布基线退出 0：compileall、Ruff `All checks passed!`、
+  strict mypy `Success: no issues found in 82 source files`、Google docstring
+  `missing_google_sections=0`、shell syntax、Compose config、应用资产 SHA 和
+  `git diff --check`。临时 index release-safety 为 tracked_files=188、
+  violations=0，真实 index 前后 SHA 相同。
+- [x] 本地已有 `qdrant/qdrant:v1.18.3` amd64 镜像，以 `--pull never` 启动
+  `rag-trace-baseline-qdrant`；全量精确命令退出 0：
+  `292 passed, 35 warnings in 174.02s`、skipped=0，warning 类别未新增。
+- [x] 现有追踪调用点：`query_service.py` 生成 6 类 `StageEvent`，
+  `stream.py` 转发阶段/终态，`observability.py` 写 query_stage/query_outcome/
+  external_call/query_failed JSON，`app.py` 生成 32 位 trace ID，
+  `frontend/app.js` 仅展示阶段名与 `elapsed_ms`。
+- [x] 全仓搜索确认没有 `TraceStore`、持久 span、`parent_span_id`、Trace 查询
+  API、Debug 页面或 OTLP exporter；现有 `ExternalCallAudit` 只含净化前 endpoint、
+  retry_count 和累计秒数。
+- [x] 公开 ASCII 合成查询实际退出 0：事件顺序为 rewrite/retrieve/rerank/
+  assemble/validate/complete，累计 `elapsed_ms` 为 0/0/0/0/0/5；审计共 7 条，
+  终态 refused/NO_EVIDENCE。rerank `candidate_count=0` 实际来自 final hits；
+  rewrite/route/neighbor/evidence 无稳定详细 reason，失败日志只保留异常类型。
+  第一次内联脚本因缺 `PYTHONPATH` 退出 1，第二次因 PowerShell 中文转码触发替身
+  断言退出 1；显式 `PYTHONPATH` 并使用纯 ASCII 公开数据后通过。
+
+## 2026-07-29 Query Trace v1 顺序与风险（8 行）
+
+1. 先以严格枚举和 SQLite 外键冻结 Trace/Span/Decision/Artifact 持久契约。
+2. 再用单 writer 队列隔离普通查询降级与 FULL Debug fail-closed 语义。
+3. 在不改变算法返回值的前提下，为每一现有阶段增加观察器和稳定 reason code。
+4. 候选漏斗从各组件的现有确定性中间值复制，不重算、不改排序。
+5. 管理 API 只接受 admin token，并对 FULL、trace 归属、分页和过期严格校验。
+6. Debug 页面只用本地资源和 `textContent`，普通首页只显示可复制 trace ID。
+7. 最后用四条公开合成 Trace 证明回答、拒答、预算丢弃和 repair 可回溯。
+8. 最大风险是异步持久化不影响正常回答、FULL 容量原子准入和失败 span 尽力 flush。
+
+## 2026-07-29 Query Trace v1 任务 1：持久契约
+
+- [x] 红证据：新增 Trace model/store/recorder 契约测试后首次收集退出 1，
+  `3 errors in 0.11s`，三项均为
+  `ModuleNotFoundError: No module named 'rag_app.tracing'`；未放宽或删除测试。
+- [x] 实现严格枚举、独立 SQLite 四表、zlib 压缩 artifact 与 SHA256 复核、
+  FULL 72h/SAFE/DIAGNOSTIC 30d 到期删除、稳定倒序分页、单 Trace 5MiB 原始
+  artifact 硬上限、0600 数据库权限、单 writer 有界队列、关闭排空和 exporter
+  失败隔离；FULL 在 Store/队列不可用时于查询前 fail-closed，普通模式仅审计
+  `TRACE_CAPTURE_FAILED`。
+- [x] 首轮实现定向测试为 `2 failed, 7 passed`：一项错误假设短 zlib 结果必小于
+  原文，另一项错误构造了与期望不符的时间顺序；改为验证精确压缩字节数并修正
+  固定时间数据后，未改产品语义。最终定向门禁均退出 0：
+  `9 passed in 0.54s`、Ruff `All checks passed!`、mypy
+  `Success: no issues found in 9 source files`、compileall 无输出、
+  Google docstring `missing_google_sections=0`。
+
+## 2026-07-29 Query Trace v1 任务 2：Span 树与决策漏斗
+
+- [x] 不改变查询算法输出，给现有返回对象附加 `compare=False` 旁路诊断：
+  rewrite 的 8 个稳定 reason、路由逐规则命中数/覆盖率/阈值、dense/BM25
+  独立 raw rank/score、RRF contribution/score/rank、rerank input/scored/final
+  三个数量、neighbor 的 7 类接受/淘汰原因、evidence 的 5 类原因及
+  OCR/source-span/token 字段、首次 validation 与唯一 repair 关联。
+- [x] 每次启用 Trace 的查询建立 `rag.query` 根节点及 context/rewrite/route/
+  retrieve/embedding/各 Qdrant 通道/RRF/rerank/neighbor/evidence/answer/
+  validation/repair/publish 父子 span；span 保存独立 duration，原 StageEvent
+  `elapsed_ms` 继续保持外部 NDJSON 兼容，但日志和前端明确标为请求累计时间。
+  rerank 阶段事件已改为分别给出 input/scored/final，未再把 final hits 冒充
+  candidate count。
+- [x] SAFE/DIAGNOSTIC 不落业务原文；DIAGNOSTIC 仍保存完整候选 rank/score/
+  reason；FULL 用独立压缩 artifact 保存准确 context/rewrite/retrieval/
+  rerank/evidence/Prompt/原始模型输出/validation/final，显式排除向量、二进制、
+  image/OCR base64 和凭据。查询异常关闭活动 span，根记录保存稳定
+  `failure_stage`/error code，前序 span 与漏斗不丢失。
+- [x] 首次组合命令因 120 秒上限退出 124、没有产出断言摘要；拆分单测确认两条
+  Trace pipeline 测试各自约 1 秒通过，随后同一真实 Qdrant 容器下定向回归退出
+  0：`56 passed, 2 warnings in 8.34s`。额外 mypy 定向检查为
+  `Success: no issues found in 17 source files`；两类 warning 均为任务 0 已有
+  TestClient/httpx2 与 HTTP API-key 类别。
+
+## 2026-07-29 Query Trace v1 任务 3：管理员 API
+
+- [x] 新增仅 admin token 可用的 FULL Debug Chat、Trace 分页/过滤、详情、
+  trace 绑定 artifact 和 canonical export；query token 对五类管理员入口均
+  401，所有管理响应均 `Cache-Control: no-store`。
+- [x] FULL Debug 在查询提交前检查 recorder、Store 和队列；关闭真实 Store 后
+  实测 HTTP 503 且 query `debug_calls=0`。跨 Trace artifact 返回 404，到期
+  artifact 返回 410；详情只内联 artifact metadata，完整 payload 必须走绑定
+  读取接口。
+- [x] API/原 chat/Trace pipeline 定向回归退出 0：
+  `13 passed, 1 warning in 2.69s`；管理员 list/detail/artifact/export 均用
+  真实 SQLite，未 mock 持久化或鉴权。
+
+## 2026-07-29 Query Trace v1 任务 4：本地 Debug 页面
+
+- [x] 新增 `/debug/` 及本地 CSS/JS：列表筛选分页、诊断摘要、父子 waterfall、
+  候选漏斗、artifact 输入输出、chunk/expected chunk 浏览器内诊断均不依赖
+  日志；业务内容只通过 `textContent`/DOM 节点展示，无 `innerHTML`、CDN、
+  远程字体或第三方库。
+- [x] 普通首页新增可复制 trace ID，并把阶段毫秒明确显示为“请求累计”；
+  query token 仍无 FULL Trace 读取入口。前端静态反测通过，`/debug/` 与本地
+  `debug.js` 均 HTTP 200；本环境没有 `node`，额外 `node --check` 退出 127，
+  该命令不属于任务书门禁，最终仍由前端源规则测试和 HTTP 验收覆盖。
+- [x] 更新 `deployment/ASSETS.sha256` 纳入 6 个前端文件；新 SHA 均由实际
+  `sha256sum` 输出生成，待最终 11/11 资产门禁复核。
+
+## 2026-07-29 Query Trace v1 任务 5：可插拔导出边界
+
+- [x] 新增无第三方依赖的 `TraceExporter` Protocol 和默认
+  `NullTraceExporter`；导出发生在 Trace 终态持久化之后，异常只记录
+  `TRACE_EXPORT_FAILED`，不会回滚 Store 或影响查询。
+- [x] `design/public/trace-observability.md` 已固定内容边界、安全边界、
+  SQLite 生命周期、失败语义和后续 OTel/Phoenix 映射；当前没有增加 SDK、
+  服务、镜像或依赖。生产 evaluator 目录对 `rag_app.tracing`、`TraceStore`、
+  `TraceExporter` 和 `trace_database` 的源扫描结果为 0。
+
+## 2026-07-29 Query Trace v1 任务 6：反向测试与最终验收
+
+- [x] 公开合成 SQLite 实际写入并读回 4 条 Trace：正常回答为 `ANSWERED` 且有
+  4 阶段候选决策；无召回为 `REFUSED/RETRIEVAL_EMPTY`；预算丢弃为
+  `TOKEN_BUDGET`；首次校验失败后存在 `REPAIR_OK` 子 span。两条 FULL Trace
+  各有 1 个压缩 artifact，摘要不含问题或正文。
+- [x] 反向测试覆盖 SAFE/DIAGNOSTIC/FULL 内容边界、query/admin 鉴权、跨 Trace
+  404、过期 410、普通 Store 故障结果不变、FULL 预检 503 且查询未执行、队列满、
+  artifact 超限不截断且不使回答失败、TTL/prune、失败 span、独立阶段耗时、
+  rerank 三类数量、rewrite/route/neighbor/evidence reason、唯一 repair、
+  secret/向量/OCR base64 净化、Trace 开关结果不变、前端无远程资源/innerHTML、
+  writer 关闭和 export 不进入 evaluator。
+- [x] 最终父子时间反测先在完整验收第 2 轮暴露亚毫秒壁钟/单调时钟偏移：
+  `1 failed, 322 passed, 35 warnings in 154.99s`；改为同一壁钟区间向上取整后，
+  定向回归为 `11 passed in 2.19s`。最终第 3 轮为
+  `323 passed, 35 warnings in 154.08s`、skipped=0；高于任务 0 的 292 项基线，
+  warning 数量和类别未新增，按上限不再发起第 4 轮。
+- [x] 最终静态门禁均退出 0：compileall 无输出、Ruff
+  `All checks passed!`、mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment shell、Compose config、
+  `git diff --check`；应用资产更新后为 11/11 `OK`。
+- [x] 临时 Git index 纳入全部候选后 release-safety 为
+  tracked_files=204、binary/large/local-path/private-network/private-path/
+  secret/总 violations 全为 0；真实 index 前后 SHA256 均为
+  `b91d7c840ac124199364fe14097b742f86c6c0906b50f6a831a58da61ad005db`。
+  当前 49 个变更条目全部命中任务白名单。
+- [x] 保护摘要终检未漂移：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts 保持已阻塞值
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`；
+  既有验收文件
+  `9e596c21953d3181992db3b4c96beb55d7d8c1ce368a0eea9b742a915105f6ab`。
+- [x] ignored OCR wheels 59/59、models 6/6、总清单 69/69 和冻结集 1/1 均为
+  `OK`。wheels 首次使用错误相对层级而退出 1，改为
+  `../../WHEELS.sha256` 后全绿，未修改资产。参考仓库保持 HEAD/tree/tracked
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`，
+  status 为空。
+- [x] 本轮真实 Qdrant 测试容器 `rag-trace-baseline-qdrant` 无挂载，已精确删除，
+  remaining=0；没有删除镜像、卷或共享数据。本轮未联网、未 build/save/package，
+  未访问 `.57/.58/.60`，`BLOCKED.md` 继续保留外部验收项。
+
+## 2026-07-29 后续授权：Query Trace v1 本地提交
+
+- [x] 用户在验收后明确要求“按要求 commit”，覆盖任务书原先“不 commit”的结束
+  状态；授权仅扩展到本地提交，没有据此 push 或联网复核远端。
+- [x] 按功能边界和仓库 Conventional Commits 拆分，逐个执行 staged
+  `git diff --check`，且每个提交新增+删除均小于 2000 行：
+  - `5dfc41b`：Trace model/reason/SQLite Store 契约，1818 行；
+  - `800be82`：单 writer recorder、exporter 与四类合成 Trace，1432 行；
+  - `045d133`：rewrite/retrieval/rerank/neighbor/evidence 决策漏斗，1357 行；
+  - `958b578`：查询 span、失败路径与 Trace 开关不变性，1636 行；
+  - `cff53e7`：管理员 API、运行时接线和本地 Debug 页面，1354 行。
+- [x] README、公开可观测性设计、部署说明、完整 PROGRESS/BLOCKED 作为单独文档
+  提交；所有外部模型、OCR/GPU/EMF、自动编号、chat-template、旧 artifacts 和
+  服务器负载项继续保留，没有因提交而标记为解除。

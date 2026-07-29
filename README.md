@@ -7,7 +7,7 @@ PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
 ## 主要组成
 
 - `src/rag_app/`：安全 DOCX 解析、稳定 ID、SQLite 任务状态、Qdrant 索引、
-  检索/重排/严格引用回答、API 与独立 PaddleOCR 客户端和服务。
+  检索/重排/严格引用回答、独立 Query Trace、API 与 PaddleOCR 客户端和服务。
 - `evaluation/`：人工冻结集 schema、独立活动证据 manifest 校验和指标计算。
 - `scripts/`：输入审计、负载/检索基准、发布安全扫描及 OCR 资产装配。
 - `deployment/`：应用、Qdrant、单 GPU OCR 的离线 Compose 和恢复脚本。
@@ -82,6 +82,12 @@ rm -f "$temporary_index"
 
 不得把含 `__pycache__/`、`.pyc` 或 `.pyo` 的审查 ZIP 当作发布源码包；
 Git 候选、Docker build context 和发布源码清单也必须排除这些文件。
+
+普通问答继续使用 query token；`/debug/`、`/api/admin/debug/chat` 和
+`/api/admin/traces*` 只使用 admin token。Trace 使用
+`RAG_TRACE_DATABASE` 独立 SQLite，普通模式由 `RAG_TRACE_MODE=SAFE` 或
+`DIAGNOSTIC` 配置，query token 不能开启 FULL。内容边界、TTL、失败语义和
+OTLP/Phoenix 预留见 `design/public/trace-observability.md`。
 
 资产装配见 `design/public/asset-assembly.md`，联网 WSL 到服务器回滚的
 完整流程见 `design/public/offline-build-and-server-deployment.md`；

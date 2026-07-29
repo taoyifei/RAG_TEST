@@ -11,7 +11,8 @@
 2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；环境文件保存在
    `/data/tyf/RAG/shared/env/rag.env`。
 3. 设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
-   mount 路径和 OCR 使用的宿主 GPU ID。
+   mount 路径、`RAG_RELEASE_REVISION`、普通查询 `RAG_TRACE_MODE` 和 OCR
+   使用的宿主 GPU ID。
 4. 执行 `bash verify-offline.sh`。
 5. 执行 `bash deploy.sh /data/tyf/RAG/shared/env/rag.env`；脚本先校验，
    再按白名单 `docker load`，最后运行
@@ -29,6 +30,13 @@
    ```
 7. `/ready` 只有在检索参数冻结、活动索引与 manifest 一致且模型健康时返回
    200。通过管理 API 创建全量任务，由单个 `rag-worker` 串行执行。
+
+应用把 Query Trace 单独写入 `/state/traces.sqlite3`；它随现有 state bind
+mount 持久化，但不与任务或 manifest 表共库。管理员通过 `/debug/` 和
+`/api/admin/traces*` 查询，FULL Debug 仅走 admin token。Trace Store 不加入
+RAG readiness：普通查询捕获失败继续回答，显式 FULL Debug 则在执行前返回
+503。详细内容边界与 72 小时/30 天保留策略见
+`design/public/trace-observability.md`。
 
 执行 `bash rollback.sh /data/tyf/RAG/shared/env/rag.env` 可切回部署前记录的
 应用、OCR 和 Qdrant 镜像 ID；脚本保留 SQLite/Qdrant bind mount。索引数据

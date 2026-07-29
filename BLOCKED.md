@@ -1,6 +1,6 @@
 # 阻塞项
 
-## P0：`evaluation/metrics.py` 与功能白名单存在不可同时满足的硬约束
+## 已解决的任务边界偏差：`evaluation/metrics.py`
 
 - 本目标一方面只列出 `evaluation/{active_state.py,evaluate.py,
   chunking_experiment.py,chunking_ablation.py}` 为功能改动白名单，未列出
@@ -12,9 +12,8 @@
 - 当前保留 18 行最小必要 diff：删除该类型/loader 的导入导出与 `isinstance`
   伪边界，改收现场 `ActiveEvidenceManifest`，并让 schema v2 的任一真实 locator
   可参与引用匹配。没有借此修改指标、阈值或冻结集。
-- 中途无人可问，故不能自行扩大白名单；本轮继续完成全部独立验收，但最终不能
-  声称“范围外实现=0”。解除条件是用户明确把 `evaluation/metrics.py` 加入白名单，
-  或撤销“删除 TrustedActiveEvidence”硬要求并重新定义可信边界。
+- 2026-07-29 Query Trace v1 任务书明确批准上一轮 18 行最小必要改动；
+  该偏差不再是产品 P0，也不需要恢复。历史原因和最小 diff 仍保留在此供审计。
 
 ## P0：retrieval chunking 消融缺少真实模型与 tuning 文档键映射
 
@@ -38,16 +37,16 @@
   cross_chunk/table/numeric 的 Recall@5/10/20、MRR、rerank Recall@5；定参只看
   tuning，最终 holdout 另行一次性验收。
 
-## 2026-07-29 任务 0 边界偏差：恢复检查已发生一次联网读取
+## 历史审计：2026-07-29 恢复检查发生一次联网读取
 
 - 新任务书要求本轮不联网；恢复上一条“推送到新仓库”请求时，读取任务书和
   Git 状态被并行执行，其中
   `env GIT_TERMINAL_PROMPT=0 git ls-remote origin` 已实际联网并退出 0，
   返回 `HEAD` 与 `refs/heads/main` 均为
   `4fe7b26164e6ad1ee6b1f8477beed0473f7d49fe`。
-- 当前本地 `main` 已跟踪 `origin/main`，远端提交发生在本目标开始前或恢复
-  边界；本目标开始后未执行 push。由于只读联网已经发生，完成条件中的
-  “本轮没有联网”无法再按字面成立；后续禁止任何网络调用，继续所有不受影响项。
+- 当前本地 `main` 已跟踪 `origin/main`，远端提交发生在上一目标开始前或恢复
+  边界；未执行 push。Query Trace v1 任务书明确要求该事实继续保留审计，但不再
+  作为产品阻塞；本轮没有再次联网。
 
 ## 2026-07-28 新目标任务 0 基线不一致
 
