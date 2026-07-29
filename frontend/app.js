@@ -7,6 +7,8 @@ const clearButton = document.querySelector("#clear");
 const stageList = document.querySelector("#stages");
 const answerNode = document.querySelector("#answer");
 const citationsNode = document.querySelector("#citations");
+const traceIdNode = document.querySelector("#trace-id");
+const copyTraceButton = document.querySelector("#copy-trace");
 const usefulButton = document.querySelector("#feedback-useful");
 const notUsefulButton = document.querySelector("#feedback-not-useful");
 const conversationId = crypto.randomUUID();
@@ -21,18 +23,22 @@ function resetOutput() {
   citationsNode.replaceChildren();
   answerNode.textContent = "正在处理。";
   currentTraceId = null;
+  traceIdNode.textContent = "尚无";
+  copyTraceButton.disabled = true;
   usefulButton.disabled = true;
   notUsefulButton.disabled = true;
 }
 
 function renderStage(event) {
   const item = document.createElement("li");
-  item.textContent = `${event.stage} · ${event.elapsed_ms} ms`;
+  item.textContent = `${event.stage} · 请求累计 ${event.elapsed_ms} ms`;
   stageList.append(item);
 }
 
 function renderFinal(event) {
   currentTraceId = event.trace_id;
+  traceIdNode.textContent = event.trace_id;
+  copyTraceButton.disabled = false;
   usefulButton.disabled = false;
   notUsefulButton.disabled = false;
   answerNode.textContent =
@@ -136,6 +142,8 @@ clearButton.addEventListener("click", async () => {
     citationsNode.replaceChildren();
     answerNode.textContent = "会话已清空。";
     currentTraceId = null;
+    traceIdNode.textContent = "尚无";
+    copyTraceButton.disabled = true;
     usefulButton.disabled = true;
     notUsefulButton.disabled = true;
   } else {
@@ -145,3 +153,8 @@ clearButton.addEventListener("click", async () => {
 
 usefulButton.addEventListener("click", () => submitFeedback(true));
 notUsefulButton.addEventListener("click", () => submitFeedback(false));
+copyTraceButton.addEventListener("click", async () => {
+  if (currentTraceId !== null) {
+    await navigator.clipboard.writeText(currentTraceId);
+  }
+});

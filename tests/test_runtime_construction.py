@@ -79,6 +79,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         qdrant_alias="rag-active",
         state_database=tmp_path / "state.sqlite3",
         manifest_database=tmp_path / "manifest.sqlite3",
+        trace_database=tmp_path / "traces.sqlite3",
         pipeline_path=root / "deployment/config/pipeline.json",
         retrieval_path=root / "deployment/config/retrieval.json",
         corpus_policy_path=root / "deployment/config/corpus-policy.json",

@@ -84,6 +84,9 @@ services:
       RAG_QDRANT_ALIAS: ${RAG_QDRANT_ALIAS:-rag-docx-active}
       RAG_STATE_DATABASE: /state/state.sqlite3
       RAG_MANIFEST_DATABASE: /state/manifest.sqlite3
+      RAG_TRACE_DATABASE: /state/traces.sqlite3
+      RAG_RELEASE_REVISION: ${RAG_RELEASE_REVISION:-0.1.0}
+      RAG_TRACE_MODE: ${RAG_TRACE_MODE:-SAFE}
       RAG_PIPELINE_PATH: /app/deployment/config/pipeline.json
       RAG_RETRIEVAL_PATH: /app/deployment/config/retrieval.json
       RAG_FRONTEND_DIR: /app/frontend
@@ -148,6 +151,9 @@ services:
       RAG_QDRANT_ALIAS: ${RAG_QDRANT_ALIAS:-rag-docx-active}
       RAG_STATE_DATABASE: /state/state.sqlite3
       RAG_MANIFEST_DATABASE: /state/manifest.sqlite3
+      RAG_TRACE_DATABASE: /state/traces.sqlite3
+      RAG_RELEASE_REVISION: ${RAG_RELEASE_REVISION:-0.1.0}
+      RAG_TRACE_MODE: ${RAG_TRACE_MODE:-SAFE}
       RAG_PIPELINE_PATH: /app/deployment/config/pipeline.json
       RAG_RETRIEVAL_PATH: /app/deployment/config/retrieval.json
       RAG_FRONTEND_DIR: /app/frontend

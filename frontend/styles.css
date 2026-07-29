@@ -96,3 +96,14 @@ button:disabled {
 .citation code {
   overflow-wrap: anywhere;
 }
+
+.trace-reference {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.trace-reference code {
+  overflow-wrap: anywhere;
+}

@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -57,10 +58,14 @@ from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
 from rag_app.strict_json import load_json_file
+from rag_app.tracing.models import TraceIdentity, TraceMode
+from rag_app.tracing.recorder import TraceRecorder
+from rag_app.tracing.store import TraceStore
 
 __all__ = ["RuntimeBundle", "build_runtime", "load_pipeline"]
 
 _PIPELINE_CONFIG_FIELDS = frozenset(PipelineSpec.model_fields)
+_PAYLOAD_SCHEMA_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -73,6 +78,7 @@ class RuntimeBundle:
     http_clients: tuple[httpx.Client, ...]
     readiness: ReadinessService
     query_executor: QueryExecutor
+    trace_recorder: TraceRecorder
     _close_lock: threading.Lock = field(
         default_factory=threading.Lock,
         init=False,
@@ -99,6 +105,7 @@ class RuntimeBundle:
             for client in reversed(self.http_clients):
                 close_stack.callback(client.close)
             close_stack.callback(self.readiness.close)
+            close_stack.callback(self.trace_recorder.close)
             close_stack.callback(self.query_executor.close)
 
 
@@ -245,6 +252,21 @@ def _assemble_runtime(
     jobs.initialize()
     feedback = FeedbackStore(settings.state_database)
     feedback.initialize()
+    logger = StructuredAuditLogger(
+        logging.getLogger("rag_app.audit"),
+        fingerprint,
+        serving_fingerprint,
+    )
+    trace_store = TraceStore(settings.trace_database)
+    trace_store.initialize()
+    trace_recorder = TraceRecorder(
+        trace_store,
+        audit_failure=lambda trace_id, code: logger.trace_failure(
+            trace_id,
+            code.value,
+        ),
+    )
+    rollback.callback(trace_recorder.close)
     query = _build_query_service(
         retrieval=retrieval,
         parts=_QueryParts(
@@ -255,6 +277,14 @@ def _assemble_runtime(
             token_counter=token_counter,
             conversations=conversations,
         ),
+        trace_recorder=trace_recorder,
+        trace_identity=lambda: _trace_identity(
+            manifests,
+            pipeline_fingerprint=fingerprint,
+            serving_fingerprint=serving_fingerprint,
+            release_revision=settings.release_revision,
+        ),
+        default_trace_mode=settings.trace_mode,
     )
     readiness = ReadinessService(
         (
@@ -292,11 +322,6 @@ def _assemble_runtime(
     rollback.callback(readiness.close)
     query_executor = QueryExecutor()
     rollback.callback(query_executor.close)
-    logger = StructuredAuditLogger(
-        logging.getLogger("rag_app.audit"),
-        fingerprint,
-        serving_fingerprint,
-    )
     app = create_app(
         ApiServices(
             readiness=readiness,
@@ -310,6 +335,8 @@ def _assemble_runtime(
             pipeline_fingerprint=fingerprint,
             frontend_dir=settings.frontend_dir,
             audit=logger,
+            trace_store=trace_store,
+            trace_recorder=trace_recorder,
         )
     )
     readiness.start()
@@ -320,6 +347,7 @@ def _assemble_runtime(
         http_clients=clients,
         readiness=readiness,
         query_executor=query_executor,
+        trace_recorder=trace_recorder,
     )
 
 
@@ -327,6 +355,9 @@ def _build_query_service(
     *,
     retrieval: RetrievalSettings,
     parts: _QueryParts,
+    trace_recorder: TraceRecorder,
+    trace_identity: Callable[[], TraceIdentity],
+    default_trace_mode: TraceMode,
 ) -> QueryService:
     bm25 = QdrantBm25Encoder(
         tokenizer=retrieval.bm25_tokenizer,
@@ -408,7 +439,10 @@ def _build_query_service(
             ),
             assembler=assembler,
             answerer=answerer,
-        )
+        ),
+        trace_recorder=trace_recorder,
+        trace_identity=trace_identity,
+        default_trace_mode=default_trace_mode,
     )
 
 
@@ -498,6 +532,26 @@ def _secret(value: object) -> str | None:
         return None
     secret = get_secret_value()
     return secret if isinstance(secret, str) and secret else None
+
+
+def _trace_identity(
+    manifests: ManifestRepository,
+    *,
+    pipeline_fingerprint: str,
+    serving_fingerprint: str,
+    release_revision: str,
+) -> TraceIdentity:
+    active = manifests.get_active()
+    if active is None:
+        raise ValueError("Trace 无法绑定活动 index manifest。")
+    return TraceIdentity(
+        pipeline_fingerprint=pipeline_fingerprint,
+        serving_fingerprint=serving_fingerprint,
+        release_revision=release_revision,
+        active_collection=active.manifest.collection_name,
+        index_manifest_sha256=active.manifest_sha256,
+        payload_schema_version=_PAYLOAD_SCHEMA_VERSION,
+    )
 
 
 def _validate_runtime_contract(

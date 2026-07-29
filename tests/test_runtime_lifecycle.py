@@ -13,6 +13,7 @@ from rag_app.query_executor import QueryExecutor
 from rag_app.runtime import RuntimeBundle
 from rag_app.settings import RuntimeSettings
 from rag_app.state import StateStore
+from rag_app.tracing.recorder import TraceRecorder
 from rag_app.worker_runtime import WorkerRuntimeBundle
 
 
@@ -44,6 +45,10 @@ def test_runtime_close_drains_executor_before_network_and_is_idempotent(
             QueryExecutor,
             _Closable("executor", calls),
         ),
+        trace_recorder=cast(
+            TraceRecorder,
+            _Closable("trace", calls),
+        ),
     )
 
     bundle.close()
@@ -51,6 +56,7 @@ def test_runtime_close_drains_executor_before_network_and_is_idempotent(
 
     assert calls == [
         "executor",
+        "trace",
         "readiness",
         "http-1",
         "http-2",
@@ -102,6 +108,10 @@ def test_runtime_waits_for_active_query_before_closing_network() -> None:
             _Closable("readiness", calls),
         ),
         query_executor=executor,
+        trace_recorder=cast(
+            TraceRecorder,
+            _Closable("trace", calls),
+        ),
     )
 
     with ThreadPoolExecutor(max_workers=1) as caller:
@@ -112,4 +122,4 @@ def test_runtime_waits_for_active_query_before_closing_network() -> None:
         release.set()
         closing.result(timeout=1)
 
-    assert calls == ["readiness", "http", "qdrant"]
+    assert calls == ["trace", "readiness", "http", "qdrant"]

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Query Trace 管理</title>
+    <link rel="stylesheet" href="/assets/debug.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">DOCX RAG 管理诊断</p>
+        <h1>Query Trace v1</h1>
+      </div>
+      <label>
+        管理令牌
+        <input id="admin-token" type="password" autocomplete="off">
+      </label>
+    </header>
+    <main>
+      <section>
+        <h2>Trace 列表</h2>
+        <div class="filters">
+          <label>Trace ID <input id="filter-trace" maxlength="32"></label>
+          <label>
+            状态
+            <select id="filter-status">
+              <option value="">全部</option>
+              <option>ANSWERED</option>
+              <option>REFUSED</option>
+              <option>FAILED</option>
+              <option>CANCELLED</option>
+            </select>
+          </label>
+          <label>拒答码 <input id="filter-refusal"></label>
+          <label>错误码 <input id="filter-error"></label>
+          <button id="load-list" type="button">查询</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Trace ID</th><th>时间</th><th>总耗时</th>
+                <th>状态</th><th>拒答/错误</th><th>FULL</th><th>反馈</th>
+              </tr>
+            </thead>
+            <tbody id="trace-list"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button id="previous-page" type="button">上一页</button>
+          <span id="page-state">第 1 页</span>
+          <button id="next-page" type="button">下一页</button>
+        </div>
+      </section>
+
+      <section id="detail-section" hidden>
+        <div class="detail-heading">
+          <div>
+            <h2>Trace 详情</h2>
+            <code id="selected-trace"></code>
+          </div>
+          <a id="export-link" href="#">导出 canonical JSON</a>
+        </div>
+        <div id="diagnostic" class="diagnostic"></div>
+        <label>
+          Expected chunk ID（仅当前浏览器会话）
+          <input id="expected-chunk">
+        </label>
+        <p id="expected-diagnosis"></p>
+
+        <h3>树形 waterfall</h3>
+        <div id="waterfall" class="waterfall"></div>
+
+        <h3>候选漏斗</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>阶段</th><th>Chunk</th><th>选中</th>
+                <th>原因</th><th>rank / score / metadata</th>
+              </tr>
+            </thead>
+            <tbody id="funnel"></tbody>
+          </table>
+        </div>
+
+        <h3>输入输出</h3>
+        <nav id="artifact-tabs" class="tabs" aria-label="Trace 输入输出"></nav>
+        <pre id="artifact-content">选择一个标签读取完整 artifact。</pre>
+
+        <h3>Chunk 详情</h3>
+        <label>Chunk ID <input id="chunk-id"></label>
+        <pre id="chunk-detail">输入 chunk ID 查看候选和 artifact 中的定位信息。</pre>
+      </section>
+      <p id="error" role="alert"></p>
+    </main>
+    <script src="/assets/debug.js" defer></script>
+  </body>
+</html>

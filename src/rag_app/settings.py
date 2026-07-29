@@ -20,6 +20,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_app.contracts import AuthorityLevel, DocumentStatus, PipelineSpec
 from rag_app.strict_json import load_json_file
+from rag_app.tracing.models import TraceMode
 
 __all__ = [
     "ConfigurationState",
@@ -245,6 +246,9 @@ class RuntimeSettings(BaseSettings):
     qdrant_alias: str = Field(min_length=1, max_length=128)
     state_database: Path
     manifest_database: Path
+    trace_database: Path = Path("/state/traces.sqlite3")
+    trace_mode: TraceMode = TraceMode.SAFE
+    release_revision: str = Field(default="0.1.0", min_length=1)
     pipeline_path: Path
     retrieval_path: Path
     corpus_policy_path: Path = Path(
