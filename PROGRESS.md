@@ -1959,3 +1959,162 @@
   `src/rag_app/tracing/**` 或既有 Query Trace 测试的白名单授权，而任务书同时
   禁止扩大范围并限制完整验收最多三轮。连续三回合均为同一不可绕过阻塞，
   当前没有剩余的范围内工作可以使该完成条件成立。
+
+## 2026-07-29 合并后剩余阻塞任务 0：事实基线
+
+- [x] 新任务授权后的 HEAD 为预期
+  `4a8d4292d4aa2ef052a617c457f91c959c583f0e`；工作树为空，
+  tracked=211、modified/untracked/deleted/staged 均为 0；真实 index SHA 为
+  `9e780b9c89ac6e36c72c595ed2fa67dc575a46b81bfa46835c7735256a407ce1`。
+- [x] 保护摘要仍为 docs `36c67e3…`、artifacts `220473c6…`、frozen
+  `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；参考
+  HEAD/tree/tracked 仍为 `03d51db2…` / `84a0a960…` / `44254dff…`，
+  参考工作树为空。
+- [x] compileall 无输出、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`；全部 Shell、默认/profile Compose、
+  11/11 资产和 `git diff --check` 均退出 0。
+- [x] 临时 index release-safety 为 `tracked_files=211`、
+  `violations=0`；真实 index 前后 SHA 相同，临时 index 已删除。
+- [x] 第 1 次可判定全量红基线为
+  `1 failed, 367 passed, 36 warnings in 158.56s`；唯一失败是
+  `test_safe_trace_has_complete_tree_without_business_artifacts`。失败发生在
+  `recorder.close()` 前，非 daemon writer 使 pytest 摘要后等待；精确 SIGINT
+  清理了本轮 PID，未删除或修改测试。
+- [x] 调用点与预期一致：package 直接比较 Qdrant `.Id`/registry digest；
+  rollback 对来源 digest 作同一假设；deploy 不处理 worker；rollback 仅有
+  `restore_metadata`；backup 未读 `.State.Health.Status`；Compose 和 env
+  仍允许 release/image `0.1.0` 默认值。
+
+## 2026-07-29 合并后剩余阻塞：执行顺序与最大风险
+
+1. 先建立单一 Trace timeline，稳定 200 次原失败用例并消除 writer 残留。
+2. 再拆分 RepoDigest/image ID，同时收紧 40 位 release revision。
+3. 之后实现 deploy 的 worker/核心/元数据完整失败补偿。
+4. 在 deploy 记录的 worker 状态基础上实现 rollback 双目标联合补偿。
+5. 最后让 backup 严格按 Qdrant healthy→app live→worker running 恢复。
+6. 最大风险是 Shell 补偿的二次失败留下容器与 env/current 不一致。
+7. 次要风险是 Trace 外部 duration 超过父区间时破坏层级或结果不变性。
+8. 完整验收最多再使用两轮；不以重复运行碰时序运气。
+
+## 2026-07-29 合并后任务 1：Trace 单一时间轴
+
+- [x] 新增 `tests/test_trace_time_invariants.py` 后红测为 `8 failed`：
+  确定复现 wall clock 二次读取、父子结束倒挂、child 早于 parent、外部
+  duration 越界、关闭 parent 后仍可建 child，以及 Trace finish 早于根 span。
+- [x] `TraceSession` 现在以 `trace.created_at` 和一次 monotonic 读数冻结双锚点，
+  所有 span/根 Trace 时间均由同一 helper 毫秒向上量化；不再在
+  start/finish/completed 中调用 `datetime.now()`。
+- [x] 会话内记录父子和开闭状态；父关闭前要求后代已关闭并覆盖最大 finish，
+  关闭 parent 下创建 child 直接 `RuntimeError`。外部 duration 超出可用区间时
+  实际 span 被夹取，原值写入 `reported_duration_ms`。
+- [x] fake clock 覆盖 0ms、亚毫秒、整毫秒、wall clock 跳变、边界 child、
+  多层、失败和关闭父节点；200 次真实时钟合成查询证明树合法且 Trace 开关
+  不改变 QueryOutcome 或模型调用。
+- [x] 原始
+  `test_safe_trace_has_complete_tree_without_business_artifacts` 未修改断言，
+  连续调用 200 次为 `1 passed in 43.16s`。
+- [x] 合并 Trace 回归为 `13 passed in 67.90s`；专项 Ruff、mypy、
+  Google docstring 和 `git diff --check` 全绿。旧 Query Trace 阻塞已从
+  `BLOCKED.md` 删除。
+
+## 2026-07-29 合并后任务 2/6：Qdrant 双身份与 revision 契约
+
+- [x] package fake 改为 registry digest `0bd98f…` 与本地 image ID
+  `777777…` 刻意不同；连同新身份、Compose/env 和 RuntimeSettings 反测，
+  红基线为 `10 failed, 24 passed`。
+- [x] package 继续要求批准的完整输入引用，并新增 canonical
+  `RepoDigests` 精确包含检查；`.Id` 只校验合法格式并继续写入 Qdrant TSV。
+  错误 RepoDigest 在 SBOM/tag/save/正式输出前失败。
+- [x] rollback 保留并校验 `QDRANT_SOURCE_IMAGE` 来源记录，但实际本地身份改为
+  读取旧 release `IMAGE_ARCHIVES.tsv` 第三列；测试中的 source digest 与
+  image ID 已明确不同，不再直接比较两者。
+- [x] Compose 四个 image 表达式和两处 `RAG_RELEASE_REVISION` 均改为必填；
+  `.env.example` 删除 `0.1.0`，revision 改为 40 位 SHA 占位符。
+- [x] `RuntimeSettings.release_revision` 取消默认并严格匹配
+  `^[0-9a-f]{40}$`；缺失、短 SHA、大写和 `0.1.0` 均红，完整小写 40 位绿。
+  serving/pipeline fingerprint 代码与三份配置未改。
+- [x] 相关回归为 `56 passed, 1 warning in 4.41s`，package 合并回归
+  `16 passed`；专项 Ruff/mypy、三个 Shell、默认/profile Compose 和
+  `git diff --check` 全绿。
+- [x] deploy 的 revision/SOURCE_REVISION 错配在 load/up 前失败；fake 状态机
+  覆盖缺失、短 SHA、大写、`0.1.0`、合法但错配五种反测。
+
+## 2026-07-29 合并后任务 3：deploy worker 与失败事务
+
+- [x] fake 状态机红基线为 `9 failed, 2 passed`；实现后覆盖 worker 不存在、
+  停止、运行以及核心全有/全无/不完整集合，最终为 `17 passed in 2.17s`。
+- [x] 任何容器修改前保存旧 release、三核心实际 image ID 和
+  `ROLLBACK_WORKER_WAS_RUNNING`；运行 worker 必先停止并确认，新部署成功后
+  worker 保持停止，显式 index profile 契约未改。
+- [x] load、加载后 Qdrant ID 漂移、核心部分 up、ps、current rename 失败时，
+  使用旧 current Compose 和实际 image ID 恢复核心、worker、env、current；
+  类别稳定为 `DEPLOY_FAILED_RECOVERED`/`DEPLOY_FAILED_RECOVERY_FAILED`。
+- [x] 核心全无但孤立 worker 运行也已覆盖：成功时先停 worker，失败时删除
+  新建核心并以 `--no-deps` 恢复原 worker；没有 worker 时不会创建 worker。
+
+## 2026-07-29 合并后任务 4：rollback 运行时与元数据联合补偿
+
+- [x] rollback 严格读取且只读取 deploy 持久化的
+  `ROLLBACK_WORKER_WAS_RUNNING=true|false`，不再用调用时 worker 状态推断
+  回滚目标；缺失、重复、非布尔均在容器修改前失败。
+- [x] 旧 Compose up 前冻结调用时的新 release、原 env、三核心实际 image ID、
+  worker 存在/运行/image ID，分别构造 rollback target 和 compensation target。
+- [x] 旧 Compose 部分切换、镜像核验、`/live`、env/current 原子切换和持久复核
+  失败均恢复三核心、worker、env、current；补偿失败使用独立稳定 exit=70。
+- [x] 测试实际读取 fake container state，不只检查文件；运行 worker、无 worker、
+  核心镜像和元数据恢复专项连同既有回滚回归为 `26 passed in 3.71s`。
+
+## 2026-07-29 合并后任务 5：backup 健康恢复顺序
+
+- [x] Qdrant 原运行时先单独启动，最多轮询 `.State.Health.Status` 30 次；
+  仅 `healthy` 继续，`unhealthy` 立即失败，持续 `starting` 固定超时失败。
+- [x] Qdrant healthy 后才启动 app 并检查 Running 与 `/live=200`；随后仅在
+  原 worker 运行时通过 index profile 恢复。原未运行服务不新增，不查 `/ready`。
+- [x] fake 反测覆盖 starting→healthy、直接 unhealthy、30 次超时、app live
+  失败和 worker 两种状态；backup 合并回归为 `21 passed in 3.05s`。
+- [x] 当前部署/打包/回滚/备份契约专项为 `94 passed in 9.36s`，skipped=0；
+  未执行真实 load、package、backup、rollback 或任何服务器操作。
+
+## 2026-07-29 合并后最终验收与交付审计
+
+- [x] 第一轮完整绿验收为 `419 passed, 36 warnings in 233.95s`；联合补偿随后
+  收紧为容器补偿失败时仍独立尝试元数据补偿，回滚专项保持
+  `26 passed in 3.47s`，因此按规则再执行一次完整验收。
+- [x] 最终完整验收为 `419 passed, 36 warnings in 232.45s`，skipped=0；
+  warning 数量和类别与任务 0 红基线相同，没有使用第三轮验收额度。
+- [x] 最终静态门禁全部退出 0：compileall 无输出、Ruff
+  `All checks passed!`、strict mypy `68 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment Shell、默认/profile Compose、
+  11/11 ASSETS 和 `git diff --check`。
+- [x] 首个临时 index 命令因 PowerShell→WSL 转义失败，输出
+  `tracked_files=0` 和 fatal，明确不作为证据；改用临时脚本后首次真实扫描发现
+  fake fixture 的 `TOKEN=preserve` 触发 `violations=1`。改为非凭据
+  `CUSTOM_SETTING=preserve` 后对应部署测试仍为 `17 passed`。
+- [x] 最终临时 index 扫描为 `tracked_files=216`，binary/large/local-path/
+  private-network/private-path/secret 均为 0、`violations=0`；真实 `.git/index`
+  前后 SHA256 均为
+  `9e780b9c89ac6e36c72c595ed2fa67dc575a46b81bfa46835c7735256a407ce1`。
+- [x] 冻结摘要未漂移：docs `36c67e3b…`、artifacts `220473c6…`、
+  frozen `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；
+  pipeline/retrieval/corpus 分别仍为 `f61a74b0…` / `267e419f…` /
+  `0d6553c1…`，retrieval 继续为 provisional。
+- [x] 参考仓库 HEAD/tree/tracked 仍为 `03d51db2…` / `84a0a960…` /
+  `44254dff…` 且状态为空；本仓库 HEAD 仍为 `4a8d4292…`，staged/deleted=0。
+- [x] 两个本轮临时 Qdrant 容器均为 mounts=0，已按精确名称删除并确认
+  remaining=0；临时验收日志、临时 index 和 helper 已清理，未删除镜像、卷、
+  网络或共享数据。
+- [x] 本轮未执行 build/buildx、真实 save/load/package、SSH/SCP、`.57/.58/.60`、
+  服务器 backup/rollback、安装、下载、commit、push 或 pull。
+
+## 2026-07-29 后续授权：提交并推送合并阻塞修复
+
+- [x] 用户在完整验收后明确要求 commit 并 push，覆盖上一节验收时点的
+  “未 commit/push”限制；授权不扩展到构建、服务器或其他外部操作。
+- [x] 按仓库 Conventional Commits 中文标题和功能边界拆分五个代码提交：
+  `8359ad9` Trace 时间边界、`d202e08` 镜像身份/revision、`e532c8e`
+  deploy 事务、`af217a4` rollback 联合补偿、`3c95410` backup 健康恢复。
+- [x] 每个提交前均执行 `git diff --cached --check`；变更行数分别为
+  552、129、1024、776、288，全部小于 2000 行，未混入范围外文件。
+- [ ] 审计文档提交完成后推送 `main`，并以远端 `refs/heads/main` 与本地
+  HEAD 完整 SHA 一致作为完成证据。
