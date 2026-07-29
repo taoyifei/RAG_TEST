@@ -1,5 +1,54 @@
 # 阻塞项
 
+## P0：`evaluation/metrics.py` 与功能白名单存在不可同时满足的硬约束
+
+- 本目标一方面只列出 `evaluation/{active_state.py,evaluate.py,
+  chunking_experiment.py,chunking_ablation.py}` 为功能改动白名单，未列出
+  `evaluation/metrics.py`；另一方面又硬性要求删除 `TrustedActiveEvidence`、
+  `_TRUST_MARKER` 和公开 verifier，并让生产评分直接消费同进程现场扫描结果。
+- 基线 `evaluation/metrics.py` 直接导入、公开导出并在 `evaluate_results()` 中
+  接收和检查 `TrustedActiveEvidence`。若保持该文件只读，删除可信包装后模块导入
+  立即失败；若保留当前最小改动，则白名单按字面不再是零越界。
+- 当前保留 18 行最小必要 diff：删除该类型/loader 的导入导出与 `isinstance`
+  伪边界，改收现场 `ActiveEvidenceManifest`，并让 schema v2 的任一真实 locator
+  可参与引用匹配。没有借此修改指标、阈值或冻结集。
+- 中途无人可问，故不能自行扩大白名单；本轮继续完成全部独立验收，但最终不能
+  声称“范围外实现=0”。解除条件是用户明确把 `evaluation/metrics.py` 加入白名单，
+  或撤销“删除 TrustedActiveEvidence”硬要求并重新定义可信边界。
+
+## P0：retrieval chunking 消融缺少真实模型与 tuning 文档键映射
+
+- structural 四候选已在真实 6 DOCX 上完成且硬结构门槛全绿；这不能替代真实
+  embedding/reranker 的 tuning 检索结果，也不能证明准确率提高。
+- 当前任务禁止联网、访问 `.57/.58/.60`，生产 embedding/reranker revision 仍未
+  核验；因此未运行 retrieval mode、未读取 holdout 标签，pipeline 保持
+  `section-pack-v2-provisional`，`retrieval.json` 保持 `provisional`。
+- 用户需先准备一个仅含冻结集 `documents` 映射、不含问题或 expected 的
+  `tuning-document-map.json`，再在已核验模型环境执行：
+  `.venv/bin/python evaluation/chunking_ablation.py docs --mode retrieval
+  --tokenizer deployment/assets/tokenizers/embedding/tokenizer.json
+  --pipeline deployment/config/pipeline.json
+  --corpus-policy deployment/config/corpus-policy.json
+  --retrieval-config deployment/config/retrieval.json
+  --dataset evaluation/frozen/questions.json
+  --document-map tuning-document-map.json --qdrant-url "$RAG_QDRANT_URL"
+  --embedding-endpoint "$RAG_EMBEDDING_URL"
+  --reranker-endpoint "$RAG_RERANKER_URL"`。
+- 所需证据：四个独立临时 collection 的清理记录、模型 revision、候选总体及
+  cross_chunk/table/numeric 的 Recall@5/10/20、MRR、rerank Recall@5；定参只看
+  tuning，最终 holdout 另行一次性验收。
+
+## 2026-07-29 任务 0 边界偏差：恢复检查已发生一次联网读取
+
+- 新任务书要求本轮不联网；恢复上一条“推送到新仓库”请求时，读取任务书和
+  Git 状态被并行执行，其中
+  `env GIT_TERMINAL_PROMPT=0 git ls-remote origin` 已实际联网并退出 0，
+  返回 `HEAD` 与 `refs/heads/main` 均为
+  `4fe7b26164e6ad1ee6b1f8477beed0473f7d49fe`。
+- 当前本地 `main` 已跟踪 `origin/main`，远端提交发生在本目标开始前或恢复
+  边界；本目标开始后未执行 push。由于只读联网已经发生，完成条件中的
+  “本轮没有联网”无法再按字面成立；后续禁止任何网络调用，继续所有不受影响项。
+
 ## 2026-07-28 新目标任务 0 基线不一致
 
 - `artifacts/` 只读聚合 SHA256 命令退出 0，但当前值为
@@ -7,6 +56,16 @@
   与 `PROGRESS.md` 冻结基线
   `ee2ec74eb8cb39e7676ce66deae57e47525e6f69be818d567d40d711553a6415`
   不一致。当前目标禁止修改该目录；只继续只读定位差异，不恢复或删除内容。
+
+## P1：Word 自动编号尚未渲染为可引用文本
+
+- 2026-07-29 只读审计检测到 268 个 `list_level` 非空段落；当前
+  `docx-parser-v3` 只读取段落 runs，不解析 `numbering.xml` 并渲染 Word 自动编号，
+  因而 268 个自动编号 marker 均未作为可验证原文进入 text/source span。
+- 本轮硬约束要求保持 parser revision 和解析行为不变，且禁止猜测或伪造编号文本；
+  section-aware chunking 仅保留这些段落的原始 run 文本和列表层级，用换行组织连续列表项。
+- 解除条件：实现并审计只读 Word numbering renderer，覆盖多级编号、restart、style
+  继承和缺失定义的反测；更新 parser revision 后通过真实 6 DOCX 覆盖与引用核验。
 
 ## 本目标按边界保留的用户执行项
 
@@ -25,14 +84,14 @@
 - 上述均是明确的职责边界，不代表已获得真实 GPU、服务器或生产指标证据；
   代理未伪造对应输出。
 
-## P1：GitHub 远端 refs 当前无法复核
+## 已解除：GitHub 远端 refs 可读取
 
-- 状态：只阻塞最终“远端 refs 不变”的在线复核；不阻塞本地测试和分组提交。
-- 证据：2026-07-27 执行
-  `git ls-remote https://github.com/taoyifei/RAG_TEST.git`，60 秒无输出后
-  超时退出 124。
-- 已遵守边界：仓库仍无 remote；未认证、未 push。
-- 解除条件：网络恢复后只读执行同一命令并与“无 refs”基线比较。
+- 2026-07-29 现场确认 `origin` 为
+  `https://github.com/taoyifei/RAG_TEST.git`，本地 `main` 跟踪
+  `origin/main`；远端 `HEAD` 与 `refs/heads/main` 均指向
+  `4fe7b26164e6ad1ee6b1f8477beed0473f7d49fe`。
+- 该读取同时构成本轮禁止联网边界的偏差，已在本文件置顶单独保留；后续不再
+  在线复核远端。
 
 ## P0：OCR GPU 镜像构建和服务器实测由用户执行
 

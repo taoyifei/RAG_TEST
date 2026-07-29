@@ -36,6 +36,38 @@ git diff --check
 默认 docstring 命令检查 `src/rag_app`、`evaluation`、`scripts` 全量 Python；
 只有显式 `--changed` 才缩小到当前新增或修改文件。
 
+section-aware chunking 的规则和定参边界见
+`design/public/chunking-strategy.md`。在只读 DOCX 上执行四候选结构审计：
+
+```bash
+.venv/bin/python evaluation/chunking_ablation.py docs \
+  --mode structural \
+  --tokenizer deployment/assets/tokenizers/embedding/tokenizer.json \
+  --pipeline deployment/config/pipeline.json \
+  --corpus-policy deployment/config/corpus-policy.json
+```
+
+真实模型环境中的 retrieval 消融只允许读取 tuning 标签，并为每个候选创建独立
+临时 collection/state；不得切 active alias。`tuning-document-map.json` 只能
+包含文档键到相对路径，不能包含问题或 expected：
+
+```bash
+.venv/bin/python evaluation/chunking_ablation.py docs \
+  --mode retrieval \
+  --tokenizer deployment/assets/tokenizers/embedding/tokenizer.json \
+  --pipeline deployment/config/pipeline.json \
+  --corpus-policy deployment/config/corpus-policy.json \
+  --retrieval-config deployment/config/retrieval.json \
+  --dataset evaluation/frozen/questions.json \
+  --document-map tuning-document-map.json \
+  --qdrant-url "$RAG_QDRANT_URL" \
+  --embedding-endpoint "$RAG_EMBEDDING_URL" \
+  --reranker-endpoint "$RAG_RERANKER_URL"
+```
+
+当前 pipeline 和 retrieval 均保持 `provisional`。没有真实 embedding/reranker
+tuning 结果时不得选择候选、声称准确率提高或读取 holdout expected。
+
 发布安全检查必须使用临时 Git index，禁止教程或审查流程修改真实 index：
 
 ```bash
