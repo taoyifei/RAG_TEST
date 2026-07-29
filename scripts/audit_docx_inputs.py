@@ -56,6 +56,17 @@ def audit(input_directory: Path) -> dict[str, object]:
             element.kind.value != "image" and not element.text.strip()
             for element in elements
         )
+        automatic_numbering = sum(
+            element.kind.value == "paragraph"
+            and element.list_level is not None
+            for element in elements
+        )
+        totals["automatic_numbering_paragraphs_detected"] += (
+            automatic_numbering
+        )
+        totals["automatic_numbering_markers_not_represented"] += (
+            automatic_numbering
+        )
         totals["toc_controls_skipped"] += (
             parser_audit.toc_controls_skipped
         )
@@ -75,6 +86,12 @@ def audit(input_directory: Path) -> dict[str, object]:
         "image_references": totals["image"],
         "unique_media": len(unique_media),
         "blank_text_elements": totals["blank_text_elements"],
+        "automatic_numbering_paragraphs_detected": totals[
+            "automatic_numbering_paragraphs_detected"
+        ],
+        "automatic_numbering_markers_not_represented": totals[
+            "automatic_numbering_markers_not_represented"
+        ],
         "toc_controls_skipped": totals["toc_controls_skipped"],
         "ordinary_controls_parsed": totals["ordinary_controls_parsed"],
         "unsupported_nodes": totals["unsupported_nodes"],

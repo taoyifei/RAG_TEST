@@ -1,4 +1,4 @@
-"""比较结构切块与固定 512-token 基线。"""
+"""在真实只读 DOCX 上比较 production candidate 与冻结基线。"""
 
 from __future__ import annotations
 
@@ -6,30 +6,36 @@ import argparse
 import hashlib
 import json
 import math
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(
+        0,
+        str(Path(__file__).resolve().parents[1] / "src"),
+    )
+
+from evaluation.legacy_chunking import (
+    fixed_token_windows,
+    legacy_element_chunks,
+)
 from rag_app.chunking import (
     Chunker,
     ChunkerConfig,
     HuggingFaceTokenCounter,
 )
 from rag_app.contracts import (
-    Element,
-    ElementKind,
-    OcrState,
     PipelineSpec,
     allocate_source_id,
     content_doc_version,
 )
+from rag_app.corpus_policy import CorpusPolicy
 from rag_app.parsers.docx import DocxParser
+from rag_app.runtime import load_pipeline
 
-_STRUCTURAL_CONFIG = ChunkerConfig(
-    target_tokens=384,
-    hard_max_tokens=512,
-    overlap_tokens=64,
-)
 _FIXED_BASELINE_TOKENS = 512
 
 
@@ -40,7 +46,7 @@ def summarize_token_lengths(lengths: Sequence[int]) -> dict[str, int]:
         lengths: 非空的 token 长度序列。
 
     Returns:
-        数量、最小值、p50、p95 和最大值。
+        数量、最小值、p50、p90、p95 和最大值。
 
     Raises:
         ValueError: 输入为空或包含负数。
@@ -55,6 +61,7 @@ def summarize_token_lengths(lengths: Sequence[int]) -> dict[str, int]:
         "count": len(ordered),
         "minimum": ordered[0],
         "p50": _nearest_rank(ordered, 0.50),
+        "p90": _nearest_rank(ordered, 0.90),
         "p95": _nearest_rank(ordered, 0.95),
         "maximum": ordered[-1],
     }
@@ -63,68 +70,160 @@ def summarize_token_lengths(lengths: Sequence[int]) -> dict[str, int]:
 def run_experiment(
     input_directory: Path,
     tokenizer_path: Path,
+    pipeline_path: Path,
+    corpus_policy_path: Path,
 ) -> dict[str, object]:
-    """在冻结 DOCX 上比较两种切块方式的静态分布。
+    """用 operator 指定配置在真实 DOCX 上运行结构实验。
 
     Args:
         input_directory: 只读 DOCX 输入目录。
-        tokenizer_path: Qwen 本地 tokenizer.json。
+        tokenizer_path: 已固化的 embedding tokenizer.json。
+        pipeline_path: operator 指定的严格 pipeline.json。
+        corpus_policy_path: operator 指定的 corpus-policy.json。
 
     Returns:
-        JSON 兼容的实验摘要，不包含检索效果结论。
+        不含文件名、标题、正文或 quote 的 JSON 兼容聚合摘要。
+
+    Raises:
+        ValueError: 配置、资产摘要、parser revision 或 corpus policy 不一致。
 
     """
+    pipeline = load_pipeline(pipeline_path)
+    policy = CorpusPolicy.load(corpus_policy_path)
+    _validate_inputs(
+        pipeline,
+        policy,
+        tokenizer_path=tokenizer_path,
+    )
     token_counter = HuggingFaceTokenCounter(tokenizer_path)
-    pipeline = _experiment_pipeline()
+    config = _chunker_config(pipeline)
     chunker = Chunker(
-        _STRUCTURAL_CONFIG,
+        config,
         token_counter,
         pipeline_fingerprint=pipeline.fingerprint(),
     )
     parser = DocxParser()
-    structural_lengths: list[int] = []
-    fixed_lengths: list[int] = []
+    paths = _docx_paths(input_directory)
+    relative_paths = tuple(
+        path.relative_to(input_directory).as_posix() for path in paths
+    )
+    metadata = policy.resolve(
+        input_root=input_directory,
+        discovered_paths=relative_paths,
+    )
+    structural_text_lengths: list[int] = []
+    structural_embedding_lengths: list[int] = []
     structural_kinds: Counter[str] = Counter()
-    documents = 0
-    for path in _docx_paths(input_directory):
-        documents += 1
-        relative_path = path.relative_to(input_directory).as_posix()
-        content_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+    legacy_text_lengths: list[int] = []
+    legacy_embedding_lengths: list[int] = []
+    legacy_kinds: Counter[str] = Counter()
+    fixed_lengths: list[int] = []
+    for path, relative_path in zip(paths, relative_paths, strict=True):
+        content_sha256 = _sha256_file(path)
         elements = parser.parse(path, display_path=relative_path)
         chunks = chunker.chunk(
             source_id=allocate_source_id(relative_path, content_sha256),
             doc_version=content_doc_version(content_sha256),
             elements=elements,
+            metadata=metadata[relative_path],
         )
-        structural_lengths.extend(
+        structural_text_lengths.extend(
             token_counter.count(chunk.text) for chunk in chunks
         )
-        structural_kinds.update(chunk.element_kind.value for chunk in chunks)
+        structural_embedding_lengths.extend(
+            token_counter.count(chunk.embedding_text) for chunk in chunks
+        )
+        structural_kinds.update(
+            chunk.element_kind.value for chunk in chunks
+        )
+        legacy = legacy_element_chunks(elements, token_counter, config)
+        legacy_text_lengths.extend(
+            token_counter.count(chunk.text) for chunk in legacy
+        )
+        legacy_embedding_lengths.extend(
+            token_counter.count(chunk.embedding_text) for chunk in legacy
+        )
+        legacy_kinds.update(chunk.element_kind.value for chunk in legacy)
         fixed_lengths.extend(
-            _fixed_window_lengths(elements, token_counter)
+            token_counter.count(window.text)
+            for window in fixed_token_windows(
+                elements,
+                token_counter,
+                window_tokens=_FIXED_BASELINE_TOKENS,
+            )
         )
     return {
-        "documents": documents,
-        "tokenizer_sha256": hashlib.sha256(
-            tokenizer_path.read_bytes()
-        ).hexdigest(),
-        "structural": {
-            "config": {
-                "target_tokens": _STRUCTURAL_CONFIG.target_tokens,
-                "hard_max_tokens": _STRUCTURAL_CONFIG.hard_max_tokens,
-                "overlap_tokens": _STRUCTURAL_CONFIG.overlap_tokens,
-            },
-            "token_lengths": summarize_token_lengths(structural_lengths),
-            "chunks_by_kind": dict(sorted(structural_kinds.items())),
-        },
+        "documents": len(paths),
+        "pipeline_fingerprint": pipeline.fingerprint(),
+        "tokenizer_sha256": _sha256_file(tokenizer_path),
+        "structural": _chunk_summary(
+            config,
+            structural_text_lengths,
+            structural_embedding_lengths,
+            structural_kinds,
+        ),
+        "legacy_element": _chunk_summary(
+            config,
+            legacy_text_lengths,
+            legacy_embedding_lengths,
+            legacy_kinds,
+        ),
         "fixed_512": {
             "window_tokens": _FIXED_BASELINE_TOKENS,
-            "token_lengths": summarize_token_lengths(fixed_lengths),
+            "text_token_lengths": summarize_token_lengths(fixed_lengths),
+            "embedding_token_lengths": summarize_token_lengths(
+                fixed_lengths
+            ),
         },
-        "conclusion": (
-            "仅完成静态分布对照；必须在冻结问答集上完成召回消融后才能定参。"
-        ),
+        "status": "structural_only_provisional",
     }
+
+
+def _chunk_summary(
+    config: ChunkerConfig,
+    text_lengths: list[int],
+    embedding_lengths: list[int],
+    kinds: Counter[str],
+) -> dict[str, object]:
+    return {
+        "config": {
+            "target_tokens": config.target_tokens,
+            "hard_max_tokens": config.hard_max_tokens,
+            "overlap_tokens": config.overlap_tokens,
+        },
+        "text_token_lengths": summarize_token_lengths(text_lengths),
+        "embedding_token_lengths": summarize_token_lengths(
+            embedding_lengths
+        ),
+        "chunks_by_kind": dict(sorted(kinds.items())),
+    }
+
+
+def _validate_inputs(
+    pipeline: PipelineSpec,
+    policy: CorpusPolicy,
+    *,
+    tokenizer_path: Path,
+) -> None:
+    tokenizer_sha256 = _sha256_file(tokenizer_path)
+    if tokenizer_sha256 != pipeline.embedding_tokenizer_sha256:
+        raise ValueError("embedding tokenizer SHA256 与 pipeline 不一致。")
+    if policy.semantic_sha256() != pipeline.corpus_policy_sha256:
+        raise ValueError("corpus policy SHA256 与 pipeline 不一致。")
+    if pipeline.parser_revision != DocxParser.version:
+        raise ValueError("parser revision 与 DocxParser 不一致。")
+
+
+def _chunker_config(pipeline: PipelineSpec) -> ChunkerConfig:
+    parameters = dict(pipeline.chunker_parameters)
+    try:
+        return ChunkerConfig(
+            target_tokens=int(parameters["target_tokens"]),
+            hard_max_tokens=int(parameters["hard_max_tokens"]),
+            overlap_tokens=int(parameters["overlap_tokens"]),
+        )
+    except (KeyError, ValueError) as error:
+        raise ValueError("pipeline chunker_parameters 无效。") from error
 
 
 def _docx_paths(input_directory: Path) -> list[Path]:
@@ -135,62 +234,21 @@ def _docx_paths(input_directory: Path) -> list[Path]:
     )
 
 
-def _fixed_window_lengths(
-    elements: Sequence[Element],
-    token_counter: HuggingFaceTokenCounter,
-) -> list[int]:
-    evidence_texts = [
-        element.text
-        for element in elements
-        if element.text
-        and (
-            element.kind != ElementKind.IMAGE
-            or element.ocr_state
-            in {OcrState.SUCCEEDED, OcrState.LOW_CONFIDENCE}
-        )
-    ]
-    total_tokens = token_counter.count("\n".join(evidence_texts))
-    if total_tokens == 0:
-        return []
-    full_windows, remainder = divmod(total_tokens, _FIXED_BASELINE_TOKENS)
-    lengths = [_FIXED_BASELINE_TOKENS] * full_windows
-    if remainder:
-        lengths.append(remainder)
-    return lengths
-
-
 def _nearest_rank(ordered: Sequence[int], quantile: float) -> int:
     index = max(0, math.ceil(quantile * len(ordered)) - 1)
     return ordered[index]
 
 
-def _experiment_pipeline() -> PipelineSpec:
-    return PipelineSpec(
-        schema_version="1",
-        parser_revision=DocxParser.version,
-        ocr_model="server-gpu-ocr-unselected",
-        ocr_revision="unselected",
-        chunker_revision="structural-v1",
-        chunker_parameters=(
-            ("target_tokens", "384"),
-            ("hard_max_tokens", "512"),
-            ("overlap_tokens", "64"),
-        ),
-        embedding_model="Qwen3-Embedding-0.6B",
-        embedding_revision="pending-server-validation",
-        embedding_dimension=1024,
-        sparse_model="bm25-chinese",
-        sparse_revision="pending-benchmark",
-        index_revision="qdrant-v1.18.3",
-        reranker_model="Qwen3-Reranker-0.6B",
-        reranker_revision="pending-server-validation",
-        llm_revisions=(("Qwen3-8B-AWQ", "pending-remote-revision"),),
-        prompt_revision="strict-answer-v1",
-    )
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def main() -> None:
-    """执行结构切块静态实验。
+    """执行只输出非敏感聚合统计的真实 DOCX 结构实验。
 
     Args:
         无参数。
@@ -201,12 +259,20 @@ def main() -> None:
     """
     argument_parser = argparse.ArgumentParser()
     argument_parser.add_argument("input_directory", type=Path)
-    argument_parser.add_argument("tokenizer_path", type=Path)
+    argument_parser.add_argument("--tokenizer", required=True, type=Path)
+    argument_parser.add_argument("--pipeline", required=True, type=Path)
+    argument_parser.add_argument(
+        "--corpus-policy",
+        required=True,
+        type=Path,
+    )
     argument_parser.add_argument("--output", type=Path)
     arguments = argument_parser.parse_args()
     result = run_experiment(
         arguments.input_directory,
-        arguments.tokenizer_path,
+        arguments.tokenizer,
+        arguments.pipeline,
+        arguments.corpus_policy,
     )
     rendered = json.dumps(result, ensure_ascii=False, indent=2)
     if arguments.output is None:
