@@ -157,6 +157,7 @@ def _settings(tmp_path: Path, paths: dict[str, Path]) -> RuntimeSettings:
         qdrant_api_key=uuid.uuid4().hex,
         qdrant_url="http://qdrant:6333",
         qdrant_alias="rag-active",
+        release_revision="1" * 40,
         state_database=tmp_path / "state.sqlite3",
         manifest_database=tmp_path / "manifest.sqlite3",
         pipeline_path=paths["pipeline"],

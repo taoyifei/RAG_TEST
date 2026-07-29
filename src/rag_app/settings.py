@@ -248,7 +248,7 @@ class RuntimeSettings(BaseSettings):
     manifest_database: Path
     trace_database: Path = Path("/state/traces.sqlite3")
     trace_mode: TraceMode = TraceMode.SAFE
-    release_revision: str = Field(default="0.1.0", min_length=1)
+    release_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     pipeline_path: Path
     retrieval_path: Path
     corpus_policy_path: Path = Path(

@@ -5,10 +5,7 @@ from pathlib import Path
 
 import yaml
 
-_QDRANT_IMAGE = (
-    "qdrant/qdrant:v1.18.3@sha256:"
-    "0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
-)
+_QDRANT_IMAGE = "${RAG_QDRANT_IMAGE:?required}"
 
 
 def _qdrant_service() -> dict[str, object]:
@@ -19,12 +16,12 @@ def _qdrant_service() -> dict[str, object]:
     return compose["services"]["rag-qdrant"]
 
 
-def test_qdrant_healthcheck_uses_fixed_image_posix_command() -> None:
+def test_qdrant_healthcheck_uses_required_image_posix_command() -> None:
     service = _qdrant_service()
     healthcheck = service["healthcheck"]
     command = healthcheck["test"]
 
-    assert _QDRANT_IMAGE in service["image"]
+    assert service["image"] == _QDRANT_IMAGE
     assert command[0] == "CMD"
     assert command[1] == "/usr/bin/grep"
     assert command[2] == "-Eq"

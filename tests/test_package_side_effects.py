@@ -7,10 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _REVISION = "1" * 40
-_QDRANT_DIGEST = (
+_QDRANT_REGISTRY_DIGEST = (
     "sha256:"
     "0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
 )
+_QDRANT_IMAGE_ID = "sha256:" + "7" * 64
+_QDRANT_REPO_DIGEST = f"qdrant/qdrant@{_QDRANT_REGISTRY_DIGEST}"
 
 
 @dataclass(frozen=True)
@@ -71,9 +73,15 @@ if [[ "$1 $2" == "image inspect" ]]; then
   elif [[ "$*" == *".Id"* ]]; then
     image="${{@: -1}}"
     if [[ "${{image}}" == *"qdrant/qdrant"* ]]; then
-      echo "{_QDRANT_DIGEST}"
+      echo "{_QDRANT_IMAGE_ID}"
     else
       printf 'sha256:%064d\n' 2
+    fi
+  elif [[ "$*" == *".RepoDigests"* ]]; then
+    if [[ "${{FAKE_BAD_REPO_DIGEST:-0}}" == "1" ]]; then
+      echo "qdrant/qdrant@sha256:$(printf '%064d' 9)"
+    else
+      echo "{_QDRANT_REPO_DIGEST}"
     fi
   elif [[ "$*" == *"org.opencontainers.image.revision"* ]]; then
     printf '%s\n' "{_REVISION}"
@@ -167,6 +175,24 @@ def test_bad_image_inspect_fails_before_preflight_or_output(
     assert completed.returncode != 0
     calls = sandbox.docker_log.read_text(encoding="utf-8").splitlines()
     assert "sbom --help" not in calls
+    assert not [call for call in calls if call.startswith("image tag ")]
+    assert not (sandbox.repository / "artifacts").exists()
+
+
+def test_wrong_qdrant_repo_digest_fails_before_release_side_effect(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_package(
+        sandbox,
+        FAKE_BAD_REPO_DIGEST="1",
+        FAKE_SBOM_AVAILABLE="1",
+    )
+
+    assert completed.returncode != 0
+    calls = sandbox.docker_log.read_text(encoding="utf-8").splitlines()
+    assert [call for call in calls if ".RepoDigests" in call]
     assert not [call for call in calls if call.startswith("image tag ")]
     assert not (sandbox.repository / "artifacts").exists()
 

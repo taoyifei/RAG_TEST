@@ -10,6 +10,7 @@ corpus_id="${CORPUS_ID:-frozen-docx-v1}"
 app_image="${RAG_APP_IMAGE:-docx-rag:${release_id}}"
 ocr_image="${RAG_OCR_IMAGE:-docx-rag-ocr:${release_id}}"
 approved_qdrant_image="qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
+approved_qdrant_repo_digest="qdrant/qdrant@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
 qdrant_image="${RAG_QDRANT_IMAGE:-${approved_qdrant_image}}"
 qdrant_runtime_image="rag-qdrant:${release_id}"
 runtime_archive="${artifact_root}/rag-runtime-${release_id}.tar.gz"
@@ -102,8 +103,12 @@ validate_image "${app_image}" "${git_revision}"
 validate_image "${ocr_image}" "${git_revision}"
 validate_image "${qdrant_image}" "-"
 qdrant_image_id="$(docker image inspect --format '{{.Id}}' "${qdrant_image}")"
-if [[ "${qdrant_image_id}" != "${qdrant_image##*@}" ]]; then
-  echo "Qdrant 镜像 ID 与固定 digest 不一致。" >&2
+qdrant_repo_digests="$(docker image inspect \
+  --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+  "${qdrant_image}")"
+if ! grep -Fxq -- \
+  "${approved_qdrant_repo_digest}" <<< "${qdrant_repo_digests}"; then
+  echo "Qdrant RepoDigests 不包含批准的 canonical digest。" >&2
   exit 1
 fi
 docker sbom --help >/dev/null

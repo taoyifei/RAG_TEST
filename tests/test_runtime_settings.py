@@ -16,6 +16,7 @@ def _runtime_values(tmp_path: Path) -> dict[str, object]:
         "qdrant_api_key": uuid.uuid4().hex,
         "qdrant_url": "http://rag-qdrant:6333",
         "qdrant_alias": "rag-docx-active",
+        "release_revision": "1" * 40,
         "state_database": tmp_path / "state.sqlite3",
         "manifest_database": tmp_path / "manifest.sqlite3",
         "pipeline_path": tmp_path / "pipeline.json",
@@ -62,6 +63,24 @@ def test_runtime_settings_parse_bounded_endpoint_lists(
     assert settings.max_llm_concurrency == 4
     assert settings.max_ocr_concurrency == 1
     assert not hasattr(settings, "max_model_concurrency")
+
+
+@pytest.mark.parametrize(
+    "revision",
+    (None, "1" * 12, "A" * 40, "0.1.0"),
+)
+def test_runtime_settings_require_full_lowercase_git_revision(
+    tmp_path: Path,
+    revision: str | None,
+) -> None:
+    values = _runtime_values(tmp_path)
+    if revision is None:
+        values.pop("release_revision")
+    else:
+        values["release_revision"] = revision
+
+    with pytest.raises(ValidationError, match="release_revision"):
+        RuntimeSettings(**values)
 
 
 def test_provisional_retrieval_config_is_not_ready(tmp_path: Path) -> None:
