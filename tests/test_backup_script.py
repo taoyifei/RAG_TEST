@@ -96,6 +96,24 @@ write_state() {
   } > "${FAKE_CONTAINER_STATE}"
 }
 if [[ "$1 $2" == "container inspect" ]]; then
+  if [[ "$*" == *".State.Health.Status"* ]]; then
+    count=0
+    if [[ -f "${FAKE_HEALTH_COUNT}" ]]; then
+      count="$(cat "${FAKE_HEALTH_COUNT}")"
+    fi
+    count="$((count + 1))"
+    printf '%s\n' "${count}" > "${FAKE_HEALTH_COUNT}"
+    case "${FAKE_QDRANT_HEALTH_MODE:-healthy}" in
+      healthy) echo healthy ;;
+      unhealthy) echo unhealthy ;;
+      starting_then_healthy)
+        if ((count < 3)); then echo starting; else echo healthy; fi
+        ;;
+      always_starting) echo starting ;;
+      *) exit 46 ;;
+    esac
+    exit 0
+  fi
   case "${@: -1}" in
     rag-app) echo "${APP_RUNNING}" ;;
     rag-worker) echo "${WORKER_RUNNING}" ;;
@@ -177,6 +195,13 @@ printf 'curl %s\n' "$*" >> "${FAKE_COMMAND_LOG}"
 """,
     )
     _write_executable(
+        binaries / "sleep",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf 'sleep %s\n' "$*" >> "${FAKE_COMMAND_LOG}"
+""",
+    )
+    _write_executable(
         binaries / "sha256sum",
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -224,6 +249,9 @@ def _run_backup(
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
             "FAKE_COMMAND_LOG": str(sandbox.command_log),
             "FAKE_CONTAINER_STATE": str(sandbox.state_file),
+            "FAKE_HEALTH_COUNT": str(
+                sandbox.script.parent / "health-count",
+            ),
         }
     )
     environment.update(overrides)

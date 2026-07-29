@@ -163,36 +163,57 @@ chmod 0700 "${temporary_dir}"
 final_published=false
 restore_required=false
 
-restore_services() {
-  local failed=0
-  local actual
-  local service
-  local expected
-  for service in rag-qdrant rag-app rag-worker; do
-    case "${service}" in
-      rag-app) expected="${app_was_running}" ;;
-      rag-worker) expected="${worker_was_running}" ;;
-      rag-qdrant) expected="${qdrant_was_running}" ;;
-    esac
-    if [[ "${expected}" != "true" ]]; then
-      continue
-    fi
-    compose_command=(
-      docker compose
-      --env-file "${env_file}"
-      -f "${compose_file}"
-    )
-    if [[ "${service}" == "rag-worker" ]]; then
-      compose_command+=(--profile index)
-    fi
-    if ! "${compose_command[@]}" up -d --no-deps \
-      --no-build --pull never "${service}"; then
-      echo "恢复服务失败：${service}" >&2
-      failed=1
-    fi
-  done
+start_service() {
+  local service="$1"
+  local compose_command=(
+    docker compose
+    --env-file "${env_file}"
+    -f "${compose_file}"
+  )
+  if [[ "${service}" == "rag-worker" ]]; then
+    compose_command+=(--profile index)
+  fi
+  "${compose_command[@]}" up -d --no-deps \
+    --no-build --pull never "${service}"
+}
 
-  for service in rag-app rag-worker rag-qdrant; do
+wait_for_qdrant_health() {
+  local attempt
+  local health_status
+  local max_attempts=30
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    if ! health_status="$(docker container inspect \
+      --format '{{.State.Health.Status}}' rag-qdrant 2>/dev/null)"; then
+      health_status=""
+    fi
+    case "${health_status}" in
+      healthy)
+        return 0
+        ;;
+      unhealthy)
+        echo "恢复后的 rag-qdrant health 状态为 unhealthy。" >&2
+        return 1
+        ;;
+      starting|"")
+        if ((attempt < max_attempts)); then
+          sleep 1
+        fi
+        ;;
+      *)
+        echo "恢复后的 rag-qdrant health 状态无效：${health_status}" >&2
+        return 1
+        ;;
+    esac
+  done
+  echo "恢复后的 rag-qdrant health 在固定期限内未达到 healthy。" >&2
+  return 1
+}
+
+verify_original_service_set() {
+  local actual
+  local expected
+  local service
+  for service in rag-qdrant rag-app rag-worker; do
     case "${service}" in
       rag-app) expected="${app_was_running}" ;;
       rag-worker) expected="${worker_was_running}" ;;
@@ -201,16 +222,42 @@ restore_services() {
     if ! actual="$(container_running_state "${service}")" \
       || [[ "${actual}" != "${expected}" ]]; then
       echo "服务未恢复到备份前状态：${service}" >&2
-      failed=1
+      return 1
     fi
   done
-  if [[ "${app_was_running}" == "true" ]] \
-    && ! curl -fsS --max-time 10 \
-      "http://127.0.0.1:${port}/live" >/dev/null; then
-    echo "恢复后的 rag-app /live 检查失败。" >&2
-    failed=1
+}
+
+restore_services() {
+  if [[ "${qdrant_was_running}" == "true" ]]; then
+    if ! start_service rag-qdrant; then
+      echo "恢复服务失败：rag-qdrant" >&2
+      return 1
+    fi
+    wait_for_qdrant_health || return 1
   fi
-  return "${failed}"
+  if [[ "${app_was_running}" == "true" ]]; then
+    if ! start_service rag-app; then
+      echo "恢复服务失败：rag-app" >&2
+      return 1
+    fi
+    if [[ "$(container_running_state rag-app)" != "true" ]] \
+      || ! curl -fsS --max-time 10 \
+        "http://127.0.0.1:${port}/live" >/dev/null; then
+      echo "恢复后的 rag-app 运行状态或 /live 检查失败。" >&2
+      return 1
+    fi
+  fi
+  if [[ "${worker_was_running}" == "true" ]]; then
+    if ! start_service rag-worker; then
+      echo "恢复服务失败：rag-worker" >&2
+      return 1
+    fi
+    if [[ "$(container_running_state rag-worker)" != "true" ]]; then
+      echo "恢复后的 rag-worker 未运行。" >&2
+      return 1
+    fi
+  fi
+  verify_original_service_set
 }
 
 on_exit() {
