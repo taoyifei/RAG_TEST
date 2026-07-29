@@ -14,7 +14,8 @@ from rag_app.query_service import (
     StageName,
 )
 from rag_app.retrieval.hybrid import HybridRetrievalResult
-from rag_app.retrieval.rerank import RerankStageResult
+from rag_app.retrieval.neighbors import NeighborExpansionResult
+from rag_app.retrieval.rerank import RerankedHit, RerankStageResult
 from rag_app.retrieval.rewrite import QueryVariants
 from rag_app.state.conversations import ConversationStore
 
@@ -76,8 +77,14 @@ class _Assembler:
 
 
 class _Neighbors:
-    def expand(self, ranked_hits: tuple[object, ...]) -> tuple[object, ...]:
-        return ranked_hits
+    def expand_with_trace(
+        self,
+        ranked_hits: tuple[RerankedHit, ...],
+    ) -> NeighborExpansionResult:
+        return NeighborExpansionResult(
+            hits=ranked_hits,
+            decisions=(),
+        )
 
 
 class _Answerer:

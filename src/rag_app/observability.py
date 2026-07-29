@@ -37,7 +37,7 @@ class StructuredAuditLogger:
                 "event": "query_stage",
                 "trace_id": event.trace_id,
                 "stage": event.stage.value,
-                "elapsed_ms": event.elapsed_ms,
+                "total_elapsed_ms": event.elapsed_ms,
                 "metrics": event.metrics,
             }
         )
@@ -98,6 +98,25 @@ class StructuredAuditLogger:
         self._write(
             {
                 "event": "query_failed",
+                "trace_id": trace_id,
+                "error_code": error_code,
+            }
+        )
+
+    def trace_failure(self, trace_id: str, error_code: str) -> None:
+        """记录不含业务正文的 Trace 子系统失败。
+
+        Args:
+            trace_id: 当前查询追踪标识。
+            error_code: 稳定 Trace 失败码。
+
+        Returns:
+            无返回值。
+
+        """
+        self._write(
+            {
+                "event": "trace_failure",
                 "trace_id": trace_id,
                 "error_code": error_code,
             }

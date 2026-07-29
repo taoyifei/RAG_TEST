@@ -17,6 +17,7 @@ from rag_app.query_service import (
     QueryService,
     StageEvent,
 )
+from rag_app.tracing.models import TraceMode
 
 __all__ = ["QueryStreamRequest", "stream_query"]
 
@@ -35,6 +36,7 @@ class QueryStreamRequest:
     conversation_id: str
     question: str
     audit: StructuredAuditLogger | None = None
+    trace_mode: TraceMode = TraceMode.SAFE
 
 
 def stream_query(
@@ -102,7 +104,12 @@ def stream_query(
                     request.audit.query_stage(event)
                 put_message(event)
 
-            outcome = service.ask(
+            query_method = (
+                service.ask_debug
+                if request.trace_mode is TraceMode.FULL
+                else service.ask
+            )
+            outcome = query_method(
                 trace_id=request.trace_id,
                 conversation_id=request.conversation_id,
                 question=request.question,
@@ -112,11 +119,11 @@ def stream_query(
             if request.audit is not None:
                 request.audit.query_outcome(outcome)
             put_message(outcome)
-        except Exception as error:
+        except Exception:
             if request.audit is not None:
                 request.audit.query_failed(
                     request.trace_id,
-                    type(error).__name__,
+                    "QUERY_EXECUTION_FAILED",
                 )
             put_message(_ERROR_EVENT)
         finally:
