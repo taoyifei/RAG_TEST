@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from typing import Literal
@@ -86,7 +87,7 @@ class BufferedLlmClient:
         messages: tuple[ChatMessage, ...],
         *,
         max_output_tokens: int,
-        response_format: dict[str, object] | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> LlmGeneration:
         """生成完整缓冲响应，不向调用方暴露任何中间 token。
 

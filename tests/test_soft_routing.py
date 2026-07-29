@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from rag_app.retrieval.filters import MetadataPolicy
 from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
+from rag_app.tracing.reasons import DecisionCode
 
 
 def test_high_confidence_route_adds_source_filter() -> None:
@@ -31,6 +32,9 @@ def test_high_confidence_route_adds_source_filter() -> None:
     assert decision.routed is True
     assert decision.route_id == "procurement"
     assert decision.confidence == 1.0
+    assert decision.reason_code is DecisionCode.UNIQUE_MATCH
+    assert decision.rule_scores[0].matched_keywords == 2
+    assert decision.rule_scores[0].coverage == 1.0
     assert query_filter.must[-1].key == "source_id"
 
 
@@ -57,5 +61,16 @@ def test_low_confidence_or_tie_falls_back_to_full_library() -> None:
 
     assert low.routed is False
     assert low.source_ids == ()
+    assert low.reason_code is DecisionCode.BELOW_THRESHOLD
     assert tie.routed is False
     assert tie.source_ids == ()
+    assert tie.reason_code is DecisionCode.TIE
+
+
+def test_empty_route_rules_report_no_rules() -> None:
+    router = KeywordSoftRouter((), minimum_confidence=0.75)
+
+    decision = router.route("任意问题")
+
+    assert decision.routed is False
+    assert decision.reason_code is DecisionCode.NO_RULES

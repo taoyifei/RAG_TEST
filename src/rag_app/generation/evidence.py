@@ -12,12 +12,15 @@ from rag_app.contracts import (
     validate_chunk_source_spans,
 )
 from rag_app.retrieval.rerank import RerankedHit
+from rag_app.tracing.reasons import DecisionCode
 
 __all__ = [
     "EvidenceAssembler",
     "EvidenceBundle",
     "EvidenceConfig",
+    "EvidenceDecision",
     "EvidenceItem",
+    "InvalidEvidencePayloadError",
 ]
 
 _UNTRUSTED_DATA_NOTICE = (
@@ -88,6 +91,30 @@ class EvidenceBundle:
     rendered_json: str
     token_count: int
     quarantined_chunk_ids: tuple[str, ...]
+    decisions: tuple[EvidenceDecision, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceDecision:
+    """一个候选在证据预算阶段的确定性决策。"""
+
+    chunk_id: str
+    evidence_id: str | None
+    selected: bool
+    reason_code: DecisionCode
+    estimated_total_tokens: int
+    actual_candidate_tokens: int
+    contains_ocr: bool
+    minimum_ocr_confidence: float | None
+    source_span_count: int
+
+
+class InvalidEvidencePayloadError(ValueError):
+    """候选 payload 失败关闭，并携带非正文旁路决策。"""
+
+    def __init__(self, decision: EvidenceDecision) -> None:
+        super().__init__("候选 payload 无效。")
+        self.decision = decision
 
 
 class EvidenceAssembler:
@@ -123,35 +150,96 @@ class EvidenceAssembler:
         """
         selected: list[EvidenceItem] = []
         quarantined: list[str] = []
+        decisions: list[EvidenceDecision] = []
         rendered = _render(())
         for hit in ranked_hits:
             if len(selected) >= self._config.max_items:
-                break
+                decisions.append(
+                    _evidence_decision(
+                        hit,
+                        evidence_id=None,
+                        selected=False,
+                        reason_code=DecisionCode.MAX_ITEMS,
+                        estimated_total_tokens=self._token_counter.count(
+                            rendered
+                        ),
+                        actual_candidate_tokens=0,
+                    )
+                )
+                continue
             raw_text = hit.hit.payload.get("text")
             if isinstance(raw_text, str) and _suspected_prompt_injection(
                 raw_text
             ):
                 quarantined.append(hit.hit.chunk_id)
+                decisions.append(
+                    _evidence_decision(
+                        hit,
+                        evidence_id=None,
+                        selected=False,
+                        reason_code=DecisionCode.PROMPT_INJECTION,
+                        estimated_total_tokens=self._token_counter.count(
+                            rendered
+                        ),
+                        actual_candidate_tokens=(
+                            self._token_counter.count(raw_text)
+                        ),
+                    )
+                )
                 continue
-            candidate = _evidence_item(
-                hit,
-                evidence_id=f"E{len(selected) + 1}",
-                low_ocr_threshold=self._config.low_ocr_threshold,
-            )
+            try:
+                candidate = _evidence_item(
+                    hit,
+                    evidence_id=f"E{len(selected) + 1}",
+                    low_ocr_threshold=self._config.low_ocr_threshold,
+                )
+            except ValueError as error:
+                raise InvalidEvidencePayloadError(
+                    _evidence_decision(
+                        hit,
+                        evidence_id=None,
+                        selected=False,
+                        reason_code=DecisionCode.INVALID_PAYLOAD,
+                        estimated_total_tokens=self._token_counter.count(
+                            rendered
+                        ),
+                        actual_candidate_tokens=0,
+                    )
+                ) from error
             proposed = (*selected, candidate)
             proposed_rendered = _render(proposed)
-            if (
-                self._token_counter.count(proposed_rendered)
-                > self._config.max_evidence_tokens
-            ):
+            proposed_tokens = self._token_counter.count(proposed_rendered)
+            candidate_tokens = self._token_counter.count(candidate.text)
+            if proposed_tokens > self._config.max_evidence_tokens:
+                decisions.append(
+                    _evidence_decision(
+                        hit,
+                        evidence_id=None,
+                        selected=False,
+                        reason_code=DecisionCode.TOKEN_BUDGET,
+                        estimated_total_tokens=proposed_tokens,
+                        actual_candidate_tokens=candidate_tokens,
+                    )
+                )
                 continue
             selected.append(candidate)
             rendered = proposed_rendered
+            decisions.append(
+                _evidence_decision(
+                    hit,
+                    evidence_id=candidate.evidence_id,
+                    selected=True,
+                    reason_code=DecisionCode.SELECTED,
+                    estimated_total_tokens=proposed_tokens,
+                    actual_candidate_tokens=candidate_tokens,
+                )
+            )
         return EvidenceBundle(
             items=tuple(selected),
             rendered_json=rendered,
             token_count=self._token_counter.count(rendered),
             quarantined_chunk_ids=tuple(quarantined),
+            decisions=tuple(decisions),
         )
 
 
@@ -220,4 +308,39 @@ def _suspected_prompt_injection(text: str) -> bool:
     return any(
         pattern.casefold() in normalized
         for pattern in _PROMPT_INJECTION_PATTERNS
+    )
+
+
+def _evidence_decision(  # noqa: PLR0913
+    ranked: RerankedHit,
+    *,
+    evidence_id: str | None,
+    selected: bool,
+    reason_code: DecisionCode,
+    estimated_total_tokens: int,
+    actual_candidate_tokens: int,
+) -> EvidenceDecision:
+    payload = ranked.hit.payload
+    contains_ocr = payload.get("contains_ocr", False)
+    raw_confidence = payload.get("minimum_ocr_confidence")
+    raw_source_spans = payload.get("source_spans")
+    return EvidenceDecision(
+        chunk_id=ranked.hit.chunk_id,
+        evidence_id=evidence_id,
+        selected=selected,
+        reason_code=reason_code,
+        estimated_total_tokens=estimated_total_tokens,
+        actual_candidate_tokens=actual_candidate_tokens,
+        contains_ocr=(
+            contains_ocr if isinstance(contains_ocr, bool) else False
+        ),
+        minimum_ocr_confidence=(
+            float(raw_confidence)
+            if isinstance(raw_confidence, (int, float))
+            and not isinstance(raw_confidence, bool)
+            else None
+        ),
+        source_span_count=(
+            len(raw_source_spans) if isinstance(raw_source_spans, list) else 0
+        ),
     )

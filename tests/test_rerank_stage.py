@@ -64,6 +64,9 @@ def test_rerank_stage_sorts_by_model_then_rrf() -> None:
         "chunk-a",
     ]
     assert result.call_count == 1
+    assert result.input_candidate_count == 3
+    assert len(result.scored_hits) == 3
+    assert len(result.hits) == 3
 
 
 def test_rerank_stage_rejects_missing_embedding_text() -> None:

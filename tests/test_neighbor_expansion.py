@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -18,6 +19,7 @@ from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.retrieval.fusion import FusedHit
 from rag_app.retrieval.neighbors import NeighborExpander
 from rag_app.retrieval.rerank import RerankedHit
+from rag_app.tracing.reasons import DecisionCode
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE = f"sha256:{'a' * 64}"
@@ -210,8 +212,116 @@ def test_neighbor_expander_does_not_cross_neighbor_group() -> None:
         ),
     )
 
-    expanded = NeighborExpander(_PayloadReader(), max_items=2).expand(
-        (seed,)
+    result = NeighborExpander(
+        _PayloadReader(),
+        max_items=2,
+    ).expand_with_trace(
+        (seed,),
     )
 
-    assert expanded == (seed,)
+    assert result.hits == (seed,)
+    assert result.decisions[0].reason_code is (
+        DecisionCode.NEIGHBOR_GROUP_MISMATCH
+    )
+
+
+@pytest.mark.parametrize(
+    ("neighbor_overrides", "expected"),
+    (
+        ({"source_id": "src_" + "d" * 32}, DecisionCode.SOURCE_MISMATCH),
+        ({"doc_version": "sha256:" + "e" * 64}, DecisionCode.VERSION_MISMATCH),
+    ),
+)
+def test_neighbor_trace_distinguishes_identity_mismatch(
+    neighbor_overrides: dict[str, object],
+    expected: DecisionCode,
+) -> None:
+    neighbor_payload: dict[str, object] = {
+        "chunk_id": "chunk_next",
+        "source_id": _SOURCE,
+        "doc_version": _VERSION,
+        "neighbor_group_id": "group_" + "b" * 32,
+        **neighbor_overrides,
+    }
+
+    class _PayloadReader:
+        def fetch_active_payloads(
+            self,
+            chunk_ids: tuple[str, ...],
+        ) -> dict[str, dict[str, object]]:
+            return {chunk_ids[0]: neighbor_payload}
+
+    result = NeighborExpander(
+        _PayloadReader(),
+        max_items=2,
+    ).expand_with_trace((_neighbor_seed("chunk_next"),))
+
+    assert result.decisions[0].reason_code is expected
+
+
+def test_neighbor_trace_records_missing_duplicate_accept_and_capacity() -> None:
+    class _PayloadReader:
+        def fetch_active_payloads(
+            self,
+            chunk_ids: tuple[str, ...],
+        ) -> dict[str, dict[str, object]]:
+            del chunk_ids
+            return {
+                "chunk_previous": {
+                    "chunk_id": "chunk_previous",
+                    "source_id": _SOURCE,
+                    "doc_version": _VERSION,
+                    "neighbor_group_id": "group_" + "b" * 32,
+                }
+            }
+
+    accepted_and_capacity = NeighborExpander(
+        _PayloadReader(),
+        max_items=2,
+    ).expand_with_trace(
+        (
+            _neighbor_seed(
+                "chunk_next",
+                previous="chunk_previous",
+            ),
+        )
+    )
+    missing = NeighborExpander(
+        _PayloadReader(),
+        max_items=3,
+    ).expand_with_trace((_neighbor_seed("chunk_missing"),))
+    duplicate = NeighborExpander(
+        _PayloadReader(),
+        max_items=3,
+    ).expand_with_trace((_neighbor_seed("chunk_seed"),))
+
+    assert [item.reason_code for item in accepted_and_capacity.decisions] == [
+        DecisionCode.ACCEPTED,
+        DecisionCode.CAPACITY_LIMIT,
+    ]
+    assert missing.decisions[0].reason_code is DecisionCode.MISSING_PAYLOAD
+    assert duplicate.decisions[0].reason_code is DecisionCode.DUPLICATE
+
+
+def _neighbor_seed(
+    next_chunk: str,
+    *,
+    previous: str | None = None,
+) -> RerankedHit:
+    return RerankedHit(
+        rank=1,
+        rerank_score=0.9,
+        hit=FusedHit(
+            chunk_id="chunk_seed",
+            rrf_score=0.1,
+            channel_ranks=(("dense", 1),),
+            payload={
+                "chunk_id": "chunk_seed",
+                "source_id": _SOURCE,
+                "doc_version": _VERSION,
+                "neighbor_group_id": "group_" + "b" * 32,
+                "previous_chunk_id": previous,
+                "next_chunk_id": next_chunk,
+            },
+        ),
+    )

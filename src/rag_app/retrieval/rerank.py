@@ -29,10 +29,7 @@ class RerankConfig:
     def __post_init__(self) -> None:
         """要求 `final <= max_final <= candidate`。"""
         if not (
-            0
-            < self.final_limit
-            <= self.max_final_limit
-            <= self.candidate_limit
+            0 < self.final_limit <= self.max_final_limit <= self.candidate_limit
         ):
             raise ValueError(
                 "必须满足 0 < final_limit <= max_final_limit "
@@ -55,6 +52,8 @@ class RerankStageResult:
 
     hits: tuple[RerankedHit, ...]
     call: ExternalCallAudit | None
+    scored_hits: tuple[RerankedHit, ...] = ()
+    input_candidate_count: int = 0
 
     @property
     def call_count(self) -> int:
@@ -108,7 +107,12 @@ class RerankStage:
         """
         selected = candidates[: self.config.candidate_limit]
         if not selected:
-            return RerankStageResult(hits=(), call=None)
+            return RerankStageResult(
+                hits=(),
+                call=None,
+                scored_hits=(),
+                input_candidate_count=0,
+            )
         documents = tuple(_embedding_text(hit) for hit in selected)
         scored = self._client.rerank(query, documents)
         ranked = [
@@ -126,18 +130,23 @@ class RerankStage:
                 item.hit.chunk_id,
             )
         )
-        limited = tuple(
+        scored_hits = tuple(
             RerankedHit(
                 rank=rank,
                 rerank_score=item.rerank_score,
                 hit=item.hit,
             )
             for rank, item in enumerate(
-                ranked[: self.config.final_limit],
+                ranked,
                 start=1,
             )
         )
-        return RerankStageResult(hits=limited, call=scored.call)
+        return RerankStageResult(
+            hits=scored_hits[: self.config.final_limit],
+            call=scored.call,
+            scored_hits=scored_hits,
+            input_candidate_count=len(selected),
+        )
 
 
 def _embedding_text(hit: FusedHit) -> str:

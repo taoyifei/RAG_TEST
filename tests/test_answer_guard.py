@@ -165,6 +165,8 @@ def test_answer_is_published_only_after_exact_quote_validation() -> None:
     assert result.answer == "验收期为30天。"
     assert result.claims[0].supports[0].evidence_id == "E1"
     assert result.model_calls == 1
+    assert result.trace["first_validation_code"] == "VALIDATION_OK"
+    assert result.trace["repair_triggered"] is False
 
 
 def test_invalid_citation_is_repaired_at_most_once() -> None:
@@ -186,6 +188,9 @@ def test_invalid_citation_is_repaired_at_most_once() -> None:
 
     assert result.status == AnswerStatus.ANSWERED
     assert result.model_calls == 2
+    assert result.trace["first_validation_code"] == "INVALID_CITATION_ID"
+    assert result.trace["repair_validation_code"] == "VALIDATION_OK"
+    assert result.trace["repair_triggered"] is True
     assert calls == 2
 
 

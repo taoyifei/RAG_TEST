@@ -94,6 +94,10 @@ def test_rewriter_only_triggers_for_context_dependent_question() -> None:
     )
     assert contextual.resolved_query == "需求快验流程的验收负责人是谁？"
     assert contextual.rewritten is True
+    assert standalone.trace["reason_code"] == "NO_CONTEXT_SIGNAL"
+    assert contextual.trace["reason_code"] == "REWRITE_OK"
+    assert contextual.trace["question_tokens"] > 0
+    assert contextual.trace["resolved_query_sha256"] != ""
     assert calls == 1
 
 
@@ -134,6 +138,7 @@ def test_invalid_rewrite_falls_back_to_original() -> None:
     assert result.queries == ("它什么时候生效？",)
     assert result.resolved_query == "它什么时候生效？"
     assert result.rewritten is False
+    assert result.trace["reason_code"] == "REWRITE_INVALID_SCHEMA"
 
 
 def test_rewrite_trigger_uses_bounded_context_references() -> None:
@@ -207,4 +212,127 @@ def test_rewrite_trigger_uses_bounded_context_references() -> None:
     assert contextual.rewritten is True
     assert contextual_particle.rewritten is True
     assert without_history.rewritten is False
+    assert without_history.trace["reason_code"] == "NO_HISTORY"
     assert calls == 2
+
+
+def test_rewrite_reports_history_budget_empty() -> None:
+    rewriter = QueryRewriter(
+        _llm(lambda _: httpx.Response(500)),
+        Utf8TokenCounter(),
+        QueryRewriteConfig(
+            max_history_turns=2,
+            history_token_budget=1,
+            max_question_tokens=100,
+            max_output_tokens=32,
+        ),
+    )
+
+    result = rewriter.rewrite(
+        "它什么时候生效？",
+        previous_questions=("项目交付规范是什么？",),
+    )
+
+    assert result.trace["reason_code"] == "HISTORY_BUDGET_EMPTY"
+
+
+def test_rewrite_reports_model_unavailable() -> None:
+    result = QueryRewriter(
+        _llm(lambda _: httpx.Response(503)),
+        Utf8TokenCounter(),
+        QueryRewriteConfig(
+            max_history_turns=2,
+            history_token_budget=100,
+            max_question_tokens=100,
+            max_output_tokens=32,
+        ),
+    ).rewrite(
+        "它什么时候生效？",
+        previous_questions=("项目交付规范是什么？",),
+    )
+
+    assert result.trace["reason_code"] == "REWRITE_MODEL_UNAVAILABLE"
+
+
+def test_rewrite_reports_same_as_original() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "Qwen/Qwen3-8B-AWQ",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {"standalone_query": "它什么时候生效？"},
+                                ensure_ascii=False,
+                            )
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 5,
+                    "total_tokens": 25,
+                },
+            },
+        )
+
+    result = QueryRewriter(
+        _llm(handler),
+        Utf8TokenCounter(),
+        QueryRewriteConfig(
+            max_history_turns=2,
+            history_token_budget=100,
+            max_question_tokens=100,
+            max_output_tokens=32,
+        ),
+    ).rewrite(
+        "它什么时候生效？",
+        previous_questions=("项目交付规范是什么？",),
+    )
+
+    assert result.trace["reason_code"] == "REWRITE_SAME_AS_ORIGINAL"
+
+
+def test_rewrite_reports_resolved_query_token_limit() -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "Qwen/Qwen3-8B-AWQ",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps(
+                                {"standalone_query": "超长改写" * 30},
+                                ensure_ascii=False,
+                            )
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 20,
+                    "completion_tokens": 5,
+                    "total_tokens": 25,
+                },
+            },
+        )
+
+    result = QueryRewriter(
+        _llm(handler),
+        Utf8TokenCounter(),
+        QueryRewriteConfig(
+            max_history_turns=2,
+            history_token_budget=100,
+            max_question_tokens=40,
+            max_output_tokens=32,
+        ),
+    ).rewrite(
+        "它何时生效？",
+        previous_questions=("项目规范？",),
+    )
+
+    assert result.trace["reason_code"] == "REWRITE_TOKEN_LIMIT"

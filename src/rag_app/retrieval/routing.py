@@ -5,9 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from rag_app.tracing.reasons import DecisionCode
+
 __all__ = [
     "KeywordRouteRule",
     "KeywordSoftRouter",
+    "RouteRuleScore",
     "SoftRouteDecision",
     "SoftRouter",
 ]
@@ -37,6 +40,20 @@ class SoftRouteDecision:
     source_ids: tuple[str, ...]
     confidence: float
     routed: bool
+    reason_code: DecisionCode = DecisionCode.FALLBACK_FULL_CORPUS
+    rule_scores: tuple[RouteRuleScore, ...] = ()
+    threshold: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class RouteRuleScore:
+    """一条路由规则的确定性关键词命中明细。"""
+
+    route_id: str
+    source_ids: tuple[str, ...]
+    matched_keywords: int
+    keyword_count: int
+    coverage: float
 
 
 class SoftRouter(Protocol):
@@ -93,42 +110,74 @@ class KeywordSoftRouter:
         """
         normalized = question.casefold()
         scored = tuple(
-            (
-                sum(
+            RouteRuleScore(
+                route_id=rule.route_id,
+                source_ids=rule.source_ids,
+                matched_keywords=sum(
+                    keyword.casefold() in normalized
+                    for keyword in rule.keywords
+                ),
+                keyword_count=len(rule.keywords),
+                coverage=sum(
                     keyword.casefold() in normalized
                     for keyword in rule.keywords
                 )
                 / len(rule.keywords),
-                rule,
             )
             for rule in self._rules
         )
         if not scored:
-            return _fallback(0.0)
-        best_score = max(score for score, _ in scored)
+            return _fallback(
+                0.0,
+                reason=DecisionCode.NO_RULES,
+                scores=(),
+                threshold=self._minimum_confidence,
+            )
+        best_score = max(score.coverage for score in scored)
         winners = tuple(
-            rule for score, rule in scored if score == best_score
+            score for score in scored if score.coverage == best_score
         )
-        if (
-            best_score < self._minimum_confidence
-            or len(winners) != 1
-        ):
-            return _fallback(best_score)
+        if best_score < self._minimum_confidence:
+            return _fallback(
+                best_score,
+                reason=DecisionCode.BELOW_THRESHOLD,
+                scores=scored,
+                threshold=self._minimum_confidence,
+            )
+        if len(winners) != 1:
+            return _fallback(
+                best_score,
+                reason=DecisionCode.TIE,
+                scores=scored,
+                threshold=self._minimum_confidence,
+            )
         winner = winners[0]
         return SoftRouteDecision(
             route_id=winner.route_id,
             source_ids=winner.source_ids,
             confidence=best_score,
             routed=True,
+            reason_code=DecisionCode.UNIQUE_MATCH,
+            rule_scores=scored,
+            threshold=self._minimum_confidence,
         )
 
 
-def _fallback(confidence: float) -> SoftRouteDecision:
+def _fallback(
+    confidence: float,
+    *,
+    reason: DecisionCode,
+    scores: tuple[RouteRuleScore, ...],
+    threshold: float,
+) -> SoftRouteDecision:
     return SoftRouteDecision(
         route_id=None,
         source_ids=(),
         confidence=confidence,
         routed=False,
+        reason_code=reason,
+        rule_scores=scores,
+        threshold=threshold,
     )
 
 

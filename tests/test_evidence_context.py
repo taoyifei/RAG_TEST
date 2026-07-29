@@ -2,9 +2,11 @@ from rag_app.chunking import Utf8TokenCounter
 from rag_app.generation.evidence import (
     EvidenceAssembler,
     EvidenceConfig,
+    InvalidEvidencePayloadError,
 )
 from rag_app.retrieval.fusion import FusedHit
 from rag_app.retrieval.rerank import RerankedHit
+from rag_app.tracing.reasons import DecisionCode
 
 
 def _ranked(
@@ -77,6 +79,8 @@ def test_evidence_assembler_uses_original_text_and_hard_budget() -> None:
         <= bundle.token_count
         <= 500
     )
+    assert bundle.decisions[0].reason_code is DecisionCode.TOKEN_BUDGET
+    assert bundle.decisions[1].reason_code is DecisionCode.SELECTED
 
 
 def test_evidence_assembler_preserves_low_ocr_authority() -> None:
@@ -99,6 +103,8 @@ def test_evidence_assembler_preserves_low_ocr_authority() -> None:
     )
 
     assert bundle.items[0].low_confidence_ocr is True
+    assert bundle.decisions[0].contains_ocr is True
+    assert bundle.decisions[0].minimum_ocr_confidence == 0.5
 
 
 def test_evidence_assembler_quarantines_prompt_injection() -> None:
@@ -120,6 +126,9 @@ def test_evidence_assembler_quarantines_prompt_injection() -> None:
 
     assert bundle.items == ()
     assert bundle.quarantined_chunk_ids == ("chunk-injection",)
+    assert bundle.decisions[0].reason_code is (
+        DecisionCode.PROMPT_INJECTION
+    )
 
 
 def test_evidence_assembler_rejects_missing_source_spans() -> None:
@@ -137,7 +146,29 @@ def test_evidence_assembler_rejects_missing_source_spans() -> None:
 
     try:
         assembler.assemble((ranked,))
-    except ValueError as error:
-        assert "source_spans" in str(error)
+    except InvalidEvidencePayloadError as error:
+        assert error.decision.reason_code is DecisionCode.INVALID_PAYLOAD
     else:
         raise AssertionError("缺少 source_spans 必须失败关闭。")
+
+
+def test_evidence_trace_records_max_items_without_changing_selection() -> None:
+    bundle = EvidenceAssembler(
+        Utf8TokenCounter(),
+        EvidenceConfig(
+            max_evidence_tokens=1000,
+            max_items=1,
+            low_ocr_threshold=0.8,
+        ),
+    ).assemble(
+        (
+            _ranked("chunk-first", "第一条"),
+            _ranked("chunk-second", "第二条"),
+        )
+    )
+
+    assert [item.chunk_id for item in bundle.items] == ["chunk-first"]
+    assert [item.reason_code for item in bundle.decisions] == [
+        DecisionCode.SELECTED,
+        DecisionCode.MAX_ITEMS,
+    ]
