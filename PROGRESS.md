@@ -3008,3 +3008,149 @@
   仅覆盖本任务书的 commit/push 禁令；不扩大到任何其他外部操作。
   `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
   EMF、完整 chat-template token 预算和正式生产验收。
+
+## 2026-07-30 部署文档身份契约任务 0：事实基线
+
+- [x] 当前 HEAD 为
+  `db6e9237e6f28833597f1db5319c4af8cc34ce5f`，`main` 与
+  `origin/main` 同步，工作树和暂存区均为空。`git write-tree` 与
+  `HEAD^{tree}` 均为 `c6c3da6f2ccd7ee8998e7ac9d72667307e5a431a`。
+- [x] 当前 HEAD 全量 pytest 退出 0：
+  `584 passed, 61 warnings in 579.95s`，skipped=0；warning 类别仍只有
+  `StarletteDeprecationWarning` 与 `UserWarning`。
+- [x] 基线静态门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose 和 `git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] 当前 HEAD 的 release-safety 为 `tracked_files=236`，binary、large、
+  local path、private network、private path、secret 与总 `violations`
+  均为 0。
+- [x] 保护摘要继续为 docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`。
+  专用本地 `rag-final-three-qdrant` 为 running、OOMKilled=false、
+  RestartCount=0、mounts=[]，且只绑定 `127.0.0.1:6333`。
+- [x] 本阶段未修改源码、部署实现、Compose 或三份冻结配置；未执行 build、
+  save/load、package、联网、`.57/.58/.60`、服务器操作、commit 或 push。
+
+## 2026-07-30 部署文档身份契约任务 1：release 身份术语
+
+- [x] 两项文档契约测试先在旧文档上真实红灯：
+  `2 failed, 4 deselected in 0.04s`。其中 release 身份用例证明短 README
+  缺少推荐的 `revision/release_id` 命令、把 `release_id` 错写为 40 位
+  Git SHA，且两份文档都没有从 runtime `RELEASE_ID/SOURCE_REVISION`
+  重新读取服务器身份。
+- [x] 两份文档现统一定义：`revision` 是完整 40 位小写 Git SHA；
+  `release_id` 是 runtime `RELEASE_ID`，未显式覆盖打包变量时默认为
+  `revision` 前 12 位。两份文档均给出
+  `revision="$(git rev-parse HEAD)"` 与
+  `release_id="${revision:0:12}"`。
+- [x] 服务器候选流程从已校验 runtime 的 `RELEASE_ID` 和
+  `SOURCE_REVISION` 读取变量；release 目录、镜像 tag、归档名和
+  `candidates/${release_id}.env` 使用 `release_id`，候选文件中的
+  `RAG_RELEASE_REVISION` 使用完整 `revision`。长手册还用独立
+  `expected_release_id` 完成解包前归档定位和解包后身份复核。
+- [x] 静态测试同时绑定 `package.sh` 写入 `RELEASE_ID/SOURCE_REVISION`
+  和 `deploy.sh` 读取两文件、按 release ID 校验 candidate 路径的现有契约；
+  禁止重新出现 `release_id='<40位小写Git SHA>'`。定向绿测为
+  `1 passed, 5 deselected in 0.02s`；相关 Ruff
+  `All checks passed!` 与 `git diff --check` 均退出 0。
+- [x] 本阶段仅修改两份允许文档、对应静态测试和本进度记录；未修改
+  package/deploy 等部署实现，也未执行 build/package/联网/服务器操作、
+  commit 或 push。
+
+## 2026-07-30 部署文档身份契约任务 2：Docker 镜像身份
+
+- [x] 与任务 1 同轮建立的镜像身份静态测试在旧长手册上真实红灯；失败点为
+  缺少同时输出平台、`.Id` 和 `.RepoDigests` 的只读命令，且旧文档仍要求
+  “镜像 ID 必须分别等于引用中的 digest”。两项初始红测合计为
+  `2 failed, 4 deselected in 0.04s`。
+- [x] 长手册现在分别定义 `.Id` 为当前 Docker daemon 的本地 image ID，
+  `.RepoDigests` 为 registry 来源核验依据；明确两者属于不同身份域，不得
+  比较 `.Id == RepoDigest`。
+- [x] 只读示例使用
+  `docker image inspect --format '{{.Os}}/{{.Architecture}} {{.Id}}
+  {{range .RepoDigests}}{{println .}}{{end}}'`。Python、OCR、Qdrant 三个固定
+  引用分别要求 `linux/amd64`，并以 `grep -Fx` 证明 RepoDigests 精确包含各自
+  批准的 canonical RepoDigest；没有把本地 image ID 当作 registry digest。
+- [x] 新反测同时扫描两份部署文档，禁止再次出现 image ID 必须等于 digest
+  或 `.Id` 与 RepoDigest 相等的正向要求。镜像身份定向绿测为
+  `1 passed, 5 deselected in 0.03s`；完整文档事务静态测试为
+  `6 passed in 0.02s`，相关 Ruff `All checks passed!` 和
+  `git diff --check` 均退出 0。
+- [x] 本阶段仍只修改允许的长手册、静态测试和进度记录；没有执行
+  `docker pull`、build、save/load、package、联网、服务器访问、commit 或
+  push。
+
+## 2026-07-30 部署文档身份契约：最终验收
+
+- [x] 最终全量 pytest 退出 0：
+  `586 passed, 61 warnings in 575.95s`，skipped=0；高于任务 0 的
+  584 passed，warning 类别仍只有既有 `StarletteDeprecationWarning` 与
+  `UserWarning`，没有新增类别。
+- [x] 最终静态门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、`git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] 最终只有 4 个允许文件有差异：`PROGRESS.md`、
+  `deployment/README.md`、长版离线部署手册和对应静态测试；
+  unexpected=0、missing=0。`src/`、三份 deployment config、Compose 和
+  deploy/rollback/install/package/backup 实现均为零 diff；新增
+  skip/xfail/TODO=0。
+- [x] 保护摘要与任务 0 完全一致：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`。
+- [x] 最终临时 Git index release-safety 为 `tracked_files=236`，binary、
+  large、local path、private network、private path、secret 和总
+  `violations` 均为 0；确认临时 index 是 `/tmp` 下普通文件后已精确删除。
+  真实 index staged=0，`git write-tree` 与 `HEAD^{tree}` 均为
+  `c6c3da6f2ccd7ee8998e7ac9d72667307e5a431a`。
+- [x] 测试后专用 `rag-final-three-qdrant` 为 running、
+  OOMKilled=false、RestartCount=0、mounts=[]、collections=0，且只绑定
+  `127.0.0.1:6333`。额外只读 inspect 证明本地已有 Python/Qdrant 镜像的
+  RepoDigests 包含手册 canonical digest；OCR 固定镜像本地未加载，按边界
+  没有 pull 或联网补齐，也未把缺失的本地实测冒充为文档契约证据。
+- [x] `BLOCKED.md` 继续保留真实模型消融、Word 自动编号、GPU OCR、EMF、
+  完整 chat-template token 预算和生产验收。当前 HEAD 仍为
+  `db6e9237e6f28833597f1db5319c4af8cc34ce5f`；本轮未 build、save/load、
+  package、联网、访问 `.57/.58/.60` 或服务器，也未 commit/push。
+
+## 2026-07-30 部署文档身份契约：后续提交授权
+
+- [x] 用户在完整验收后明确要求“把代码 commit 并 push”，仅覆盖本任务的
+  commit/push 禁令；不扩大到 build、package、服务器访问或其他外部操作。
+- [x] 提交范围继续限定为两份部署文档、对应静态测试和本进度记录。

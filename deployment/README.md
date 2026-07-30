@@ -5,6 +5,23 @@
 只在内部网络可达。服务器脚本不 build、不 pull、不安装软件、不访问外网，
 也不删除 `/data/tyf/RAG` 下的 bind mount 数据。
 
+## 发布身份约定
+
+`revision` 始终表示完整 40 位小写 Git SHA；打包端推荐从已提交且干净的
+源码树生成默认身份：
+
+```bash
+revision="$(git rev-parse HEAD)"
+release_id="${revision:0:12}"
+```
+
+runtime 会分别保存 `SOURCE_REVISION` 和 `RELEASE_ID`。`package.sh` 在没有
+显式设置 `RELEASE_ID` 时，默认把 `revision` 前 12 位写入
+runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来源。
+`release_id` 统一用于 release 目录、镜像 tag、归档名和 candidate env
+文件名；候选文件中的 `RAG_RELEASE_REVISION` 使用完整 `revision`，不得填
+`release_id`。
+
 ## 服务器步骤
 
 1. 先用 `offline_bundle.py.sha256` 校验固定解包器，再分别校验
@@ -16,12 +33,17 @@
    其他普通文件为 0444。复用既有 release 时只验证身份、文件集、owner 和
    mode，发现漂移会拒绝而不会静默修复。corpus 仍固定为
    `10001:10001`、目录 0700、文件 0400。
-3. 设置 `release_id` 后创建候选目录。首次部署从 release 样例安装候选文件；
-   升级则从当前活动文件复制到新 release 的候选文件。两种路径都只编辑候选
-   文件：
+3. 从已校验的 runtime 重新读取 `release_id` 和完整 `revision`，再创建候选
+   目录。首次部署从 release 样例安装候选文件；升级则从当前活动文件复制到
+   新 release 的候选文件。两种路径都只编辑候选文件：
 
    ```bash
-   release_id='<40位小写Git SHA>'
+   runtime_dir=/data/tyf/RAG/incoming/extracted/runtime
+   release_id="$(cat "${runtime_dir}/RELEASE_ID")"
+   revision="$(cat "${runtime_dir}/SOURCE_REVISION")"
+   [[ "${revision}" =~ ^[0-9a-f]{40}$ ]]
+   test "$(cat "/data/tyf/RAG/releases/${release_id}/SOURCE_REVISION")" \
+     = "${revision}"
    install -d -m 0700 /data/tyf/RAG/shared/env/candidates
 
    # 首次部署：
@@ -40,7 +62,8 @@
 
    设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
    mount 路径、`RAG_RELEASE_REVISION`、普通查询 `RAG_TRACE_MODE` 和 OCR
-   使用的宿主 GPU ID。首次部署与升级命令二选一，不要覆盖既有候选文件。
+   使用的宿主 GPU ID；其中 `RAG_RELEASE_REVISION` 必须等于上面读取的完整
+   `revision`。首次部署与升级命令二选一，不要覆盖既有候选文件。
 4. 执行 `bash verify-offline.sh`。
 5. 只把候选文件传给 deploy；active rag.env 只能由 deploy.sh 成功后发布：
 

@@ -9,6 +9,22 @@ V1 只处理 DOCX。图片 OCR 使用独立的单 GPU PaddleOCR 容器；EMF 不
 隐式转换，继续记录 `EMF_RASTERIZER_UNAVAILABLE`。当前检索参数仍是候选值，
 冻结集验收完成前 `/ready` 必须保持严格，不能为了冒烟改成宽松成功。
 
+## 发布身份约定
+
+`revision` 始终表示完整 40 位小写 Git SHA。`release_id` 是 runtime
+`RELEASE_ID` 的值；未显式设置打包变量 `RELEASE_ID` 时，默认值为
+`revision` 前 12 位。构建端推荐命令如下：
+
+```bash
+revision="$(git rev-parse HEAD)"
+release_id="${revision:0:12}"
+```
+
+runtime 将两者分别保存为 `SOURCE_REVISION` 和 `RELEASE_ID`，服务器解包后
+必须从这两个文件重新读取。`release_id` 统一用于 release 目录、镜像 tag、
+归档名和 candidate env 文件名；候选文件中的 `RAG_RELEASE_REVISION` 使用
+完整 `revision`，不得使用 `release_id`。
+
 ## 1. 交付物和目录
 
 一次发布只原子产生一个 release 输出目录；两个归档各有独立外层摘要，
@@ -85,17 +101,36 @@ git diff --check
 先拉取并检查三张固定 digest 基础镜像；不得换成浮动 tag：
 
 ```bash
-python_base='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+python_repo_digest='python@sha256:86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1'
+ocr_repo_digest='paddlepaddle/paddle@sha256:bb84347b6365c2980347cf784fc8be3eaa903472f5c40129cb65aaa634ebd776'
+qdrant_repo_digest='qdrant/qdrant@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286'
+python_base="${python_repo_digest}"
 ocr_base='paddlepaddle/paddle:3.3.0-gpu-cuda12.6-cudnn9.5@sha256:bb84347b6365c2980347cf784fc8be3eaa903472f5c40129cb65aaa634ebd776'
 qdrant_ref='qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286'
 docker pull "${python_base}"
 docker pull "${ocr_base}"
 docker pull "${qdrant_ref}"
-docker image inspect --format '{{.Os}}/{{.Architecture}} {{.Id}}' \
+docker image inspect --format '{{.Os}}/{{.Architecture}} {{.Id}} {{range .RepoDigests}}{{println .}}{{end}}' \
   "${python_base}" "${ocr_base}" "${qdrant_ref}"
+
+verify_base_image() {
+  local image_ref="$1"
+  local approved_repo_digest="$2"
+  test "$(docker image inspect \
+    --format '{{.Os}}/{{.Architecture}}' "${image_ref}")" = linux/amd64
+  docker image inspect \
+    --format '{{range .RepoDigests}}{{println .}}{{end}}' "${image_ref}" \
+    | grep -Fx -- "${approved_repo_digest}"
+}
+verify_base_image "${python_base}" "${python_repo_digest}"
+verify_base_image "${ocr_base}" "${ocr_repo_digest}"
+verify_base_image "${qdrant_ref}" "${qdrant_repo_digest}"
 ```
 
-三行平台都必须为 `linux/amd64`，镜像 ID 必须分别等于引用中的 digest。
+`.Id` 是本地 image ID，只标识当前 Docker daemon 中的镜像对象；
+`.RepoDigests` 用于核验 registry 来源。三个固定引用都必须检查为
+`linux/amd64`，并确认各自 `.RepoDigests` 精确包含上面批准的 canonical
+RepoDigest。不得比较 `.Id == RepoDigest`，两者属于不同身份域。
 
 应用 wheelhouse 必须由 Python 3.11 按 lock 重建。脚本只接受二进制
 `linux/amd64` wheels，并检查项目 wheel 同时包含 worker 和 OCR 入口。
@@ -240,24 +275,28 @@ scp \
 拒绝覆盖。不要使用 `tar --overwrite`。
 
 ```bash
-release_id='<前述 12 位 release-id>'
+expected_release_id='<前述 12 位 release-id>'
 corpus_id='frozen-docx-v1'
 cd /data/tyf/RAG/incoming
 sha256sum -c RELEASE_MANIFEST.sha256
 sha256sum -c offline_bundle.py.sha256
-sha256sum -c "rag-runtime-${release_id}.tar.gz.sha256"
+sha256sum -c "rag-runtime-${expected_release_id}.tar.gz.sha256"
 sha256sum -c "rag-corpus-${corpus_id}.tar.gz.sha256"
 install -d -m 0700 extracted
 python3 offline_bundle.py \
-  "rag-runtime-${release_id}.tar.gz" \
-  "rag-runtime-${release_id}.tar.gz.sha256" \
+  "rag-runtime-${expected_release_id}.tar.gz" \
+  "rag-runtime-${expected_release_id}.tar.gz.sha256" \
   extracted --top-level runtime
 python3 offline_bundle.py \
   "rag-corpus-${corpus_id}.tar.gz" \
   "rag-corpus-${corpus_id}.tar.gz.sha256" \
   extracted --top-level corpus
 
-test "$(cat extracted/runtime/RELEASE_ID)" = "${release_id}"
+runtime_dir=/data/tyf/RAG/incoming/extracted/runtime
+release_id="$(cat "${runtime_dir}/RELEASE_ID")"
+revision="$(cat "${runtime_dir}/SOURCE_REVISION")"
+test "${release_id}" = "${expected_release_id}"
+[[ "${revision}" =~ ^[0-9a-f]{40}$ ]]
 test "$(cat extracted/corpus/CORPUS_ID)" = "${corpus_id}"
 install -d -m 0700 \
   /data/tyf/RAG \
@@ -310,9 +349,10 @@ chmod 0600 /data/tyf/RAG/shared/env/candidates/${release_id}.env
 editor /data/tyf/RAG/shared/env/candidates/${release_id}.env
 ```
 
-至少替换四个不同的随机令牌、三个模型端点数组、镜像 tag 和
-`RAG_DOCS_PATH`。首次部署与升级命令二选一，不要覆盖既有候选文件。固定
-持久化路径应为：
+至少替换四个不同的随机令牌、三个模型端点数组、镜像 tag、
+`RAG_DOCS_PATH`，并把 `RAG_RELEASE_REVISION` 设置为上面从
+`SOURCE_REVISION` 读取的完整 `revision`。首次部署与升级命令二选一，不要
+覆盖既有候选文件。固定持久化路径应为：
 
 ```text
 RAG_APP_IMAGE=docx-rag:<release-id>
