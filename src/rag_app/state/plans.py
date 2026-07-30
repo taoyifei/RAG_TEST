@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS job_items (
     ordinal INTEGER NOT NULL,
     kind TEXT NOT NULL,
     source_id TEXT,
+    source_id_hint TEXT,
     previous_path TEXT,
     source_path TEXT,
     content_sha256 TEXT NOT NULL,
@@ -89,6 +90,16 @@ class SyncPlanStore:
         """
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(job_items)"
+                ).fetchall()
+            }
+            if "source_id_hint" not in columns:
+                connection.execute(
+                    "ALTER TABLE job_items ADD COLUMN source_id_hint TEXT"
+                )
 
     def save(self, job_id: str, plan: SyncPlan) -> None:
         """按 job ID 幂等保存不可变计划。
@@ -134,9 +145,10 @@ class SyncPlanStore:
                     """
                     INSERT INTO job_items (
                         item_id, job_id, ordinal, kind, source_id,
+                        source_id_hint,
                         previous_path, source_path, content_sha256,
                         state, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         _item_id(job_id, ordinal, plan.digest),
@@ -144,6 +156,7 @@ class SyncPlanStore:
                         ordinal,
                         action.kind.value,
                         action.source_id,
+                        action.source_id_hint,
                         action.previous_path,
                         action.source_path,
                         action.content_sha256,
@@ -405,6 +418,11 @@ def _item_from_row(row: sqlite3.Row) -> StoredSyncItem:
                 else str(row["source_path"])
             ),
             content_sha256=str(row["content_sha256"]),
+            source_id_hint=(
+                None
+                if row["source_id_hint"] is None
+                else str(row["source_id_hint"])
+            ),
         ),
         state=SyncItemState(str(row["state"])),
         attempt=int(row["attempt"]),

@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
+from pathlib import Path
+from urllib.parse import quote
 
 from rag_app.contracts import allocate_source_id, content_doc_version
 from rag_app.state.jobs import JobStore, _utc_now_text
 from rag_app.state.models import (
     ActiveSource,
+    CollectionStateIdentity,
     MediaReference,
     OcrResult,
     SourceVersion,
@@ -15,12 +20,174 @@ from rag_app.state.models import (
     _require_row,
     _version_from_row,
 )
+from rag_app.state.schema import SCHEMA
 
 __all__ = ["StateStore"]
+
+_SOURCE_ID_LENGTH = 36
+_SHA256_HEX_LENGTH = 64
+_PIPELINE_FINGERPRINT_LENGTH = 71
 
 
 class StateStore(JobStore):
     """用短事务管理任务、来源版本与 OCR 缓存。"""
+
+    @classmethod
+    def clone_collection_state(
+        cls,
+        *,
+        source_path: Path,
+        target_path: Path,
+        identity: CollectionStateIdentity,
+        expected_sources: tuple[ActiveSource, ...],
+    ) -> StateStore:
+        """用 SQLite backup API 建立独立 collection state。
+
+        Args:
+            source_path: 当前活动 collection 的只读状态数据库。
+            target_path: 新物理 collection 的独立状态数据库。
+            identity: 创建 target 的 control job、pipeline 与基线摘要。
+            expected_sources: 活动 manifest 声明的完整来源列表。
+
+        Returns:
+            已校验完整性和来源列表的 target StateStore。
+
+        Raises:
+            FileNotFoundError: 活动状态数据库不存在。
+            FileExistsError: target 在原子发布时由其他主体创建。
+            ValueError: 数据库、来源列表或 staging 身份不一致。
+
+        """
+        _require_identity_values(
+            identity.control_job_id,
+            identity.pipeline_fingerprint,
+            identity.base_manifest_sha256,
+        )
+        if identity.base_manifest_sha256 is None:
+            raise ValueError("增量 clone 必须绑定 base manifest SHA256。")
+        if target_path.exists():
+            store = cls(target_path)
+            store.require_collection_identity(
+                control_job_id=identity.control_job_id,
+                pipeline_fingerprint=identity.pipeline_fingerprint,
+                base_manifest_sha256=identity.base_manifest_sha256,
+            )
+            return store
+        if (
+            not source_path.is_file()
+            or source_path.is_symlink()
+            or target_path.is_symlink()
+        ):
+            raise FileNotFoundError("活动 collection state 不存在或不安全。")
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=target_path.parent,
+                prefix=f".{target_path.name}.clone-",
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+            _backup_state_database(
+                source_path=source_path,
+                target_path=temporary_path,
+                identity=identity,
+                expected_sources=expected_sources,
+            )
+            os.link(temporary_path, target_path)
+        finally:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+        return cls(target_path)
+
+    def bind_collection_identity(
+        self,
+        *,
+        control_job_id: str,
+        pipeline_fingerprint: str,
+        base_manifest_sha256: str | None,
+    ) -> None:
+        """幂等绑定物理 collection state 的 staging 身份。
+
+        Args:
+            control_job_id: 创建该 state 的 control job。
+            pipeline_fingerprint: 该 state 对应的索引 pipeline。
+            base_manifest_sha256: 增量基线摘要；full 首发时为 None。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 现有 state 已绑定其他 job、pipeline 或基线。
+
+        """
+        _require_identity_values(
+            control_job_id,
+            pipeline_fingerprint,
+            base_manifest_sha256,
+        )
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO collection_identity (
+                    singleton, control_job_id, pipeline_fingerprint,
+                    base_manifest_sha256
+                ) VALUES (1, ?, ?, ?)
+                """,
+                (
+                    control_job_id,
+                    pipeline_fingerprint,
+                    base_manifest_sha256,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM collection_identity WHERE singleton = 1"
+            ).fetchone()
+        _require_matching_identity(
+            _require_row(row),
+            control_job_id,
+            pipeline_fingerprint,
+            base_manifest_sha256,
+        )
+
+    def require_collection_identity(
+        self,
+        *,
+        control_job_id: str,
+        pipeline_fingerprint: str,
+        base_manifest_sha256: str | None,
+    ) -> None:
+        """要求既有 target state 属于同一 control job 和基线。
+
+        Args:
+            control_job_id: 预期 control job。
+            pipeline_fingerprint: 预期索引 pipeline。
+            base_manifest_sha256: 预期增量基线；full 首发时为 None。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 身份缺失或任一字段不一致。
+
+        """
+        _require_identity_values(
+            control_job_id,
+            pipeline_fingerprint,
+            base_manifest_sha256,
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM collection_identity WHERE singleton = 1"
+            ).fetchone()
+        if row is None:
+            raise ValueError("target collection state 缺少 staging 身份。")
+        _require_matching_identity(
+            row,
+            control_job_id,
+            pipeline_fingerprint,
+            base_manifest_sha256,
+        )
 
     def stage_source_version(
         self,
@@ -29,6 +196,7 @@ class StateStore(JobStore):
         source_path: str,
         content_sha256: str,
         pipeline_fingerprint: str,
+        source_id_hint: str | None = None,
     ) -> SourceVersion:
         """创建不影响当前活动版本的 staging 版本。
 
@@ -37,6 +205,7 @@ class StateStore(JobStore):
             source_path: 当前相对路径。
             content_sha256: DOCX 内容摘要。
             pipeline_fingerprint: 解析和索引 pipeline 指纹。
+            source_id_hint: full planner 可靠继承的可选来源身份。
 
         Returns:
             staging 或已存在的幂等版本。
@@ -50,6 +219,7 @@ class StateStore(JobStore):
                 connection,
                 source_path,
                 content_sha256,
+                source_id_hint,
             )
             conflicting = connection.execute(
                 """
@@ -675,11 +845,28 @@ class StateStore(JobStore):
         connection: sqlite3.Connection,
         source_path: str,
         content_sha256: str,
+        source_id_hint: str | None,
     ) -> str:
         row = connection.execute(
             "SELECT source_id FROM sources WHERE current_path = ?",
             (source_path,),
         ).fetchone()
+        if source_id_hint is not None:
+            _require_source_id(source_id_hint)
+            if row is not None and str(row["source_id"]) != source_id_hint:
+                raise ValueError("source ID hint 与现有路径身份冲突。")
+            hinted = connection.execute(
+                """
+                SELECT current_path FROM sources WHERE source_id = ?
+                """,
+                (source_id_hint,),
+            ).fetchone()
+            if (
+                hinted is not None
+                and str(hinted["current_path"]) != source_path
+            ):
+                raise ValueError("source ID hint 已绑定其他来源路径。")
+            return source_id_hint
         if row is not None:
             return str(row["source_id"])
         matching = connection.execute(
@@ -692,3 +879,122 @@ class StateStore(JobStore):
         if len(matching) == 1:
             return str(matching[0]["source_id"])
         return allocate_source_id(source_path, content_sha256)
+
+
+def _require_source_id(value: str) -> None:
+    if (
+        len(value) != _SOURCE_ID_LENGTH
+        or not value.startswith("src_")
+        or any(character not in "0123456789abcdef" for character in value[4:])
+    ):
+        raise ValueError("source ID hint 格式无效。")
+
+
+def _backup_state_database(
+    *,
+    source_path: Path,
+    target_path: Path,
+    identity: CollectionStateIdentity,
+    expected_sources: tuple[ActiveSource, ...],
+) -> None:
+    encoded = quote(source_path.resolve(strict=True).as_posix(), safe="/:")
+    with sqlite3.connect(
+        f"file:{encoded}?mode=ro",
+        uri=True,
+        timeout=10.0,
+    ) as source:
+        source.execute("PRAGMA query_only=ON")
+        with sqlite3.connect(target_path, timeout=10.0) as target:
+            source.backup(target)
+            target.row_factory = sqlite3.Row
+            target.executescript(SCHEMA)
+            actual_sources = _active_sources_from_connection(target)
+            if actual_sources != tuple(
+                sorted(expected_sources, key=lambda item: item.current_path)
+            ):
+                raise ValueError(
+                    "活动 collection state 来源列表与 manifest 不一致。"
+                )
+            integrity = target.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or str(integrity[0]) != "ok":
+                raise ValueError("克隆后的 collection state 完整性校验失败。")
+            target.execute("DELETE FROM collection_identity")
+            target.execute(
+                """
+                INSERT INTO collection_identity (
+                    singleton, control_job_id, pipeline_fingerprint,
+                    base_manifest_sha256
+                ) VALUES (1, ?, ?, ?)
+                """,
+                (
+                    identity.control_job_id,
+                    identity.pipeline_fingerprint,
+                    identity.base_manifest_sha256,
+                ),
+            )
+            target.commit()
+            target.execute("PRAGMA journal_mode=DELETE")
+
+
+def _active_sources_from_connection(
+    connection: sqlite3.Connection,
+) -> tuple[ActiveSource, ...]:
+    rows = connection.execute(
+        """
+        SELECT source_id, current_path, current_content_sha256,
+               active_doc_version
+        FROM sources
+        WHERE state = 'active'
+        ORDER BY current_path
+        """
+    ).fetchall()
+    return tuple(
+        ActiveSource(
+            source_id=str(row["source_id"]),
+            current_path=str(row["current_path"]),
+            content_sha256=str(row["current_content_sha256"]),
+            doc_version=str(row["active_doc_version"]),
+        )
+        for row in rows
+    )
+
+
+def _require_identity_values(
+    control_job_id: str,
+    pipeline_fingerprint: str,
+    base_manifest_sha256: str | None,
+) -> None:
+    if not control_job_id:
+        raise ValueError("control_job_id 不能为空。")
+    if (
+        not pipeline_fingerprint.startswith("sha256:")
+        or len(pipeline_fingerprint) != _PIPELINE_FINGERPRINT_LENGTH
+    ):
+        raise ValueError("collection state pipeline 指纹格式无效。")
+    if base_manifest_sha256 is not None and (
+        len(base_manifest_sha256) != _SHA256_HEX_LENGTH
+        or any(
+            character not in "0123456789abcdef"
+            for character in base_manifest_sha256
+        )
+    ):
+        raise ValueError("base manifest SHA256 格式无效。")
+
+
+def _require_matching_identity(
+    row: sqlite3.Row,
+    control_job_id: str,
+    pipeline_fingerprint: str,
+    base_manifest_sha256: str | None,
+) -> None:
+    actual_base = (
+        None
+        if row["base_manifest_sha256"] is None
+        else str(row["base_manifest_sha256"])
+    )
+    if (
+        str(row["control_job_id"]) != control_job_id
+        or str(row["pipeline_fingerprint"]) != pipeline_fingerprint
+        or actual_base != base_manifest_sha256
+    ):
+        raise ValueError("target collection state staging 身份不一致。")

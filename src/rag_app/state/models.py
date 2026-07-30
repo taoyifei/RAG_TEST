@@ -9,6 +9,7 @@ from enum import StrEnum
 
 __all__ = [
     "ActiveSource",
+    "CollectionStateIdentity",
     "Job",
     "JobKind",
     "JobState",
@@ -83,6 +84,15 @@ class ActiveSource:
     current_path: str
     content_sha256: str
     doc_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class CollectionStateIdentity:
+    """copy-on-write collection state 的不可变归属。"""
+
+    control_job_id: str
+    pipeline_fingerprint: str
+    base_manifest_sha256: str | None
 
 
 @dataclass(frozen=True, slots=True)

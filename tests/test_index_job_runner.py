@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import sqlite3
+import threading
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -13,6 +18,7 @@ from rag_app.contracts import (
     ChunkRole,
     ChunkSourceSpan,
     ElementKind,
+    IndexManifest,
     Locator,
     PipelineSpec,
 )
@@ -20,12 +26,195 @@ from rag_app.index.job_runner import (
     IndexJobRunner,
     JobRunnerConfig,
     JobRunnerServices,
+    JobRunResult,
 )
-from rag_app.index.qdrant import IndexedChunk
+from rag_app.index.qdrant import IndexedChunk, QdrantIndex
 from rag_app.manifest import ManifestRepository
+from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
 from rag_app.state import JobKind, JobState, SourceVersion, StateStore
 
 _API_KEY = "test-only-qdrant-key"
+
+
+def _state_path(root: Path, collection_name: str) -> Path:
+    digest = hashlib.sha256(collection_name.encode()).hexdigest()[:24]
+    return root / f"index-{digest}.sqlite3"
+
+
+def _alias_target(client: QdrantClient, alias: str) -> str | None:
+    return next(
+        (
+            item.collection_name
+            for item in client.get_aliases().aliases
+            if item.alias_name == alias
+        ),
+        None,
+    )
+
+
+def _payloads(
+    client: QdrantClient,
+    collection_name: str,
+) -> tuple[dict[str, object] | None, ...]:
+    records, _ = client.scroll(
+        collection_name,
+        limit=10,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return tuple(record.payload for record in records)
+
+
+def _collection_names(client: QdrantClient) -> set[str]:
+    return {item.name for item in client.get_collections().collections}
+
+
+def _assert_manifest_matches_active_records(
+    client: QdrantClient,
+    manifest: IndexManifest,
+) -> None:
+    records, _ = client.scroll(
+        manifest.collection_name,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="version_state",
+                    match=models.MatchValue(value="active"),
+                )
+            ]
+        ),
+        limit=100,
+        with_payload=True,
+        with_vectors=False,
+    )
+    actual = {
+        (
+            str(record.payload["source_id"]),
+            str(record.payload["source_path"]),
+            str(record.payload["doc_version"]),
+        )
+        for record in records
+        if record.payload is not None
+    }
+    expected = {
+        (source.source_id, source.current_path, source.doc_version)
+        for source in manifest.sources
+    }
+    assert actual == expected
+
+
+def _assert_collection_can_rollback(
+    client: QdrantClient,
+    *,
+    alias: str,
+    old_collection: str,
+    target_manifest: IndexManifest,
+    expected_old_count: int,
+) -> None:
+    old_index = QdrantIndex(
+        client,
+        collection_name=old_collection,
+        dense_dimension=target_manifest.pipeline.embedding_dimension,
+        pipeline_fingerprint=target_manifest.pipeline_fingerprint,
+    )
+    target_index = QdrantIndex(
+        client,
+        collection_name=target_manifest.collection_name,
+        dense_dimension=target_manifest.pipeline.embedding_dimension,
+        pipeline_fingerprint=target_manifest.pipeline_fingerprint,
+    )
+    old_index.switch_alias(alias)
+    assert _alias_target(client, alias) == old_collection
+    assert client.count(old_collection, exact=True).count == expected_old_count
+    target_index.switch_alias(alias)
+    assert _alias_target(client, alias) == target_manifest.collection_name
+
+
+def _assert_idle_with_exact_count(
+    runner: IndexJobRunner,
+    client: QdrantClient,
+    collection_name: str,
+    expected_count: int,
+) -> None:
+    assert runner.run_next(worker_id="single-index-worker") is None
+    assert client.count(collection_name, exact=True).count == expected_count
+
+
+def _published_state(
+    client: QdrantClient,
+    alias: str,
+    collection_name: str,
+    state_path: Path,
+) -> tuple[
+    str | None,
+    tuple[dict[str, object] | None, ...],
+    StateStore,
+    tuple[SourceVersion, ...],
+]:
+    state = StateStore(state_path)
+    return (
+        _alias_target(client, alias),
+        _payloads(client, collection_name),
+        state,
+        state.list_active_sources(),
+    )
+
+
+def _assert_delete_succeeds_when_add_fails(
+    *,
+    config: JobRunnerConfig,
+    services: JobRunnerServices,
+    old_collection: str,
+) -> str:
+    docs = config.input_root
+    (docs / "新甲.docx").unlink()
+    (docs / "乙.docx").write_bytes(b"second")
+    (docs / "丙.docx").write_bytes(b"third")
+    old_manifest = services.manifests.get_active()
+    assert old_manifest is not None
+    old_payloads = _payloads(services.qdrant, old_collection)
+
+    def failing_builder(
+        source_path: str,
+        version: SourceVersion,
+    ) -> tuple[IndexedChunk, ...]:
+        if source_path == "丙.docx":
+            raise RuntimeError("test-only add failure")
+        return _build_chunks(source_path, version)
+
+    runner = IndexJobRunner(
+        config=config,
+        services=JobRunnerServices(
+            control=services.control,
+            manifests=services.manifests,
+            qdrant=services.qdrant,
+            pipeline=services.pipeline,
+            build_chunks_factory=lambda _: failing_builder,
+        ),
+    )
+    job = services.control.create_job(
+        idempotency_key="cow:delete-then-add-failure",
+        kind=JobKind.INCREMENTAL,
+        pipeline_fingerprint=services.pipeline.fingerprint(),
+    )
+    before_collections = _collection_names(services.qdrant)
+
+    failed = runner.run_next(worker_id="cow-worker")
+
+    assert failed is not None
+    assert failed.state == JobState.FAILED
+    assert services.control.get_job(job.job_id).state == JobState.FAILED
+    targets = _collection_names(services.qdrant) - before_collections
+    assert len(targets) == 1
+    target = targets.pop()
+    target_state = StateStore(_state_path(config.index_state_dir, target))
+    assert {
+        source.current_path for source in target_state.list_active_sources()
+    } == {"乙.docx"}
+    assert services.manifests.get_active() == old_manifest
+    assert _alias_target(services.qdrant, config.alias_name) == old_collection
+    assert _payloads(services.qdrant, old_collection) == old_payloads
+    return target
 
 
 def _client() -> QdrantClient:
@@ -151,10 +340,18 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         full_result = runner.run_next(worker_id="single-index-worker")
         assert full_result is not None
         created_collections.add(full_result.collection_name)
+        full_state = StateStore(
+            _state_path(tmp_path / "indexes", full_result.collection_name)
+        )
+        original_sources = full_state.list_active_sources()
         assert control.get_job(full.job_id).state == JobState.SUCCEEDED
         assert client.count(full_result.collection_name, exact=True).count == 2
-        assert runner.run_next(worker_id="single-index-worker") is None
-        assert client.count(full_result.collection_name, exact=True).count == 2
+        _assert_idle_with_exact_count(
+            runner,
+            client,
+            full_result.collection_name,
+            2,
+        )
 
         (docs / "甲.docx").rename(docs / "新甲.docx")
         (docs / "乙.docx").unlink()
@@ -166,30 +363,434 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         )
         result = runner.run_next(worker_id="single-index-worker")
         assert result is not None
-        assert result.collection_name == full_result.collection_name
-        assert control.get_job(incremental.job_id).state == JobState.SUCCEEDED
+        if result.collection_name:
+            created_collections.add(result.collection_name)
+        assert result.collection_name != full_result.collection_name
+        assert (
+            control.get_job(incremental.job_id).state == JobState.SUCCEEDED
+        ), result
         assert client.count(result.collection_name, exact=True).count == 3
-
         active = manifests.get_active()
         assert active is not None
-        assert {
-            source.current_path for source in active.manifest.sources
-        } == {"新甲.docx", "丙.docx"}
-        assert manifests.count_revisions(result.collection_name) == 2
-    finally:
-        target = next(
-            (
-                item.collection_name
-                for item in client.get_aliases().aliases
-                if item.alias_name == alias
-            ),
-            None,
+        _assert_collection_can_rollback(
+            client,
+            alias=alias,
+            old_collection=full_result.collection_name,
+            target_manifest=active.manifest,
+            expected_old_count=2,
         )
+        assert full_state.list_active_sources() == original_sources
+
+        assert active.manifest.collection_name == result.collection_name
+        _assert_manifest_matches_active_records(client, active.manifest)
+        assert manifests.count_revisions(result.collection_name) == 1
+        assert _alias_target(client, alias) == result.collection_name
+    finally:
+        target = _alias_target(client, alias)
         if target is not None:
             client.delete_collection(target)
         for collection in created_collections:
             if client.collection_exists(collection):
                 client.delete_collection(collection)
+
+
+def test_incremental_failure_keeps_old_alias_manifest_qdrant_and_state(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-cow-failure-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "甲.docx").write_bytes(b"first")
+    (docs / "乙.docx").write_bytes(b"second")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    config = JobRunnerConfig(
+        alias_name=alias,
+        input_root=docs,
+        index_state_dir=tmp_path / "indexes",
+        collection_prefix=f"rag-cow-failure-{suffix}",
+        lease_seconds=60,
+    )
+    services = JobRunnerServices(
+        control=control,
+        manifests=manifests,
+        qdrant=client,
+        pipeline=pipeline,
+        build_chunks_factory=lambda _: _build_chunks,
+    )
+    runner = IndexJobRunner(config=config, services=services)
+    collections: set[str] = set()
+    try:
+        control.create_job(
+            idempotency_key="cow:full",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        full = runner.run_next(worker_id="cow-worker")
+        assert full is not None
+        collections.add(full.collection_name)
+        old_manifest = manifests.get_active()
+        assert old_manifest is not None
+        old_alias_target, old_payloads, old_state, old_sources = (
+            _published_state(
+                client,
+                alias,
+                full.collection_name,
+                _state_path(tmp_path / "indexes", full.collection_name),
+            )
+        )
+
+        (docs / "甲.docx").rename(docs / "新甲.docx")
+        (docs / "乙.docx").write_bytes(b"changed")
+
+        def failing_builder(
+            source_path: str,
+            version: SourceVersion,
+        ) -> tuple[IndexedChunk, ...]:
+            if source_path == "乙.docx":
+                raise RuntimeError("test-only second item failure")
+            return _build_chunks(source_path, version)
+
+        failing_runner = IndexJobRunner(
+            config=config,
+            services=JobRunnerServices(
+                control=control,
+                manifests=manifests,
+                qdrant=client,
+                pipeline=pipeline,
+                build_chunks_factory=lambda _: failing_builder,
+            ),
+        )
+        incremental = control.create_job(
+            idempotency_key="cow:incremental:failure",
+            kind=JobKind.INCREMENTAL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        before_collections = _collection_names(client)
+
+        failed = failing_runner.run_next(worker_id="cow-worker")
+
+        assert failed is not None
+        assert failed.state == JobState.FAILED
+        assert control.get_job(incremental.job_id).state == JobState.FAILED
+        after_collections = _collection_names(client)
+        collections.update(after_collections - before_collections)
+        active = manifests.get_active()
+        assert active == old_manifest
+        assert _alias_target(client, alias) == old_alias_target
+        assert _payloads(client, full.collection_name) == old_payloads
+        assert old_state.list_active_sources() == old_sources
+        collections.add(
+            _assert_delete_succeeds_when_add_fails(
+                config=config,
+                services=services,
+                old_collection=full.collection_name,
+            )
+        )
+    finally:
+        index = QdrantIndex(
+            client,
+            collection_name="unused-cleanup",
+            dense_dimension=pipeline.embedding_dimension,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        index.delete_alias(alias)
+        for collection in collections:
+            if client.collection_exists(collection):
+                client.delete_collection(collection)
+
+
+def test_same_control_job_recovers_after_publish_before_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-control-recovery-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "甲.docx").write_bytes(b"first")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    runner = IndexJobRunner(
+        config=JobRunnerConfig(
+            alias_name=alias,
+            input_root=docs,
+            index_state_dir=tmp_path / "indexes",
+            collection_prefix=f"rag-control-recovery-{suffix}",
+            lease_seconds=1,
+        ),
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: _build_chunks,
+        ),
+    )
+    job = control.create_job(
+        idempotency_key="full:publish-before-finish",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=pipeline.fingerprint(),
+    )
+    original_finish = control.finish_job
+    crashed = False
+
+    def crash_once(
+        *,
+        job_id: str,
+        worker_id: str,
+        error_code: str | None,
+    ) -> None:
+        nonlocal crashed
+        if error_code is None and not crashed:
+            crashed = True
+            raise SystemExit("test-only crash after publish")
+        original_finish(
+            job_id=job_id,
+            worker_id=worker_id,
+            error_code=error_code,
+        )
+
+    monkeypatch.setattr(control, "finish_job", crash_once)
+    target = ""
+    try:
+        with pytest.raises(SystemExit, match="after publish"):
+            runner.run_next(worker_id="recovery-worker")
+        active = manifests.get_active()
+        assert active is not None
+        target = active.manifest.collection_name
+        assert control.get_job(job.job_id).state == JobState.RUNNING
+        control.renew_job_lease(
+            job_id=job.job_id,
+            worker_id="recovery-worker",
+            now=datetime(2000, 1, 1, tzinfo=UTC),
+            lease_seconds=1,
+        )
+        monkeypatch.setattr(control, "finish_job", original_finish)
+
+        recovered = runner.run_next(worker_id="recovery-worker")
+
+        assert recovered is not None
+        assert recovered.collection_name == target
+        assert recovered.state == JobState.SUCCEEDED
+        assert control.get_job(job.job_id).state == JobState.SUCCEEDED
+        assert manifests.count_revisions(target) == 1
+        assert _alias_target(client, alias) == target
+    finally:
+        if target and client.collection_exists(target):
+            client.delete_collection(target)
+
+
+def test_control_and_local_heartbeats_cover_long_build(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-long-build-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "甲.docx").write_bytes(b"first")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    build_started = threading.Event()
+    release_build = threading.Event()
+
+    def blocking_builder(
+        source_path: str,
+        version: SourceVersion,
+    ) -> tuple[IndexedChunk, ...]:
+        build_started.set()
+        assert release_build.wait(5)
+        return _build_chunks(source_path, version)
+
+    runner = IndexJobRunner(
+        config=JobRunnerConfig(
+            alias_name=alias,
+            input_root=docs,
+            index_state_dir=tmp_path / "indexes",
+            collection_prefix=f"rag-long-build-{suffix}",
+            lease_seconds=1,
+        ),
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: blocking_builder,
+        ),
+    )
+    control.create_job(
+        idempotency_key="full:long-build",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=pipeline.fingerprint(),
+    )
+    results: list[JobRunResult | None] = []
+    errors: list[BaseException] = []
+
+    def execute() -> None:
+        try:
+            results.append(runner.run_next(worker_id="heartbeat-worker"))
+        except BaseException as error:
+            errors.append(error)
+
+    worker_thread = threading.Thread(target=execute, daemon=False)
+    worker_thread.start()
+    target = ""
+    try:
+        assert build_started.wait(30)
+        assert threading.Event().wait(1.2) is False
+        assert (
+            control.claim_next_job(
+                worker_id="control-thief",
+                now=datetime.now(UTC),
+                lease_seconds=1,
+            )
+            is None
+        )
+        state_path = next((tmp_path / "indexes").glob("index-*.sqlite3"))
+        local = StateStore(state_path)
+        assert (
+            local.claim_next_job(
+                worker_id="local-thief",
+                now=datetime.now(UTC),
+                lease_seconds=1,
+            )
+            is None
+        )
+        release_build.set()
+        worker_thread.join(60)
+        assert not worker_thread.is_alive()
+        assert errors == [] and len(results) == 1
+        result = results[0]
+        assert result is not None
+        assert result.state == JobState.SUCCEEDED
+        target = result.collection_name
+        assert not any(
+            thread.name.startswith("rag-lease-heartbeat-")
+            for thread in threading.enumerate()
+        )
+    finally:
+        release_build.set()
+        worker_thread.join(60)
+        if target and client.collection_exists(target):
+            client.delete_collection(target)
+
+
+def test_control_heartbeat_failure_returns_stable_lease_lost(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-lease-lost-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    source = docs / "甲.docx"
+    source.write_bytes(b"first")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    config = JobRunnerConfig(
+        alias_name=alias,
+        input_root=docs,
+        index_state_dir=tmp_path / "indexes",
+        collection_prefix=f"rag-lease-lost-{suffix}",
+        lease_seconds=1,
+    )
+    services = JobRunnerServices(
+        control=control,
+        manifests=manifests,
+        qdrant=client,
+        pipeline=pipeline,
+        build_chunks_factory=lambda _: _build_chunks,
+    )
+    runner = IndexJobRunner(config=config, services=services)
+    control.create_job(
+        idempotency_key="lease-lost:base",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=pipeline.fingerprint(),
+    )
+    base = runner.run_next(worker_id="lease-owner")
+    assert base is not None
+    source.write_bytes(b"changed")
+    job = control.create_job(
+        idempotency_key="lease-lost:incremental",
+        kind=JobKind.INCREMENTAL,
+        pipeline_fingerprint=pipeline.fingerprint(),
+    )
+    old_manifest = manifests.get_active()
+    assert old_manifest is not None
+    old_payloads = _payloads(client, base.collection_name)
+    allow_failure = threading.Event()
+    failure_seen = threading.Event()
+    original_renew = control.renew_job_lease
+
+    def fail_renewal(
+        *,
+        job_id: str,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> object:
+        if allow_failure.is_set():
+            failure_seen.set()
+            raise sqlite3.OperationalError("test-only renewal failure")
+        return original_renew(
+            job_id=job_id,
+            worker_id=worker_id,
+            now=now,
+            lease_seconds=lease_seconds,
+        )
+
+    def wait_for_failure(
+        source_path: str,
+        version: SourceVersion,
+    ) -> tuple[IndexedChunk, ...]:
+        allow_failure.set()
+        assert failure_seen.wait(2)
+        return _build_chunks(source_path, version)
+
+    monkeypatch.setattr(control, "renew_job_lease", fail_renewal)
+    failing_runner = IndexJobRunner(
+        config=config,
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: wait_for_failure,
+        ),
+    )
+    before_collections = _collection_names(client)
+    try:
+        failed = failing_runner.run_next(worker_id="lease-owner")
+
+        assert failed is not None
+        assert failed.error_code == "LEASE_LOST"
+        assert failed.state == JobState.FAILED
+        assert control.get_job(job.job_id).error_code == "LEASE_LOST"
+        assert manifests.get_active() == old_manifest
+        assert _alias_target(client, alias) == base.collection_name
+        assert _payloads(client, base.collection_name) == old_payloads
+    finally:
+        for collection in _collection_names(client) - before_collections:
+            client.delete_collection(collection)
+        if client.collection_exists(base.collection_name):
+            client.delete_collection(base.collection_name)
 
 
 def test_policy_change_rejects_incremental_and_requires_new_collection(
@@ -374,3 +975,107 @@ def test_worker_rejects_old_payload_schema_before_chunk_builder(
     finally:
         if collection and client.collection_exists(collection):
             client.delete_collection(collection)
+
+
+def test_full_rebuild_preserves_source_identity_and_soft_route(
+    tmp_path: Path,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    alias = f"rag-full-identity-active-{suffix}"
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    original = docs / "规范.docx"
+    original.write_bytes(b"first")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    runner = IndexJobRunner(
+        config=JobRunnerConfig(
+            alias_name=alias,
+            input_root=docs,
+            index_state_dir=tmp_path / "indexes",
+            collection_prefix=f"rag-full-identity-{suffix}",
+            lease_seconds=60,
+        ),
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: _build_chunks,
+        ),
+    )
+    collections: set[str] = set()
+    try:
+        control.create_job(
+            idempotency_key="identity:full:first",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        first = runner.run_next(worker_id="identity-worker")
+        assert first is not None
+        collections.add(first.collection_name)
+        first_manifest = manifests.get_active()
+        assert first_manifest is not None
+        source_id = first_manifest.manifest.sources[0].source_id
+
+        original.write_bytes(b"changed")
+        control.create_job(
+            idempotency_key="identity:full:update",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        updated = runner.run_next(worker_id="identity-worker")
+        assert updated is not None
+        collections.add(updated.collection_name)
+        updated_manifest = manifests.get_active()
+        assert updated_manifest is not None
+        assert updated_manifest.manifest.sources[0].source_id == source_id
+
+        renamed = docs / "新规范.docx"
+        original.rename(renamed)
+        control.create_job(
+            idempotency_key="identity:full:rename",
+            kind=JobKind.FULL,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        rebuilt = runner.run_next(worker_id="identity-worker")
+        assert rebuilt is not None
+        collections.add(rebuilt.collection_name)
+        rebuilt_manifest = manifests.get_active()
+        assert rebuilt_manifest is not None
+        assert rebuilt_manifest.manifest.sources[0].source_id == source_id
+        assert rebuilt_manifest.manifest.sources[0].current_path == (
+            "新规范.docx"
+        )
+
+        router = KeywordSoftRouter(
+            (
+                KeywordRouteRule(
+                    route_id="stable-source",
+                    keywords=("规范",),
+                    source_ids=(source_id,),
+                ),
+            ),
+            minimum_confidence=1.0,
+        )
+        decision = router.route("规范")
+        assert decision.source_ids == (source_id,)
+        assert source_id in {
+            source.source_id
+            for source in rebuilt_manifest.manifest.sources
+        }
+    finally:
+        index = QdrantIndex(
+            client,
+            collection_name="unused-cleanup",
+            dense_dimension=pipeline.embedding_dimension,
+            pipeline_fingerprint=pipeline.fingerprint(),
+        )
+        index.delete_alias(alias)
+        for collection in collections:
+            if client.collection_exists(collection):
+                client.delete_collection(collection)

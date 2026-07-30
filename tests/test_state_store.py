@@ -1,15 +1,11 @@
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from rag_app.state import (
-    JobKind,
-    JobState,
-    OcrResult,
-    StateStore,
-    VersionState,
-)
+from rag_app.state import JobKind, JobState, OcrResult, StateStore, VersionState
+from rag_app.state.models import CollectionStateIdentity
 
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64
 
@@ -253,3 +249,114 @@ def test_job_lease_renewal_and_terminal_state_require_owner(
     finished = store.get_job(job.job_id)
     assert finished.state == JobState.SUCCEEDED
     assert finished.lease_owner is None
+
+
+def test_source_id_hint_is_used_once_and_conflicts_fail_closed(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    job = store.create_job(
+        idempotency_key="full:source-hint",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    hinted_source_id = "src_" + "a" * 32
+
+    staged = store.stage_source_version(
+        job_id=job.job_id,
+        source_path="规范.docx",
+        content_sha256="a" * 64,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        source_id_hint=hinted_source_id,
+    )
+
+    assert staged.source_id == hinted_source_id
+    store.activate_source_version(staged.source_id, staged.doc_version)
+    second_job = store.create_job(
+        idempotency_key="full:source-hint-conflict",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    with pytest.raises(ValueError, match="source ID hint"):
+        store.stage_source_version(
+            job_id=second_job.job_id,
+            source_path="其他.docx",
+            content_sha256="b" * 64,
+            pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+            source_id_hint=hinted_source_id,
+        )
+
+
+def test_collection_state_clone_is_consistent_and_job_bound(
+    tmp_path: Path,
+) -> None:
+    source = _store(tmp_path / "source")
+    job = source.create_job(
+        idempotency_key="clone:base",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    version = source.stage_source_version(
+        job_id=job.job_id,
+        source_path="规范.docx",
+        content_sha256="a" * 64,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    source.activate_source_version(version.source_id, version.doc_version)
+    expected = source.list_active_sources()
+    target_path = tmp_path / "target.sqlite3"
+    identity = CollectionStateIdentity(
+        control_job_id="job_clone_target",
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        base_manifest_sha256="b" * 64,
+    )
+    writer = sqlite3.connect(source.path)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            """
+            INSERT INTO sources (
+                source_id, current_path, state, updated_at
+            ) VALUES (?, ?, 'staging', ?)
+            """,
+            (
+                "src_" + "f" * 32,
+                "未提交.docx",
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+        target = StateStore.clone_collection_state(
+            source_path=source.path,
+            target_path=target_path,
+            identity=identity,
+            expected_sources=expected,
+        )
+    finally:
+        writer.rollback()
+        writer.close()
+
+    assert target.list_active_sources() == expected
+    target.require_collection_identity(
+        control_job_id=identity.control_job_id,
+        pipeline_fingerprint=identity.pipeline_fingerprint,
+        base_manifest_sha256=identity.base_manifest_sha256,
+    )
+    repeated = StateStore.clone_collection_state(
+        source_path=source.path,
+        target_path=target_path,
+        identity=identity,
+        expected_sources=expected,
+    )
+    assert repeated.list_active_sources() == expected
+    with pytest.raises(ValueError, match="staging 身份"):
+        StateStore.clone_collection_state(
+            source_path=source.path,
+            target_path=target_path,
+            identity=CollectionStateIdentity(
+                control_job_id="job_other",
+                pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+                base_manifest_sha256="b" * 64,
+            ),
+            expected_sources=expected,
+        )

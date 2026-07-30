@@ -35,16 +35,24 @@ class IndexResult:
 class IndexCoordinator:
     """按 Qdrant 先行、SQLite 后确认的顺序切换文档版本。"""
 
-    def __init__(self, state: StateStore, index: QdrantIndex) -> None:
+    def __init__(
+        self,
+        state: StateStore,
+        index: QdrantIndex,
+        *,
+        lease_guard: Callable[[], None] | None = None,
+    ) -> None:
         """保存两个持久存储。
 
         Args:
             state: SQLite WAL 状态库。
             index: 当前 pipeline 的 Qdrant 物理 collection。
+            lease_guard: 每次 Qdrant mutation 前后的租约检查。
 
         """
         self._state = state
         self._index = index
+        self._lease_guard = lease_guard or _noop
 
     def index_source(
         self,
@@ -53,6 +61,7 @@ class IndexCoordinator:
         source_path: str,
         content_sha256: str,
         build_chunks: ChunkBuilder,
+        source_id_hint: str | None = None,
     ) -> IndexResult:
         """幂等构建并激活一个来源版本。
 
@@ -61,6 +70,7 @@ class IndexCoordinator:
             source_path: 当前相对路径。
             content_sha256: DOCX 内容摘要。
             build_chunks: 根据持久 source/version 生成完整编码 chunk。
+            source_id_hint: full planner 可靠继承的可选来源身份。
 
         Returns:
             激活、无变化或崩溃恢复结果。
@@ -75,6 +85,7 @@ class IndexCoordinator:
             source_path=source_path,
             content_sha256=content_sha256,
             pipeline_fingerprint=self._index.pipeline_fingerprint,
+            source_id_hint=source_id_hint,
         )
         if version.state == VersionState.ACTIVE:
             return self._require_active_version(version)
@@ -86,6 +97,7 @@ class IndexCoordinator:
                 "active",
             )
             if active_count == version.chunk_count:
+                self._lease_guard()
                 self._state.activate_source_version(
                     version.source_id,
                     version.doc_version,
@@ -100,11 +112,14 @@ class IndexCoordinator:
         try:
             chunks = tuple(build_chunks(version))
             self._validate_chunks(version, chunks)
+            self._lease_guard()
             self._index.delete_staging(
                 version.source_id,
                 version.doc_version,
             )
+            self._lease_guard()
             self._index.stage_chunks(chunks)
+            self._lease_guard()
             expected_count = len(chunks)
             actual_count = self._index.count_version(
                 version.source_id,
@@ -120,15 +135,19 @@ class IndexCoordinator:
                 version.doc_version,
                 expected_count,
             )
+            self._lease_guard()
             self._index.activate_source_version(
                 version.source_id,
                 version.doc_version,
             )
+            self._lease_guard()
         except Exception as error:
+            self._lease_guard()
             self._index.delete_staging(
                 version.source_id,
                 version.doc_version,
             )
+            self._lease_guard()
             self._state.fail_source_version(
                 version.source_id,
                 version.doc_version,
@@ -157,7 +176,9 @@ class IndexCoordinator:
             无返回值。
 
         """
+        self._lease_guard()
         self._index.retire_source(source_id)
+        self._lease_guard()
         self._state.mark_source_deleted(source_id)
 
     def _require_active_version(
@@ -199,3 +220,7 @@ class IndexCoordinator:
                 != self._index.pipeline_fingerprint
             ):
                 raise ValueError("chunk 身份与 staging 来源版本不一致。")
+
+
+def _noop() -> None:
+    return

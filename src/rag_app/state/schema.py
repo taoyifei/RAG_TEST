@@ -72,4 +72,11 @@ CREATE TABLE IF NOT EXISTS media_references (
 
 CREATE INDEX IF NOT EXISTS idx_media_references_ocr_state
 ON media_references(ocr_revision, state);
+
+CREATE TABLE IF NOT EXISTS collection_identity (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    control_job_id TEXT NOT NULL,
+    pipeline_fingerprint TEXT NOT NULL,
+    base_manifest_sha256 TEXT
+);
 """

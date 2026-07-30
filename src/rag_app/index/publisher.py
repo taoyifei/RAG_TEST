@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -55,11 +56,17 @@ class FullIndexPublisher:
         self._index = index
         self._alias_name = alias_name
 
-    def publish(self, manifest: IndexManifest) -> PublishResult:
+    def publish(
+        self,
+        manifest: IndexManifest,
+        *,
+        lease_guard: Callable[[], None] | None = None,
+    ) -> PublishResult:
         """幂等发布一个完整索引。
 
         Args:
             manifest: 与新物理 collection 对应的完整 manifest。
+            lease_guard: snapshot、alias 和 manifest 边界前后的租约检查。
 
         Returns:
             新发布、崩溃恢复或无变化结果。
@@ -69,27 +76,40 @@ class FullIndexPublisher:
             RuntimeError: snapshot 缺少校验摘要或历史状态冲突。
 
         """
+        guard = lease_guard or _noop
+        guard()
         self._validate_manifest(manifest)
         stored = self._repository.get(manifest.collection_name)
         alias_target = self._index.alias_target(self._alias_name)
+        previous_target = self._previous_active_collection(
+            manifest.collection_name
+        )
         if stored is not None:
             self._require_same_manifest(stored, manifest)
             if (
                 stored.state == ManifestState.ACTIVE
                 and alias_target == manifest.collection_name
             ):
+                guard()
                 return _result(stored, PublishState.UNCHANGED)
             if (
                 stored.state == ManifestState.STAGING
                 and alias_target == manifest.collection_name
             ):
-                self._repository.activate(manifest.collection_name)
+                try:
+                    guard()
+                    self._repository.activate(manifest.collection_name)
+                except Exception:
+                    self._restore_alias(previous_target)
+                    raise
                 active = self._repository.get(manifest.collection_name)
                 return _result(_require_stored(active), PublishState.RECOVERED)
             if stored.state != ManifestState.STAGING:
                 raise RuntimeError("不能重新发布 retired manifest。")
         else:
+            guard()
             snapshot = self._index.create_snapshot()
+            guard()
             if snapshot.checksum is None:
                 raise RuntimeError("Qdrant snapshot 缺少 checksum。")
             stored = self._repository.stage(
@@ -97,19 +117,16 @@ class FullIndexPublisher:
                 snapshot_name=snapshot.name,
                 snapshot_checksum=snapshot.checksum,
             )
+            guard()
 
-        old_target = alias_target
-        self._index.switch_alias(self._alias_name)
+        guard()
         try:
+            self._index.switch_alias(self._alias_name)
+            guard()
+            guard()
             self._repository.activate(manifest.collection_name)
         except Exception:
-            if old_target is None:
-                self._index.delete_alias(self._alias_name)
-            else:
-                self._index.switch_alias_to(
-                    self._alias_name,
-                    old_target,
-                )
+            self._restore_alias(previous_target)
             raise
         active = self._repository.get(manifest.collection_name)
         return _result(_require_stored(active), PublishState.PUBLISHED)
@@ -131,6 +148,27 @@ class FullIndexPublisher:
         if stored.manifest != manifest:
             raise ValueError("collection 已绑定其他 manifest。")
 
+    def _previous_active_collection(
+        self,
+        target_collection: str,
+    ) -> str | None:
+        active = self._repository.get_active()
+        if (
+            active is None
+            or active.manifest.collection_name == target_collection
+        ):
+            return None
+        return active.manifest.collection_name
+
+    def _restore_alias(self, previous_target: str | None) -> None:
+        if previous_target is None:
+            self._index.delete_alias(self._alias_name)
+            return
+        self._index.switch_alias_to(
+            self._alias_name,
+            previous_target,
+        )
+
 
 def _result(
     stored: StoredManifest,
@@ -147,3 +185,7 @@ def _require_stored(value: StoredManifest | None) -> StoredManifest:
     if value is None:
         raise RuntimeError("发布后 manifest 记录丢失。")
     return value
+
+
+def _noop() -> None:
+    return

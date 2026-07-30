@@ -15,6 +15,7 @@ __all__ = [
     "SyncAction",
     "SyncActionKind",
     "SyncPlan",
+    "plan_full_rebuild",
     "plan_incremental_sync",
 ]
 
@@ -54,6 +55,7 @@ class SyncAction:
     previous_path: str | None
     source_path: str | None
     content_sha256: str
+    source_id_hint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,65 @@ class SyncPlan:
 
     actions: tuple[SyncAction, ...]
     digest: str
+
+
+def plan_full_rebuild(
+    discovered: tuple[DiscoveredSource, ...],
+    active: tuple[ActiveSource, ...],
+) -> SyncPlan:
+    """为新物理 collection 规划全部来源重建。
+
+    Args:
+        discovered: 本次扫描的全部 DOCX。
+        active: 当前活动 manifest 中的来源身份。
+
+    Returns:
+        每个发现来源都需要重建、且仅携带可靠 source ID hint 的计划。
+
+    Raises:
+        ValueError: 输入含重复路径或重复活动 source ID。
+
+    """
+    discovered_by_path = _unique_discovered_paths(discovered)
+    active_by_path = _unique_active_paths(active)
+    _require_unique_active_ids(active)
+    hints: dict[str, str] = {}
+    matched_discovered: set[str] = set()
+    matched_active: set[str] = set()
+
+    for path in sorted(discovered_by_path.keys() & active_by_path.keys()):
+        hints[path] = active_by_path[path].source_id
+        matched_discovered.add(path)
+        matched_active.add(path)
+
+    unmatched_discovered = [
+        item
+        for item in discovered
+        if item.source_path not in matched_discovered
+    ]
+    unmatched_active = [
+        item for item in active if item.current_path not in matched_active
+    ]
+    discovered_by_hash = _group_discovered_by_hash(unmatched_discovered)
+    active_by_hash = _group_active_by_hash(unmatched_active)
+    for digest in sorted(discovered_by_hash.keys() & active_by_hash.keys()):
+        found_items = discovered_by_hash[digest]
+        current_items = active_by_hash[digest]
+        if len(found_items) == 1 and len(current_items) == 1:
+            hints[found_items[0].source_path] = current_items[0].source_id
+
+    actions = tuple(
+        SyncAction(
+            kind=SyncActionKind.ADD,
+            source_id=None,
+            previous_path=None,
+            source_path=source.source_path,
+            content_sha256=source.content_sha256,
+            source_id_hint=hints.get(source.source_path),
+        )
+        for source in sorted(discovered, key=lambda item: item.source_path)
+    )
+    return SyncPlan(actions=actions, digest=_plan_digest(actions))
 
 
 def plan_incremental_sync(
@@ -206,6 +267,12 @@ def _group_active_by_hash(
     for source in sources:
         grouped[source.content_sha256].append(source)
     return grouped
+
+
+def _require_unique_active_ids(sources: tuple[ActiveSource, ...]) -> None:
+    source_ids = {source.source_id for source in sources}
+    if len(source_ids) != len(sources):
+        raise ValueError("活动来源含重复 source ID。")
 
 
 def _action_sort_key(action: SyncAction) -> tuple[str, str]:

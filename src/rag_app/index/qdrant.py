@@ -20,6 +20,9 @@ _VERSION_ACTIVE = "active"
 _VERSION_RETIRED = "retired"
 _SHA256_HEX_LENGTH = 64
 _PAYLOAD_SCHEMA_VERSION = "2"
+_STAGING_JOB_KEY = "staging_control_job_id"
+_BASE_MANIFEST_KEY = "staging_base_manifest_sha256"
+_BASE_ACTIVE_COUNT_KEY = "staging_base_active_count"
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +139,227 @@ class QdrantIndex:
                 field_schema=models.PayloadSchemaType.DATETIME,
                 wait=True,
             )
+
+    def prepare_staging_collection(
+        self,
+        *,
+        control_job_id: str,
+        base_manifest_sha256: str | None,
+    ) -> None:
+        """创建或恢复同一 full job 的空 staging collection。
+
+        Args:
+            control_job_id: 创建 target 的 control job。
+            base_manifest_sha256: 发布前活动 manifest；首发时为 None。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 既有 collection 不属于同一 job、pipeline 或基线。
+
+        """
+        if self._client.collection_exists(self.collection_name):
+            self._validate_existing_collection()
+            self.require_staging_identity(
+                control_job_id=control_job_id,
+                base_manifest_sha256=base_manifest_sha256,
+            )
+            return
+        self.create_collection()
+        self._set_staging_identity(
+            control_job_id=control_job_id,
+            base_manifest_sha256=base_manifest_sha256,
+            base_active_count=0,
+        )
+
+    def clone_registered_snapshot(
+        self,
+        *,
+        source_collection_name: str,
+        snapshot_name: str,
+        checksum: str,
+        control_job_id: str,
+        base_manifest_sha256: str,
+    ) -> None:
+        """从已登记活动 snapshot 克隆新的物理 collection。
+
+        Args:
+            source_collection_name: snapshot 所属活动 collection。
+            snapshot_name: manifest 登记的安全 snapshot 文件名。
+            checksum: manifest 登记的 snapshot SHA256。
+            control_job_id: 创建 target 的 control job。
+            base_manifest_sha256: 冻结活动 manifest 摘要。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: snapshot、collection、schema 或 staging 身份不一致。
+            RuntimeError: Qdrant 未确认恢复，或恢复后活动点数不一致。
+
+        """
+        _validate_snapshot_identity(snapshot_name, checksum)
+        _require_collection_name(source_collection_name)
+        if source_collection_name == self.collection_name:
+            raise ValueError("增量 target collection 不能是活动 collection。")
+        if self._client.collection_exists(self.collection_name):
+            self._validate_existing_collection()
+            self.require_staging_identity(
+                control_job_id=control_job_id,
+                base_manifest_sha256=base_manifest_sha256,
+            )
+            return
+        if not self._client.collection_exists(source_collection_name):
+            raise ValueError("活动 source collection 不存在。")
+        self._validate_existing_collection(source_collection_name)
+        self.require_registered_snapshot(
+            collection_name=source_collection_name,
+            snapshot_name=snapshot_name,
+            checksum=checksum,
+        )
+        source_active_count = self.count_active_exact(
+            source_collection_name
+        )
+        location = (
+            "file:///qdrant/snapshots/"
+            f"{source_collection_name}/{snapshot_name}"
+        )
+        recovered = self._client.recover_snapshot(
+            collection_name=self.collection_name,
+            location=location,
+            checksum=checksum,
+            priority=models.SnapshotPriority.SNAPSHOT,
+            wait=True,
+        )
+        if recovered is not True:
+            raise RuntimeError("Qdrant 未确认 snapshot clone 成功。")
+        self._validate_existing_collection()
+        target_active_count = self.count_active_exact()
+        if target_active_count != source_active_count:
+            raise RuntimeError("snapshot clone 前后活动点精确计数不一致。")
+        self._set_staging_identity(
+            control_job_id=control_job_id,
+            base_manifest_sha256=base_manifest_sha256,
+            base_active_count=source_active_count,
+        )
+
+    def require_registered_snapshot(
+        self,
+        *,
+        collection_name: str,
+        snapshot_name: str,
+        checksum: str,
+    ) -> None:
+        """要求 manifest snapshot 仍在指定 collection 精确登记。
+
+        Args:
+            collection_name: snapshot 所属物理 collection。
+            snapshot_name: manifest 冻结的 snapshot 文件名。
+            checksum: manifest 冻结的 snapshot SHA256。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: collection 不兼容，或 snapshot 身份不唯一、不匹配。
+
+        """
+        _require_collection_name(collection_name)
+        _validate_snapshot_identity(snapshot_name, checksum)
+        if not self._client.collection_exists(collection_name):
+            raise ValueError("活动 source collection 不存在。")
+        self._validate_existing_collection(collection_name)
+        snapshots = [
+            snapshot
+            for snapshot in self._client.list_snapshots(collection_name)
+            if snapshot.name == snapshot_name
+        ]
+        if (
+            len(snapshots) != 1
+            or snapshots[0].checksum is None
+            or snapshots[0].checksum != checksum
+        ):
+            raise ValueError("活动 manifest snapshot 未在 Qdrant 精确登记。")
+
+    def require_staging_identity(
+        self,
+        *,
+        control_job_id: str,
+        base_manifest_sha256: str | None,
+    ) -> None:
+        """要求既有 target collection 属于同一 job 和基线。
+
+        Args:
+            control_job_id: 预期 control job。
+            base_manifest_sha256: 预期活动 manifest；首发时为 None。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: metadata 身份缺失或不一致。
+
+        """
+        actual_base = self.staging_base_manifest_sha256(
+            control_job_id=control_job_id
+        )
+        if actual_base != base_manifest_sha256:
+            raise ValueError("target collection staging 身份不一致。")
+
+    def staging_base_manifest_sha256(
+        self,
+        *,
+        control_job_id: str,
+    ) -> str | None:
+        """读取同一 control job 绑定的 base manifest 摘要。
+
+        Args:
+            control_job_id: 预期创建 target 的 control job。
+
+        Returns:
+            增量基线摘要；full 首发 target 返回 None。
+
+        Raises:
+            ValueError: staging metadata 缺失、格式无效或 job 不一致。
+
+        """
+        metadata = (
+            self._client.get_collection(self.collection_name).config.metadata
+            or {}
+        )
+        raw_base = metadata.get(_BASE_MANIFEST_KEY)
+        if (
+            metadata.get(_STAGING_JOB_KEY) != control_job_id
+            or not isinstance(raw_base, str)
+            or not isinstance(metadata.get(_BASE_ACTIVE_COUNT_KEY), int)
+        ):
+            raise ValueError("target collection staging 身份不一致。")
+        if not raw_base:
+            return None
+        _validate_sha256(raw_base, "base manifest")
+        return raw_base
+
+    def count_active_exact(
+        self,
+        collection_name: str | None = None,
+    ) -> int:
+        """精确统计物理 collection 的全部活动点。
+
+        Args:
+            collection_name: 可选 collection；默认使用当前 target。
+
+        Returns:
+            `version_state=active` 的精确点数。
+
+        """
+        return self._client.count(
+            collection_name or self.collection_name,
+            count_filter=models.Filter(
+                must=[_match("version_state", _VERSION_ACTIVE)]
+            ),
+            exact=True,
+        ).count
 
     def fetch_active_payloads(
         self,
@@ -606,16 +830,7 @@ class QdrantIndex:
             RuntimeError: Qdrant 未确认恢复成功。
 
         """
-        if (
-            not snapshot_name.endswith(".snapshot")
-            or "/" in snapshot_name
-            or "\\" in snapshot_name
-        ):
-            raise ValueError("snapshot_name 必须是安全的 snapshot 文件名。")
-        if len(checksum) != _SHA256_HEX_LENGTH or any(
-            character not in "0123456789abcdef" for character in checksum
-        ):
-            raise ValueError("snapshot checksum 必须是 64 位小写十六进制。")
+        _validate_snapshot_identity(snapshot_name, checksum)
         location = (
             "file:///qdrant/snapshots/"
             f"{self.collection_name}/{snapshot_name}"
@@ -630,6 +845,39 @@ class QdrantIndex:
         if recovered is not True:
             raise RuntimeError("Qdrant 未确认 snapshot 恢复成功。")
         self._validate_existing_collection()
+
+    def _set_staging_identity(
+        self,
+        *,
+        control_job_id: str,
+        base_manifest_sha256: str | None,
+        base_active_count: int,
+    ) -> None:
+        if not control_job_id:
+            raise ValueError("control_job_id 不能为空。")
+        if base_manifest_sha256 is not None:
+            _validate_sha256(base_manifest_sha256, "base manifest")
+        if base_active_count < 0:
+            raise ValueError("base_active_count 不能为负数。")
+        info = self._client.get_collection(self.collection_name)
+        metadata = dict(info.config.metadata or {})
+        metadata.update(
+            {
+                _STAGING_JOB_KEY: control_job_id,
+                _BASE_MANIFEST_KEY: base_manifest_sha256 or "",
+                _BASE_ACTIVE_COUNT_KEY: base_active_count,
+            }
+        )
+        updated = self._client.update_collection(
+            self.collection_name,
+            metadata=metadata,
+        )
+        if updated is not True:
+            raise RuntimeError("Qdrant 未确认 staging metadata 更新。")
+        self.require_staging_identity(
+            control_job_id=control_job_id,
+            base_manifest_sha256=base_manifest_sha256,
+        )
 
     def require_compatible_collection(
         self,
@@ -739,6 +987,28 @@ def _match(field: str, value: str) -> models.FieldCondition:
         key=field,
         match=models.MatchValue(value=value),
     )
+
+
+def _validate_snapshot_identity(name: str, checksum: str) -> None:
+    if (
+        not name.endswith(".snapshot")
+        or "/" in name
+        or "\\" in name
+    ):
+        raise ValueError("snapshot_name 必须是安全的 snapshot 文件名。")
+    _validate_sha256(checksum, "snapshot checksum")
+
+
+def _validate_sha256(value: str, label: str) -> None:
+    if len(value) != _SHA256_HEX_LENGTH or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise ValueError(f"{label} 必须是 64 位小写十六进制。")
+
+
+def _require_collection_name(value: str) -> None:
+    if not value or "/" in value or "\\" in value:
+        raise ValueError("collection 名称不安全。")
 
 
 def _point_id(doc_version: str, chunk_id: str) -> uuid.UUID:

@@ -1,6 +1,7 @@
 import uuid
 from pathlib import Path
 
+import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -532,3 +533,96 @@ def test_coordinator_recovers_qdrant_activation_after_process_crash(
     finally:
         if client.collection_exists(collection):
             client.delete_collection(collection)
+
+
+def test_registered_snapshot_clones_new_job_bound_collection() -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    source_name = f"rag-clone-source-{suffix}"
+    target_name = f"rag-clone-target-{suffix}"
+    unrelated_name = f"rag-clone-unrelated-{suffix}"
+    source = QdrantIndex(
+        client,
+        collection_name=source_name,
+        dense_dimension=_DIMENSION,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    target = QdrantIndex(
+        client,
+        collection_name=target_name,
+        dense_dimension=_DIMENSION,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    unrelated = QdrantIndex(
+        client,
+        collection_name=unrelated_name,
+        dense_dimension=_DIMENSION,
+        pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+    )
+    base_digest = "b" * 64
+    try:
+        source.create_collection()
+        source.stage_chunks([_indexed_chunk("a", "克隆证据", 1)])
+        source.activate_source_version(
+            _SOURCE_ID,
+            "sha256:" + "a" * 64,
+        )
+        snapshot = source.create_snapshot()
+        assert snapshot.checksum is not None
+
+        target.clone_registered_snapshot(
+            source_collection_name=source_name,
+            snapshot_name=snapshot.name,
+            checksum=snapshot.checksum,
+            control_job_id="job_clone",
+            base_manifest_sha256=base_digest,
+        )
+
+        assert target.count_active_exact() == source.count_active_exact() == 1
+        target.require_staging_identity(
+            control_job_id="job_clone",
+            base_manifest_sha256=base_digest,
+        )
+        target.clone_registered_snapshot(
+            source_collection_name=source_name,
+            snapshot_name=snapshot.name,
+            checksum=snapshot.checksum,
+            control_job_id="job_clone",
+            base_manifest_sha256=base_digest,
+        )
+        with pytest.raises(ValueError, match="staging 身份"):
+            target.require_staging_identity(
+                control_job_id="job_other",
+                base_manifest_sha256=base_digest,
+            )
+        unrelated.create_collection()
+        with pytest.raises(ValueError, match="staging 身份"):
+            unrelated.clone_registered_snapshot(
+                source_collection_name=source_name,
+                snapshot_name=snapshot.name,
+                checksum=snapshot.checksum,
+                control_job_id="job_clone",
+                base_manifest_sha256=base_digest,
+            )
+        with pytest.raises(ValueError, match="精确登记"):
+            QdrantIndex(
+                client,
+                collection_name=f"rag-clone-missing-{suffix}",
+                dense_dimension=_DIMENSION,
+                pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+            ).clone_registered_snapshot(
+                source_collection_name=source_name,
+                snapshot_name="missing.snapshot",
+                checksum="c" * 64,
+                control_job_id="job_clone",
+                base_manifest_sha256=base_digest,
+            )
+    finally:
+        for collection_name in (
+            source_name,
+            target_name,
+            unrelated_name,
+            f"rag-clone-missing-{suffix}",
+        ):
+            if client.collection_exists(collection_name):
+                client.delete_collection(collection_name)

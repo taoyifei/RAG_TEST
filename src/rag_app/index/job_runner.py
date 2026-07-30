@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,13 +17,14 @@ from rag_app.contracts import (
     SourceRecord,
 )
 from rag_app.index.build import discover_docx_sources
-from rag_app.index.planner import plan_incremental_sync
+from rag_app.index.planner import plan_full_rebuild, plan_incremental_sync
 from rag_app.index.publisher import FullIndexPublisher
 from rag_app.index.qdrant import QdrantIndex
 from rag_app.index.worker import SyncChunkBuilder, SyncWorker
-from rag_app.manifest import ManifestRepository
+from rag_app.manifest import ManifestRepository, ManifestState, StoredManifest
 from rag_app.state import Job, JobKind, JobState, StateStore
-from rag_app.state.models import ActiveSource
+from rag_app.state.lease import LeaseHeartbeat, LeaseLostError
+from rag_app.state.models import ActiveSource, CollectionStateIdentity
 from rag_app.state.plans import SyncPlanStore
 
 __all__ = [
@@ -73,6 +75,13 @@ class JobRunResult:
     error_code: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class _FrozenBase:
+    stored: StoredManifest
+    sources: tuple[ActiveSource, ...]
+    active_count: int | None
+
+
 class IndexJobRunner:
     """一次只领取一个控制任务，并在物理索引状态库中重入。"""
 
@@ -110,8 +119,46 @@ class IndexJobRunner:
         )
         if job is None:
             return None
+        heartbeat = LeaseHeartbeat.for_job(
+            store=self._services.control,
+            job_id=job.job_id,
+            worker_id=worker_id,
+            lease_seconds=self._config.lease_seconds,
+        )
+        try:
+            with heartbeat:
+                return self._run_with_control_lease(
+                    job,
+                    worker_id=worker_id,
+                    heartbeat=heartbeat,
+                )
+        except LeaseLostError:
+            self._mark_lease_lost_if_owned(job, worker_id)
+            return JobRunResult(
+                job_id=job.job_id,
+                collection_name=self._collection_name(job),
+                source_count=0,
+                state=JobState.FAILED,
+                error_code="LEASE_LOST",
+            )
+
+    def _run_with_control_lease(
+        self,
+        job: Job,
+        *,
+        worker_id: str,
+        heartbeat: LeaseHeartbeat,
+    ) -> JobRunResult:
+        guard = heartbeat.raise_if_failed
         if job.pipeline_fingerprint != self._fingerprint:
-            self._finish_failed(job, worker_id, "PIPELINE_INCOMPATIBLE")
+            guard()
+            heartbeat.close()
+            guard()
+            self._finish_owned(
+                job,
+                worker_id,
+                error_code="PIPELINE_INCOMPATIBLE",
+            )
             return JobRunResult(
                 job.job_id,
                 "",
@@ -120,13 +167,18 @@ class IndexJobRunner:
                 "PIPELINE_INCOMPATIBLE",
             )
         try:
-            result = self._run_claimed(job)
+            result = self._run_claimed(job, lease_guard=guard)
+        except LeaseLostError:
+            raise
         except Exception as error:
+            guard()
             error_code = f"INDEX_{type(error).__name__.upper()}"
-            self._finish_failed(
+            heartbeat.close()
+            guard()
+            self._finish_owned(
                 job,
                 worker_id,
-                error_code,
+                error_code=error_code,
             )
             return JobRunResult(
                 job.job_id,
@@ -135,34 +187,52 @@ class IndexJobRunner:
                 JobState.FAILED,
                 error_code,
             )
-        self._services.control.finish_job(
-            job_id=job.job_id,
-            worker_id=worker_id,
-            error_code=None,
-        )
+        guard()
+        heartbeat.close()
+        guard()
+        self._finish_owned(job, worker_id, error_code=None)
         return result
 
-    def _run_claimed(self, job: Job) -> JobRunResult:
-        if job.kind == JobKind.FULL:
-            collection_name = self._full_collection_name(job)
-            previous_sources: tuple[ActiveSource, ...] | None = ()
-        else:
-            active = self._services.manifests.get_active()
-            if active is None:
-                raise LookupError("增量任务要求已有活动 manifest。")
-            collection_name = active.manifest.collection_name
-            previous_sources = None
-
-        state = self._collection_state(collection_name)
-        plans = SyncPlanStore(state.path)
-        plans.initialize()
+    def _run_claimed(
+        self,
+        job: Job,
+        *,
+        lease_guard: Callable[[], None],
+    ) -> JobRunResult:
+        collection_name = self._collection_name(job)
         index = QdrantIndex(
             self._services.qdrant,
             collection_name=collection_name,
             dense_dimension=self._services.pipeline.embedding_dimension,
             pipeline_fingerprint=self._fingerprint,
         )
-        index.create_collection()
+        lease_guard()
+        published = self._published_result(job, index)
+        lease_guard()
+        if published is not None:
+            return published
+        base = self._freeze_base(job, collection_name, index)
+        lease_guard()
+        if job.kind == JobKind.FULL:
+            state = self._prepare_full_target(
+                job,
+                index,
+                base,
+                lease_guard=lease_guard,
+            )
+            previous_sources = () if base is None else base.sources
+        else:
+            if base is None:
+                raise LookupError("增量任务要求已有活动 manifest。")
+            state = self._prepare_incremental_target(
+                job,
+                index,
+                base,
+                lease_guard=lease_guard,
+            )
+            previous_sources = None
+        plans = SyncPlanStore(state.path)
+        plans.initialize()
         local_job = state.create_job(
             idempotency_key=f"control:{job.job_id}",
             kind=job.kind,
@@ -174,41 +244,37 @@ class IndexJobRunner:
                 if previous_sources is not None
                 else state.list_active_sources()
             )
-            plans.save(
-                local_job.job_id,
-                plan_incremental_sync(
-                    discover_docx_sources(self._config.input_root),
-                    active_sources,
-                ),
+            discovered = discover_docx_sources(self._config.input_root)
+            plan = (
+                plan_full_rebuild(discovered, active_sources)
+                if job.kind == JobKind.FULL
+                else plan_incremental_sync(discovered, active_sources)
             )
+            plans.save(local_job.job_id, plan)
         if local_job.state in {JobState.PENDING, JobState.RUNNING}:
             SyncWorker(state, plans, index).run_next(
                 worker_id=f"inner:{job.job_id}",
                 lease_seconds=self._config.lease_seconds,
                 build_chunks=self._services.build_chunks_factory(state),
+                lease_guard=lease_guard,
             )
         completed = state.get_job(local_job.job_id)
         if completed.state != JobState.SUCCEEDED:
             raise RuntimeError("物理索引同步任务未成功。")
 
+        lease_guard()
         manifest = self._manifest(job, collection_name, state)
-        if job.kind == JobKind.FULL:
-            FullIndexPublisher(
-                self._services.manifests,
-                index,
-                alias_name=self._config.alias_name,
-            ).publish(manifest)
-        else:
-            current = self._services.manifests.get_active()
-            if current is None or current.manifest != manifest:
-                snapshot = index.create_snapshot()
-                if snapshot.checksum is None:
-                    raise RuntimeError("Qdrant snapshot 缺少 checksum。")
-                self._services.manifests.record_active_revision(
-                    manifest,
-                    snapshot_name=snapshot.name,
-                    snapshot_checksum=snapshot.checksum,
-                )
+        self._require_base_unchanged(base, collection_name, index)
+        lease_guard()
+        FullIndexPublisher(
+            self._services.manifests,
+            index,
+            alias_name=self._config.alias_name,
+        ).publish(manifest, lease_guard=lease_guard)
+        lease_guard()
+        active = self._services.manifests.get_active()
+        if active is None or active.manifest != manifest:
+            raise RuntimeError("发布后 active manifest 与 target 不一致。")
         return JobRunResult(
             job_id=job.job_id,
             collection_name=collection_name,
@@ -217,15 +283,234 @@ class IndexJobRunner:
             error_code=None,
         )
 
-    def _collection_state(self, collection_name: str) -> StateStore:
-        digest = hashlib.sha256(collection_name.encode()).hexdigest()[:24]
-        state = StateStore(
-            self._config.index_state_dir / f"index-{digest}.sqlite3"
+    def _prepare_full_target(
+        self,
+        job: Job,
+        index: QdrantIndex,
+        base: _FrozenBase | None,
+        *,
+        lease_guard: Callable[[], None],
+    ) -> StateStore:
+        base_digest = None if base is None else base.stored.manifest_sha256
+        lease_guard()
+        index.prepare_staging_collection(
+            control_job_id=job.job_id,
+            base_manifest_sha256=base_digest,
         )
+        lease_guard()
+        state = self._collection_state(index.collection_name)
+        state.bind_collection_identity(
+            control_job_id=job.job_id,
+            pipeline_fingerprint=self._fingerprint,
+            base_manifest_sha256=base_digest,
+        )
+        return state
+
+    def _prepare_incremental_target(
+        self,
+        job: Job,
+        index: QdrantIndex,
+        base: _FrozenBase,
+        *,
+        lease_guard: Callable[[], None],
+    ) -> StateStore:
+        lease_guard()
+        index.clone_registered_snapshot(
+            source_collection_name=base.stored.manifest.collection_name,
+            snapshot_name=base.stored.snapshot_name,
+            checksum=base.stored.snapshot_checksum,
+            control_job_id=job.job_id,
+            base_manifest_sha256=base.stored.manifest_sha256,
+        )
+        lease_guard()
+        source_path = self._collection_state_path(
+            base.stored.manifest.collection_name
+        )
+        target_path = self._collection_state_path(index.collection_name)
+        lease_guard()
+        state = StateStore.clone_collection_state(
+            source_path=source_path,
+            target_path=target_path,
+            identity=CollectionStateIdentity(
+                control_job_id=job.job_id,
+                pipeline_fingerprint=self._fingerprint,
+                base_manifest_sha256=base.stored.manifest_sha256,
+            ),
+            expected_sources=base.sources,
+        )
+        lease_guard()
         state.initialize()
         return state
 
-    def _full_collection_name(self, job: Job) -> str:
+    def _freeze_base(
+        self,
+        job: Job,
+        collection_name: str,
+        target_index: QdrantIndex,
+    ) -> _FrozenBase | None:
+        active = self._services.manifests.get_active()
+        alias_target = target_index.alias_target(self._config.alias_name)
+        if active is None:
+            if not self._alias_is_recoverable(
+                alias_target,
+                collection_name,
+                base_collection=None,
+            ):
+                raise ValueError("alias 与空活动 manifest 不一致。")
+            return None
+        if not self._alias_is_recoverable(
+            alias_target,
+            collection_name,
+            base_collection=active.manifest.collection_name,
+        ):
+            raise ValueError("活动 alias 与 manifest collection 不一致。")
+        sources = tuple(
+            ActiveSource(
+                source_id=source.source_id,
+                current_path=source.current_path,
+                content_sha256=source.content_sha256,
+                doc_version=source.doc_version,
+            )
+            for source in active.manifest.sources
+        )
+        active_count = None
+        if job.kind == JobKind.INCREMENTAL:
+            if active.manifest.pipeline_fingerprint != self._fingerprint:
+                raise ValueError("增量任务 pipeline 与活动 manifest 不一致。")
+            source_index = QdrantIndex(
+                self._services.qdrant,
+                collection_name=active.manifest.collection_name,
+                dense_dimension=self._services.pipeline.embedding_dimension,
+                pipeline_fingerprint=self._fingerprint,
+            )
+            source_index.require_compatible_collection()
+            source_index.require_registered_snapshot(
+                collection_name=active.manifest.collection_name,
+                snapshot_name=active.snapshot_name,
+                checksum=active.snapshot_checksum,
+            )
+            active_count = source_index.count_active_exact()
+            self._require_base_state_sources(active, sources)
+        return _FrozenBase(
+            stored=active,
+            sources=sources,
+            active_count=active_count,
+        )
+
+    def _alias_is_recoverable(
+        self,
+        alias_target: str | None,
+        collection_name: str,
+        *,
+        base_collection: str | None,
+    ) -> bool:
+        if alias_target == base_collection:
+            return True
+        if alias_target != collection_name:
+            return False
+        target = self._services.manifests.get(collection_name)
+        return target is not None and target.state == ManifestState.STAGING
+
+    def _require_base_unchanged(
+        self,
+        base: _FrozenBase | None,
+        collection_name: str,
+        target_index: QdrantIndex,
+    ) -> None:
+        active = self._services.manifests.get_active()
+        if base is None:
+            if active is not None:
+                raise RuntimeError("构建期间 active manifest 已改变。")
+        elif active != base.stored:
+            raise RuntimeError("构建期间 active manifest 或 snapshot 已改变。")
+        alias_target = target_index.alias_target(self._config.alias_name)
+        base_collection = (
+            None if base is None else base.stored.manifest.collection_name
+        )
+        if not self._alias_is_recoverable(
+            alias_target,
+            collection_name,
+            base_collection=base_collection,
+        ):
+            raise RuntimeError("构建期间活动 alias 已改变。")
+        if base is not None and base.active_count is not None:
+            source_index = QdrantIndex(
+                self._services.qdrant,
+                collection_name=base_collection or "",
+                dense_dimension=self._services.pipeline.embedding_dimension,
+                pipeline_fingerprint=self._fingerprint,
+            )
+            source_index.require_registered_snapshot(
+                collection_name=base.stored.manifest.collection_name,
+                snapshot_name=base.stored.snapshot_name,
+                checksum=base.stored.snapshot_checksum,
+            )
+            if source_index.count_active_exact() != base.active_count:
+                raise RuntimeError("构建期间活动 collection 点数已改变。")
+            self._require_base_state_sources(base.stored, base.sources)
+
+    def _published_result(
+        self,
+        job: Job,
+        index: QdrantIndex,
+    ) -> JobRunResult | None:
+        active = self._services.manifests.get_active()
+        if (
+            active is None
+            or active.manifest.collection_name != index.collection_name
+            or index.alias_target(self._config.alias_name)
+            != index.collection_name
+        ):
+            return None
+        index.require_compatible_collection()
+        base_digest = index.staging_base_manifest_sha256(
+            control_job_id=job.job_id
+        )
+        state = self._collection_state(index.collection_name)
+        state.require_collection_identity(
+            control_job_id=job.job_id,
+            pipeline_fingerprint=self._fingerprint,
+            base_manifest_sha256=base_digest,
+        )
+        if tuple(
+            (source.source_id, source.current_path, source.content_sha256)
+            for source in state.list_active_sources()
+        ) != tuple(
+            (source.source_id, source.current_path, source.content_sha256)
+            for source in active.manifest.sources
+        ):
+            raise RuntimeError("已发布 target 的 manifest 与 state 不一致。")
+        return JobRunResult(
+            job_id=job.job_id,
+            collection_name=index.collection_name,
+            source_count=len(active.manifest.sources),
+            state=JobState.SUCCEEDED,
+            error_code=None,
+        )
+
+    def _collection_state(self, collection_name: str) -> StateStore:
+        state = StateStore(self._collection_state_path(collection_name))
+        state.initialize()
+        return state
+
+    def _require_base_state_sources(
+        self,
+        stored: StoredManifest,
+        expected_sources: tuple[ActiveSource, ...],
+    ) -> None:
+        state = StateStore(
+            self._collection_state_path(stored.manifest.collection_name)
+        )
+        if state.list_active_sources() != expected_sources:
+            raise RuntimeError(
+                "构建期间活动 collection state 来源列表已改变。"
+            )
+
+    def _collection_state_path(self, collection_name: str) -> Path:
+        digest = hashlib.sha256(collection_name.encode()).hexdigest()[:24]
+        return self._config.index_state_dir / f"index-{digest}.sqlite3"
+
+    def _collection_name(self, job: Job) -> str:
         fingerprint = self._fingerprint.removeprefix("sha256:")[:12]
         job_suffix = job.job_id.removeprefix("job_")[:12]
         return f"{self._config.collection_prefix}-{fingerprint}-{job_suffix}"
@@ -254,17 +539,35 @@ class IndexJobRunner:
             sources=sources,
         )
 
-    def _finish_failed(
+    def _finish_owned(
         self,
         job: Job,
         worker_id: str,
-        error_code: str,
+        *,
+        error_code: str | None,
     ) -> None:
-        self._services.control.finish_job(
-            job_id=job.job_id,
-            worker_id=worker_id,
-            error_code=error_code,
-        )
+        try:
+            self._services.control.finish_job(
+                job_id=job.job_id,
+                worker_id=worker_id,
+                error_code=error_code,
+            )
+        except (LookupError, sqlite3.Error):
+            raise LeaseLostError("LEASE_LOST") from None
+
+    def _mark_lease_lost_if_owned(
+        self,
+        job: Job,
+        worker_id: str,
+    ) -> None:
+        try:
+            self._services.control.finish_job(
+                job_id=job.job_id,
+                worker_id=worker_id,
+                error_code="LEASE_LOST",
+            )
+        except (LookupError, sqlite3.Error):
+            return
 
 
 def _utc_now() -> datetime:
