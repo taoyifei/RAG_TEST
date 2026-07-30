@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 
 from rag_app.chunking import TokenCounter
@@ -27,17 +28,47 @@ __all__ = [
     "RewriteTokenLimitError",
 ]
 
-_CONTEXT_SIGNALS = (
+_PRONOUN_SIGNALS = (
     "这个",
     "这些",
     "那个",
     "那些",
     "它",
-    "其",
     "其中",
     "上述",
+    "前述",
     "前者",
     "后者",
+)
+_TEMPORAL_SIGNALS = ("刚才", "前面", "上面")
+_PREVIOUS_ITEM_PATTERN = re.compile(r"上一(?:条|项|个)")
+_ORDINAL_PATTERN = re.compile(
+    r"第(?:\d+|[一二三四五六七八九十百千万两]+)(?:种|项|条|个)"
+)
+_CONTINUATION_PATTERN = re.compile(
+    r"^(?:请)?(?:"
+    r"继续(?:$|[，。！？?!\s]|说|说明|介绍|展开|补充|讲|回答)"
+    r"|再详细|还有吗|还有么|然后呢|那怎么办"
+    r")"
+)
+_DATE_PATTERN = re.compile(
+    r"(?<!\d)(\d{4})(?:年|[-/.])(\d{1,2})(?:月|[-/.])"
+    r"(\d{1,2})日?(?!\d)"
+)
+_PERCENT_PATTERN = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*[%％]")
+_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])"
+    r"(?=[A-Za-z0-9._/-]*[A-Za-z])"
+    r"(?=[A-Za-z0-9._/-]*\d)"
+    r"[A-Za-z0-9]+(?:[._/-][A-Za-z0-9]+)*"
+    r"(?![A-Za-z0-9])"
+)
+_CLAUSE_PATTERN = re.compile(r"(?<!\d)\d+(?:\.\d+){1,}(?!\d)")
+_NUMBER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])"
+)
+_QUOTED_NAME_PATTERN = re.compile(
+    r"“([^”\n]+)”|\"([^\"\n]+)\"|‘([^’\n]+)’"
 )
 _REWRITTEN_QUERY_COUNT = 2
 _SYSTEM_PROMPT = """你只负责把依赖上文的当前问题改成独立问题。
@@ -166,6 +197,7 @@ class QueryRewriter:
         stripped_question = question.strip()
         if not stripped_question:
             raise ValueError("当前问题不能为空。")
+        trigger_reason = _context_signal_reason(stripped_question)
         question_tokens = self._token_counter.count(stripped_question)
         if question_tokens > self._config.max_question_tokens:
             raise RewriteTokenLimitError(
@@ -181,6 +213,7 @@ class QueryRewriter:
                     messages=(),
                     generated=None,
                     max_output_tokens=self._config.max_output_tokens,
+                    trigger_reason=trigger_reason,
                 )
             )
         if not previous_questions:
@@ -190,14 +223,16 @@ class QueryRewriter:
                 (),
                 DecisionCode.NO_HISTORY,
                 question_tokens,
+                trigger_reason=trigger_reason,
             )
-        if not _has_context_signal(stripped_question):
+        if trigger_reason is None:
             return self._original(
                 stripped_question,
                 previous_questions,
                 (),
                 DecisionCode.NO_CONTEXT_SIGNAL,
                 question_tokens,
+                trigger_reason=trigger_reason,
             )
         selected_history = self._select_history(previous_questions)
         if not selected_history:
@@ -207,6 +242,7 @@ class QueryRewriter:
                 (),
                 DecisionCode.HISTORY_BUDGET_EMPTY,
                 question_tokens,
+                trigger_reason=trigger_reason,
             )
         user_payload = json.dumps(
             {
@@ -236,6 +272,7 @@ class QueryRewriter:
                 selected_history,
                 DecisionCode.REWRITE_MODEL_UNAVAILABLE,
                 question_tokens,
+                trigger_reason=trigger_reason,
                 messages=messages,
             )
         except ValueError:
@@ -245,6 +282,7 @@ class QueryRewriter:
                 selected_history,
                 DecisionCode.REWRITE_INVALID_SCHEMA,
                 question_tokens,
+                trigger_reason=trigger_reason,
                 messages=messages,
             )
         try:
@@ -256,6 +294,7 @@ class QueryRewriter:
                 selected_history,
                 DecisionCode.REWRITE_INVALID_SCHEMA,
                 question_tokens,
+                trigger_reason=trigger_reason,
                 messages=messages,
                 generated=generated,
             )
@@ -266,6 +305,22 @@ class QueryRewriter:
                 selected_history,
                 DecisionCode.REWRITE_SAME_AS_ORIGINAL,
                 question_tokens,
+                trigger_reason=trigger_reason,
+                messages=messages,
+                generated=generated,
+            )
+        if not _anchors_valid(
+            stripped_question,
+            selected_history,
+            rewritten,
+        ):
+            return self._original(
+                stripped_question,
+                previous_questions,
+                selected_history,
+                DecisionCode.REWRITE_ANCHOR_DRIFT,
+                question_tokens,
+                trigger_reason=trigger_reason,
                 messages=messages,
                 generated=generated,
             )
@@ -277,6 +332,7 @@ class QueryRewriter:
                 selected_history,
                 DecisionCode.REWRITE_TOKEN_LIMIT,
                 question_tokens,
+                trigger_reason=trigger_reason,
                 messages=messages,
                 generated=generated,
             )
@@ -297,6 +353,7 @@ class QueryRewriter:
                 messages=messages,
                 generated=generated,
                 max_output_tokens=self._config.max_output_tokens,
+                trigger_reason=trigger_reason,
             ),
         )
 
@@ -312,7 +369,21 @@ class QueryRewriter:
         """
         serialized = json.dumps(
             {
-                "context_signals": _CONTEXT_SIGNALS,
+                "trigger_rules": {
+                    "continuation": _CONTINUATION_PATTERN.pattern,
+                    "ordinal": _ORDINAL_PATTERN.pattern,
+                    "previous_item": _PREVIOUS_ITEM_PATTERN.pattern,
+                    "pronoun": _PRONOUN_SIGNALS,
+                    "temporal": _TEMPORAL_SIGNALS,
+                },
+                "anchor_patterns": (
+                    _DATE_PATTERN.pattern,
+                    _PERCENT_PATTERN.pattern,
+                    _IDENTIFIER_PATTERN.pattern,
+                    _CLAUSE_PATTERN.pattern,
+                    _NUMBER_PATTERN.pattern,
+                    _QUOTED_NAME_PATTERN.pattern,
+                ),
                 "response_format": _RESPONSE_FORMAT,
                 "system_prompt": _SYSTEM_PROMPT,
             },
@@ -358,6 +429,7 @@ class QueryRewriter:
         reason: DecisionCode,
         question_tokens: int,
         *,
+        trigger_reason: DecisionCode | None,
         messages: tuple[ChatMessage, ...] = (),
         generated: LlmGeneration | None = None,
     ) -> QueryVariants:
@@ -369,6 +441,7 @@ class QueryRewriter:
             selected_history: 在 token 预算内选中的历史问题。
             reason: 不采用改写结果的稳定原因码。
             question_tokens: 原问题的 token 数量。
+            trigger_reason: 命中的确定性触发规则类别。
             messages: 已发送给模型的消息；未调用模型时为空。
             generated: 可选的模型生成结果。
 
@@ -393,12 +466,99 @@ class QueryRewriter:
                 messages=messages,
                 generated=generated,
                 max_output_tokens=self._config.max_output_tokens,
+                trigger_reason=trigger_reason,
             ),
         )
 
 
-def _has_context_signal(question: str) -> bool:
-    return any(signal in question for signal in _CONTEXT_SIGNALS)
+def _context_signal_reason(question: str) -> DecisionCode | None:
+    if any(signal in question for signal in _PRONOUN_SIGNALS):
+        return DecisionCode.REWRITE_TRIGGER_PRONOUN
+    if (
+        any(signal in question for signal in _TEMPORAL_SIGNALS)
+        or _PREVIOUS_ITEM_PATTERN.search(question) is not None
+    ):
+        return DecisionCode.REWRITE_TRIGGER_TEMPORAL
+    if _ORDINAL_PATTERN.search(question) is not None:
+        return DecisionCode.REWRITE_TRIGGER_ORDINAL
+    if _CONTINUATION_PATTERN.search(question) is not None:
+        return DecisionCode.REWRITE_TRIGGER_CONTINUATION
+    return None
+
+
+def _anchors_valid(
+    question: str,
+    selected_history: tuple[str, ...],
+    rewritten: str,
+) -> bool:
+    question_anchors = _extract_anchors(question)
+    rewritten_anchors = _extract_anchors(rewritten)
+    history_anchors = frozenset(
+        anchor
+        for historical_question in selected_history
+        for anchor in _extract_anchors(historical_question)
+    )
+    if any(
+        not _anchor_present(anchor, rewritten_anchors, rewritten)
+        for anchor in question_anchors
+    ):
+        return False
+    return rewritten_anchors <= question_anchors | history_anchors
+
+
+def _extract_anchors(text: str) -> frozenset[str]:
+    anchors: set[str] = set()
+    for match in _DATE_PATTERN.finditer(text):
+        year, month, day = (
+            _normalize_number(value) for value in match.groups()
+        )
+        anchors.add(f"date:{year}-{month}-{day}")
+    anchors.update(
+        f"percent:{_normalize_number(match.group(1))}"
+        for match in _PERCENT_PATTERN.finditer(text)
+    )
+    anchors.update(
+        f"identifier:{match.group(0).casefold()}"
+        for match in _IDENTIFIER_PATTERN.finditer(text)
+    )
+    anchors.update(
+        f"clause:{match.group(0)}"
+        for match in _CLAUSE_PATTERN.finditer(text)
+    )
+    anchors.update(
+        f"number:{_normalize_number(match.group(0))}"
+        for match in _NUMBER_PATTERN.finditer(text)
+    )
+    anchors.update(
+        f"ordinal:{match.group(0)}"
+        for match in _ORDINAL_PATTERN.finditer(text)
+    )
+    for match in _QUOTED_NAME_PATTERN.finditer(text):
+        name = next(
+            value.strip() for value in match.groups() if value is not None
+        )
+        if name:
+            anchors.add(f"name:{name.casefold()}")
+    return frozenset(anchors)
+
+
+def _anchor_present(
+    anchor: str,
+    rewritten_anchors: frozenset[str],
+    rewritten: str,
+) -> bool:
+    if anchor.startswith("name:"):
+        return anchor.removeprefix("name:") in rewritten.casefold()
+    return anchor in rewritten_anchors
+
+
+def _normalize_number(value: str) -> str:
+    integer, separator, fraction = value.partition(".")
+    normalized_integer = str(int(integer))
+    normalized_fraction = fraction.rstrip("0")
+    if separator and normalized_fraction:
+        return f"{normalized_integer}.{normalized_fraction}"
+    return normalized_integer
 
 
 def _parse_rewrite(content: str) -> str:
@@ -424,6 +584,7 @@ def _rewrite_trace(  # noqa: PLR0913
     messages: tuple[ChatMessage, ...],
     generated: LlmGeneration | None,
     max_output_tokens: int,
+    trigger_reason: DecisionCode | None,
 ) -> dict[str, JsonValue]:
     """构造查询改写决策的完整诊断属性。
 
@@ -439,6 +600,7 @@ def _rewrite_trace(  # noqa: PLR0913
         messages: 实际发送给模型的消息。
         generated: 可选的模型生成结果。
         max_output_tokens: 改写调用的输出 token 上限。
+        trigger_reason: 命中的确定性触发规则类别。
 
     Returns:
         包含摘要、token 计数、输入和可选模型响应的 Trace 属性。
@@ -449,8 +611,17 @@ def _rewrite_trace(  # noqa: PLR0913
         ensure_ascii=False,
         separators=(",", ":"),
     )
+    persisted_reason = (
+        trigger_reason
+        if reason is DecisionCode.REWRITE_OK and trigger_reason is not None
+        else reason
+    )
     trace: dict[str, JsonValue] = {
-        "reason_code": reason.value,
+        "reason_code": persisted_reason.value,
+        "rewrite_result_code": reason.value,
+        "trigger_reason_code": (
+            None if trigger_reason is None else trigger_reason.value
+        ),
         "question_sha256": _sha256(question),
         "history_sha256": _sha256(history_json),
         "resolved_query_sha256": _sha256(resolved_query),
