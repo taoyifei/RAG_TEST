@@ -237,6 +237,21 @@ class Chunker:
         return self._ocr_drafts(run.elements[0])
 
     def _text_drafts(self, elements: tuple[Element, ...]) -> tuple[_Draft, ...]:
+        """按正文语义边界生成不突破硬上限的草稿。
+
+        普通元素可以继续与相邻元素装包；被迫拆分的长元素片段保持独立，
+        避免重新组合后突破 token 上限。
+
+        Args:
+            elements: 同一正文 run 内按原文顺序排列的元素。
+
+        Returns:
+            保留原始字符定位的正文草稿。
+
+        Raises:
+            ValueError: 超长文本无法在硬上限内取得前进切点。
+
+        """
         pieces: list[_Piece] = []
         for element in elements:
             if self._tokens.count(element.text) <= self._config.hard_max_tokens:
@@ -276,6 +291,18 @@ class Chunker:
         )
 
     def _table_drafts(self, element: Element) -> tuple[_Draft, ...]:
+        """把表格转换为重复表头且行边界稳定的草稿。
+
+        Args:
+            element: 包含按行渲染表格文本的单个表格元素。
+
+        Returns:
+            保留表头上下文和原始字符定位的表格草稿。
+
+        Raises:
+            ValueError: 单行表格内容无法在硬上限内取得前进切点。
+
+        """
         rows = _lines(element.text)
         if not rows:
             return ()
@@ -342,6 +369,22 @@ class Chunker:
         header: _Piece,
         row: _Piece,
     ) -> tuple[_Draft, ...]:
+        """在保留表头的前提下切分超长表格行。
+
+        单元格边界优先于通用语义边界，每个结果都携带重复表头，
+        同时保持数据行相对于原表格元素的字符定位。
+
+        Args:
+            header: 需要附加到每个片段的表头。
+            row: 与表头组合后超过硬上限的数据行。
+
+        Returns:
+            可独立检索且不突破 token 硬上限的表格草稿。
+
+        Raises:
+            ValueError: 数据行无法在硬上限内取得前进切点。
+
+        """
         prefix = f"{header.text}\n"
         cell_boundaries = tuple(
             index + 3
@@ -371,6 +414,21 @@ class Chunker:
         return tuple(drafts)
 
     def _ocr_drafts(self, element: Element) -> tuple[_Draft, ...]:
+        """按 OCR 行边界生成独立于正文的草稿。
+
+        可容纳的行参与连续装包，超长行按语义边界拆分后保持独立，
+        以免丢失 OCR 文本的原始字符定位。
+
+        Args:
+            element: 已通过 OCR 证据判定的图片元素。
+
+        Returns:
+            按行组织并保留来源跨度的 OCR 草稿。
+
+        Raises:
+            ValueError: 超长 OCR 行无法在硬上限内取得前进切点。
+
+        """
         lines = [
             _Piece(element, text, start, end)
             for text, start, end in _lines(element.text)
@@ -416,6 +474,16 @@ class Chunker:
         pieces: list[_Piece],
         render: Callable[[tuple[_Piece, ...]], str],
     ) -> tuple[tuple[_Piece, ...], ...]:
+        """按目标 token 数贪心装包，并在安全时合并尾组。
+
+        Args:
+            pieces: 不可再拆分且按原文排序的内容片段。
+            render: 把候选片段组渲染为实际计数文本的函数。
+
+        Returns:
+            保持输入顺序且每组不超过硬上限的片段组。
+
+        """
         if not pieces:
             return ()
         groups: list[tuple[_Piece, ...]] = []
@@ -449,6 +517,20 @@ class Chunker:
         prefix: str = "",
         primary_boundaries: tuple[int, ...] = (),
     ) -> tuple[tuple[int, int], ...]:
+        """生成带受限语义重叠的半开字符区间。
+
+        Args:
+            text: 需要切分的单个原子文本。
+            prefix: 每个片段计入 token 预算的固定前缀。
+            primary_boundaries: 优先于通用标点的候选结束位置。
+
+        Returns:
+            覆盖原文且单段不突破硬上限的 ``(start, end)`` 区间。
+
+        Raises:
+            ValueError: 当前配置无法生成严格向前推进的片段。
+
+        """
         segments: list[tuple[int, int]] = []
         start = 0
         while start < len(text):
@@ -484,6 +566,18 @@ class Chunker:
         prefix: str,
         primary_boundaries: tuple[int, ...],
     ) -> int:
+        """选择兼顾目标长度和语义完整性的片段结束位置。
+
+        Args:
+            text: 当前原子文本。
+            start: 当前片段的起始字符位置。
+            prefix: 每个候选片段计入 token 预算的固定前缀。
+            primary_boundaries: 业务结构提供的优先结束位置。
+
+        Returns:
+            不超过硬上限且严格位于 ``start`` 之后的结束位置。
+
+        """
         target_end = _largest_fitting_end(
             text,
             start,
@@ -522,6 +616,22 @@ class Chunker:
         drafts: tuple[_Draft, ...],
         metadata: DocumentMetadata,
     ) -> list[Chunk]:
+        """把同一 run 的草稿固化为身份和来源信息完整的 chunks。
+
+        固化过程为重复表头标记分段序号，并把稳定身份、内容摘要、
+        检索文本及文档治理元数据绑定到最终对象。
+
+        Args:
+            source_id: manifest 持久保存的来源标识。
+            doc_version: 当前不可变文档版本。
+            run: 草稿所属的 section、邻居组和结构角色。
+            drafts: 已满足 token 边界的有序草稿。
+            metadata: 从 corpus policy 解析的文档治理元数据。
+
+        Returns:
+            尚未写入前后邻居链接的最终 chunks。
+
+        """
         chunks: list[Chunk] = []
         for segment_index, draft in enumerate(drafts, start=1):
             spans = tuple(
@@ -595,6 +705,19 @@ class Chunker:
 
 
 def _sections(source_id: str, elements: list[Element]) -> tuple[_Section, ...]:
+    """按标题上下文划分稳定且不包含标题本身的 sections。
+
+    Args:
+        source_id: 用于生成稳定 section 身份的来源标识。
+        elements: 按原文顺序排列的解析元素。
+
+    Returns:
+        携带当前标题路径和标题序号的非空 sections。
+
+    Raises:
+        ValueError: 标题元素缺少生成稳定身份所需的标题序号。
+
+    """
     sections: list[_Section] = []
     heading_path: tuple[str, ...] = ()
     heading_index: int | None = None
@@ -643,6 +766,19 @@ def _sections(source_id: str, elements: list[Element]) -> tuple[_Section, ...]:
 
 
 def _runs(source_id: str, section: _Section) -> tuple[_Run, ...]:
+    """把 section 划分为正文连续、表格隔离和 OCR 隔离的 runs。
+
+    空正文和不构成 OCR 证据的图片不会进入结果；每个 run 的身份由
+    section、结构角色、顺序及原始元素共同确定。
+
+    Args:
+        source_id: 用于生成稳定邻居组身份的来源标识。
+        section: 待按结构边界划分的 section。
+
+    Returns:
+        保持原文顺序且角色单一的非空 runs。
+
+    """
     runs: list[_Run] = []
     text_elements: list[Element] = []
     run_index = 0
@@ -734,6 +870,16 @@ def _spans(
     pieces: tuple[_Piece, ...],
     separator: Callable[[_Piece, _Piece], str],
 ) -> tuple[ChunkSourceSpan, ...]:
+    """同时记录片段在渲染文本和原始元素中的字符区间。
+
+    Args:
+        pieces: 按渲染顺序排列且携带原文区间的片段。
+        separator: 计算相邻片段间渲染分隔符的函数。
+
+    Returns:
+        与输入片段一一对应的来源跨度；分隔符只推进渲染游标。
+
+    """
     spans: list[ChunkSourceSpan] = []
     cursor = 0
     for index, piece in enumerate(pieces):
@@ -774,6 +920,18 @@ def _preferred_boundary(
     limit: int,
     primary: tuple[int, ...],
 ) -> int | None:
+    """按结构、段落和标点优先级选择最靠后的合法边界。
+
+    Args:
+        text: 提供通用语义边界的完整文本。
+        start: 当前片段起始字符位置。
+        limit: 允许选择的最远结束位置。
+        primary: 业务结构提供的最高优先级边界。
+
+    Returns:
+        首个有候选值的优先级中最靠后的边界，或无候选时返回 ``None``。
+
+    """
     priorities = (
         tuple(index for index in primary if start < index <= limit),
         tuple(index + 2 for index in _find_all(text, "\n\n")),
@@ -803,6 +961,19 @@ def _semantic_overlap_start(
     overlap_tokens: int,
     token_counter: TokenCounter,
 ) -> int:
+    """在完整句末边界上选择不超过预算的重叠起点。
+
+    Args:
+        text: 包含当前片段的完整文本。
+        segment_start: 当前片段起始字符位置。
+        segment_end: 当前片段结束字符位置。
+        overlap_tokens: 下一片段允许复用的最大 token 数。
+        token_counter: 与索引 embedding 模型一致的计数器。
+
+    Returns:
+        满足预算的最近句末位置；无安全边界时不产生重叠。
+
+    """
     if overlap_tokens == 0:
         return segment_end
     candidates = sorted(
@@ -827,6 +998,19 @@ def _largest_fitting_end(
     token_counter: TokenCounter,
     prefix: str,
 ) -> int:
+    """查找从 ``start`` 起不超过 token 预算的最远结束位置。
+
+    Args:
+        text: 待测量的完整文本。
+        start: 候选片段起始字符位置。
+        max_tokens: 固定前缀和候选正文共用的 token 上限。
+        token_counter: 与索引 embedding 模型一致的计数器。
+        prefix: 每个候选片段计入预算的固定前缀。
+
+    Returns:
+        可容纳的最大半开区间结束位置；无字符可容纳时返回 ``start``。
+
+    """
     low = start + 1
     high = len(text)
     best = start

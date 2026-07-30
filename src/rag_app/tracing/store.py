@@ -800,6 +800,19 @@ class TraceStore:
 
 
 def _canonical_database_path(path: Path) -> Path:
+    """校验数据库路径并拒绝符号链接父目录。
+
+    Args:
+        path: 配置提供的 Trace 数据库文件路径。
+
+    Returns:
+        使用已解析真实父目录组成的绝对数据库路径。
+
+    Raises:
+        ValueError: 路径不是绝对路径、文件名无效、父目录不存在，
+            或父目录解析结果发生变化。
+
+    """
     if not path.is_absolute():
         raise ValueError("RAG_TRACE_DATABASE 必须是绝对路径。")
     if path.name in {"", ".", ".."}:
@@ -814,6 +827,19 @@ def _canonical_database_path(path: Path) -> Path:
 
 
 def _secure_create_database(path: Path) -> None:
+    """以私有权限创建数据库文件或验证现有文件权限。
+
+    Args:
+        path: 已通过父目录规范化检查的数据库路径。
+
+    Returns:
+        无返回值。
+
+    Raises:
+        ValueError: 目标是符号链接，或现有文件向组或其他用户开放。
+        OSError: 独占创建或关闭新文件失败。
+
+    """
     if path.is_symlink():
         raise ValueError("Trace 数据库不能是符号链接。")
     if not path.exists():

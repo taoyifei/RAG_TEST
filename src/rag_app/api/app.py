@@ -453,6 +453,21 @@ def _admit_query_stream(
     trace_id: str,
     trace_mode: TraceMode = TraceMode.SAFE,
 ) -> Iterator[bytes]:
+    """校验查询依赖并创建受容量限制的流式响应。
+
+    Args:
+        services: API 已配置的运行时服务。
+        request: 已通过 schema 校验的聊天请求。
+        trace_id: 本次查询的稳定追踪标识。
+        trace_mode: 本次请求允许使用的 Trace 模式。
+
+    Returns:
+        按需生成 NDJSON 消息的字节迭代器。
+
+    Raises:
+        HTTPException: 查询服务不可用或执行容量已耗尽。
+
+    """
     query = _require_service(services.query)
     query_executor = _require_service(services.query_executor)
     try:

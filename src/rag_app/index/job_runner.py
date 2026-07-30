@@ -149,6 +149,23 @@ class IndexJobRunner:
         worker_id: str,
         heartbeat: LeaseHeartbeat,
     ) -> JobRunResult:
+        """在控制租约保护下执行任务并持久化终态。
+
+        pipeline 不兼容和普通执行异常会转换为失败摘要。写入任务终态前会
+        停止 heartbeat 并再次确认租约，避免失去所有权后覆盖其他 worker。
+
+        Args:
+            job: 已由当前 worker 领取的控制任务。
+            worker_id: 当前租约所有者。
+            heartbeat: 该控制任务的续租器。
+
+        Returns:
+            成功或失败的任务执行摘要。
+
+        Raises:
+            LeaseLostError: 执行期间失去任务租约。
+
+        """
         guard = heartbeat.raise_if_failed
         if job.pipeline_fingerprint != self._fingerprint:
             guard()
@@ -199,6 +216,25 @@ class IndexJobRunner:
         *,
         lease_guard: Callable[[], None],
     ) -> JobRunResult:
+        """重入或执行已领取任务，直至目标 collection 发布完成。
+
+        此过程可能创建或克隆物理 collection、更新独立状态库、执行同步计划，
+        并在最终一致性检查后切换 alias 与活动 manifest。
+
+        Args:
+            job: 已领取且 pipeline 兼容的控制任务。
+            lease_guard: 各持久化边界前后的租约检查函数。
+
+        Returns:
+            已发布目标 collection 的成功摘要。
+
+        Raises:
+            LeaseLostError: 任一持久化边界检测到租约丢失。
+            LookupError: 增量任务没有可冻结的活动基线。
+            ValueError: 活动基线、target 身份或索引契约不一致。
+            RuntimeError: 物理同步或发布后的三方一致性检查失败。
+
+        """
         collection_name = self._collection_name(job)
         index = QdrantIndex(
             self._services.qdrant,
@@ -291,6 +327,22 @@ class IndexJobRunner:
         *,
         lease_guard: Callable[[], None],
     ) -> StateStore:
+        """为全量任务准备绑定当前控制任务的空 target。
+
+        Args:
+            job: 当前控制任务。
+            index: 任务对应的 target collection。
+            base: 发布前冻结的活动基线；首发时为 None。
+            lease_guard: Qdrant 与 SQLite 写入边界的租约检查函数。
+
+        Returns:
+            已初始化并绑定 staging 身份的 target 状态库。
+
+        Raises:
+            LeaseLostError: 准备期间失去控制任务租约。
+            ValueError: 已存在 target 的 staging 身份不一致。
+
+        """
         base_digest = None if base is None else base.stored.manifest_sha256
         lease_guard()
         index.prepare_staging_collection(
@@ -314,6 +366,24 @@ class IndexJobRunner:
         *,
         lease_guard: Callable[[], None],
     ) -> StateStore:
+        """从冻结基线克隆增量任务的 Qdrant 与 SQLite target。
+
+        Args:
+            job: 当前增量控制任务。
+            index: 任务对应的 target collection。
+            base: 已验证 snapshot、来源和活动点数的冻结基线。
+            lease_guard: 两类存储克隆边界的租约检查函数。
+
+        Returns:
+            已初始化并绑定 staging 身份的 target 状态库。
+
+        Raises:
+            LeaseLostError: 克隆期间失去控制任务租约。
+            FileNotFoundError: 活动 collection 状态库不存在或不安全。
+            ValueError: snapshot、来源列表或 staging 身份不一致。
+            RuntimeError: Qdrant 未确认恢复或活动点数发生变化。
+
+        """
         lease_guard()
         index.clone_registered_snapshot(
             source_collection_name=base.stored.manifest.collection_name,
@@ -348,6 +418,24 @@ class IndexJobRunner:
         collection_name: str,
         target_index: QdrantIndex,
     ) -> _FrozenBase | None:
+        """冻结发布前活动索引的身份、来源和精确点数。
+
+        全量首发可以没有活动基线。增量任务还会验证 pipeline、已登记
+        snapshot 及独立状态库，并保存活动点数供发布前再次比较。
+
+        Args:
+            job: 当前控制任务。
+            collection_name: 当前任务的 target collection 名称。
+            target_index: 用于读取 alias 和活动 collection 的索引客户端。
+
+        Returns:
+            冻结的活动基线；全量首发时返回 None。
+
+        Raises:
+            ValueError: alias、pipeline、collection 或 snapshot 身份不一致。
+            RuntimeError: 活动状态库的来源列表与 manifest 不一致。
+
+        """
         active = self._services.manifests.get_active()
         alias_target = target_index.alias_target(self._config.alias_name)
         if active is None:
@@ -404,6 +492,17 @@ class IndexJobRunner:
         *,
         base_collection: str | None,
     ) -> bool:
+        """判断 alias 是否仍对应基线或可恢复的 staging target。
+
+        Args:
+            alias_target: 当前 alias 指向的 collection；不存在时为 None。
+            collection_name: 当前控制任务的 target collection。
+            base_collection: 冻结基线 collection；首发时为 None。
+
+        Returns:
+            alias 指向基线，或指向同一任务的 staging target 时返回 True。
+
+        """
         if alias_target == base_collection:
             return True
         if alias_target != collection_name:
@@ -417,6 +516,21 @@ class IndexJobRunner:
         collection_name: str,
         target_index: QdrantIndex,
     ) -> None:
+        """在发布前确认活动基线未被其他任务替换或改写。
+
+        Args:
+            base: 构建开始时冻结的活动基线；首发时为 None。
+            collection_name: 当前任务的 target collection。
+            target_index: 用于复核 alias、snapshot 和活动点数的索引客户端。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            RuntimeError: manifest、alias、活动点数或来源列表发生变化。
+            ValueError: 已登记 snapshot 不再存在或与冻结身份不一致。
+
+        """
         active = self._services.manifests.get_active()
         if base is None:
             if active is not None:
@@ -454,6 +568,23 @@ class IndexJobRunner:
         job: Job,
         index: QdrantIndex,
     ) -> JobRunResult | None:
+        """识别并校验同一任务已经完成发布的重入状态。
+
+        只有 alias、活动 manifest、物理 collection 和独立状态库全部对应
+        当前 target 时才返回成功摘要。
+
+        Args:
+            job: 当前控制任务。
+            index: 当前任务的 target collection。
+
+        Returns:
+            已发布任务的成功摘要；target 尚未发布时返回 None。
+
+        Raises:
+            ValueError: collection 契约或 staging 身份不一致。
+            RuntimeError: manifest 与独立状态库的来源列表不一致。
+
+        """
         active = self._services.manifests.get_active()
         if (
             active is None

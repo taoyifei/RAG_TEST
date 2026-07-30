@@ -387,6 +387,20 @@ def _validate_answer(
     *,
     calls: tuple[ExternalCallAudit, ...],
 ) -> AnswerResult:
+    """校验模型回答 schema 及其全部证据约束。
+
+    Args:
+        content: LLM 返回的原始 JSON 文本。
+        evidence: 本次生成允许引用的证据集合。
+        calls: 本次回答包含的外部调用审计记录。
+
+    Returns:
+        已通过逐项引用校验的回答或规范拒答。
+
+    Raises:
+        _ValidationError: JSON、回答状态、声明或引用不满足发布契约。
+
+    """
     try:
         payload = json.loads(content)
     except json.JSONDecodeError as error:
@@ -435,6 +449,19 @@ def _validate_claim(
     raw_claim: object,
     evidence_by_id: dict[str, EvidenceItem],
 ) -> AnswerClaim:
+    """校验单条声明及其证据覆盖范围。
+
+    Args:
+        raw_claim: 模型生成的未信任声明值。
+        evidence_by_id: 本次允许引用的证据映射。
+
+    Returns:
+        引用唯一、包含安全证据且数字受支持的声明。
+
+    Raises:
+        _ValidationError: 声明 schema、引用或数字支持不符合契约。
+
+    """
     if not isinstance(raw_claim, dict) or set(raw_claim) != {
         "text",
         "supports",
@@ -478,6 +505,19 @@ def _validate_support(
     raw_support: object,
     evidence_by_id: dict[str, EvidenceItem],
 ) -> ClaimSupport:
+    """把单条模型引用绑定到真实证据与唯一定位。
+
+    Args:
+        raw_support: 模型生成的未信任引用值。
+        evidence_by_id: 本次允许引用的证据映射。
+
+    Returns:
+        已验证逐字引文及其来源定位。
+
+    Raises:
+        _ValidationError: 引用 schema、证据 ID、原文或定位无效。
+
+    """
     if not isinstance(raw_support, dict) or set(raw_support) != {
         "evidence_id",
         "quote",
@@ -580,6 +620,18 @@ def _generation_trace(
     messages: tuple[ChatMessage, ...],
     max_output_tokens: int,
 ) -> dict[str, JsonValue]:
+    """构造一次生成调用的完整诊断属性。
+
+    Args:
+        generated: 已通过客户端响应校验的生成结果。
+        phase: 初次生成或修复阶段标识。
+        messages: 实际发送给模型的消息。
+        max_output_tokens: 本次调用使用的输出 token 上限。
+
+    Returns:
+        包含调用、用量、请求和原始输出的 Trace 属性。
+
+    """
     return {
         "phase": phase,
         "model": generated.model,
@@ -613,6 +665,20 @@ def _repair_failure_trace(  # noqa: PLR0913, PLR0917
     generations: list[JsonValue],
     config: AnswerConfig,
 ) -> dict[str, JsonValue]:
+    """构造回答修复仍失败时的完整诊断属性。
+
+    Args:
+        first_code: 初次回答的稳定校验失败码。
+        repair_code: 修复回答的稳定校验失败码。
+        messages: 初次生成使用的消息。
+        repair_messages: 修复生成使用的消息。
+        generations: 两次模型调用的诊断记录。
+        config: 冻结的回答输出预算。
+
+    Returns:
+        描述两次校验失败及调用上下文的 Trace 属性。
+
+    """
     return {
         "first_validation_code": first_code,
         "repair_triggered": True,

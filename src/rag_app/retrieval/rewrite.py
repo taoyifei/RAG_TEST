@@ -326,6 +326,15 @@ class QueryRewriter:
         self,
         previous_questions: tuple[str, ...],
     ) -> tuple[str, ...]:
+        """从最近问题向前选取不超过 token 预算的连续历史。
+
+        Args:
+            previous_questions: 按时间顺序排列的历史问题。
+
+        Returns:
+            保持原时间顺序的非空历史问题子序列。
+
+        """
         selected_reversed: list[str] = []
         used_tokens = 0
         for raw_question in reversed(
@@ -352,6 +361,21 @@ class QueryRewriter:
         messages: tuple[ChatMessage, ...] = (),
         generated: LlmGeneration | None = None,
     ) -> QueryVariants:
+        """构造回退到原问题的查询变体及诊断信息。
+
+        Args:
+            question: 已规范化的当前问题。
+            history: 调用方提供的完整历史问题。
+            selected_history: 在 token 预算内选中的历史问题。
+            reason: 不采用改写结果的稳定原因码。
+            question_tokens: 原问题的 token 数量。
+            messages: 已发送给模型的消息；未调用模型时为空。
+            generated: 可选的模型生成结果。
+
+        Returns:
+            只包含原问题且标记为未改写的查询变体。
+
+        """
         return QueryVariants(
             queries=(question,),
             resolved_query=question,
@@ -401,6 +425,25 @@ def _rewrite_trace(  # noqa: PLR0913
     generated: LlmGeneration | None,
     max_output_tokens: int,
 ) -> dict[str, JsonValue]:
+    """构造查询改写决策的完整诊断属性。
+
+    Args:
+        question: 已规范化的当前问题。
+        history: 调用方提供的完整历史问题。
+        selected_history: 在 token 预算内选中的历史问题。
+        resolved_query: 最终进入检索的独立查询。
+        reason: 改写或回退的稳定原因码。
+        question_tokens: 原问题 token 数量。
+        resolved_tokens: 最终查询 token 数量。
+        token_counter: 冻结模型对应的 token 计数器。
+        messages: 实际发送给模型的消息。
+        generated: 可选的模型生成结果。
+        max_output_tokens: 改写调用的输出 token 上限。
+
+    Returns:
+        包含摘要、token 计数、输入和可选模型响应的 Trace 属性。
+
+    """
     history_json = json.dumps(
         history,
         ensure_ascii=False,

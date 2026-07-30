@@ -130,6 +130,24 @@ def _assemble_worker_runtime(
     metadata_by_source: dict[str, DocumentMetadata],
     rollback: ExitStack,
 ) -> WorkerRuntimeBundle:
+    """组装索引 worker 资源，并把未交付资源注册到回滚栈。
+
+    该流程绑定活动集合契约，创建 embedding 与 OCR 客户端、分块器和
+    稀疏编码器，随后构造按任务绑定状态库的索引 runner。
+
+    Args:
+        settings: 已完成环境校验的运行设置。
+        pipeline: 本次索引任务必须遵循的冻结 pipeline。
+        metadata_by_source: corpus policy 为每个来源解析的完整元数据。
+        rollback: 在组装失败时按逆序关闭已创建资源的退出栈。
+
+    Returns:
+        持有任务 runner、状态库和网络资源的 worker bundle。
+
+    Raises:
+        ValueError: 活动集合或 manifest 与冻结 pipeline 不兼容。
+
+    """
     qdrant = QdrantClient(
         url=settings.qdrant_url.rstrip("/"),
         api_key=settings.qdrant_api_key.get_secret_value(),
@@ -374,6 +392,23 @@ def _validate_worker_contract(
     pipeline: PipelineSpec,
     retrieval: RetrievalSettings,
 ) -> dict[str, DocumentMetadata]:
+    """验证索引 worker 契约并解析全部待索引来源元数据。
+
+    校验范围涵盖 embedding tokenizer、模型与解析器 revision、BM25
+    契约、OCR 阈值和 corpus policy 指纹。
+
+    Args:
+        settings: 提供本地文件、模型标识和输入目录的运行设置。
+        pipeline: 索引构建必须遵循的冻结 pipeline。
+        retrieval: 提供 BM25 与 OCR 联动参数的冻结检索配置。
+
+    Returns:
+        以来源标识为键、通过 corpus policy 解析的文档元数据。
+
+    Raises:
+        ValueError: 任一冻结契约不一致或来源元数据无法完整解析。
+
+    """
     _require_file_sha256(
         settings.embedding_tokenizer_path,
         pipeline.embedding_tokenizer_sha256,

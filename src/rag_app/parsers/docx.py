@@ -186,6 +186,18 @@ class DocxParser:
             raise UnsafeDocxError("DOCX 文件大小超过限制。")
 
     def _validate_archive(self, archive: zipfile.ZipFile) -> None:
+        """在读取正文前验证归档资源与结构安全边界。
+
+        Args:
+            archive: 已打开但尚未解析正文的 DOCX ZIP 归档。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            UnsafeDocxError: 路径、加密状态、资源用量或必要条目不安全。
+
+        """
         entries = archive.infolist()
         if len(entries) > self._limits.max_entries:
             raise UnsafeDocxError("ZIP 条目数超过限制。")
@@ -217,6 +229,22 @@ class DocxParser:
         doc_sha256: str,
         started_at: float,
     ) -> tuple[list[Element], DocxParseAudit]:
+        """按正文顺序提取元素并汇总结构边界审计。
+
+        Args:
+            archive: 已通过资源边界校验的 DOCX ZIP 归档。
+            display_path: 写入元素定位器的展示路径。
+            doc_sha256: 当前文档内容的稳定摘要。
+            started_at: 用于执行解析超时检查的单调时钟起点。
+
+        Returns:
+            正文元素列表及不含正文内容的结构审计计数。
+
+        Raises:
+            UnsafeDocxError: 正文缺失、结构含不可安全忽略的证据，
+                或解析超过时限。
+
+        """
         document_root = _parse_xml(archive.read("word/document.xml"))
         relationships = _read_relationships(archive)
         heading_styles = _read_heading_styles(archive)
@@ -329,6 +357,22 @@ def _iter_blocks(
     container: etree._Element,
     audit: _AuditAccumulator,
 ) -> Iterator[etree._Element]:
+    """递归展开受支持的正文块并记录结构边界决策。
+
+    该迭代会原地更新审计计数；目录控件被忽略，含可索引证据的未知
+    结构会被拒绝。
+
+    Args:
+        container: 待遍历的正文或内容控件容器。
+        audit: 本次解析共享的可变审计累加器。
+
+    Returns:
+        按文档顺序产生段落和表格的迭代器。
+
+    Raises:
+        UnsafeDocxError: 未知结构中包含不可安全忽略的可索引证据。
+
+    """
     for child in container:
         local_name = etree.QName(child).localname
         if local_name in {"p", "tbl"}:
@@ -396,6 +440,20 @@ def _parse_xml(content: bytes) -> etree._Element:
 
 
 def _read_relationships(archive: zipfile.ZipFile) -> dict[str, str]:
+    """读取指向归档内部受支持媒体目录的关系。
+
+    外部关系和非媒体关系不会进入返回映射。
+
+    Args:
+        archive: 已通过资源边界校验的 DOCX ZIP 归档。
+
+    Returns:
+        关系标识到归档内部媒体路径的映射。
+
+    Raises:
+        UnsafeDocxError: 关系 XML 或内部媒体路径不满足安全边界。
+
+    """
     path = "word/_rels/document.xml.rels"
     if path not in archive.namelist():
         return {}
@@ -435,6 +493,17 @@ def _style_heading_level(
     name: str,
     style: etree._Element,
 ) -> int | None:
+    """从样式名称或大纲级别推断受限的标题层级。
+
+    Args:
+        style_id: Word 样式标识。
+        name: Word 样式显示名称。
+        style: 样式对应的 Open XML 节点。
+
+    Returns:
+        一到九级标题层级；无法识别时返回 `None`。
+
+    """
     normalized = f"{style_id} {name}".lower().replace(" ", "")
     for prefix in ("heading", "标题"):
         if prefix in normalized:
@@ -463,6 +532,15 @@ def _heading_level(
 
 
 def _list_level(paragraph: etree._Element) -> int | None:
+    """从编号属性或列表样式推断段落列表层级。
+
+    Args:
+        paragraph: 待判定的 Word 段落节点。
+
+    Returns:
+        零到八级列表层级；普通段落返回 `None`。
+
+    """
     properties = paragraph.find(f"./{{{_WORD_NAMESPACE}}}pPr")
     if properties is None:
         return None
@@ -484,6 +562,15 @@ def _list_level(paragraph: etree._Element) -> int | None:
 
 
 def _paragraph_text(paragraph: etree._Element) -> str:
+    """提取段落文本并保留制表符与显式换行语义。
+
+    Args:
+        paragraph: 待提取的 Word 段落节点。
+
+    Returns:
+        合并后的段落文本；仅含空白时返回空字符串。
+
+    """
     parts: list[str] = []
     for node in paragraph.iter():
         qualified_name = etree.QName(node)
@@ -580,6 +667,20 @@ def _image_element(
     context: _ElementContext,
     image_index: int,
 ) -> Element | None:
+    """将可接受的内嵌媒体构造成待 OCR 的图片元素。
+
+    Args:
+        archive: 已通过资源边界校验的 DOCX ZIP 归档。
+        relationship_id: 图片节点引用的关系标识。
+        relationships: 内部媒体关系映射。
+        context: 当前标题路径和文档摘要上下文。
+        image_index: 图片在正文遍历中的一基序号。
+
+    Returns:
+        带二进制内容和稳定定位器的图片元素；关系缺失或媒体类型
+        不受支持时返回 `None`。
+
+    """
     media_path = relationships.get(relationship_id)
     if media_path is None or media_path not in archive.namelist():
         return None

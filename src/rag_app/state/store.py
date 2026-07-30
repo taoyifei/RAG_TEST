@@ -847,6 +847,25 @@ class StateStore(JobStore):
         content_sha256: str,
         source_id_hint: str | None,
     ) -> str:
+        """按显式提示、既有路径和唯一内容匹配解析来源身份。
+
+        显式提示具有最高优先级，但不得覆盖其他路径身份。没有提示时优先
+        复用当前路径；仅有一个活动来源共享内容摘要时将其视为 rename，
+        否则为新来源分配稳定标识。
+
+        Args:
+            connection: 当前来源版本事务使用的 SQLite 连接。
+            source_path: 待索引来源的稳定路径。
+            content_sha256: 待索引内容摘要。
+            source_id_hint: 同步计划冻结的来源标识；未提供时为 None。
+
+        Returns:
+            可用于 staging 来源版本的稳定来源标识。
+
+        Raises:
+            ValueError: 提示格式无效，或与既有路径、来源身份冲突。
+
+        """
         row = connection.execute(
             "SELECT source_id FROM sources WHERE current_path = ?",
             (source_path,),
@@ -897,6 +916,26 @@ def _backup_state_database(
     identity: CollectionStateIdentity,
     expected_sources: tuple[ActiveSource, ...],
 ) -> None:
+    """克隆只读活动状态库，并把副本绑定到新的 staging 身份。
+
+    克隆后会核对活动来源快照和 SQLite 完整性，再替换副本中的 collection
+    身份。源数据库始终以只读、query-only 模式打开。
+
+    Args:
+        source_path: 活动 collection 的状态数据库。
+        target_path: 接收完整副本的临时数据库路径。
+        identity: 新 target 应绑定的控制任务、pipeline 与基线。
+        expected_sources: 活动 manifest 冻结的来源快照。
+
+    Returns:
+        无返回值。
+
+    Raises:
+        FileNotFoundError: 活动状态数据库在克隆前消失。
+        ValueError: 来源快照不一致或克隆后的数据库完整性校验失败。
+        sqlite3.Error: SQLite backup、schema 或身份写入失败。
+
+    """
     encoded = quote(source_path.resolve(strict=True).as_posix(), safe="/:")
     with sqlite3.connect(
         f"file:{encoded}?mode=ro",

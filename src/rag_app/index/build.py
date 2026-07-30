@@ -203,6 +203,22 @@ class DocxChunkBuilder:
         elements: list[Element],
         version: SourceVersion,
     ) -> list[Element]:
+        """解析图片 OCR 状态，并登记可审计的媒体结果。
+
+        非图片元素按原顺序保留。每个图片元素无论 OCR 成功、失败还是
+        待处理，都会写入 OCR 结果与媒体引用，并返回携带对应状态的副本。
+
+        Args:
+            elements: 解析器产生的文档元素。
+            version: 图片所属的 staging 来源版本。
+
+        Returns:
+            保持输入顺序、已补充图片 OCR 状态的元素列表。
+
+        Raises:
+            ValueError: 图片缺少原始数据或媒体类型。
+
+        """
         processed = []
         for element in elements:
             if element.kind != ElementKind.IMAGE:
@@ -252,6 +268,21 @@ class DocxChunkBuilder:
         return processed
 
     def _ocr_result(self, element: Element) -> OcrResult:
+        """读取缓存或调用 OCR，并归一化为可持久化结果。
+
+        缓存未命中且已配置 OCR 客户端时会发起外部请求。预期的服务错误、
+        无效响应和低置信度不会向上泄漏，而会转换为明确的 OCR 状态。
+
+        Args:
+            element: 包含内容摘要及媒体字段的图片元素。
+
+        Returns:
+            已缓存或新生成的 OCR 结果。
+
+        Raises:
+            ValueError: 发起 OCR 时图片缺少原始数据或媒体类型。
+
+        """
         cached = self._state.get_ocr_result(
             element.content_sha256,
             self._ocr_revision,
@@ -356,6 +387,20 @@ def discover_docx_sources(input_root: Path) -> tuple[DiscoveredSource, ...]:
 
 
 def _safe_source_path(input_root: Path, source_path: str) -> Path:
+    """将受控根目录内的相对来源路径解析为真实文件。
+
+    Args:
+        input_root: 已解析的受控 DOCX 根目录。
+        source_path: 待解析的相对来源路径。
+
+    Returns:
+        位于输入根目录内且不是符号链接的真实路径。
+
+    Raises:
+        FileNotFoundError: 来源路径不存在。
+        ValueError: 路径为绝对路径、包含父级穿越、为符号链接或解析后越界。
+
+    """
     relative = Path(source_path)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("source_path 必须是安全相对路径。")

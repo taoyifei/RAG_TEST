@@ -853,6 +853,23 @@ class QdrantIndex:
         base_manifest_sha256: str | None,
         base_active_count: int,
     ) -> None:
+        """写入并复核 target collection 的 staging 身份。
+
+        更新会保留 collection 已有 metadata，只覆盖当前任务拥有的身份字段。
+
+        Args:
+            control_job_id: 创建 target 的控制任务。
+            base_manifest_sha256: 冻结基线摘要；全量首发时为 None。
+            base_active_count: 克隆基线时记录的活动点数。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 任务、摘要或活动点数无效，或回读身份不一致。
+            RuntimeError: Qdrant 未确认 metadata 更新成功。
+
+        """
         if not control_job_id:
             raise ValueError("control_job_id 不能为空。")
         if base_manifest_sha256 is not None:
@@ -901,6 +918,18 @@ class QdrantIndex:
         self,
         collection_name: str | None = None,
     ) -> None:
+        """校验现有 collection 满足当前索引读写契约。
+
+        Args:
+            collection_name: 待校验 collection；默认使用当前实例名称。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: dense、sparse、pipeline 或 payload schema 不兼容。
+
+        """
         target = collection_name or self.collection_name
         info = self._client.get_collection(target)
         vectors = info.config.params.vectors
@@ -1032,6 +1061,19 @@ def _renamed_locators(
     payload: dict[str, object] | None,
     new_path: str,
 ) -> list[dict[str, object]]:
+    """复制 locator payload，并只替换其中的来源路径。
+
+    Args:
+        payload: Qdrant 点的完整 payload。
+        new_path: rename 后的稳定来源路径。
+
+    Returns:
+        保持其他 locator 字段不变的新列表。
+
+    Raises:
+        ValueError: payload 缺少非空 locator 列表或成员格式无效。
+
+    """
     if payload is None:
         raise ValueError("Qdrant 点缺少 payload。")
     raw_locators = payload.get("locators")
@@ -1051,6 +1093,19 @@ def _renamed_source_spans(
     payload: dict[str, object] | None,
     new_path: str,
 ) -> list[dict[str, object]]:
+    """复制 source span payload，并替换嵌套 locator 的来源路径。
+
+    Args:
+        payload: Qdrant 点的完整 payload。
+        new_path: rename 后的稳定来源路径。
+
+    Returns:
+        保持 span 证据范围不变的新列表。
+
+    Raises:
+        ValueError: span 列表、成员或嵌套 locator 格式无效。
+
+    """
     if payload is None:
         raise ValueError("Qdrant 点缺少 payload。")
     raw_spans = payload.get("source_spans")

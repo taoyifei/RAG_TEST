@@ -937,6 +937,25 @@ class TraceRecorder:
         strict: bool,
         wait: bool,
     ) -> object | None:
+        """按捕获模式提交持久化命令并处理背压。
+
+        非严格模式允许在不可用时记录审计并丢弃命令；严格模式会把
+        关闭、队列拥塞、等待超时和持久化错误暴露给调用方。
+
+        Args:
+            trace_id: 用于失败审计的 Trace 标识。
+            action: 由单一写线程执行的存储操作。
+            strict: 是否要求提交及持久化失败对调用方可见。
+            wait: 是否等待命令完成并返回存储操作结果。
+
+        Returns:
+            同步命令的存储操作结果；异步提交或容错丢弃时返回 `None`。
+
+        Raises:
+            TraceUnavailableError: 严格模式下 recorder 不可用、队列已满、
+                等待超时或持久化失败。
+
+        """
         completion = threading.Event() if wait else None
         command = _WriteCommand(
             trace_id=trace_id,
@@ -984,6 +1003,18 @@ class TraceRecorder:
             raise TraceUnavailableError("Trace recorder 已关闭。")
 
     def _run(self) -> None:
+        """消费写入队列并周期性清理过期 Trace。
+
+        该后台循环会为每个已取出的队列项完成确认，并在收到停止标记
+        后退出。
+
+        Args:
+            无参数。
+
+        Returns:
+            无返回值。
+
+        """
         next_prune = time.monotonic()
         while True:
             timeout = max(0.0, next_prune - time.monotonic())
@@ -1007,6 +1038,18 @@ class TraceRecorder:
                 self._queue.task_done()
 
     def _execute(self, command: _WriteCommand) -> None:
+        """执行单条写命令并向等待方发布结果或错误。
+
+        失败会转换为捕获审计并保存在命令对象中；存在完成事件时，无论
+        成功或失败都会唤醒等待方。
+
+        Args:
+            command: 包含存储操作、结果容器和可选完成事件的写命令。
+
+        Returns:
+            无返回值。
+
+        """
         try:
             command.results.append(command.action())
         except TraceArtifactLimitError as error:

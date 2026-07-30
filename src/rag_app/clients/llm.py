@@ -151,6 +151,19 @@ def _parse_generation(
     *,
     expected_model: str,
 ) -> tuple[str, str, TokenUsage]:
+    """校验单候选 LLM 响应并提取生成结果。
+
+    Args:
+        payload: 服务返回的未信任 JSON 值。
+        expected_model: 请求时冻结的模型名称。
+
+    Returns:
+        非空回答、模型名称和一致的 token 用量。
+
+    Raises:
+        ValueError: 响应 schema、模型、结束原因或内容无效。
+
+    """
     if not isinstance(payload, dict):
         raise ValueError("LLM 响应必须是 JSON object。")
     model = payload.get("model")
@@ -184,6 +197,18 @@ def _validate_generation(
 
 
 def _parse_usage(raw_usage: object) -> TokenUsage:
+    """校验并转换 LLM token 用量。
+
+    Args:
+        raw_usage: 响应中的未信任 usage 值。
+
+    Returns:
+        三项计数非负且总量一致的 token 用量。
+
+    Raises:
+        ValueError: usage 缺失、计数无效或总量不一致。
+
+    """
     if not isinstance(raw_usage, dict):
         raise ValueError("LLM 响应缺少 usage。")
     values: list[int] = []

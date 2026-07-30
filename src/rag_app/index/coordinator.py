@@ -185,6 +185,18 @@ class IndexCoordinator:
         self,
         version: SourceVersion,
     ) -> IndexResult:
+        """确认已激活版本在 SQLite 与 Qdrant 中保持一致。
+
+        Args:
+            version: SQLite 中记录为活动状态的来源版本。
+
+        Returns:
+            表示无需重复索引的结果。
+
+        Raises:
+            RuntimeError: 版本缺少分块计数，或两端活动点数不一致。
+
+        """
         if version.chunk_count is None:
             raise RuntimeError("活动来源版本缺少 chunk_count。")
         active_count = self._index.count_version(
@@ -206,6 +218,19 @@ class IndexCoordinator:
         version: SourceVersion,
         chunks: Sequence[IndexedChunk],
     ) -> None:
+        """验证待写入分块属于同一个 staging 来源版本。
+
+        Args:
+            version: 当前 staging 来源版本。
+            chunks: 构建器返回的索引分块。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 分块为空、ID 重复或来源、版本、pipeline 身份不匹配。
+
+        """
         if not chunks:
             raise ValueError("一个可激活 DOCX 至少需要一个证据 chunk。")
         chunk_ids = {indexed.chunk.chunk_id for indexed in chunks}

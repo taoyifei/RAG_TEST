@@ -178,6 +178,24 @@ def _assemble_runtime(
     retrieval: RetrievalSettings,
     rollback: ExitStack,
 ) -> RuntimeBundle:
+    """组装查询进程资源，并把未交付资源注册到回滚栈。
+
+    该流程初始化状态存储和追踪存储，绑定活动索引身份，构造查询链与
+    readiness 探针，并在返回前启动后台探测。
+
+    Args:
+        settings: 已完成环境校验的运行设置。
+        pipeline: 当前索引必须匹配的冻结 pipeline。
+        retrieval: 当前服务使用的冻结检索参数。
+        rollback: 在组装失败时按逆序关闭已创建资源的退出栈。
+
+    Returns:
+        持有应用、网络客户端、探针和执行器的运行时 bundle。
+
+    Raises:
+        ValueError: 活动索引身份或 manifest 与冻结 pipeline 不兼容。
+
+    """
     fingerprint = pipeline.fingerprint()
     serving_fingerprint = retrieval.serving_fingerprint(pipeline)
     qdrant = QdrantClient(
@@ -359,6 +377,19 @@ def _build_query_service(
     trace_identity: Callable[[], TraceIdentity],
     default_trace_mode: TraceMode,
 ) -> QueryService:
+    """把冻结检索参数绑定为一条完整且可追踪的查询链。
+
+    Args:
+        retrieval: 控制改写、召回、重排和证据预算的冻结参数。
+        parts: 已创建的索引、模型客户端、计数器和会话存储。
+        trace_recorder: 持久化查询追踪的记录器。
+        trace_identity: 在请求时绑定活动索引身份的工厂。
+        default_trace_mode: 普通查询默认使用的追踪模式。
+
+    Returns:
+        依赖和阶段配置均已固定的查询服务。
+
+    """
     bm25 = QdrantBm25Encoder(
         tokenizer=retrieval.bm25_tokenizer,
         language=retrieval.bm25_language,
@@ -450,6 +481,19 @@ def _build_http_clients(
     settings: RuntimeSettings,
     rollback: ExitStack,
 ) -> tuple[httpx.Client, ...]:
+    """分别创建模型请求和健康探测客户端并注册关闭回调。
+
+    返回顺序固定为 embedding、reranker、LLM 的请求客户端，随后是
+    相同服务顺序的短超时健康探测客户端。
+
+    Args:
+        settings: 提供各服务超时、鉴权和连接配置的运行设置。
+        rollback: 在组装失败时关闭已创建客户端的退出栈。
+
+    Returns:
+        顺序稳定且彼此隔离的六个 HTTP 客户端。
+
+    """
     pairs = (
         (settings.embedding_timeout_seconds, settings.embedding_api_token),
         (settings.reranker_timeout_seconds, settings.reranker_api_token),
@@ -541,6 +585,21 @@ def _trace_identity(
     serving_fingerprint: str,
     release_revision: str,
 ) -> TraceIdentity:
+    """把查询追踪绑定到当前活动索引和服务版本。
+
+    Args:
+        manifests: 提供当前活动 index manifest 的仓库。
+        pipeline_fingerprint: 索引构建 pipeline 的稳定指纹。
+        serving_fingerprint: 当前查询参数和 pipeline 的联合指纹。
+        release_revision: 当前部署制品的版本标识。
+
+    Returns:
+        可证明查询所用索引、schema 和服务版本的追踪身份。
+
+    Raises:
+        ValueError: 当前没有可绑定的活动 index manifest。
+
+    """
     active = manifests.get_active()
     if active is None:
         raise ValueError("Trace 无法绑定活动 index manifest。")
@@ -559,6 +618,23 @@ def _validate_runtime_contract(
     pipeline: PipelineSpec,
     retrieval: RetrievalSettings,
 ) -> None:
+    """在创建网络资源前验证查询进程的冻结契约。
+
+    校验范围涵盖解析器和 prompt revision、tokenizer 内容、corpus
+    policy、模型标识、BM25 契约及 OCR 阈值。
+
+    Args:
+        settings: 提供本地文件和实际模型标识的运行设置。
+        pipeline: 索引构建时冻结的 pipeline。
+        retrieval: 查询服务使用的冻结检索参数。
+
+    Returns:
+        无返回值；全部契约一致时允许继续组装运行时。
+
+    Raises:
+        ValueError: 任一文件摘要、模型、revision 或检索契约不一致。
+
+    """
     if DocxParser.version != pipeline.parser_revision:
         raise ValueError("parser revision 与实际 DocxParser 不一致。")
     _require_file_sha256(
@@ -651,6 +727,21 @@ def _reject_incompatible_active_index(
     manifests: ManifestRepository,
     pipeline_fingerprint: str,
 ) -> None:
+    """要求活动 alias 和 manifest 同时存在并匹配当前 pipeline。
+
+    Args:
+        index: 用于解析 Qdrant alias 的索引访问器。
+        alias_name: 查询进程读取的活动索引别名。
+        manifests: 提供当前活动 manifest 的仓库。
+        pipeline_fingerprint: 当前冻结 pipeline 的稳定指纹。
+
+    Returns:
+        无活动索引，或 alias 与 manifest 完全兼容时返回。
+
+    Raises:
+        ValueError: alias 与 manifest 缺失状态或冻结身份不一致。
+
+    """
     target = index.alias_target(alias_name)
     active = manifests.get_active()
     if target is None and active is None:

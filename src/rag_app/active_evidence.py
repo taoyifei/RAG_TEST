@@ -269,6 +269,19 @@ class ActiveEvidenceExporter:
         )
 
     def _read_live_state(self, stored: StoredManifest) -> _LiveState:
+        """读取并交叉校验当前 alias、collection 与 manifest。
+
+        Args:
+            stored: SQLite 中唯一的活动索引 manifest。
+
+        Returns:
+            可用于扫描前后并发变更检测的现场状态。
+
+        Raises:
+            LookupError: 活动 alias 不存在。
+            ValueError: alias、collection 元数据或 pipeline 不一致。
+
+        """
         collection_name = _active_collection(
             self._client,
             self._alias_name,
@@ -309,6 +322,19 @@ class ActiveEvidenceExporter:
         collection_name: str,
         stored: StoredManifest,
     ) -> tuple[ActiveEvidenceRecord, ...]:
+        """分页读取活动 point 并拒绝重复页或无效证据。
+
+        Args:
+            collection_name: 当前活动物理 collection 名称。
+            stored: 用于校验证据来源与 pipeline 的活动 manifest。
+
+        Returns:
+            按 Qdrant 分页结果收集的已验证证据记录。
+
+        Raises:
+            ValueError: point、分页 offset 或证据来源不满足活动契约。
+
+        """
         sources = {
             source.source_id: source
             for source in stored.manifest.sources
@@ -408,6 +434,20 @@ def _record_from_payload(
     sources: dict[str, SourceRecord],
     pipeline_fingerprint: str,
 ) -> ActiveEvidenceRecord:
+    """把活动 point payload 转换为可验证证据记录。
+
+    Args:
+        payload: Qdrant point 携带的原始 payload。
+        sources: 当前 manifest 中按 source ID 索引的活动来源。
+        pipeline_fingerprint: 当前活动索引的 pipeline 指纹。
+
+    Returns:
+        已通过字段、来源、定位和稳定 ID 校验的证据记录。
+
+    Raises:
+        ValueError: payload 缺失、格式无效或与活动索引契约不一致。
+
+    """
     if payload is None:
         raise ValueError("活动 Qdrant point 缺少 payload。")
     chunk_id = _required_string(payload, "chunk_id")

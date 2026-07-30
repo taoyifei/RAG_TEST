@@ -366,6 +366,20 @@ class SyncPlanStore:
         *,
         error_code: str | None,
     ) -> None:
+        """将仍为 running 的计划项原子迁移到指定终态。
+
+        Args:
+            item_id: 待结束的计划项标识。
+            state: 要写入的成功、待重试或失败状态。
+            error_code: 失败审计码；成功时为 None。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            LookupError: 计划项不存在或已不再处于 running 状态。
+
+        """
         with self._connect() as connection:
             cursor = connection.execute(
                 """

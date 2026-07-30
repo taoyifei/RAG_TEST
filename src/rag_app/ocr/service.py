@@ -145,6 +145,22 @@ def create_ocr_app(
         request: OcrRequest,
         authorization: str | None = Header(default=None),
     ) -> OcrResponse:
+        """执行 OCR 路由的认证、输入校验和受限推理。
+
+        调用期间会占用受并发闸门保护的推理工作线程。
+
+        Args:
+            request: 包含媒体类型、摘要和 Base64 内容的 OCR 请求。
+            authorization: 可选的内部 Bearer 凭据。
+
+        Returns:
+            带规范化尺寸、文本行和汇总置信度的 OCR 响应。
+
+        Raises:
+            HTTPException: 认证、revision 或输入无效，或者推理繁忙、
+                超时或失败。
+
+        """
         _authorize(authorization, api_token)
         if request.ocr_revision != revision:
             raise HTTPException(
@@ -222,6 +238,19 @@ def _decode_and_check_request(
     request: OcrRequest,
     limits: OcrLimits,
 ) -> bytes:
+    """解码请求媒体并验证字节上限与内容摘要。
+
+    Args:
+        request: 携带 Base64 内容和预期 SHA-256 的 OCR 请求。
+        limits: 当前请求适用的资源硬上限。
+
+    Returns:
+        通过完整性与大小校验的原始媒体字节。
+
+    Raises:
+        HTTPException: Base64 无效、内容为空或过大，或者摘要不匹配。
+
+    """
     try:
         media_bytes = base64.b64decode(
             request.content_base64,
@@ -252,6 +281,22 @@ def _normalize_image(
     limits: OcrLimits,
     rasterizer: EmfRasterizer | None,
 ) -> tuple[bytes, int, int]:
+    """将受支持媒体规范化为受像素上限约束的 RGB PNG。
+
+    Args:
+        media_bytes: 已通过字节数和摘要校验的媒体内容。
+        media_type: 请求声明的 PNG、JPEG 或 EMF 媒体类型。
+        limits: 当前请求适用的像素硬上限。
+        rasterizer: 处理 EMF 输入的受限光栅化器。
+
+    Returns:
+        规范化 PNG 字节以及解码后的宽度和高度。
+
+    Raises:
+        HTTPException: 光栅化器不可用、媒体与声明不符、尺寸越界，
+            或图片无法安全解码。
+
+    """
     expected_format = "PNG" if media_type == "image/png" else "JPEG"
     if media_type == "image/emf":
         if rasterizer is None:

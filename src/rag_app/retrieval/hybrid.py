@@ -273,6 +273,20 @@ def _channel_trace(  # noqa: PLR0913
     duration_ms: int,
     points: object,
 ) -> dict[str, JsonValue]:
+    """规范化单个召回通道的候选与耗时诊断。
+
+    Args:
+        name: 通道在本次检索中的稳定名称。
+        query_variant_index: 通道对应的查询变体序号。
+        channel_type: dense 或 sparse 通道类型。
+        limit: 请求通道返回的最大候选数。
+        duration_ms: 通道调用的非负毫秒耗时。
+        points: Qdrant 返回的候选序列。
+
+    Returns:
+        仅含候选身份、排名、分数和索引元数据的 Trace 属性。
+
+    """
     raw_points = points if isinstance(points, (list, tuple)) else ()
     candidates: list[JsonValue] = []
     for rank, point in enumerate(raw_points, start=1):

@@ -414,6 +414,18 @@ class PipelineSpec(BaseModel):
 
     @model_validator(mode="after")
     def _validate_version_maps(self) -> Self:
+        """校验会参与 pipeline 指纹的有序版本映射。
+
+        Args:
+            无参数。
+
+        Returns:
+            已确认参数键和模型 revision 唯一完整的 pipeline 规范。
+
+        Raises:
+            ValueError: chunker 参数不完整，或 LLM 映射含空值和重复项。
+
+        """
         parameter_keys = tuple(key for key, _ in self.chunker_parameters)
         if (
             len(set(parameter_keys)) != len(parameter_keys)

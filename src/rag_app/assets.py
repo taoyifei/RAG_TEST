@@ -74,6 +74,19 @@ def verify_offline_assets(paths: AssetPaths) -> AssetCheckReport:
 
 
 def _verify_manifest(*, root: Path, manifest_path: Path) -> int:
+    """验证资源清单中的路径边界、唯一性与文件摘要。
+
+    Args:
+        root: 所有清单条目必须位于其中的资源根目录。
+        manifest_path: 使用双空格分隔摘要和相对路径的清单。
+
+    Returns:
+        已成功校验的唯一资源文件数量。
+
+    Raises:
+        ValueError: 清单为空、格式无效、路径越界或摘要不一致。
+
+    """
     resolved_root = root.resolve(strict=True)
     rows = manifest_path.read_text(encoding="utf-8").splitlines()
     if not rows:
@@ -100,6 +113,18 @@ def _verify_manifest(*, root: Path, manifest_path: Path) -> int:
 
 
 def _verify_frontend(frontend_dir: Path) -> None:
+    """确认必需前端文件不存在远程资源引用。
+
+    Args:
+        frontend_dir: 包含固定前端文件的本地目录。
+
+    Returns:
+        无返回值。
+
+    Raises:
+        ValueError: 任一前端文件引用远程资源。
+
+    """
     for name in ("index.html", "styles.css", "app.js"):
         path = frontend_dir / name
         text = path.read_text(encoding="utf-8")

@@ -148,6 +148,21 @@ def _model_directory(path: Path) -> Path:
 
 
 def _parse_result(result: object) -> tuple[OcrLine, ...]:
+    """将单次 PaddleOCR 输出收敛为已校验的文本行。
+
+    空白文本会被忽略；框坐标缺失或不合法时保留零值占位，文本和
+    置信度 schema 错误则拒绝整个结果。
+
+    Args:
+        result: PaddleOCR 返回的结果对象、JSON 映射或包装结果。
+
+    Returns:
+        保持原输出顺序的有效 OCR 文本行。
+
+    Raises:
+        ValueError: 文本与置信度不等长，或置信度不是有效概率。
+
+    """
     payload = _result_payload(result)
     texts = payload.get("rec_texts")
     scores = payload.get("rec_scores")
@@ -196,6 +211,16 @@ def _result_payload(result: object) -> Mapping[str, object]:
 
 
 def _bbox(boxes: object, index: int) -> tuple[int, int, int, int]:
+    """提取文本行边界框，并对不可用坐标使用零值占位。
+
+    Args:
+        boxes: PaddleOCR 返回的边界框集合。
+        index: 待提取文本行在结果中的位置。
+
+    Returns:
+        四个舍入后的整数坐标；缺失、越界或非有限坐标返回全零框。
+
+    """
     box_rows = _sequence_value(boxes)
     if box_rows is None or index >= len(box_rows):
         return (0, 0, 0, 0)

@@ -153,6 +153,25 @@ class SyncWorker:
         max_item_attempts: int,
         lease: _WorkerLease,
     ) -> WorkerResult:
+        """执行已领取任务的剩余计划项并结束本地任务。
+
+        单项业务异常会转为重试或最终失败，不阻塞后续计划项；租约丢失则
+        立即终止，避免继续写入 Qdrant 或 SQLite。
+
+        Args:
+            job: 已由当前 worker 领取的本地同步任务。
+            worker_id: 当前本地租约所有者。
+            build_chunks: 将来源版本构建为索引分块的函数。
+            max_item_attempts: 单个计划项允许的最大尝试次数。
+            lease: control 与 local 两层租约检查器。
+
+        Returns:
+            成功和失败计划项数量的任务摘要。
+
+        Raises:
+            LeaseLostError: 任一执行边界检测到租约丢失。
+
+        """
         coordinator = IndexCoordinator(
             self._state,
             self._index,
@@ -211,6 +230,22 @@ class SyncWorker:
         coordinator: IndexCoordinator,
         lease_guard: Callable[[], None],
     ) -> None:
+        """按冻结动作类型执行一次来源同步。
+
+        Args:
+            action: 已持久化的同步动作。
+            job: 动作所属的本地同步任务。
+            build_chunks: ADD 或 UPDATE 使用的分块构建函数。
+            coordinator: 协调 SQLite 与 Qdrant 状态迁移的执行器。
+            lease_guard: rename 两端写入边界的租约检查函数。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            ValueError: 动作缺少必要身份字段或类型未知。
+
+        """
         if action.kind in (SyncActionKind.ADD, SyncActionKind.UPDATE):
             if action.source_path is None:
                 raise ValueError("add/update 动作缺少 source_path。")
@@ -243,6 +278,21 @@ class SyncWorker:
         *,
         lease_guard: Callable[[], None],
     ) -> None:
+        """在租约保护下同步修改 Qdrant 与 SQLite 的来源路径。
+
+        Args:
+            action: 包含原来源身份和新路径的 rename 动作。
+            lease_guard: 两端持久化写入前后的租约检查函数。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            LeaseLostError: rename 边界检测到租约丢失。
+            ValueError: 动作缺少来源身份或新路径。
+            RuntimeError: SQLite 解析出的来源身份与计划不一致。
+
+        """
         if action.source_id is None or action.source_path is None:
             raise ValueError("rename 动作缺少来源身份或新路径。")
         lease_guard()
@@ -263,6 +313,21 @@ class SyncWorker:
         error_code: str | None,
         lease: _WorkerLease,
     ) -> None:
+        """停止 heartbeat，并仅由仍持有租约的 worker 结束任务。
+
+        Args:
+            job: 待结束的本地同步任务。
+            worker_id: 预期租约所有者。
+            error_code: 最终失败码；成功时为 None。
+            lease: 待关闭并做最后检查的双层租约。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            LeaseLostError: heartbeat 已失败或终态写入时所有权已变化。
+
+        """
         lease.close()
         try:
             self._state.finish_job(

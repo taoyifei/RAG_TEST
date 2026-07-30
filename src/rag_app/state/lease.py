@@ -239,6 +239,18 @@ class LeaseHeartbeat:
             raise LeaseLostError("LEASE_LOST")
 
     def _run(self) -> None:
+        """按单调时钟调度续租，并把后台失败记录给主线程。
+
+        任意续租异常都会停止循环并设置失败标记，异常本身不会越过线程边界。
+        如果一次续租耗时跨过原 deadline，下一轮会从当前时刻重新计时。
+
+        Args:
+            无参数。
+
+        Returns:
+            无返回值。
+
+        """
         deadline = time.monotonic() + self._interval_seconds
         while True:
             remaining = max(0.0, deadline - time.monotonic())

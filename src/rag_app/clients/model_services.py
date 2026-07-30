@@ -236,6 +236,20 @@ def _batch_inputs(
     max_batch_size: int,
     max_batch_chars: int,
 ) -> tuple[tuple[str, ...], ...]:
+    """在条数和字符双重预算内顺序切分 embedding 输入。
+
+    Args:
+        inputs: 保持原始顺序的 embedding 文本。
+        max_batch_size: 单批允许的最大文本条数。
+        max_batch_chars: 单批允许的最大字符总数。
+
+    Returns:
+        保持输入顺序且不超过任一预算的批次。
+
+    Raises:
+        ValueError: 单条文本已经超过字符预算。
+
+    """
     batches: list[tuple[str, ...]] = []
     current: list[str] = []
     current_chars = 0
@@ -264,6 +278,21 @@ def _parse_embedding_payload(
     expected_count: int,
     dimension: int,
 ) -> tuple[tuple[float, ...], ...]:
+    """校验 embedding 响应并恢复请求顺序。
+
+    Args:
+        payload: 服务返回的未信任 JSON 值。
+        expected_model: 请求时冻结的 embedding 模型。
+        expected_count: 请求文本总数。
+        dimension: 每个向量必须具有的维度。
+
+    Returns:
+        按连续响应索引排序的有限浮点向量。
+
+    Raises:
+        ValueError: schema、模型、索引、维度或数值不符合契约。
+
+    """
     if not isinstance(payload, dict) or not isinstance(
         payload.get("data"),
         list,
@@ -323,6 +352,19 @@ def _parse_rerank_payload(
     *,
     expected_count: int,
 ) -> tuple[RerankItem, ...]:
+    """校验 rerank 响应并恢复候选顺序。
+
+    Args:
+        payload: 服务返回的未信任 JSON 值。
+        expected_count: 请求候选文档总数。
+
+    Returns:
+        按连续候选索引排序的精排结果。
+
+    Raises:
+        ValueError: schema、索引或分数不符合精排契约。
+
+    """
     if not isinstance(payload, dict) or not isinstance(
         payload.get("results"),
         list,

@@ -263,6 +263,23 @@ class QueryService:
         request: _QueryRequest,
         mode: TraceMode,
     ) -> QueryOutcome:
+        """执行带阶段事件和可选审计追踪的完整问答编排。
+
+        成功路径依次完成上下文、改写、检索、重排、邻居扩展、证据组装、
+        回答校验和发布；仅在回答完成后写入会话。任一阶段失败时会结束
+        当前 span 和 trace，再原样传播异常。
+
+        Args:
+            request: 本次查询的身份、问题、时间和事件回调。
+            mode: 控制审计追踪降级或强制成功建立的模式。
+
+        Returns:
+            包含回答、改写状态、阶段数和外部调用审计的查询结果。
+
+        Raises:
+            ValueError: ``request.trace_id`` 为空。
+
+        """
         if not request.trace_id:
             raise ValueError("trace_id 不能为空。")
         started = self._clock()
@@ -645,6 +662,19 @@ class QueryService:
         request: _QueryRequest,
         mode: TraceMode,
     ) -> TraceSession | None:
+        """按追踪模式建立会话，并为非 FULL 请求提供审计降级。
+
+        Args:
+            request: 提供 trace 身份和查询时点的请求。
+            mode: 决定追踪建立失败是否阻断查询的模式。
+
+        Returns:
+            已建立的追踪会话；追踪未配置或允许降级失败时返回 ``None``。
+
+        Raises:
+            Exception: FULL 模式下生成身份或建立追踪会话失败。
+
+        """
         if self._trace_recorder is None or self._trace_identity is None:
             return None
         try:
@@ -754,6 +784,20 @@ def _record_retrieval(
     retrieve_span: TraceSpanHandle | None,
     trace: Mapping[str, object],
 ) -> None:
+    """把检索内部决策投影为父子 spans 和逐候选审计记录。
+
+    路由决策挂在根 span 下，embedding、各检索通道和 RRF 融合挂在
+    检索 span 下；缺少追踪上下文时安全跳过。
+
+    Args:
+        session: 当前追踪会话，未启用追踪时为 ``None``。
+        retrieve_span: 检索阶段父 span，未建立时为 ``None``。
+        trace: 检索器产生的结构化追踪载荷。
+
+    Returns:
+        无返回值；有效会话会新增 spans 和候选决策记录。
+
+    """
     if session is None or retrieve_span is None:
         return
     route = trace.get("route")
@@ -845,6 +889,17 @@ def _record_channel(
     retrieve_span: TraceSpanHandle,
     channel: dict[object, object],
 ) -> None:
+    """记录单个检索通道及其返回候选。
+
+    Args:
+        session: 接收通道 span 和候选决策的追踪会话。
+        retrieve_span: 通道所属的检索阶段父 span。
+        channel: 检索器提供的单通道结构化追踪载荷。
+
+    Returns:
+        无返回值；通道名称无效时不写入任何记录。
+
+    """
     name = channel.get("name")
     if not isinstance(name, str) or not name:
         return
@@ -885,6 +940,17 @@ def _record_rerank(
     candidates: tuple[FusedHit, ...],
     result: RerankStageResult,
 ) -> None:
+    """记录重排前后名次以及最终截断决策。
+
+    Args:
+        session: 当前追踪会话，未启用追踪时为 ``None``。
+        candidates: RRF 融合后按名次排列的输入候选。
+        result: 包含评分全集和最终入选集合的重排结果。
+
+    Returns:
+        无返回值；有效会话会为每个已评分候选写入一条决策。
+
+    """
     if session is None:
         return
     scored = result.scored_hits or result.hits
@@ -978,6 +1044,17 @@ def _record_answer_children(
     answer_span_id: str | None,
     trace: Mapping[str, object],
 ) -> None:
+    """记录回答首次校验和可选修复调用的子 spans。
+
+    Args:
+        session: 当前追踪会话，未启用追踪时为 ``None``。
+        answer_span_id: 回答生成阶段的父 span 标识。
+        trace: 回答器产生的校验、修复和生成追踪载荷。
+
+    Returns:
+        无返回值；缺少会话或父 span 时安全跳过。
+
+    """
     if session is None or answer_span_id is None:
         return
     first_code = _decision_code(
@@ -1242,6 +1319,21 @@ def _failure_code(stage: str) -> str:
 
 
 def _sanitize_artifact_payload(payload: object) -> object:
+    """递归清理进入 FULL Trace artifact 的不安全内容。
+
+    映射中的密钥、鉴权信息、向量和 Base64 字段会被移除，endpoint
+    只保留安全组成，普通字符串中的常见凭据模式会被遮蔽。
+
+    Args:
+        payload: 待持久化的任意嵌套 artifact 载荷。
+
+    Returns:
+        保持原有容器语义且已完成敏感信息清理的 JSON 兼容值。
+
+    Raises:
+        ValueError: 任意嵌套层级包含二进制内容。
+
+    """
     if isinstance(payload, Mapping):
         sanitized: dict[str, object] = {}
         for raw_key, value in payload.items():

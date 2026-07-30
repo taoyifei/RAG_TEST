@@ -249,6 +249,20 @@ def _evidence_item(
     evidence_id: str,
     low_ocr_threshold: float,
 ) -> EvidenceItem:
+    """校验候选 payload 并构造可供回答引用的证据。
+
+    Args:
+        ranked: 已完成精排的候选命中。
+        evidence_id: 在本次证据包内分配的稳定引用 ID。
+        low_ocr_threshold: 判定 OCR 低置信度的下限。
+
+    Returns:
+        定位与来源 span 完整且标记 OCR 风险的证据项。
+
+    Raises:
+        ValueError: 候选文本、定位、来源 span 或 OCR 字段无效。
+
+    """
     payload = ranked.hit.payload
     text = payload.get("text")
     raw_locators = payload.get("locators")
@@ -320,6 +334,20 @@ def _evidence_decision(  # noqa: PLR0913
     estimated_total_tokens: int,
     actual_candidate_tokens: int,
 ) -> EvidenceDecision:
+    """记录候选进入证据包的选择结果与非敏感指标。
+
+    Args:
+        ranked: 当前精排候选。
+        evidence_id: 已选候选的引用 ID；未选时为 None。
+        selected: 候选是否进入最终证据包。
+        reason_code: 选择或排除候选的稳定原因码。
+        estimated_total_tokens: 加入候选后的估算总 token 数。
+        actual_candidate_tokens: 候选序列化后的实际 token 数。
+
+    Returns:
+        可用于 Trace 的证据选择决策。
+
+    """
     payload = ranked.hit.payload
     contains_ocr = payload.get("contains_ocr", False)
     raw_confidence = payload.get("minimum_ocr_confidence")

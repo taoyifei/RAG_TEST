@@ -174,6 +174,15 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
 
 
 def _parser() -> argparse.ArgumentParser:
+    """构建所有 CLI 子命令共享的参数解析器。
+
+    Args:
+        无参数。
+
+    Returns:
+        已注册服务、索引和离线自检子命令的解析器。
+
+    """
     parser = argparse.ArgumentParser(prog="rag-app")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("serve", help="启动 API 与本地静态页。")
