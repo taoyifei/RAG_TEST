@@ -2849,3 +2849,162 @@
 - [x] `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
   EMF、完整 chat-template token 预算、正式离线双包与服务器验收；这些外部
   证据项没有被本轮源码门禁误报为已完成。
+
+## 2026-07-30 首次部署入口收口任务 0：基线
+
+- [x] 当前 HEAD 为
+  `2aa972560ddc8300b9d901835031f814aac7a58a`，`main` 与
+  `origin/main` 无 ahead/behind，工作树与暂存区均为空。`git write-tree`
+  与 `HEAD^{tree}` 均为 `3c1f07178bf6dc688138494d0017a8737e9e5289`。
+- [x] 当前 HEAD 唯一全量 pytest 基线退出 0：
+  `562 passed, 61 warnings in 554.92s`，skipped=0；warning 类别仍只有
+  `StarletteDeprecationWarning` 与 `UserWarning`。
+- [x] 快速门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、`git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] release-safety 为 `tracked_files=236`，binary、large、local path、
+  private network、private path、secret 与总 `violations` 均为 0。
+- [x] 保护摘要继续为 docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`，
+  retrieval 继续为 provisional。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`。
+- [x] 专用本地 Qdrant 在测试前后均 running、无挂载、仅绑定
+  `127.0.0.1:6333`，collection 列表为空；本阶段未 build、save/load、
+  package、联网安装、访问 `.57/.58/.60`、commit 或 push。
+
+## 2026-07-30 首次部署入口收口任务 1：候选 env 文档契约
+
+- [x] 新静态契约先在旧文档上真实红灯：
+  `1 failed, 3 deselected in 0.03s`。两份公开文档均未创建 0700
+  `shared/env/candidates`，且都把 active `rag.env` 直接传给只接受
+  `candidates/<release-id>.env` 的 `deploy.sh`。
+- [x] `deployment/README.md` 与公开离线部署手册现在都明确区分首次部署和
+  升级：首次部署以 0600 从 release `.env.example` 安装候选文件；升级先
+  拒绝覆盖同名候选，再从 active `rag.env` 复制并 chmod 0600；两条路径都只
+  编辑并传递 `candidates/${release_id}.env`。
+- [x] 两份文档均明确 active `rag.env` 只能由 deploy 成功后发布；后续
+  Compose、backup 和 rollback 继续读取固定 active env。静态反测同时验证
+  deploy/rollback 脚本参数契约，并禁止任何 `deploy.sh .../rag.env` 命令。
+- [x] 完整静态契约为 `4 passed in 0.02s`，Ruff
+  `All checks passed!`，`git diff --check` 退出 0。首次并行完整测试遇到
+  WSL 宿主 `0x8007274c`、没有 pytest 结果，串行复跑真实通过；本阶段未
+  build/package、联网、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署入口收口任务 2：Qdrant 语义就绪
+
+- [x] 修正 fake f-string 转义后，旧实现的有效红测为
+  `10 failed, 2 passed, 51 deselected in 3.75s`：即使 Qdrant 端口 health
+  已 healthy，`/readyz` 延迟、连接失败、非 200、超时或容器消失仍会错误
+  提交 env/current。更早一轮 deploy 夹具 `NameError` 明确作废，没有用作
+  产品红证据。
+- [x] deploy/rollback 均新增独立 60 秒 `/readyz` deadline。每次请求都由
+  `docker exec rag-app python -c` 在容器内执行，从容器环境读取
+  `RAG_QDRANT_URL` 与 `RAG_QDRANT_API_KEY`，请求 timeout 不超过当前 deadline
+  剩余时间；只有 HTTP 200 成功。
+- [x] 连接失败、非 200 与单次超时只在 deadline 内重试；rag-app 或
+  rag-qdrant 消失立即失败。Python stdout/stderr 全部丢弃，Shell 只输出通用
+  失败分类，不记录 API key、URL 响应正文或状态正文，也没有发布 Qdrant
+  宿主端口。
+- [x] deploy 主路径与旧 runtime 补偿复用完整健康 helper；rollback 主路径
+  同样复用，rollback 独立补偿在原 app 与 Qdrant 都应运行时再次执行语义
+  readiness。目标 readiness 失败后，fake 日志证明旧 runtime readiness
+  也被执行后才报告恢复成功。
+- [x] 新定向矩阵为 `13 passed, 54 deselected in 12.00s`；deploy、rollback
+  和静态契约完整回归为 `67 passed in 31.46s`。相关 Ruff
+  `All checks passed!`、两份 Shell `bash -n` 与 `git diff --check` 均退出
+  0；两份部署文档已同步说明端口 health 与容器内语义 readiness 的区别。
+  本阶段未 build/package、联网、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署入口收口任务 3：部署状态机
+
+- [x] 状态矩阵先在旧实现上真实红灯 `10 failed, 61 deselected in 2.45s`：
+  fresh 会沿用 stale rollback；degraded 不发布完整 rollback；active/current
+  缺一和旧 worker image 错配仍会进入 load；旧 release 未在部署或 rollback
+  补偿前复验。rollback worker 错配用例修正“保持测试输入不变”的断言后，
+  进一步证明旧实现已执行 compose up 才失败。
+- [x] deploy 在第一条 `docker load` 前只读收集 active env、current、三个
+  核心容器、worker 和 rollback state 的存在性，并唯一分类为：
+  fresh（五类均无）、installed（合法 active/current + 三核心完整）、
+  degraded（合法 active/current + 核心全无，worker 可无或合法）或 invalid。
+  任何其他组合均立即退出。
+- [x] fresh 遇到任意旧 rollback state 直接拒绝。installed/degraded 均要求
+  current 直接指向安全旧 release、active revision 匹配，并重新执行旧 release
+  `verify-offline.sh`；active 三镜像解析为实际 image ID，若旧 worker 存在，
+  其 image 必须精确等于旧 app image。
+- [x] degraded 无论无 worker 或仅有合法旧 worker，成功升级都会从 active
+  env/current/旧镜像生成 schema v2 完整 rollback state；部署失败补偿仍精确
+  恢复“核心全无”和原 worker 状态，不把 degraded 误恢复成 installed。
+- [x] deploy 在进入失败补偿前再次复验旧 release；专门反测确认第一次复验
+  位于 load 前，第二次位于故障后的补偿前。rollback 继续先复验 rollback
+  target，同时在任何 runtime 变更前复验 current/original release，并在补偿
+  前再次复验；rollback state 中 worker image 与 app image 不同会在 up 前拒绝。
+- [x] 状态矩阵定向修复后为 `11 passed, 60 deselected in 1.63s`，补偿复验
+  补充为 `4 passed, 68 deselected in 3.95s`；deploy、rollback 与静态契约
+  全集最终为 `76 passed in 33.19s`。相关 Ruff `All checks passed!`、两份
+  Shell `bash -n` 与 `git diff --check` 均退出 0；文档已同步四类状态与旧
+  release 复验时点。本阶段未 build/package、联网、访问服务器、commit 或
+  push。
+
+## 2026-07-30 首次部署入口收口：最终验收与提交授权
+
+- [x] 唯一有效的最终全量 pytest 退出 0：
+  `584 passed, 61 warnings in 556.36s`，skipped=0；高于本轮任务 0 的
+  562 passed。warning 类别仍只有既有 `StarletteDeprecationWarning` 与
+  `UserWarning`，没有新增类别。
+- [x] 最终静态门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、`git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] 最终临时 Git index release-safety 为 `tracked_files=236`，binary、
+  large、local path、private network、private path、secret 与总
+  `violations` 均为 0；临时 index 已在确认是 `/tmp` 下普通文件后精确删除。
+- [x] 最终只修改 8 个白名单文件：`PROGRESS.md`、两份部署脚本、两份部署
+  文档和三份对应测试；新增 skip/xfail/TODO=0，三份冻结 deployment config
+  diff=0。提交前真实 index staged=0，`git write-tree` 与
+  `HEAD^{tree}` 均为 `3c1f07178bf6dc688138494d0017a8737e9e5289`。
+- [x] 保护摘要与任务 0 完全一致：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`。
+- [x] 专用本地 `rag-final-three-qdrant` 最终仍 running、
+  OOMKilled=false、RestartCount=0、mounts=[]、collection=0，且只绑定
+  `127.0.0.1:6333`。本轮没有 build/buildx、image save/load、真实
+  package、联网安装、SSH/SCP 或 `.57/.58/.60` 操作。
+- [x] 用户在实现和验收完成后最新明确要求“将代码 commit 并 push”，因此
+  仅覆盖本任务书的 commit/push 禁令；不扩大到任何其他外部操作。
+  `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
+  EMF、完整 chat-template token 预算和正式生产验收。

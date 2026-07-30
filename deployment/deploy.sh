@@ -17,6 +17,7 @@ old_env_snapshot=""
 current_new="${current_link}.new"
 current_restore="${current_link}.deploy-restore"
 QDRANT_HEALTH_TIMEOUT_SECONDS=60
+QDRANT_READY_TIMEOUT_SECONDS=60
 APP_HEALTH_TIMEOUT_SECONDS=60
 APP_LIVE_TIMEOUT_SECONDS=60
 OCR_HEALTH_TIMEOUT_SECONDS=240
@@ -268,6 +269,64 @@ wait_for_app_live() {
   done
 }
 
+wait_for_qdrant_ready() {
+  local timeout_seconds="$1"
+  local deadline
+  local now
+  local remaining
+  local request_timeout
+  local sleep_seconds
+  deadline="$(($(date +%s) + timeout_seconds))"
+  while true; do
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "Qdrant /readyz 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
+    fi
+    if ! container_exists rag-app || ! container_exists rag-qdrant; then
+      echo "Qdrant /readyz 检查时核心容器不存在。" >&2
+      return 1
+    fi
+    request_timeout=3
+    if ((request_timeout > remaining)); then
+      request_timeout="${remaining}"
+    fi
+    if docker exec rag-app python -c '
+import os
+import sys
+import urllib.request
+
+base_url = os.environ["RAG_QDRANT_URL"].rstrip("/")
+request = urllib.request.Request(
+    f"{base_url}/readyz",
+    headers={"api-key": os.environ["RAG_QDRANT_API_KEY"]},
+)
+response = urllib.request.urlopen(request, timeout=float(sys.argv[1]))
+status = response.status
+response.close()
+raise SystemExit(0 if status == 200 else 1)
+' "${request_timeout}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! container_exists rag-app || ! container_exists rag-qdrant; then
+      echo "Qdrant /readyz 检查时核心容器不存在。" >&2
+      return 1
+    fi
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "Qdrant /readyz 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
+    fi
+    sleep_seconds="${HEALTH_POLL_INTERVAL_SECONDS}"
+    if ((sleep_seconds > remaining)); then
+      sleep_seconds="${remaining}"
+    fi
+    sleep "${sleep_seconds}"
+  done
+}
+
 wait_for_runtime_health() {
   local port="$1"
   wait_for_container_health \
@@ -276,6 +335,7 @@ wait_for_runtime_health() {
     "rag-ocr" "${OCR_HEALTH_TIMEOUT_SECONDS}" || return 1
   wait_for_container_health \
     "rag-app" "${APP_HEALTH_TIMEOUT_SECONDS}" || return 1
+  wait_for_qdrant_ready "${QDRANT_READY_TIMEOUT_SECONDS}" || return 1
   wait_for_app_live "${port}" "${APP_LIVE_TIMEOUT_SECONDS}"
 }
 
@@ -374,6 +434,7 @@ if container_exists rag-worker; then
   worker_running="$(container_running rag-worker)"
   worker_image="$(container_image rag-worker)"
 fi
+deployment_state=invalid
 old_runtime=false
 old_active_exists=false
 old_release=""
@@ -385,6 +446,7 @@ old_app_running=false
 old_ocr_running=false
 old_qdrant_running=false
 old_current_exists=false
+old_rollback_exists=false
 old_env_sha=""
 if [[ -f "${active_env}" && ! -L "${active_env}" ]]; then
   require_regular_0600 "${active_env}" "活动环境文件"
@@ -400,39 +462,76 @@ fi
 if [[ -L "${current_link}" ]]; then
   old_current_exists=true
   old_release="$(readlink -f "${current_link}")"
+elif [[ -e "${current_link}" ]]; then
+  fail "current 必须是指向 release 的符号链接。"
 fi
-if [[ "${existing_count}" == "3" ]]; then
-  old_runtime=true
-  if [[ "${old_active_exists}" != "true" \
-    || "${old_current_exists}" != "true" \
-    || "${old_release}" != "${project_root}/releases/"* \
-    || ! -f "${old_release}/SOURCE_REVISION" \
-    || ! -f "${old_release}/compose.yaml" ]]; then
-    fail "升级要求安全 active env 与 current release。"
+if [[ -f "${rollback_file}" && ! -L "${rollback_file}" ]]; then
+  require_regular_0600 "${rollback_file}" "rollback state"
+  old_rollback_exists=true
+elif [[ -e "${rollback_file}" || -L "${rollback_file}" ]]; then
+  fail "rollback state 路径不是安全普通文件。"
+fi
+
+if [[ "${old_active_exists}" == "false" \
+  && "${old_current_exists}" == "false" \
+  && "${existing_count}" == "0" \
+  && "${worker_exists}" == "false" ]]; then
+  if [[ "${old_rollback_exists}" == "true" ]]; then
+    fail "fresh 部署不允许遗留 rollback state。"
   fi
+  deployment_state=fresh
+elif [[ "${old_active_exists}" == "true" \
+  && "${old_current_exists}" == "true" ]]; then
+  if [[ "${existing_count}" == "3" ]]; then
+    deployment_state=installed
+    old_runtime=true
+  elif [[ "${existing_count}" == "0" ]]; then
+    deployment_state=degraded
+  fi
+fi
+if [[ "${deployment_state}" == "invalid" ]]; then
+  fail "部署前状态不是 fresh、installed 或 degraded。"
+fi
+
+if [[ "${deployment_state}" != "fresh" ]]; then
+  if [[ "${old_release}" != "${project_root}/releases/"* \
+    || "$(dirname "${old_release}")" != "${project_root}/releases" \
+    || ! -d "${old_release}" \
+    || ! -f "${old_release}/SOURCE_REVISION" \
+    || ! -f "${old_release}/compose.yaml" \
+    || ! -f "${old_release}/verify-offline.sh" ]]; then
+    fail "active env/current 未指向安全的旧 release。"
+  fi
+  bash "${old_release}/verify-offline.sh"
   old_revision="$(cat "${old_release}/SOURCE_REVISION")"
-  if [[ "$(exact_env_value "${active_env}" RAG_RELEASE_REVISION)" \
+  if [[ ! "${old_revision}" =~ ^[0-9a-f]{40}$ \
+    || "$(exact_env_value "${active_env}" RAG_RELEASE_REVISION)" \
     != "${old_revision}" ]]; then
     fail "active env 不是 current release 的实际配置。"
   fi
-  old_app_image="$(container_image rag-app)"
-  old_ocr_image="$(container_image rag-ocr)"
-  old_qdrant_image="$(container_image rag-qdrant)"
-  old_app_running="$(container_running rag-app)"
-  old_ocr_running="$(container_running rag-ocr)"
-  old_qdrant_running="$(container_running rag-qdrant)"
-  if [[ "$(image_id "$(exact_env_value "${active_env}" RAG_APP_IMAGE)")" \
-      != "${old_app_image}" \
-    || "$(image_id "$(exact_env_value "${active_env}" RAG_OCR_IMAGE)")" \
-      != "${old_ocr_image}" \
-    || "$(image_id "$(exact_env_value "${active_env}" RAG_QDRANT_IMAGE)")" \
-      != "${old_qdrant_image}" ]]; then
-    fail "active env 镜像与当前容器不一致。"
+  old_app_image="$(image_id "$(
+    exact_env_value "${active_env}" RAG_APP_IMAGE
+  )")"
+  old_ocr_image="$(image_id "$(
+    exact_env_value "${active_env}" RAG_OCR_IMAGE
+  )")"
+  old_qdrant_image="$(image_id "$(
+    exact_env_value "${active_env}" RAG_QDRANT_IMAGE
+  )")"
+  if [[ "${deployment_state}" == "installed" ]]; then
+    old_app_running="$(container_running rag-app)"
+    old_ocr_running="$(container_running rag-ocr)"
+    old_qdrant_running="$(container_running rag-qdrant)"
+    if [[ "$(container_image rag-app)" != "${old_app_image}" \
+      || "$(container_image rag-ocr)" != "${old_ocr_image}" \
+      || "$(container_image rag-qdrant)" != "${old_qdrant_image}" ]]; then
+      fail "active env 镜像与当前容器不一致。"
+    fi
   fi
-fi
-if [[ "${worker_exists}" == "true" \
-  && "${old_active_exists}" != "true" ]]; then
-  fail "既有 worker 要求可恢复的 active env。"
+  if [[ "${worker_exists}" == "true" \
+    && "${worker_image}" != "${old_app_image}" ]]; then
+    fail "旧 worker image 必须等于旧 app image。"
+  fi
 fi
 
 commit_candidate_env() {
@@ -449,7 +548,7 @@ commit_candidate_env() {
 }
 
 publish_rollback_state() {
-  if [[ "${old_runtime}" != "true" ]]; then
+  if [[ "${deployment_state}" == "fresh" ]]; then
     return 0
   fi
   rollback_new="$(mktemp \
@@ -528,6 +627,9 @@ perform_deploy() {
 
 restore_original_runtime() {
   local service
+  if [[ "${deployment_state}" != "fresh" ]]; then
+    bash "${old_release}/verify-offline.sh" || return 1
+  fi
   if [[ "${old_runtime}" == "true" ]]; then
     docker compose --env-file "${old_env_snapshot}" \
       -f "${old_release}/compose.yaml" \

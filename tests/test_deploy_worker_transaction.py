@@ -78,6 +78,7 @@ def _prepare_sandbox(
         f"RAG_QDRANT_PATH={qdrant}\n"
         f"RAG_DOCS_PATH={docs}\n"
         "RAG_PORT=8088\n"
+        "RAG_QDRANT_API_KEY=deploy-qdrant-secret\n"
         "CUSTOM_SETTING=candidate-value\n"
     )
     env_file.write_text(candidate_content, encoding="utf-8")
@@ -92,6 +93,7 @@ def _prepare_sandbox(
         f"RAG_QDRANT_PATH={qdrant}\n"
         f"RAG_DOCS_PATH={docs}\n"
         "RAG_PORT=8088\n"
+        "RAG_QDRANT_API_KEY=deploy-old-qdrant-secret\n"
         "CUSTOM_SETTING=active-value\n"
     )
     active_env.write_text(original_active, encoding="utf-8")
@@ -135,6 +137,12 @@ def _prepare_sandbox(
     shutil.copyfile(
         new_release / "compose.yaml",
         old_release / "compose.yaml",
+    )
+    (old_release / "verify-offline.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'verify-old-release\\n' >> \"${FAKE_COMMAND_LOG}\"\n"
+        "[[ \"${FAKE_OLD_VERIFY_FAIL:-0}\" != \"1\" ]]\n",
+        encoding="utf-8",
     )
     source = Path(__file__).parents[1] / "deployment/deploy.sh"
     script = new_release / "deploy.sh"
@@ -327,6 +335,39 @@ if [[ "$1 $2" == "container inspect" ]]; then
     container_field "${{container}}" image
   fi
   exit 0
+fi
+if [[ "$1 $2" == "exec rag-app" ]]; then
+  [[ "${{APP_EXISTS}}" == "true" \
+    && "${{APP_RUNNING}}" == "true" \
+    && "${{QDRANT_EXISTS}}" == "true" \
+    && "${{QDRANT_RUNNING}}" == "true" ]] || exit 86
+  if [[ "${{QDRANT_IMAGE}}" == "{_NEW_QDRANT_IMAGE}" ]]; then
+    if [[ -n "${{FAKE_NEW_QDRANT_READY_AT_SECONDS:-}}" ]]; then
+      elapsed="$(cat "${{FAKE_CLOCK_FILE}}")"
+      if ((elapsed >= FAKE_NEW_QDRANT_READY_AT_SECONDS)); then
+        exit 0
+      fi
+      exit 1
+    fi
+    mode="${{FAKE_NEW_QDRANT_READYZ:-ready}}"
+  else
+    mode="${{FAKE_OLD_QDRANT_READYZ:-ready}}"
+  fi
+  case "${{mode}}" in
+    ready) exit 0 ;;
+    disappear)
+      QDRANT_EXISTS=false
+      QDRANT_RUNNING=false
+      write_state
+      exit 1
+      ;;
+    non_200)
+      echo "sensitive-qdrant-response-body"
+      exit 1
+      ;;
+    connection_error|timeout) exit 1 ;;
+    *) exit 87 ;;
+  esac
 fi
 if [[ "$1 $2 $3" == "container rm -f" ]]; then
   case "${{@: -1}}" in
@@ -596,6 +637,12 @@ def _remove_core_runtime(sandbox: _DeploySandbox) -> None:
     )
 
 
+def _assert_no_runtime_mutation(sandbox: _DeploySandbox) -> None:
+    log = _command_log(sandbox)
+    for command in ("docker load ", " up -d ", " stop "):
+        assert command not in log
+
+
 def test_running_worker_is_stopped_before_load_and_stays_stopped(
     tmp_path: Path,
 ) -> None:
@@ -645,18 +692,139 @@ def test_first_deploy_allows_missing_active_env(tmp_path: Path) -> None:
     _remove_core_runtime(sandbox)
     sandbox.active_env.unlink()
     sandbox.current_link.unlink()
+    rollback_file = sandbox.root / "shared/env/rollback-images.env"
+    rollback_file.unlink()
 
     completed = _run_deploy(sandbox)
 
     assert completed.returncode == 0, completed.stderr
     assert sandbox.active_env.read_bytes() == sandbox.env_file.read_bytes()
     assert sandbox.current_link.resolve() == sandbox.new_release
-    assert (
-        sandbox.root.joinpath(
-            "shared/env/rollback-images.env"
-        ).read_text(encoding="utf-8")
-        == sandbox.original_rollback
+    assert not rollback_file.exists()
+
+
+def test_fresh_deploy_rejects_stale_rollback_before_load(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(
+        tmp_path,
+        worker_exists=False,
+        worker_running=False,
     )
+    _remove_core_runtime(sandbox)
+    sandbox.active_env.unlink()
+    sandbox.current_link.unlink()
+    rollback_file = sandbox.root / "shared/env/rollback-images.env"
+    stale_rollback = rollback_file.read_bytes()
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode != 0
+    assert not sandbox.active_env.exists()
+    assert not sandbox.current_link.exists()
+    assert rollback_file.read_bytes() == stale_rollback
+    _assert_no_runtime_mutation(sandbox)
+
+
+def test_degraded_without_core_or_worker_publishes_complete_rollback(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(
+        tmp_path,
+        worker_exists=False,
+        worker_running=False,
+    )
+    _remove_core_runtime(sandbox)
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    rollback = sandbox.root.joinpath(
+        "shared/env/rollback-images.env",
+    ).read_text(encoding="utf-8")
+    assert "ROLLBACK_SCHEMA_VERSION=2\n" in rollback
+    assert f"ROLLBACK_APP_IMAGE={_OLD_APP_IMAGE}\n" in rollback
+    assert f"ROLLBACK_OCR_IMAGE={_OLD_OCR_IMAGE}\n" in rollback
+    assert f"ROLLBACK_QDRANT_IMAGE={_OLD_QDRANT_IMAGE}\n" in rollback
+    assert "ROLLBACK_WORKER_EXISTS=false\n" in rollback
+
+
+@pytest.mark.parametrize("missing_path", ("active", "current"))
+def test_degraded_requires_both_active_env_and_current(
+    tmp_path: Path,
+    missing_path: str,
+) -> None:
+    sandbox = _prepare_sandbox(
+        tmp_path,
+        worker_exists=False,
+        worker_running=False,
+    )
+    _remove_core_runtime(sandbox)
+    if missing_path == "active":
+        sandbox.active_env.unlink()
+    else:
+        sandbox.current_link.unlink()
+    original_active = (
+        sandbox.active_env.read_bytes()
+        if sandbox.active_env.exists()
+        else None
+    )
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode != 0
+    if original_active is None:
+        assert not sandbox.active_env.exists()
+    else:
+        assert sandbox.active_env.read_bytes() == original_active
+    _assert_no_runtime_mutation(sandbox)
+
+
+def test_degraded_worker_image_must_equal_old_app_image(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    _remove_core_runtime(sandbox)
+    state = _state(sandbox)
+    state["WORKER_IMAGE"] = "sha256:" + "9" * 64
+    sandbox.state_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in state.items()),
+        encoding="ascii",
+    )
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode != 0
+    assert sandbox.current_link.resolve() == sandbox.old_release
+    assert sandbox.active_env.read_text(
+        encoding="utf-8",
+    ) == sandbox.original_active
+    _assert_no_runtime_mutation(sandbox)
+
+
+def test_old_release_is_reverified_before_load(tmp_path: Path) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(sandbox, FAKE_OLD_VERIFY_FAIL="1")
+
+    assert completed.returncode != 0
+    log = _command_log(sandbox)
+    assert "verify-old-release" in log
+    _assert_no_runtime_mutation(sandbox)
+
+
+def test_failure_reverifies_old_release_before_compensation(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(sandbox, FAKE_LOAD_FAIL="1")
+
+    assert completed.returncode == 1
+    log = _command_log(sandbox)
+    assert log.count("verify-old-release") == 2
+    assert log.rindex("verify-old-release") > log.index("docker load ")
+    _assert_old_runtime_restored(sandbox)
 
 
 def test_starting_health_reaches_healthy_before_commit(tmp_path: Path) -> None:
@@ -669,6 +837,77 @@ def test_starting_health_reaches_healthy_before_commit(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert sandbox.current_link.resolve() == sandbox.new_release
+
+
+def test_delayed_qdrant_readyz_succeeds_before_metadata_commit(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_NEW_QDRANT_READY_AT_SECONDS="3",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 3
+    assert sandbox.current_link.resolve() == sandbox.new_release
+    assert _command_log(sandbox).count("docker exec rag-app") == 4
+
+
+@pytest.mark.parametrize(
+    "ready_mode",
+    ("connection_error", "non_200", "timeout"),
+)
+def test_qdrant_readyz_failure_times_out_and_compensates(
+    tmp_path: Path,
+    ready_mode: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_NEW_QDRANT_READYZ=ready_mode,
+    )
+
+    assert completed.returncode == 1
+    assert "DEPLOY_FAILED_RECOVERED" in completed.stderr
+    assert "sensitive-qdrant-response-body" not in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 60
+    assert _command_log(sandbox).count("docker exec rag-app") >= 61
+    _assert_old_runtime_restored(sandbox)
+
+
+def test_qdrant_disappearance_during_readyz_fails_immediately(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_NEW_QDRANT_READYZ="disappear",
+    )
+
+    assert completed.returncode == 1
+    assert "DEPLOY_FAILED_RECOVERED" in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 0
+    _assert_old_runtime_restored(sandbox)
+
+
+def test_qdrant_readyz_command_does_not_expose_secret_or_body(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_NEW_QDRANT_READYZ="non_200",
+    )
+
+    combined_output = completed.stdout + completed.stderr
+    assert "deploy-qdrant-secret" not in combined_output
+    assert "sensitive-qdrant-response-body" not in combined_output
+    assert "deploy-qdrant-secret" not in _command_log(sandbox)
 
 
 @pytest.mark.parametrize("healthy_at_seconds", (31, 90, 210))
@@ -819,6 +1058,12 @@ def test_running_worker_without_core_is_stopped_on_success(
     assert state["QDRANT_IMAGE"] == _NEW_QDRANT_IMAGE
     assert state["WORKER_RUNNING"] == "false"
     assert sandbox.current_link.resolve() == sandbox.new_release
+    rollback = sandbox.root.joinpath(
+        "shared/env/rollback-images.env",
+    ).read_text(encoding="utf-8")
+    assert f"ROLLBACK_APP_IMAGE={_OLD_APP_IMAGE}\n" in rollback
+    assert "ROLLBACK_WORKER_EXISTS=true\n" in rollback
+    assert f"ROLLBACK_WORKER_IMAGE={_OLD_APP_IMAGE}\n" in rollback
 
 
 def test_running_worker_without_core_is_restored_after_failure(

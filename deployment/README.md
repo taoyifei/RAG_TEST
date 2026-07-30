@@ -9,21 +9,59 @@
 
 1. 先用 `offline_bundle.py.sha256` 校验固定解包器，再分别校验
    runtime/corpus 外层 SHA256 和内部 manifest；解包器摘要失败时禁止执行。
-2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；环境文件保存在
+2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；候选环境文件保存在
+   `/data/tyf/RAG/shared/env/candidates`，活动环境文件固定为
    `/data/tyf/RAG/shared/env/rag.env`。`install.sh` 必须由 root 执行；
    发布前会把 release 全部固定为 `root:root`，目录与 Shell 为 0555，
    其他普通文件为 0444。复用既有 release 时只验证身份、文件集、owner 和
    mode，发现漂移会拒绝而不会静默修复。corpus 仍固定为
    `10001:10001`、目录 0700、文件 0400。
-3. 设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
+3. 设置 `release_id` 后创建候选目录。首次部署从 release 样例安装候选文件；
+   升级则从当前活动文件复制到新 release 的候选文件。两种路径都只编辑候选
+   文件：
+
+   ```bash
+   release_id='<40位小写Git SHA>'
+   install -d -m 0700 /data/tyf/RAG/shared/env/candidates
+
+   # 首次部署：
+   install -m 0600 \
+     "/data/tyf/RAG/releases/${release_id}/.env.example" \
+     /data/tyf/RAG/shared/env/candidates/${release_id}.env
+
+   # 升级：
+   test ! -e /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   cp -- /data/tyf/RAG/shared/env/rag.env \
+     /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   chmod 0600 /data/tyf/RAG/shared/env/candidates/${release_id}.env
+
+   editor /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   ```
+
+   设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
    mount 路径、`RAG_RELEASE_REVISION`、普通查询 `RAG_TRACE_MODE` 和 OCR
-   使用的宿主 GPU ID。
+   使用的宿主 GPU ID。首次部署与升级命令二选一，不要覆盖既有候选文件。
 4. 执行 `bash verify-offline.sh`。
-5. 执行 `bash deploy.sh /data/tyf/RAG/shared/env/rag.env`；脚本先校验，
-   再按白名单 `docker load`，最后只启动 app、OCR 和 Qdrant。默认 Compose
-   路径不启动 worker。部署、回滚与失败补偿均按 deadline 等待：Qdrant、
-   app health 和 app `/live` 各最多 60 秒，OCR 最多 240 秒；OCR 的期限
-   覆盖 90 秒 start period 与后续 12×10 秒健康重试窗口。
+5. 只把候选文件传给 deploy；active rag.env 只能由 deploy.sh 成功后发布：
+
+   ```bash
+   bash "/data/tyf/RAG/releases/${release_id}/deploy.sh" \
+     /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   ```
+
+   脚本先校验，再按白名单 `docker load`，最后只启动 app、OCR 和 Qdrant。
+   默认 Compose 路径不启动 worker。部署、回滚与失败补偿均按 deadline 等待：
+   Qdrant 端口 health、容器内 Qdrant `/readyz`、app health 和 app
+   `/live` 各最多 60 秒，OCR 最多 240 秒；OCR 的期限覆盖 90 秒 start
+   period 与后续 12×10 秒健康重试窗口。`/readyz` 由 `rag-app` 容器内
+   Python 使用容器环境中的 URL 和 API key 请求，不发布 Qdrant 宿主端口。
+
+   脚本在 `docker load` 前严格分类部署状态：全部发布元数据、核心容器、
+   worker 和 rollback state 都不存在才是 fresh；合法 active/current 配合
+   完整核心容器是 installed；合法 active/current 配合全无核心、可选同旧 app
+   image 的 worker 是 degraded。其余组合一律拒绝。fresh 不允许遗留 rollback
+   state；installed/degraded 的旧 release 会在部署前和失败补偿前重新执行
+   `verify-offline.sh`。
 6. 检查 Compose、应用存活和容器内 OCR readiness：
 
    ```bash

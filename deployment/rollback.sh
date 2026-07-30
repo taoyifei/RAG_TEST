@@ -15,6 +15,7 @@ active_new=""
 current_new="${current_link}.rollback-new"
 current_restore="${current_link}.rollback-restore"
 QDRANT_HEALTH_TIMEOUT_SECONDS=60
+QDRANT_READY_TIMEOUT_SECONDS=60
 APP_HEALTH_TIMEOUT_SECONDS=60
 APP_LIVE_TIMEOUT_SECONDS=60
 OCR_HEALTH_TIMEOUT_SECONDS=240
@@ -277,6 +278,64 @@ wait_for_app_live() {
   done
 }
 
+wait_for_qdrant_ready() {
+  local timeout_seconds="$1"
+  local deadline
+  local now
+  local remaining
+  local request_timeout
+  local sleep_seconds
+  deadline="$(($(date +%s) + timeout_seconds))"
+  while true; do
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "Qdrant /readyz 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
+    fi
+    if ! container_exists rag-app || ! container_exists rag-qdrant; then
+      echo "Qdrant /readyz 检查时核心容器不存在。" >&2
+      return 1
+    fi
+    request_timeout=3
+    if ((request_timeout > remaining)); then
+      request_timeout="${remaining}"
+    fi
+    if docker exec rag-app python -c '
+import os
+import sys
+import urllib.request
+
+base_url = os.environ["RAG_QDRANT_URL"].rstrip("/")
+request = urllib.request.Request(
+    f"{base_url}/readyz",
+    headers={"api-key": os.environ["RAG_QDRANT_API_KEY"]},
+)
+response = urllib.request.urlopen(request, timeout=float(sys.argv[1]))
+status = response.status
+response.close()
+raise SystemExit(0 if status == 200 else 1)
+' "${request_timeout}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ! container_exists rag-app || ! container_exists rag-qdrant; then
+      echo "Qdrant /readyz 检查时核心容器不存在。" >&2
+      return 1
+    fi
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "Qdrant /readyz 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
+    fi
+    sleep_seconds="${HEALTH_POLL_INTERVAL_SECONDS}"
+    if ((sleep_seconds > remaining)); then
+      sleep_seconds="${remaining}"
+    fi
+    sleep "${sleep_seconds}"
+  done
+}
+
 wait_for_runtime_health() {
   local port="$1"
   wait_for_container_health \
@@ -285,6 +344,7 @@ wait_for_runtime_health() {
     "rag-ocr" "${OCR_HEALTH_TIMEOUT_SECONDS}" || return 1
   wait_for_container_health \
     "rag-app" "${APP_HEALTH_TIMEOUT_SECONDS}" || return 1
+  wait_for_qdrant_ready "${QDRANT_READY_TIMEOUT_SECONDS}" || return 1
   wait_for_app_live "${port}" "${APP_LIVE_TIMEOUT_SECONDS}"
 }
 
@@ -346,6 +406,10 @@ if [[ "${rollback_worker_exists}" == "true" \
   && ! "${rollback_worker_image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   fail "rollback worker image ID 无效。"
 fi
+if [[ "${rollback_worker_exists}" == "true" \
+  && "${rollback_worker_image}" != "${rollback_app_image}" ]]; then
+  fail "rollback worker image 必须等于 rollback app image。"
+fi
 
 bash "${rollback_release}/verify-offline.sh"
 compose_file="${rollback_release}/compose.yaml"
@@ -402,9 +466,11 @@ if [[ ! -L "${current_link}" ]]; then
 fi
 original_release="$(readlink -f "${current_link}")"
 if [[ "${original_release}" != "${releases_dir}/"* \
-  || ! -f "${original_release}/compose.yaml" ]]; then
+  || ! -f "${original_release}/compose.yaml" \
+  || ! -f "${original_release}/verify-offline.sh" ]]; then
   fail "当前 release 无效。"
 fi
+bash "${original_release}/verify-offline.sh"
 original_env="$(mktemp "${shared_env_dir}/.rag.env.rollback-original.XXXXXXXX")"
 cp -- "${active_env}" "${original_env}"
 chmod 0600 "${original_env}"
@@ -518,6 +584,7 @@ restore_original_runtime() {
   )
   local services=()
   local service
+  bash "${original_release}/verify-offline.sh" || return 1
   if [[ "${ORIGINAL_APP_EXISTS}" == "true" ]]; then
     services+=(rag-app)
   fi
@@ -580,6 +647,10 @@ restore_original_runtime() {
         "${service}" "${timeout_seconds}" || return 1
     fi
   done
+  if [[ "${ORIGINAL_APP_RUNNING}" == "true" \
+    && "${ORIGINAL_QDRANT_RUNNING}" == "true" ]]; then
+    wait_for_qdrant_ready "${QDRANT_READY_TIMEOUT_SECONDS}" || return 1
+  fi
   if [[ "${ORIGINAL_APP_RUNNING}" == "true" ]]; then
     wait_for_app_live \
       "${original_port}" "${APP_LIVE_TIMEOUT_SECONDS}" || return 1

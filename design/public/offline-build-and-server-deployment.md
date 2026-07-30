@@ -289,18 +289,30 @@ corpus 同样只允许完全一致时复用。因此同一 runtime 可以安装�
 相同 runtime/corpus 可幂等重跑，任一漂移、复制后篡改或发布竞态都会非零退出，
 且不会删除既有目标或留下伪完整 staging。
 
-首次部署时创建外置配置；升级时复用并审查原文件，不从新 release 覆盖它。
-该文件始终在 release 外且必须保持 0600：
+候选配置始终在 release 外。候选目录固定为 0700；首次部署从新 release
+样例安装候选文件，升级则从 active `rag.env` 复制到新 release 的候选文件。
+两种路径都只编辑候选文件：
 
 ```bash
+install -d -m 0700 /data/tyf/RAG/shared/env/candidates
+
+# 首次部署：
 install -m 0600 \
   "/data/tyf/RAG/releases/${release_id}/.env.example" \
-  /data/tyf/RAG/shared/env/rag.env
-editor /data/tyf/RAG/shared/env/rag.env
+  /data/tyf/RAG/shared/env/candidates/${release_id}.env
+
+# 升级：
+test ! -e /data/tyf/RAG/shared/env/candidates/${release_id}.env
+cp -- /data/tyf/RAG/shared/env/rag.env \
+  /data/tyf/RAG/shared/env/candidates/${release_id}.env
+chmod 0600 /data/tyf/RAG/shared/env/candidates/${release_id}.env
+
+editor /data/tyf/RAG/shared/env/candidates/${release_id}.env
 ```
 
 至少替换四个不同的随机令牌、三个模型端点数组、镜像 tag 和
-`RAG_DOCS_PATH`。固定持久化路径应为：
+`RAG_DOCS_PATH`。首次部署与升级命令二选一，不要覆盖既有候选文件。固定
+持久化路径应为：
 
 ```text
 RAG_APP_IMAGE=docx-rag:<release-id>
@@ -317,10 +329,27 @@ RAG_DOCS_PATH=/data/tyf/RAG/shared/corpora/frozen-docx-v1/docs
 `--no-build --pull never` 启动。当前 provisional release 的默认路径只启动
 app、OCR 和 Qdrant，不启动 worker；这时 `/ready=503` 是正确结果。
 
+在第一条 `docker load` 前，脚本会把现场唯一分类为 fresh、installed 或
+degraded。fresh 要求 active env、current、三个核心容器、worker 和 rollback
+state 全不存在；installed 要求合法 active/current 与完整核心容器；degraded
+要求合法 active/current、核心全无，并只允许不存在 worker 或保留 image 等于
+旧 app image 的 worker。其他组合均为 invalid。fresh 若残留旧 rollback state
+也会失败；installed/degraded 的旧 release 会在部署前和失败补偿前重新执行
+`verify-offline.sh`。
+
 ```bash
 bash "/data/tyf/RAG/releases/${release_id}/deploy.sh" \
-  /data/tyf/RAG/shared/env/rag.env
+  /data/tyf/RAG/shared/env/candidates/${release_id}.env
 ```
+
+deploy.sh 只接受候选文件；active rag.env 只能由 deploy.sh 成功后发布。
+后续 Compose、备份和 rollback 继续读取固定的
+`/data/tyf/RAG/shared/env/rag.env`。
+
+Compose 的 Qdrant 端口 healthcheck 只用于启动顺序。deploy、rollback 和失败
+补偿还会在 `rag-app` 容器内，以容器环境中的 Qdrant URL/API key 有界请求
+`/readyz`；只有 HTTP 200 才允许提交 env/current。命令、日志和错误不输出
+API key 或响应正文，Qdrant 也不发布宿主端口。
 
 检查容器、应用存活和 OCR GPU 就绪：
 

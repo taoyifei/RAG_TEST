@@ -60,6 +60,7 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
         f"RAG_RELEASE_REVISION={'2' * 40}\n"
         "RAG_PORT=8088\n"
         "RAG_QUERY_TOKEN=keep-secret\n"
+        "RAG_QDRANT_API_KEY=rollback-qdrant-secret\n"
         "CUSTOM_SETTING=keep-value\n"
     )
     env_file.write_text(original_env, encoding="utf-8")
@@ -90,7 +91,9 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     rollback_file.write_text(original_rollback, encoding="utf-8")
     rollback_file.chmod(0o600)
     (old_release / "verify-offline.sh").write_text(
-        "#!/usr/bin/env bash\nexit 0\n",
+        "#!/usr/bin/env bash\n"
+        "printf 'verify-rollback-target\\n' >> \"${FAKE_DOCKER_LOG}\"\n"
+        "exit 0\n",
         encoding="utf-8",
     )
     (old_release / "compose.yaml").write_text(
@@ -130,6 +133,12 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     (new_release / "SOURCE_REVISION").write_text(
         f"{'2' * 40}\n",
         encoding="ascii",
+    )
+    (new_release / "verify-offline.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'verify-original-release\\n' >> \"${FAKE_DOCKER_LOG}\"\n"
+        "[[ \"${FAKE_ORIGINAL_VERIFY_FAIL:-0}\" != \"1\" ]]\n",
+        encoding="utf-8",
     )
 
     script = tmp_path / "rollback.sh"
@@ -300,6 +309,39 @@ if [[ "$1 $2" == "container inspect" ]]; then
   fi
   printf '%s\n' "${actual}"
   exit 0
+fi
+if [[ "$1 $2" == "exec rag-app" ]]; then
+  [[ "${APP_EXISTS}" == "true" \
+    && "${APP_RUNNING}" == "true" \
+    && "${QDRANT_EXISTS}" == "true" \
+    && "${QDRANT_RUNNING}" == "true" ]] || exit 45
+  if [[ "${QDRANT_IMAGE}" == "${FAKE_QDRANT_IMAGE}" ]]; then
+    if [[ -n "${FAKE_TARGET_QDRANT_READY_AT_SECONDS:-}" ]]; then
+      elapsed="$(cat "${FAKE_CLOCK_FILE}")"
+      if ((elapsed >= FAKE_TARGET_QDRANT_READY_AT_SECONDS)); then
+        exit 0
+      fi
+      exit 1
+    fi
+    mode="${FAKE_TARGET_QDRANT_READYZ:-ready}"
+  else
+    mode="${FAKE_ORIGINAL_QDRANT_READYZ:-ready}"
+  fi
+  case "${mode}" in
+    ready) exit 0 ;;
+    disappear)
+      QDRANT_EXISTS=false
+      QDRANT_RUNNING=false
+      write_state
+      exit 1
+      ;;
+    non_200)
+      echo "sensitive-qdrant-response-body"
+      exit 1
+      ;;
+    connection_error|timeout) exit 1 ;;
+    *) exit 46 ;;
+  esac
 fi
 if [[ "$1" == "compose" ]]; then
   env_file=""
@@ -512,6 +554,7 @@ def test_rollback_revalidates_old_release_and_image_identity() -> None:
 
     for required in (
         'bash "${rollback_release}/verify-offline.sh"',
+        'bash "${original_release}/verify-offline.sh"',
         "SOURCE_REVISION",
         "ROLLBACK_ENV_SHA256",
         "ROLLBACK_ENV_BASE64",
@@ -531,6 +574,50 @@ def test_rollback_atomically_persists_only_release_image_keys() -> None:
     assert "RAG_RELEASE_REVISION" in script
     assert 'mv -T "${active_new}" "${active_env}"' in script
     assert "sed -i" not in script
+
+
+def test_original_release_verify_failure_prevents_runtime_mutation(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_ORIGINAL_VERIFY_FAIL="1",
+    )
+
+    assert completed.returncode != 0
+    _assert_original_metadata(sandbox)
+    log = sandbox.docker_log.read_text(encoding="utf-8")
+    assert "verify-rollback-target" in log
+    assert "verify-original-release" in log
+    assert " up -d " not in log
+
+
+def test_rollback_worker_image_must_equal_old_app_before_up(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    mismatched_image = "sha256:" + "8" * 64
+    sandbox.rollback_file.write_text(
+        sandbox.original_rollback.replace(
+            f"ROLLBACK_WORKER_IMAGE={_APP_IMAGE}",
+            f"ROLLBACK_WORKER_IMAGE={mismatched_image}",
+        ),
+        encoding="utf-8",
+    )
+    mismatched_rollback = sandbox.rollback_file.read_bytes()
+
+    completed = _run_rollback(sandbox)
+
+    assert completed.returncode != 0
+    assert sandbox.env_file.read_text(
+        encoding="utf-8",
+    ) == sandbox.original_env
+    assert sandbox.current_link.resolve() == sandbox.new_release
+    assert sandbox.rollback_file.read_bytes() == mismatched_rollback
+    log = sandbox.docker_log.read_text(encoding="utf-8")
+    assert " up -d " not in log
 
 
 def test_rollback_preserves_worker_state_and_compensates_metadata() -> None:
@@ -612,6 +699,93 @@ def test_rollback_waits_for_ocr_beyond_30_seconds(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert int(sandbox.clock_file.read_text(encoding="ascii")) >= 210
     assert sandbox.current_link.resolve() == sandbox.old_release
+
+
+def test_rollback_waits_for_delayed_qdrant_readyz(tmp_path: Path) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_QDRANT_READY_AT_SECONDS="3",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 3
+    assert sandbox.current_link.resolve() == sandbox.old_release
+    assert (
+        sandbox.docker_log.read_text(encoding="utf-8").count(
+            "exec rag-app",
+        )
+        == 4
+    )
+
+
+@pytest.mark.parametrize(
+    "ready_mode",
+    ("connection_error", "non_200", "timeout"),
+)
+def test_rollback_readyz_failure_times_out_and_checks_compensation(
+    tmp_path: Path,
+    ready_mode: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_QDRANT_READYZ=ready_mode,
+    )
+
+    assert completed.returncode == 1
+    assert "ROLLBACK_FAILED_RECOVERED" in completed.stderr
+    assert "sensitive-qdrant-response-body" not in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 60
+    assert (
+        sandbox.docker_log.read_text(encoding="utf-8").count(
+            "exec rag-app",
+        )
+        >= 61
+    )
+    assert (
+        sandbox.docker_log.read_text(encoding="utf-8").count(
+            "verify-original-release",
+        )
+        == 2
+    )
+    _assert_original_metadata(sandbox)
+
+
+def test_rollback_qdrant_disappearance_fails_without_metadata_commit(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_QDRANT_READYZ="disappear",
+    )
+
+    assert completed.returncode == 1
+    assert "ROLLBACK_FAILED_RECOVERED" in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 0
+    _assert_original_metadata(sandbox)
+
+
+def test_rollback_readyz_does_not_expose_secret_or_body(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_QDRANT_READYZ="non_200",
+    )
+
+    combined_output = completed.stdout + completed.stderr
+    assert "rollback-qdrant-secret" not in combined_output
+    assert "sensitive-qdrant-response-body" not in combined_output
+    assert "rollback-qdrant-secret" not in sandbox.docker_log.read_text(
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.parametrize(

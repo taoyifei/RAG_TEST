@@ -1,12 +1,61 @@
 """最终部署事务的静态安全边界测试。"""
 
+import re
 from pathlib import Path
 
 _ROOT = Path(__file__).parents[1]
+_DEPLOYMENT_DOCUMENTS = (
+    Path("deployment/README.md"),
+    Path("design/public/offline-build-and-server-deployment.md"),
+)
+_ACTIVE_ENV = "/data/tyf/RAG/shared/env/rag.env"
+_CANDIDATE_DIR = "/data/tyf/RAG/shared/env/candidates"
+_CANDIDATE_ENV = f"{_CANDIDATE_DIR}/${{release_id}}.env"
 
 
 def _script(name: str) -> str:
     return (_ROOT / "deployment" / name).read_text(encoding="utf-8")
+
+
+def _document(path: Path) -> str:
+    return (_ROOT / path).read_text(encoding="utf-8")
+
+
+def _normalize_shell_continuations(text: str) -> str:
+    without_continuations = re.sub(r"\\\s*\n\s*", " ", text)
+    return " ".join(without_continuations.split())
+
+
+def test_documents_follow_candidate_and_active_env_contract() -> None:
+    deploy = _script("deploy.sh")
+    rollback = _script("rollback.sh")
+    assert 'candidate_dir="${shared_env_dir}/candidates"' in deploy
+    assert 'candidate_env="${1:-}"' in deploy
+    assert 'requested_env="${1:-${active_env}}"' in rollback
+
+    for path in _DEPLOYMENT_DOCUMENTS:
+        document = _normalize_shell_continuations(_document(path))
+        assert f"install -d -m 0700 {_CANDIDATE_DIR}" in document
+        assert (
+            '"/data/tyf/RAG/releases/${release_id}/.env.example" '
+            f"{_CANDIDATE_ENV}"
+        ) in document
+        assert f"cp -- {_ACTIVE_ENV} {_CANDIDATE_ENV}" in document
+        assert f"chmod 0600 {_CANDIDATE_ENV}" in document
+        assert f"editor {_CANDIDATE_ENV}" in document
+        assert re.search(
+            rf'deploy\.sh"?\s+{re.escape(_CANDIDATE_ENV)}',
+            document,
+        )
+        assert not re.search(
+            rf'deploy\.sh"?\s+{re.escape(_ACTIVE_ENV)}',
+            document,
+        )
+        assert re.search(
+            rf'rollback\.sh"?\s+{re.escape(_ACTIVE_ENV)}',
+            document,
+        )
+        assert "active rag.env 只能由 deploy.sh 成功后发布" in document
 
 
 def test_deploy_separates_candidate_active_and_late_rollback_state() -> None:
@@ -38,13 +87,20 @@ def test_deploy_and_rollback_share_complete_health_gate() -> None:
                 in script
             )
         assert "QDRANT_HEALTH_TIMEOUT_SECONDS=60" in script
+        assert "QDRANT_READY_TIMEOUT_SECONDS=60" in script
         assert "APP_HEALTH_TIMEOUT_SECONDS=60" in script
         assert "APP_LIVE_TIMEOUT_SECONDS=60" in script
         assert "OCR_HEALTH_TIMEOUT_SECONDS=240" in script
         assert "deadline" in script
         assert "max_attempts=30" not in script
         assert "/live" in script
-        assert "/ready" not in script
+        assert "wait_for_qdrant_ready" in script
+        assert "docker exec rag-app python -c" in script
+        assert 'os.environ["RAG_QDRANT_URL"]' in script
+        assert 'os.environ["RAG_QDRANT_API_KEY"]' in script
+        assert "response.status" in script
+        assert "/readyz" in script
+        assert 'http://127.0.0.1:${port}/ready' not in script
 
 
 def test_rollback_records_and_restores_degraded_runtime() -> None:
