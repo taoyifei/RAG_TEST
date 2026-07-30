@@ -11,10 +11,12 @@ V1 只处理 DOCX。图片 OCR 使用独立的单 GPU PaddleOCR 容器；EMF 不
 
 ## 1. 交付物和目录
 
-一次发布产生以下文件，其中两个归档各有独立的外层摘要：
+一次发布只原子产生一个 release 输出目录；两个归档各有独立外层摘要，
+目录本身另有逐文件摘要：
 
 ```text
-artifacts/
+artifacts/releases/<release-id>-<corpus-id>/
+├── RELEASE_MANIFEST.sha256
 ├── offline_bundle.py
 ├── offline_bundle.py.sha256
 ├── rag-runtime-<release-id>.tar.gz
@@ -155,30 +157,43 @@ docker run --rm --network none --entrypoint python \
 
 ## 5. 生成和校验双包
 
-打包前工作树必须干净。分别保存三个镜像，禁止通过 glob 或归档内任意名称
-批量加载镜像。
+先由操作员把当前 DOCX exact set 冻结为外置 canonical manifest。推荐输出到
+已被 Git 忽略的 `corpus-manifests/`；私有文件名不进入仓库记录。打包前工作树
+必须干净，且 manifest 与当前 docs 的路径、大小和 SHA256 必须完全一致。
+分别保存三个镜像，禁止通过 glob 或归档内任意名称批量加载镜像。
 
 ```bash
 export RELEASE_ID="${release_id}"
-export CORPUS_ID='frozen-docx-v1'
+corpus_id='frozen-docx-v1'
+mkdir -p corpus-manifests
+.venv/bin/python -m scripts.freeze_corpus_manifest freeze \
+  --docs docs \
+  --corpus-id "${corpus_id}" \
+  --output "corpus-manifests/${corpus_id}.json"
+export CORPUS_MANIFEST="$(
+  realpath "corpus-manifests/${corpus_id}.json"
+)"
 export RAG_APP_IMAGE="docx-rag:${release_id}"
 export RAG_OCR_IMAGE="docx-rag-ocr:${release_id}"
 export RAG_QDRANT_IMAGE="${qdrant_ref}"
 bash deployment/package.sh
+release_output="artifacts/releases/${release_id}-${corpus_id}"
+(cd "${release_output}" && sha256sum -c RELEASE_MANIFEST.sha256)
 ```
 
 在 WSL 的全新临时目录验证两个外层摘要、tar 路径和内部逐文件清单：
 
 ```bash
-(cd artifacts && sha256sum -c offline_bundle.py.sha256)
+release_output="artifacts/releases/${release_id}-${corpus_id}"
+(cd "${release_output}" && sha256sum -c offline_bundle.py.sha256)
 verify_root="$(mktemp -d)"
-.venv/bin/python artifacts/offline_bundle.py \
-  "artifacts/rag-runtime-${release_id}.tar.gz" \
-  "artifacts/rag-runtime-${release_id}.tar.gz.sha256" \
+.venv/bin/python "${release_output}/offline_bundle.py" \
+  "${release_output}/rag-runtime-${release_id}.tar.gz" \
+  "${release_output}/rag-runtime-${release_id}.tar.gz.sha256" \
   "${verify_root}" --top-level runtime
-.venv/bin/python artifacts/offline_bundle.py \
-  "artifacts/rag-corpus-${CORPUS_ID}.tar.gz" \
-  "artifacts/rag-corpus-${CORPUS_ID}.tar.gz.sha256" \
+.venv/bin/python "${release_output}/offline_bundle.py" \
+  "${release_output}/rag-corpus-${corpus_id}.tar.gz" \
+  "${release_output}/rag-corpus-${corpus_id}.tar.gz.sha256" \
   "${verify_root}" --top-level corpus
 bash "${verify_root}/runtime/verify-offline.sh"
 (cd "${verify_root}/corpus" && sha256sum -c MANIFEST.sha256)
@@ -194,15 +209,17 @@ bash "${verify_root}/runtime/verify-offline.sh"
 
 ```bash
 test -n "${RAG_SERVER}"
+release_output="artifacts/releases/${release_id}-${corpus_id}"
 ssh "<server-user>@${RAG_SERVER}" \
   'install -d -m 0700 /data/tyf/RAG/incoming'
 scp \
-  artifacts/offline_bundle.py \
-  artifacts/offline_bundle.py.sha256 \
-  "artifacts/rag-runtime-${release_id}.tar.gz" \
-  "artifacts/rag-runtime-${release_id}.tar.gz.sha256" \
-  "artifacts/rag-corpus-${CORPUS_ID}.tar.gz" \
-  "artifacts/rag-corpus-${CORPUS_ID}.tar.gz.sha256" \
+  "${release_output}/RELEASE_MANIFEST.sha256" \
+  "${release_output}/offline_bundle.py" \
+  "${release_output}/offline_bundle.py.sha256" \
+  "${release_output}/rag-runtime-${release_id}.tar.gz" \
+  "${release_output}/rag-runtime-${release_id}.tar.gz.sha256" \
+  "${release_output}/rag-corpus-${corpus_id}.tar.gz" \
+  "${release_output}/rag-corpus-${corpus_id}.tar.gz.sha256" \
   "<server-user>@${RAG_SERVER}":/data/tyf/RAG/incoming/
 ```
 
@@ -213,26 +230,26 @@ scp \
 
 ```bash
 release_id='<前述 12 位 release-id>'
-CORPUS_ID='frozen-docx-v1'
+corpus_id='frozen-docx-v1'
 cd /data/tyf/RAG/incoming
+sha256sum -c RELEASE_MANIFEST.sha256
 sha256sum -c offline_bundle.py.sha256
 sha256sum -c "rag-runtime-${release_id}.tar.gz.sha256"
-sha256sum -c "rag-corpus-${CORPUS_ID}.tar.gz.sha256"
+sha256sum -c "rag-corpus-${corpus_id}.tar.gz.sha256"
 install -d -m 0700 extracted
 python3 offline_bundle.py \
   "rag-runtime-${release_id}.tar.gz" \
   "rag-runtime-${release_id}.tar.gz.sha256" \
   extracted --top-level runtime
 python3 offline_bundle.py \
-  "rag-corpus-${CORPUS_ID}.tar.gz" \
-  "rag-corpus-${CORPUS_ID}.tar.gz.sha256" \
+  "rag-corpus-${corpus_id}.tar.gz" \
+  "rag-corpus-${corpus_id}.tar.gz.sha256" \
   extracted --top-level corpus
 
 test "$(cat extracted/runtime/RELEASE_ID)" = "${release_id}"
-test "$(cat extracted/corpus/CORPUS_ID)" = "${CORPUS_ID}"
-test ! -e "/data/tyf/RAG/releases/${release_id}"
-test ! -e "/data/tyf/RAG/shared/corpora/${CORPUS_ID}"
+test "$(cat extracted/corpus/CORPUS_ID)" = "${corpus_id}"
 install -d -m 0700 \
+  /data/tyf/RAG \
   /data/tyf/RAG/releases \
   /data/tyf/RAG/shared/corpora \
   /data/tyf/RAG/shared/env \
@@ -240,15 +257,16 @@ install -d -m 0700 \
   /data/tyf/RAG/data/qdrant \
   /data/tyf/RAG/backups \
   /data/tyf/RAG/logs
-mv extracted/runtime "/data/tyf/RAG/releases/${release_id}"
-mv extracted/corpus "/data/tyf/RAG/shared/corpora/${CORPUS_ID}"
+bash extracted/runtime/install.sh \
+  "$(realpath extracted/runtime)" \
+  "$(realpath extracted/corpus)"
 sudo chown -R 10001:10001 \
-  "/data/tyf/RAG/shared/corpora/${CORPUS_ID}" \
+  "/data/tyf/RAG/shared/corpora/${corpus_id}" \
   /data/tyf/RAG/data/state \
   /data/tyf/RAG/logs
-sudo find "/data/tyf/RAG/shared/corpora/${CORPUS_ID}" \
+sudo find "/data/tyf/RAG/shared/corpora/${corpus_id}" \
   -type d -exec chmod 0700 {} +
-sudo find "/data/tyf/RAG/shared/corpora/${CORPUS_ID}" \
+sudo find "/data/tyf/RAG/shared/corpora/${corpus_id}" \
   -type f -exec chmod 0400 {} +
 sudo chmod 0700 \
   /data/tyf/RAG/data/state \
@@ -256,7 +274,13 @@ sudo chmod 0700 \
   /data/tyf/RAG/logs
 ```
 
-首次部署时创建外置配置；升级时复用并审查原文件，不从新 release 覆盖它：
+`install.sh` 再次校验 runtime 和 corpus 摘要，在各目标父目录的临时目录中
+复制，先设置 release 目录 0555、普通文件 0444、Shell 0555，再以不覆盖的
+原子 rename 发布。目标已存在、输入含 secret env 或任一步失败都会非零退出，
+不会把 staging 冒充完整 release。
+
+首次部署时创建外置配置；升级时复用并审查原文件，不从新 release 覆盖它。
+该文件始终在 release 外且必须保持 0600：
 
 ```bash
 install -m 0600 \
@@ -442,6 +466,13 @@ stat -c '%U:%G %a %n' \
 `MANIFEST.sha256` 后才原子发布。成功或失败都会尝试恢复原运行集合；原来未
 运行的 worker 不会被启动。恢复失败时脚本非零退出，但不会删除已经验证成功的
 备份，也不会删除任何历史备份。
+
+每个正式备份还包含进入 `MANIFEST.sha256` 的
+`BACKUP_METADATA.json`：记录 UTC 创建时间、release ID、源码 revision、
+app/OCR/Qdrant 实际 image ID、外置 active env 的 SHA256（不含 env 内容）、
+两个归档 SHA；活动 manifest SQLite 可安全只读时还记录唯一活动 collection
+和 manifest SHA，否则该字段明确为 `null`。app 恢复与 Qdrant 一样使用固定
+30 次上限的有界轮询，不以单次 `/live` 请求判定恢复失败。
 
 本轮 Agent 只实现并使用 fake 命令测试 `backup.sh`，没有在服务器执行备份、
 恢复或回滚。操作人员实际部署后必须运行上述命令并保存退出码、manifest 校验、

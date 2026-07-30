@@ -4,20 +4,53 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import uvicorn
 
+from rag_app._build_revision import SOURCE_REVISION
 from rag_app.assets import AssetPaths, verify_offline_assets
 from rag_app.runtime import build_runtime, load_pipeline
 from rag_app.settings import RuntimeSettings
 from rag_app.state import JobKind, JobState
 from rag_app.worker_runtime import build_worker_runtime
 
-__all__ = ["main"]
+__all__ = ["BuildInfo", "build_info", "main"]
+
+
+@dataclass(frozen=True, slots=True)
+class BuildInfo:
+    """安装包和 OCI 期望源码身份的最小报告。"""
+
+    installed_revision: str
+    expected_revision: str
+    matches: bool
+
+
+def build_info(
+    *,
+    expected_revision: str,
+    installed_revision: str = SOURCE_REVISION,
+) -> BuildInfo:
+    """构造不含路径或配置内容的 revision 报告。
+
+    Args:
+        expected_revision: OCI 或部署环境期望的完整 Git SHA。
+        installed_revision: wheel 内安装的完整 Git SHA。
+
+    Returns:
+        两个 revision 及其精确匹配结果。
+
+    """
+    return BuildInfo(
+        installed_revision=installed_revision,
+        expected_revision=expected_revision,
+        matches=installed_revision == expected_revision,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -32,26 +65,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     """
     parser = _parser()
     arguments = parser.parse_args(argv)
-    if arguments.command == "asset-selfcheck":
-        report = verify_offline_assets(
-            AssetPaths(
-                root=arguments.root,
-                manifest_path=arguments.manifest,
-                pipeline_path=arguments.pipeline,
-                retrieval_path=arguments.retrieval,
-                tokenizer_path=arguments.tokenizer,
-                frontend_dir=arguments.frontend,
-            )
-        )
-        print(
-            json.dumps(
-                asdict(report),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        )
-        return 0
+    read_only_result = _run_read_only_command(arguments)
+    if read_only_result is not None:
+        return read_only_result
     if arguments.command == "serve":
         verify_offline_assets(_default_asset_paths())
         settings = RuntimeSettings()  # type: ignore[call-arg]
@@ -111,10 +127,64 @@ def main(argv: Sequence[str] | None = None) -> int:
     raise AssertionError("argparse 未约束到已知命令。")
 
 
+def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
+    """执行不创建 runtime 的只读诊断命令。
+
+    Args:
+        arguments: 已解析的 CLI 参数。
+
+    Returns:
+        已处理命令的退出码；非只读命令返回 None。
+
+    """
+    if arguments.command == "build-info":
+        build_report = build_info(
+            expected_revision=arguments.expected_revision
+        )
+        print(
+            json.dumps(
+                asdict(build_report),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return 0 if build_report.matches else 1
+    if arguments.command == "asset-selfcheck":
+        asset_report = verify_offline_assets(
+            AssetPaths(
+                root=arguments.root,
+                manifest_path=arguments.manifest,
+                pipeline_path=arguments.pipeline,
+                retrieval_path=arguments.retrieval,
+                tokenizer_path=arguments.tokenizer,
+                frontend_dir=arguments.frontend,
+            )
+        )
+        print(
+            json.dumps(
+                asdict(asset_report),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        return 0
+    return None
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="rag-app")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("serve", help="启动 API 与本地静态页。")
+    build = subparsers.add_parser(
+        "build-info",
+        help="报告安装包与 OCI 期望 revision 是否一致。",
+    )
+    build.add_argument(
+        "--expected-revision",
+        default=os.environ.get("RAG_RELEASE_REVISION", ""),
+    )
     worker = subparsers.add_parser(
         "worker",
         help="串行执行管理 API 创建的索引任务。",

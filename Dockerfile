@@ -26,6 +26,9 @@ RUN test "$(printf '%s' "${VCS_REF}" | wc -c)" -eq 40 \
     --requirement=/app/requirements.runtime.lock \
     docx-rag==0.1.0 \
     && python -m pip check \
+    && python -c \
+    'import sys; from rag_app._build_revision import SOURCE_REVISION; sys.exit(0 if SOURCE_REVISION == sys.argv[1] else 1)' \
+    "${VCS_REF}" \
     && rm -rf /wheelhouse \
     && groupadd --gid 10001 rag \
     && useradd --uid 10001 --gid rag --no-create-home rag \

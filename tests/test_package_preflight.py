@@ -21,6 +21,8 @@ def test_package_rejects_app_image_from_old_revision(
     package = deployment / "package.sh"
     shutil.copyfile(source, package)
     package.chmod(0o755)
+    corpus_manifest = repository / "operator-corpus.json"
+    corpus_manifest.write_text("{}\n", encoding="utf-8")
     binaries = tmp_path / "bin"
     binaries.mkdir()
     _write_executable(
@@ -51,8 +53,21 @@ else
 fi
 """,
     )
+    _write_executable(
+        binaries / "python3",
+        """#!/usr/bin/env bash
+if [[ "$*" == *"freeze_corpus_manifest id"* ]]; then
+  echo frozen-corpus
+elif [[ "$*" == *"freeze_corpus_manifest verify"* ]]; then
+  exit 0
+else
+  exit 2
+fi
+""",
+    )
     environment = os.environ.copy()
     environment["PATH"] = f"{binaries}:/usr/bin:/bin"
+    environment["CORPUS_MANIFEST"] = str(corpus_manifest)
 
     completed = subprocess.run(  # noqa: S603
         ["/bin/bash", str(package)],

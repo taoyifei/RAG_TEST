@@ -19,6 +19,7 @@ _QDRANT_REPO_DIGEST = f"qdrant/qdrant@{_QDRANT_REGISTRY_DIGEST}"
 class _PackageSandbox:
     repository: Path
     package: Path
+    corpus_manifest: Path
     docker_log: Path
     binaries: Path
 
@@ -32,10 +33,28 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     repository = tmp_path / "repository"
     deployment = repository / "deployment"
     deployment.mkdir(parents=True)
+    ocr_assets = deployment / "ocr/assets"
+    ocr_assets.mkdir(parents=True)
+    empty_sha = (
+        "e3b0c44298fc1c149afbf4c8996fb924"
+        "27ae41e4649b934ca495991b7852b855"
+    )
+    (ocr_assets / "asset.bin").write_bytes(b"")
+    (ocr_assets / "model.bin").write_bytes(b"")
+    (ocr_assets / "MANIFEST.sha256").write_text(
+        f"{empty_sha}  asset.bin\n",
+        encoding="ascii",
+    )
+    (ocr_assets.parent / "MODELS.sha256").write_text(
+        f"{empty_sha}  model.bin\n",
+        encoding="ascii",
+    )
     source = Path(__file__).parents[1] / "deployment/package.sh"
     package = deployment / "package.sh"
     shutil.copyfile(source, package)
     package.chmod(0o755)
+    corpus_manifest = repository / "operator-corpus.json"
+    corpus_manifest.write_text("{}\n", encoding="utf-8")
     binaries = tmp_path / "bin"
     binaries.mkdir()
     docker_log = tmp_path / "docker.log"
@@ -99,9 +118,35 @@ fi
 exit 3
 """,
     )
+    _write_executable(
+        binaries / "python3",
+        """#!/usr/bin/env bash
+if [[ "$*" == *"freeze_corpus_manifest id"* ]]; then
+  echo frozen-corpus
+elif [[ "$*" == *"freeze_corpus_manifest verify"* ]]; then
+  exit 0
+else
+  exit 2
+fi
+""",
+    )
+    _write_executable(
+        binaries / "cp",
+        """#!/usr/bin/env bash
+set -euo pipefail
+source_path="${@: -2:1}"
+destination="${@: -1}"
+if [[ -d "${destination}" || "${destination}" == */ ]]; then
+  destination="${destination}/$(basename "${source_path}")"
+fi
+mkdir -p "$(dirname "${destination}")"
+printf 'placeholder\n' > "${destination}"
+""",
+    )
     return _PackageSandbox(
         repository=repository,
         package=package,
+        corpus_manifest=corpus_manifest,
         docker_log=docker_log,
         binaries=binaries,
     )
@@ -115,6 +160,7 @@ def _run_package(
     environment.update(
         {
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
+            "CORPUS_MANIFEST": str(sandbox.corpus_manifest),
             "FAKE_DOCKER_LOG": str(sandbox.docker_log),
         }
     )
@@ -156,7 +202,8 @@ def test_sbom_success_is_still_before_tag_and_save(tmp_path: Path) -> None:
         index
         for index, call in enumerate(calls)
         if call.startswith("image tag ")
-    )
+    ) if any(call.startswith("image tag ") for call in calls) else -1
+    assert tag >= 0, completed.stderr
     assert preflight < tag
     assert not [
         call
@@ -206,8 +253,8 @@ def test_source_places_sbom_preflight_before_formal_output_code() -> None:
     for side_effect in (
         "docker image tag",
         "docker image save",
-        'mkdir -p "${artifact_root}"',
-        'tar --format=posix -C "${stage}"',
+        'mkdir -p "${release_parent}"',
+        'tar --format=posix -C "${work}"',
         'write_sidecar "${runtime_archive}"',
     ):
         assert preflight < package.index(side_effect)
