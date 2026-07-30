@@ -24,6 +24,7 @@ _REQUIRED_PROJECT_MEMBERS = frozenset(
     }
 )
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
+_ARTIFACT_COUNT = 3
 _REVISION_ASSIGNMENT = re.compile(
     rb'^SOURCE_REVISION = "([0-9a-f]{40})"\n$'
 )
@@ -104,14 +105,27 @@ def prepare_runtime_wheels(
     if _FULL_GIT_SHA.fullmatch(revision) is None:
         raise ValueError("Git HEAD 必须是完整 40 位小写 SHA。")
     _validate_lock(lock)
-    output_dir.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_metadata = metadata_path or manifest_path.with_name(
+        "PROJECT_WHEEL.json"
+    )
+    artifact_parent = _prepare_artifact_parent(
+        output_dir,
+        manifest_path,
+        resolved_metadata,
+    )
+    _validate_existing_artifacts(
+        output_dir,
+        manifest_path,
+        resolved_metadata,
+    )
     with tempfile.TemporaryDirectory(
-        dir=output_dir.parent,
+        dir=artifact_parent,
         prefix=".runtime-wheels-",
     ) as temporary_name:
         work = Path(temporary_name)
-        stage = work / "wheelhouse"
+        stage = work / output_dir.name
+        staged_manifest = work / manifest_path.name
+        staged_metadata = work / resolved_metadata.name
         source_copy = work / "source"
         stage.mkdir()
         _copy_tracked_source(root, source_copy)
@@ -122,7 +136,7 @@ def prepare_runtime_wheels(
         )
         _download_locked_wheels(lock, stage)
         _build_project_wheel(source_copy, stage)
-        wheels = tuple(sorted(stage.glob("*.whl"), key=lambda item: item.name))
+        wheels = _wheel_files(stage)
         project_wheels = tuple(
             wheel for wheel in wheels if _PROJECT_WHEEL.fullmatch(wheel.name)
         )
@@ -132,38 +146,94 @@ def prepare_runtime_wheels(
             project_wheels[0],
             expected_revision=revision,
         )
-        if not wheels:
-            raise ValueError("runtime wheelhouse 不能为空。")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        _write_wheel_contract(
+            wheelhouse=stage,
+            manifest_path=staged_manifest,
+            metadata_path=staged_metadata,
+            revision=revision,
+        )
+        count = _verify_wheel_contract(
+            wheelhouse=stage,
+            manifest_path=staged_manifest,
+            metadata_path=staged_metadata,
+            revision=revision,
+        )
+        _transactional_replace(
+            (
+                (stage, output_dir),
+                (staged_manifest, manifest_path),
+                (staged_metadata, resolved_metadata),
+            ),
+            backup_dir=work / "backup",
+        )
+        return count
+
+
+def _prepare_artifact_parent(
+    output_dir: Path,
+    manifest_path: Path,
+    metadata_path: Path,
+) -> Path:
+    parents = {
+        output_dir.parent.resolve(),
+        manifest_path.parent.resolve(),
+        metadata_path.parent.resolve(),
+    }
+    if len(parents) != 1:
+        raise ValueError("wheelhouse 三件套必须位于同一父目录。")
+    parent = parents.pop()
+    parent.mkdir(parents=True, exist_ok=True)
+    if (
+        len({output_dir.name, manifest_path.name, metadata_path.name})
+        != _ARTIFACT_COUNT
+    ):
+        raise ValueError("wheelhouse 三件套名称不能冲突。")
+    return parent
+
+
+def _validate_existing_artifacts(
+    output_dir: Path,
+    manifest_path: Path,
+    metadata_path: Path,
+) -> None:
+    if output_dir.is_symlink():
+        raise ValueError("runtime wheelhouse 不能是符号链接。")
+    if output_dir.exists():
+        if not output_dir.is_dir():
+            raise ValueError("runtime wheelhouse 必须是目录。")
         for existing in output_dir.iterdir():
-            if not existing.is_file() or existing.suffix != ".whl":
+            if (
+                not existing.is_file()
+                or existing.is_symlink()
+                or existing.suffix != ".whl"
+            ):
                 raise ValueError(
                     "runtime wheelhouse 含非 wheel 文件，拒绝覆盖。"
                 )
-        for existing in output_dir.glob("*.whl"):
-            existing.unlink()
-        for wheel in wheels:
-            wheel.replace(output_dir / wheel.name)
-    final_wheels = tuple(
-        sorted(output_dir.glob("*.whl"), key=lambda item: item.name)
-    )
-    lines = [
-        f"{_sha256_file(wheel)}  {wheel.name}" for wheel in final_wheels
-    ]
+    for artifact in (manifest_path, metadata_path):
+        if artifact.is_symlink() or (
+            artifact.exists() and not artifact.is_file()
+        ):
+            raise ValueError("wheelhouse 清单必须是普通文件。")
+
+
+def _write_wheel_contract(
+    *,
+    wheelhouse: Path,
+    manifest_path: Path,
+    metadata_path: Path,
+    revision: str,
+) -> None:
+    wheels = _wheel_files(wheelhouse)
+    lines = [f"{_sha256_file(wheel)}  {wheel.name}" for wheel in wheels]
     manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    final_project_wheels = tuple(
-        wheel
-        for wheel in final_wheels
-        if _PROJECT_WHEEL.fullmatch(wheel.name)
+    project_wheels = tuple(
+        wheel for wheel in wheels if _PROJECT_WHEEL.fullmatch(wheel.name)
     )
-    if len(final_project_wheels) != 1:
+    if len(project_wheels) != 1:
         raise ValueError("输出 wheelhouse 缺少唯一项目 wheel。")
-    project_wheel = final_project_wheels[0]
-    resolved_metadata = metadata_path or manifest_path.with_name(
-        "PROJECT_WHEEL.json"
-    )
-    resolved_metadata.parent.mkdir(parents=True, exist_ok=True)
-    resolved_metadata.write_text(
+    project_wheel = project_wheels[0]
+    metadata_path.write_text(
         json.dumps(
             {
                 "project_wheel": project_wheel.name,
@@ -178,7 +248,96 @@ def prepare_runtime_wheels(
         + "\n",
         encoding="utf-8",
     )
-    return len(final_wheels)
+
+
+def _verify_wheel_contract(
+    *,
+    wheelhouse: Path,
+    manifest_path: Path,
+    metadata_path: Path,
+    revision: str,
+) -> int:
+    wheels = _wheel_files(wheelhouse)
+    expected_manifest = "".join(
+        f"{_sha256_file(wheel)}  {wheel.name}\n" for wheel in wheels
+    )
+    if manifest_path.read_text(encoding="utf-8") != expected_manifest:
+        raise ValueError("WHEELS.sha256 与 staging wheelhouse 不一致。")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError("PROJECT_WHEEL.json 无效。") from error
+    project_wheels = tuple(
+        wheel for wheel in wheels if _PROJECT_WHEEL.fullmatch(wheel.name)
+    )
+    if len(project_wheels) != 1:
+        raise ValueError("staging 缺少唯一项目 wheel。")
+    project_wheel = project_wheels[0]
+    expected_metadata = {
+        "project_wheel": project_wheel.name,
+        "schema_version": "1",
+        "sha256": _sha256_file(project_wheel),
+        "source_revision": revision,
+    }
+    if metadata != expected_metadata:
+        raise ValueError("PROJECT_WHEEL.json 与 staging wheel 不一致。")
+    verify_project_wheel(project_wheel, expected_revision=revision)
+    return len(wheels)
+
+
+def _wheel_files(wheelhouse: Path) -> tuple[Path, ...]:
+    if not wheelhouse.is_dir() or wheelhouse.is_symlink():
+        raise ValueError("runtime wheelhouse 必须是真实目录。")
+    entries = tuple(sorted(wheelhouse.iterdir(), key=lambda item: item.name))
+    if not entries:
+        raise ValueError("runtime wheelhouse 不能为空。")
+    if any(
+        not entry.is_file()
+        or entry.is_symlink()
+        or entry.suffix != ".whl"
+        for entry in entries
+    ):
+        raise ValueError("runtime wheelhouse 只能包含普通 wheel 文件。")
+    return entries
+
+
+def _transactional_replace(
+    artifacts: tuple[tuple[Path, Path], ...],
+    *,
+    backup_dir: Path,
+) -> None:
+    backup_dir.mkdir()
+    backups: list[tuple[Path, Path]] = []
+    installed: list[tuple[Path, Path]] = []
+    try:
+        for position, (source, destination) in enumerate(artifacts):
+            if destination.exists() or destination.is_symlink():
+                backup = backup_dir / str(position)
+                _replace_path(destination, backup)
+                backups.append((backup, destination))
+            _replace_path(source, destination)
+            installed.append((destination, source))
+    except Exception as error:
+        rollback_errors: list[OSError] = []
+        for destination, source in reversed(installed):
+            try:
+                _replace_path(destination, source)
+            except OSError as rollback_error:
+                rollback_errors.append(rollback_error)
+        for backup, destination in reversed(backups):
+            try:
+                _replace_path(backup, destination)
+            except OSError as rollback_error:
+                rollback_errors.append(rollback_error)
+        if rollback_errors:
+            raise RuntimeError(
+                "wheelhouse 事务失败且旧三件套恢复失败。"
+            ) from error
+        raise
+
+
+def _replace_path(source: Path, destination: Path) -> None:
+    source.replace(destination)
 
 
 def _require_clean_git(root: Path) -> None:

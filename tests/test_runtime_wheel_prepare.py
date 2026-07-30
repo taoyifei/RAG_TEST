@@ -32,6 +32,81 @@ def _wheel(
             )
 
 
+def _repository(tmp_path: Path) -> tuple[Path, Path, list[str]]:
+    repository = tmp_path / "repository"
+    source_revision = repository / "src/rag_app/_build_revision.py"
+    source_revision.parent.mkdir(parents=True)
+    source_revision.write_text(
+        'SOURCE_REVISION = "development-unset"\n',
+        encoding="ascii",
+    )
+    tracked = [
+        "src/rag_app/_build_revision.py",
+        *(f"src/{relative}" for relative in _REQUIRED_MEMBERS),
+    ]
+    for relative in _REQUIRED_MEMBERS:
+        path = repository / "src" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("content", encoding="utf-8")
+    lock = repository / "requirements.runtime.lock"
+    lock.write_text("example-package==1.0\n", encoding="utf-8")
+    tracked.append("requirements.runtime.lock")
+    return repository, lock, tracked
+
+
+def _mock_git(
+    monkeypatch: pytest.MonkeyPatch,
+    tracked: list[str],
+) -> None:
+    def git_output(_: Path, *arguments: str) -> str:
+        if arguments[0] == "status":
+            return ""
+        if arguments == ("rev-parse", "HEAD"):
+            return _REVISION + "\n"
+        if arguments == ("ls-files", "-z"):
+            return "\0".join(tracked) + "\0"
+        raise AssertionError(arguments)
+
+    monkeypatch.setattr(wheel_preparer, "_git_output", git_output)
+
+
+def _old_artifacts(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, tuple[dict[str, bytes], bytes, bytes]]:
+    runtime = tmp_path / "runtime"
+    output = runtime / "wheelhouse"
+    output.mkdir(parents=True)
+    (output / "old-1.0-py3-none-any.whl").write_bytes(b"old-wheel")
+    manifest = runtime / "WHEELS.sha256"
+    metadata = runtime / "PROJECT_WHEEL.json"
+    manifest.write_bytes(b"old manifest bytes\n")
+    metadata.write_bytes(b'{"old":"metadata"}\n')
+    snapshot = (
+        {
+            path.name: path.read_bytes()
+            for path in sorted(output.iterdir())
+        },
+        manifest.read_bytes(),
+        metadata.read_bytes(),
+    )
+    return output, manifest, metadata, snapshot
+
+
+def _artifact_snapshot(
+    output: Path,
+    manifest: Path,
+    metadata: Path,
+) -> tuple[dict[str, bytes], bytes, bytes]:
+    return (
+        {
+            path.name: path.read_bytes()
+            for path in sorted(output.iterdir())
+        },
+        manifest.read_bytes(),
+        metadata.read_bytes(),
+    )
+
+
 def test_project_wheel_must_contain_ocr_and_worker(
     tmp_path: Path,
 ) -> None:
@@ -90,33 +165,8 @@ def test_prepare_builds_from_temporary_revision_copy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    repository = tmp_path / "repository"
+    repository, lock, tracked = _repository(tmp_path)
     source_revision = repository / "src/rag_app/_build_revision.py"
-    source_revision.parent.mkdir(parents=True)
-    source_revision.write_text(
-        'SOURCE_REVISION = "development-unset"\n',
-        encoding="ascii",
-    )
-    tracked = [
-        "src/rag_app/_build_revision.py",
-        *(f"src/{relative}" for relative in _REQUIRED_MEMBERS),
-    ]
-    for relative in _REQUIRED_MEMBERS:
-        path = repository / "src" / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("content", encoding="utf-8")
-    lock = repository / "requirements.runtime.lock"
-    lock.write_text("example-package==1.0\n", encoding="utf-8")
-    tracked.append("requirements.runtime.lock")
-
-    def git_output(_: Path, *arguments: str) -> str:
-        if arguments[0] == "status":
-            return ""
-        if arguments == ("rev-parse", "HEAD"):
-            return _REVISION + "\n"
-        if arguments == ("ls-files", "-z"):
-            return "\0".join(tracked) + "\0"
-        raise AssertionError(arguments)
 
     def build_project(source: Path, destination: Path) -> None:
         assert source != repository
@@ -131,7 +181,7 @@ def test_prepare_builds_from_temporary_revision_copy(
             revision=_REVISION,
         )
 
-    monkeypatch.setattr(wheel_preparer, "_git_output", git_output)
+    _mock_git(monkeypatch, tracked)
     monkeypatch.setattr(
         wheel_preparer,
         "_download_locked_wheels",
@@ -165,6 +215,147 @@ def test_prepare_builds_from_temporary_revision_copy(
     assert "docx_rag-0.1.0-py3-none-any.whl" in manifest.read_text(
         encoding="utf-8"
     )
+    assert not tuple(tmp_path.glob(".runtime-wheels-*"))
+
+
+def test_prepare_replaces_old_three_artifacts_as_one_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, lock, tracked = _repository(tmp_path)
+    _mock_git(monkeypatch, tracked)
+    output, manifest, metadata, old_snapshot = _old_artifacts(tmp_path)
+
+    def download(_lock: Path, destination: Path) -> None:
+        (destination / "dependency-1.0-py3-none-any.whl").write_bytes(
+            b"dependency"
+        )
+
+    def build(_source: Path, destination: Path) -> None:
+        _wheel(
+            destination / "docx_rag-0.1.0-py3-none-any.whl",
+            _REQUIRED_MEMBERS,
+            revision=_REVISION,
+        )
+
+    monkeypatch.setattr(wheel_preparer, "_download_locked_wheels", download)
+    monkeypatch.setattr(wheel_preparer, "_build_project_wheel", build)
+
+    count = wheel_preparer.prepare_runtime_wheels(
+        repository_root=repository,
+        lock_path=lock,
+        output_dir=output,
+        manifest_path=manifest,
+        metadata_path=metadata,
+    )
+
+    assert count == 2
+    assert _artifact_snapshot(output, manifest, metadata) != old_snapshot
+    identity = json.loads(metadata.read_text(encoding="utf-8"))
+    assert identity["source_revision"] == _REVISION
+    assert {path.name for path in output.iterdir()} == {
+        "dependency-1.0-py3-none-any.whl",
+        "docx_rag-0.1.0-py3-none-any.whl",
+    }
+    assert not tuple((tmp_path / "runtime").glob(".runtime-wheels-*"))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "download",
+        "build",
+        "unexpected",
+        "manifest",
+        "metadata",
+        "move",
+    ),
+)
+def test_prepare_failure_keeps_old_three_artifacts_byte_identical(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    repository, lock, tracked = _repository(tmp_path)
+    _mock_git(monkeypatch, tracked)
+    output, manifest, metadata, old_snapshot = _old_artifacts(tmp_path)
+
+    def download(_lock: Path, destination: Path) -> None:
+        if failure == "download":
+            raise RuntimeError("synthetic download failure")
+        (destination / "dependency-1.0-py3-none-any.whl").write_bytes(
+            b"dependency"
+        )
+        if failure == "unexpected":
+            (destination / "unexpected.txt").write_text(
+                "unexpected",
+                encoding="utf-8",
+            )
+
+    def build(_source: Path, destination: Path) -> None:
+        if failure == "build":
+            raise RuntimeError("synthetic build failure")
+        _wheel(
+            destination / "docx_rag-0.1.0-py3-none-any.whl",
+            _REQUIRED_MEMBERS,
+            revision=_REVISION,
+        )
+
+    monkeypatch.setattr(wheel_preparer, "_download_locked_wheels", download)
+    monkeypatch.setattr(wheel_preparer, "_build_project_wheel", build)
+    original_write_text = Path.write_text
+
+    def write_text(
+        path: Path,
+        content: str,
+        *,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        if (
+            failure == "manifest"
+            and path.name == "WHEELS.sha256"
+        ) or (
+            failure == "metadata"
+            and path.name == "PROJECT_WHEEL.json"
+        ):
+            raise OSError(f"synthetic {failure} write failure")
+        return original_write_text(
+            path,
+            content,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+    replace_calls = 0
+
+    def replace_path(source: Path, destination: Path) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if failure == "move" and replace_calls == 4:
+            raise OSError("synthetic move failure")
+        source.replace(destination)
+
+    monkeypatch.setattr(
+        wheel_preparer,
+        "_replace_path",
+        replace_path,
+        raising=False,
+    )
+
+    with pytest.raises((OSError, RuntimeError, ValueError)):
+        wheel_preparer.prepare_runtime_wheels(
+            repository_root=repository,
+            lock_path=lock,
+            output_dir=output,
+            manifest_path=manifest,
+            metadata_path=metadata,
+        )
+
+    assert _artifact_snapshot(output, manifest, metadata) == old_snapshot
 
 
 def test_prepare_rejects_dirty_git_before_build(
