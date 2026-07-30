@@ -17,8 +17,12 @@ from rag_app.index.gc import (
     IndexGarbageCollector,
 )
 from rag_app.index.qdrant import QdrantIndex
-from rag_app.manifest import ManifestRepository
+from rag_app.manifest import (
+    ManifestRepository,
+    ReadOnlyManifestRepository,
+)
 from rag_app.state import JobKind, JobState, StateStore
+from rag_app.state.jobs import ReadOnlyJobStore
 from rag_app.state.models import CollectionStateIdentity
 
 _API_KEY = "test-only-qdrant-key"
@@ -48,6 +52,7 @@ def _client() -> QdrantClient:
         api_key=_API_KEY,
         timeout=10,
         check_compatibility=False,
+        trust_env=False,
     )
 
 
@@ -148,9 +153,11 @@ def _scenario(tmp_path: Path) -> _GcScenario:
     prefix = f"rag-gc-{suffix}"
     alias = f"rag-gc-active-{suffix}"
     state_dir = tmp_path / "indexes"
-    control = StateStore(tmp_path / "control.sqlite3")
+    control_path = tmp_path / "control.sqlite3"
+    control = StateStore(control_path)
     control.initialize()
-    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifest_path = tmp_path / "manifests.sqlite3"
+    manifests = ManifestRepository(manifest_path)
     manifests.initialize()
     published_names = tuple(
         f"{prefix}-published-{ordinal}" for ordinal in range(4)
@@ -239,8 +246,8 @@ def _scenario(tmp_path: Path) -> _GcScenario:
     collections = (*published_names, failed, orphan, unknown)
     collector = IndexGarbageCollector(
         client=client,
-        manifests=manifests,
-        control=control,
+        manifests=ReadOnlyManifestRepository(manifest_path),
+        control=ReadOnlyJobStore(control_path),
         config=GarbageCollectorConfig(
             alias_name=alias,
             index_state_dir=state_dir,
@@ -400,7 +407,7 @@ def test_index_gc_does_not_delete_state_after_collection_failure(
             **kwargs: object,
         ) -> bool:
             if collection_name == scenario.failed:
-                raise RuntimeError("test delete failure")
+                raise OSError("test delete failure")
             return original_delete(
                 collection_name,
                 timeout=timeout,

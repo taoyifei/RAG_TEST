@@ -50,6 +50,14 @@ rag-app index-gc --apply
 输出仅含稳定对象标识、原因和状态，不含正文、文件路径或配置内容。失败项可在
 故障排除后重跑；collection 删除失败时不会先删除对应 state。
 
+GC 在读取 pipeline、连接 Qdrant 或打开 SQLite 前先核对安装 wheel 与
+`RAG_RELEASE_REVISION`。control 和 manifest 主库必须预先存在且不能是
+symlink。规划会把主库与已提交 WAL 复制到临时隔离目录，再以
+`mode=ro + query_only` 查询，并复核源 control、manifest、collection state
+主库/WAL/SHM 的文件集与 SHA256 均未变化。`--apply` 会在删除前再次核对
+Qdrant staging identity 和 state identity；state 主库、WAL、SHM 作为一个
+逻辑集合删除，任一 sidecar symlink 或不完整删除都会返回失败状态。
+
 section-aware chunking 的规则和定参边界见
 `design/public/chunking-strategy.md`。在只读 DOCX 上执行四候选结构审计：
 

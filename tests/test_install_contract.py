@@ -25,11 +25,14 @@ def test_install_contract_is_immutable_and_no_clobber() -> None:
     assert 'project_root="/data/tyf/RAG"' in install
     assert "verify-offline.sh" in install
     assert "/usr/bin/id -u" in install
+    assert "chown -R root:root" in install
     assert "chown -R 10001:10001" in install
     assert "CORPUS_MANIFEST.json" in install
     assert "offline_bundle.py" in install
     assert "chmod 0555" in install
     assert "chmod 0444" in install
+    assert "! -uid 0" in install
+    assert "! -gid 0" in install
     assert "shared/env/rag.env" in install
     assert "0600" in install
     assert "rm -rf" not in install

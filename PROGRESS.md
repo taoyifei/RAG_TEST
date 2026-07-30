@@ -2699,3 +2699,153 @@
 - [x] `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
   EMF 转换器、完整 chat-template token 预算、正式离线双包与服务器验收，
   本轮没有伪造或提前解除这些外部证据项。
+
+## 2026-07-30 首次部署最后三项任务 0：新 HEAD 基线
+
+- [x] 本轮恢复时当前工作树已由外部变为 clean，HEAD 为
+  `1a4d158974f41aa79f11e78c3d9c2902c8db89e9`，最近四笔提交为上一轮
+  install、wheel、runtime revision 与文档改动；本轮不改写这些历史。
+- [x] 三项逻辑 Git index 不变量通过：`git diff --cached --quiet` 退出 0，
+  `git write-tree` 与 `HEAD^{tree}` 均为
+  `6d3ba0a680b89cd32a293ca7ea45a6a5f4521920`，staged=0。
+- [x] 本地固定 Qdrant 镜像仍为批准 digest
+  `sha256:0bd98fa…`、`amd64/linux`；确认 6333 未占用后，以 `--pull never`
+  启动精确测试容器 `rag-final-three-qdrant`，无挂载且只绑定
+  `127.0.0.1:6333`，`/readyz` 返回 `all shards are ready`。
+- [x] 当前 HEAD 全量 pytest 退出 0：
+  `536 passed, 60 warnings in 529.92s`，skipped=0；warning 类别仍只有既有
+  Starlette deprecation、本地 Qdrant API-key 与客户端兼容性提示。
+- [x] compileall 无输出、Ruff `All checks passed!`、mypy
+  `Success: no issues found in 93 source files`、Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、11/11 ASSETS 与 `git diff --check` 均退出 0。
+- [x] 临时 Git index release-safety 为 `tracked_files=235`，binary、large、
+  local path、private network、private path、secret 与总 `violations`
+  均为 0；精确临时 index 已删除并复核不存在。
+- [x] 保护摘要与上一任务一致：docs `36c67e3b…`、artifacts `220473c6…`、
+  frozen `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；
+  pipeline/retrieval/corpus policy 分别为
+  `f61a74b0… / 267e419f… / 0d6553c1…`，retrieval 继续为 provisional。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked 聚合仍为
+  `03d51db2… / 84a0a960… / 44254dff…`。本阶段未 build、save/load、
+  真实 package、联网安装、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署最后三项任务 1：健康等待契约
+
+- [x] 先增加 fake clock 与 deadline 契约测试；旧实现真实红灯为
+  `5 failed, 7 passed`：deploy/rollback 都仍是 30 次固定循环，OCR 在
+  fake 第 31、90、210 秒才健康时均误判失败，静态契约也找不到四类
+  显式 timeout。
+- [x] `deployment/deploy.sh` 与 `deployment/rollback.sh` 现使用相同常量：
+  Qdrant 60 秒、app health 60 秒、app `/live` 60 秒、OCR 240 秒；循环按
+  wall-clock deadline 和剩余时间休眠，不再使用 `max_attempts=30`。
+- [x] 两条主路径与失败补偿均复用同一 health helper/timeout。`starting`
+  继续等待，`healthy` 成功，`unhealthy`、health inspect 失败/空字段、
+  检查中容器消失立即失败；仍只检查 `/live`，没有增加 `/ready`。
+- [x] fake docker/sleep/date 不发生真实等待；行为反测覆盖 OCR 第 31、
+  90、210 秒成功，第 240 秒持续 starting 超时并恢复旧运行态，以及
+  unhealthy、无 health、容器消失和 rollback/deploy 补偿路径。
+- [x] 修复后定向契约为 `15 passed, 57 deselected in 13.25s`；完整
+  deploy/rollback 相关套件为 `72 passed in 31.44s`。对应 Ruff
+  `All checks passed!`、两份 Shell `bash -n` 与 `git diff --check`
+  均退出 0。本阶段未 build/package、联网、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署最后三项任务 2：release 不可变
+
+- [x] 先把 runtime/corpus 输入在 fakeroot 中明确设为普通用户
+  `1234:1234`，再增加发布 owner 与既有 release 漂移反测；旧实现真实红灯
+  为 `6 failed, 9 deselected`：发布目标仍继承 `1234:1234`，owner、
+  普通文件 0644、Shell 0544、目录 0755 漂移均被错误复用。
+- [x] 新 release staging 在身份、MANIFEST、复制文件集复核后执行
+  `chown -R root:root`；所有目录与 `*.sh` 固定 0555，其余普通文件固定
+  0444，并逐项拒绝特殊文件、非 root owner/group 或任一 mode 偏差。
+- [x] 既有 release 仍先复核 SOURCE_REVISION、MANIFEST、输入/目标文件集，
+  再全量验证 root:root 与精确 mode；发现漂移直接退出，反测确认失败后
+  `1234:1234/0644/0544/0755` 原值未被静默修复。
+- [x] 原有复制后 runtime/corpus 篡改与发布竞态仍通过；corpus 保持
+  `10001:10001`、目录 0700、文件 0400。完整 install 套件为
+  `15 passed in 14.08s`，对应 Ruff `All checks passed!`、`bash -n
+  deployment/install.sh` 与 `git diff --check` 均退出 0。本阶段未
+  build/package、联网、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署最后三项任务 3：index-gc 收紧
+
+- [x] 先增加 revision/缺库顺序、只读连接、dry-run 文件集与摘要、只读文件
+  系统、WAL/SHM、sidecar symlink、部分删除、collection/state 同名替换
+  反测；旧实现真实红灯为 `9 failed, 1 passed`。其中 dry-run 会创建/修改
+  SQLite sidecar，既有 state apply 只删除主库且会删除同名替换对象。
+- [x] `index-gc` 现在首先执行 `require_release_revision()`，随后要求
+  control/manifest 主库均已存在、为非 symlink 普通文件；revision 错配、
+  主库缺失及两类 symlink 测试都证明在 pipeline、Qdrant 与 SQLite 前失败，
+  且主库、WAL、SHM 均未创建。
+- [x] GC 不再注入可写 `ManifestRepository/StateStore`。只读入口先按字节
+  冻结并稳定复制主库与已提交 WAL 到自动清理的隔离目录，再仅对副本使用
+  `mode=ro + query_only`；这避免源 WAL 模式数据库因只读 SELECT 创建 SHM，
+  又不会像 `immutable=1` 一样忽略未 checkpoint WAL。专门反测确认非空 WAL
+  中的新 identity 可见，源主库/WAL/SHM 文件集和 SHA256 前后完全不变。
+- [x] CLI 还会在完整 plan 前后复核 control、manifest 与全部 collection
+  state 三件套的文件集和 SHA256；真实 Qdrant + SQLite dry-run 在普通与
+  0555/0444 只读树上均零变化。
+- [x] plan 冻结 Qdrant staging identity 与 collection state identity；
+  apply 在 collection 删除前重新验证二者，collection 或 state 同名替换均
+  返回 `identity_changed` 且保留替换对象。意外编程/控制漂移异常不再被
+  broad `except Exception` 吞掉，仅已知 Qdrant API/OS 删除失败转为稳定
+  `delete_failed`。
+- [x] state 主库、`-wal`、`-shm` 作为逻辑集合：collection 成功删除后才
+  处理；WAL/SHM 任一 symlink 返回 `unsafe_state`；全缺失为
+  `already_absent`；任一 unlink 失败或有残留均不报告 deleted；重复 apply
+  幂等。
+- [x] 新安全套件为 `13 passed, 1 warning in 33.77s`；旧 GC 的 apply
+  幂等与 collection 删除失败关键回归为 `2 passed, 2 warnings in
+  64.61s`。专用本地真实 Qdrant 客户端设置 `trust_env=False`，避免当前
+  WSL 的 `NO_PROXY=127.*` 被 HTTPX 忽略后误走 7890 代理；没有 mock
+  Qdrant。对应 compileall、Ruff、mypy、`git diff --check` 均退出 0。
+  本阶段未 build/package、联网、访问服务器、commit 或 push。
+
+## 2026-07-30 首次部署最后三项最终验收与提交授权
+
+- [x] 唯一有效的最终全量 pytest 退出 0：
+  `562 passed, 61 warnings in 542.05s`，skipped=0；高于任务 0 的
+  536 passed。warning 类别仍只有既有 `StarletteDeprecationWarning`
+  与 `UserWarning`，没有新增类别。
+- [x] 最终静态门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、`git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] 最终临时 Git index release-safety 为 `tracked_files=236`，binary、
+  large、local path、private network、private path、secret 与总
+  `violations` 均为 0；临时 index 已精确删除。第一次 PowerShell→WSL
+  变量传递错误产生的 `tracked_files=0` 结果明确作废，没有当作门禁证据。
+- [x] 保护摘要与任务 0 完全一致：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`，
+  retrieval 继续为 provisional。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2c0e57ade04c8f9fe035316907d2717f5` /
+  `84a0a960426da37111a93a806242543c61a881a9` /
+  `44254dffe64a2a1a18ab9b5fdb86025650a99c6d136fca5c48161b0d7879297a`。
+  新增 skip/xfail/TODO=0；Parser、chunking、检索、rerank、Prompt、回答
+  schema、模型参数与三份冻结配置均无修改。
+- [x] 测试后专用 `rag-final-three-qdrant` 仍 running、OOMKilled=false、
+  RestartCount=0、mounts=[]、仅绑定 `127.0.0.1:6333`，collection 列表为空。
+  本轮没有 build/buildx、image save/load、真实 package/双包、联网安装、
+  SSH/SCP、`.57/.58/.60` 或服务器操作。
+- [x] 用户在全部实现完成后最新明确要求“将代码 commit 并 push”，因此仅覆盖
+  本任务书的 commit/push 禁令；不扩大到 build、package、服务器或其他联网
+  操作。提交前仍要求真实 index staged=0、白名单 diff 与发布安全扫描全绿。
+- [x] `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
+  EMF、完整 chat-template token 预算、正式离线双包与服务器验收；这些外部
+  证据项没有被本轮源码门禁误报为已完成。

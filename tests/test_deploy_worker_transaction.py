@@ -28,6 +28,7 @@ class _DeploySandbox:
     old_release: Path
     new_release: Path
     state_file: Path
+    clock_file: Path
     command_log: Path
     binaries: Path
     original_active: str
@@ -151,6 +152,8 @@ def _prepare_sandbox(
     binaries.mkdir()
     command_log = tmp_path / "commands.log"
     state_file = tmp_path / "containers.env"
+    clock_file = tmp_path / "clock"
+    clock_file.write_text("0\n", encoding="ascii")
     state_file.write_text(
         "APP_EXISTS=true\n"
         "APP_RUNNING=true\n"
@@ -176,6 +179,7 @@ def _prepare_sandbox(
         old_release=old_release,
         new_release=new_release,
         state_file=state_file,
+        clock_file=clock_file,
         command_log=command_log,
         binaries=binaries,
         original_active=original_active,
@@ -289,7 +293,23 @@ if [[ "$1 $2" == "container inspect" ]]; then
         ;;
       rag-ocr)
         if [[ "${{OCR_IMAGE}}" == "{_NEW_OCR_IMAGE}" ]]; then
-          echo "${{FAKE_OCR_HEALTH:-healthy}}"
+          if [[ -n "${{FAKE_OCR_HEALTHY_AT_SECONDS:-}}" ]]; then
+            elapsed="$(cat "${{FAKE_CLOCK_FILE}}")"
+            if ((elapsed >= FAKE_OCR_HEALTHY_AT_SECONDS)); then
+              echo healthy
+            else
+              echo starting
+            fi
+          elif [[ "${{FAKE_OCR_HEALTH:-healthy}}" == "disappear" ]]; then
+            OCR_EXISTS=false
+            OCR_RUNNING=false
+            write_state
+            exit 1
+          elif [[ "${{FAKE_OCR_HEALTH:-healthy}}" == "no_health" ]]; then
+            echo ""
+          else
+            echo "${{FAKE_OCR_HEALTH:-healthy}}"
+          fi
         else
           echo healthy
         fi
@@ -427,7 +447,22 @@ exec /usr/bin/find "$@"
     )
     _write_executable(
         binaries / "sleep",
-        "#!/usr/bin/env bash\nexit 0\n",
+        """#!/usr/bin/env bash
+set -euo pipefail
+elapsed="$(cat "${FAKE_CLOCK_FILE}")"
+printf '%s\n' "$((elapsed + $1))" > "${FAKE_CLOCK_FILE}"
+""",
+    )
+    _write_executable(
+        binaries / "date",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "+%s" ]]; then
+  cat "${FAKE_CLOCK_FILE}"
+else
+  exec /usr/bin/date "$@"
+fi
+""",
     )
     _write_executable(
         binaries / "curl",
@@ -479,6 +514,7 @@ def _run_deploy(
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
             "FAKE_COMMAND_LOG": str(sandbox.command_log),
             "FAKE_CONTAINER_STATE": str(sandbox.state_file),
+            "FAKE_CLOCK_FILE": str(sandbox.clock_file),
         }
     )
     environment.update(overrides)
@@ -633,6 +669,73 @@ def test_starting_health_reaches_healthy_before_commit(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert sandbox.current_link.resolve() == sandbox.new_release
+
+
+@pytest.mark.parametrize("healthy_at_seconds", (31, 90, 210))
+def test_delayed_ocr_health_succeeds_within_240_second_deadline(
+    tmp_path: Path,
+    healthy_at_seconds: int,
+) -> None:
+    """证明 OCR 在 Compose 启动窗口内延迟健康仍可部署。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        healthy_at_seconds: OCR 首次返回 healthy 的伪时钟秒数。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_OCR_HEALTHY_AT_SECONDS=str(healthy_at_seconds),
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) >= (
+        healthy_at_seconds
+    )
+    assert sandbox.current_link.resolve() == sandbox.new_release
+
+
+def test_ocr_starting_times_out_at_240_seconds_and_compensates(
+    tmp_path: Path,
+) -> None:
+    """证明 OCR 超时使用 240 秒 deadline 且恢复旧运行态。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(sandbox, FAKE_OCR_HEALTH="starting")
+
+    assert completed.returncode == 1
+    assert "DEPLOY_FAILED_RECOVERED" in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 240
+    _assert_old_runtime_restored(sandbox)
+
+
+@pytest.mark.parametrize("health", ("unhealthy", "no_health", "disappear"))
+def test_invalid_ocr_health_fails_immediately_and_compensates(
+    tmp_path: Path,
+    health: str,
+) -> None:
+    """证明终止状态、缺失 health 和容器消失都立即失败。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        health: fake OCR health 故障。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(sandbox, FAKE_OCR_HEALTH=health)
+
+    assert completed.returncode == 1
+    assert "DEPLOY_FAILED_RECOVERED" in completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) == 0
+    _assert_old_runtime_restored(sandbox)
 
 
 @pytest.mark.parametrize(

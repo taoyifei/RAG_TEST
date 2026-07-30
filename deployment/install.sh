@@ -87,6 +87,29 @@ verify_runtime_directory() {
   bash "${directory}/verify-offline.sh"
 }
 
+verify_release_permissions() {
+  local directory="$1"
+  if find -P "${directory}" ! -type d ! -type f \
+    -print -quit | grep -q .; then
+    fail "release 只能包含目录和普通文件。"
+  fi
+  if find -P "${directory}" -type d \
+    \( ! -perm 0555 -o ! -uid 0 -o ! -gid 0 \) \
+    -print -quit | grep -q .; then
+    fail "release owner 或权限无效：目录必须为 root:root/0555。"
+  fi
+  if find -P "${directory}" -type f -name '*.sh' \
+    \( ! -perm 0555 -o ! -uid 0 -o ! -gid 0 \) \
+    -print -quit | grep -q .; then
+    fail "release owner 或权限无效：Shell 必须为 root:root/0555。"
+  fi
+  if find -P "${directory}" -type f ! -name '*.sh' \
+    \( ! -perm 0444 -o ! -uid 0 -o ! -gid 0 \) \
+    -print -quit | grep -q .; then
+    fail "release owner 或权限无效：普通文件必须为 root:root/0444。"
+  fi
+}
+
 verify_corpus_directory() {
   local directory="$1"
   local validator="$2"
@@ -119,6 +142,7 @@ verify_runtime_reuse() {
     fail "既有 release 身份或 MANIFEST 与输入不一致。"
   fi
   require_same_file_set "${source}" "${target}"
+  verify_release_permissions "${target}"
 }
 
 verify_corpus_permissions() {
@@ -228,14 +252,11 @@ if [[ "${release_reused}" != "true" ]]; then
     -print -quit | grep -q .; then
     fail "安装 staging 不能包含 secret env。"
   fi
+  chown -R root:root "${release_stage}"
   find -P "${release_stage}" -type d -exec chmod 0555 {} +
   find -P "${release_stage}" -type f -exec chmod 0444 {} +
   find -P "${release_stage}" -type f -name '*.sh' -exec chmod 0555 {} +
-  if [[ "$(stat -c '%a' "${release_stage}")" != "555" \
-    || "$(stat -c '%a' "${release_stage}/deploy.sh")" != "555" \
-    || "$(stat -c '%a' "${release_stage}/compose.yaml")" != "444" ]]; then
-    fail "release 不可变权限复核失败。"
-  fi
+  verify_release_permissions "${release_stage}"
 fi
 
 if [[ "${corpus_reused}" != "true" ]]; then

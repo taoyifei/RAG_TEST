@@ -27,8 +27,22 @@ def test_deploy_and_rollback_share_complete_health_gate() -> None:
     for name in ("deploy.sh", "rollback.sh"):
         script = _script(name)
         assert "wait_for_runtime_health" in script
-        for container in ("rag-qdrant", "rag-ocr", "rag-app"):
-            assert f'wait_for_container_health "{container}"' in script
+        expected_waits = {
+            "rag-qdrant": "QDRANT_HEALTH_TIMEOUT_SECONDS",
+            "rag-ocr": "OCR_HEALTH_TIMEOUT_SECONDS",
+            "rag-app": "APP_HEALTH_TIMEOUT_SECONDS",
+        }
+        for container, timeout in expected_waits.items():
+            assert (
+                f'"{container}" "${{{timeout}}}"'
+                in script
+            )
+        assert "QDRANT_HEALTH_TIMEOUT_SECONDS=60" in script
+        assert "APP_HEALTH_TIMEOUT_SECONDS=60" in script
+        assert "APP_LIVE_TIMEOUT_SECONDS=60" in script
+        assert "OCR_HEALTH_TIMEOUT_SECONDS=240" in script
+        assert "deadline" in script
+        assert "max_attempts=30" not in script
         assert "/live" in script
         assert "/ready" not in script
 

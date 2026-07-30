@@ -14,6 +14,11 @@ original_env=""
 active_new=""
 current_new="${current_link}.rollback-new"
 current_restore="${current_link}.rollback-restore"
+QDRANT_HEALTH_TIMEOUT_SECONDS=60
+APP_HEALTH_TIMEOUT_SECONDS=60
+APP_LIVE_TIMEOUT_SECONDS=60
+OCR_HEALTH_TIMEOUT_SECONDS=240
+HEALTH_POLL_INTERVAL_SECONDS=1
 ORIGINAL_APP_EXISTS=false
 ORIGINAL_APP_RUNNING=false
 ORIGINAL_APP_IMAGE="-"
@@ -184,16 +189,28 @@ inspect_revision() {
 
 wait_for_container_health() {
   local container="$1"
-  local attempt
+  local timeout_seconds="$2"
+  local deadline
+  local now
+  local remaining
+  local sleep_seconds
   local status
-  local max_attempts=30
-  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+  deadline="$(($(date +%s) + timeout_seconds))"
+  while true; do
+    now="$(date +%s)"
+    if ((now >= deadline)); then
+      echo "容器 health 在 ${timeout_seconds} 秒内未达到 healthy：${container}" >&2
+      return 1
+    fi
     if ! container_exists "${container}"; then
       echo "健康检查时容器不存在：${container}" >&2
       return 1
     fi
-    status="$(docker container inspect \
-      --format '{{.State.Health.Status}}' "${container}")"
+    if ! status="$(docker container inspect \
+      --format '{{.State.Health.Status}}' "${container}")"; then
+      echo "容器 health 字段缺失或无效：${container}" >&2
+      return 1
+    fi
     case "${status}" in
       healthy)
         return 0
@@ -202,44 +219,73 @@ wait_for_container_health() {
         echo "容器 health 为 unhealthy：${container}" >&2
         return 1
         ;;
-      starting)
-        if ((attempt < max_attempts)); then
-          sleep 1
-        fi
-        ;;
+      starting) ;;
       *)
         echo "容器 health 字段缺失或无效：${container}" >&2
         return 1
         ;;
     esac
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "容器 health 在 ${timeout_seconds} 秒内未达到 healthy：${container}" >&2
+      return 1
+    fi
+    sleep_seconds="${HEALTH_POLL_INTERVAL_SECONDS}"
+    if ((sleep_seconds > remaining)); then
+      sleep_seconds="${remaining}"
+    fi
+    sleep "${sleep_seconds}"
   done
-  echo "容器 health 在固定期限内未达到 healthy：${container}" >&2
-  return 1
 }
 
 wait_for_app_live() {
   local port="$1"
-  local attempt
-  local max_attempts=30
-  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
-    if curl -fsS --connect-timeout 2 --max-time 5 \
+  local timeout_seconds="$2"
+  local deadline
+  local now
+  local remaining
+  local request_timeout
+  local sleep_seconds
+  deadline="$(($(date +%s) + timeout_seconds))"
+  while true; do
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "rag-app /live 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
+    fi
+    request_timeout=5
+    if ((request_timeout > remaining)); then
+      request_timeout="${remaining}"
+    fi
+    if curl -fsS --connect-timeout 2 --max-time "${request_timeout}" \
       "http://127.0.0.1:${port}/live" >/dev/null; then
       return 0
     fi
-    if ((attempt < max_attempts)); then
-      sleep 1
+    now="$(date +%s)"
+    remaining="$((deadline - now))"
+    if ((remaining <= 0)); then
+      echo "rag-app /live 在 ${timeout_seconds} 秒内未返回 200。" >&2
+      return 1
     fi
+    sleep_seconds="${HEALTH_POLL_INTERVAL_SECONDS}"
+    if ((sleep_seconds > remaining)); then
+      sleep_seconds="${remaining}"
+    fi
+    sleep "${sleep_seconds}"
   done
-  echo "rag-app /live 在固定期限内未返回 200。" >&2
-  return 1
 }
 
 wait_for_runtime_health() {
   local port="$1"
-  wait_for_container_health "rag-qdrant" || return 1
-  wait_for_container_health "rag-ocr" || return 1
-  wait_for_container_health "rag-app" || return 1
-  wait_for_app_live "${port}"
+  wait_for_container_health \
+    "rag-qdrant" "${QDRANT_HEALTH_TIMEOUT_SECONDS}" || return 1
+  wait_for_container_health \
+    "rag-ocr" "${OCR_HEALTH_TIMEOUT_SECONDS}" || return 1
+  wait_for_container_health \
+    "rag-app" "${APP_HEALTH_TIMEOUT_SECONDS}" || return 1
+  wait_for_app_live "${port}" "${APP_LIVE_TIMEOUT_SECONDS}"
 }
 
 if [[ "${requested_env}" != "${active_env}" ]]; then
@@ -525,11 +571,18 @@ restore_original_runtime() {
       rag-qdrant) running="${ORIGINAL_QDRANT_RUNNING}" ;;
     esac
     if [[ "${running}" == "true" ]]; then
-      wait_for_container_health "${service}" || return 1
+      case "${service}" in
+        rag-app) timeout_seconds="${APP_HEALTH_TIMEOUT_SECONDS}" ;;
+        rag-ocr) timeout_seconds="${OCR_HEALTH_TIMEOUT_SECONDS}" ;;
+        rag-qdrant) timeout_seconds="${QDRANT_HEALTH_TIMEOUT_SECONDS}" ;;
+      esac
+      wait_for_container_health \
+        "${service}" "${timeout_seconds}" || return 1
     fi
   done
   if [[ "${ORIGINAL_APP_RUNNING}" == "true" ]]; then
-    wait_for_app_live "${original_port}" || return 1
+    wait_for_app_live \
+      "${original_port}" "${APP_LIVE_TIMEOUT_SECONDS}" || return 1
   fi
 }
 

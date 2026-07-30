@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import hashlib
-import sqlite3
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import ApiException
 
 from rag_app.index.qdrant import QdrantIndex
-from rag_app.manifest import ManifestRepository, ManifestState
+from rag_app.manifest import (
+    ManifestRepository,
+    ManifestState,
+    ReadOnlyManifestRepository,
+)
 from rag_app.state import Job, JobState, StateStore
+from rag_app.state.jobs import ReadOnlyJobStore
+from rag_app.state.models import CollectionStateIdentity
 
 __all__ = [
     "GarbageApplyReport",
@@ -43,6 +49,8 @@ class GarbagePlanItem:
     collection_name: str
     reason: str
     snapshot_name: str | None = None
+    collection_identity: CollectionStateIdentity | None = None
+    state_identity: CollectionStateIdentity | None = None
 
     @property
     def stable_id(self) -> str:
@@ -68,6 +76,13 @@ class _ControlSnapshot:
     manifests: tuple[tuple[str, str, str, str], ...]
     snapshot_references: tuple[tuple[str, str], ...]
     jobs: tuple[tuple[str, str, str], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _StateSnapshot:
+    present: bool
+    quiescent: bool
+    identity: CollectionStateIdentity | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,8 +128,8 @@ class IndexGarbageCollector:
         self,
         *,
         client: QdrantClient,
-        manifests: ManifestRepository,
-        control: StateStore,
+        manifests: ManifestRepository | ReadOnlyManifestRepository,
+        control: StateStore | ReadOnlyJobStore,
         config: GarbageCollectorConfig,
     ) -> None:
         """冻结 GC 所需的控制面与当前索引契约。
@@ -191,28 +206,41 @@ class IndexGarbageCollector:
         items: list[GarbagePlanItem] = []
         candidate_collections: set[str] = set()
         for collection_name in sorted(self._collection_names()):
-            reason = self._collection_reason(
+            candidate = self._collection_candidate(
                 collection_name,
                 protected=protected,
                 expired_retired=expired_retired,
                 jobs_by_id=jobs_by_id,
             )
-            if reason is None or not self._state_is_quiescent(collection_name):
+            if candidate is None:
                 continue
+            reason, collection_identity = candidate
+            state_snapshot = self._state_snapshot(collection_name)
+            if not state_snapshot.quiescent:
+                continue
+            if (
+                state_snapshot.identity is not None
+                and state_snapshot.identity != collection_identity
+            ):
+                raise RuntimeError("GC_STATE_IDENTITY_MISMATCH")
             candidate_collections.add(collection_name)
             items.append(
                 GarbagePlanItem(
                     kind=GarbageItemKind.COLLECTION,
                     collection_name=collection_name,
                     reason=reason,
+                    collection_identity=collection_identity,
+                    state_identity=state_snapshot.identity,
                 )
             )
-            if self._state_path(collection_name).is_file():
+            if state_snapshot.present:
                 items.append(
                     GarbagePlanItem(
                         kind=GarbageItemKind.STATE,
                         collection_name=collection_name,
                         reason=reason,
+                        collection_identity=collection_identity,
+                        state_identity=state_snapshot.identity,
                     )
                 )
         references = self._manifests.snapshot_references()
@@ -256,7 +284,7 @@ class IndexGarbageCollector:
             self._require_control_unchanged(plan.control_snapshot)
             try:
                 status = self._apply_item(item)
-            except Exception:
+            except (ApiException, OSError):
                 status = "delete_failed"
             results.append(
                 GarbageApplyResult(
@@ -268,40 +296,45 @@ class IndexGarbageCollector:
             self._require_control_unchanged(plan.control_snapshot)
         return GarbageApplyReport(results=tuple(results))
 
-    def _collection_reason(
+    def _collection_candidate(
         self,
         collection_name: str,
         *,
         protected: set[str],
         expired_retired: set[str],
         jobs_by_id: dict[str, Job],
-    ) -> str | None:
+    ) -> tuple[str, CollectionStateIdentity] | None:
         if collection_name in protected:
             return None
+        identity = self._collection_identity(collection_name)
+        if identity is None:
+            return None
         if collection_name in expired_retired:
-            return "retired_beyond_rollback_window"
+            return "retired_beyond_rollback_window", identity
         if not collection_name.startswith(
             f"{self._config.collection_prefix}-"
         ):
             return None
-        return self._managed_staging_reason(
+        reason = self._managed_staging_reason(
             collection_name,
+            identity=identity,
             jobs_by_id=jobs_by_id,
         )
+        if reason is None:
+            return None
+        return reason, identity
 
     def _managed_staging_reason(
         self,
         collection_name: str,
         *,
+        identity: CollectionStateIdentity,
         jobs_by_id: dict[str, Job],
     ) -> str | None:
-        index = self._index(collection_name)
-        try:
-            index.require_compatible_collection()
-            control_job_id, _ = index.staging_identity()
-        except (LookupError, RuntimeError, ValueError):
-            return None
-        if collection_name != self._target_name_from_id(control_job_id):
+        control_job_id = identity.control_job_id
+        if collection_name != self._target_name_from_id(
+            control_job_id
+        ):
             return None
         job = jobs_by_id.get(control_job_id)
         if job is None:
@@ -310,21 +343,35 @@ class IndexGarbageCollector:
             return "failed_job_terminal"
         return None
 
-    def _state_is_quiescent(self, collection_name: str) -> bool:
-        state_path = self._state_path(collection_name)
-        if not state_path.exists():
-            return True
-        if not state_path.is_file() or state_path.is_symlink():
-            return False
-        state = StateStore(state_path)
-        try:
-            state.require_integrity()
-            jobs = state.list_jobs()
-        except (FileNotFoundError, RuntimeError, sqlite3.Error):
-            return False
-        return all(
-            job.state not in {JobState.PENDING, JobState.RUNNING}
-            for job in jobs
+    def _state_snapshot(self, collection_name: str) -> _StateSnapshot:
+        paths = self._state_paths(collection_name)
+        present: list[Path] = []
+        for path in paths:
+            if path.is_symlink():
+                raise RuntimeError("GC_UNSAFE_STATE_SYMLINK")
+            if path.exists():
+                if not path.is_file():
+                    raise RuntimeError("GC_UNSAFE_STATE_FILE")
+                present.append(path)
+        if not present:
+            return _StateSnapshot(
+                present=False,
+                quiescent=True,
+                identity=None,
+            )
+        if paths[0] not in present:
+            raise RuntimeError("GC_STATE_MAIN_MISSING")
+        state = ReadOnlyJobStore(paths[0])
+        state.require_integrity()
+        identity = state.collection_identity()
+        jobs = state.list_jobs()
+        return _StateSnapshot(
+            present=True,
+            quiescent=all(
+                job.state not in {JobState.PENDING, JobState.RUNNING}
+                for job in jobs
+            ),
+            identity=identity,
         )
 
     def _apply_item(self, item: GarbagePlanItem) -> str:
@@ -337,6 +384,24 @@ class IndexGarbageCollector:
     def _apply_collection(self, item: GarbagePlanItem) -> str:
         if not self._client.collection_exists(item.collection_name):
             return "already_absent"
+        if (
+            item.collection_identity is None
+            or self._collection_identity(item.collection_name)
+            != item.collection_identity
+        ):
+            return "identity_changed"
+        try:
+            state_snapshot = self._state_snapshot(item.collection_name)
+        except RuntimeError as error:
+            if str(error).startswith("GC_UNSAFE_STATE"):
+                return "unsafe_state"
+            return "identity_changed"
+        if (
+            state_snapshot.identity != item.state_identity
+            or state_snapshot.present != (item.state_identity is not None)
+            or not state_snapshot.quiescent
+        ):
+            return "identity_changed"
         deleted = self._client.delete_collection(item.collection_name)
         return "deleted" if deleted else "delete_failed"
 
@@ -364,13 +429,37 @@ class IndexGarbageCollector:
     def _apply_state(self, item: GarbagePlanItem) -> str:
         if self._client.collection_exists(item.collection_name):
             return "still_referenced"
-        state_path = self._state_path(item.collection_name)
-        if not state_path.exists():
+        try:
+            state_snapshot = self._state_snapshot(item.collection_name)
+        except RuntimeError as error:
+            if str(error).startswith("GC_UNSAFE_STATE"):
+                return "unsafe_state"
+            return "identity_changed"
+        if not state_snapshot.present:
             return "already_absent"
-        if not state_path.is_file() or state_path.is_symlink():
-            return "unsafe_state"
-        state_path.unlink()
-        return "deleted"
+        if (
+            item.state_identity is None
+            or state_snapshot.identity != item.state_identity
+            or not state_snapshot.quiescent
+        ):
+            return "identity_changed"
+        failed = False
+        for path in (
+            self._state_paths(item.collection_name)[1],
+            self._state_paths(item.collection_name)[2],
+            self._state_paths(item.collection_name)[0],
+        ):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                failed = True
+        remaining = any(
+            path.exists() or path.is_symlink()
+            for path in self._state_paths(item.collection_name)
+        )
+        return "delete_failed" if failed or remaining else "deleted"
 
     def _require_control_unchanged(
         self,
@@ -435,6 +524,24 @@ class IndexGarbageCollector:
             index_revision=self._config.index_revision,
         )
 
+    def _collection_identity(
+        self,
+        collection_name: str,
+    ) -> CollectionStateIdentity | None:
+        index = self._index(collection_name)
+        try:
+            index.require_compatible_collection()
+            control_job_id, base_manifest_sha256 = (
+                index.staging_identity()
+            )
+        except (LookupError, RuntimeError, ValueError):
+            return None
+        return CollectionStateIdentity(
+            control_job_id=control_job_id,
+            pipeline_fingerprint=self._config.pipeline_fingerprint,
+            base_manifest_sha256=base_manifest_sha256,
+        )
+
     def _target_name(self, job: Job) -> str:
         return self._target_name_from_id(
             job.job_id,
@@ -459,6 +566,17 @@ class IndexGarbageCollector:
     def _state_path(self, collection_name: str) -> Path:
         digest = hashlib.sha256(collection_name.encode()).hexdigest()[:24]
         return self._config.index_state_dir / f"index-{digest}.sqlite3"
+
+    def _state_paths(
+        self,
+        collection_name: str,
+    ) -> tuple[Path, Path, Path]:
+        main_path = self._state_path(collection_name)
+        return (
+            main_path,
+            Path(f"{main_path}-wal"),
+            Path(f"{main_path}-shm"),
+        )
 
 
 def _plan_sort_key(item: GarbagePlanItem) -> tuple[int, str]:

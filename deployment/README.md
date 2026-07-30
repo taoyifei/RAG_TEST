@@ -10,14 +10,20 @@
 1. 先用 `offline_bundle.py.sha256` 校验固定解包器，再分别校验
    runtime/corpus 外层 SHA256 和内部 manifest；解包器摘要失败时禁止执行。
 2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；环境文件保存在
-   `/data/tyf/RAG/shared/env/rag.env`。
+   `/data/tyf/RAG/shared/env/rag.env`。`install.sh` 必须由 root 执行；
+   发布前会把 release 全部固定为 `root:root`，目录与 Shell 为 0555，
+   其他普通文件为 0444。复用既有 release 时只验证身份、文件集、owner 和
+   mode，发现漂移会拒绝而不会静默修复。corpus 仍固定为
+   `10001:10001`、目录 0700、文件 0400。
 3. 设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
    mount 路径、`RAG_RELEASE_REVISION`、普通查询 `RAG_TRACE_MODE` 和 OCR
    使用的宿主 GPU ID。
 4. 执行 `bash verify-offline.sh`。
 5. 执行 `bash deploy.sh /data/tyf/RAG/shared/env/rag.env`；脚本先校验，
    再按白名单 `docker load`，最后只启动 app、OCR 和 Qdrant。默认 Compose
-   路径不启动 worker。
+   路径不启动 worker。部署、回滚与失败补偿均按 deadline 等待：Qdrant、
+   app health 和 app `/live` 各最多 60 秒，OCR 最多 240 秒；OCR 的期限
+   覆盖 90 秒 start period 与后续 12×10 秒健康重试窗口。
 6. 检查 Compose、应用存活和容器内 OCR readiness：
 
    ```bash

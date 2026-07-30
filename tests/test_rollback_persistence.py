@@ -33,6 +33,7 @@ class _Sandbox:
     current_link: Path
     docker_log: Path
     state_file: Path
+    clock_file: Path
     original_env: str
     original_rollback: str
 
@@ -145,6 +146,8 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     binaries.mkdir()
     docker_log = tmp_path / "docker.log"
     state_file = tmp_path / "container-state.env"
+    clock_file = tmp_path / "clock"
+    clock_file.write_text("0\n", encoding="ascii")
     state_file.write_text(
         "APP_EXISTS=true\n"
         f"APP_IMAGE={'sha256:' + 'd' * 64}\n"
@@ -246,7 +249,16 @@ if [[ "$1 $2" == "container inspect" ]]; then
       rag-ocr)
         [[ "${OCR_EXISTS}" == "true" ]] || exit 42
         if [[ "${OCR_IMAGE}" == "${FAKE_OCR_IMAGE}" ]]; then
-          echo "${FAKE_TARGET_OCR_HEALTH:-healthy}"
+          if [[ -n "${FAKE_TARGET_OCR_HEALTHY_AT_SECONDS:-}" ]]; then
+            elapsed="$(cat "${FAKE_CLOCK_FILE}")"
+            if ((elapsed >= FAKE_TARGET_OCR_HEALTHY_AT_SECONDS)); then
+              echo healthy
+            else
+              echo starting
+            fi
+          else
+            echo "${FAKE_TARGET_OCR_HEALTH:-healthy}"
+          fi
         else
           echo healthy
         fi
@@ -415,7 +427,22 @@ fi
     )
     _write_executable(
         binaries / "sleep",
-        "#!/usr/bin/env bash\nexit 0\n",
+        """#!/usr/bin/env bash
+set -euo pipefail
+elapsed="$(cat "${FAKE_CLOCK_FILE}")"
+printf '%s\n' "$((elapsed + $1))" > "${FAKE_CLOCK_FILE}"
+""",
+    )
+    _write_executable(
+        binaries / "date",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" == "+%s" ]]; then
+  cat "${FAKE_CLOCK_FILE}"
+else
+  exec /usr/bin/date "$@"
+fi
+""",
     )
     return _Sandbox(
         root=root,
@@ -427,6 +454,7 @@ fi
         current_link=current_link,
         docker_log=docker_log,
         state_file=state_file,
+        clock_file=clock_file,
         original_env=original_env,
         original_rollback=original_rollback,
     )
@@ -448,6 +476,7 @@ def _run_rollback(
             "PATH": f"{sandbox.script.parent / 'bin'}:/usr/bin:/bin",
             "FAKE_DOCKER_LOG": str(sandbox.docker_log),
             "FAKE_STATE_FILE": str(sandbox.state_file),
+            "FAKE_CLOCK_FILE": str(sandbox.clock_file),
             "FAKE_CURL_COUNT": str(
                 sandbox.script.parent / "curl-failure-used",
             ),
@@ -564,6 +593,25 @@ def test_running_worker_is_restored_with_old_app_image(
     assert "--profile index up -d --no-build --pull never" in log
     state = sandbox.state_file.read_text(encoding="utf-8")
     assert f"WORKER_IMAGE={_APP_IMAGE}" in state
+
+
+def test_rollback_waits_for_ocr_beyond_30_seconds(tmp_path: Path) -> None:
+    """证明 rollback 与 deploy 共用足够长的 OCR 等待窗口。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_OCR_HEALTHY_AT_SECONDS="210",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert int(sandbox.clock_file.read_text(encoding="ascii")) >= 210
+    assert sandbox.current_link.resolve() == sandbox.old_release
 
 
 @pytest.mark.parametrize(

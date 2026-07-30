@@ -5,8 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -605,9 +608,93 @@ class ReadOnlyManifestRepository:
             return None
         return _stored_from_row(row)
 
-    def _connect(self) -> sqlite3.Connection:
-        path = self._database_path.resolve(strict=False).as_posix()
-        encoded_path = quote(path, safe="/:")
+    def list_all(self) -> tuple[StoredManifest, ...]:
+        """只读列出全部物理 collection 的当前 manifest。
+
+        Args:
+            无参数。
+
+        Returns:
+            按 collection 名称稳定排序的 manifest 元组。
+
+        """
+        with self._connect() as connection:
+            _require_manifest_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                ORDER BY collection_name
+                """
+            ).fetchall()
+        return tuple(_stored_from_row(row) for row in rows)
+
+    def snapshot_references(self) -> frozenset[tuple[str, str]]:
+        """只读返回当前及历史 manifest 的 snapshot 引用。
+
+        Args:
+            无参数。
+
+        Returns:
+            collection 与 snapshot 名称组成的不可变集合。
+
+        """
+        with self._connect() as connection:
+            _require_manifest_schema(connection)
+            rows = connection.execute(
+                """
+                SELECT collection_name, snapshot_name
+                FROM index_manifests
+                UNION
+                SELECT collection_name, snapshot_name
+                FROM manifest_revisions
+                """
+            ).fetchall()
+        return frozenset(
+            (str(row["collection_name"]), str(row["snapshot_name"]))
+            for row in rows
+        )
+
+    def _connect(
+        self,
+    ) -> AbstractContextManager[sqlite3.Connection]:
+        return readonly_sqlite_snapshot(self._database_path)
+
+
+@contextmanager
+def readonly_sqlite_snapshot(
+    database_path: Path,
+) -> Iterator[sqlite3.Connection]:
+    """在临时隔离副本上以 mode=ro 和 query_only 查询 SQLite。
+
+    原主库及 WAL/SHM 只按字节读取。复制前后会冻结源文件集与摘要，因此
+    并发变化会失败；SQLite 即使为 WAL 锁创建临时 sidecar，也只会写入
+    自动清理的隔离目录。
+
+    Args:
+        database_path: 必须已存在的非 symlink SQLite 主库。
+
+    Returns:
+        提供只读 SQLite 连接的上下文管理器迭代器。
+
+    Yields:
+        读取完整主库与已提交 WAL 的 query-only 连接。
+
+    Raises:
+        sqlite3.OperationalError: 主库缺失或不是普通文件。
+        ValueError: 任一逻辑 sidecar 不安全。
+        RuntimeError: 复制期间源逻辑文件集或内容发生变化。
+
+    """
+    before = _sqlite_source_snapshot(database_path)
+    with tempfile.TemporaryDirectory(prefix="rag-sqlite-ro-") as temporary:
+        copied_main = Path(temporary) / database_path.name
+        shutil.copyfile(database_path, copied_main)
+        wal_path = Path(f"{database_path}-wal")
+        if wal_path.is_file():
+            shutil.copyfile(wal_path, Path(f"{copied_main}-wal"))
+        if _sqlite_source_snapshot(database_path) != before:
+            raise RuntimeError("SQLite 源文件在只读快照期间发生变化。")
+        encoded_path = quote(copied_main.as_posix(), safe="/:")
         connection = sqlite3.connect(
             f"file:{encoded_path}?mode=ro",
             timeout=10.0,
@@ -622,10 +709,37 @@ class ReadOnlyManifestRepository:
             ).fetchone()
             if query_only is None or int(query_only[0]) != 1:
                 raise ValueError("SQLite 只读连接未启用 query_only。")
-        except BaseException:
+            yield connection
+        finally:
             connection.close()
-            raise
-        return connection
+        if _sqlite_source_snapshot(database_path) != before:
+            raise RuntimeError("SQLite 源文件在只读查询期间发生变化。")
+
+
+def _sqlite_source_snapshot(
+    database_path: Path,
+) -> tuple[tuple[str, str], ...]:
+    """冻结 SQLite 主库、WAL 与 SHM 的安全文件集和摘要。"""
+    items: list[tuple[str, str]] = []
+    for suffix in ("", "-wal", "-shm"):
+        path = Path(f"{database_path}{suffix}")
+        if path.is_symlink():
+            raise ValueError("SQLite 逻辑文件不能是 symlink。")
+        if not path.exists():
+            if not suffix:
+                raise sqlite3.OperationalError(
+                    "SQLite 主库不存在或不是安全普通文件。"
+                )
+            continue
+        if not path.is_file():
+            raise ValueError("SQLite 逻辑路径必须是普通文件。")
+        items.append(
+            (
+                suffix,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+        )
+    return tuple(items)
 
 
 def _serialize_manifest(manifest: IndexManifest) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import time
@@ -16,10 +17,15 @@ from qdrant_client import QdrantClient
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.assets import AssetPaths, verify_offline_assets
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
-from rag_app.manifest import ManifestRepository
-from rag_app.runtime import build_runtime, load_pipeline
+from rag_app.manifest import ReadOnlyManifestRepository
+from rag_app.runtime import (
+    build_runtime,
+    load_pipeline,
+    require_release_revision,
+)
 from rag_app.settings import RuntimeSettings
-from rag_app.state import JobKind, JobState, StateStore
+from rag_app.state import JobKind, JobState
+from rag_app.state.jobs import ReadOnlyJobStore
 from rag_app.worker_runtime import build_worker_runtime
 
 __all__ = ["BuildInfo", "build_info", "main"]
@@ -206,6 +212,16 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
 
     """
     settings = RuntimeSettings()  # type: ignore[call-arg]
+    require_release_revision(settings)
+    _require_existing_gc_database(
+        settings.state_database,
+        label="control SQLite",
+    )
+    _require_existing_gc_database(
+        settings.manifest_database,
+        label="manifest SQLite",
+    )
+    files_before = _gc_file_snapshot(settings)
     pipeline = load_pipeline(settings.pipeline_path)
     client = QdrantClient(
         url=settings.qdrant_url,
@@ -216,8 +232,10 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
     try:
         collector = IndexGarbageCollector(
             client=client,
-            manifests=ManifestRepository(settings.manifest_database),
-            control=StateStore(settings.state_database),
+            manifests=ReadOnlyManifestRepository(
+                settings.manifest_database
+            ),
+            control=ReadOnlyJobStore(settings.state_database),
             config=GarbageCollectorConfig(
                 alias_name=settings.qdrant_alias,
                 index_state_dir=settings.index_state_dir,
@@ -228,6 +246,8 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
             ),
         )
         plan = collector.plan()
+        if _gc_file_snapshot(settings) != files_before:
+            raise RuntimeError("GC_DRY_RUN_FILE_DRIFT")
         items = [
             {
                 "id": item.stable_id,
@@ -250,6 +270,80 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
         )
     finally:
         client.close()
+
+
+def _require_existing_gc_database(path: Path, *, label: str) -> None:
+    """要求 GC 数据库已经存在且是非 symlink 普通文件。
+
+    Args:
+        path: SQLite 主库路径。
+        label: 不含路径的错误标签。
+
+    Raises:
+        FileNotFoundError: 路径缺失或不是安全普通文件。
+
+    """
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(f"{label} 必须是已存在的安全普通文件。")
+
+
+def _gc_file_snapshot(
+    settings: RuntimeSettings,
+) -> tuple[tuple[str, str], ...]:
+    """冻结 GC 可见 SQLite 文件集合与内容摘要。
+
+    Args:
+        settings: 含 control、manifest 与 collection state 路径的设置。
+
+    Returns:
+        路径与 SHA256 组成的稳定元组。
+
+    Raises:
+        ValueError: 任一候选路径是 symlink 或非普通文件。
+
+    """
+    paths: set[Path] = set()
+    for main_path in (
+        settings.state_database,
+        settings.manifest_database,
+    ):
+        for path in (
+            main_path,
+            Path(f"{main_path}-wal"),
+            Path(f"{main_path}-shm"),
+        ):
+            if path.is_symlink():
+                raise ValueError("GC SQLite 文件不能是 symlink。")
+            if path.exists():
+                if not path.is_file():
+                    raise ValueError("GC SQLite 路径必须是普通文件。")
+                paths.add(path)
+    state_dir = settings.index_state_dir
+    if state_dir.is_symlink() or (
+        state_dir.exists() and not state_dir.is_dir()
+    ):
+        raise ValueError("GC state 目录必须是真实目录。")
+    if state_dir.is_dir():
+        for path in state_dir.iterdir():
+            if not _is_collection_state_file(path.name):
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("GC collection state 必须是普通文件。")
+            paths.add(path)
+    return tuple(
+        (
+            path.as_posix(),
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
+        for path in sorted(paths)
+    )
+
+
+def _is_collection_state_file(name: str) -> bool:
+    """判断文件名是否属于 collection state 逻辑三件套。"""
+    return name.startswith("index-") and name.endswith(
+        (".sqlite3", ".sqlite3-wal", ".sqlite3-shm")
+    )
 
 
 def _print_json(payload: object) -> None:

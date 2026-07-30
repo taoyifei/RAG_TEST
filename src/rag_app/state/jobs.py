@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from rag_app.manifest import readonly_sqlite_snapshot
 from rag_app.state.models import (
+    CollectionStateIdentity,
     Job,
     JobKind,
     JobState,
@@ -344,6 +347,95 @@ class JobStore:
         connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA busy_timeout=10000")
         return connection
+
+
+class ReadOnlyJobStore:
+    """用 mode=ro 与 query_only 查询既有任务或 collection state。"""
+
+    def __init__(self, path: Path) -> None:
+        """保存必须已存在且不能是 symlink 的 SQLite 路径。
+
+        Args:
+            path: 只读查询的 SQLite 主库。
+
+        """
+        self.path = path
+
+    def require_integrity(self) -> None:
+        """要求只读完整性检查唯一返回 ok。
+
+        Args:
+            无参数。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            RuntimeError: SQLite 完整性检查失败。
+
+        """
+        with self._connect() as connection:
+            rows = connection.execute("PRAGMA integrity_check").fetchall()
+        if len(rows) != 1 or str(rows[0][0]) != "ok":
+            raise RuntimeError("SQLite 完整性检查失败。")
+
+    def list_jobs(self) -> tuple[Job, ...]:
+        """只读列出全部任务。
+
+        Args:
+            无参数。
+
+        Returns:
+            按创建时间和 job ID 稳定排序的任务元组。
+
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                ORDER BY created_at, job_id
+                """
+            ).fetchall()
+        return tuple(_job_from_row(row) for row in rows)
+
+    def collection_identity(self) -> CollectionStateIdentity:
+        """只读返回 collection state 的单例身份。
+
+        Args:
+            无参数。
+
+        Returns:
+            control job、pipeline 与可选基线摘要。
+
+        Raises:
+            ValueError: collection identity 缺失。
+
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT control_job_id, pipeline_fingerprint,
+                       base_manifest_sha256
+                FROM collection_identity
+                WHERE singleton = 1
+                """
+            ).fetchone()
+        if row is None:
+            raise ValueError("collection state 缺少身份。")
+        return CollectionStateIdentity(
+            control_job_id=str(row["control_job_id"]),
+            pipeline_fingerprint=str(row["pipeline_fingerprint"]),
+            base_manifest_sha256=(
+                None
+                if row["base_manifest_sha256"] is None
+                else str(row["base_manifest_sha256"])
+            ),
+        )
+
+    def _connect(
+        self,
+    ) -> AbstractContextManager[sqlite3.Connection]:
+        return readonly_sqlite_snapshot(self.path)
 
 
 def _utc_now_text() -> str:

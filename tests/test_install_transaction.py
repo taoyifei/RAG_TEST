@@ -8,6 +8,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from scripts.freeze_corpus_manifest import freeze_corpus_manifest
 
 
@@ -95,6 +97,20 @@ printf 'verified\n' >> "${FAKE_VERIFY_LOG}"
     )
     _write_manifest(runtime)
     _write_corpus(corpus, "corpus-a", b"docx")
+    fakeroot_state = tmp_path / "fakeroot.state"
+    subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/fakeroot",
+            "-s",
+            str(fakeroot_state),
+            "/usr/bin/chown",
+            "-R",
+            "1234:1234",
+            str(runtime),
+            str(corpus),
+        ],
+        check=True,
+    )
     script = tmp_path / "install.sh"
     source = (project / "deployment/install.sh").read_text(encoding="utf-8")
     script.write_text(
@@ -146,7 +162,7 @@ fi
         corpus_target=root / "shared/corpora/corpus-a",
         binaries=binaries,
         verify_log=verify_log,
-        fakeroot_state=tmp_path / "fakeroot.state",
+        fakeroot_state=fakeroot_state,
     )
 
 
@@ -210,6 +226,30 @@ def _fakeroot_stat(
     return completed.stdout.strip()
 
 
+def _fakeroot_change(
+    sandbox: _InstallSandbox,
+    *arguments: str,
+) -> None:
+    """在同一 fakeroot 状态中修改测试文件元数据。
+
+    Args:
+        sandbox: 安装测试沙箱。
+        *arguments: 传给目标系统命令的参数。
+
+    """
+    subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/fakeroot",
+            "-i",
+            str(sandbox.fakeroot_state),
+            "-s",
+            str(sandbox.fakeroot_state),
+            *arguments,
+        ],
+        check=True,
+    )
+
+
 def test_install_publishes_immutable_release_and_private_corpus(
     tmp_path: Path,
 ) -> None:
@@ -218,6 +258,11 @@ def test_install_publishes_immutable_release_and_private_corpus(
     completed = _run_install(sandbox)
 
     assert completed.returncode == 0, completed.stderr
+    assert _fakeroot_stat(
+        sandbox,
+        sandbox.runtime,
+        format_value="%u:%g",
+    ) == "1234:1234"
     assert sandbox.verify_log.read_text(encoding="utf-8") == (
         "verified\nverified\n"
     )
@@ -226,6 +271,27 @@ def test_install_publishes_immutable_release_and_private_corpus(
         sandbox.release_target,
         format_value="%a",
     ) == "555"
+    assert _fakeroot_stat(
+        sandbox,
+        sandbox.release_target,
+        format_value="%u:%g",
+    ) == "0:0"
+    for path in sandbox.release_target.rglob("*"):
+        expected_mode = (
+            "555"
+            if path.is_dir() or path.suffix == ".sh"
+            else "444"
+        )
+        assert _fakeroot_stat(
+            sandbox,
+            path,
+            format_value="%u:%g",
+        ) == "0:0"
+        assert _fakeroot_stat(
+            sandbox,
+            path,
+            format_value="%a",
+        ) == expected_mode
     assert _fakeroot_stat(
         sandbox,
         sandbox.release_target / "compose.yaml",
@@ -262,6 +328,52 @@ def test_install_publishes_immutable_release_and_private_corpus(
     assert sandbox.runtime.is_dir()
     assert sandbox.corpus.is_dir()
     assert not (sandbox.root / ".install.lock").exists()
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_metadata"),
+    (
+        (("/usr/bin/chown", "1234:1234", "compose.yaml"), "1234:1234"),
+        (("/usr/bin/chown", "1234:1234", "."), "1234:1234"),
+        (("/usr/bin/chmod", "0644", "compose.yaml"), "644"),
+        (("/usr/bin/chmod", "0544", "deploy.sh"), "544"),
+        (("/usr/bin/chmod", "0755", "."), "755"),
+    ),
+)
+def test_install_rejects_existing_release_owner_or_mode_drift(
+    tmp_path: Path,
+    command: tuple[str, str, str],
+    expected_metadata: str,
+) -> None:
+    """证明既有 release 元数据漂移会拒绝复用且不会被修复。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        command: fakeroot 中执行的元数据修改命令。
+        expected_metadata: 失败后仍应保留的漂移值。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    first = _run_install(sandbox)
+    assert first.returncode == 0, first.stderr
+    target = sandbox.release_target / command[2]
+    _fakeroot_change(
+        sandbox,
+        command[0],
+        command[1],
+        str(target),
+    )
+    format_value = "%u:%g" if command[0].endswith("chown") else "%a"
+
+    repeated = _run_install(sandbox)
+
+    assert repeated.returncode != 0
+    assert "release owner 或权限无效" in repeated.stderr
+    assert _fakeroot_stat(
+        sandbox,
+        target,
+        format_value=format_value,
+    ) == expected_metadata
 
 
 def test_install_requires_root_before_verification(tmp_path: Path) -> None:
