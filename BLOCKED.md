@@ -1,6 +1,6 @@
 # 阻塞项
 
-## P0：真实 Git index 原始字节 SHA 无法恢复到任务 0 基线
+## 历史审计：真实 Git index 原始字节 SHA 与旧任务 0 基线不同
 
 - 任务 0 记录的 `.git/index` SHA256 为
   `dee80a74563a99d765fb3d34ce87860a6bf068a73ed20d7bfadcbd76d3be8b8f`；
@@ -19,11 +19,17 @@
   未变：只有缺失的任务 0 原始 index 字节副本才能满足字面 SHA 条件。
 - 任务 0 的原始 index 字节副本已不在文件系统中，SHA256 不能反推出原文件；
   为避免覆盖用户真实 Git index，本轮不执行 `read-tree`、复制或其他写回。
-  这不影响源码和 staged=0，但未满足任务书“真实 Git index 摘要不变”的字面
-  完成条件，需由持有任务 0 index 备份的一方恢复后重新核验。
+  当前发布口径只使用 staged=0、`git diff --cached --quiet` 和
+  `git write-tree == HEAD^{tree}` 三项逻辑不变量；原始字节差异不再是 blocker。
 - 2026-07-30：完整交付说明后，用户再次明确要求 commit 并 push，视为接受该
   原始字节差异并覆盖仅针对本轮 Agent 的 Git 提交禁令；该历史证据继续保留，
   但不再阻止本次提交与推送。
+- 2026-07-30 本轮任务 0 复核：HEAD 为
+  `caf5bdba83c149845bc1f0e48d1dc8f3491fbe1c`，`git diff --cached --quiet`
+  退出 0，`git write-tree` 与 `HEAD^{tree}` 均为
+  `d59ea6c35c3c8c7409300b851e6caf0f26497367`，staged=0。当前原始 index
+  SHA256 为 `af72443dfe0be82e6cc731256459ed7d36d7fa518f2e997401f75ed2b6e689f2`，
+  仅保留审计，不要求恢复。
 
 ## 2026-07-29 离线发布链任务 0：Windows Git UNC safe.directory 拒绝
 

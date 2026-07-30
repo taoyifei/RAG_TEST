@@ -2498,3 +2498,106 @@
   Git index 原始字节 SHA 差异；不覆盖 build、package、服务器访问或部署禁令。
 - [x] 提交范围仍只包含本轮精确白名单内的索引事务、租约、部署事务、构建身份、
   corpus manifest/原子发布、对应测试及本进度与阻塞记录。
+
+## 2026-07-30 四项生产发布风险任务 0：当前 HEAD 基线
+
+- [x] 起始 HEAD 为 `caf5bdba83c149845bc1f0e48d1dc8f3491fbe1c`，
+  本地 `main` 与 `origin/main` 同步；tracked=231，工作树、staged 和 deleted
+  均为 0。Python 为 3.11.15，Docker Engine 29.4.0、Compose 5.1.2。
+- [x] 三项逻辑 Git index 不变量通过：`git diff --cached --quiet` 退出 0，
+  `git write-tree` 与 `HEAD^{tree}` 均为
+  `d59ea6c35c3c8c7409300b851e6caf0f26497367`，staged=0。原始
+  `.git/index` SHA 仅保留在 `BLOCKED.md` 历史审计，不再作为发布门禁。
+- [x] 保护摘要未漂移：docs `36c67e3b…`、artifacts `220473c6…`、
+  frozen `63adcd45…`、results `cdb17f0…`、evidence `05b845b9…`；
+  pipeline/retrieval/corpus policy 分别为 `f61a74b0…` / `267e419f…` /
+  `0d6553c1…`，retrieval 继续为 provisional。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked 聚合为
+  `03d51db2…` / `84a0a960…` / `44254dff…`。
+- [x] 本地已有固定 `qdrant/qdrant:v1.18.3` amd64 镜像，使用
+  `--pull never` 启动精确测试容器 `rag-release-risk-qdrant`；
+  `mounts=[]`、仅绑定 `127.0.0.1:6333`、OOMKilled=false。
+- [x] 当前 HEAD 全量 pytest 为
+  `499 passed, 45 warnings in 351.42s`，skipped=0；warning 类别仍只有
+  Starlette deprecation 和本地 Qdrant API-key/兼容性提示。
+- [x] compileall 无输出、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 91 source files`、Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、11/11 ASSETS 和 `git diff --check` 均退出 0。
+- [x] 临时 Git index release-safety 为 `tracked_files=231`，binary、
+  large、local path、private network、private path、secret 和总 violations
+  均为 0；临时 index 已精确删除。
+- [x] 当前代码审计确认本轮四个缺口仍存在：无统一发布前 target verifier、
+  无 `index-gc`、安装不能独立幂等复用 runtime/corpus、wheelhouse 三件套
+  不是事务替换且 serve/worker/index 未在外部资源前强制 revision 相等。
+- [x] 本阶段未执行 build/buildx、image save/load、真实 package、联网安装、
+  SSH/SCP、`.57/.58/.60`、服务器操作、commit 或 push。
+
+## 2026-07-30 四项生产发布风险任务 1：target 全量一致性证明
+
+- [x] 红测首次在收集阶段退出 1：两个测试模块均报
+  `ModuleNotFoundError: rag_app.index.verifier`。新增测试覆盖真实 Qdrant
+  删除点、额外 active 点、错误 chunk_count、残留 staging、损坏 SQLite、
+  verifier 重入及 job runner 必须在 snapshot 前调用 verifier。
+- [x] 新 `TargetIndexVerifier` 先以只读 SQLite
+  `PRAGMA integrity_check` 校验 state，再核对 control job、pipeline、base
+  manifest 三方身份和待发布 manifest 的 exact active source 列表。
+- [x] 每个 manifest `source_id+doc_version` 必须在 SQLite 为 active、具有
+  正 chunk_count 且 Qdrant exact count 相等；target 总 active 点数必须等于
+  全部 chunk_count 之和，并要求 staging 点为 0。因此删除点、额外 active
+  source/version 及相互抵消的漂移都会失败关闭。
+- [x] Qdrant 兼容检查补齐 dense cosine distance、BM25 sparse IDF、
+  collection/payload schema、全部固定 payload index 类型及 index revision；
+  pipeline fingerprint 继续包含冻结 index revision，未改三份 deployment
+  config。
+- [x] 既有 full target 恢复要求 collection/state 同时存在，先验证 Qdrant
+  结构与 staging identity，再以只读方式验证 SQLite integrity/identity；
+  incremental 已有 state 还必须与 base manifest 来源完全一致，不能重新
+  initialize 或补写身份来掩盖损坏。
+- [x] publisher 通过独立 target guard 在 snapshot、stage manifest、alias
+  和 activate manifest 前重复执行统一 verifier；同 control job 已发布重入
+  也会重新验证完整 target。反测证明 verifier 失败时 snapshots=[]、
+  target manifest 不存在且 alias 未切换。
+- [x] 首轮合并回归为 `1 failed, 39 passed`；唯一失败揭示纯 rename 后
+  immutable source version 保留初始路径，而 active source 使用当前路径。
+  verifier 改为以活动来源表验证 current path，不错误要求历史 version path
+  改写；没有改变 rename 或检索行为。
+- [x] 最终 target/Qdrant/state/publisher/job runner/runtime 合并回归为
+  `60 passed, 31 warnings in 178.15s`。专项 compileall 无输出、Ruff
+  `All checks passed!`、strict mypy `7 source files`、Google docstring
+  `missing_google_sections=0` 和 `git diff --check` 均退出 0。
+
+## 2026-07-30 四项生产发布风险任务 2：保守索引 GC
+
+- [x] 红测首次在收集阶段退出 1：
+  `ModuleNotFoundError: No module named 'rag_app.index.gc'`。测试覆盖默认
+  dry-run、显式 apply、幂等重跑、活动 alias、最新两份 retired、失败任务、
+  orphan target、未知 collection、state、snapshot、任务并发、alias 漂移和
+  collection 删除失败后的重试。
+- [x] `index-gc` 仅把可验证为兼容索引且具有受管 staging identity 的目标纳入
+  collection 回收；保护 alias、active/staging manifest、最新两份 retired、
+  非失败任务 target 和未知/不兼容 collection。对应 SQLite 必须为普通非
+  symlink 文件、完整且无本地 pending/running 任务。
+- [x] snapshot 只有在当前及历史 manifest 均无引用时才进入计划；dry-run
+  零写入，`--apply` 在每个对象前后复核 alias、manifest、snapshot 引用和
+  control job 快照。控制面漂移立即拒绝继续。
+- [x] apply 按 snapshot、collection、state 顺序执行并逐项给出稳定状态；
+  collection 删除失败时保留 state，后续重跑可恢复；已不存在对象返回
+  `already_absent`，因此成功计划可幂等重放。CLI 输出不含正文、本地路径或
+  配置内容。
+- [x] 首轮专项测试为 `5 passed, 4 warnings in 130.00s`。首次静态复核真实发现
+  Ruff 5 项复杂度/性能问题和 mypy 1 项联合类型问题；通过冻结配置对象及窄职责
+  helper 修正后，Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 3 source files`、compileall 无输出且
+  `git diff --check` 退出 0。
+- [x] 与 target verifier、job runner、Qdrant、state、publisher 和 runtime
+  的真实 Qdrant 合并回归为
+  `53 passed, 34 warnings in 316.24s`；skipped=0，warning 均为已有本地
+  HTTP API-key 提示。本阶段未 build、package、访问服务器或改动冻结检索配置。
+- [x] 推送前唯一全量 pytest 退出 0：
+  `515 passed, 60 warnings in 498.88s`，skipped=0；warning 类别仍只有已有
+  Starlette deprecation、本地 Qdrant API-key 和兼容性提示。全量 compileall
+  无输出、Ruff `All checks passed!`、mypy
+  `Success: no issues found in 93 source files`、Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose 与 `git diff --check` 均退出 0。
