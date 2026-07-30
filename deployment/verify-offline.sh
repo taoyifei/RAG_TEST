@@ -36,7 +36,9 @@ required_files=(
   "evaluation/runtime/evaluation/evaluate.py"
   "evaluation/runtime/evaluation/metrics.py"
   "evaluation/runtime/scripts/load_test_chat.py"
+  "offline_bundle.py"
   "backup.sh"
+  "install.sh"
 )
 for path in "${required_files[@]}"; do
   if [[ ! -s "${path}" || -L "${path}" ]]; then
@@ -49,6 +51,12 @@ if [[ "$(wc -l < IMAGE_ARCHIVES.tsv)" -ne 3 ]]; then
   echo "IMAGE_ARCHIVES.tsv 必须恰有三行。" >&2
   exit 1
 fi
+if awk -F '\t' 'NF != 4 {exit 1}' IMAGE_ARCHIVES.tsv; then
+  :
+else
+  echo "IMAGE_ARCHIVES.tsv 每行必须恰有四列。" >&2
+  exit 1
+fi
 if [[ "$(cut -f1 IMAGE_ARCHIVES.tsv | paste -sd ',')" \
   != "images/docx-rag-linux-amd64.tar,images/docx-rag-ocr-linux-amd64.tar,images/qdrant-linux-amd64.tar" ]]; then
   echo "镜像归档白名单或顺序无效。" >&2
@@ -56,6 +64,23 @@ if [[ "$(cut -f1 IMAGE_ARCHIVES.tsv | paste -sd ',')" \
 fi
 if [[ ! "$(cat SOURCE_REVISION)" =~ ^[0-9a-f]{40}$ ]]; then
   echo "SOURCE_REVISION 无效。" >&2
+  exit 1
+fi
+source_revision="$(cat SOURCE_REVISION)"
+if ! awk -F '\t' -v revision="${source_revision}" '
+  NR <= 2 {
+    if ($3 !~ /^sha256:[0-9a-f]{64}$/ || $4 != revision) {
+      exit 1
+    }
+  }
+  NR == 3 {
+    if ($3 !~ /^sha256:[0-9a-f]{64}$/ \
+      || $4 !~ /^qdrant\/qdrant@sha256:[0-9a-f]{64}$/) {
+      exit 1
+    }
+  }
+' IMAGE_ARCHIVES.tsv; then
+  echo "镜像 image ID 或 provenance 无效。" >&2
   exit 1
 fi
 

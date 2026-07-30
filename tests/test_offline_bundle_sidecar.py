@@ -28,13 +28,13 @@ def test_package_declares_external_unpacker_sidecar_and_summary() -> None:
     root = Path(__file__).parents[1]
     package = (root / "deployment/package.sh").read_text(encoding="utf-8")
 
-    assert 'unpacker="${artifact_root}/offline_bundle.py"' in package
+    assert 'unpacker="${stage}/offline_bundle.py"' in package
     assert (
-        'unpacker_sidecar="${artifact_root}/offline_bundle.py.sha256"'
+        'write_sidecar "${unpacker}"'
         in package
     )
     assert 'write_sidecar "${unpacker}"' in package
-    assert "unpacker_sha=" in package
+    assert "RELEASE_MANIFEST.sha256" in package
 
 
 @pytest.mark.parametrize(
@@ -72,7 +72,7 @@ def test_public_upload_verifies_unpacker_before_python() -> None:
         root / "design/public/offline-build-and-server-deployment.md"
     ).read_text(encoding="utf-8")
 
-    assert "artifacts/offline_bundle.py.sha256" in tutorial
+    assert '"${release_output}/offline_bundle.py.sha256"' in tutorial
     verification = tutorial.index("sha256sum -c offline_bundle.py.sha256")
     execution = tutorial.index("python3 offline_bundle.py")
     assert verification < execution

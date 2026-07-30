@@ -57,6 +57,31 @@ def _set_rollback_worker_target(
     )
 
 
+def _set_core_state(
+    sandbox: _Sandbox,
+    *,
+    service: str,
+    exists: bool,
+    running: bool,
+) -> None:
+    """设置回滚调用前的核心容器 degraded 状态。
+
+    Args:
+        sandbox: 回滚测试沙箱。
+        service: APP、OCR 或 QDRANT。
+        exists: 容器是否存在。
+        running: 容器是否运行。
+
+    """
+    state = _container_state(sandbox)
+    state[f"{service}_EXISTS"] = str(exists).lower()
+    state[f"{service}_RUNNING"] = str(running).lower()
+    sandbox.state_file.write_text(
+        "".join(f"{key}={value}\n" for key, value in state.items()),
+        encoding="ascii",
+    )
+
+
 def _assert_original_runtime(
     sandbox: _Sandbox,
     *,
@@ -89,7 +114,10 @@ def _assert_original_runtime(
     (
         {"FAKE_COMPOSE_UP_FAIL": "1"},
         {"FAKE_BAD_CONTAINER": "rag-app"},
-        {"FAKE_CURL_FAIL_ONCE": "1"},
+        {"FAKE_TARGET_QDRANT_HEALTH": "unhealthy"},
+        {"FAKE_TARGET_OCR_HEALTH": "unhealthy"},
+        {"FAKE_TARGET_APP_HEALTH": "unhealthy"},
+        {"FAKE_TARGET_CURL_FAIL": "1"},
         {"FAKE_FAIL_ENV_REPLACE": "1"},
         {"FAKE_FAIL_CURRENT_RENAME": "1"},
         {"FAKE_CORRUPT_ENV_AFTER_CURRENT": "1"},
@@ -192,7 +220,11 @@ def test_invalid_recorded_worker_state_fails_before_container_change(
         worker_exists=True,
         worker_running=False,
     )
-    log = sandbox.docker_log.read_text(encoding="utf-8")
+    log = (
+        sandbox.docker_log.read_text(encoding="utf-8")
+        if sandbox.docker_log.exists()
+        else ""
+    )
     assert " up -d " not in log
     assert _APP_IMAGE not in _container_state(sandbox).values()
 
@@ -213,3 +245,86 @@ def test_compensation_health_failure_returns_stable_recovery_code(
     assert completed.returncode == 70
     assert "ROLLBACK_FAILED_RECOVERY_FAILED" in completed.stderr
     assert "ROLLBACK_FAILED_RECOVERED" not in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("service", "exists", "running"),
+    (
+        ("APP", True, False),
+        ("OCR", False, False),
+    ),
+)
+def test_degraded_current_runtime_can_still_rollback(
+    tmp_path: Path,
+    service: str,
+    exists: bool,
+    running: bool,
+) -> None:
+    """证明 stopped 或缺失的当前核心不会阻止健康回滚。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        service: degraded 核心服务前缀。
+        exists: 调用前是否存在。
+        running: 调用前是否运行。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    _set_core_state(
+        sandbox,
+        service=service,
+        exists=exists,
+        running=running,
+    )
+
+    completed = _run_rollback(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    state = _container_state(sandbox)
+    for prefix in ("APP", "OCR", "QDRANT"):
+        assert state[f"{prefix}_EXISTS"] == "true"
+        assert state[f"{prefix}_RUNNING"] == "true"
+
+
+@pytest.mark.parametrize(
+    ("service", "exists", "running"),
+    (
+        ("APP", True, False),
+        ("OCR", False, False),
+    ),
+)
+def test_target_health_failure_restores_original_degraded_state(
+    tmp_path: Path,
+    service: str,
+    exists: bool,
+    running: bool,
+) -> None:
+    """证明目标不健康时补偿精确恢复调用前 degraded 状态。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        service: degraded 核心服务前缀。
+        exists: 调用前是否存在。
+        running: 调用前是否运行。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    _set_core_state(
+        sandbox,
+        service=service,
+        exists=exists,
+        running=running,
+    )
+
+    completed = _run_rollback(
+        sandbox,
+        FAKE_TARGET_QDRANT_HEALTH="unhealthy",
+    )
+
+    assert completed.returncode == 1
+    assert "ROLLBACK_FAILED_RECOVERED" in completed.stderr
+    state = _container_state(sandbox)
+    assert state[f"{service}_EXISTS"] == str(exists).lower()
+    assert state[f"{service}_RUNNING"] == str(running).lower()
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.original_env
+    assert sandbox.current_link.resolve() == sandbox.new_release

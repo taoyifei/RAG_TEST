@@ -33,6 +33,7 @@ def test_server_scripts_never_build_pull_install_or_delete_volumes() -> None:
             "rollback.sh",
             "verify-offline.sh",
             "backup.sh",
+            "install.sh",
         )
     )
     joined = "\n".join(scripts)
@@ -70,11 +71,12 @@ def test_images_and_package_are_bound_to_git_revision() -> None:
         assert "org.opencontainers.image.revision" in dockerfile
         assert "ARG VCS_REF" in dockerfile
     assert "org.opencontainers.image.revision" in package
-    assert "git rev-parse HEAD" in package
+    assert 'git -C "${repo_root}" rev-parse HEAD' in package
     assert "MODELS.sha256" in ocr_dockerfile
     assert "rag-runtime-" in package
     assert "rag-corpus-" in package
-    assert ".tar.gz.sha256" in package
+    assert 'write_sidecar "${runtime_archive}"' in package
+    assert 'write_sidecar "${corpus_archive}"' in package
     assert 'for archive in "${' not in package
 
 

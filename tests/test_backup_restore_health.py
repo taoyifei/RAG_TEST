@@ -43,7 +43,8 @@ def test_qdrant_health_precedes_app_and_worker_restore(
         " up -d --no-deps --no-build --pull never rag-app"
     )
     app_live = log.index(
-        "curl -fsS --max-time 10 http://127.0.0.1:8088/live"
+        "curl -fsS --connect-timeout 2 --max-time 5 "
+        "http://127.0.0.1:8088/live"
     )
     worker_up = log.index(
         " up -d --no-deps --no-build --pull never rag-worker"
@@ -109,6 +110,38 @@ def test_app_live_failure_after_qdrant_health_does_not_start_worker(
     assert ".State.Health.Status" in log
     assert " up -d --no-deps --no-build --pull never rag-app" in log
     assert " up -d --no-deps --no-build --pull never rag-worker" not in log
+    assert log.count("curl ") == 30
+
+
+def test_app_live_bounded_wait_recovers_before_worker(
+    tmp_path: Path,
+) -> None:
+    """证明 app /live 可在有界重试内恢复。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    sandbox.state_file.write_text(
+        "APP_RUNNING=true\n"
+        "WORKER_RUNNING=true\n"
+        "QDRANT_RUNNING=true\n",
+        encoding="ascii",
+    )
+
+    completed = _run_backup(
+        sandbox,
+        FAKE_APP_LIVE_MODE="fail_then_success",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    log = sandbox.command_log.read_text(encoding="utf-8")
+    assert log.count("curl ") == 3
+    assert log.count("sleep 1") == 2
+    assert log.rindex("curl ") < log.index(
+        " up -d --no-deps --no-build --pull never rag-worker"
+    )
 
 
 @pytest.mark.parametrize("worker_was_running", (False, True))

@@ -8,6 +8,7 @@ default_env_file="${shared_env_dir}/rag.env"
 data_root="${project_root}/data"
 state_path="${project_root}/data/state"
 qdrant_path="${project_root}/data/qdrant"
+manifest_database="${state_path}/manifest.sqlite3"
 backup_root="${project_root}/backups"
 releases_dir="${project_root}/releases"
 current_link="${project_root}/current"
@@ -66,6 +67,18 @@ container_running_state() {
   else
     printf 'false\n'
   fi
+}
+
+container_image_id() {
+  local container="$1"
+  local image_id
+  image_id="$(docker container inspect \
+    --format '{{.Image}}' "${container}")"
+  if [[ ! "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    echo "容器 image ID 无效：${container}" >&2
+    return 1
+  fi
+  printf '%s\n' "${image_id}"
 }
 
 env_optional_value() {
@@ -132,6 +145,12 @@ compose_file="${active_release}/compose.yaml"
 if [[ ! -f "${compose_file}" || -L "${compose_file}" ]]; then
   fail "当前 release 缺少普通 Compose 文件。"
 fi
+release_id="$(cat "${active_release}/RELEASE_ID")"
+source_revision="$(cat "${active_release}/SOURCE_REVISION")"
+if [[ ! "${release_id}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ \
+  || ! "${source_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+  fail "当前 release 身份无效。"
+fi
 
 final_dir="${backup_root}/${backup_id}"
 if [[ -e "${final_dir}" || -L "${final_dir}" ]]; then
@@ -150,6 +169,14 @@ port="${port:-8088}"
 if [[ ! "${port}" =~ ^[0-9]+$ ]] || ((port < 1 || port > 65535)); then
   fail "RAG_PORT 无效。"
 fi
+active_env_sha256="$(sha256sum "${env_file}" | awk '{print $1}')"
+app_image_id="$(container_image_id rag-app)" \
+  || fail "无法读取 app image ID。"
+ocr_image_id="$(container_image_id rag-ocr)" \
+  || fail "无法读取 OCR image ID。"
+qdrant_image_id="$(container_image_id rag-qdrant)" \
+  || fail "无法读取 Qdrant image ID。"
+created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 app_was_running="$(container_running_state rag-app)"
 worker_was_running="$(container_running_state rag-worker)"
@@ -209,6 +236,23 @@ wait_for_qdrant_health() {
   return 1
 }
 
+wait_for_app_live() {
+  local attempt
+  local max_attempts=30
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    if [[ "$(container_running_state rag-app)" == "true" ]] \
+      && curl -fsS --connect-timeout 2 --max-time 5 \
+        "http://127.0.0.1:${port}/live" >/dev/null; then
+      return 0
+    fi
+    if ((attempt < max_attempts)); then
+      sleep 1
+    fi
+  done
+  echo "恢复后的 rag-app /live 在固定期限内未成功。" >&2
+  return 1
+}
+
 verify_original_service_set() {
   local actual
   local expected
@@ -240,12 +284,7 @@ restore_services() {
       echo "恢复服务失败：rag-app" >&2
       return 1
     fi
-    if [[ "$(container_running_state rag-app)" != "true" ]] \
-      || ! curl -fsS --max-time 10 \
-        "http://127.0.0.1:${port}/live" >/dev/null; then
-      echo "恢复后的 rag-app 运行状态或 /live 检查失败。" >&2
-      return 1
-    fi
+    wait_for_app_live || return 1
   fi
   if [[ "${worker_was_running}" == "true" ]]; then
     if ! start_service rag-worker; then
@@ -360,9 +399,130 @@ archive_directory() {
 
 archive_directory state
 archive_directory qdrant
+python3 - \
+  "${temporary_dir}/BACKUP_METADATA.json" \
+  "${created_at}" \
+  "${release_id}" \
+  "${source_revision}" \
+  "${app_image_id}" \
+  "${ocr_image_id}" \
+  "${qdrant_image_id}" \
+  "${active_env_sha256}" \
+  "${temporary_dir}/state.tar.gz" \
+  "${temporary_dir}/qdrant.tar.gz" \
+  "${manifest_database}" <<'PY'
+import hashlib
+import json
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+(
+    output_value,
+    created_at,
+    release_id,
+    source_revision,
+    app_image_id,
+    ocr_image_id,
+    qdrant_image_id,
+    active_env_sha256,
+    state_value,
+    qdrant_value,
+    database_value,
+) = sys.argv[1:]
+sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
+image_pattern = re.compile(r"^sha256:[0-9a-f]{64}$")
+identifier_pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+if (
+    re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T"
+        r"[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+        created_at,
+    )
+    is None
+    or identifier_pattern.fullmatch(release_id) is None
+    or re.fullmatch(r"[0-9a-f]{40}", source_revision) is None
+    or sha256_pattern.fullmatch(active_env_sha256) is None
+    or any(
+        image_pattern.fullmatch(value) is None
+        for value in (app_image_id, ocr_image_id, qdrant_image_id)
+    )
+):
+    raise ValueError("备份身份字段无效。")
+archives = {}
+for name, raw_path in (
+    ("state", state_value),
+    ("qdrant", qdrant_value),
+):
+    path = Path(raw_path)
+    if not path.is_file() or path.is_symlink() or path.stat().st_size == 0:
+        raise ValueError("备份归档必须是非空普通文件。")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    archives[name] = {"filename": path.name, "sha256": digest.hexdigest()}
+active_manifest = None
+database = Path(database_value)
+if database.is_file() and not database.is_symlink():
+    uri = f"{database.resolve(strict=True).as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(uri, uri=True) as connection:
+            connection.execute("PRAGMA query_only = ON")
+            rows = connection.execute(
+                """
+                SELECT manifest_sha256, collection_name
+                FROM index_manifests
+                WHERE state = 'active'
+                """
+            ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    if len(rows) == 1:
+        manifest_sha256, collection_name = rows[0]
+        if (
+            isinstance(manifest_sha256, str)
+            and sha256_pattern.fullmatch(manifest_sha256) is not None
+            and isinstance(collection_name, str)
+            and identifier_pattern.fullmatch(collection_name) is not None
+        ):
+            active_manifest = {
+                "collection_name": collection_name,
+                "manifest_sha256": manifest_sha256,
+            }
+metadata = {
+    "active_env_sha256": active_env_sha256,
+    "active_manifest": active_manifest,
+    "archives": archives,
+    "created_at": created_at,
+    "images": {
+        "app": app_image_id,
+        "ocr": ocr_image_id,
+        "qdrant": qdrant_image_id,
+    },
+    "release_id": release_id,
+    "schema_version": "1",
+    "source_revision": source_revision,
+}
+output = Path(output_value)
+if output.exists() or output.is_symlink():
+    raise FileExistsError("BACKUP_METADATA.json 已存在。")
+with output.open("x", encoding="utf-8") as stream:
+    json.dump(
+        metadata,
+        stream,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    stream.write("\n")
+    stream.flush()
+PY
 (
   cd "${temporary_dir}"
-  sha256sum state.tar.gz qdrant.tar.gz > MANIFEST.sha256.tmp
+  sha256sum state.tar.gz qdrant.tar.gz BACKUP_METADATA.json \
+    > MANIFEST.sha256.tmp
   chmod 0600 MANIFEST.sha256.tmp
   mv MANIFEST.sha256.tmp MANIFEST.sha256
   sha256sum -c MANIFEST.sha256
@@ -371,6 +531,7 @@ archive_directory qdrant
 for output in \
   "${temporary_dir}/state.tar.gz" \
   "${temporary_dir}/qdrant.tar.gz" \
+  "${temporary_dir}/BACKUP_METADATA.json" \
   "${temporary_dir}/MANIFEST.sha256"; do
   chmod 0600 "${output}"
   if [[ "$(stat -c '%u:%g' "${output}")" \

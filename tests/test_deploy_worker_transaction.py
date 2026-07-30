@@ -23,12 +23,15 @@ class _DeploySandbox:
     root: Path
     script: Path
     env_file: Path
+    active_env: Path
     current_link: Path
     old_release: Path
     new_release: Path
     state_file: Path
     command_log: Path
     binaries: Path
+    original_active: str
+    original_rollback: str
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -44,6 +47,7 @@ def _prepare_sandbox(
 ) -> _DeploySandbox:
     root = tmp_path / "RAG"
     env_dir = root / "shared/env"
+    candidate_dir = env_dir / "candidates"
     data = root / "data"
     state = data / "state"
     qdrant = data / "qdrant"
@@ -52,6 +56,7 @@ def _prepare_sandbox(
     new_release = root / "releases/new"
     for directory in (
         env_dir,
+        candidate_dir,
         state,
         qdrant,
         docs,
@@ -62,8 +67,8 @@ def _prepare_sandbox(
     state.chmod(0o700)
     current_link = root / "current"
     current_link.symlink_to(old_release)
-    env_file = env_dir / "rag.env"
-    env_file.write_text(
+    env_file = candidate_dir / "new.env"
+    candidate_content = (
         "RAG_APP_IMAGE=new-app:new\n"
         "RAG_OCR_IMAGE=new-ocr:new\n"
         "RAG_QDRANT_IMAGE=new-qdrant:new\n"
@@ -72,10 +77,28 @@ def _prepare_sandbox(
         f"RAG_QDRANT_PATH={qdrant}\n"
         f"RAG_DOCS_PATH={docs}\n"
         "RAG_PORT=8088\n"
-        "CUSTOM_SETTING=preserve\n",
-        encoding="utf-8",
+        "CUSTOM_SETTING=candidate-value\n"
     )
+    env_file.write_text(candidate_content, encoding="utf-8")
     env_file.chmod(0o600)
+    active_env = env_dir / "rag.env"
+    original_active = (
+        f"RAG_APP_IMAGE={_OLD_APP_IMAGE}\n"
+        f"RAG_OCR_IMAGE={_OLD_OCR_IMAGE}\n"
+        f"RAG_QDRANT_IMAGE={_OLD_QDRANT_IMAGE}\n"
+        f"RAG_RELEASE_REVISION={_OLD_REVISION}\n"
+        f"RAG_STATE_PATH={state}\n"
+        f"RAG_QDRANT_PATH={qdrant}\n"
+        f"RAG_DOCS_PATH={docs}\n"
+        "RAG_PORT=8088\n"
+        "CUSTOM_SETTING=active-value\n"
+    )
+    active_env.write_text(original_active, encoding="utf-8")
+    active_env.chmod(0o600)
+    rollback_file = env_dir / "rollback-images.env"
+    original_rollback = "OLD_ROLLBACK_STATE=preserve\n"
+    rollback_file.write_text(original_rollback, encoding="utf-8")
+    rollback_file.chmod(0o600)
     (new_release / "RELEASE_ID").write_text("new\n", encoding="ascii")
     (new_release / "SOURCE_REVISION").write_text(
         f"{_NEW_REVISION}\n",
@@ -83,11 +106,11 @@ def _prepare_sandbox(
     )
     (new_release / "IMAGE_ARCHIVES.tsv").write_text(
         "images/docx-rag-linux-amd64.tar\tnew-app:new\t"
-        f"{_NEW_REVISION}\n"
+        f"{_NEW_APP_IMAGE}\t{_NEW_REVISION}\n"
         "images/docx-rag-ocr-linux-amd64.tar\tnew-ocr:new\t"
-        f"{_NEW_REVISION}\n"
+        f"{_NEW_OCR_IMAGE}\t{_NEW_REVISION}\n"
         "images/qdrant-linux-amd64.tar\tnew-qdrant:new\t"
-        f"{_NEW_QDRANT_IMAGE}\n",
+        f"{_NEW_QDRANT_IMAGE}\tqdrant/qdrant@sha256:{'9' * 64}\n",
         encoding="ascii",
     )
     (new_release / "verify-offline.sh").write_text(
@@ -148,12 +171,15 @@ def _prepare_sandbox(
         root=root,
         script=script,
         env_file=env_file,
+        active_env=active_env,
         current_link=current_link,
         old_release=old_release,
         new_release=new_release,
         state_file=state_file,
         command_log=command_log,
         binaries=binaries,
+        original_active=original_active,
+        original_rollback=original_rollback,
     )
 
 
@@ -201,8 +227,20 @@ container_field() {{
 }}
 resolve_image() {{
   case "$1" in
-    new-app:new) echo "{_NEW_APP_IMAGE}" ;;
-    new-ocr:new) echo "{_NEW_OCR_IMAGE}" ;;
+    new-app:new)
+      if [[ "${{FAKE_BAD_LOADED_APP_ID:-0}}" == "1" ]]; then
+        echo "sha256:$(printf '%064d' 6)"
+      else
+        echo "{_NEW_APP_IMAGE}"
+      fi
+      ;;
+    new-ocr:new)
+      if [[ "${{FAKE_BAD_LOADED_OCR_ID:-0}}" == "1" ]]; then
+        echo "sha256:$(printf '%064d' 7)"
+      else
+        echo "{_NEW_OCR_IMAGE}"
+      fi
+      ;;
     new-qdrant:new)
       if [[ "${{FAKE_BAD_LOADED_QDRANT_ID:-0}}" == "1" ]]; then
         echo "sha256:$(printf '%064d' 8)"
@@ -230,6 +268,41 @@ if [[ "$1 $2" == "container inspect" ]]; then
   [[ "${{exists}}" == "true" ]] || exit 1
   if [[ "$*" == *".State.Running"* ]]; then
     container_field "${{container}}" running
+  elif [[ "$*" == *".State.Health.Status"* ]]; then
+    case "${{container}}" in
+      rag-qdrant)
+        if [[ "${{QDRANT_IMAGE}}" == "{_NEW_QDRANT_IMAGE}" ]]; then
+          status="${{FAKE_QDRANT_HEALTH:-healthy}}"
+          marker="${{FAKE_COMMAND_LOG}}.qdrant-health"
+          if [[ "${{status}}" == "starting_then_healthy" \
+            && ! -e "${{marker}}" ]]; then
+            : > "${{marker}}"
+            echo starting
+          elif [[ "${{status}}" == "starting_then_healthy" ]]; then
+            echo healthy
+          else
+            echo "${{status}}"
+          fi
+        else
+          echo healthy
+        fi
+        ;;
+      rag-ocr)
+        if [[ "${{OCR_IMAGE}}" == "{_NEW_OCR_IMAGE}" ]]; then
+          echo "${{FAKE_OCR_HEALTH:-healthy}}"
+        else
+          echo healthy
+        fi
+        ;;
+      rag-app)
+        if [[ "${{APP_IMAGE}}" == "{_NEW_APP_IMAGE}" ]]; then
+          echo "${{FAKE_APP_HEALTH:-healthy}}"
+        else
+          echo healthy
+        fi
+        ;;
+      *) exit 81 ;;
+    esac
   elif [[ "$*" == *".Image"* ]]; then
     container_field "${{container}}" image
   fi
@@ -326,7 +399,10 @@ exit 84
         binaries / "stat",
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"%u"* ]]; then
+path="${@: -1}"
+if [[ "${path}" == *.env || "${path}" == */rollback-images.env ]]; then
+  exec /usr/bin/stat "$@"
+elif [[ "$*" == *"%u"* ]]; then
   echo 10001
 elif [[ "$*" == *"%a"* ]]; then
   echo 700
@@ -350,10 +426,20 @@ exec /usr/bin/find "$@"
         "#!/usr/bin/env bash\nexit 0\n",
     )
     _write_executable(
+        binaries / "sleep",
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
+    _write_executable(
         binaries / "curl",
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'curl %s\n' "$*" >> "${FAKE_COMMAND_LOG}"
+source "${FAKE_CONTAINER_STATE}"
+expected_new_app="sha256:$(printf 'd%.0s' {1..64})"
+if [[ "${FAKE_NEW_CURL_FAIL:-0}" == "1" \
+  && "${APP_IMAGE}" == "${expected_new_app}" ]]; then
+  exit 1
+fi
 [[ "${FAKE_CURL_FAIL:-0}" != "1" ]]
 """,
     )
@@ -367,6 +453,16 @@ if [[ "${FAKE_CURRENT_RENAME_FAIL:-0}" == "1" \
   && "${source_path}" == *"current.new" \
   && "${destination}" == */current ]]; then
   exit 91
+fi
+if [[ "${FAKE_ACTIVE_ENV_REPLACE_FAIL:-0}" == "1" \
+  && "${source_path}" == *".rag.env.active-new."* \
+  && "${destination}" == */shared/env/rag.env ]]; then
+  exit 92
+fi
+if [[ "${FAKE_ROLLBACK_PUBLISH_FAIL:-0}" == "1" \
+  && "${source_path}" == *".rollback-images.env.new."* \
+  && "${destination}" == */rollback-images.env ]]; then
+  exit 93
 fi
 exec /usr/bin/mv "$@"
 """,
@@ -407,7 +503,7 @@ def _state(sandbox: _DeploySandbox) -> dict[str, str]:
 def _env_values(sandbox: _DeploySandbox) -> dict[str, str]:
     return dict(
         line.split("=", maxsplit=1)
-        for line in sandbox.env_file.read_text(
+        for line in sandbox.active_env.read_text(
             encoding="utf-8"
         ).splitlines()
     )
@@ -435,6 +531,16 @@ def _assert_old_runtime_restored(sandbox: _DeploySandbox) -> None:
     assert env["RAG_OCR_IMAGE"] == _OLD_OCR_IMAGE
     assert env["RAG_QDRANT_IMAGE"] == _OLD_QDRANT_IMAGE
     assert env["RAG_RELEASE_REVISION"] == _OLD_REVISION
+    assert (
+        sandbox.active_env.read_text(encoding="utf-8")
+        == sandbox.original_active
+    )
+    assert (
+        sandbox.root.joinpath(
+            "shared/env/rollback-images.env"
+        ).read_text(encoding="utf-8")
+        == sandbox.original_rollback
+    )
 
 
 def _remove_core_runtime(sandbox: _DeploySandbox) -> None:
@@ -473,14 +579,78 @@ def test_running_worker_is_stopped_before_load_and_stays_stopped(
     assert "ROLLBACK_WORKER_WAS_RUNNING=true\n" in rollback
 
 
+def test_success_commits_candidate_then_complete_rollback_state(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    candidate = sandbox.env_file.read_bytes()
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    assert sandbox.active_env.read_bytes() == candidate
+    rollback_file = sandbox.root / "shared/env/rollback-images.env"
+    rollback = rollback_file.read_text(encoding="utf-8")
+    assert "ROLLBACK_SCHEMA_VERSION=2\n" in rollback
+    assert f"ROLLBACK_SOURCE_REVISION={_OLD_REVISION}\n" in rollback
+    assert f"ROLLBACK_APP_IMAGE={_OLD_APP_IMAGE}\n" in rollback
+    assert "ROLLBACK_WORKER_EXISTS=true\n" in rollback
+    assert "ROLLBACK_ENV_SHA256=" in rollback
+    assert "ROLLBACK_ENV_BASE64=" in rollback
+    assert rollback_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_first_deploy_allows_missing_active_env(tmp_path: Path) -> None:
+    sandbox = _prepare_sandbox(
+        tmp_path,
+        worker_exists=False,
+        worker_running=False,
+    )
+    _remove_core_runtime(sandbox)
+    sandbox.active_env.unlink()
+    sandbox.current_link.unlink()
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    assert sandbox.active_env.read_bytes() == sandbox.env_file.read_bytes()
+    assert sandbox.current_link.resolve() == sandbox.new_release
+    assert (
+        sandbox.root.joinpath(
+            "shared/env/rollback-images.env"
+        ).read_text(encoding="utf-8")
+        == sandbox.original_rollback
+    )
+
+
+def test_starting_health_reaches_healthy_before_commit(tmp_path: Path) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_QDRANT_HEALTH="starting_then_healthy",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert sandbox.current_link.resolve() == sandbox.new_release
+
+
 @pytest.mark.parametrize(
     "failure",
     (
         "FAKE_LOAD_FAIL",
+        "FAKE_BAD_LOADED_APP_ID",
+        "FAKE_BAD_LOADED_OCR_ID",
         "FAKE_BAD_LOADED_QDRANT_ID",
         "FAKE_CORE_UP_PARTIAL_FAIL",
         "FAKE_PS_FAIL",
+        "FAKE_QDRANT_HEALTH",
+        "FAKE_OCR_HEALTH",
+        "FAKE_APP_HEALTH",
+        "FAKE_NEW_CURL_FAIL",
+        "FAKE_ACTIVE_ENV_REPLACE_FAIL",
         "FAKE_CURRENT_RENAME_FAIL",
+        "FAKE_ROLLBACK_PUBLISH_FAIL",
     ),
 )
 def test_failure_restores_old_core_worker_env_and_current(
@@ -489,7 +659,8 @@ def test_failure_restores_old_core_worker_env_and_current(
 ) -> None:
     sandbox = _prepare_sandbox(tmp_path)
 
-    completed = _run_deploy(sandbox, **{failure: "1"})
+    value = "unhealthy" if failure.endswith("_HEALTH") else "1"
+    completed = _run_deploy(sandbox, **{failure: value})
 
     assert completed.returncode != 0
     assert "DEPLOY_FAILED_RECOVERED" in completed.stderr

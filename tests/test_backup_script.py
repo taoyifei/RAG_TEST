@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 from dataclasses import dataclass
@@ -49,6 +51,24 @@ def _prepare_sandbox(tmp_path: Path) -> _BackupSandbox:
     ):
         directory.mkdir(parents=True)
     (state / "state.sqlite3").write_bytes(b"sqlite-state")
+    with sqlite3.connect(state / "manifest.sqlite3") as connection:
+        connection.execute(
+            """
+            CREATE TABLE index_manifests (
+                manifest_sha256 TEXT NOT NULL,
+                collection_name TEXT NOT NULL,
+                state TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO index_manifests (
+                manifest_sha256, collection_name, state
+            ) VALUES (?, ?, 'active')
+            """,
+            ("a" * 64, "rag-docx-active-release-a"),
+        )
     (qdrant / "storage.bin").write_bytes(b"qdrant-state")
     env_file = env_dir / "rag.env"
     env_file.write_text("RAG_PORT=8088\nTOKEN=preserve\n", encoding="utf-8")
@@ -59,6 +79,14 @@ def _prepare_sandbox(tmp_path: Path) -> _BackupSandbox:
         "  rag-worker: {image: app, profiles: [index]}\n"
         "  rag-qdrant: {image: qdrant}\n",
         encoding="utf-8",
+    )
+    (active_release / "RELEASE_ID").write_text(
+        "release-a\n",
+        encoding="ascii",
+    )
+    (active_release / "SOURCE_REVISION").write_text(
+        f"{'1' * 40}\n",
+        encoding="ascii",
     )
     (root / "current").symlink_to(active_release)
     script = tmp_path / "backup.sh"
@@ -71,7 +99,6 @@ def _prepare_sandbox(tmp_path: Path) -> _BackupSandbox:
         encoding="utf-8",
     )
     script.chmod(0o755)
-
     binaries = tmp_path / "bin"
     binaries.mkdir()
     state_file = tmp_path / "containers.env"
@@ -96,6 +123,15 @@ write_state() {
   } > "${FAKE_CONTAINER_STATE}"
 }
 if [[ "$1 $2" == "container inspect" ]]; then
+  if [[ "$*" == *".Image"* ]]; then
+    case "${@: -1}" in
+      rag-app) printf 'sha256:%064d\n' 1 ;;
+      rag-ocr) printf 'sha256:%064d\n' 2 ;;
+      rag-qdrant) printf 'sha256:%064d\n' 3 ;;
+      *) exit 41 ;;
+    esac
+    exit 0
+  fi
   if [[ "$*" == *".State.Health.Status"* ]]; then
     count=0
     if [[ -f "${FAKE_HEALTH_COUNT}" ]]; then
@@ -191,7 +227,17 @@ exec /usr/bin/gzip "$@"
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'curl %s\n' "$*" >> "${FAKE_COMMAND_LOG}"
-[[ "${FAKE_CURL_FAIL:-0}" != "1" ]]
+count=0
+if [[ -f "${FAKE_CURL_COUNT}" ]]; then
+  count="$(cat "${FAKE_CURL_COUNT}")"
+fi
+count="$((count + 1))"
+printf '%s\n' "${count}" > "${FAKE_CURL_COUNT}"
+if [[ "${FAKE_APP_LIVE_MODE:-healthy}" == "fail_then_success" ]]; then
+  ((count >= 3))
+else
+  [[ "${FAKE_CURL_FAIL:-0}" != "1" ]]
+fi
 """,
     )
     _write_executable(
@@ -251,6 +297,9 @@ def _run_backup(
             "FAKE_CONTAINER_STATE": str(sandbox.state_file),
             "FAKE_HEALTH_COUNT": str(
                 sandbox.script.parent / "health-count",
+            ),
+            "FAKE_CURL_COUNT": str(
+                sandbox.script.parent / "curl-count",
             ),
         }
     )
@@ -314,7 +363,12 @@ def test_success_creates_private_verified_archives_and_restores_services(
     assert final.is_dir()
     assert (history / "keep").read_text(encoding="ascii") == "keep"
     assert stat.S_IMODE(final.stat().st_mode) == 0o700
-    for filename in ("state.tar.gz", "qdrant.tar.gz", "MANIFEST.sha256"):
+    for filename in (
+        "state.tar.gz",
+        "qdrant.tar.gz",
+        "BACKUP_METADATA.json",
+        "MANIFEST.sha256",
+    ):
         output = final / filename
         assert output.stat().st_size > 0
         assert stat.S_IMODE(output.stat().st_mode) == 0o600
@@ -328,13 +382,34 @@ def test_success_creates_private_verified_archives_and_restores_services(
         text=True,
     )
     assert manifest_check.returncode == 0
+    metadata = json.loads(
+        (final / "BACKUP_METADATA.json").read_text(encoding="utf-8")
+    )
+    assert metadata["release_id"] == "release-a"
+    assert metadata["source_revision"] == "1" * 40
+    assert set(metadata["images"]) == {"app", "ocr", "qdrant"}
+    assert len(metadata["active_env_sha256"]) == 64
+    assert metadata["active_manifest"] == {
+        "collection_name": "rag-docx-active-release-a",
+        "manifest_sha256": "a" * 64,
+    }
+    assert set(metadata["archives"]) == {"state", "qdrant"}
+    assert "TOKEN=preserve" not in json.dumps(metadata)
+    manifest_text = (final / "MANIFEST.sha256").read_text(
+        encoding="utf-8"
+    )
+    assert "BACKUP_METADATA.json" in manifest_text
     assert "APP_RUNNING=true" in _container_states(sandbox)
     assert "WORKER_RUNNING=false" in _container_states(sandbox)
     assert "QDRANT_RUNNING=true" in _container_states(sandbox)
     log = sandbox.command_log.read_text(encoding="utf-8")
     assert "sudo tar --format=posix" in log
     assert " up -d --no-deps --no-build --pull never rag-worker" not in log
-    assert "curl -fsS --max-time 10 http://127.0.0.1:8088/live" in log
+    assert (
+        "curl -fsS --connect-timeout 2 --max-time 5 "
+        "http://127.0.0.1:8088/live"
+        in log
+    )
     assert not tuple(sandbox.backups.glob(".backup-a.incomplete.*"))
 
 

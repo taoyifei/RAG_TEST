@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
+import os
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
 _HASH_BLOCK_BYTES = 1024 * 1024
+_PUBLISH_ARGUMENT_COUNT = 4
 _SHA_LINE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)$")
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
 
 
 def verify_outer_sidecar(archive: Path, sidecar: Path) -> str:
@@ -141,6 +148,58 @@ def safe_extract_bundle(
     return final_path
 
 
+def publish_directory(source: Path, destination: Path) -> None:
+    """在同一真实父目录内原子发布且拒绝覆盖。
+
+    Args:
+        source: 已完整生成的临时目录。
+        destination: 尚不存在的正式目录。
+
+    Returns:
+        无。
+
+    Raises:
+        FileExistsError: 正式目录已存在。
+        OSError: 路径、文件系统或 renameat2 调用无效。
+
+    """
+    if not source.is_dir() or source.is_symlink():
+        raise OSError("原子发布源必须是真实目录。")
+    source_parent = source.parent.resolve(strict=True)
+    destination_parent = destination.parent.resolve(strict=True)
+    if source_parent != destination_parent:
+        raise OSError("原子发布要求源和目标位于同一真实父目录。")
+    if source.name in {"", ".", ".."} or destination.name in {"", ".", ".."}:
+        raise OSError("原子发布目录名无效。")
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = libc.renameat2
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        _AT_FDCWD,
+        os.fsencode(source),
+        _AT_FDCWD,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise FileExistsError(
+            error_number,
+            "原子发布目标已存在。",
+            destination,
+        )
+    raise OSError(error_number, os.strerror(error_number), destination)
+
+
 def _validate_members(
     members: list[tarfile.TarInfo],
     expected_top_level: str,
@@ -221,6 +280,13 @@ def main() -> int:
         成功时返回 0；异常由调用方看到并产生非零退出码。
 
     """
+    if len(sys.argv) > 1 and sys.argv[1] == "publish":
+        if len(sys.argv) != _PUBLISH_ARGUMENT_COUNT:
+            raise ValueError("publish 必须提供 source 和 destination。")
+        destination = Path(sys.argv[3])
+        publish_directory(Path(sys.argv[2]), destination)
+        print(f"published={destination}")
+        return 0
     arguments = _arguments()
     extracted = safe_extract_bundle(
         arguments.archive,

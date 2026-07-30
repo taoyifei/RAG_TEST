@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import os
 import stat
 import subprocess
@@ -62,14 +64,30 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     env_file.write_text(original_env, encoding="utf-8")
     env_file.chmod(0o600)
     rollback_file = shared_env / "rollback-images.env"
+    rollback_env = (
+        original_env.replace("sha256:" + "d" * 64, _APP_IMAGE)
+        .replace("sha256:" + "e" * 64, _OCR_IMAGE)
+        .replace("sha256:" + "f" * 64, _QDRANT_IMAGE)
+        .replace("2" * 40, _SOURCE_REVISION)
+    )
+    rollback_env_bytes = rollback_env.encode()
     original_rollback = (
+        "ROLLBACK_SCHEMA_VERSION=2\n"
         f"ROLLBACK_RELEASE_DIR={old_release}\n"
         f"ROLLBACK_APP_IMAGE={_APP_IMAGE}\n"
         f"ROLLBACK_OCR_IMAGE={_OCR_IMAGE}\n"
         f"ROLLBACK_QDRANT_IMAGE={_QDRANT_IMAGE}\n"
+        "ROLLBACK_WORKER_EXISTS=true\n"
         "ROLLBACK_WORKER_WAS_RUNNING=false\n"
+        f"ROLLBACK_WORKER_IMAGE={_APP_IMAGE}\n"
+        f"ROLLBACK_SOURCE_REVISION={_SOURCE_REVISION}\n"
+        "ROLLBACK_ENV_SHA256="
+        f"{hashlib.sha256(rollback_env_bytes).hexdigest()}\n"
+        "ROLLBACK_ENV_BASE64="
+        f"{base64.b64encode(rollback_env_bytes).decode()}\n"
     )
     rollback_file.write_text(original_rollback, encoding="utf-8")
+    rollback_file.chmod(0o600)
     (old_release / "verify-offline.sh").write_text(
         "#!/usr/bin/env bash\nexit 0\n",
         encoding="utf-8",
@@ -97,11 +115,11 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     )
     (old_release / "IMAGE_ARCHIVES.tsv").write_text(
         "images/docx-rag-linux-amd64.tar\tapp\t"
-        f"{_SOURCE_REVISION}\n"
+        f"{_APP_IMAGE}\t{_SOURCE_REVISION}\n"
         "images/docx-rag-ocr-linux-amd64.tar\tocr\t"
-        f"{_SOURCE_REVISION}\n"
+        f"{_OCR_IMAGE}\t{_SOURCE_REVISION}\n"
         "images/qdrant-linux-amd64.tar\tqdrant\t"
-        f"{_QDRANT_IMAGE}\n",
+        f"{_QDRANT_IMAGE}\tqdrant/qdrant@{_QDRANT_REGISTRY_DIGEST}\n",
         encoding="ascii",
     )
     (new_release / "compose.yaml").write_text(
@@ -128,8 +146,11 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     docker_log = tmp_path / "docker.log"
     state_file = tmp_path / "container-state.env"
     state_file.write_text(
+        "APP_EXISTS=true\n"
         f"APP_IMAGE={'sha256:' + 'd' * 64}\n"
+        "OCR_EXISTS=true\n"
         f"OCR_IMAGE={'sha256:' + 'e' * 64}\n"
+        "QDRANT_EXISTS=true\n"
         f"QDRANT_IMAGE={'sha256:' + 'f' * 64}\n"
         f"WORKER_IMAGE={'sha256:' + 'd' * 64}\n"
         "APP_RUNNING=true\n"
@@ -147,8 +168,11 @@ printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"
 source "${FAKE_STATE_FILE}"
 write_state() {
   {
+    printf 'APP_EXISTS=%q\n' "${APP_EXISTS}"
     printf 'APP_IMAGE=%q\n' "${APP_IMAGE}"
+    printf 'OCR_EXISTS=%q\n' "${OCR_EXISTS}"
     printf 'OCR_IMAGE=%q\n' "${OCR_IMAGE}"
+    printf 'QDRANT_EXISTS=%q\n' "${QDRANT_EXISTS}"
     printf 'QDRANT_IMAGE=%q\n' "${QDRANT_IMAGE}"
     printf 'WORKER_IMAGE=%q\n' "${WORKER_IMAGE}"
     printf 'APP_RUNNING=%q\n' "${APP_RUNNING}"
@@ -178,14 +202,29 @@ fi
 if [[ "$1 $2" == "container inspect" ]]; then
   container="${@: -1}"
   if [[ "$*" != *"--format"* ]]; then
-    [[ "${container}" != "rag-worker" || "${WORKER_EXISTS}" == "true" ]]
+    case "${container}" in
+      rag-app) [[ "${APP_EXISTS}" == "true" ]] ;;
+      rag-ocr) [[ "${OCR_EXISTS}" == "true" ]] ;;
+      rag-qdrant) [[ "${QDRANT_EXISTS}" == "true" ]] ;;
+      rag-worker) [[ "${WORKER_EXISTS}" == "true" ]] ;;
+      *) exit 42 ;;
+    esac
     exit
   fi
   if [[ "$*" == *".State.Running"* ]]; then
     case "${container}" in
-      rag-app) echo "${APP_RUNNING}" ;;
-      rag-ocr) echo "${OCR_RUNNING}" ;;
-      rag-qdrant) echo "${QDRANT_RUNNING}" ;;
+      rag-app)
+        [[ "${APP_EXISTS}" == "true" ]] || exit 42
+        echo "${APP_RUNNING}"
+        ;;
+      rag-ocr)
+        [[ "${OCR_EXISTS}" == "true" ]] || exit 42
+        echo "${OCR_RUNNING}"
+        ;;
+      rag-qdrant)
+        [[ "${QDRANT_EXISTS}" == "true" ]] || exit 42
+        echo "${QDRANT_RUNNING}"
+        ;;
       rag-worker)
         [[ "${WORKER_EXISTS}" == "true" ]] || exit 42
         echo "${WORKER_RUNNING}"
@@ -194,11 +233,53 @@ if [[ "$1 $2" == "container inspect" ]]; then
     esac
     exit 0
   fi
+  if [[ "$*" == *".State.Health.Status"* ]]; then
+    case "${container}" in
+      rag-app)
+        [[ "${APP_EXISTS}" == "true" ]] || exit 42
+        if [[ "${APP_IMAGE}" == "${FAKE_APP_IMAGE}" ]]; then
+          echo "${FAKE_TARGET_APP_HEALTH:-healthy}"
+        else
+          echo healthy
+        fi
+        ;;
+      rag-ocr)
+        [[ "${OCR_EXISTS}" == "true" ]] || exit 42
+        if [[ "${OCR_IMAGE}" == "${FAKE_OCR_IMAGE}" ]]; then
+          echo "${FAKE_TARGET_OCR_HEALTH:-healthy}"
+        else
+          echo healthy
+        fi
+        ;;
+      rag-qdrant)
+        [[ "${QDRANT_EXISTS}" == "true" ]] || exit 42
+        if [[ "${QDRANT_IMAGE}" == "${FAKE_QDRANT_IMAGE}" ]]; then
+          echo "${FAKE_TARGET_QDRANT_HEALTH:-healthy}"
+        else
+          echo healthy
+        fi
+        ;;
+      *) exit 42 ;;
+    esac
+    exit 0
+  fi
   case "${container}" in
-    rag-app) actual="${APP_IMAGE}" ;;
-    rag-ocr) actual="${OCR_IMAGE}" ;;
-    rag-qdrant) actual="${QDRANT_IMAGE}" ;;
-    rag-worker) actual="${WORKER_IMAGE}" ;;
+    rag-app)
+      [[ "${APP_EXISTS}" == "true" ]] || exit 42
+      actual="${APP_IMAGE}"
+      ;;
+    rag-ocr)
+      [[ "${OCR_EXISTS}" == "true" ]] || exit 42
+      actual="${OCR_IMAGE}"
+      ;;
+    rag-qdrant)
+      [[ "${QDRANT_EXISTS}" == "true" ]] || exit 42
+      actual="${QDRANT_IMAGE}"
+      ;;
+    rag-worker)
+      [[ "${WORKER_EXISTS}" == "true" ]] || exit 42
+      actual="${WORKER_IMAGE}"
+      ;;
     *) exit 42 ;;
   esac
   if [[ "${FAKE_BAD_CONTAINER:-}" == "${container}" \
@@ -220,8 +301,17 @@ if [[ "$1" == "compose" ]]; then
   if [[ "$*" == *" config -q"* || "$*" == *" ps"* ]]; then
     exit 0
   fi
-  if [[ "$*" == *" stop rag-worker"* ]]; then
-    WORKER_RUNNING=false
+  if [[ "$*" == *" stop "* ]]; then
+    for service in rag-app rag-ocr rag-qdrant rag-worker; do
+      if [[ "$*" == *" ${service}"* ]]; then
+        case "${service}" in
+          rag-app) APP_RUNNING=false ;;
+          rag-ocr) OCR_RUNNING=false ;;
+          rag-qdrant) QDRANT_RUNNING=false ;;
+          rag-worker) WORKER_RUNNING=false ;;
+        esac
+      fi
+    done
     write_state
     exit 0
   fi
@@ -229,12 +319,21 @@ if [[ "$1" == "compose" ]]; then
     app="$(awk -F= '$1 == "RAG_APP_IMAGE" {print $2}' "${env_file}")"
     ocr="$(awk -F= '$1 == "RAG_OCR_IMAGE" {print $2}' "${env_file}")"
     qdrant="$(awk -F= '$1 == "RAG_QDRANT_IMAGE" {print $2}' "${env_file}")"
-    APP_IMAGE="${app}"
-    OCR_IMAGE="${ocr}"
-    QDRANT_IMAGE="${qdrant}"
-    APP_RUNNING=true
-    OCR_RUNNING=true
-    QDRANT_RUNNING=true
+    if [[ "$*" == *" rag-app"* ]]; then
+      APP_EXISTS=true
+      APP_IMAGE="${app}"
+      APP_RUNNING=true
+    fi
+    if [[ "$*" == *" rag-ocr"* ]]; then
+      OCR_EXISTS=true
+      OCR_IMAGE="${ocr}"
+      OCR_RUNNING=true
+    fi
+    if [[ "$*" == *" rag-qdrant"* ]]; then
+      QDRANT_EXISTS=true
+      QDRANT_IMAGE="${qdrant}"
+      QDRANT_RUNNING=true
+    fi
     if [[ "$*" == *"rag-worker"* ]]; then
       WORKER_EXISTS=true
       WORKER_IMAGE="${app}"
@@ -249,9 +348,17 @@ if [[ "$1" == "compose" ]]; then
   fi
 fi
 if [[ "$1 $2 $3" == "container rm -f" ]]; then
-  WORKER_EXISTS=false
-  WORKER_RUNNING=false
-  WORKER_IMAGE=
+  case "${@: -1}" in
+    rag-app) APP_EXISTS=false; APP_RUNNING=false ;;
+    rag-ocr) OCR_EXISTS=false; OCR_RUNNING=false ;;
+    rag-qdrant) QDRANT_EXISTS=false; QDRANT_RUNNING=false ;;
+    rag-worker)
+      WORKER_EXISTS=false
+      WORKER_RUNNING=false
+      WORKER_IMAGE=
+      ;;
+    *) exit 44 ;;
+  esac
   write_state
   exit 0
 fi
@@ -263,6 +370,11 @@ exit 44
         """#!/usr/bin/env bash
 set -euo pipefail
 printf 'curl %s\n' "$*" >> "${FAKE_DOCKER_LOG}"
+source "${FAKE_STATE_FILE}"
+if [[ "${FAKE_TARGET_CURL_FAIL:-0}" == "1" \
+  && "${APP_IMAGE}" == "${FAKE_APP_IMAGE}" ]]; then
+  exit 1
+fi
 if [[ "${FAKE_CURL_FAIL_ONCE:-0}" == "1" \
   && ! -e "${FAKE_CURL_COUNT}" ]]; then
   : > "${FAKE_CURL_COUNT}"
@@ -301,6 +413,10 @@ if [[ "${FAKE_CORRUPT_ENV_AFTER_CURRENT:-0}" == "1" \
 fi
 """,
     )
+    _write_executable(
+        binaries / "sleep",
+        "#!/usr/bin/env bash\nexit 0\n",
+    )
     return _Sandbox(
         root=root,
         script=script,
@@ -338,6 +454,8 @@ def _run_rollback(
             "FAKE_ENV_FILE": str(sandbox.env_file),
             "FAKE_CURRENT_LINK": str(sandbox.current_link),
             "FAKE_APP_IMAGE": _APP_IMAGE,
+            "FAKE_OCR_IMAGE": _OCR_IMAGE,
+            "FAKE_QDRANT_IMAGE": _QDRANT_IMAGE,
             "FAKE_SOURCE_REVISION": _SOURCE_REVISION,
         }
     )
@@ -364,9 +482,10 @@ def test_rollback_revalidates_old_release_and_image_identity() -> None:
     script = _rollback_script()
 
     for required in (
-        'bash "${rollback_release_dir}/verify-offline.sh"',
+        'bash "${rollback_release}/verify-offline.sh"',
         "SOURCE_REVISION",
-        "QDRANT_SOURCE_IMAGE",
+        "ROLLBACK_ENV_SHA256",
+        "ROLLBACK_ENV_BASE64",
         "docker compose",
         "config -q",
         "org.opencontainers.image.revision",
@@ -378,10 +497,10 @@ def test_rollback_atomically_persists_only_release_image_keys() -> None:
     script = _rollback_script()
 
     assert "rag.env.rollback-new" in script
-    assert "rag.env.rollback-old" in script
+    assert "rag.env.rollback-original" in script
     assert "chmod 0600" in script
     assert "RAG_RELEASE_REVISION" in script
-    assert 'mv "${new_env}" "${env_file}"' in script
+    assert 'mv -T "${active_new}" "${active_env}"' in script
     assert "sed -i" not in script
 
 
@@ -390,9 +509,9 @@ def test_rollback_preserves_worker_state_and_compensates_metadata() -> None:
 
     assert ".State.Running" in script
     assert "--profile index" in script
-    assert "restore_compensation_runtime" in script
-    assert "restore_compensation_metadata" in script
-    assert "verify_persisted_state" in script
+    assert "restore_original_runtime" in script
+    assert "restore_original_metadata" in script
+    assert "verify_rollback_target" in script
     assert 'env \\\n  RAG_APP_IMAGE=' not in script
 
 
@@ -414,9 +533,12 @@ def test_success_persists_images_and_normal_restart_uses_them(
     assert stat.S_IMODE(sandbox.env_file.stat().st_mode) == 0o600
     assert sandbox.current_link.resolve() == sandbox.old_release
     log = sandbox.docker_log.read_text(encoding="utf-8")
-    assert log.count(" up -d --no-build --pull never") == 2
+    assert log.count(" up -d --no-build --pull never") == 1
     up_calls = [line for line in log.splitlines() if " up -d " in line]
-    assert all("rag-worker" not in call for call in up_calls)
+    assert len(up_calls) == 1
+    assert "--profile index" in up_calls[0]
+    assert "rag-worker" in up_calls[0]
+    assert " stop rag-worker" in log
     assert (
         sandbox.rollback_file.read_text(encoding="utf-8")
         == sandbox.original_rollback
