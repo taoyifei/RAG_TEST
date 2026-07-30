@@ -132,6 +132,25 @@ class JobStore:
             row = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()
         return int(_require_row(row)[0])
 
+    def list_jobs(self) -> tuple[Job, ...]:
+        """列出全部任务的不可变快照。
+
+        Args:
+            无参数。
+
+        Returns:
+            按创建时间和 job ID 稳定排序的任务元组。
+
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                ORDER BY created_at, job_id
+                """
+            ).fetchall()
+        return tuple(_job_from_row(row) for row in rows)
+
     def claim_next_job(
         self,
         *,

@@ -11,12 +11,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import uvicorn
+from qdrant_client import QdrantClient
 
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.assets import AssetPaths, verify_offline_assets
+from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
+from rag_app.manifest import ManifestRepository
 from rag_app.runtime import build_runtime, load_pipeline
 from rag_app.settings import RuntimeSettings
-from rag_app.state import JobKind, JobState
+from rag_app.state import JobKind, JobState, StateStore
 from rag_app.worker_runtime import build_worker_runtime
 
 __all__ = ["BuildInfo", "build_info", "main"]
@@ -68,6 +71,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     read_only_result = _run_read_only_command(arguments)
     if read_only_result is not None:
         return read_only_result
+    if arguments.command == "index-gc":
+        return _run_index_gc(
+            apply=arguments.apply,
+            collection_prefix=arguments.collection_prefix,
+        )
+    return _run_runtime_command(arguments)
+
+
+def _run_runtime_command(arguments: argparse.Namespace) -> int:
+    """执行需要完整应用运行时的命令。
+
+    Args:
+        arguments: 已解析且未被只读或 GC 入口处理的参数。
+
+    Returns:
+        服务、worker 或索引任务的退出码。
+
+    """
     if arguments.command == "serve":
         verify_offline_assets(_default_asset_paths())
         settings = RuntimeSettings()  # type: ignore[call-arg]
@@ -173,6 +194,84 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
     return None
 
 
+def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
+    """规划或显式执行本地索引垃圾回收。
+
+    Args:
+        apply: 为 True 时执行计划；否则只输出 dry-run。
+        collection_prefix: 单索引 worker 使用的物理 collection 前缀。
+
+    Returns:
+        dry-run 或全部执行成功为 0；任一删除失败为 1。
+
+    """
+    settings = RuntimeSettings()  # type: ignore[call-arg]
+    pipeline = load_pipeline(settings.pipeline_path)
+    client = QdrantClient(
+        url=settings.qdrant_url,
+        api_key=settings.qdrant_api_key.get_secret_value(),
+        timeout=10,
+        check_compatibility=False,
+    )
+    try:
+        collector = IndexGarbageCollector(
+            client=client,
+            manifests=ManifestRepository(settings.manifest_database),
+            control=StateStore(settings.state_database),
+            config=GarbageCollectorConfig(
+                alias_name=settings.qdrant_alias,
+                index_state_dir=settings.index_state_dir,
+                collection_prefix=collection_prefix,
+                dense_dimension=pipeline.embedding_dimension,
+                pipeline_fingerprint=pipeline.fingerprint(),
+                index_revision=pipeline.index_revision,
+            ),
+        )
+        plan = collector.plan()
+        items = [
+            {
+                "id": item.stable_id,
+                "kind": item.kind.value,
+                "reason": item.reason,
+            }
+            for item in plan.items
+        ]
+        if not apply:
+            _print_json({"items": items, "mode": "dry-run"})
+            return 0
+        report = collector.apply(plan)
+        results = [asdict(result) for result in report.results]
+        _print_json({"items": items, "mode": "apply", "results": results})
+        successful = {"deleted", "already_absent"}
+        return (
+            0
+            if all(result.status in successful for result in report.results)
+            else 1
+        )
+    finally:
+        client.close()
+
+
+def _print_json(payload: object) -> None:
+    """输出稳定且紧凑的 JSON。
+
+    Args:
+        payload: 只含非敏感管理摘要的 JSON 可序列化对象。
+
+    Returns:
+        无返回值。
+
+    """
+    print(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
 def _parser() -> argparse.ArgumentParser:
     """构建所有 CLI 子命令共享的参数解析器。
 
@@ -217,6 +316,15 @@ def _parser() -> argparse.ArgumentParser:
     index.add_argument(
         "--worker-id",
         default="index-cli",
+    )
+    index_gc = subparsers.add_parser(
+        "index-gc",
+        help="默认 dry-run 规划安全索引垃圾回收。",
+    )
+    index_gc.add_argument("--apply", action="store_true")
+    index_gc.add_argument(
+        "--collection-prefix",
+        default="rag-docx",
     )
     selfcheck = subparsers.add_parser(
         "asset-selfcheck",

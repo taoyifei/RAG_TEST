@@ -36,6 +36,20 @@ git diff --check
 默认 docstring 命令检查 `src/rag_app`、`evaluation`、`scripts` 全量 Python；
 只有显式 `--changed` 才缩小到当前新增或修改文件。
 
+## 索引垃圾回收
+
+`index-gc` 默认只生成无副作用计划，只有显式传入 `--apply` 才删除已证明不再被
+alias、manifest、回滚窗口或任务引用的 collection、state 和 snapshot：
+
+```bash
+rag-app index-gc
+rag-app index-gc --apply
+```
+
+存在 pending/running 索引任务或执行期间控制面发生漂移时，命令拒绝继续。
+输出仅含稳定对象标识、原因和状态，不含正文、文件路径或配置内容。失败项可在
+故障排除后重跑；collection 删除失败时不会先删除对应 state。
+
 section-aware chunking 的规则和定参边界见
 `design/public/chunking-strategy.md`。在只读 DOCX 上执行四候选结构审计：
 

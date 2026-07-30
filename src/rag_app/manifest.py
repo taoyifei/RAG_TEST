@@ -422,6 +422,50 @@ class ManifestRepository:
             return None
         return _stored_from_row(row)
 
+    def list_all(self) -> tuple[StoredManifest, ...]:
+        """列出全部物理 collection 的当前 manifest 记录。
+
+        Args:
+            无参数。
+
+        Returns:
+            按 collection 名称稳定排序的不可变 manifest 元组。
+
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM index_manifests
+                ORDER BY collection_name
+                """
+            ).fetchall()
+        return tuple(_stored_from_row(row) for row in rows)
+
+    def snapshot_references(self) -> frozenset[tuple[str, str]]:
+        """返回当前和历史 manifest 登记的全部 snapshot 引用。
+
+        Args:
+            无参数。
+
+        Returns:
+            `(collection_name, snapshot_name)` 的不可变集合。
+
+        """
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT collection_name, snapshot_name
+                FROM index_manifests
+                UNION
+                SELECT collection_name, snapshot_name
+                FROM manifest_revisions
+                """
+            ).fetchall()
+        return frozenset(
+            (str(row["collection_name"]), str(row["snapshot_name"]))
+            for row in rows
+        )
+
     def require_compatible(
         self,
         *,
