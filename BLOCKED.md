@@ -1,5 +1,30 @@
 # 阻塞项
 
+## P0：真实 Git index 原始字节 SHA 无法恢复到任务 0 基线
+
+- 任务 0 记录的 `.git/index` SHA256 为
+  `dee80a74563a99d765fb3d34ce87860a6bf068a73ed20d7bfadcbd76d3be8b8f`；
+  最终只读复核为
+  `19f4940557b5294103c562db4909e7127f659496430e4b918d43294352779a9a`。
+- 当前 `git diff --cached --quiet` 退出 0，`git write-tree` 与
+  `HEAD^{tree}` 均为 `96df5fdd1c51f7be7482be4d1878766324ac4b12`，HEAD 仍为
+  `49c34074a0553711bae4796aeb42da3916f31623`；因此 staged 内容和索引逻辑树
+  未改变，差异只存在于 index 原始字节/缓存元数据层。
+- 本轮发布扫描始终使用独立 `GIT_INDEX_FILE`，最终候选 236 个文件、
+  violations=0，临时 index 已精确删除；没有对真实 index 执行 add/reset。
+- 白名单收敛终审期间，只读 `git status` 的缓存刷新使原始字节 SHA 再变为
+  `3533a1c76120079ee84c02d8703db657a73c1ff084441ed3b49620ddb6555ea6`；
+  最终临时扫描前后均保持该值。`git write-tree` 与 `HEAD^{tree}` 仍同为
+  `96df5fdd1c51f7be7482be4d1878766324ac4b12`，staged 仍为 0，因此阻塞性质
+  未变：只有缺失的任务 0 原始 index 字节副本才能满足字面 SHA 条件。
+- 任务 0 的原始 index 字节副本已不在文件系统中，SHA256 不能反推出原文件；
+  为避免覆盖用户真实 Git index，本轮不执行 `read-tree`、复制或其他写回。
+  这不影响源码和 staged=0，但未满足任务书“真实 Git index 摘要不变”的字面
+  完成条件，需由持有任务 0 index 备份的一方恢复后重新核验。
+- 2026-07-30：完整交付说明后，用户再次明确要求 commit 并 push，视为接受该
+  原始字节差异并覆盖仅针对本轮 Agent 的 Git 提交禁令；该历史证据继续保留，
+  但不再阻止本次提交与推送。
+
 ## 2026-07-29 离线发布链任务 0：Windows Git UNC safe.directory 拒绝
 
 - 命令（PowerShell UNC 工作目录）：`git status --porcelain=v1`；退出码 `1`。

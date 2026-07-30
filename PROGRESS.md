@@ -2089,7 +2089,7 @@
   11/11 ASSETS 和 `git diff --check`。
 - [x] 首个临时 index 命令因 PowerShell→WSL 转义失败，输出
   `tracked_files=0` 和 fatal，明确不作为证据；改用临时脚本后首次真实扫描发现
-  fake fixture 的 `TOKEN=preserve` 触发 `violations=1`。改为非凭据
+  fake fixture 的凭据变量字面赋值触发 `violations=1`。改为非凭据
   `CUSTOM_SETTING=preserve` 后对应部署测试仍为 `17 passed`。
 - [x] 最终临时 index 扫描为 `tracked_files=216`，binary/large/local-path/
   private-network/private-path/secret 均为 0、`violations=0`；真实 `.git/index`
@@ -2119,3 +2119,382 @@
 - [x] 首次推送退出 0：`4a8d429..42941ed  main -> main`；随后提交本条
   推送证据并再次推送，最终以远端 `refs/heads/main` 与本地 HEAD 完整 SHA
   一致作为完成证据。
+
+## 2026-07-30 最终生产包一致性任务 0：事实基线
+
+- [x] 起始 HEAD 为预期
+  `49c34074a0553711bae4796aeb42da3916f31623`；工作树为空，
+  tracked=216、untracked/modified/deleted/staged 均为 0；真实 Git index
+  SHA256 为
+  `dee80a74563a99d765fb3d34ce87860a6bf068a73ed20d7bfadcbd76d3be8b8f`。
+- [x] 保护摘要未漂移：docs `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`、
+  artifacts `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`、
+  frozen `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`、
+  results `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`、
+  evidence `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+- [x] 三份冻结配置 SHA256 分别仍为 pipeline `f61a74b0…`、retrieval
+  `267e419f…`、corpus policy `0d6553c1…`；retrieval 保持 provisional。
+  参考仓库 HEAD/tree/tracked 聚合仍为 `03d51db2…` / `84a0a960…` /
+  `44254dff…`，tracked=182、状态为空。
+- [x] 固定 Qdrant 镜像实测为
+  `sha256:0bd98fa…`、`amd64/linux`；临时容器使用 `--pull never`、
+  mounts=0、仅绑定 `127.0.0.1:6333` 并启用测试 API key。
+  未启动依赖时首轮为 `32 failed, 387 passed, 36 warnings`，全部 32 项均为
+  6333 返回 502；依赖就绪后同一完整命令为
+  `419 passed, 36 warnings in 253.86s`，skipped=0。
+- [x] compileall 无输出、Ruff `All checks passed!`、strict mypy
+  `Success: no issues found in 88 source files`、Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/profile
+  Compose、11/11 应用资产及 `git diff --check` 均退出 0。
+- [x] 当前 HEAD 的 release-safety 首次因本文件历史证据含凭据变量字面赋值而
+  `violations=1`；改为等义非赋值描述后为 `tracked_files=216`、
+  `violations=0`。临时 Git index 纳入本轮进度文件后同样为 216/0，
+  真实 index 前后 SHA256 均为 `dee80a…`，临时 index 已删除。
+- [x] 索引调用审计确认：INCREMENTAL 直接选择活动 collection/state；
+  成功 item 会立即调用 `activate_source_version`、rename/delete 会立即修改
+  活动 payload，失败 item 只阻止 `record_active_revision`，不会回滚已成功项；
+  FULL 使用空 previous sources；全量才调用 `FullIndexPublisher`。
+- [x] 租约调用审计确认：control job 在完整 `_run_claimed()` 期间没有
+  heartbeat；local job 只在每个 item 前调用 `renew_job_lease`；
+  `claim_next_job`/`finish_job` 均只校验当前 owner，长 item 可越过租约。
+- [x] 部署调用审计确认：rollback state 在 `perform_deploy` 前正式替换；
+  recovery env 从传入活动/候选混用的 env 复制；current 切换前只校验 running，
+  未等待 Qdrant/OCR/app health；rollback 要求当前三核心全 running。
+- [x] 构建/包审计确认：wheel 不含完整 Git revision，Dockerfile 只校验
+  `VCS_REF` 格式；package 含数量 6、总字节 22358173，并直接向最终
+  artifacts 文件写 tar/sidecar，没有整体原子发布或外置 corpus manifest。
+
+## 2026-07-30 最终生产包一致性：目标、顺序与最大风险（8 行）
+
+1. 先让 full planner 继承可靠 source identity，同时强制所有文档重新构建。
+2. 再把增量改为 snapshot/SQLite backup 驱动的新 collection copy-on-write。
+3. 在统一发布边界上加入 control/local 两层非 daemon 租约 heartbeat。
+4. 随后重做 candidate env、健康提交、rollback state 与 degraded 补偿事务。
+5. 再把 Git HEAD 固化进 wheel，并与 OCI VCS_REF 和三镜像身份交叉校验。
+6. 最后外置 corpus manifest、原子发布完整输出、不可变安装并补 backup 身份。
+7. 最大数据风险是恢复路径把不同 base manifest 的 target 当成同一 job 继续。
+8. 最大运维风险是健康或元数据提交失败后二次补偿留下运行态与持久态分裂。
+
+## 2026-07-30 任务 1：full rebuild source identity
+
+- [x] 红测先加入 full 同路径 update、唯一纯 rename、unchanged 强制重建、
+  新增/删除、重复摘要歧义、rename+update、hint 冲突、输入重排确定性和
+  soft-route 旧 source ID；首次收集因缺少 `plan_full_rebuild` 退出 1。
+- [x] 新 full planner 对同路径身份优先匹配，仅对两侧都唯一的内容摘要继承
+  纯 rename；重复摘要和 rename+update 均不给 hint。所有 discovered 来源都
+  生成 ADD 动作，不产生 UNCHANGED，因而每次 full 都重新解析、编码和写入。
+- [x] `SyncAction.source_id_hint` 已纳入规范 plan digest 与 SQLite 计划持久化；
+  旧 job_items schema 通过幂等加列迁移。StateStore 仅在 hint 格式合法、路径
+  和既有 source ID 都无冲突时采用，否则 fail closed；新来源仍走原分配函数。
+- [x] IndexCoordinator/SyncWorker 只把 planner 的 hint 传给 staging；
+  IndexJobRunner 从活动 manifest 构造只含身份的 previous sources，未读取或
+  复用旧 chunk，最终 manifest 路径、内容 SHA、doc version 和 source ID
+  均来自新 target state。
+- [x] 首轮实现回归为 `1 failed, 20 passed`，唯一差异是测试写反两个中文路径
+  的稳定排序；修正预期顺序并提取 Ruff 指出的长度常量后，索引/状态专项为
+  `21 passed, 5 warnings in 46.75s`。
+- [x] 专项 Ruff `All checks passed!`、strict mypy `17 source files`、
+  changed Google docstring `missing_google_sections=0` 和
+  `git diff --check` 均退出 0；未修改 Parser、检索、生成或三份冻结配置。
+
+## 2026-07-30 任务 2：incremental copy-on-write 发布
+
+- [x] 真实 Qdrant 红测先证明旧实现把 incremental 复用 full collection，
+  且 rename 成功、后续 update 失败后活动 payload 已被改写；首次为
+  `2 failed, 2 warnings in 14.82s`。
+- [x] full/incremental control job 现在都使用由 pipeline fingerprint 与
+  job ID 确定的新物理 collection；incremental 从活动 manifest 冻结 alias、
+  manifest digest、snapshot 名称/checksum、pipeline、source list 和 exact
+  active count，发布前重新核对，任一漂移均失败关闭。
+- [x] Qdrant clone 只接受活动 manifest 精确登记的 snapshot，恢复到不存在的
+  target 后校验 dense/sparse/schema/pipeline 与 source/target exact active
+  count；既有 target 仅在 control job、pipeline 和 base manifest 身份完全
+  一致时恢复，否则拒绝。
+- [x] SQLite collection state 使用只读源连接与 Python backup API 复制，
+  校验 `integrity_check` 和 manifest exact source list，再以不覆盖 hard-link
+  原子发布；未提交事务未进入 clone，目标 state 绑定同一 job/pipeline/base
+  身份，旧 state 在任务路径中未写入。
+- [x] 全部 ADD/UPDATE/RENAME/DELETE 仅作用于 target Qdrant 与 target state；
+  所有 item 成功后统一构造完整 manifest，并复用
+  snapshot → stage manifest → alias → activate manifest 发布事务，不再走
+  same-collection `record_active_revision()`。
+- [x] 真实故障矩阵覆盖两文档第二项失败、rename 成功/update 失败、delete
+  成功/add 失败、snapshot 后 alias 前恢复、alias 后 manifest 前恢复、同一
+  control job 发布后未 finish 的重领收敛，以及成功发布恰好一次 alias 切换。
+  每个失败场景均验证旧 alias、active manifest、旧 Qdrant payload/count 和
+  旧 SQLite source list 不变。
+- [x] 成功路径逐项比较新 manifest 的 source ID/path/doc version 与 target
+  exact active records，并真实切回旧 collection 后再恢复新 target，证明旧
+  collection 可回滚；相关完整回归为
+  `34 passed, 16 warnings in 117.44s`。
+- [x] 专项 compileall 无输出、Ruff `All checks passed!`、strict mypy
+  `10 source files`、Google docstring `missing_google_sections=0` 和
+  `git diff --check` 均退出 0；未修改 Parser、检索、生成或三份冻结配置。
+
+## 2026-07-30 任务 3：control/local lease heartbeat
+
+- [x] 独立红测首次因 `rag_app.state.lease` 不存在而 collection error、退出 1；
+  新 `LeaseHeartbeat` 不依赖第三方，使用非 daemon 线程、单调时钟和可中断
+  Event 调度；间隔为租约四分之一且同时限制在 0.1–30 秒，并始终不超过
+  `lease_seconds / 3`。
+- [x] heartbeat 进入 context 时先用带时区 UTC 同步续租，后台异常只记录稳定
+  失败状态，不保留或输出异常正文；`raise_if_failed()` 在主线程统一抛出
+  `LEASE_LOST`。`close()` 可重复调用并 stop/join，正常、数据库异常和 owner
+  被替换路径均验证无线程泄漏。
+- [x] control heartbeat 覆盖从领取到 control `finish_job`；local heartbeat
+  覆盖 SyncWorker 的完整 plan。单个 `build_chunks` 实际阻塞 1.2 秒、超过
+  1 秒完整租约时，第二 worker 对 control 和 collection state 两层均无法领取；
+  heartbeat 停止后按未来时间可由第二 worker 正常回收。
+- [x] 主线程在每个 plan item 前后、snapshot clone 前后、所有 target Qdrant
+  mutation 前后、create snapshot 前后、alias switch 前后、manifest activate
+  前和两层 finish 前执行租约检查；长 item 内由后台线程续租，不使用无限 sleep。
+- [x] control 续租数据库异常在 build 返回后的首个 mutation 前停止，control
+  job 记录稳定 `LEASE_LOST`，target 保留 job/base staging 身份；旧 alias、
+  active manifest 和旧 collection payload 不变。local 丢租约同样向 control
+  提升为 `LEASE_LOST`，不继续发布。
+- [x] publisher 在 snapshot 后 alias 前丢租约时不切换；alias 后 manifest 前
+  丢租约时补偿恢复旧 alias，target manifest 保持 staging。正常 staged
+  snapshot 恢复仍只切换一次 alias，同 job 重入契约未退化。
+- [x] heartbeat、状态、worker、Qdrant、publisher 和 job runner 合并回归为
+  `35 passed, 20 warnings in 159.03s`；专项 compileall 无输出、Ruff
+  `All checks passed!`、strict mypy `6 source files`、Google docstring
+  `missing_google_sections=0` 和 `git diff --check` 均退出 0。
+
+## 2026-07-30 任务 4：deploy/rollback 完整事务
+
+- [x] 静态事务红测首次为 `3 failed in 0.02s`，分别证明旧 deploy 没有
+  candidate/active 分离与晚提交 rollback state、两脚本没有完整健康门槛、
+  rollback 仍拒绝 degraded 当前运行态。
+- [x] deploy 现在只接受固定
+  `shared/env/candidates/<release-id>.env`，active 固定为
+  `shared/env/rag.env`；两者必须是不同的 0600 普通文件、无 symlink 祖先。
+  candidate revision、三镜像、release 和固定数据路径均在任何容器修改前校验；
+  首次部署允许 active/current 不存在。
+- [x] 升级前把 active env 原字节复制到 0600 临时快照，并核对 current
+  revision、active 三镜像引用解析出的 image ID 与当前容器完全一致。候选中的
+  非镜像配置刻意与 active 不同，所有故障补偿仍从原快照恢复，未从 candidate
+  拼装旧配置。
+- [x] 新 rollback state schema 记录上一 release、完整 env 的 base64 快照与
+  SHA256、三个核心 image ID、worker existence/running/image 和 source
+  revision；单一 0600 文件只在目标三容器 health、app `/live`、candidate
+  env、current 和最终身份全部提交成功后原子替换。
+- [x] deploy/rollback 共用有界健康语义：Qdrant、OCR、app 依次要求
+  `.State.Health.Status=healthy`，`starting` 有固定 30 次上限，
+  `unhealthy` 立即失败，缺容器/缺 health/无效值失败；app `/live` 使用连接与
+  总超时重试，不要求 `/ready`。
+- [x] rollback 不再要求当前核心全 running；调用前分别冻结 app/OCR/Qdrant/
+  worker 的 existence、running 和 image。目标必须全健康，失败补偿则按服务
+  精确恢复缺失、stopped 或 running，并恢复原 worker、active env 和 current；
+  补偿自身失败稳定退出 70。
+- [x] fake-command 反测覆盖成功、首次部署、load/部分 up/ps、三个 health、
+  `/live`、active env/current/rollback state 三个提交点、旧 rollback state
+  字节不变、starting→healthy、app stopped、OCR missing、三种 worker 状态及
+  degraded 补偿；合并回归为 `69 passed in 11.31s`。
+- [x] 两个 Shell 的 `bash -n`、专项 Ruff `All checks passed!` 与
+  `git diff --check` 均退出 0；测试只使用临时目录和 fake command，未访问
+  Docker daemon 或服务器。
+
+## 2026-07-30 任务 5：wheel、OCI 与镜像归档身份闭环
+
+- [x] 红测先以 `ModuleNotFoundError: rag_app.build_identity` 退出 1；新增
+  tracked 开发占位 `_build_revision.py`，其值为 `development-unset`，不符合
+  正式 40 位 revision 格式，因而不能冒充正式构建。
+- [x] `prepare_runtime_wheels.py` 在任何下载/构建前要求含 untracked 文件在内
+  的 clean Git，读取完整小写 HEAD，只复制 tracked 普通文件到临时源码树并在
+  该副本写入 revision；真实源码占位值由测试逐字确认未变。项目 wheel 必须
+  唯一，内嵌 revision 必须存在、格式正确且等于 HEAD。
+- [x] wheelhouse 同步输出 `WHEELS.sha256` 和 `PROJECT_WHEEL.json`；后者只含
+  schema、项目 wheel 名、wheel SHA256 与 source revision。缺 revision、
+  大写/占位格式、旧 wheel 对新 HEAD、正确 wheel及 dirty Git 均有独立测试。
+- [x] 应用 Dockerfile 在离线 pip install 与 pip check 之后导入已安装的
+  `SOURCE_REVISION` 并与 `VCS_REF` 精确比较，不匹配使构建步骤失败；只读
+  `build-info` 仅报告 installed revision、expected revision 和 matches，
+  不输出路径、环境内容或 secret。
+- [x] `IMAGE_ARCHIVES.tsv` 对 app、OCR、Qdrant 统一为 archive path、
+  runtime tag、local image ID、source revision/批准 RepoDigest 四列；
+  verifier 严格检查三行、顺序、四列和字段格式。deploy 在 load 后逐一检查
+  三个实际 ID，并校验 app/OCR revision；rollback 也交叉核对三者身份。
+- [x] fake Docker 故障矩阵中的 app、OCR、Qdrant load 后 ID 漂移都非零并
+  完整恢复旧运行态；任务 5 合并回归为 `69 passed in 8.09s`，未构建镜像。
+- [x] `compileall -q src tests scripts` 无输出、专项 Ruff
+  `All checks passed!`、strict mypy `4 source files`、Google docstring
+  `missing_google_sections=0`、四个相关 Shell 的 `bash -n` 与
+  `git diff --check` 均退出 0。
+
+## 2026-07-30 任务 6：外置 corpus manifest 与原子 package
+
+- [x] package 契约红测先以 `2 failed in 0.02s` 证明旧脚本未要求外置
+  manifest、仍硬编码语料数量/字节数且把双包分散写入 artifacts 根目录。
+- [x] 新 manifest schema 固定 corpus ID、document count、total bytes、
+  有序 path/size/SHA256 和整体 digest；JSON 必须 canonical。扫描递归处理
+  DOCX，拒绝 root/成员 symlink、Zone.Identifier、越界路径与 case-fold
+  冲突，并按相对 POSIX 路径排序。
+- [x] freeze/verify/stage 使用窄职责模块且均少于 400 行；输出由操作员明确
+  指定，默认建议目录已加入 `.gitignore`。测试覆盖 1、6、1000 份合成 DOCX，
+  新增、删除、修改、额外 DOCX、symlink、Zone.Identifier、case-fold 冲突、
+  路径越界和 manifest 篡改；未在进度或阻塞记录私有文件名。
+- [x] package 现在强制绝对 `CORPUS_MANIFEST`，先校验 schema、corpus ID、
+  exact DOCX set、逐文件 size/SHA 与整体摘要；不含真实文件名、固定数量或固定
+  总字节数。复制严格按 manifest 顺序，并把原始 canonical manifest 放入
+  corpus 包。
+- [x] 全部 runtime、corpus、unpacker 与各自 sidecar 在
+  `artifacts/releases/` 的同父目录隐藏 staging 中完成；两个内部 manifest
+  先验证，成包后再安全解包验证外层 sidecar 与内部 exact manifest，并生成、
+  复核 release 级 manifest。
+- [x] Linux `renameat2(RENAME_NOREPLACE)` 只在同一真实父目录原子发布
+  `<release-id>-<corpus-id>`，已存在目标和 rename 竞态均拒绝覆盖。runtime
+  tar 成功后 corpus tar 失败、sidecar 失败时正式目录为零且 staging 被清理；
+  竞态保留竞争方内容，成功仅出现七个完整 release 文件。
+- [x] SBOM 前置、Qdrant canonical RepoDigest、三镜像四列白名单、
+  unpacker sidecar 与双包内部 manifest 均保留；所有 package 测试只用小型
+  合成输入、fake Docker/save/SBOM，未运行真实 package 或访问 daemon。
+- [x] 任务 6 合并回归为 `89 passed in 10.34s`；`compileall` 无输出、
+  Ruff `All checks passed!`、strict mypy `4 source files`、Google docstring
+  `missing_google_sections=0`、五个 Shell 的 `bash -n` 和
+  `git diff --check` 均退出 0。
+
+## 2026-07-30 任务 7：不可变安装与备份身份
+
+- [x] install/backup 契约红测先以 `4 failed in 0.05s` 证明 runtime 未包含
+  原子安装器与 metadata helper、backup 未生成身份元数据且 app 恢复只请求
+  `/live` 一次。
+- [x] 新 `install.sh` 只接受安全解出的 runtime/corpus 绝对目录，再执行
+  runtime `verify-offline.sh` 和 corpus 内部 manifest；拒绝输入/祖先 symlink、
+  `.env.example` 以外的 env 文件、无效 ID、已存在目标、非 0600 外置 active
+  env 和并发安装锁。
+- [x] 安装先在 releases/corpora 各自同一父文件系统的隐藏目录复制；release
+  所有目录设 0555、普通文件 0444、Shell 0555，corpus 目录/文件设
+  0700/0400。两次发布均调用 `RENAME_NOREPLACE`；第二次发生竞态时只清理本
+  事务已发布的 corpus，保留竞争方 release，且不留下伪完整 release/staging。
+- [x] package 已把 install、原子 rename helper 和 backup metadata helper
+  固化进 runtime，`verify-offline.sh` 将三者列为非空普通必需文件；公开部署
+  手册已改为外置 corpus manifest、单一 release 输出目录和 `install.sh`
+  安装，不再手工 `mv`。
+- [x] `BACKUP_METADATA.json` 使用 canonical JSON，记录 schema、UTC 时间、
+  current release ID、完整 source revision、app/OCR/Qdrant 实际 image ID、
+  active env SHA256、state/Qdrant 归档名与 SHA；不含 env 内容或本地路径。
+- [x] 写入服务停止后，metadata helper 以 SQLite `mode=ro` 和
+  `query_only=ON` 尝试读取唯一 active manifest SHA/collection；缺失、schema
+  不可读、多 active 或字段不安全时明确写 `null`，不修改数据库。
+  Metadata 本身以 0600 纳入 `MANIFEST.sha256` 并在正式发布前再次复核。
+- [x] app 恢复现在要求容器 running 且 `/live` 在最多 30 次内成功，每次有
+  connect/总超时；前两次失败第三次成功后才恢复 worker，持续失败恰好请求
+  30 次并稳定退出恢复错误。Qdrant 原有 bounded health 顺序保持不变。
+- [x] Shell/fake-command 测试覆盖成功权限、输入保留、已有目标、unsafe env、
+  release 竞态补偿、完整 metadata、真实只读 active manifest、metadata
+  manifest 绑定、app 延迟恢复/超时及原服务集合；未执行服务器备份或部署。
+- [x] 任务 7 合并回归为 `122 passed in 18.41s`；`compileall` 无输出、
+  Ruff `All checks passed!`、strict mypy `5 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment Shell 的 `bash -n` 与
+  `git diff --check` 均退出 0。
+
+## 2026-07-30 最终完整验收与边界审计
+
+- [x] 唯一完整 pytest 验收退出 0：
+  `499 passed, 45 warnings in 347.60s`，高于任务 0 的 419，skipped=0；
+  warning 类别仍只有既有 `StarletteDeprecationWarning` 与 `UserWarning`，
+  没有新增类别。
+- [x] 指定静态门禁均退出 0：`compileall -q src tests scripts evaluation`
+  无输出；全仓 Ruff `All checks passed!`；strict mypy
+  `Success: no issues found in 96 source files`；默认 Google docstring
+  `missing_google_sections=0`；全部 deployment Shell 的 `bash -n`、
+  `git diff --check` 均无输出。
+- [x] 默认 Compose 与 `--profile index` 两次 `config -q` 均退出 0；
+  应用 `ASSETS.sha256` 11/11 逐项 `OK`。package 中固定语料数量/字节字面量
+  为 0，新增 skip/xfail/todo 为 0。
+- [x] 最终临时 Git index 发布安全扫描先发现两个、再发现一个测试凭据型
+  字面量；改为明确 DUMMY/REPLACE 标记并跑定向测试后，最终为
+  `tracked_files=236`、六类和总 `violations=0`，临时 index 已精确删除。
+- [x] 保护摘要与任务 0 完全相同：docs `36c67e3…`、artifacts
+  `220473c6…`、frozen `63adcd45…`、results `cdb17f0…`、evidence
+  `05b845b9…`；pipeline/retrieval/corpus policy 分别为 `f61a74b0…` /
+  `267e419f…` / `0d6553c1…`，retrieval 仍为 provisional。
+- [x] 参考仓库仍 clean，HEAD/tree/tracked=182/聚合分别为
+  `03d51db2…` / `84a0a960…` / `44254dff…`；当前仓库 HEAD 仍为
+  `49c34074…`，范围外实现为 0，Parser/chunking/retrieval/generation/
+  Query Trace 与三份冻结配置均未修改。
+- [x] 真实 Git staged=0，`git write-tree` 与 `HEAD^{tree}` 都是
+  `96df5fdd…`；但 `.git/index` 原始字节 SHA 为 `19f49405…`，不等于任务 0
+  的 `dee80a74…`。无法从 SHA 恢复已丢失的原字节且未写回真实 index，已置顶
+  记录到 `BLOCKED.md`；这是唯一新增的字面完成条件阻塞。
+- [x] 本轮测试 Qdrant 在删除前复核为批准 v1.18.3 digest、mounts=[]、仅
+  `127.0.0.1:6333`；只删除精确容器
+  `rag-final-consistency-qdrant`，复核已不存在，未删除镜像、卷或网络。
+- [x] 明确未执行 build/buildx、真实 image save/load、真实 package/正式双包、
+  SSH/SCP、`.57/.58/.60`、服务器 backup/restore/rollback、commit/push/pull；
+  所有部署、打包和备份动态测试均为临时目录加 fake command。
+
+## 2026-07-30 白名单收敛修正
+
+- [x] 重新逐字核对任务书后，发现此前新增的 corpus、原子目录、备份元数据和
+  build identity 辅助模块不在精确白名单；已在继续验收前主动纠正，没有扩大
+  修改范围。
+- [x] corpus freeze/verify/stage 全部收敛到唯一允许新增的
+  `scripts/freeze_corpus_manifest.py`；因禁止再拆分新模块，该文件现为 440 行，
+  更正此前“各模块均少于 400 行”的记录，行为与安全断言未放宽。
+- [x] `RENAME_NOREPLACE` 发布收敛到允许修改的 `scripts/offline_bundle.py`；
+  backup metadata 收敛到允许修改的 `deployment/backup.sh` 内嵌只读 Python；
+  build-info 收敛到允许修改的 `src/rag_app/cli.py`。
+- [x] 删除范围外的 `scripts/{corpus_files.py,corpus_manifest.py,
+  atomic_directory.py,backup_metadata.py}` 和
+  `src/rag_app/build_identity.py`；`src/rag_app/state/__init__.py` 已恢复到 HEAD
+  字节内容，lease/collection identity 改为从白名单模块直接导入。
+- [x] 越界模块引用搜索为零；定向回归退出 0：
+  `95 passed in 12.35s`。定向 Ruff 为 `All checks passed!`，mypy 为
+  `Success: no issues found in 5 source files`，Google docstring 为
+  `missing_google_sections=0`，相关 Shell `bash -n` 与 `git diff --check`
+  均退出 0。
+- [x] 本次修正仍未执行 commit/push；当前 `/goal` 明确将二者列为禁止操作。
+
+## 2026-07-30 白名单收敛后的完整验收红证据
+
+- [ ] 第二轮完整 pytest 首次运行真实退出非零，摘要为
+  `2 failed, 497 passed, 45 warnings in 368.72s`；失败分别是 policy change
+  full rebuild 和 registered snapshot clone，均发生在本地 Qdrant HTTP 调用。
+- [x] SQLite 只读复核显示前者稳定记录
+  `INDEX_RESPONSEHANDLINGEXCEPTION`；后者 traceback 为
+  `qdrant_client.http.exceptions.ResponseHandlingException: timed out`。
+  Qdrant 容器仍 running、OOMKilled=false、mounts=[]、仅绑定
+  `127.0.0.1:6333`，日志无 panic/OOM，故没有把该红证据误写成绿。
+- [x] 运行环境同时注入了 localhost HTTP proxy 与非标准 `NO_PROXY=127.*`；
+  traceback 实际经过 `http_proxy.py`，Qdrant 日志对应请求存在约 10 秒空档。
+  下一步先清除代理变量并对两个失败用例做定向复核，不直接重跑全量碰运气。
+
+## 2026-07-30 白名单收敛最终验收
+
+- [x] 清除测试进程的代理变量后，两个原失败用例定向复核退出 0：
+  `2 passed, 2 warnings in 23.28s`；随后使用最后一轮完整验收额度，真实退出码
+  为 0，摘要为 `499 passed, 45 warnings in 343.67s`，skipped=0，warning
+  类别仍只有既有 Starlette deprecation 与本地 Qdrant API-key 提示。
+- [x] 最终静态门禁均退出 0：compileall 无输出，Ruff
+  `All checks passed!`，strict mypy
+  `Success: no issues found in 91 source files`，Google docstring
+  `missing_google_sections=0`，全部 deployment Shell、默认/index profile
+  Compose 和 `git diff --check` 均通过。
+- [x] 资产 SHA 首次从错误的 `deployment/` 工作目录执行，因 manifest 路径按
+  仓库根解释而 11 项均报告无法打开；从仓库根按指定命令纠正后 11/11 全部
+  `OK`，没有修改 manifest 或资产。
+- [x] 最终临时 Git index 纳入全部候选后为 `tracked_files=231`，binary、
+  large、local path、private network、private path、secret 和总
+  `violations` 均为 0；临时 index 已精确删除，真实 index 扫描前后均为
+  `3533a1c7…`。
+- [x] 保护摘要仍为 docs `36c67e3b…`、artifacts `220473c6…`、frozen
+  `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；三份冻结配置为
+  `f61a74b0… / 267e419f… / 0d6553c1…`。参考仓库仍 clean，
+  HEAD/tree/tracked 为 `03d51db2… / 84a0a960… / 44254dff…`。
+- [x] 当前 HEAD 仍为 `49c34074…`，`git write-tree` 与 `HEAD^{tree}` 均为
+  `96df5fdd…`，staged=0、deleted=0；当前修改 38 个 tracked 文件，新增
+  15 个文件，全部命中精确白名单。
+- [x] 临时 Qdrant 删除前为批准 v1.18.3 digest、running、OOMKilled=false、
+  mounts=[] 且仅本机回环端口；已精确删除
+  `rag-final-consistency-qdrant` 并复核不存在，镜像仍在，未删除镜像、卷或网络。
+- [x] 最终仍未执行 build/buildx、真实 image save/load、真实 package/正式双包、
+  SSH/SCP、服务器访问/部署/backup/restore/rollback、commit/push/pull。
+
+## 2026-07-30 用户覆盖提交边界
+
+- [x] 完整交付与阻塞说明后，用户再次明确要求“将代码 commit 并 push”，该指令
+  覆盖本轮任务书中仅针对 Agent 的 commit/push 禁令，并接受已如实记录的真实
+  Git index 原始字节 SHA 差异；不覆盖 build、package、服务器访问或部署禁令。
+- [x] 提交范围仍只包含本轮精确白名单内的索引事务、租约、部署事务、构建身份、
+  corpus manifest/原子发布、对应测试及本进度与阻塞记录。
