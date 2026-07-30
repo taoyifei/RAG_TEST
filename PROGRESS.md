@@ -3154,3 +3154,192 @@
 - [x] 用户在完整验收后明确要求“把代码 commit 并 push”，仅覆盖本任务的
   commit/push 禁令；不扩大到 build、package、服务器访问或其他外部操作。
 - [x] 提交范围继续限定为两份部署文档、对应静态测试和本进度记录。
+
+## 2026-07-30 Query rewrite 与真实模型契约任务 0：当前 HEAD 基线
+
+- [x] 中断后已先读本文件与 `BLOCKED.md`。当前 HEAD 为
+  `1eb05986058f791d7f9b8705911a5219b86be7d9`，`main` 与
+  `origin/main` 同步，工作树和暂存区为空；`git write-tree` 与
+  `HEAD^{tree}` 均为 `43fc81b4006a61de675167865e019d16efe762f7`。
+  该 HEAD 已包含用户在上一阶段明确授权提交的文档身份修复；从本阶段恢复后
+  未再 commit/push。
+- [x] 当前 HEAD 全量 pytest 基线实际为
+  `1 failed, 585 passed, 61 warnings in 567.76s`，skipped=0，达到不少于
+  584 passed 的基线要求。唯一失败是白名单外
+  `test_target_verifier_rejects_corrupt_sqlite_state` 在覆写 SQLite 主文件后
+  未抛错；未修改源码或测试，随后原样定向复核为
+  `1 passed, 1 warning in 5.57s`。因此保留首次全量非绿事实，不把定向通过
+  冒充全量通过；warning 类别仍只有既有 `StarletteDeprecationWarning`
+  与 `UserWarning`。
+- [x] 其余基线门禁退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 93 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、11/11 `deployment/ASSETS.sha256` 和 `git diff --check`
+  均通过。首次 mypy 命令误把配置排除的 `tests/` 显式传入而退出 2，改用
+  仓库既有 `src scripts evaluation` 全量口径后通过，不作为产品失败。
+- [x] 当前 HEAD release-safety 为 `tracked_files=236`，binary、large、
+  local path、private network、private path、secret 与总 `violations`
+  均为 0。
+- [x] 保护摘要为 docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`。
+  retrieval 仍为 `provisional`，embedding/reranker/LLM revision 仍为
+  `pending-server-verification`，未伪造 frozen 或 revision。
+- [x] 本阶段未修改源码、测试、部署实现或冻结配置；未执行 build、package、
+  联网安装、访问 `.57/.58/.60` 或其他服务器操作。
+
+## 2026-07-30 Query rewrite 任务 2：确定性触发规则
+
+- [x] 新测试先在旧实现上真实红灯：
+  `5 failed, 7 deselected in 0.97s`。其中“其他情况怎么处理”证明裸字符
+  `"其"` 会误调用 LLM；时间、序号、继续请求三类证明旧规则漏触发；既有
+  “上述”用例证明 Trace 缺少稳定的 trigger 分类码。
+- [x] 删除裸 `"其"` 子串规则，保留明确短语“其中”；新增四类确定性规则：
+  这个/这些/那个/那些/它/其中/上述/前述/前者/后者归为
+  `REWRITE_TRIGGER_PRONOUN`，刚才/前面/上面/上一条或项或个归为
+  `REWRITE_TRIGGER_TEMPORAL`，`第N种/项/条/个` 归为
+  `REWRITE_TRIGGER_ORDINAL`，有界的继续/再详细/还有吗/然后呢/那怎么办
+  归为 `REWRITE_TRIGGER_CONTINUATION`。
+- [x] “其他、其次、尤其”、仅含“该”或“其”的独立问句以及句末“呢”均不
+  触发。Trace 新增的 `trigger_reason_code` 只保存稳定类别码，不保存命中词
+  或匹配正文；无命中时为 null。改写 revision 已纳入四类规则与正则。
+- [x] 红测修复后为 `5 passed, 7 deselected in 0.89s`；整份 rewrite 测试为
+  `12 passed in 0.65s`。相关 Ruff `All checks passed!`、mypy
+  `Success: no issues found in 2 source files` 与 `git diff --check`
+  均退出 0。
+- [x] 完成审计进一步发现 QueryService 的 SAFE span 只持久化顶层
+  `reason_code`，原实现成功时仍写通用 `REWRITE_OK`，无法留下具体触发类别。
+  先改测试后定向真实红灯为 `7 failed, 13 deselected in 0.87s`；修复后顶层
+  `reason_code` 保存具体 trigger 类别，独立 `rewrite_result_code` 保存
+  `REWRITE_OK`，定向复核为 `7 passed, 13 deselected in 0.90s`。FULL Trace
+  仍保留既有诊断正文，SAFE span 只记录类别和计数，不记录匹配词或正文。
+- [x] 完成审计后的 rewrite、query service、hybrid 和模型契约回归合计
+  `33 passed, 1 warning in 4.98s`；既有 Qdrant warning 类别未变化。
+- [x] 本阶段只修改 rewrite、稳定原因码、对应测试和本进度记录；未改
+  chunking、检索融合、rerank、回答发布协议或冻结配置，也未执行
+  build/package、联网、服务器访问、commit/push。
+
+## 2026-07-30 Query rewrite 任务 3：anchor 漂移守卫
+
+- [x] 新 anchor 测试先在旧实现上真实红灯：
+  `6 failed, 2 passed, 12 deselected in 0.93s`。3号→2号、5%→10%、
+  2026-07-30→2026-07-31、v2→v3、GB/T19001-2016→2015 和
+  “Alpha方案”→“Beta方案”六种漂移均被旧实现错误接受；从选中历史补入
+  A-17 或“Alpha方案”的两个合法用例保持通过。
+- [x] 新守卫从当前问题、选中历史和候选改写中确定性提取并规范化日期、
+  百分比、普通数字、序号、点分条款号、字母数字设备/版本/标准号，以及
+  中文或英文引号中的名称。当前问题的全部 anchor 必须仍存在，改写新增
+  anchor 必须属于 token 预算内的选中历史；校验不读取历史答案。
+- [x] schema 合法但 anchor 缺失、修改或凭空增加时，查询变体只保留原问题，
+  `resolved_query` 回退原问题并记录稳定
+  `REWRITE_ANCHOR_DRIFT`。Trace 不写 anchor 值，只沿用摘要、计数和稳定
+  原因码；anchor 正则已纳入 rewrite revision。
+- [x] 修复后 anchor 定向为 `8 passed, 12 deselected in 0.67s`，整份
+  rewrite 为 `20 passed in 0.66s`。rewrite、query service 和真实 Qdrant
+  hybrid 回归合计 `22 passed, 1 warning in 5.15s`，继续证明原问题与合法
+  改写同时召回、resolved_query 用于检索/重排、回答仍使用原问题。
+  相关 Ruff、2 文件 strict mypy、changed Google docstring 与
+  `git diff --check` 均退出 0。
+- [x] `rewrite.py` 从基线 496 行增至 661 行，超过“手写模块宜 ≤400 行”的
+  建议值；本任务硬白名单不允许新增 anchor 辅助模块，因此保留在唯一允许的
+  rewrite 模块内，并拆成 5 个窄职责私有函数，没有借机修改其他模块。
+- [x] 本阶段仍未改 chunking、索引事务、Dense/BM25、RRF、rerank 参数、
+  回答发布协议或冻结配置；未 build/package、联网、访问服务器、commit/push。
+
+## 2026-07-30 真实模型契约任务 4：用户执行脚本
+
+- [x] 新测试先在当前仓库真实红灯：pytest 收集期因
+  `ModuleNotFoundError: scripts.verify_model_contracts` 退出 1，证明原仓库
+  完全缺少该交付物。新增脚本后首次功能轮为 `10 passed, 1 failed`；唯一
+  失败是 HTTPX 在进入产品代码前拒绝 Mock 的 `Infinity` 序列化，改用明确
+  原始 JSON 夹具后产品的非有限向量拒绝码得到真实覆盖。
+- [x] 新只读 CLI 对 embedding、reranker、LLM 分角色接受 endpoint、model、
+  token 环境变量名、超时和 embedding dimension；只调用 `/health`、
+  `/v1/models` 及该角色的一次最小业务端点，不导入 DOCX/Qdrant 代码，
+  不写文件或数据库，并以 `trust_env=False` 禁止误走环境代理。
+- [x] 三类服务均要求 health=200、models 中 model ID 唯一匹配且 endpoint
+  revision 可从受限字段/响应头提取。embedding 严格校验两条响应的数量、
+  连续 index、配置维度和全部有限数值；reranker 严格校验两条响应的数量、
+  连续 index 和 `[0,1]` 有限分数。
+- [x] LLM 分别发送与生产结构一致的 query rewrite 和 strict evidence answer
+  JSON Schema；两次请求都固定 temperature=0、stream=false、
+  `enable_thinking=false`，只接受单 choice、`finish_reason=stop`、匹配 model、
+  合法 schema 和自洽 prompt/completion/total token 计数。
+- [x] 报告只含 service、净化 endpoint、model、revision、通过项、维度/条数/
+  index、分数范围、finish reason 和 token 计数；不输出 token、问题、prompt
+  或完整响应。失败只输出稳定错误码。MockTransport 最终为
+  `11 passed in 0.05s`，覆盖三角色成功、错 model、错 schema、错维度、
+  非有限向量、reranker 条数/index/分数、截断和 endpoint failure。
+- [x] 脚本 `--help` 退出 0；缺失 token 环境变量的真实 CLI 调用输出仅含
+  `TOKEN_ENV_MISSING` 等脱敏元数据并按预期退出 1。相关 Ruff
+  `All checks passed!`、strict mypy
+  `Success: no issues found in 1 source file`、changed Google docstring
+  `missing_google_sections=0` 与 `git diff --check` 均退出 0。
+- [x] `verify_model_contracts.py` 为 607 行，超过“手写模块宜 ≤400 行”的建议；
+  硬白名单只允许新增这一份脚本，且两个严格 schema 必须随离线脚本自包含，
+  因此未新增白名单外模块。执行、三角色 probe、响应校验和 CLI 仍拆成窄职责
+  函数，单项测试文件为 298 行。
+- [x] `BLOCKED.md` 已加入三个角色的用户执行命令和四个 LLM 分别执行要求。
+  本轮没有访问真实端点，retrieval 保持 `provisional`，模型 revision 保持
+  `pending-server-verification`；未 build/package、联网、访问服务器、
+  commit/push。
+
+## 2026-07-30 Query rewrite 与真实模型契约：最终验收
+
+- [x] 全量验收严格止于 3 轮。第 1 轮为
+  `1 failed, 609 passed, 61 warnings in 576.56s`，唯一失败是白名单外
+  target verifier 读取 Qdrant collection 超时，原样定向复核为
+  `1 passed, 1 warning in 4.87s`。第 2 轮为
+  `2 failed, 608 passed, 61 warnings in 567.79s`：一项在清理 Qdrant
+  collection 时超时，另一项是既有 SQLite/WAL 覆写用例偶发未抛错；原样
+  定向复核中 Qdrant 项通过，SQLite 项先失败，未改代码或测试的下一次独立
+  运行通过。没有把定向通过冒充全量通过。
+- [x] 第 3 轮、也是最后一轮全量 pytest 退出 0：
+  `610 passed, 61 warnings in 563.83s`，skipped=0，高于 584 passed 基线；
+  warning 类别仍只有既有 `StarletteDeprecationWarning` 与 `UserWarning`。
+- [x] 最终静态门禁全部退出 0：`compileall -q src tests scripts` 无输出；
+  Ruff `All checks passed!`；mypy
+  `Success: no issues found in 94 source files`；changed Google docstring
+  `missing_google_sections=0`；全部 deployment Shell、默认/index profile
+  Compose、`git diff --check` 均通过；`deployment/ASSETS.sha256` 11/11
+  全部 `OK`。
+- [x] 最终候选树严格只有 7 个允许文件：`BLOCKED.md`、`PROGRESS.md`、
+  `scripts/verify_model_contracts.py`、`src/rag_app/retrieval/rewrite.py`、
+  `src/rag_app/tracing/reasons.py`、`tests/test_query_rewrite.py` 和
+  `tests/test_verify_model_contracts.py`；unexpected=0、missing=0。
+  新增 skip/xfail/TODO=0。
+- [x] 最终临时 Git index release-safety 为 `tracked_files=238`，binary、
+  large、local path、private network、private path、secret 和总
+  `violations` 均为 0；临时 index 仅用于审计并已精确删除。真实 index
+  staged=0，`git write-tree` 与 `HEAD^{tree}` 均为
+  `43fc81b4006a61de675167865e019d16efe762f7`。
+- [x] 保护摘要与任务 0 完全一致：docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别仍为
+  `f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`。
+- [x] retrieval 仍为 `provisional`，模型 revision 仍为
+  `pending-server-verification`。真实模型命令和解除条件已写入
+  `BLOCKED.md`；本轮没有 build/save/load/package、联网、访问
+  `.57/.58/.60` 或其他服务器，也未 commit/push。

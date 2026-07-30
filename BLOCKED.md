@@ -120,6 +120,42 @@
 - 上述均是明确的职责边界，不代表已获得真实 GPU、服务器或生产指标证据；
   代理未伪造对应输出。
 
+## P0：真实 Qwen Prompt 与模型 HTTP 契约仍待目标网络执行
+
+- 本轮只新增只读 `scripts/verify_model_contracts.py` 和 MockTransport 测试；
+  任务边界禁止访问 `.57/.58/.60`，因此尚无真实 embedding、reranker 或
+  四个 LLM 端点的通过报告，也没有据此填写任何 revision。
+- 用户需在可达目标网络的环境分别执行下列命令；令牌只通过变量名传入脚本，
+  不要把令牌值写进命令参数或报告：
+
+  ```bash
+  .venv/bin/python scripts/verify_model_contracts.py embedding \
+    --endpoint "${RAG_EMBEDDING_URL}" \
+    --model Qwen3-Embedding-0.6B \
+    --token-env RAG_EMBEDDING_API_TOKEN \
+    --dimension 1024
+
+  .venv/bin/python scripts/verify_model_contracts.py reranker \
+    --endpoint "${RAG_RERANKER_URL}" \
+    --model Qwen3-Reranker-0.6B \
+    --token-env RAG_RERANKER_API_TOKEN
+
+  .venv/bin/python scripts/verify_model_contracts.py llm \
+    --endpoint "${RAG_LLM_URL}" \
+    --model Qwen/Qwen3-8B-AWQ \
+    --token-env RAG_LLM_API_TOKEN
+  ```
+
+- LLM 命令需对四个目标 URL 分别执行。每份 JSON 必须为 `status=passed`，
+  model ID 和 endpoint revision 明确，rewrite/answer 都以严格 JSON Schema
+  完成，finish_reason=stop、temperature=0、thinking=false，且三项 token
+  计数一致。embedding 还需 count/index/dimension/finite 全绿；reranker
+  还需 count/index/[0,1] 全绿。
+- 任一端点返回 `REVISION_MISSING`、model/schema/维度/索引/分数错误、截断或
+  endpoint failure，均继续阻塞对应依赖。真实结果齐全前
+  `deployment/config/retrieval.json` 继续为 `provisional`，pipeline 中
+  embedding/reranker/LLM revision 继续为 `pending-server-verification`。
+
 ## 已解除：GitHub 远端 refs 可读取
 
 - 2026-07-29 现场确认 `origin` 为
