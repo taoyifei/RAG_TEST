@@ -349,6 +349,21 @@ def test_collection_state_clone_is_consistent_and_job_bound(
         expected_sources=expected,
     )
     assert repeated.list_active_sources() == expected
+    with sqlite3.connect(target_path) as connection:
+        connection.execute(
+            """
+            UPDATE sources SET current_path = ?
+            WHERE source_id = ?
+            """,
+            ("drifted.docx", expected[0].source_id),
+        )
+    with pytest.raises(RuntimeError, match="活动来源"):
+        StateStore.clone_collection_state(
+            source_path=source.path,
+            target_path=target_path,
+            identity=identity,
+            expected_sources=expected,
+        )
     with pytest.raises(ValueError, match="staging 身份"):
         StateStore.clone_collection_state(
             source_path=source.path,

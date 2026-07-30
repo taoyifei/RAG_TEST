@@ -315,6 +315,7 @@ def _reject_incompatible_active_collection(
         collection_name=active.manifest.collection_name,
         dense_dimension=pipeline.embedding_dimension,
         pipeline_fingerprint=fingerprint,
+        index_revision=pipeline.index_revision,
     )
     target = index.alias_target(alias_name)
     if target != active.manifest.collection_name:

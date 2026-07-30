@@ -23,6 +23,23 @@ _PAYLOAD_SCHEMA_VERSION = "2"
 _STAGING_JOB_KEY = "staging_control_job_id"
 _BASE_MANIFEST_KEY = "staging_base_manifest_sha256"
 _BASE_ACTIVE_COUNT_KEY = "staging_base_active_count"
+_INDEX_SCHEMA_VERSION = "1"
+_DEFAULT_INDEX_REVISION = "qdrant-v1.18.3"
+_REQUIRED_PAYLOAD_INDEXES = {
+    "chunk_id": models.PayloadSchemaType.KEYWORD,
+    "source_id": models.PayloadSchemaType.KEYWORD,
+    "source_path": models.PayloadSchemaType.KEYWORD,
+    "doc_version": models.PayloadSchemaType.KEYWORD,
+    "version_state": models.PayloadSchemaType.KEYWORD,
+    "document_status": models.PayloadSchemaType.KEYWORD,
+    "authority_level": models.PayloadSchemaType.KEYWORD,
+    "element_kind": models.PayloadSchemaType.KEYWORD,
+    "section_id": models.PayloadSchemaType.KEYWORD,
+    "neighbor_group_id": models.PayloadSchemaType.KEYWORD,
+    "chunk_role": models.PayloadSchemaType.KEYWORD,
+    "effective_from": models.PayloadSchemaType.DATETIME,
+    "effective_to": models.PayloadSchemaType.DATETIME,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +61,7 @@ class QdrantIndex:
         collection_name: str,
         dense_dimension: int,
         pipeline_fingerprint: str,
+        index_revision: str = _DEFAULT_INDEX_REVISION,
     ) -> None:
         """保存 collection 契约。
 
@@ -52,6 +70,7 @@ class QdrantIndex:
             collection_name: pipeline 专属物理 collection 名。
             dense_dimension: embedding 向量维度。
             pipeline_fingerprint: collection 对应的 pipeline 指纹。
+            index_revision: collection 对应的 Qdrant 索引契约 revision。
 
         Returns:
             无返回值。
@@ -59,10 +78,13 @@ class QdrantIndex:
         """
         if dense_dimension <= 0:
             raise ValueError("dense_dimension 必须为正数。")
+        if not index_revision:
+            raise ValueError("index_revision 不能为空。")
         self._client = client
         self.collection_name = collection_name
         self._dense_dimension = dense_dimension
         self._pipeline_fingerprint = pipeline_fingerprint
+        self._index_revision = index_revision
 
     @property
     def pipeline_fingerprint(self) -> str:
@@ -76,6 +98,31 @@ class QdrantIndex:
 
         """
         return self._pipeline_fingerprint
+
+    @property
+    def index_revision(self) -> str:
+        """返回物理 collection 的索引契约 revision。
+
+        Args:
+            无参数。
+
+        Returns:
+            构造实例时冻结的索引契约 revision。
+
+        """
+        return self._index_revision
+
+    def collection_exists(self) -> bool:
+        """判断当前物理 collection 是否存在。
+
+        Args:
+            无参数。
+
+        Returns:
+            当前 collection 存在时返回 True。
+
+        """
+        return self._client.collection_exists(self.collection_name)
 
     def create_collection(self) -> None:
         """创建或严格校验 dense+sparse collection。
@@ -109,34 +156,16 @@ class QdrantIndex:
             on_disk_payload=True,
             metadata={
                 "pipeline_fingerprint": self._pipeline_fingerprint,
-                "schema_version": "1",
+                "schema_version": _INDEX_SCHEMA_VERSION,
                 "payload_schema_version": _PAYLOAD_SCHEMA_VERSION,
+                "index_revision": self._index_revision,
             },
         )
-        for field_name in (
-            "chunk_id",
-            "source_id",
-            "source_path",
-            "doc_version",
-            "version_state",
-            "document_status",
-            "authority_level",
-            "element_kind",
-            "section_id",
-            "neighbor_group_id",
-            "chunk_role",
-        ):
+        for field_name, field_schema in _REQUIRED_PAYLOAD_INDEXES.items():
             self._client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name=field_name,
-                field_schema=models.PayloadSchemaType.KEYWORD,
-                wait=True,
-            )
-        for field_name in ("effective_from", "effective_to"):
-            self._client.create_payload_index(
-                collection_name=self.collection_name,
-                field_name=field_name,
-                field_schema=models.PayloadSchemaType.DATETIME,
+                field_schema=field_schema,
                 wait=True,
             )
 
@@ -340,6 +369,38 @@ class QdrantIndex:
         _validate_sha256(raw_base, "base manifest")
         return raw_base
 
+    def staging_identity(self) -> tuple[str, str | None]:
+        """读取既有 target 的 control job 与 base manifest 身份。
+
+        Args:
+            无参数。
+
+        Returns:
+            control job ID 与可选 base manifest SHA256。
+
+        Raises:
+            ValueError: staging metadata 缺失或格式无效。
+
+        """
+        metadata = (
+            self._client.get_collection(self.collection_name).config.metadata
+            or {}
+        )
+        control_job_id = metadata.get(_STAGING_JOB_KEY)
+        if (
+            not isinstance(control_job_id, str)
+            or not control_job_id
+            or "/" in control_job_id
+            or "\\" in control_job_id
+        ):
+            raise ValueError("target collection 缺少安全 control job 身份。")
+        return (
+            control_job_id,
+            self.staging_base_manifest_sha256(
+                control_job_id=control_job_id
+            ),
+        )
+
     def count_active_exact(
         self,
         collection_name: str | None = None,
@@ -357,6 +418,34 @@ class QdrantIndex:
             collection_name or self.collection_name,
             count_filter=models.Filter(
                 must=[_match("version_state", _VERSION_ACTIVE)]
+            ),
+            exact=True,
+        ).count
+
+    def count_state_exact(self, version_state: str) -> int:
+        """精确统计当前 collection 中指定状态的全部点。
+
+        Args:
+            version_state: staging、active、retired 或 failed。
+
+        Returns:
+            与指定状态完全匹配的点数。
+
+        Raises:
+            ValueError: version_state 不属于受支持的固定状态。
+
+        """
+        if version_state not in {
+            _VERSION_STAGING,
+            _VERSION_ACTIVE,
+            _VERSION_RETIRED,
+            "failed",
+        }:
+            raise ValueError("version_state 不受支持。")
+        return self._client.count(
+            collection_name=self.collection_name,
+            count_filter=models.Filter(
+                must=[_match("version_state", version_state)]
             ),
             exact=True,
         ).count
@@ -938,9 +1027,14 @@ class QdrantIndex:
         dense = vectors.get(_DENSE_VECTOR_NAME)
         if dense is None or dense.size != self._dense_dimension:
             raise ValueError("现有 collection dense 维度不兼容。")
+        if dense.distance != models.Distance.COSINE:
+            raise ValueError("现有 collection dense distance 不兼容。")
         sparse = info.config.params.sparse_vectors or {}
-        if _SPARSE_VECTOR_NAME not in sparse:
+        sparse_params = sparse.get(_SPARSE_VECTOR_NAME)
+        if sparse_params is None:
             raise ValueError("现有 collection 缺少 BM25 sparse 向量。")
+        if sparse_params.modifier != models.Modifier.IDF:
+            raise ValueError("现有 collection sparse IDF 契约不兼容。")
         metadata = info.config.metadata or {}
         if metadata.get("pipeline_fingerprint") != self._pipeline_fingerprint:
             raise ValueError("现有 collection pipeline 指纹不兼容。")
@@ -949,6 +1043,20 @@ class QdrantIndex:
             != _PAYLOAD_SCHEMA_VERSION
         ):
             raise ValueError("现有 collection payload schema 不是 v2。")
+        if metadata.get("schema_version") != _INDEX_SCHEMA_VERSION:
+            raise ValueError("现有 collection schema revision 不兼容。")
+        if metadata.get("index_revision") != self._index_revision:
+            raise ValueError("现有 collection index revision 不兼容。")
+        payload_schema = info.payload_schema
+        for field_name, expected_schema in _REQUIRED_PAYLOAD_INDEXES.items():
+            actual_schema = payload_schema.get(field_name)
+            if (
+                actual_schema is None
+                or actual_schema.data_type != expected_schema
+            ):
+                raise ValueError(
+                    f"现有 collection payload 索引 {field_name} 不兼容。"
+                )
 
 
 def _chunk_payload(chunk: Chunk, *, version_state: str) -> dict[str, object]:

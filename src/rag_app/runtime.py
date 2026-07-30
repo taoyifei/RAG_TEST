@@ -210,6 +210,7 @@ def _assemble_runtime(
         collection_name=settings.qdrant_alias,
         dense_dimension=pipeline.embedding_dimension,
         pipeline_fingerprint=fingerprint,
+        index_revision=pipeline.index_revision,
     )
     manifests = ManifestRepository(settings.manifest_database)
     manifests.initialize()

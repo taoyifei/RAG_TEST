@@ -67,11 +67,16 @@ class StateStore(JobStore):
             raise ValueError("增量 clone 必须绑定 base manifest SHA256。")
         if target_path.exists():
             store = cls(target_path)
+            store.require_integrity()
             store.require_collection_identity(
                 control_job_id=identity.control_job_id,
                 pipeline_fingerprint=identity.pipeline_fingerprint,
                 base_manifest_sha256=identity.base_manifest_sha256,
             )
+            if store.list_active_sources() != expected_sources:
+                raise RuntimeError(
+                    "既有 target state 的活动来源与 base manifest 不一致。"
+                )
             return store
         if (
             not source_path.is_file()
@@ -99,6 +104,34 @@ class StateStore(JobStore):
             if temporary_path is not None and temporary_path.exists():
                 temporary_path.unlink()
         return cls(target_path)
+
+    def require_integrity(self) -> None:
+        """以只读连接要求 SQLite 完整性检查唯一返回 ok。
+
+        Args:
+            无参数。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            FileNotFoundError: 数据库不存在、不是普通文件或是符号链接。
+            RuntimeError: `PRAGMA integrity_check` 未唯一返回 `ok`。
+            sqlite3.DatabaseError: SQLite 文件损坏或无法读取。
+
+        """
+        if (
+            not self.path.is_file()
+            or self.path.is_symlink()
+        ):
+            raise FileNotFoundError("target collection state 不存在或不安全。")
+        resolved_path = self.path.resolve(strict=True)
+        database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
+        with sqlite3.connect(database_uri, uri=True) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            rows = connection.execute("PRAGMA integrity_check").fetchall()
+        if rows != [("ok",)]:
+            raise RuntimeError("target collection state 完整性检查失败。")
 
     def bind_collection_identity(
         self,

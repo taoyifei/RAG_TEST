@@ -61,12 +61,14 @@ class FullIndexPublisher:
         manifest: IndexManifest,
         *,
         lease_guard: Callable[[], None] | None = None,
+        target_guard: Callable[[], object] | None = None,
     ) -> PublishResult:
         """幂等发布一个完整索引。
 
         Args:
             manifest: 与新物理 collection 对应的完整 manifest。
             lease_guard: snapshot、alias 和 manifest 边界前后的租约检查。
+            target_guard: 发布边界前的 target 全量一致性检查。
 
         Returns:
             新发布、崩溃恢复或无变化结果。
@@ -77,8 +79,10 @@ class FullIndexPublisher:
 
         """
         guard = lease_guard or _noop
+        verify_target = target_guard or _noop
         guard()
         self._validate_manifest(manifest)
+        verify_target()
         stored = self._repository.get(manifest.collection_name)
         alias_target = self._index.alias_target(self._alias_name)
         previous_target = self._previous_active_collection(
@@ -91,6 +95,7 @@ class FullIndexPublisher:
                 and alias_target == manifest.collection_name
             ):
                 guard()
+                verify_target()
                 return _result(stored, PublishState.UNCHANGED)
             if (
                 stored.state == ManifestState.STAGING
@@ -98,6 +103,7 @@ class FullIndexPublisher:
             ):
                 try:
                     guard()
+                    verify_target()
                     self._repository.activate(manifest.collection_name)
                 except Exception:
                     self._restore_alias(previous_target)
@@ -108,10 +114,12 @@ class FullIndexPublisher:
                 raise RuntimeError("不能重新发布 retired manifest。")
         else:
             guard()
+            verify_target()
             snapshot = self._index.create_snapshot()
             guard()
             if snapshot.checksum is None:
                 raise RuntimeError("Qdrant snapshot 缺少 checksum。")
+            verify_target()
             stored = self._repository.stage(
                 manifest,
                 snapshot_name=snapshot.name,
@@ -120,9 +128,11 @@ class FullIndexPublisher:
             guard()
 
         guard()
+        verify_target()
         try:
             self._index.switch_alias(self._alias_name)
             guard()
+            verify_target()
             guard()
             self._repository.activate(manifest.collection_name)
         except Exception:

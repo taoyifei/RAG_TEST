@@ -418,6 +418,76 @@ def test_real_qdrant_rejects_collection_without_payload_schema_v2() -> None:
             client.delete_collection(collection)
 
 
+@pytest.mark.parametrize(
+    ("distance", "modifier", "index_revision", "error_fragment"),
+    [
+        (
+            models.Distance.DOT,
+            models.Modifier.IDF,
+            "qdrant-v1.18.3",
+            "dense distance",
+        ),
+        (
+            models.Distance.COSINE,
+            None,
+            "qdrant-v1.18.3",
+            "sparse IDF",
+        ),
+        (
+            models.Distance.COSINE,
+            models.Modifier.IDF,
+            "qdrant-v0",
+            "index revision",
+        ),
+        (
+            models.Distance.COSINE,
+            models.Modifier.IDF,
+            "qdrant-v1.18.3",
+            "payload 索引",
+        ),
+    ],
+)
+def test_real_qdrant_rejects_incompatible_collection_contract(
+    distance: models.Distance,
+    modifier: models.Modifier | None,
+    index_revision: str,
+    error_fragment: str,
+) -> None:
+    client = _client()
+    collection = f"rag-index-contract-{uuid.uuid4().hex}"
+    try:
+        client.create_collection(
+            collection_name=collection,
+            vectors_config={
+                "dense": models.VectorParams(
+                    size=_DIMENSION,
+                    distance=distance,
+                )
+            },
+            sparse_vectors_config={
+                "bm25": models.SparseVectorParams(modifier=modifier)
+            },
+            metadata={
+                "pipeline_fingerprint": _PIPELINE_FINGERPRINT,
+                "schema_version": "1",
+                "payload_schema_version": "2",
+                "index_revision": index_revision,
+            },
+        )
+        index = QdrantIndex(
+            client,
+            collection_name=collection,
+            dense_dimension=_DIMENSION,
+            pipeline_fingerprint=_PIPELINE_FINGERPRINT,
+        )
+
+        with pytest.raises(ValueError, match=error_fragment):
+            index.require_compatible_collection()
+    finally:
+        if client.collection_exists(collection):
+            client.delete_collection(collection)
+
+
 def test_alias_bound_runtime_rejects_old_payload_schema() -> None:
     client = _client()
     suffix = uuid.uuid4().hex

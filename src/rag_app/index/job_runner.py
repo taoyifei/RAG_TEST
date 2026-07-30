@@ -20,6 +20,7 @@ from rag_app.index.build import discover_docx_sources
 from rag_app.index.planner import plan_full_rebuild, plan_incremental_sync
 from rag_app.index.publisher import FullIndexPublisher
 from rag_app.index.qdrant import QdrantIndex
+from rag_app.index.verifier import TargetIndexVerifier
 from rag_app.index.worker import SyncChunkBuilder, SyncWorker
 from rag_app.manifest import ManifestRepository, ManifestState, StoredManifest
 from rag_app.state import Job, JobKind, JobState, StateStore
@@ -241,6 +242,7 @@ class IndexJobRunner:
             collection_name=collection_name,
             dense_dimension=self._services.pipeline.embedding_dimension,
             pipeline_fingerprint=self._fingerprint,
+            index_revision=self._services.pipeline.index_revision,
         )
         lease_guard()
         published = self._published_result(job, index)
@@ -301,12 +303,29 @@ class IndexJobRunner:
         lease_guard()
         manifest = self._manifest(job, collection_name, state)
         self._require_base_unchanged(base, collection_name, index)
+        identity = CollectionStateIdentity(
+            control_job_id=job.job_id,
+            pipeline_fingerprint=self._fingerprint,
+            base_manifest_sha256=(
+                None if base is None else base.stored.manifest_sha256
+            ),
+        )
+        verifier = TargetIndexVerifier(
+            state=state,
+            index=index,
+            manifest=manifest,
+            identity=identity,
+        )
         lease_guard()
         FullIndexPublisher(
             self._services.manifests,
             index,
             alias_name=self._config.alias_name,
-        ).publish(manifest, lease_guard=lease_guard)
+        ).publish(
+            manifest,
+            lease_guard=lease_guard,
+            target_guard=verifier.verify,
+        )
         lease_guard()
         active = self._services.manifests.get_active()
         if active is None or active.manifest != manifest:
@@ -344,6 +363,29 @@ class IndexJobRunner:
 
         """
         base_digest = None if base is None else base.stored.manifest_sha256
+        state_path = self._collection_state_path(index.collection_name)
+        collection_exists = index.collection_exists()
+        state_exists = state_path.exists()
+        if collection_exists != state_exists:
+            raise ValueError(
+                "既有 target collection 与独立 state 必须同时存在。"
+            )
+        if collection_exists:
+            if not state_path.is_file() or state_path.is_symlink():
+                raise FileNotFoundError("既有 target state 不存在或不安全。")
+            index.require_compatible_collection()
+            index.require_staging_identity(
+                control_job_id=job.job_id,
+                base_manifest_sha256=base_digest,
+            )
+            state = StateStore(state_path)
+            state.require_integrity()
+            state.require_collection_identity(
+                control_job_id=job.job_id,
+                pipeline_fingerprint=self._fingerprint,
+                base_manifest_sha256=base_digest,
+            )
+            return state
         lease_guard()
         index.prepare_staging_collection(
             control_job_id=job.job_id,
@@ -470,6 +512,7 @@ class IndexJobRunner:
                 collection_name=active.manifest.collection_name,
                 dense_dimension=self._services.pipeline.embedding_dimension,
                 pipeline_fingerprint=self._fingerprint,
+                index_revision=self._services.pipeline.index_revision,
             )
             source_index.require_compatible_collection()
             source_index.require_registered_snapshot(
@@ -603,6 +646,16 @@ class IndexJobRunner:
             pipeline_fingerprint=self._fingerprint,
             base_manifest_sha256=base_digest,
         )
+        TargetIndexVerifier(
+            state=state,
+            index=index,
+            manifest=active.manifest,
+            identity=CollectionStateIdentity(
+                control_job_id=job.job_id,
+                pipeline_fingerprint=self._fingerprint,
+                base_manifest_sha256=base_digest,
+            ),
+        ).verify()
         if tuple(
             (source.source_id, source.current_path, source.content_sha256)
             for source in state.list_active_sources()

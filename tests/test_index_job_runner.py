@@ -29,6 +29,7 @@ from rag_app.index.job_runner import (
     JobRunResult,
 )
 from rag_app.index.qdrant import IndexedChunk, QdrantIndex
+from rag_app.index.verifier import TargetIndexVerifier
 from rag_app.manifest import ManifestRepository
 from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
 from rag_app.state import JobKind, JobState, SourceVersion, StateStore
@@ -297,6 +298,66 @@ def _build_chunks(
             sparse=models.SparseVector(indices=[1], values=[1.0]),
         ),
     )
+
+
+def test_job_runner_invokes_target_verifier_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client()
+    suffix = uuid.uuid4().hex
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "source.docx").write_bytes(b"source")
+    control = StateStore(tmp_path / "control.sqlite3")
+    control.initialize()
+    manifests = ManifestRepository(tmp_path / "manifests.sqlite3")
+    manifests.initialize()
+    pipeline = _pipeline()
+    runner = IndexJobRunner(
+        config=JobRunnerConfig(
+            alias_name=f"rag-verifier-alias-{suffix}",
+            input_root=docs,
+            index_state_dir=tmp_path / "indexes",
+            collection_prefix=f"rag-verifier-{suffix}",
+            lease_seconds=60,
+        ),
+        services=JobRunnerServices(
+            control=control,
+            manifests=manifests,
+            qdrant=client,
+            pipeline=pipeline,
+            build_chunks_factory=lambda _: _build_chunks,
+        ),
+    )
+    control.create_job(
+        idempotency_key=f"target-verifier:{suffix}",
+        kind=JobKind.FULL,
+        pipeline_fingerprint=pipeline.fingerprint(),
+    )
+    before_collections = _collection_names(client)
+    calls = 0
+
+    def reject_target(_verifier: TargetIndexVerifier) -> object:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("target verification rejected")
+
+    monkeypatch.setattr(TargetIndexVerifier, "verify", reject_target)
+    try:
+        result = runner.run_next(worker_id="target-verifier-worker")
+        created = _collection_names(client) - before_collections
+
+        assert result is not None
+        assert result.state == JobState.FAILED
+        assert calls == 1
+        assert len(created) == 1
+        target = created.pop()
+        assert client.list_snapshots(target) == []
+        assert manifests.get(target) is None
+    finally:
+        for collection_name in _collection_names(client) - before_collections:
+            client.delete_collection(collection_name)
 
 
 def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
