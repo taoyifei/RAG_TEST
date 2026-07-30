@@ -11,6 +11,7 @@ def test_runtime_requires_atomic_install_and_backup_metadata_helpers() -> None:
     for filename in (
         "install.sh",
         "offline_bundle.py",
+        "freeze_corpus_manifest.py",
     ):
         assert filename in package
         assert f'"{filename}"' in verifier
@@ -23,6 +24,9 @@ def test_install_contract_is_immutable_and_no_clobber() -> None:
 
     assert 'project_root="/data/tyf/RAG"' in install
     assert "verify-offline.sh" in install
+    assert "/usr/bin/id -u" in install
+    assert "chown -R 10001:10001" in install
+    assert "CORPUS_MANIFEST.json" in install
     assert "offline_bundle.py" in install
     assert "chmod 0555" in install
     assert "chmod 0444" in install

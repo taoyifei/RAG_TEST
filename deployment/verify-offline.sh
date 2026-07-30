@@ -37,6 +37,7 @@ required_files=(
   "evaluation/runtime/evaluation/metrics.py"
   "evaluation/runtime/scripts/load_test_chat.py"
   "offline_bundle.py"
+  "freeze_corpus_manifest.py"
   "backup.sh"
   "install.sh"
 )

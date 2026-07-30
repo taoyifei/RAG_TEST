@@ -171,6 +171,8 @@ cp "${repo_root}/design/public/offline-build-and-server-deployment.md" \
   "${runtime_root}/README.md"
 cp "${repo_root}/scripts/offline_bundle.py" \
   "${runtime_root}/offline_bundle.py"
+cp "${repo_root}/scripts/freeze_corpus_manifest.py" \
+  "${runtime_root}/freeze_corpus_manifest.py"
 cp "${repo_root}/evaluation/"*.py \
   "${runtime_root}/evaluation/runtime/evaluation/"
 cp "${repo_root}/scripts/load_test_chat.py" \
