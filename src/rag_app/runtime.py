@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import threading
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -16,6 +17,7 @@ import httpx
 from fastapi import FastAPI
 from qdrant_client import QdrantClient
 
+from rag_app._build_revision import SOURCE_REVISION
 from rag_app.api import ApiServices, create_app
 from rag_app.chunking import HuggingFaceTokenCounter
 from rag_app.clients.llm import BufferedLlmClient
@@ -62,10 +64,16 @@ from rag_app.tracing.models import TraceIdentity, TraceMode
 from rag_app.tracing.recorder import TraceRecorder
 from rag_app.tracing.store import TraceStore
 
-__all__ = ["RuntimeBundle", "build_runtime", "load_pipeline"]
+__all__ = [
+    "RuntimeBundle",
+    "build_runtime",
+    "load_pipeline",
+    "require_release_revision",
+]
 
 _PIPELINE_CONFIG_FIELDS = frozenset(PipelineSpec.model_fields)
 _PAYLOAD_SCHEMA_VERSION = 2
+_FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(slots=True)
@@ -145,6 +153,27 @@ def load_pipeline(path: Path) -> PipelineSpec:
     return PipelineSpec.model_validate(payload)
 
 
+def require_release_revision(settings: RuntimeSettings) -> None:
+    """在创建任何外部资源前绑定安装 wheel 与 release 身份。
+
+    Args:
+        settings: 含正式 release revision 的已验证运行设置。
+
+    Returns:
+        安装 wheel 与 release revision 完全一致时返回。
+
+    Raises:
+        ValueError: 安装 wheel revision 缺失、为开发占位或与 release 不同。
+
+    """
+    if _FULL_GIT_SHA.fullmatch(SOURCE_REVISION) is None:
+        raise ValueError("安装 wheel SOURCE_REVISION 缺失或不是正式 Git SHA。")
+    if settings.release_revision != SOURCE_REVISION:
+        raise ValueError(
+            "安装 wheel SOURCE_REVISION 与 release revision 不一致。"
+        )
+
+
 def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
     """组装查询链、状态库与严格 readiness。
 
@@ -158,6 +187,7 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
         ValueError: 活动 alias/manifest 存在但与配置不一致。
 
     """
+    require_release_revision(settings)
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
     _validate_runtime_contract(settings, pipeline, retrieval)

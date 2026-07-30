@@ -14,6 +14,13 @@ from rag_app.settings import RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
 
 
+@pytest.fixture(autouse=True)
+def _installed_source_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "SOURCE_REVISION", "1" * 40)
+
+
 class _TrackedResource:
     def __init__(self, name: str, calls: list[str]) -> None:
         self._name = name

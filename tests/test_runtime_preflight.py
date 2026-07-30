@@ -9,6 +9,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 
+import rag_app.cli as cli_module
 import rag_app.runtime as runtime_module
 import rag_app.worker_runtime as worker_runtime_module
 from rag_app.corpus_policy import CorpusPolicy
@@ -18,6 +19,13 @@ from rag_app.retrieval.rewrite import QueryRewriter
 from rag_app.runtime import build_runtime
 from rag_app.settings import RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
+
+
+@pytest.fixture(autouse=True)
+def _installed_source_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_module, "SOURCE_REVISION", "1" * 40)
 
 
 def _sha256(content: bytes) -> str:
@@ -187,6 +195,88 @@ def _forbid_qdrant(
         raise AssertionError("preflight 失败后不得构造 Qdrant 客户端")
 
     return construct
+
+
+@pytest.mark.parametrize(
+    "installed_revision",
+    ("", "development-unset", "2" * 40),
+)
+@pytest.mark.parametrize("builder", ("serve", "worker"))
+def test_runtime_revision_mismatch_fails_before_external_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed_revision: str,
+    builder: str,
+) -> None:
+    paths = _write_configuration(tmp_path)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        runtime_module,
+        "SOURCE_REVISION",
+        installed_revision,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "QdrantClient",
+        _forbid_qdrant(calls),
+    )
+    monkeypatch.setattr(
+        worker_runtime_module,
+        "QdrantClient",
+        _forbid_qdrant(calls),
+    )
+
+    with pytest.raises(ValueError, match="SOURCE_REVISION"):
+        if builder == "serve":
+            build_runtime(_settings(tmp_path, paths))
+        else:
+            build_worker_runtime(_settings(tmp_path, paths))
+
+    assert calls == []
+    assert not (tmp_path / "state.sqlite3").exists()
+    assert not (tmp_path / "manifest.sqlite3").exists()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    (
+        ("serve",),
+        ("worker", "--once"),
+        ("index", "full", "--idempotency-key", "revision-test"),
+    ),
+)
+def test_cli_runtime_commands_reject_revision_before_external_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    arguments: tuple[str, ...],
+) -> None:
+    paths = _write_configuration(tmp_path)
+    settings = _settings(tmp_path, paths)
+    calls: list[str] = []
+    monkeypatch.setattr(runtime_module, "SOURCE_REVISION", "2" * 40)
+    monkeypatch.setattr(cli_module, "RuntimeSettings", lambda: settings)
+    monkeypatch.setattr(
+        cli_module,
+        "verify_offline_assets",
+        lambda _paths: None,
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "QdrantClient",
+        _forbid_qdrant(calls),
+    )
+    monkeypatch.setattr(
+        worker_runtime_module,
+        "QdrantClient",
+        _forbid_qdrant(calls),
+    )
+
+    with pytest.raises(ValueError, match="SOURCE_REVISION"):
+        cli_module.main(arguments)
+
+    assert calls == []
+    assert not (tmp_path / "state.sqlite3").exists()
+    assert not (tmp_path / "manifest.sqlite3").exists()
 
 
 @pytest.mark.parametrize(

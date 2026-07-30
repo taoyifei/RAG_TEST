@@ -41,7 +41,7 @@ from rag_app.manifest import ManifestRepository
 from rag_app.ocr.client import OcrClient
 from rag_app.parsers import DocxParser
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
-from rag_app.runtime import load_pipeline
+from rag_app.runtime import load_pipeline, require_release_revision
 from rag_app.settings import (
     ConfigurationState,
     RetrievalSettings,
@@ -105,6 +105,7 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
         ValueError: 检索参数或必要模型 revision 尚未冻结。
 
     """
+    require_release_revision(settings)
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
     require_indexable_configuration(pipeline, retrieval)
