@@ -107,6 +107,12 @@ docker image inspect --format '{{.Os}}/{{.Architecture}} {{.Id}}' \
 sha256sum --check deployment/ASSETS.sha256
 ```
 
+runtime wheel 准备器先在三件套的同一父目录内完整生成并复核新
+`wheelhouse`、`WHEELS.sha256` 和 `PROJECT_WHEEL.json`，确认项目 wheel
+内嵌 revision 与 clean Git HEAD 一致后才开始替换。替换期间旧三件套先原子
+移入事务备份；下载、构建、清单写入或任一移动失败都会恢复旧三者，不会先删除
+旧 wheel 或留下新旧混合状态。
+
 仅在 OCR 固定资产尚未装配或批准版本发生变化时执行以下下载。下载脚本按
 来源清单、大小和 SHA256 校验，不从服务器下载：
 
@@ -154,6 +160,11 @@ docker run --rm --network none --entrypoint python \
 
 预期两行平台均为 `linux/amd64`，revision 均等于 `git rev-parse HEAD`，
 两条断网命令退出码均为 0。
+
+应用 wheel 内的 `SOURCE_REVISION` 还会在 `serve`、`worker` 和一次性
+`index` 创建 Qdrant、SQLite 或 HTTP 客户端之前，与
+`RAG_RELEASE_REVISION` 做精确比较。`development-unset`、缺失、非 40 位
+小写 Git SHA 或错配都会使进程立即失败；`build-info` 仍可用于只读诊断。
 
 ## 5. 生成和校验双包
 
@@ -257,27 +268,26 @@ install -d -m 0700 \
   /data/tyf/RAG/data/qdrant \
   /data/tyf/RAG/backups \
   /data/tyf/RAG/logs
-bash extracted/runtime/install.sh \
+sudo bash extracted/runtime/install.sh \
   "$(realpath extracted/runtime)" \
   "$(realpath extracted/corpus)"
 sudo chown -R 10001:10001 \
-  "/data/tyf/RAG/shared/corpora/${corpus_id}" \
   /data/tyf/RAG/data/state \
   /data/tyf/RAG/logs
-sudo find "/data/tyf/RAG/shared/corpora/${corpus_id}" \
-  -type d -exec chmod 0700 {} +
-sudo find "/data/tyf/RAG/shared/corpora/${corpus_id}" \
-  -type f -exec chmod 0400 {} +
 sudo chmod 0700 \
   /data/tyf/RAG/data/state \
   /data/tyf/RAG/data/qdrant \
   /data/tyf/RAG/logs
 ```
 
-`install.sh` 再次校验 runtime 和 corpus 摘要，在各目标父目录的临时目录中
-复制，先设置 release 目录 0555、普通文件 0444、Shell 0555，再以不覆盖的
-原子 rename 发布。目标已存在、输入含 secret env 或任一步失败都会非零退出，
-不会把 staging 冒充完整 release。
+`install.sh` 必须由 root 执行。它在复制前后分别校验 runtime 的逐文件摘要和
+corpus 的 `MANIFEST.sha256`、`CORPUS_MANIFEST.json`，将 corpus staging
+递归设为 `10001:10001`、目录 0700、文件 0400，再以不覆盖的原子 rename
+发布；不再需要安装后手工修 corpus owner。release 已存在时，只有
+`SOURCE_REVISION`、`MANIFEST.sha256` 和完整文件集合均相同才只读复用；
+corpus 同样只允许完全一致时复用。因此同一 runtime 可以安装新 corpus，
+相同 runtime/corpus 可幂等重跑，任一漂移、复制后篡改或发布竞态都会非零退出，
+且不会删除既有目标或留下伪完整 staging。
 
 首次部署时创建外置配置；升级时复用并审查原文件，不从新 release 覆盖它。
 该文件始终在 release 外且必须保持 0600：

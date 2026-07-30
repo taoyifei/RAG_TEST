@@ -2601,3 +2601,101 @@
   `Success: no issues found in 93 source files`、Google docstring
   `missing_google_sections=0`；全部 deployment Shell、默认/index profile
   Compose 与 `git diff --check` 均退出 0。
+
+## 2026-07-30 四项生产发布风险任务 3：runtime/corpus 独立安装
+
+- [x] 新增契约与 fake-command 红测首次为 `6 failed, 5 passed in 3.79s`，
+  真实证明旧安装器没有 root 门禁、复制后 runtime 复核、corpus manifest
+  语义校验、owner 设置和既有 runtime/corpus 幂等复用。
+- [x] `install.sh` 现在先以 `/usr/bin/id -u` 要求 root，再验证输入 runtime
+  与 corpus；复制到同父目录 staging 后重新运行 `verify-offline.sh`，
+  重新校验 corpus `MANIFEST.sha256`、canonical
+  `CORPUS_MANIFEST.json`、DOCX exact set 与 `CORPUS_ID`。
+- [x] corpus staging 在发布前递归设为 `10001:10001`，目录严格 0700、文件
+  严格 0400，并在原子 rename 前复核 owner/权限。打包与离线 verifier 已把
+  `freeze_corpus_manifest.py` 固化为 runtime 必需普通文件，安装后不再依赖
+  仓库或联网资源。
+- [x] 既有 release 只有在 `SOURCE_REVISION`、`MANIFEST.sha256` 和精确文件
+  集合与输入一致且自身验证通过时才只读复用；既有 corpus 同样要求两份
+  manifest、精确文件集合、内容、owner 和权限全部一致。允许复用同一 runtime
+  安装新 corpus，也允许完全相同的两者幂等重跑；任一漂移均拒绝且不修改目标。
+- [x] 安装锁只由实际持有者清理；复制后篡改会在发布前失败，release rename
+  竞态只补偿删除本事务刚发布的 corpus，不删除既有 release/corpus，且不残留
+  staging。手册已改为 `sudo bash install.sh` 并删除手工修 corpus owner 的步骤。
+- [x] 最终安装、package 与 offline bundle 合并回归为
+  `33 passed in 9.51s`；相关 Ruff `All checks passed!`，三个 Shell
+  `bash -n` 与 `git diff --check` 均退出 0。本阶段未执行真实 package、
+  build、联网、服务器访问、commit 或 push。
+
+## 2026-07-30 四项生产发布风险任务 4：wheelhouse 与运行身份事务
+
+- [x] wheelhouse 事务红测覆盖 download、build、manifest 写入、metadata
+  写入和移动失败。旧实现中 manifest/metadata 失败后旧 wheel 已被替换，
+  move 故障注入未被调用；运行时红测则因不存在可校验的
+  `runtime.SOURCE_REVISION` 入口，在 setup 阶段稳定报错。合并红测摘要为
+  `3 failed, 10 passed, 28 errors in 1.76s`。
+- [x] `prepare_runtime_wheels.py` 现在强制 wheelhouse、
+  `WHEELS.sha256` 与 `PROJECT_WHEEL.json` 位于同一真实父目录；所有下载、
+  项目 wheel 构建、revision、逐 wheel SHA 和项目元数据均先在隐藏 staging
+  完整生成并再次验证，staging 只允许非空普通 `.whl` 文件集合，正式三件套
+  在此之前保持不变。补充反测先以 `1 failed, 14 deselected` 证明意外非 wheel
+  文件曾被忽略，修复后 wheel 事务全集为 `15 passed in 0.20s`。
+- [x] 替换时每个旧对象只原子移动到同文件系统事务备份，不先删除旧 wheel；
+  任一移动失败会逆序移回已安装新对象并恢复全部旧对象。测试逐字节比较旧
+  wheel 文件集合、清单和元数据，五类失败均保持三者完全不变；成功更新一次
+  替换三者且不残留隐藏 staging/backup。
+- [x] `require_release_revision()` 已成为 `build_runtime()` 与
+  `build_worker_runtime()` 的第一项检查；`serve`、`worker`、一次性 `index`
+  因而会在读取 pipeline、创建 Qdrant、SQLite 或 HTTP 客户端前要求安装 wheel
+  的 `SOURCE_REVISION` 为 40 位小写 Git SHA 且精确等于
+  `RuntimeSettings.release_revision`。空值、`development-unset` 和错配均失败，
+  三个 CLI 路径的外部资源调用计数均为 0；`build-info` 行为未改。
+- [x] 任务 4 专项回归为 `42 passed, 2 warnings in 3.34s`；与 runtime、
+  build identity、install、package、offline bundle 的合并回归为
+  `88 passed, 2 warnings in 12.02s`。相关 Ruff、strict mypy
+  `3 source files`、Google docstring、三个 Shell 和 `git diff --check`
+  均退出 0；未真实下载、构建 wheel、package、联网或访问服务器。
+
+## 2026-07-30 四项生产发布风险最终完成审计
+
+- [x] 逐条审计任务 0-4：Git 发布口径只剩三项逻辑 index 不变量；target
+  verifier、保守 `index-gc`、runtime/corpus 独立安装、wheelhouse 三件套事务
+  和启动 revision 预检均有对应实现、红证据与故障反测。没有用窄测试代替本节
+  的全量验收。
+- [x] 唯一最终全量 pytest 退出 0：
+  `536 passed, 60 warnings in 544.84s`，skipped=0；warning 类别仍只有既有
+  Starlette deprecation、本地 Qdrant API-key 与客户端兼容性提示，没有新增
+  warning 类别。
+- [x] 全量 compileall 无输出、Ruff `All checks passed!`、mypy
+  `Success: no issues found in 93 source files`、Google docstring
+  `missing_google_sections=0`、全部 deployment Shell 和 index profile
+  Compose 均退出 0。默认 Compose 与最终 `git diff --check` 首次并行调用遇到
+  WSL 服务层 `E_UNEXPECTED/0x8007274c`、没有产生工具结果；串行复跑两者均真实
+  退出 0。
+- [x] `deployment/ASSETS.sha256` 11/11 全部 `OK`。临时 Git index 扫描为
+  `tracked_files=235`，binary、large、local path、private network、
+  private path、secret 与总 `violations` 均为 0；精确临时 index 已删除并
+  复核不存在。
+- [x] 三项逻辑 Git index 不变量最终通过：`git diff --cached --quiet`
+  退出 0，`git write-tree` 与 `HEAD^{tree}` 均为
+  `fd24dd40d9814766e8f43cc06a59aaf517d24f15`，staged=0。`.git/index`
+  原始字节 SHA 只保留历史审计，不是 blocker，也未尝试恢复。
+- [x] 保护摘要与任务 0 相同：docs `36c67e3b…`、artifacts `220473c6…`、
+  frozen `63adcd45…`、results `cdb17f0c…`、evidence `05b845b9…`；
+  pipeline/retrieval/corpus policy 分别为
+  `f61a74b0… / 267e419f… / 0d6553c1…`，三份配置无 diff，retrieval 继续为
+  provisional。
+- [x] 只读参考仓库仍 clean，HEAD/tree/tracked 聚合仍为
+  `03d51db2… / 84a0a960… / 44254dff…`。当前修改仅有白名单内 13 个文件，
+  deleted=0，新增 skip/xfail/TODO=0；Parser、chunking、检索、rerank、Prompt、
+  回答 schema、模型参数与三份冻结配置均未修改。
+- [x] 最终测试容器删除前复核为 `rag-release-risk-qdrant`、running、
+  OOMKilled=false、mounts=[] 且仅绑定 `127.0.0.1:6333`；已只删除该精确
+  容器并复核不存在，未删除镜像、卷或网络。
+- [x] 本次任务 3/4 续跑未执行 build/buildx、image save/load、真实
+  package/双包、联网安装、SSH/SCP、`.57/.58/.60`、服务器操作、commit 或
+  push。任务 0-2 的三笔提交/推送发生在本次续跑前，来源于用户明确覆盖指令，
+  已在上文“用户覆盖提交边界”保留审计；本次工作区改动保持 unstaged。
+- [x] `BLOCKED.md` 继续保留真实模型消融/revision、Word 自动编号、GPU OCR、
+  EMF 转换器、完整 chat-template token 预算、正式离线双包与服务器验收，
+  本轮没有伪造或提前解除这些外部证据项。
