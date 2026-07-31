@@ -13,11 +13,10 @@ import rag_app.cli as cli_module
 import rag_app.runtime as runtime_module
 import rag_app.worker_runtime as worker_runtime_module
 from rag_app.corpus_policy import CorpusPolicy
-from rag_app.generation.answer import AnswerGenerator
 from rag_app.index.build import DocxBuildConfig
-from rag_app.retrieval.rewrite import QueryRewriter
-from rag_app.runtime import build_runtime
-from rag_app.settings import RuntimeSettings
+from rag_app.model_contracts import actual_prompt_revision
+from rag_app.runtime import build_runtime, load_pipeline
+from rag_app.settings import AccessMode, RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
 
 
@@ -33,17 +32,13 @@ def _sha256(content: bytes) -> str:
 
 
 def _prompt_revision() -> str:
-    rewriter = object.__new__(QueryRewriter)
-    answerer = object.__new__(AnswerGenerator)
-    canonical = json.dumps(
-        {
-            "answer": answerer.revision(),
-            "rewrite": rewriter.revision(),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+    return actual_prompt_revision()
+
+
+def test_checked_in_pipeline_matches_actual_prompt_revision() -> None:
+    pipeline = load_pipeline(Path("deployment/config/pipeline.json"))
+
+    assert pipeline.prompt_revision == actual_prompt_revision()
 
 
 def _write_configuration(tmp_path: Path) -> dict[str, Path]:
@@ -160,6 +155,7 @@ def _write_configuration(tmp_path: Path) -> dict[str, Path]:
 
 def _settings(tmp_path: Path, paths: dict[str, Path]) -> RuntimeSettings:
     return RuntimeSettings(
+        access_mode=AccessMode.SHARED_CORPUS,
         query_token=uuid.uuid4().hex,
         admin_token=uuid.uuid4().hex,
         qdrant_api_key=uuid.uuid4().hex,

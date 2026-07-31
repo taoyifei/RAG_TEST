@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 _PIPELINE_SHA256 = (
-    "f61a74b0dc2ad8d9e35261b6ea3717848ea6dfc3d78e427ca1b3dbc8a8538d8c"
+    "87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf"
 )
 _RETRIEVAL_SHA256 = (
     "267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3"

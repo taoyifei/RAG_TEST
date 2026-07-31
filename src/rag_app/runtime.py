@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import math
 import re
@@ -40,6 +39,7 @@ from rag_app.health import (
 )
 from rag_app.index import QdrantIndex
 from rag_app.manifest import ManifestRepository
+from rag_app.model_contracts import actual_prompt_revision
 from rag_app.observability import StructuredAuditLogger
 from rag_app.parsers.docx import DocxParser
 from rag_app.query_executor import QueryExecutor
@@ -700,7 +700,7 @@ def _validate_runtime_contract(
     _require_sparse_contract(pipeline, retrieval)
     if retrieval.low_ocr_threshold != pipeline.ocr_minimum_confidence:
         raise ValueError("OCR minimum confidence 与 pipeline 不一致。")
-    if pipeline.prompt_revision != _actual_prompt_revision():
+    if pipeline.prompt_revision != actual_prompt_revision():
         raise ValueError("prompt revision 与实际实现不一致。")
 
 
@@ -719,23 +719,6 @@ def _require_sparse_contract(
     )
     if encoder.revision() != pipeline.sparse_revision:
         raise ValueError("BM25 revision 与实际实现不一致。")
-
-
-def _actual_prompt_revision() -> str:
-    rewriter = object.__new__(QueryRewriter)
-    answerer = object.__new__(AnswerGenerator)
-    canonical = json.dumps(
-        {
-            "answer": answerer.revision(),
-            "rewrite": rewriter.revision(),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return (
-        "sha256:"
-        f"{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
-    )
 
 
 def _require_file_sha256(

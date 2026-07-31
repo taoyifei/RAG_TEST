@@ -1,11 +1,16 @@
+import hashlib
 import json
 import math
+from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
 
+from rag_app.chunking import Utf8TokenCounter
 from scripts.verify_model_contracts import (
     ContractError,
+    LlmBudgetOptions,
     ModelContractOptions,
     verify_model_contract,
 )
@@ -20,13 +25,29 @@ _MODELS = {
 
 
 def _options(service: str) -> ModelContractOptions:
+    llm_budget = (
+        LlmBudgetOptions(
+            context_limit=8192,
+            max_question_tokens=32,
+            max_evidence_tokens=128,
+            rewrite_output_tokens=128,
+            answer_output_tokens=1024,
+            repair_output_tokens=1024,
+            token_counter=Utf8TokenCounter(),
+        )
+        if service == "llm"
+        else None
+    )
     return ModelContractOptions(
         service=service,
         endpoint="http://model.internal:8000",
         model=_MODELS[service],
+        expected_revision=_REVISION,
         token=_TOKEN,
         dimension=3 if service == "embedding" else None,
         timeout_seconds=5.0,
+        deployment_manifest=None,
+        llm_budget=llm_budget,
     )
 
 
@@ -54,6 +75,8 @@ def _llm_response(
     *,
     content: object | None = None,
     finish_reason: str = "stop",
+    prompt_tokens: int = 11,
+    completion_tokens: int = 7,
 ) -> httpx.Response:
     payload = json.loads(request.content)
     schema_name = payload["response_format"]["json_schema"]["name"]
@@ -82,9 +105,9 @@ def _llm_response(
                 }
             ],
             "usage": {
-                "prompt_tokens": 11,
-                "completion_tokens": 7,
-                "total_tokens": 18,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
             },
         },
     )
@@ -148,13 +171,18 @@ def test_model_contract_success_is_sanitized(service: str) -> None:
         assert probe["indexes"] == [0, 1]
         assert probe["score_range"] == [0.0, 1.0]
     else:
-        for contract in ("rewrite", "answer"):
+        for contract in (
+            "rewrite",
+            "answer_initial_max",
+            "answer_repair_max",
+        ):
             assert probe[contract]["finish_reason"] == "stop"
             assert probe[contract]["usage"] == {
                 "prompt_tokens": 11,
                 "completion_tokens": 7,
                 "total_tokens": 18,
             }
+            assert probe[contract]["budget"]["within_context"] is True
         assert probe["temperature"] == 0
         assert probe["thinking_enabled"] is False
     serialized = json.dumps(report, ensure_ascii=False)
@@ -296,3 +324,299 @@ def test_model_contract_reports_endpoint_failure_without_response() -> None:
 
     assert raised.value.code == "ENDPOINT_FAILURE"
     assert _TOKEN not in str(raised.value)
+
+
+def test_model_contract_allows_endpoint_without_token() -> None:
+    options = replace(_options("embedding"), token=None)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "authorization" not in request.headers
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": _MODELS["embedding"],
+                            "revision": _REVISION,
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": _MODELS["embedding"],
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                ],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert report["status"] == "passed"
+
+
+def test_model_contract_rejects_endpoint_revision_drift() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": _MODELS["embedding"],
+                            "revision": "unexpected-revision",
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": _MODELS["embedding"],
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                ],
+            },
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match="REVISION_MISMATCH"),
+    ):
+        verify_model_contract(_options("embedding"), client=client)
+
+
+def test_llm_contract_uses_maximum_initial_and_repair_requests() -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        common = _common_response(request, model=_MODELS["llm"])
+        if common is not None:
+            return common
+        requests.append(json.loads(request.content))
+        return _llm_response(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        verify_model_contract(_options("llm"), client=client)
+
+    answer_requests = [
+        request
+        for request in requests
+        if request["response_format"]["json_schema"]["name"]
+        == "strict_evidence_answer"
+    ]
+    assert len(requests) == 3
+    assert [request["max_tokens"] for request in answer_requests] == [
+        1024,
+        1024,
+    ]
+
+
+def _write_manifest(
+    path: Path,
+    *,
+    service: str,
+    digest_matches: bool = True,
+) -> None:
+    payload: dict[str, object] = {
+        "schema_version": "1",
+        "service": service,
+        "endpoint": "http://model.internal:8000",
+        "model": _MODELS[service],
+        "model_revision": _REVISION,
+        "tokenizer_revision": "sha256:" + "1" * 64,
+        "code_revision": "2" * 40,
+        "vllm_version": "0.10.2",
+        "quantization": "awq",
+        "max_context_tokens": 8192,
+        "chat_template_sha256": "sha256:" + "3" * 64,
+    }
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    digest = hashlib.sha256(canonical).hexdigest()
+    payload["manifest_sha256"] = (
+        f"sha256:{digest}" if digest_matches else "sha256:" + "0" * 64
+    )
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    path.chmod(0o444)
+
+
+def test_model_contract_uses_verified_manifest_when_revision_missing(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "deployment-model-manifest.json"
+    _write_manifest(manifest_path, service="embedding")
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        if request.url.path == "/v1/models":
+            return httpx.Response(
+                200,
+                json={"data": [{"id": _MODELS["embedding"]}]},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "model": _MODELS["embedding"],
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                ],
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert report["endpoint_revision"] == _REVISION
+    assert report["revision_source"] == "deployment_manifest"
+    assert report["deployment_manifest_sha256"].startswith("sha256:")
+
+
+def test_model_contract_rejects_bad_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "deployment-model-manifest.json"
+    _write_manifest(
+        manifest_path,
+        service="embedding",
+        digest_matches=False,
+    )
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(
+            200,
+            json={"data": [{"id": _MODELS["embedding"]}]},
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+def test_model_contract_rejects_writable_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "deployment-model-manifest.json"
+    _write_manifest(manifest_path, service="embedding")
+    manifest_path.chmod(0o644)
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok"})
+        return httpx.Response(
+            200,
+            json={"data": [{"id": _MODELS["embedding"]}]},
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+def test_model_contract_rejects_conflicting_endpoint_revisions() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(
+                200,
+                json={"status": "ok"},
+                headers={"x-model-revision": "other-revision"},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": _MODELS["embedding"],
+                        "revision": _REVISION,
+                    }
+                ]
+            },
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match="REVISION_MISMATCH"),
+    ):
+        verify_model_contract(_options("embedding"), client=client)
+
+
+def test_model_contract_rejects_llm_context_overflow() -> None:
+    options = _options("llm")
+    assert options.llm_budget is not None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        common = _common_response(request, model=_MODELS["llm"])
+        if common is not None:
+            return common
+        request_payload = json.loads(request.content)
+        max_tokens = request_payload["max_tokens"]
+        prompt_tokens = (
+            options.llm_budget.context_limit - max_tokens + 1
+            if max_tokens == options.llm_budget.answer_output_tokens
+            else 11
+        )
+        return _llm_response(
+            request,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=1,
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="LLM_CONTEXT_BUDGET_EXCEEDED",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+@pytest.mark.parametrize("revision", ["unknown", "main", "latest"])
+def test_model_contract_rejects_unpinned_expected_revision(
+    revision: str,
+) -> None:
+    with pytest.raises(ValueError, match="expected_revision"):
+        replace(_options("embedding"), expected_revision=revision)
