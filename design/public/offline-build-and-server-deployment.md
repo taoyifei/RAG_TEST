@@ -410,10 +410,132 @@ docker exec rag-ocr python -c \
   print(paddle.device.cuda.device_count())"
 ```
 
-OCR 必须报告 GPU 设备且 CUDA 设备数大于 0。随后用管理令牌创建一次全量
-任务前，必须先完成检索参数冻结和模型 revision 核验，并在包含冻结配置的新
-release 上显式启动 `index` profile。禁止在服务器上直接修改 provisional
-配置或绕过 worker 的严格索引门禁：
+### 冒烟成功标准
+
+- 默认路径只启动 `rag-app`、`rag-ocr` 和 `rag-qdrant`。
+- `rag-worker` 必须不存在或保持停止。
+- 应用 `/live` 必须返回 HTTP 200。
+- Qdrant `/readyz` 必须返回 HTTP 200。
+- OCR `/ready` 必须返回 HTTP 200，且 CUDA device count 必须大于 0。
+- provisional 阶段 `/ready` 返回 HTTP 503 才是成功预期。
+- 六份模型契约报告全部 `status=passed` 前，不得冻结检索参数或启动 `rag-worker`。
+  六份分别对应 embedding、reranker 和四个 LLM。
+
+OCR 必须报告 GPU 设备且 CUDA 设备数大于 0。runtime 已携带只读模型契约
+验证器。以下模板从当前 app image 执行它；current runtime 只读挂载，
+`rag-egress` 是唯一模型出口，令牌值只由 0600 的 active env 注入，命令行
+只传 `--token-env` 变量名。报告由容器 UID 10001 写入宿主机
+`/data/tyf/RAG/logs/model-contract-*.json`。报告不含令牌、问题或完整响应，
+也不要用 `tee` 把报告复制到终端：
+
+```bash
+app_image="$(
+  awk -F= '$1 == "RAG_APP_IMAGE" {
+    sub(/^[^=]*=/, "")
+    print
+  }' /data/tyf/RAG/shared/env/rag.env
+)"
+test -n "${app_image}"
+
+run_model_contract() {
+  report_name="$1"
+  shift
+  docker run --rm \
+    --network rag-egress \
+    --env-file /data/tyf/RAG/shared/env/rag.env \
+    --volume \
+    /data/tyf/RAG/current/evaluation/runtime:/contract-runtime:ro \
+    --volume /data/tyf/RAG/logs:/contract-logs \
+    --entrypoint /bin/sh \
+    "${app_image}" -eu -c '
+      report_name="$1"
+      shift
+      python /contract-runtime/scripts/verify_model_contracts.py "$@" \
+        > "/contract-logs/${report_name}.json"
+    ' contract-runner "${report_name}" "$@"
+}
+
+run_model_contract model-contract-embedding \
+  embedding \
+  --endpoint '<verified-embedding-url>' \
+  --model Qwen3-Embedding-0.6B \
+  --expected-revision '<verified-embedding-revision>' \
+  --token-env RAG_EMBEDDING_API_TOKEN \
+  --dimension 1024
+
+run_model_contract model-contract-reranker \
+  reranker \
+  --endpoint '<verified-reranker-url>' \
+  --model Qwen3-Reranker-0.6B \
+  --expected-revision '<verified-reranker-revision>' \
+  --token-env RAG_RERANKER_API_TOKEN
+
+run_model_contract model-contract-llm-1 \
+  llm \
+  --endpoint '<verified-llm-url-1>' \
+  --model Qwen/Qwen3-8B-AWQ \
+  --expected-revision '<verified-llm-revision-1>' \
+  --token-env RAG_LLM_API_TOKEN \
+  --context-limit 8192 \
+  --retrieval-config /app/deployment/config/retrieval.json \
+  --llm-tokenizer /app/deployment/assets/tokenizers/llm/tokenizer.json
+
+run_model_contract model-contract-llm-2 \
+  llm \
+  --endpoint '<verified-llm-url-2>' \
+  --model Qwen/Qwen3-8B-AWQ \
+  --expected-revision '<verified-llm-revision-2>' \
+  --token-env RAG_LLM_API_TOKEN \
+  --context-limit 8192 \
+  --retrieval-config /app/deployment/config/retrieval.json \
+  --llm-tokenizer /app/deployment/assets/tokenizers/llm/tokenizer.json
+
+run_model_contract model-contract-llm-3 \
+  llm \
+  --endpoint '<verified-llm-url-3>' \
+  --model Qwen/Qwen3-8B-AWQ \
+  --expected-revision '<verified-llm-revision-3>' \
+  --token-env RAG_LLM_API_TOKEN \
+  --context-limit 8192 \
+  --retrieval-config /app/deployment/config/retrieval.json \
+  --llm-tokenizer /app/deployment/assets/tokenizers/llm/tokenizer.json
+
+run_model_contract model-contract-llm-4 \
+  llm \
+  --endpoint '<verified-llm-url-4>' \
+  --model Qwen/Qwen3-8B-AWQ \
+  --expected-revision '<verified-llm-revision-4>' \
+  --token-env RAG_LLM_API_TOKEN \
+  --context-limit 8192 \
+  --retrieval-config /app/deployment/config/retrieval.json \
+  --llm-tokenizer /app/deployment/assets/tokenizers/llm/tokenizer.json
+```
+
+六份报告必须都满足 `status=passed`。只输出文件名、状态和稳定错误类别进行
+汇总，不打印完整 JSON：
+
+```bash
+python3 - <<'PY'
+import json
+from pathlib import Path
+
+paths = sorted(Path("/data/tyf/RAG/logs").glob("model-contract-*.json"))
+if len(paths) != 6:
+    raise SystemExit("MODEL_CONTRACT_REPORT_COUNT_INVALID")
+failed = False
+for path in paths:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    status = payload.get("status")
+    error_code = payload.get("error_code", "-")
+    print(f"{path.name}: status={status} error_code={error_code}")
+    failed = failed or status != "passed"
+raise SystemExit(1 if failed else 0)
+PY
+```
+
+随后用管理令牌创建一次全量任务前，必须先完成检索参数冻结和模型 revision
+核验，并在包含冻结配置的新 release 上显式启动 `index` profile。禁止在
+服务器上直接修改 provisional 配置或绕过 worker 的严格索引门禁：
 
 ```bash
 docker compose --profile index \

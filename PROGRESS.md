@@ -3668,6 +3668,162 @@
   原“RAG_ACCESS_MODE 未映射”阻塞段已经删除，其余外部阻塞继续保留。
 - [x] 本轮没有 build/package、联网、访问 `.57/.58/.60` 或其他服务器，
   没有 commit 或 push。
+
+## 2026-07-31 正式双包前两项任务 0：当前 HEAD 基线
+
+- [x] 中断后已先读取 `PROGRESS.md`、`BLOCKED.md`。当前 HEAD 与任务书预期
+  一致，为 `ec0b922eb6dea7b2771cc04fcc6e8ae926169ef8`；起始工作树与
+  暂存区均为空，`git write-tree` 与 `HEAD^{tree}` 均为
+  `9d58f429164f73d40ea86db3ef267ec58cf596b0`。
+- [x] 保护摘要为 docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  Compose、pipeline/retrieval/corpus policy 和 `deployment/ASSETS.sha256`
+  分别为
+  `3d63ef7284698aacba8ecf66c9df2815f469f8d99c7c1d9ec4d8aec3a143539f` /
+  `87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0` /
+  `91a97f380ca212b27ef8909973fd61a157a5b87774f970360ab7258927e26d8f`。
+- [x] 未改代码的首轮全量 pytest 为
+  `2 failed, 635 passed, 61 warnings in 569.44s`，skipped=0；两项失败
+  均为套件末段访问本地 Qdrant 时 `ConnectTimeout`。原样定向复核为
+  `2 passed, 2 warnings in 9.49s`；第二轮未改代码的完整基线为
+  `637 passed, 61 warnings in 554.68s`，JUnit 明确 failures=0、
+  errors=0、skipped=0。warning 类别仍只有
+  `StarletteDeprecationWarning` 与 `UserWarning`。
+- [x] 其余基线门禁全部退出 0：compileall 无输出；Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 95 source files`；Google docstring
+  `missing_google_sections=0`；6 个 deployment Shell、默认/index Compose、
+  ASSETS 11/11、release-safety 和 `git diff --check` 均通过。
+  release-safety 为 `tracked_files=239`、`violations=0`。
+- [x] 基线阶段没有 build、save/load、真实 package、联网、访问
+  `.57/.58/.60` 或其他服务器，也没有 commit 或 push。
+
+## 2026-07-31 正式双包任务 1：runtime 验证器红测
+
+- [x] fake-package、required ordinary file 和安装后命令模板共 5 项新用例
+  在修复前按预期全部失败：`5 failed in 1.83s`。runtime tar 及其内部
+  `MANIFEST.sha256` 均没有
+  `evaluation/runtime/scripts/verify_model_contracts.py`；删除场景找不到目标，
+  篡改场景仍错误返回 0；`package.sh`、`verify-offline.sh` 和公开部署手册
+  也都缺少对应契约。
+- [x] 红测同时冻结边界：验证器不得进入 corpus，不得因此复制仓库
+  `src/tests/.git`、tokenizer、DOCX、真实 `.env` 或 `rag.env`；安装后命令
+  必须使用 current runtime 只读挂载、`rag-egress`、app image 内冻结配置与
+  tokenizer、`--env-file`/`--token-env` 和 `/data/tyf/RAG/logs`。
+
+## 2026-07-31 正式双包任务 1：runtime 验证器修复
+
+- [x] `package.sh` 只新增一项精确复制：
+  `scripts/verify_model_contracts.py` 到
+  `evaluation/runtime/scripts/verify_model_contracts.py`；
+  `verify-offline.sh` 把同一路径加入 non-empty、non-symlink 的普通文件
+  白名单。既有内部 `MANIFEST.sha256` 与外层 runtime archive/release
+  manifest 自动覆盖该文件，没有新增独立摘要旁路。
+- [x] fake-package 行为测试确认 runtime tar 和内部 manifest 都含该脚本；
+  原始 runtime 校验通过，删除或篡改脚本后均非零；corpus 不含该脚本，
+  runtime 也没有因此复制 `src/tests/.git`、tokenizer、DOCX、真实 `.env`、
+  `rag.env`、Dockerfile 或 `pyproject.toml`。
+- [x] 公开部署手册已给出从当前 app image 执行六次验证的模板：current
+  evaluation runtime 只读挂载、`rag-egress`、active env 的 `--env-file`、
+  三种 `--token-env`、镜像内 retrieval config/LLM tokenizer 和宿主
+  `/data/tyf/RAG/logs` 均为固定路径；embedding、reranker 和四个 LLM
+  分别落一份脱敏 JSON，只汇总 status 与稳定错误类别。
+- [x] 修复后新增专项为 `5 passed in 1.15s`，两个相关测试文件完整为
+  `15 passed in 1.99s`；专项 Ruff、`package.sh`/`verify-offline.sh`
+  `bash -n` 和 `git diff --check` 均退出 0。
+
+## 2026-07-31 正式双包任务 2：模型端点前置校验红测
+
+- [x] 新增合法内网 URL 正例与 12 项反例；修复前实际为
+  `12 failed, 1 passed in 3.67s`。除既有 `REPLACE_` 粗筛外，
+  `.invalid`/子域、坏 JSON、空数组、重复、URL 凭据、query、fragment、
+  非数组、非字符串及非 HTTP(S) 都错误完成部署；`REPLACE_` 虽非零，
+  也缺少冻结的稳定类别。
+- [x] 每项反测都要求原始端点值不出现在 stdout/stderr，且 fake Docker
+  调用日志精确为空；合法正例同时覆盖目标内网末段 `.57/.58/.60` 的
+  HTTP/HTTPS URL，不要求在本阶段建立网络连接。
+
+## 2026-07-31 正式双包任务 2：模型端点前置校验修复
+
+- [x] `deploy.sh` 使用服务器既有 `python3` 标准库，从 stdin 只读接收每组
+  原始值；依次要求非空 JSON 字符串数组、元素非空且无重复、scheme 仅
+  HTTP/HTTPS、无凭据/query/fragment/控制字符，并把 hostname 去尾点、
+  casefold 后拒绝 `invalid` 或 `.invalid` 后缀。没有 DNS、health 或真实
+  请求。
+- [x] `RAG_EMBEDDING_ENDPOINTS`、`RAG_RERANKER_ENDPOINTS` 与
+  `RAG_LLM_ENDPOINTS` 均通过既有 exact-once env 读取后逐一验证；位置早于
+  首次 `docker ps`、`docker image inspect`、`docker load`、stop/up/rm
+  等全部 Docker 调用。`REPLACE_` 粗筛也补上稳定类别
+  `CANDIDATE_PLACEHOLDER_FORBIDDEN`。
+- [x] 校验器只输出固定错误类别，Python stderr 被收敛为通用稳定类别；
+  不输出完整端点、凭据或环境文件。专项为 `13 passed in 1.10s`，完整
+  `tests/test_deploy_worker_transaction.py` 为
+  `61 passed in 26.25s`；专项 Ruff、`deploy.sh` `bash -n` 和
+  `git diff --check` 均退出 0。
+
+## 2026-07-31 正式双包任务 3：smoke 成功标准红测
+
+- [x] 新文档契约测试在修复前按预期为 `1 failed in 0.05s`；两份文档虽
+  分散提到核心容器、health 和 provisional 503，但没有一组同时覆盖启动
+  集合、worker 状态、三个 HTTP 200、CUDA 数量、503 成功预期，以及模型
+  契约全部 passed 前不得冻结参数或启动 worker 的正式成功标准。
+
+## 2026-07-31 正式双包任务 3：smoke 成功标准修复
+
+- [x] `deployment/README.md` 与 runtime 会携带的公开手册现在使用同一组
+  “冒烟成功标准”：只启动 app/OCR/Qdrant；worker 不存在或停止；
+  `/live`、Qdrant `/readyz`、OCR `/ready` 均为 HTTP 200；CUDA device
+  count 大于 0；provisional `/ready` 为 HTTP 503 才是成功预期。
+- [x] 两份文档同时明确：embedding、reranker 和四个 LLM 对应的六份
+  模型契约报告全部 `status=passed` 前，不得冻结检索参数或启动
+  `rag-worker`。专项为 `1 passed in 0.01s`，完整文档事务测试为
+  `9 passed in 0.02s`；专项 Ruff 与 `git diff --check` 均退出 0。
+
+## 2026-07-31 正式双包前两项：最终验收
+
+- [x] 部署、打包、安装、回滚及 worker policy 的关联套件为
+  `148 passed in 52.20s`。最终全量 pytest 为
+  `655 passed, 61 warnings in 551.56s`；JUnit 明确 failures=0、
+  errors=0、skipped=0，stderr=0。warning 类别仍只有
+  `StarletteDeprecationWarning` 与 `UserWarning`，相对基线没有增加。
+- [x] 最终 compileall 无输出；全仓 Ruff `All checks passed!`；strict
+  mypy `Success: no issues found in 95 source files`；Google docstring
+  `missing_google_sections=0`；6 个 deployment Shell、默认/index Compose、
+  ASSETS 11/11 与 `git diff --check` 均退出 0。
+- [x] 候选临时 Git index 的 release-safety 为 `tracked_files=239`、
+  `violations=0`，临时 index 已删除；真实 Git index 从未用于 `git add`。
+  最终修改路径仅为任务白名单内的 `deployment/{package,verify-offline,
+  deploy}.sh`、两份部署文档、3 个对应测试和本文件。
+- [x] 生产 `src/rag_app/**`、`evaluation/**`、Dockerfile、Compose、三份
+  deployment config 与 ASSETS 相对 HEAD 均无 diff。Compose、
+  pipeline/retrieval/corpus policy 和 ASSETS SHA256 分别保持
+  `3d63ef7284698aacba8ecf66c9df2815f469f8d99c7c1d9ec4d8aec3a143539f` /
+  `87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0` /
+  `91a97f380ca212b27ef8909973fd61a157a5b87774f970360ab7258927e26d8f`。
+- [x] docs/artifacts/frozen/results/evidence 保护摘要分别保持
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e` /
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24` /
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046` /
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de` /
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+- [x] `BLOCKED.md` 未修改，继续保留真实模型执行、retrieval tuning、
+  GPU OCR、EMF、Word 自动编号、完整 chat-template token 预算及服务器
+  生产验收；本轮没有把任何一项伪装成已完成。
+- [x] 本轮没有 build、save/load、真实 package、联网、访问
+  `.57/.58/.60` 或其他服务器，没有真实容器修改，也没有 commit 或 push。
+  仅在 pytest 临时目录执行 fake package/fake Docker 事务测试。
 - [ ] Compose 启动阻塞本身已经解除，但本 goal 的全量 pytest 全绿完成条件
   因上述范围外既有 GC 测试失败尚未满足；这是恢复后的第 1 个连续阻塞审计
   turn，目标保持 active。

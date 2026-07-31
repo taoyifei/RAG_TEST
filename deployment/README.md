@@ -104,6 +104,29 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
      "import urllib.request; print(urllib.request.urlopen(
      'http://127.0.0.1:8090/ready').read().decode())"
    ```
+   安装后的模型验证器固定为
+   `/data/tyf/RAG/current/evaluation/runtime/scripts/verify_model_contracts.py`。
+   必须从当前 app image 执行，使用 `rag-egress`，把
+   `/data/tyf/RAG/current/evaluation/runtime` 只读挂载到
+   `/contract-runtime`；令牌只通过 active `rag.env` 的 `--env-file` 和
+   验证器的 `--token-env` 变量名传入。embedding、reranker 和四个 LLM
+   端点分别执行，LLM 固定读取
+   `/app/deployment/config/retrieval.json` 与
+   `/app/deployment/assets/tokenizers/llm/tokenizer.json`。完整命令模板见
+   current `README.md` 的“启动与 GPU 冒烟”；六份脱敏报告只写入
+   `/data/tyf/RAG/logs`，不得输出令牌、探测问题或完整模型响应。
+
+   ### 冒烟成功标准
+
+   - 默认路径只启动 `rag-app`、`rag-ocr` 和 `rag-qdrant`。
+   - `rag-worker` 必须不存在或保持停止。
+   - 应用 `/live` 必须返回 HTTP 200。
+   - Qdrant `/readyz` 必须返回 HTTP 200。
+   - OCR `/ready` 必须返回 HTTP 200，且 CUDA device count 必须大于 0。
+   - provisional 阶段 `/ready` 返回 HTTP 503 才是成功预期。
+   - 六份模型契约报告全部 `status=passed` 前，不得冻结检索参数或启动 `rag-worker`。
+     六份分别对应 embedding、reranker 和四个 LLM。
+
 7. 当前 provisional 配置下 `/ready=503` 是正确结果，不得绕过 worker 的严格
    索引门禁。完成检索参数冻结和模型 revision 核验、生成对应 release 后，显式
    启动单索引 worker，再通过管理 API 创建任务：
