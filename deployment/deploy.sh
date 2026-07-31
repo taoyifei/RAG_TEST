@@ -97,6 +97,79 @@ optional_env_value() {
   fi
 }
 
+validate_model_endpoint_array() {
+  local raw_value="$1"
+  local error_category
+  if error_category="$(
+    printf '%s' "${raw_value}" | python3 -c '
+import json
+import sys
+from urllib.parse import urlsplit
+
+
+def reject(category):
+    print(category)
+    raise SystemExit(1)
+
+
+try:
+    endpoints = json.load(sys.stdin)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    reject("MODEL_ENDPOINTS_INVALID_JSON")
+if not isinstance(endpoints, list):
+    reject("MODEL_ENDPOINTS_NOT_ARRAY")
+if not endpoints:
+    reject("MODEL_ENDPOINTS_EMPTY")
+if any(
+    not isinstance(endpoint, str) or not endpoint
+    for endpoint in endpoints
+):
+    reject("MODEL_ENDPOINT_ITEM_INVALID")
+if len(endpoints) != len(set(endpoints)):
+    reject("MODEL_ENDPOINTS_DUPLICATE")
+for endpoint in endpoints:
+    if "REPLACE_" in endpoint:
+        reject("MODEL_ENDPOINT_PLACEHOLDER_FORBIDDEN")
+    if "?" in endpoint:
+        reject("MODEL_ENDPOINT_QUERY_FORBIDDEN")
+    if "#" in endpoint:
+        reject("MODEL_ENDPOINT_FRAGMENT_FORBIDDEN")
+    if "\\" in endpoint or any(
+        character.isspace() or ord(character) < 32
+        for character in endpoint
+    ):
+        reject("MODEL_ENDPOINT_URL_INVALID")
+    try:
+        parsed = urlsplit(endpoint)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError:
+        reject("MODEL_ENDPOINT_URL_INVALID")
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or hostname is None
+    ):
+        reject("MODEL_ENDPOINT_URL_INVALID")
+    if parsed.username is not None or parsed.password is not None:
+        reject("MODEL_ENDPOINT_CREDENTIALS_FORBIDDEN")
+    normalized_hostname = hostname.rstrip(".").casefold()
+    if (
+        normalized_hostname == "invalid"
+        or normalized_hostname.endswith(".invalid")
+    ):
+        reject("MODEL_ENDPOINT_HOST_FORBIDDEN")
+' 2>/dev/null
+  )"; then
+    return 0
+  fi
+  if [[ -z "${error_category}" ]]; then
+    error_category="MODEL_ENDPOINT_VALIDATION_FAILED"
+  fi
+  echo "${error_category}" >&2
+  return 1
+}
+
 image_manifest_value() {
   local archive="$1"
   local field="$2"
@@ -359,8 +432,26 @@ if [[ "${candidate_env}" != "${candidate_dir}/${release_id}.env" \
   fail "候选环境文件必须位于固定 candidates 目录并匹配 release ID。"
 fi
 if grep -Eq 'REPLACE_' "${candidate_env}"; then
-  fail "候选环境文件仍含占位符。"
+  fail "CANDIDATE_PLACEHOLDER_FORBIDDEN：候选环境文件仍含占位符。"
 fi
+if ! embedding_endpoints="$(
+  exact_env_value "${candidate_env}" RAG_EMBEDDING_ENDPOINTS
+)"; then
+  fail "MODEL_ENDPOINTS_ENV_INVALID"
+fi
+if ! reranker_endpoints="$(
+  exact_env_value "${candidate_env}" RAG_RERANKER_ENDPOINTS
+)"; then
+  fail "MODEL_ENDPOINTS_ENV_INVALID"
+fi
+if ! llm_endpoints="$(
+  exact_env_value "${candidate_env}" RAG_LLM_ENDPOINTS
+)"; then
+  fail "MODEL_ENDPOINTS_ENV_INVALID"
+fi
+validate_model_endpoint_array "${embedding_endpoints}"
+validate_model_endpoint_array "${reranker_endpoints}"
+validate_model_endpoint_array "${llm_endpoints}"
 candidate_revision="$(exact_env_value \
   "${candidate_env}" RAG_RELEASE_REVISION)"
 if [[ "${candidate_revision}" != "${source_revision}" ]]; then

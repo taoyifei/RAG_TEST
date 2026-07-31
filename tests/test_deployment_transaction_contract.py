@@ -125,6 +125,73 @@ def test_documents_distinguish_release_id_from_source_revision() -> None:
         assert _CANDIDATE_ENV in normalized
 
 
+def test_model_contract_verifier_is_runtime_required_file() -> None:
+    package = _script("package.sh")
+    verifier = _script("verify-offline.sh")
+    runtime_path = (
+        "evaluation/runtime/scripts/verify_model_contracts.py"
+    )
+
+    assert "scripts/verify_model_contracts.py" in package
+    assert (
+        '"${runtime_root}/evaluation/runtime/scripts/"'
+        in package
+    )
+    assert f'"{runtime_path}"' in verifier
+
+
+def test_installed_runtime_documents_model_contract_commands() -> None:
+    document = _document(_LONG_DEPLOYMENT_DOCUMENT)
+
+    assert (
+        "/data/tyf/RAG/current/evaluation/runtime:"
+        "/contract-runtime:ro"
+        in document
+    )
+    assert "--network rag-egress" in document
+    assert (
+        "--env-file /data/tyf/RAG/shared/env/rag.env"
+        in document
+    )
+    assert (
+        "/contract-runtime/scripts/verify_model_contracts.py"
+        in document
+    )
+    assert "/app/deployment/config/retrieval.json" in document
+    assert (
+        "/app/deployment/assets/tokenizers/llm/tokenizer.json"
+        in document
+    )
+    assert "--token-env RAG_EMBEDDING_API_TOKEN" in document
+    assert "--token-env RAG_RERANKER_API_TOKEN" in document
+    assert document.count("--token-env RAG_LLM_API_TOKEN") == 4
+    assert "run_model_contract model-contract-embedding" in document
+    assert "run_model_contract model-contract-reranker" in document
+    assert document.count("run_model_contract model-contract-llm-") == 4
+    assert "/data/tyf/RAG/logs/model-contract-" in document
+    assert "报告不含令牌、问题或完整响应" in document
+
+
+def test_documents_define_provisional_smoke_success() -> None:
+    required_statements = (
+        "冒烟成功标准",
+        "只启动 `rag-app`、`rag-ocr` 和 `rag-qdrant`",
+        "`rag-worker` 必须不存在或保持停止",
+        "`/live` 必须返回 HTTP 200",
+        "Qdrant `/readyz` 必须返回 HTTP 200",
+        "OCR `/ready` 必须返回 HTTP 200",
+        "CUDA device count 必须大于 0",
+        "provisional 阶段 `/ready` 返回 HTTP 503 才是成功",
+        "六份模型契约报告全部 `status=passed` 前",
+        "不得冻结检索参数或启动 `rag-worker`",
+    )
+
+    for path in _DEPLOYMENT_DOCUMENTS:
+        document = _document(path)
+        for statement in required_statements:
+            assert statement in document
+
+
 def test_document_distinguishes_image_id_from_repo_digests() -> None:
     document = _document(_LONG_DEPLOYMENT_DOCUMENT)
     normalized = _normalize_shell_continuations(document)

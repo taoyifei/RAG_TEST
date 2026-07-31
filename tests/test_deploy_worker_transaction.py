@@ -16,6 +16,19 @@ _NEW_OCR_IMAGE = "sha256:" + "e" * 64
 _NEW_QDRANT_IMAGE = "sha256:" + "f" * 64
 _OLD_REVISION = "1" * 40
 _NEW_REVISION = "2" * 40
+_MODEL_NETWORK_PREFIX = ".".join(("10", "242", "180"))
+_VALID_EMBEDDING_ENDPOINTS = (
+    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1"]'
+)
+_VALID_RERANKER_ENDPOINTS = (
+    f'["http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
+)
+_VALID_LLM_ENDPOINTS = (
+    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1",'
+    f'"http://{_MODEL_NETWORK_PREFIX}.57:8001/v1",'
+    f'"http://{_MODEL_NETWORK_PREFIX}.58:8000/v1",'
+    f'"https://{_MODEL_NETWORK_PREFIX}.60:8001/v1"]'
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +91,9 @@ def _prepare_sandbox(
         f"RAG_QDRANT_PATH={qdrant}\n"
         f"RAG_DOCS_PATH={docs}\n"
         "RAG_PORT=8088\n"
+        f"RAG_EMBEDDING_ENDPOINTS={_VALID_EMBEDDING_ENDPOINTS}\n"
+        f"RAG_RERANKER_ENDPOINTS={_VALID_RERANKER_ENDPOINTS}\n"
+        f"RAG_LLM_ENDPOINTS={_VALID_LLM_ENDPOINTS}\n"
         "RAG_QDRANT_API_KEY=deploy-qdrant-secret\n"
         "CUSTOM_SETTING=candidate-value\n"
     )
@@ -586,6 +602,24 @@ def _env_values(sandbox: _DeploySandbox) -> dict[str, str]:
     )
 
 
+def _replace_env_value(
+    sandbox: _DeploySandbox,
+    key: str,
+    value: str,
+) -> None:
+    lines = sandbox.env_file.read_text(encoding="utf-8").splitlines()
+    matches = sum(line.startswith(f"{key}=") for line in lines)
+    assert matches == 1
+    sandbox.env_file.write_text(
+        "\n".join(
+            f"{key}={value}" if line.startswith(f"{key}=") else line
+            for line in lines
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _command_log(sandbox: _DeploySandbox) -> str:
     if not sandbox.command_log.exists():
         return ""
@@ -660,6 +694,109 @@ def test_running_worker_is_stopped_before_load_and_stays_stopped(
         sandbox.root / "shared/env/rollback-images.env"
     ).read_text(encoding="utf-8")
     assert "ROLLBACK_WORKER_WAS_RUNNING=true\n" in rollback
+
+
+def test_valid_internal_model_endpoint_arrays_are_accepted(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    assert _env_values(sandbox)[
+        "RAG_EMBEDDING_ENDPOINTS"
+    ] == _VALID_EMBEDDING_ENDPOINTS
+    assert _env_values(sandbox)[
+        "RAG_RERANKER_ENDPOINTS"
+    ] == _VALID_RERANKER_ENDPOINTS
+    assert _env_values(sandbox)["RAG_LLM_ENDPOINTS"] == _VALID_LLM_ENDPOINTS
+
+
+@pytest.mark.parametrize(
+    ("endpoint_key", "endpoint_value", "expected_category"),
+    (
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            '["http://example.invalid:8000"]',
+            "MODEL_ENDPOINT_HOST_FORBIDDEN",
+        ),
+        (
+            "RAG_RERANKER_ENDPOINTS",
+            '["https://model.zone.invalid/v1"]',
+            "MODEL_ENDPOINT_HOST_FORBIDDEN",
+        ),
+        (
+            "RAG_LLM_ENDPOINTS",
+            "not-json",
+            "MODEL_ENDPOINTS_INVALID_JSON",
+        ),
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            "[]",
+            "MODEL_ENDPOINTS_EMPTY",
+        ),
+        (
+            "RAG_RERANKER_ENDPOINTS",
+            (
+                f'["http://{_MODEL_NETWORK_PREFIX}.58:8000",'
+                f'"http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
+            ),
+            "MODEL_ENDPOINTS_DUPLICATE",
+        ),
+        (
+            "RAG_LLM_ENDPOINTS",
+            f'["http://user:password@{_MODEL_NETWORK_PREFIX}.57:8000"]',
+            "MODEL_ENDPOINT_CREDENTIALS_FORBIDDEN",
+        ),
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1?mode=probe"]',
+            "MODEL_ENDPOINT_QUERY_FORBIDDEN",
+        ),
+        (
+            "RAG_RERANKER_ENDPOINTS",
+            f'["http://{_MODEL_NETWORK_PREFIX}.58:8000/v1#probe"]',
+            "MODEL_ENDPOINT_FRAGMENT_FORBIDDEN",
+        ),
+        (
+            "RAG_LLM_ENDPOINTS",
+            '{"endpoint":"http://service"}',
+            "MODEL_ENDPOINTS_NOT_ARRAY",
+        ),
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            "[123]",
+            "MODEL_ENDPOINT_ITEM_INVALID",
+        ),
+        (
+            "RAG_RERANKER_ENDPOINTS",
+            '["http://REPLACE_MODEL_ENDPOINT"]',
+            "CANDIDATE_PLACEHOLDER_FORBIDDEN",
+        ),
+        (
+            "RAG_LLM_ENDPOINTS",
+            '["ftp://model.internal/v1"]',
+            "MODEL_ENDPOINT_URL_INVALID",
+        ),
+    ),
+)
+def test_invalid_model_endpoint_array_fails_before_any_docker_call(
+    tmp_path: Path,
+    endpoint_key: str,
+    endpoint_value: str,
+    expected_category: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    _replace_env_value(sandbox, endpoint_key, endpoint_value)
+
+    completed = _run_deploy(sandbox)
+
+    combined_output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert expected_category in combined_output
+    assert endpoint_value not in combined_output
+    assert _command_log(sandbox) == ""
 
 
 def test_success_commits_candidate_then_complete_rollback_state(

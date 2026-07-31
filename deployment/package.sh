@@ -179,6 +179,8 @@ cp "${repo_root}/scripts/load_test_chat.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/scripts/benchmark_qdrant.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
+cp "${repo_root}/scripts/verify_model_contracts.py" \
+  "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/deployment/ocr/assets/licenses/PaddleOCR-LICENSE.txt" \
   "${runtime_root}/licenses/"
 cp "${repo_root}/deployment/ocr/THIRD_PARTY_NOTICES.md" \

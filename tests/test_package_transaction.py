@@ -51,8 +51,10 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     for relative in (
         "deployment/package.sh",
         "deployment/install.sh",
+        "deployment/verify-offline.sh",
         "scripts/freeze_corpus_manifest.py",
         "scripts/offline_bundle.py",
+        "scripts/verify_model_contracts.py",
     ):
         source = project / relative
         target = repository / relative
@@ -66,7 +68,6 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         "deployment/deploy.sh",
         "deployment/rollback.sh",
         "deployment/backup.sh",
-        "deployment/verify-offline.sh",
         "deployment/ocr/THIRD_PARTY_NOTICES.md",
         "deployment/ocr/ASSET_SOURCES.json",
         "deployment/ocr/BASE_RUNTIME.json",
@@ -263,6 +264,40 @@ def _run_package(
     )
 
 
+def _extract_runtime(
+    sandbox: _PackageSandbox,
+    destination: Path,
+) -> Path:
+    destination.mkdir()
+    archive = sandbox.release / f"rag-runtime-{_RELEASE_ID}.tar.gz"
+    completed = subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/tar",
+            "-xzf",
+            str(archive),
+            "-C",
+            str(destination),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return destination / "runtime"
+
+
+def _run_runtime_verifier(
+    runtime: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        ["/bin/bash", str(runtime / "verify-offline.sh")],
+        cwd=runtime,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.mark.parametrize(
     "failure",
     ("FAKE_CORPUS_TAR_FAIL", "FAKE_SIDECAR_FAIL"),
@@ -347,6 +382,41 @@ def test_success_publishes_only_complete_verified_release(
         text=True,
     )
     assert verified.returncode == 0, verified.stderr
+    runtime_archive = (
+        sandbox.release / f"rag-runtime-{_RELEASE_ID}.tar.gz"
+    )
+    contract_script = (
+        "runtime/evaluation/runtime/scripts/verify_model_contracts.py"
+    )
+    with tarfile.open(runtime_archive, mode="r:gz") as archive:
+        runtime_names = set(archive.getnames())
+        manifest_file = archive.extractfile("runtime/MANIFEST.sha256")
+        assert manifest_file is not None
+        runtime_manifest = manifest_file.read().decode("utf-8")
+    assert contract_script in runtime_names
+    assert (
+        "evaluation/runtime/scripts/verify_model_contracts.py"
+        in runtime_manifest
+    )
+    for forbidden_prefix in (
+        "runtime/.git",
+        "runtime/src",
+        "runtime/tests",
+    ):
+        assert not any(
+            name == forbidden_prefix
+            or name.startswith(f"{forbidden_prefix}/")
+            for name in runtime_names
+        )
+    for forbidden_file in (
+        "runtime/.env",
+        "runtime/Dockerfile",
+        "runtime/pyproject.toml",
+        "runtime/rag.env",
+    ):
+        assert forbidden_file not in runtime_names
+    assert not any(name.endswith(".docx") for name in runtime_names)
+    assert not any("/tokenizers/" in name for name in runtime_names)
     corpus_archive = (
         sandbox.release / f"rag-corpus-{_CORPUS_ID}.tar.gz"
     )
@@ -355,8 +425,37 @@ def test_success_publishes_only_complete_verified_release(
     assert "corpus/CORPUS_MANIFEST.json" in names
     assert "corpus/docs/group/one.docx" in names
     assert "corpus/docs/group/two.docx" in names
+    assert not any(
+        name.endswith("verify_model_contracts.py") for name in names
+    )
     assert not tuple(
         sandbox.release.parent.glob(
             f".{_RELEASE_ID}-{_CORPUS_ID}.*"
         )
     )
+
+
+@pytest.mark.parametrize("tamper", ("delete", "replace"))
+def test_runtime_verifier_detects_model_contract_script_tamper(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    completed = _run_package(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "extracted")
+    contract_script = (
+        runtime
+        / "evaluation/runtime/scripts/verify_model_contracts.py"
+    )
+
+    verified = _run_runtime_verifier(runtime)
+    assert verified.returncode == 0, verified.stderr
+    if tamper == "delete":
+        contract_script.unlink()
+    else:
+        contract_script.write_text("tampered\n", encoding="utf-8")
+
+    rejected = _run_runtime_verifier(runtime)
+
+    assert rejected.returncode != 0

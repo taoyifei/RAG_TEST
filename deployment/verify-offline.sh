@@ -36,6 +36,7 @@ required_files=(
   "evaluation/runtime/evaluation/evaluate.py"
   "evaluation/runtime/evaluation/metrics.py"
   "evaluation/runtime/scripts/load_test_chat.py"
+  "evaluation/runtime/scripts/verify_model_contracts.py"
   "offline_bundle.py"
   "freeze_corpus_manifest.py"
   "backup.sh"
