@@ -352,7 +352,10 @@ editor /data/tyf/RAG/shared/env/candidates/${release_id}.env
 至少替换四个不同的随机令牌、三个模型端点数组、镜像 tag、
 `RAG_DOCS_PATH`，并把 `RAG_RELEASE_REVISION` 设置为上面从
 `SOURCE_REVISION` 读取的完整 `revision`。首次部署与升级命令二选一，不要
-覆盖既有候选文件。固定持久化路径应为：
+覆盖既有候选文件。还必须保留 `RAG_ACCESS_MODE=shared_corpus`：持有
+query token 的所有用户都可检索全部 `active`/`official` 文档，当前没有
+用户级、租户级或文档级权限；缺失该配置或填写 `permissioned` 会在启动时
+失败。固定持久化路径应为：
 
 ```text
 RAG_APP_IMAGE=docx-rag:<release-id>
@@ -361,6 +364,7 @@ RAG_QDRANT_IMAGE=rag-qdrant:<release-id>
 RAG_STATE_PATH=/data/tyf/RAG/data/state
 RAG_QDRANT_PATH=/data/tyf/RAG/data/qdrant
 RAG_DOCS_PATH=/data/tyf/RAG/shared/corpora/frozen-docx-v1/docs
+RAG_ACCESS_MODE=shared_corpus
 ```
 
 ## 8. 启动与 GPU 冒烟

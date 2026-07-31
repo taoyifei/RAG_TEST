@@ -1,5 +1,37 @@
 # 阻塞项
 
+## P0：访问模式环境变量尚未映射进 Compose 容器
+
+- 本轮已按硬要求把 `RuntimeSettings.access_mode` 设为必填且只接受
+  `shared_corpus`，并在 `deployment/.env.example` 明确配置
+  `RAG_ACCESS_MODE=shared_corpus`；缺失或 `permissioned` 的配置测试均会
+  启动失败。
+- `deployment/compose.yaml` 当前为 app/worker 显式枚举容器环境变量，没有
+  传入 `RAG_ACCESS_MODE`。Compose 的 `--env-file` 只负责变量插值，不会把
+  未引用的变量自动注入容器，因此按现状启动的 app/worker 会因缺少必填字段
+  失败。
+- 当前任务的“只允许”白名单列出 `deployment/config/pipeline.json`、
+  `deployment/ASSETS.sha256` 和 `.env.example`，没有授权修改
+  `deployment/compose.yaml`；本轮不能越界补两处映射，也不能假装离线部署
+  已可启动。
+- 解除条件：明确授权在 app 与 worker 的 `environment` 中各增加
+  `RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}`，随后更新资产 SHA，并重跑
+  两种 Compose、缺失值和 `permissioned` 的启动前反测。
+- 2026-07-31 自动续跑第 1 次复核：实际解析默认与 `index` profile Compose
+  JSON，样例变量命中数为 1，但 `rag-app` 的 30 个环境键和 `rag-worker`
+  的 31 个环境键中均不存在 `RAG_ACCESS_MODE`。根目录只有
+  `deployment/.env.example`；Dockerfile 只复制 deployment config/assets，
+  不复制该样例，Compose 也没有 `env_file`。因此不存在白名单内可保持“显式
+  必填”的替代注入路径；阻塞条件与首次发现完全相同。
+- 2026-07-31 自动续跑第 2 次复核：使用 Docker Compose v5.1.2 分别解析默认
+  与 `index` profile。默认配置的 app/worker 环境键数为 30/1，`index`
+  profile 为 30/31，四处均没有 `RAG_ACCESS_MODE`。仓库排除 `.venv` 后唯一
+  `.env*` 文件仍为 `deployment/.env.example`；`deployment/compose.yaml`
+  SHA256 仍为
+  `d7849a77e71c554614d6ddd8cd957da8a91ad7230e5fbaa57f5a673296ed3b5c`
+  且相对 HEAD 无 diff。阻塞条件已连续 3 个 goal turn 相同，现有白名单内
+  无法继续闭环。
+
 ## 历史审计：真实 Git index 原始字节 SHA 与旧任务 0 基线不同
 
 - 任务 0 记录的 `.git/index` SHA256 为
@@ -132,23 +164,35 @@
   .venv/bin/python scripts/verify_model_contracts.py embedding \
     --endpoint "${RAG_EMBEDDING_URL}" \
     --model Qwen3-Embedding-0.6B \
+    --expected-revision "${RAG_EMBEDDING_EXPECTED_REVISION}" \
     --token-env RAG_EMBEDDING_API_TOKEN \
     --dimension 1024
 
   .venv/bin/python scripts/verify_model_contracts.py reranker \
     --endpoint "${RAG_RERANKER_URL}" \
     --model Qwen3-Reranker-0.6B \
+    --expected-revision "${RAG_RERANKER_EXPECTED_REVISION}" \
     --token-env RAG_RERANKER_API_TOKEN
 
   .venv/bin/python scripts/verify_model_contracts.py llm \
     --endpoint "${RAG_LLM_URL}" \
     --model Qwen/Qwen3-8B-AWQ \
-    --token-env RAG_LLM_API_TOKEN
+    --expected-revision "${RAG_LLM_EXPECTED_REVISION}" \
+    --token-env RAG_LLM_API_TOKEN \
+    --context-limit 8192
   ```
 
+- 端点不鉴权时必须省略 `--token-env`；设置该选项但环境变量为空同样不会
+  发送 `Authorization`。`--expected-revision` 必须来自独立部署记录，不能
+  使用 `unknown`、`main` 或 `latest`。若 health/models 均不返回 revision，
+  还必须传 `--deployment-manifest <path>`；manifest 必须为非符号链接的
+  只读文件，包含并以规范化 SHA256 绑定 endpoint、model、model/tokenizer/
+  code revision、vLLM、quantization、max context 和 chat-template SHA。
 - LLM 命令需对四个目标 URL 分别执行。每份 JSON 必须为 `status=passed`，
   model ID 和 endpoint revision 明确，rewrite/answer 都以严格 JSON Schema
-  完成，finish_reason=stop、temperature=0、thinking=false，且三项 token
+  完成，finish_reason=stop、temperature=0、thinking=false；最大初次回答和
+  最大 repair 请求都必须满足服务返回的
+  `prompt_tokens + max_output_tokens <= context_limit`，且三项 usage token
   计数一致。embedding 还需 count/index/dimension/finite 全绿；reranker
   还需 count/index/[0,1] 全绿。
 - 任一端点返回 `REVISION_MISSING`、model/schema/维度/索引/分数错误、截断或
