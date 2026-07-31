@@ -1,32 +1,5 @@
 # 阻塞项
 
-## P0：既有 Index GC 测试依赖 Qdrant 秒级 snapshot 名唯一
-
-- 本轮修改前全量基线为 `633 passed`；完成仅两行 Compose 修复及对应测试后，
-  全量 pytest 为 `1 failed, 636 passed, 61 warnings in 524.23s`，唯一失败是
-  禁止修改的既有
-  `test_index_gc_dry_run_preserves_active_rollback_and_unknown`。
-- 该用例随后连续两次定向复跑仍失败。只读 Qdrant 日志证明同一 collection
-  的两次 snapshot 请求分别于 `04:09:56.937` 和 `04:09:57.594` 完成，但
-  都在 `04:09:56` 内发起，Qdrant v1.18.3 因秒级文件名复用了首个 snapshot
-  名称。该名称已被 manifest 引用，因此不会作为额外未引用 snapshot 进入
-  GC 计划。
-- 影响：不否定本轮 Compose 契约及专项测试，但阻塞“全量 pytest 全绿”的完成
-  条件。当前白名单禁止修改 `tests/test_index_gc.py`、索引或 GC 实现，不能用
-  skip、删测或放宽断言绕过。
-- 解除条件：另行授权只修测试夹具，使创建额外 snapshot 前有界等待到 Qdrant
-  能生成不同名称，并先断言两个名称确实不同；随后重跑该用例和全量 pytest。
-- 2026-07-31 自动续跑第 1 次复核：当前默认 app、`index` app/worker 仍分别
-  解析为 `shared_corpus`，Qdrant/OCR 均未注入；`tests/test_index_gc.py`
-  与 `src/rag_app/index` 相对 HEAD 无 diff。Qdrant 两次请求的完成时间与耗时
-  分别为 `04:09:56.937/0.783s` 和 `04:09:57.594/0.617s`，即发起时间约为
-  `04:09:56.154` 与 `04:09:56.978`，确认同秒命名碰撞证据不变。当前白名单
-  仍不允许修测试夹具。
-- 2026-07-31 自动续跑第 2 次复核：默认 app、`index` app/worker 继续解析为
-  `shared_corpus`，Qdrant/OCR 继续无该变量；范围外 GC 测试和生产索引代码
-  仍无 diff，Qdrant 两条 snapshot 日志也未变化。同一阻塞已连续出现于恢复
-  后 3 个 goal turn，必须取得测试夹具修改授权才能继续。
-
 ## 历史审计：真实 Git index 原始字节 SHA 与旧任务 0 基线不同
 
 - 任务 0 记录的 `.git/index` SHA256 为

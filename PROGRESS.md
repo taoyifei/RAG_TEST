@@ -3705,3 +3705,96 @@
 - [x] 同一阻塞现已连续出现于恢复后的 3 个 goal turn；除授权修改
   `tests/test_index_gc.py` 测试夹具外已无可继续项，应按规则把目标标记为
   blocked。
+
+## 2026-07-31 Index GC snapshot 夹具稳定化任务 0：当前基线
+
+- [x] 已先读取 `PROGRESS.md` 与 `BLOCKED.md`。当前 HEAD 与任务书预期一致：
+  `ab9e9d3158e4631be7d616d530401db14a5dea83`；`main` 与
+  `origin/main` 同步，起始工作树和暂存区均为空，`git write-tree` 与
+  `HEAD^{tree}` 均为 `bc1b7b8eb6571b41f4adf736642b0b32cd862397`。
+- [x] 未修改目标用例的两个独立 pytest 进程本次均碰巧通过，分别为
+  `1 passed, 1 warning in 31.94s` 与
+  `1 passed, 1 warning in 31.24s`；不能把单次绿色当作稳定证明。
+- [x] 使用同一真实 `_scenario()` 读取合成状态并清理后，本次登记的 manifest
+  snapshot 与 extra snapshot 分别以 `05-05-09.snapshot` 和
+  `05-05-10.snapshot` 结尾，`names_equal=False`。本文件上方及
+  `BLOCKED.md` 已保存相同旧夹具实际同名失败、三次失败和 Qdrant 同秒请求
+  日志；两组结果共同证明失败取决于外部秒级命名窗口，而非 GC 业务规则。
+- [x] 诊断脚本首次因直接 Python 未继承 pytest 的 `pythonpath=src` 而在导入
+  阶段退出 1，未创建 Qdrant 场景；补充 `PYTHONPATH=src` 后成功执行并完成
+  `_cleanup()`。
+
+## 2026-07-31 Index GC snapshot 夹具稳定化任务 1—2
+
+- [x] 仅在 `tests/test_index_gc.py` 增加私有
+  `_create_distinct_snapshot()`：输入真实 `QdrantIndex` 与受保护名称，使用
+  `time.monotonic()` 建立 5 秒 deadline，并在首次及后续尝试前按具名常量
+  等待 1.05 秒命名窗口；每次只依据真实 `create_snapshot()` 返回名称判断，
+  无 mock、伪造名称或无限循环。
+- [x] helper 返回前显式断言 candidate 名称与受保护名称不同；deadline 内
+  无法取得不同名称时抛出包含 protected/last candidate 的明确
+  `AssertionError`。
+- [x] `_scenario()` 保存活动 manifest 的真实 snapshot 名称；返回前断言
+  extra 非空、两者不同，且 `list_snapshots(active)` 同时包含两者。原 GC
+  业务断言全部保留，并新增受保护 manifest snapshot 不进入计划的显式断言。
+- [x] 实现后目标用例单次为 `1 passed, 1 warning in 31.34s`；随后
+  `tests/test_index_gc.py` 全文件为
+  `5 passed, 4 warnings in 124.25s`。
+
+## 2026-07-31 Index GC snapshot 夹具稳定化任务 3：稳定性验证
+
+- [x] 目标用例使用 20 个独立 pytest 进程顺序执行，任一失败即停止；实际
+  20/20 全部通过，每次均为 `1 passed, 1 warning`，pytest 报告的单次耗时
+  范围为 `30.76s–34.34s`。未使用 `pytest-repeat`、mock、skip 或 xfail。
+- [x] 随后一轮全量 pytest 退出 0：
+  `637 passed, 61 warnings in 568.27s`，skipped=0、stderr=0；达到任务书的
+  当前收集总数和至少 637 项要求。warning 类别仍只有
+  `StarletteDeprecationWarning` 与 `UserWarning`，没有增加。
+
+## 2026-07-31 Index GC snapshot 夹具稳定化：最终验收
+
+- [x] 首轮全量后 Ruff 精确发现 `_scenario()` 为 52 statements，超过 50；
+  将“两个不同 snapshot 同时存在”的原断言完整提取到私有窄职责 helper，
+  `_scenario()` 仍在返回前调用。专项 Ruff 随即
+  `All checks passed!`，没有删减或放宽断言。
+- [x] 结构提取后的有效验证重新从头执行：目标单次
+  `1 passed, 1 warning in 32.06s`；全文件
+  `5 passed, 4 warnings in 126.87s`；PowerShell `for` 循环启动 20 个独立
+  WSL pytest 进程，20/20 通过、失败标记 0，单次耗时范围
+  `30.04s–34.26s`。
+- [x] 最终有效全量 pytest 退出 0：
+  `637 passed, 61 warnings in 537.21s`，skipped=0、stderr=0；warning
+  类别仍只有 `StarletteDeprecationWarning` 与 `UserWarning`。
+- [x] 最终 compileall 无输出；Ruff `All checks passed!`；strict mypy
+  `Success: no issues found in 95 source files`；Google docstring
+  `missing_google_sections=0`；6 个 deployment Shell、默认/index Compose
+  和 ASSETS 11/11 均退出 0。
+- [x] 生产代码、deployment 和 evaluation 相对 HEAD 无 diff。Compose、
+  pipeline/retrieval/corpus policy 与 ASSETS SHA256 分别保持
+  `3d63ef7284698aacba8ecf66c9df2815f469f8d99c7c1d9ec4d8aec3a143539f` /
+  `87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0` /
+  `91a97f380ca212b27ef8909973fd61a157a5b87774f970360ab7258927e26d8f`。
+- [x] 后续分类规则：本轮 diff 导致的失败，修生产或本轮测试；可复现的既有
+  产品缺陷写入 `BLOCKED.md`，不得越权修改；已证明与生产无关的非确定性测试
+  夹具，只允许稳定夹具，不得改生产代码、skip/xfail、删测试或放宽业务断言。
+  测试不得再假设外部系统生成的时间戳名称必然唯一，必须显式建立并验证前置
+  条件。
+- [x] 原 Index GC snapshot 夹具阻塞已从 `BLOCKED.md` 删除；真实模型契约、
+  retrieval tuning、GPU OCR、EMF、Word 自动编号、完整 token 预算和服务器
+  生产验收等外部阻塞继续保留。
+- [x] 最终候选 release-safety 为 `tracked_files=239`、`violations=0`；
+  候选与工作树 `diff --check` 均退出 0。真实 staged=0，`git write-tree`
+  与 `HEAD^{tree}` 均为
+  `bc1b7b8eb6571b41f4adf736642b0b32cd862397`，临时索引已删除。
+- [x] docs/artifacts/frozen/results/evidence 保护摘要分别保持
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e` /
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24` /
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046` /
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de` /
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  实际 diff 仅为获授权的 `tests/test_index_gc.py`、`PROGRESS.md` 与
+  `BLOCKED.md`。
+- [x] 本轮没有 build/package、联网、访问 `.57/.58/.60` 或其他服务器，
+  没有 commit 或 push。

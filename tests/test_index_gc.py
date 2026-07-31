@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,8 @@ from rag_app.state.jobs import ReadOnlyJobStore
 from rag_app.state.models import CollectionStateIdentity
 
 _API_KEY = "test-only-qdrant-key"
+_SNAPSHOT_NAME_DEADLINE_SECONDS = 5.0
+_SNAPSHOT_NAME_WINDOW_SECONDS = 1.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +45,7 @@ class _GcScenario:
     orphan: str
     unknown: str
     state_dir: Path
+    protected_snapshot: str
     extra_snapshot: str
     collections: tuple[str, ...]
 
@@ -145,6 +149,77 @@ def _create_index(
     return index
 
 
+def _create_distinct_snapshot(
+    index: QdrantIndex,
+    protected_snapshot_name: str,
+) -> str:
+    """创建与受保护名称不同的真实 Qdrant snapshot。
+
+    Args:
+        index: 待创建额外 snapshot 的真实 Qdrant 索引。
+        protected_snapshot_name: manifest 已登记、不得回收的 snapshot 名称。
+
+    Returns:
+        Qdrant 实际返回的不同名 snapshot 名称。
+
+    Raises:
+        AssertionError: 在有界期限内无法取得不同名称。
+
+    """
+    deadline = time.monotonic() + _SNAPSHOT_NAME_DEADLINE_SECONDS
+    last_candidate_name = ""
+    while time.monotonic() < deadline:
+        remaining_seconds = deadline - time.monotonic()
+        time.sleep(
+            min(_SNAPSHOT_NAME_WINDOW_SECONDS, remaining_seconds)
+        )
+        if time.monotonic() >= deadline:
+            break
+        candidate = index.create_snapshot()
+        last_candidate_name = candidate.name
+        if candidate.name == protected_snapshot_name:
+            continue
+        assert candidate.name != protected_snapshot_name
+        return candidate.name
+    raise AssertionError(
+        "未在有界期限内创建不同名 snapshot："
+        f"protected={protected_snapshot_name!r}, "
+        f"last_candidate={last_candidate_name!r}"
+    )
+
+
+def _assert_distinct_snapshots_present(
+    client: QdrantClient,
+    *,
+    collection_name: str,
+    protected_snapshot_name: str,
+    extra_snapshot_name: str,
+) -> None:
+    """断言受保护与额外 snapshot 名称不同且同时存在。
+
+    Args:
+        client: 用于读取 snapshot 清单的真实 Qdrant 客户端。
+        collection_name: 两个 snapshot 所属的 collection 名称。
+        protected_snapshot_name: manifest 已登记的 snapshot 名称。
+        extra_snapshot_name: 等待命名窗口后创建的额外 snapshot 名称。
+
+    Returns:
+        无返回值。
+
+    """
+    assert protected_snapshot_name
+    assert extra_snapshot_name
+    assert extra_snapshot_name != protected_snapshot_name
+    snapshot_names = {
+        snapshot.name
+        for snapshot in client.list_snapshots(collection_name)
+    }
+    assert {
+        protected_snapshot_name,
+        extra_snapshot_name,
+    }.issubset(snapshot_names)
+
+
 def _scenario(tmp_path: Path) -> _GcScenario:
     client = _client()
     pipeline = _pipeline()
@@ -163,6 +238,7 @@ def _scenario(tmp_path: Path) -> _GcScenario:
         f"{prefix}-published-{ordinal}" for ordinal in range(4)
     )
     published_indexes: list[QdrantIndex] = []
+    protected_snapshot_name = ""
     for ordinal, collection_name in enumerate(published_names):
         job_id = "job_" + f"{ordinal + 1:032x}"
         identity = CollectionStateIdentity(
@@ -187,8 +263,19 @@ def _scenario(tmp_path: Path) -> _GcScenario:
         index.switch_alias(alias)
         manifests.activate(collection_name)
         published_indexes.append(index)
+        protected_snapshot_name = snapshot.name
     active = published_names[-1]
-    extra_snapshot = published_indexes[-1].create_snapshot().name
+    assert protected_snapshot_name
+    extra_snapshot = _create_distinct_snapshot(
+        published_indexes[-1],
+        protected_snapshot_name,
+    )
+    _assert_distinct_snapshots_present(
+        client,
+        collection_name=active,
+        protected_snapshot_name=protected_snapshot_name,
+        extra_snapshot_name=extra_snapshot,
+    )
 
     failed_job = control.create_job(
         idempotency_key=f"gc-failed:{suffix}",
@@ -270,6 +357,7 @@ def _scenario(tmp_path: Path) -> _GcScenario:
         orphan=orphan,
         unknown=unknown,
         state_dir=state_dir,
+        protected_snapshot=protected_snapshot_name,
         extra_snapshot=extra_snapshot,
         collections=collections,
     )
@@ -297,6 +385,10 @@ def test_index_gc_dry_run_preserves_active_rollback_and_unknown(
         assert (
             f"snapshot:{scenario.active}:{scenario.extra_snapshot}"
             in stable_ids
+        )
+        assert (
+            f"snapshot:{scenario.active}:{scenario.protected_snapshot}"
+            not in stable_ids
         )
         for collection_name in (
             scenario.active,
