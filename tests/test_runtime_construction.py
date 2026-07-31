@@ -10,7 +10,7 @@ from pydantic import SecretStr
 import rag_app.runtime as runtime_module
 import rag_app.worker_runtime as worker_runtime_module
 from rag_app.runtime import build_runtime
-from rag_app.settings import RuntimeSettings
+from rag_app.settings import AccessMode, RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
 
 
@@ -79,6 +79,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
     docs = tmp_path / "docs"
     docs.mkdir(exist_ok=True)
     return RuntimeSettings(
+        access_mode=AccessMode.SHARED_CORPUS,
         query_token=SecretStr(uuid.uuid4().hex),
         admin_token=SecretStr(uuid.uuid4().hex),
         qdrant_api_key=SecretStr(uuid.uuid4().hex),

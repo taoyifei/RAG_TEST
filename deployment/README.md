@@ -5,6 +5,13 @@
 只在内部网络可达。服务器脚本不 build、不 pull、不安装软件、不访问外网，
 也不删除 `/data/tyf/RAG` 下的 bind mount 数据。
 
+## 访问范围
+
+V1 必须显式配置 `RAG_ACCESS_MODE=shared_corpus`。持有 query token 的所有
+用户都能检索语料中全部 `active`/`official` 文档；系统没有用户级、租户级或
+文档级授权。`permissioned` 未实现，配置缺失或填写任何其他值都会使应用在
+启动配置校验阶段失败，不能把 query token 当作文档权限凭据。
+
 ## 发布身份约定
 
 `revision` 始终表示完整 40 位小写 Git SHA；打包端推荐从已提交且干净的
@@ -61,9 +68,10 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
    ```
 
    设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
-   mount 路径、`RAG_RELEASE_REVISION`、普通查询 `RAG_TRACE_MODE` 和 OCR
-   使用的宿主 GPU ID；其中 `RAG_RELEASE_REVISION` 必须等于上面读取的完整
-   `revision`。首次部署与升级命令二选一，不要覆盖既有候选文件。
+   mount 路径、`RAG_RELEASE_REVISION`、`RAG_ACCESS_MODE=shared_corpus`、
+   普通查询 `RAG_TRACE_MODE` 和 OCR 使用的宿主 GPU ID；其中
+   `RAG_RELEASE_REVISION` 必须等于上面读取的完整 `revision`。首次部署与
+   升级命令二选一，不要覆盖既有候选文件。
 4. 执行 `bash verify-offline.sh`。
 5. 只把候选文件传给 deploy；active rag.env 只能由 deploy.sh 成功后发布：
 

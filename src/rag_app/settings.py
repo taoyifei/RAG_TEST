@@ -23,6 +23,7 @@ from rag_app.strict_json import load_json_file
 from rag_app.tracing.models import TraceMode
 
 __all__ = [
+    "AccessMode",
     "ConfigurationState",
     "RetrievalSettings",
     "RuntimeSettings",
@@ -31,6 +32,12 @@ __all__ = [
 
 _MIN_SECRET_LENGTH = 32
 _SOURCE_ID_LENGTH = 36
+
+
+class AccessMode(StrEnum):
+    """当前生产版本唯一支持的语料访问边界。"""
+
+    SHARED_CORPUS = "shared_corpus"
 
 
 class ConfigurationState(StrEnum):
@@ -239,6 +246,7 @@ class RuntimeSettings(BaseSettings):
         frozen=True,
     )
 
+    access_mode: AccessMode
     query_token: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)
     admin_token: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)
     qdrant_api_key: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)

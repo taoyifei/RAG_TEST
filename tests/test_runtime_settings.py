@@ -11,6 +11,7 @@ from rag_app.settings import RetrievalSettings, RuntimeSettings
 
 def _runtime_values(tmp_path: Path) -> dict[str, object]:
     return {
+        "access_mode": "shared_corpus",
         "query_token": uuid.uuid4().hex,
         "admin_token": uuid.uuid4().hex,
         "qdrant_api_key": uuid.uuid4().hex,
@@ -30,6 +31,29 @@ def _runtime_values(tmp_path: Path) -> dict[str, object]:
         "reranker_model": "Qwen3-Reranker-0.6B",
         "llm_model": "Qwen/Qwen3-8B-AWQ",
     }
+
+
+def test_runtime_settings_require_explicit_access_mode(
+    tmp_path: Path,
+) -> None:
+    values = _runtime_values(tmp_path)
+    values.pop("access_mode")
+    with pytest.raises(ValidationError, match="access_mode"):
+        RuntimeSettings(**values)
+
+
+def test_runtime_settings_accept_only_shared_corpus(
+    tmp_path: Path,
+) -> None:
+    values = _runtime_values(tmp_path)
+    values["access_mode"] = "shared_corpus"
+
+    settings = RuntimeSettings(**values)
+
+    assert settings.access_mode == "shared_corpus"
+    values["access_mode"] = "permissioned"
+    with pytest.raises(ValidationError, match="access_mode"):
+        RuntimeSettings(**values)
 
 
 def test_runtime_settings_require_distinct_non_default_secrets(
