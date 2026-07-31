@@ -81,6 +81,7 @@ services:
       rag-qdrant:
         condition: service_healthy
     environment:
+      RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}
       RAG_QUERY_TOKEN: ${RAG_QUERY_TOKEN:?required}
       RAG_ADMIN_TOKEN: ${RAG_ADMIN_TOKEN:?required}
       RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:?required}
@@ -150,6 +151,7 @@ services:
       rag-qdrant:
         condition: service_healthy
     environment:
+      RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}
       RAG_QUERY_TOKEN: ${RAG_QUERY_TOKEN:?required}
       RAG_ADMIN_TOKEN: ${RAG_ADMIN_TOKEN:?required}
       RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:?required}

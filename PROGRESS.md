@@ -3561,3 +3561,147 @@
   `deployment/compose.yaml` 修改授权外已无可继续项，应按目标规则标记为
   blocked。没有 build/package、联网、服务器、commit 或 push，也未重跑已
   用满三轮的完整验收。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入任务 0：当前 HEAD 基线
+
+- [x] 已先读取本文件与 `BLOCKED.md`。当前 HEAD 为
+  `26b7d5c7eac412cb0427acd289c01bf91271256c`，`main` 与
+  `origin/main` 同步，起始工作树和暂存区均为空；`git write-tree` 与
+  `HEAD^{tree}` 均为 `dc910e9e7cb83d19ae62499289bb8dd3ce9a95cf`。
+- [x] 保护摘要为 docs
+  `36c67e3b7ac38a734b4f5eba00216cd806996bbc23b6d99b856f9763b44e8e0e`；
+  artifacts
+  `220473c637bc5179f2019948cc225dfb8130dd3cb928a6d71c82b6736f874c24`；
+  frozen
+  `63adcd455c16678f29a5b2d3c6cdf3edc7ccbea4bd3dff8e0c8ba68c4cab5046`；
+  results
+  `cdb17f0c251a46e523175c632e260804390b63b4ef1d8c68f4c4bc1253df73de`；
+  evidence
+  `05b845b97ced765a6e48a3be8bc99acbc0913cd38fc891d6513d65a93e3bf3bc`。
+  pipeline/retrieval/corpus policy 分别为
+  `87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`；
+  `deployment/ASSETS.sha256` 为
+  `91a97f380ca212b27ef8909973fd61a157a5b87774f970360ab7258927e26d8f`。
+- [x] 当前 HEAD 全量 pytest 基线为
+  `633 passed, 61 warnings in 558.55s`，skipped=0、stderr=0；warning
+  类别仍只有 `StarletteDeprecationWarning` 与 `UserWarning`。首次用 1 秒
+  前台超时探测时进程被工具终止并退出 124，未形成 pytest 结果；随后改用
+  隐藏后台 WSL 进程完整执行得到上述有效基线。
+- [x] 基线门禁均退出 0：compileall 无输出；Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 95 source files`；Google docstring
+  `missing_google_sections=0`；6 个 deployment Shell、默认/index Compose、
+  `git diff --check` 和 ASSETS 11/11 均通过。release-safety 为
+  `tracked_files=239`、`violations=0`。
+- [x] Docker Compose v5.1.2 实际解析证明旧实现的默认与 `index` profile
+  中，`rag-app` 和 `rag-worker` 四处均不存在 `RAG_ACCESS_MODE`；加载
+  `deployment/.env.example` 也不会自动注入未显式映射的变量。Compose
+  SHA256 为
+  `d7849a77e71c554614d6ddd8cd957da8a91ad7230e5fbaa57f5a673296ed3b5c`。
+- [x] 基线阶段没有 build/package、联网、访问 `.57/.58/.60` 或其他服务器，
+  也没有 commit 或 push。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入任务 1：红测
+
+- [x] 在既有 `tests/test_worker_deployment_policy.py` 新增真实 Compose
+  契约测试，不断言环境键数量。两个用例均先确认
+  `deployment/.env.example` 已有 `RAG_ACCESS_MODE=shared_corpus`，再分别
+  检查默认 `rag-app` 与 `index` profile `rag-worker` 的解析环境。
+- [x] 修复前定向 pytest 按预期退出 1：
+  `2 failed, 3 passed in 0.22s`。两项失败均为解析环境中
+  `environment.get("RAG_ACCESS_MODE")` 实际为 `None`，证明样例变量不会在
+  Compose 未显式映射时自动进入容器。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入任务 2—3：修复与反测
+
+- [x] 实现只改 `deployment/compose.yaml` 两行：在 `rag-app` 与
+  `rag-worker` 的 `environment` 中分别加入精确表达式
+  `RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}`。没有增加默认值、
+  `env_file` 或镜像 COPY，也没有向其他服务注入变量。修复后 Compose
+  SHA256 为
+  `3d63ef7284698aacba8ecf66c9df2815f469f8d99c7c1d9ec4d8aec3a143539f`。
+- [x] 首轮修复绿测为 `5 passed in 0.39s`；补齐反向契约后
+  `tests/test_worker_deployment_policy.py` 为
+  `7 passed in 0.86s`，专项 Ruff `All checks passed!`。
+- [x] 真实 Compose 解析退出 0：默认配置中 `rag-app` 为
+  `RAG_ACCESS_MODE=shared_corpus`，且唯一接收者为 `rag-app`；`index`
+  profile 中 app/worker 均为 `shared_corpus`，接收者集合精确为
+  `{rag-app, rag-worker}`，未注入 `rag-ocr` 或 `rag-qdrant`。
+- [x] 新反测从临时 env 删除 `RAG_ACCESS_MODE`，并从 Compose 子进程环境
+  清除同名变量；默认与 `index` profile 的 `config --quiet` 均要求非零且
+  stderr 包含该变量名。连同既有 RuntimeSettings 缺失值及
+  `permissioned` 拒绝测试，合并专项为 `9 passed in 1.14s`。
+- [x] pipeline/retrieval/corpus policy SHA256 仍分别为
+  `87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf` /
+  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3` /
+  `0d6553c1ac42207c064145357c3a60fa687f6f0ead3a35bfccace42963a07ab0`；
+  `deployment/ASSETS.sha256` 仍为
+  `91a97f380ca212b27ef8909973fd61a157a5b87774f970360ab7258927e26d8f`，
+  本轮未修改四者。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入：完整验收
+
+- [x] 最终快速门禁全部退出 0：compileall 无输出；Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 95 source files`；Google docstring
+  `missing_google_sections=0`；6 个 deployment Shell、默认/index Compose
+  和 ASSETS 11/11 均通过。
+- [ ] 最终全量 pytest 唯一实际结果为
+  `1 failed, 636 passed, 61 warnings in 524.23s`，skipped=0；warning 类别
+  没有增加。唯一失败是范围外既有
+  `test_index_gc_dry_run_preserves_active_rollback_and_unknown`，本轮新增
+  Compose 测试全部通过。
+- [x] 该既有用例再定向复跑两次仍各为 `1 failed, 1 warning`，总计连续失败
+  3 次。Qdrant 日志证明两次 snapshot 在同一秒发起并复用同一文件名，导致
+  “额外 snapshot”仍是 manifest 已引用对象；已按规则停止重复，并在
+  `BLOCKED.md` 记录解除条件。未修改范围外测试、索引或 GC 实现，也未
+  skip、删测或放宽断言。
+- [x] 候选临时索引 release-safety 为 `tracked_files=239`、
+  `violations=0`；候选与工作树 `diff --check` 均退出 0。真实 staged=0，
+  `git write-tree` 与 `HEAD^{tree}` 均为
+  `dc910e9e7cb83d19ae62499289bb8dd3ce9a95cf`，临时索引已删除。
+- [x] 五项保护摘要与任务 0 完全一致；pipeline/retrieval/corpus policy 和
+  `deployment/ASSETS.sha256` 内容均未变化。工作树实际仅修改获授权的
+  `deployment/compose.yaml`、对应测试、`PROGRESS.md` 与 `BLOCKED.md`；
+  原“RAG_ACCESS_MODE 未映射”阻塞段已经删除，其余外部阻塞继续保留。
+- [x] 本轮没有 build/package、联网、访问 `.57/.58/.60` 或其他服务器，
+  没有 commit 或 push。
+- [ ] Compose 启动阻塞本身已经解除，但本 goal 的全量 pytest 全绿完成条件
+  因上述范围外既有 GC 测试失败尚未满足；这是恢复后的第 1 个连续阻塞审计
+  turn，目标保持 active。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入：自动续跑第 1 次审计
+
+- [x] 已重新读取 `PROGRESS.md`、`BLOCKED.md` 和当前工作树，没有重复执行已
+  连续失败 3 次的 Index GC 用例。
+- [x] 默认 Compose 的 app 与 `index` profile 的 app/worker 仍解析为
+  `RAG_ACCESS_MODE=shared_corpus`，Qdrant/OCR 仍没有该变量；Compose 修复
+  状态未退化。
+- [x] `tests/test_index_gc.py` 与 `src/rag_app/index` 相对 HEAD 无 diff。
+  只读 Qdrant 日志结合请求耗时再次证明两次 snapshot 发起于同一秒，阻塞
+  原因与上一 goal turn 完全相同。
+- [x] 候选 release-safety 再次为 `tracked_files=239`、`violations=0`；
+  候选与工作树 `diff --check` 均退出 0，真实 staged=0，`git write-tree`
+  与 `HEAD^{tree}` 均为
+  `dc910e9e7cb83d19ae62499289bb8dd3ce9a95cf`，临时索引已删除。
+- [ ] 这是恢复后的第 2 个连续阻塞审计 turn，尚未达到 3 次阈值；目标保持
+  active。解除条件仍是授权修改范围外测试夹具，不得改索引/GC 生产实现。
+
+## 2026-07-31 RAG_ACCESS_MODE Compose 注入：自动续跑第 2 次阻塞审计
+
+- [x] 已再次读取 `PROGRESS.md`、`BLOCKED.md` 和当前工作树，没有重跑已连续
+  失败 3 次的 Index GC 用例。
+- [x] 默认 app、`index` app/worker 仍为 `shared_corpus`，Qdrant/OCR 仍未
+  注入；`tests/test_index_gc.py` 与 `src/rag_app/index` 相对 HEAD 无 diff，
+  两条 Qdrant snapshot 日志仍证明同秒发起。
+- [x] Compose 启动阻塞已经稳定解除，当前白名单内所有任务均已完成；唯一
+  未满足项仍是范围外既有 GC 用例导致全量 pytest 非零。
+- [x] 最终候选 release-safety 为 `tracked_files=239`、`violations=0`；
+  候选与工作树 `diff --check` 均退出 0，真实 staged=0，`git write-tree`
+  与 `HEAD^{tree}` 均为
+  `dc910e9e7cb83d19ae62499289bb8dd3ce9a95cf`，临时索引已删除。
+- [x] 同一阻塞现已连续出现于恢复后的 3 个 goal turn；除授权修改
+  `tests/test_index_gc.py` 测试夹具外已无可继续项，应按规则把目标标记为
+  blocked。
