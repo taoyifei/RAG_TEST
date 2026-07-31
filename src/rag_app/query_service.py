@@ -299,15 +299,23 @@ class QueryService:
                 "context.load",
                 SpanKind.STORAGE,
             )
-            previous_questions = self._dependencies.conversations.get_questions(
-                request.conversation_id,
-                now=request.now,
+            context = (
+                self._dependencies.conversations.get_rewrite_context(
+                    request.conversation_id,
+                    now=request.now,
+                )
             )
+            previous_questions = context.questions
             _finish_span(
                 session,
                 current_span,
                 DecisionCode.ACCEPTED,
-                {"history_count": len(previous_questions)},
+                {
+                    "history_count": len(previous_questions),
+                    "verified_claim_count": len(
+                        context.verified_claims
+                    ),
+                },
             )
             current_span = None
             _full_artifact(
@@ -316,6 +324,10 @@ class QueryService:
                 {
                     "question": request.question,
                     "history": list(previous_questions),
+                    "verified_claims": [
+                        claim.as_payload()
+                        for claim in context.verified_claims
+                    ],
                 },
             )
 
@@ -328,6 +340,7 @@ class QueryService:
             variants = self._dependencies.rewriter.rewrite(
                 request.question,
                 previous_questions=previous_questions,
+                verified_claims=context.verified_claims,
             )
             rewrite_reason = _reason_from_trace(
                 variants.trace,
@@ -587,9 +600,10 @@ class QueryService:
                 failure_stage,
                 SpanKind.GUARDRAIL,
             )
-            self._dependencies.conversations.append_question(
+            self._dependencies.conversations.append_turn(
                 request.conversation_id,
                 request.question,
+                answer=answer,
                 now=request.now,
                 turn_id=request.trace_id,
             )
@@ -769,6 +783,8 @@ def _rewrite_attributes(
         "history_tokens",
         "selected_history_tokens",
         "resolved_query_tokens",
+        "rewrite_result_code",
+        "trigger_reason_code",
         "max_output_tokens",
         "model",
         "prompt_tokens",

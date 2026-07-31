@@ -10,6 +10,7 @@ from rag_app.generation.answer import (
     RefusalCode,
 )
 from rag_app.generation.evidence import EvidenceBundle
+from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.query_service import QueryDependencies, QueryService
 from rag_app.retrieval.hybrid import HybridRetrievalResult
 from rag_app.retrieval.neighbors import NeighborExpansionResult
@@ -33,7 +34,9 @@ class _Rewriter:
         question: str,
         *,
         previous_questions: tuple[str, ...],
+        verified_claims: tuple[VerifiedClaimContext, ...],
     ) -> QueryVariants:
+        assert verified_claims == ()
         return QueryVariants(
             queries=(question,),
             resolved_query=question,

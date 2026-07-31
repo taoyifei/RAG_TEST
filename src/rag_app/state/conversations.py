@@ -1,13 +1,20 @@
-"""只暂存用户问题的 TTL 多轮上下文。"""
+"""保存有限用户问题和已验证 claim 摘要的 TTL 多轮上下文。"""
 
 from __future__ import annotations
 
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-__all__ = ["ConversationStore"]
+from rag_app.generation.answer import AnswerResult, AnswerStatus
+from rag_app.model_contracts import (
+    VerifiedClaimContext,
+    VerifiedClaimSupport,
+)
+
+__all__ = ["ConversationContext", "ConversationStore"]
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -27,12 +34,42 @@ CREATE TABLE IF NOT EXISTS conversation_questions (
         REFERENCES conversations(conversation_id)
         ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS conversation_claims (
+    turn_id TEXT NOT NULL,
+    claim_ordinal INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (turn_id, claim_ordinal),
+    FOREIGN KEY (turn_id)
+        REFERENCES conversation_questions(turn_id)
+        ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS conversation_claim_supports (
+    turn_id TEXT NOT NULL,
+    claim_ordinal INTEGER NOT NULL,
+    support_ordinal INTEGER NOT NULL,
+    chunk_id TEXT NOT NULL,
+    locator TEXT NOT NULL,
+    PRIMARY KEY (turn_id, claim_ordinal, support_ordinal),
+    FOREIGN KEY (turn_id, claim_ordinal)
+        REFERENCES conversation_claims(turn_id, claim_ordinal)
+        ON DELETE CASCADE
+);
 """
 _MAX_IDENTIFIER_LENGTH = 128
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationContext:
+    """一次改写可读取的有限问题和上一轮已验证 claims。"""
+
+    questions: tuple[str, ...]
+    verified_claims: tuple[VerifiedClaimContext, ...]
+
+
 class ConversationStore:
-    """保存有 TTL/轮数上限的用户问题，不保存历史答案。"""
+    """保存有 TTL/轮数上限的问题和最小已验证 claim 摘要。"""
 
     def __init__(
         self,
@@ -96,6 +133,58 @@ class ConversationStore:
             ValueError: 标识、问题或时间无效。
 
         """
+        return self._append(
+            conversation_id,
+            question,
+            answer=None,
+            now=now,
+            turn_id=turn_id,
+        )
+
+    def append_turn(
+        self,
+        conversation_id: str,
+        question: str,
+        *,
+        answer: AnswerResult,
+        now: datetime,
+        turn_id: str | None = None,
+    ) -> str:
+        """原子保存问题及从已验证 AnswerResult 投影的最小摘要。
+
+        Args:
+            conversation_id: 客户端稳定会话标识。
+            question: 当前原始用户问题。
+            answer: 已通过回答发布门禁的结果。
+            now: 带时区当前时间。
+            turn_id: 可选请求幂等标识。
+
+        Returns:
+            持久 turn ID。
+
+        Raises:
+            ValueError: AnswerResult 内部状态不一致。
+
+        """
+        claims = _project_verified_claims(answer)
+        return self._append(
+            conversation_id,
+            question,
+            answer=claims,
+            now=now,
+            turn_id=turn_id,
+        )
+
+    def _append(
+        self,
+        conversation_id: str,
+        question: str,
+        *,
+        answer: tuple[VerifiedClaimContext, ...] | None,
+        now: datetime,
+        turn_id: str | None,
+    ) -> str:
+        """在单一事务中保存问题、可选 claims，并执行轮数裁剪。"""
         _validate_input(conversation_id, question, now)
         resolved_turn_id = turn_id or f"turn_{uuid.uuid4().hex}"
         if (
@@ -161,6 +250,34 @@ class ConversationStore:
                     now_text,
                 ),
             )
+            for claim_ordinal, claim in enumerate(answer or (), start=1):
+                connection.execute(
+                    """
+                    INSERT INTO conversation_claims (
+                        turn_id, claim_ordinal, text
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (resolved_turn_id, claim_ordinal, claim.text),
+                )
+                for support_ordinal, support in enumerate(
+                    claim.supports,
+                    start=1,
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO conversation_claim_supports (
+                            turn_id, claim_ordinal, support_ordinal,
+                            chunk_id, locator
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            resolved_turn_id,
+                            claim_ordinal,
+                            support_ordinal,
+                            support.chunk_id,
+                            support.locator,
+                        ),
+                    )
             connection.execute(
                 """
                 DELETE FROM conversation_questions
@@ -208,6 +325,57 @@ class ConversationStore:
                 (conversation_id,),
             ).fetchall()
         return tuple(str(row["question"]) for row in rows)
+
+    def get_rewrite_context(
+        self,
+        conversation_id: str,
+        *,
+        now: datetime,
+    ) -> ConversationContext:
+        """读取有限历史问题及最后一轮已验证 claim 摘要。
+
+        Args:
+            conversation_id: 客户端会话标识。
+            now: 带时区当前时间。
+
+        Returns:
+            按时间顺序的问题及按声明/来源顺序的最小摘要。
+
+        """
+        _validate_input(conversation_id, "placeholder", now)
+        now_text = now.astimezone(UTC).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                "DELETE FROM conversations WHERE expires_at <= ?",
+                (now_text,),
+            )
+            question_rows = connection.execute(
+                """
+                SELECT turn_id, question FROM conversation_questions
+                WHERE conversation_id = ?
+                ORDER BY ordinal
+                """,
+                (conversation_id,),
+            ).fetchall()
+            if not question_rows:
+                return ConversationContext(questions=(), verified_claims=())
+            latest_turn_id = str(question_rows[-1]["turn_id"])
+            claim_rows = connection.execute(
+                """
+                SELECT claim_ordinal, text FROM conversation_claims
+                WHERE turn_id = ?
+                ORDER BY claim_ordinal
+                """,
+                (latest_turn_id,),
+            ).fetchall()
+            claims = tuple(
+                _load_claim(connection, latest_turn_id, row)
+                for row in claim_rows
+            )
+        return ConversationContext(
+            questions=tuple(str(row["question"]) for row in question_rows),
+            verified_claims=claims,
+        )
 
     def clear(self, conversation_id: str) -> None:
         """立即删除会话及其全部问题。
@@ -258,3 +426,65 @@ def _require_row(row: sqlite3.Row | None) -> sqlite3.Row:
     if row is None:
         raise RuntimeError("SQLite 未返回预期会话行。")
     return row
+
+
+def _project_verified_claims(
+    answer: AnswerResult,
+) -> tuple[VerifiedClaimContext, ...]:
+    """把发布结果投影为不含 quote、evidence ID 和原始输出的摘要。"""
+    if answer.status is AnswerStatus.REFUSED:
+        if (
+            answer.answer is not None
+            or answer.claims
+            or answer.refusal_code is None
+        ):
+            raise ValueError("拒答 AnswerResult 状态不一致。")
+        return ()
+    expected_answer = "\n\n".join(claim.text for claim in answer.claims)
+    if (
+        answer.status is not AnswerStatus.ANSWERED
+        or not answer.claims
+        or answer.answer != expected_answer
+        or answer.refusal_code is not None
+    ):
+        raise ValueError("可回答 AnswerResult 状态不一致。")
+    return tuple(
+        VerifiedClaimContext(
+            text=claim.text,
+            supports=tuple(
+                VerifiedClaimSupport(
+                    chunk_id=support.chunk_id,
+                    locator=support.locator,
+                )
+                for support in claim.supports
+            ),
+        )
+        for claim in answer.claims
+    )
+
+
+def _load_claim(
+    connection: sqlite3.Connection,
+    turn_id: str,
+    row: sqlite3.Row,
+) -> VerifiedClaimContext:
+    """按冻结顺序从 SQLite 读取一条 claim 及最小支持摘要。"""
+    claim_ordinal = int(row["claim_ordinal"])
+    support_rows = connection.execute(
+        """
+        SELECT chunk_id, locator FROM conversation_claim_supports
+        WHERE turn_id = ? AND claim_ordinal = ?
+        ORDER BY support_ordinal
+        """,
+        (turn_id, claim_ordinal),
+    ).fetchall()
+    return VerifiedClaimContext(
+        text=str(row["text"]),
+        supports=tuple(
+            VerifiedClaimSupport(
+                chunk_id=str(support["chunk_id"]),
+                locator=str(support["locator"]),
+            )
+            for support in support_rows
+        ),
+    )

@@ -7,6 +7,7 @@ from rag_app.generation.answer import (
     RefusalCode,
 )
 from rag_app.generation.evidence import EvidenceBundle
+from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.query_service import (
     QueryDependencies,
     QueryService,
@@ -26,9 +27,11 @@ class _Rewriter:
         question: str,
         *,
         previous_questions: tuple[str, ...],
+        verified_claims: tuple[VerifiedClaimContext, ...],
     ) -> QueryVariants:
         assert question == "当前问题"
         assert previous_questions == ("历史问题",)
+        assert verified_claims == ()
         return QueryVariants(
             queries=(question, "独立问题"),
             resolved_query="独立问题",
@@ -152,3 +155,7 @@ def test_query_service_emits_only_stage_metadata_and_appends_question(
         "conversation",
         now=now,
     ) == ("历史问题", "当前问题")
+    assert conversations.get_rewrite_context(
+        "conversation",
+        now=now,
+    ).verified_claims == ()
