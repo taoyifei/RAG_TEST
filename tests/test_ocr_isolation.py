@@ -85,3 +85,12 @@ def test_build_contexts_reexclude_python_caches() -> None:
         )
         for exclusion in ("**/__pycache__/", "**/*.pyc", "**/*.pyo"):
             assert lines.index(exclusion) > last_include
+
+
+def test_dockerfile_checks_paddle_without_loading_cuda_driver() -> None:
+    dockerfile = Path("deployment/ocr/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert "version('paddlepaddle-gpu') == '3.3.0'" in dockerfile
+    assert "import paddle; assert paddle.__version__" not in dockerfile

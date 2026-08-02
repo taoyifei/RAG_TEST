@@ -23,7 +23,7 @@ COPY deployment/ocr/assets/wheelhouse/ /tmp/wheelhouse/
 RUN test "${TARGETARCH}" = "amd64" \
     && cd /tmp/wheelhouse \
     && sha256sum --check /tmp/WHEELS.sha256 \
-    && python -c "import paddle; assert paddle.__version__ == '3.3.0'" \
+    && python -c "from importlib.metadata import version; assert version('paddlepaddle-gpu') == '3.3.0'" \
     && python -m pip install \
         --disable-pip-version-check \
         --no-cache-dir \
