@@ -22,6 +22,7 @@ design/acceptance-and-offline-deployment-*.md
 deployment/wheelhouse/
 deployment/runtime/wheelhouse/
 deployment/runtime/WHEELS.sha256
+deployment/runtime/PROJECT_WHEEL.json
 deployment/assets/tokenizers/
 deployment/assets/ocr/
 deployment/ocr/assets/

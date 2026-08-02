@@ -25,6 +25,12 @@ _REQUIRED_PROJECT_MEMBERS = frozenset(
 )
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 _ARTIFACT_COUNT = 3
+_RUNTIME_PLATFORMS = (
+    "manylinux_2_28_x86_64",
+    "manylinux_2_17_x86_64",
+    "manylinux2014_x86_64",
+)
+_RUNTIME_ABIS = ("cp311", "abi3")
 _REVISION_ASSIGNMENT = re.compile(
     rb'^SOURCE_REVISION = "([0-9a-f]{40})"\n$'
 )
@@ -398,29 +404,23 @@ def _validate_lock(path: Path) -> None:
 
 
 def _download_locked_wheels(lock: Path, destination: Path) -> None:
-    subprocess.run(  # noqa: S603
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "download",
-            "--disable-pip-version-check",
-            "--dest",
-            str(destination),
-            "--only-binary=:all:",
-            "--platform",
-            "manylinux_2_28_x86_64",
-            "--implementation",
-            "cp",
-            "--python-version",
-            "3.11",
-            "--abi",
-            "cp311",
-            "--requirement",
-            str(lock),
-        ],
-        check=True,
-    )
+    command = [
+        sys.executable,
+        "-m",
+        "pip",
+        "download",
+        "--disable-pip-version-check",
+        "--dest",
+        str(destination),
+        "--only-binary=:all:",
+    ]
+    for platform_tag in _RUNTIME_PLATFORMS:
+        command.extend(("--platform", platform_tag))
+    command.extend(("--implementation", "cp", "--python-version", "3.11"))
+    for abi_tag in _RUNTIME_ABIS:
+        command.extend(("--abi", abi_tag))
+    command.extend(("--requirement", str(lock)))
+    subprocess.run(command, check=True)  # noqa: S603
 
 
 def _build_project_wheel(root: Path, destination: Path) -> None:

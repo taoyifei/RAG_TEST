@@ -379,3 +379,40 @@ def test_prepare_rejects_dirty_git_before_build(
             output_dir=tmp_path / "wheelhouse",
             manifest_path=tmp_path / "WHEELS.sha256",
         )
+
+
+def test_download_uses_target_compatible_linux_tags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock = tmp_path / "requirements.runtime.lock"
+    lock.write_text("grpcio==1.83.0\n", encoding="utf-8")
+    destination = tmp_path / "wheelhouse"
+    destination.mkdir()
+    captured: list[str] = []
+
+    def run(command: list[str], *, check: bool) -> None:
+        assert check is True
+        captured.extend(command)
+
+    monkeypatch.setattr(wheel_preparer.subprocess, "run", run)
+
+    wheel_preparer._download_locked_wheels(lock, destination)
+
+    platforms = tuple(
+        captured[index + 1]
+        for index, argument in enumerate(captured)
+        if argument == "--platform"
+    )
+    abis = tuple(
+        captured[index + 1]
+        for index, argument in enumerate(captured)
+        if argument == "--abi"
+    )
+    assert platforms == (
+        "manylinux_2_28_x86_64",
+        "manylinux_2_17_x86_64",
+        "manylinux2014_x86_64",
+    )
+    assert abis == ("cp311", "abi3")
+    assert "--only-binary=:all:" in captured
