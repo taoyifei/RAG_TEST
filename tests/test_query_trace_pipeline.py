@@ -270,7 +270,7 @@ def test_full_trace_persists_exact_input_without_changing_outcome(
     store.initialize()
     recorder = TraceRecorder(store)
     traced = _service(tmp_path / "full", recorder=recorder)
-    now = datetime(2026, 7, 29, 8, 0, tzinfo=UTC)
+    now = datetime.now(UTC)
 
     plain_outcome = plain.ask(
         trace_id="b" * 32,

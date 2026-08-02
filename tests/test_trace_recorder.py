@@ -220,7 +220,7 @@ def test_full_artifact_limit_marks_incomplete_without_failing_query(
     session = recorder.begin_query(
         trace_id,
         TraceMode.FULL,
-        datetime(2026, 7, 29, 8, 0, tzinfo=UTC),
+        datetime.now(UTC),
         TraceIdentity(
             pipeline_fingerprint="sha256:" + "1" * 64,
             serving_fingerprint="sha256:" + "2" * 64,

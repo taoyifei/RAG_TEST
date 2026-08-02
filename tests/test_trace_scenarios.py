@@ -32,7 +32,7 @@ def test_four_public_synthetic_trace_scenarios_round_trip(
     store = TraceStore(tmp_path / "traces.sqlite3")
     store.initialize()
     recorder = TraceRecorder(store)
-    now = datetime(2026, 7, 29, 8, 0, tzinfo=UTC)
+    now = datetime.now(UTC)
 
     answered = recorder.begin_query(
         "1" * 32,
