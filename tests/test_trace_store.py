@@ -31,7 +31,7 @@ def _trace(
     mode: TraceMode = TraceMode.FULL,
     created_at: datetime | None = None,
 ) -> TraceRecord:
-    created = created_at or datetime(2026, 7, 29, 8, 0, tzinfo=UTC)
+    created = created_at or datetime.now(UTC)
     ttl = timedelta(hours=72) if mode is TraceMode.FULL else timedelta(days=30)
     return TraceRecord(
         trace_id=trace_id,
