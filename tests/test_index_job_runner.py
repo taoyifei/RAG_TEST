@@ -70,6 +70,21 @@ def _collection_names(client: QdrantClient) -> set[str]:
     return {item.name for item in client.get_collections().collections}
 
 
+def _delete_test_collections(
+    client: QdrantClient,
+    collection_prefix: str,
+) -> None:
+    created_collections = {
+        collection
+        for collection in _collection_names(client)
+        if collection.startswith(f"{collection_prefix}-")
+    }
+    for collection in sorted(created_collections):
+        for snapshot in client.list_snapshots(collection):
+            client.delete_snapshot(collection, snapshot.name)
+        client.delete_collection(collection)
+
+
 def _assert_manifest_matches_active_records(
     client: QdrantClient,
     manifest: IndexManifest,
@@ -139,6 +154,13 @@ def _assert_idle_with_exact_count(
 ) -> None:
     assert runner.run_next(worker_id="single-index-worker") is None
     assert client.count(collection_name, exact=True).count == expected_count
+
+
+def _require_succeeded(result: JobRunResult | None) -> JobRunResult:
+    assert result is not None
+    assert result.state == JobState.SUCCEEDED, result
+    assert result.collection_name
+    return result
 
 
 def _published_state(
@@ -224,6 +246,7 @@ def _client() -> QdrantClient:
         api_key=_API_KEY,
         timeout=10,
         check_compatibility=False,
+        trust_env=False,
     )
 
 
@@ -366,8 +389,11 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
     client = _client()
     suffix = uuid.uuid4().hex
     alias = f"rag-job-active-{suffix}"
+    collection_prefix = f"rag-job-{suffix}"
     docs = tmp_path / "docs"
     docs.mkdir()
+    index_state_dir = tmp_path / "indexes"
+    index_state_dir.mkdir()
     (docs / "甲.docx").write_bytes(b"first")
     (docs / "乙.docx").write_bytes(b"second")
     control = StateStore(tmp_path / "control.sqlite3")
@@ -379,8 +405,8 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         config=JobRunnerConfig(
             alias_name=alias,
             input_root=docs,
-            index_state_dir=tmp_path / "indexes",
-            collection_prefix=f"rag-job-{suffix}",
+            index_state_dir=index_state_dir,
+            collection_prefix=collection_prefix,
             lease_seconds=60,
         ),
         services=JobRunnerServices(
@@ -391,18 +417,17 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
             build_chunks_factory=lambda _: _build_chunks,
         ),
     )
-    created_collections: set[str] = set()
     try:
         full = control.create_job(
-            idempotency_key="full:v1",
+            idempotency_key=f"full:v1:{suffix}",
             kind=JobKind.FULL,
             pipeline_fingerprint=pipeline.fingerprint(),
         )
-        full_result = runner.run_next(worker_id="single-index-worker")
-        assert full_result is not None
-        created_collections.add(full_result.collection_name)
+        full_result = _require_succeeded(
+            runner.run_next(worker_id="single-index-worker")
+        )
         full_state = StateStore(
-            _state_path(tmp_path / "indexes", full_result.collection_name)
+            _state_path(index_state_dir, full_result.collection_name)
         )
         original_sources = full_state.list_active_sources()
         assert control.get_job(full.job_id).state == JobState.SUCCEEDED
@@ -418,14 +443,13 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         (docs / "乙.docx").unlink()
         (docs / "丙.docx").write_bytes(b"third")
         incremental = control.create_job(
-            idempotency_key="incremental:v2",
+            idempotency_key=f"incremental:v2:{suffix}",
             kind=JobKind.INCREMENTAL,
             pipeline_fingerprint=pipeline.fingerprint(),
         )
-        result = runner.run_next(worker_id="single-index-worker")
-        assert result is not None
-        if result.collection_name:
-            created_collections.add(result.collection_name)
+        result = _require_succeeded(
+            runner.run_next(worker_id="single-index-worker")
+        )
         assert result.collection_name != full_result.collection_name
         assert (
             control.get_job(incremental.job_id).state == JobState.SUCCEEDED
@@ -447,12 +471,10 @@ def test_full_then_incremental_job_updates_manifest_and_zero_duplicates(
         assert manifests.count_revisions(result.collection_name) == 1
         assert _alias_target(client, alias) == result.collection_name
     finally:
-        target = _alias_target(client, alias)
-        if target is not None:
-            client.delete_collection(target)
-        for collection in created_collections:
-            if client.collection_exists(collection):
-                client.delete_collection(collection)
+        try:
+            _delete_test_collections(client, collection_prefix)
+        finally:
+            client.close()
 
 
 def test_incremental_failure_keeps_old_alias_manifest_qdrant_and_state(

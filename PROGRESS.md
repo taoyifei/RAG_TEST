@@ -4285,3 +4285,362 @@
   配置、应用/OCR 清单 SHA256 均与任务 0 完全一致。变更只在本任务白名单，
   暂存区为空；`BLOCKED.md` 恰好为真实模型、retrieval 定参、GPU OCR、EMF、
   Word 编号和 production 验收六类。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 0：可审计基线
+
+- [x] 中断后先读取 `PROGRESS.md`、`BLOCKED.md`。HEAD 精确为
+  `306ec72271dc96865aeabc65314c2708b2e3868a`；起始工作区仅有上一轮按要求写入
+  的 `BLOCKED.md` 失败记录，staged=0，未运行 `release_smoke.py`。
+- [x] 直接调用路径为目标测试 → `IndexJobRunner.run_next()` →
+  `_prepare_full_target()` / `_prepare_incremental_target()` →
+  `StateStore.initialize()` / `clone_collection_state()`。后两者都会在打开 SQLite
+  前创建父目录；测试使用 pytest `tmp_path`、每次 UUID collection/alias 前缀和
+  独立 control/manifest/state 库。
+- [x] 既有本地测试 Qdrant 已从 exited 恢复到 `/readyz` 成功，版本为 1.18.3，
+  restart policy=`no`、mounts=0。首次诊断命令因自定 basetemp 的父目录不存在而
+  在 fixture setup 前退出，完整 harness 日志保留；创建 ignored 父目录后，测试
+  体唯一一次复现为 `1 passed, 1 warning in 8.79s`。
+- [x] 原失败目录 `/tmp/pytest-of-jerry/pytest-126/...` 仍可只读审计：control job
+  为 failed、首个错误码 `INDEX_RESPONSEHANDLINGEXCEPTION`，manifest 为空且
+  `indexes/` 从未创建，证明上一轮报告的 SQLite open error 读取的是失败摘要的
+  空 collection 名派生路径，而不是已经创建后丢失的生产 state。
+- [x] 原失败 Qdrant 日志绑定 collection
+  `rag-job-651679ad7dc54be382aa17f3387a3be8-bd17364fc940-646f6c86cb1d`：collection
+  创建与前序索引请求均返回 200，随后约 10 秒没有服务端请求记录，与测试客户端
+  `timeout=10` 对齐；之后清理对空 collection 名调用 `/collections/exists` 才返回
+  404。该 404 是次生现象，不作为生产事务缺陷证据。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 1：根因分类
+
+- [x] 分类为 **C：本地 Qdrant 环境故障**。qdrant-client 1.18.0 的
+  `ResponseHandlingException` 同时包装响应 schema 与 HTTP transport 异常；本次
+  服务端日志在连续 200 后出现与客户端 10 秒 timeout 对齐的空窗，且恢复容器到
+  ready 后同一真实 full→incremental 链一次通过，现有证据不支持生产缺陷。
+- [x] 七项顺序复核：旧 pytest 目录仍存在，未提前退出 TemporaryDirectory；
+  `StateStore.initialize()` 和 clone 均先创建父目录；测试只使用 pytest 内建
+  `tmp_path`，没有提前 yield/close/delete；store 不持有可被提前关闭的长连接；
+  DB、UUID collection/alias 和控制库隔离，固定 job key 只在本测试独立 control
+  DB 内使用；Qdrant 1.18.3 当前 ready 且真实请求认证通过。
+- [x] cleanup 的确在 full setup 未成功时把空 `collection_name` 加入集合，并在
+  finally 中调用 `collection_exists("")`；业务断言又先读取空名派生的 SQLite
+  路径，因而掩盖首错并制造 404。它是测试诊断/清理的次生缺陷，但没有导致原始
+  `INDEX_RESPONSEHANDLINGEXCEPTION`，也没有生产代码修改依据。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 2：最小修复
+
+- [x] 按 C 类约束不修改代码。只启动既有、restart policy=`no`、mounts=0 的
+  `rag-final-three-qdrant`，复核 `/readyz` 成功、镜像版本 1.18.3；没有新建、
+  删除或替换容器、网络、卷、基础镜像或测试数据库。
+- [x] 当前受控 diff 仍只有 `PROGRESS.md` 与上一轮 `BLOCKED.md` 原始失败记录，
+  staged=0；`tests/test_index_job_runner.py`、`src/rag_app/state/**` 和
+  `src/rag_app/index/**` 均未修改。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 3：首轮稳定性红证据
+
+- [x] 修复前目标测试单次退出 0：`1 passed, 1 warning in 9.61s`。随后严格以
+  20 个独立 pytest 进程连续验证；第 1—19 个进程均退出 0，第 20 个进程退出 1，
+  验证立即停止，没有继续文件级、关联集或全量测试，也没有挑选性重跑。
+- [x] 第 20 次失败保留于 ignored 日志
+  `artifacts/logs/stability-target-20-processes.log` 和 pytest 临时目录。control job
+  的首错仍为 `INDEX_RESPONSEHANDLINGEXCEPTION`；真实 state 库已存在，测试却因
+  失败结果的空 collection 名另建空 SQLite 文件，随后报 `no such table: sources`。
+- [x] 对应唯一 collection 的创建、schema、upsert、count 请求均为 200；最后一条
+  200 后约 10 秒没有服务端完成记录，与测试 Qdrant 客户端 `timeout=10` 对齐；
+  finally 再对空 collection 名请求 `/collections/exists` 才出现 404。由此确认
+  SQLite 和 404 均为次生异常，首错仍是有界客户端超时链。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 1—2 复核：改判 A
+
+- [x] 20 进程红证据推翻“恢复 ready 即稳定”的 C-only 初判，最终分类改为
+  **A：测试 fixture/helper 生命周期与失败隔离缺陷**。真实集成测试 helper 的
+  10 秒单请求超时不足以覆盖连续 snapshot 工作负载；测试又在确认 job 成功前
+  使用结果，并把空 collection 名纳入 state 读取和幂等清理，导致首错被遮蔽。
+- [x] 仍无 B 类证据：生产 `StateStore` 和 clone 均先创建父目录、连接均由单次
+  context manager 管理；失败发生在 Qdrant 响应处理阶段，未出现已关闭 store、
+  生产事务顺序或 alias/manifest/去重语义破坏。因此生产代码保持不变。
+- [x] 最小修复仅限目标测试及其直接 `_client()` helper：保持原有 10 秒有界调用
+  超时，显式保持 index state 父目录，先断言 job 成功再读取业务结果，job key
+  加入本测试唯一后缀；全部原业务断言保留。
+- [x] cleanup 通过本测试 UUID collection prefix 从 Qdrant 当前资源清单取交集，
+  删除每个真实 collection 前先经 Qdrant API 删除其 snapshot，不再查询或删除
+  空名字；真实存在性检查后的 404 仍会使测试失败。测试结束显式关闭 client；
+  未修改 `src/rag_app/state/**` 或
+  `src/rag_app/index/**`。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 3：第二轮红证据与环境根因
+
+- [x] 第一版测试侧诊断修复后单次为 `1 passed, 1 warning in 9.11s`；重新从 1
+  计数的独立进程验证在第 14 次退出 1，前 13 次通过，验证再次立即停止。现在失败
+  直接落在新增的 job 成功前置断言：`state=failed`、
+  `error_code=INDEX_RESPONSEHANDLINGEXCEPTION`，没有 SQLite 异常或清理 404。
+- [x] 把测试 client timeout 临时增加到 30 秒仍在同阶段失败，证明单纯放宽超时
+  不能解除阻塞，现已恢复原 10 秒。对应 Qdrant 日志在最后一次 count=200 后整整
+  30 秒没有完成下一条业务请求，随后 cleanup 的 collection list/delete 立即 200。
+- [x] 容器只读盘点发现 `/qdrant/snapshots` 有 1474 个目录、3178 个文件、共
+  2.0G，而 collection storage 仅 16M；1473 个目录均为 `rag-*` 测试资源，余下
+  一个是 Qdrant `tmp`。当前无 alias，四个 collection 也全部是本项目失败测试
+  遗留；容器 restart_count=0、mounts=0、ready，磁盘可用 882G。
+- [x] 最终根因是 **A+C 组合**：测试 cleanup 只删除 collection，未删除 Qdrant
+  独立保留的 snapshot，长期复用无挂载测试容器后形成环境累积，触发 snapshot
+  请求周期性 transport timeout；SQLite 与 404 仍为旧测试失败处理的次生现象。
+  最小代码修复增加 snapshot→collection 的有序清理，生产代码继续不动。
+- [x] 环境恢复前再次确认 mounts=0、aliases=0、现存 collection 全为 `rag-*`，
+  snapshot 顶层只有 1473 个 `rag-*` 和保留的 `tmp`。首个 PowerShell API 清理因
+  query-string 插值错误未删除目标，立即读回发现并改用显式 URI；最终只删除四个
+  测试 collection 与 `/qdrant/snapshots/rag-*`。恢复后 collections=0、`rag-*`
+  snapshot 目录=0、snapshot 目录由 2.0G 降至 152K，`/readyz` 仍成功。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 1—3：最终根因收敛
+
+- [x] 清空历史 collection/snapshot 后，目标单次为
+  `1 passed, 1 warning in 8.85s`；第三次独立进程验证前 12 次通过、第 13 次失败，
+  严格立即停止。该次 full 已成功，incremental snapshot 创建和恢复均为 200，
+  随后的 verifier 调用出现 10 秒 transport timeout；cleanup 的 snapshot→collection
+  删除全部为 200，环境残留不是充分根因。
+- [x] qdrant-client 1.18.0 源码直接证明：host 为 `localhost/127.0.0.1` 时默认设置
+  `max_keepalive_connections=0`，每个 REST 调用都新建短连接。失败后 Windows
+  Docker 转发层有 226 个 6333 `TimeWait`，WSL 内只有 1 个，证实短连接压力集中
+  在 Docker Desktop/Windows 网络转发层，且与容器 ready、内存、磁盘无关。
+- [x] 最终分类为 **A：测试 helper 生命周期/隔离缺陷**，并伴有可恢复的本地 C 类
+  脏环境。直接 `_client()` helper 现显式使用最多 10 个连接/10 个 keep-alive、
+  30 秒 keep-alive expiry 的有界池，仍保留单请求 timeout=10；目标测试 finally
+  关闭 client，并先删本测试 snapshot 再删 collection。没有重试、sleep、mock、
+  skip 或生产代码修改。
+
+## 2026-08-03 full/incremental 生命周期稳定化：最终根因定论
+
+- [x] 显式 keep-alive 版本的第四次独立进程序列前 15 次通过、第 16 次 incremental
+  失败，验证仍立即停止；这证明连接池本身不能解除阻塞。随后运行最多 5 次、遇错
+  即停的 httpcore DEBUG 诊断进程，5/5 通过但完整连接轨迹保留于 ignored 日志，
+  不计入正式 20/20。
+- [x] DEBUG 轨迹中 785 次 `connect_tcp` 全部指向 `127.0.0.1:7890`，而非 Qdrant
+  `127.0.0.1:6333`。当前 WSL 环境设置了 HTTP/HTTPS proxy；`NO_PROXY` 包含
+  `localhost`，但不含测试 URL 使用的 `127.0.0.1`。因此 httpx 默认
+  `trust_env=True` 把真实本地 Qdrant 流量错误送入代理，周期性超时才是唯一首错。
+- [x] 最终分类明确为 **A：测试 helper 环境隔离缺陷**。最小修复为直接 `_client()`
+  设置 `trust_env=False`，只对测试本地 Qdrant 禁用环境代理；移除试验性的连接池
+  配置，保留 timeout=10、真实 Qdrant、唯一资源名、成功前置断言、snapshot 清理
+  和显式 close。C 类历史脏 snapshot 已恢复，但不是充分根因；B 类仍无证据。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 3：正式稳定性验证
+
+- [x] 最终修复后目标测试单次退出 0：`1 passed, 1 warning in 9.02s`。
+- [x] 随后从 1 重新计数的 20 个独立 pytest 进程全部退出 0：**20/20**；每次
+  均为 `1 passed, 1 warning`，测试体耗时 8.37—8.86 秒。完整逐进程日志保留于
+  ignored `artifacts/logs/stability-no-proxy-target-20-processes.log`，没有重跑
+  挑选结果。
+- [x] 失败测试文件全文件退出 0：`9 passed, 9 warnings in 66.48s`。
+- [x] SQLite/Qdrant/index job 关联测试重跑退出 0：38 个文件共
+  `234 passed, 61 warnings in 450.49s`，skipped=0。
+- [x] 全量 pytest 一轮退出 0：`822 passed, 61 warnings in 533.20s`，skipped=0；
+  warning 总数与既有基线相同，类别仍只有 `StarletteDeprecationWarning` 与
+  `UserWarning`。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 3：静态门禁
+
+- [x] 首轮 compileall 退出 0；Ruff 首错为目标测试新增清理使
+  `PLR0915 55 > 50`，静态组按规则立即停止。仅把原有 snapshot→collection
+  清理顺序提取为同文件直接 helper，不吞异常、不改变资源选择或业务断言；修复后
+  从 compileall 重新开始静态组。
+- [x] 第二轮 compileall 退出 0，Ruff 仍报 `PLR0915 53 > 50` 并立即停止；把
+  full/incremental 两处完全相同的非空、成功状态、非空 collection 三项断言原样
+  提取为 `_require_succeeded()`，没有删除或放宽任何断言。
+- [x] 最终静态组退出 0：compileall 无输出；Ruff `All checks passed!`；strict
+  mypy `Success: no issues found in 103 source files`；Google docstring
+  `missing_google_sections=0`。
+- [x] 11 个 deployment Shell `bash -n` 全部退出 0；默认与 `index` profile
+  Compose `config -q` 均退出 0。
+- [x] SHA 校验首轮因误用不存在的 `deployment/ocr/wheelhouse` 路径在第二项停止，
+  未发生摘要不匹配；按 `release_smoke.py` 的既有路径修正后六份清单全部通过：
+  deployment 11、OCR wheels 59、OCR models 6、OCR assets 69、runtime wheels
+  39、evaluation frozen 1 条均为 OK。
+- [ ] release-safety 对完整既有索引退出 1：`tracked_files=265`、
+  `violations=2`，命中未修改的 `deployment/model-services/README.md` 内网地址和
+  `tests/test_model_services_deployment.py` 凭据字面量。两文件相对 HEAD diff=0，
+  且超出本轮授权；已置顶写入 `BLOCKED.md`，禁止 commit 与 smoke release。
+- [x] `git diff --check` 退出 0。
+
+## 2026-08-03 full/incremental 生命周期稳定化：最终代码复验
+
+- [x] Ruff 机械提取完成后的最终代码重新执行全部稳定性序列：目标单次
+  `1 passed, 1 warning in 8.98s`；20 个独立 pytest 进程 **20/20**，每次均
+  退出 0，耗时 8.48—9.29 秒；目标文件全文件
+  `9 passed, 9 warnings in 66.34s`。
+- [x] 最终代码的 38 文件 SQLite/Qdrant/index job 关联集为
+  `234 passed, 61 warnings in 448.63s`，skipped=0；最终全量 pytest 为
+  `822 passed, 61 warnings in 533.99s`，skipped=0。warning 总数与类别均未
+  增加。
+- [x] 本轮唯一全量 pytest 阻塞已经解除，旧阻塞已从 `BLOCKED.md` 删除；最终
+  生产 `src/rag_app/state/**` 与 `src/rag_app/index/**` 均无修改。
+- [ ] 因完整 release-safety 仍为 `violations=2`，未满足“全部其他门禁全绿”和
+  clean-worktree 前置条件；按硬约束未创建本地 commit、未运行
+  `scripts/release_smoke.py`、未生成 deployment handoff。
+- [x] 最终 release-safety 复核仍稳定为 `tracked_files=265`、`violations=2`，
+  其他类别均为 0，命中路径未变化；没有用临时 index、忽略规则或修改扫描器绕过。
+- [x] 只读追溯确认：内网地址命中位于
+  `deployment/model-services/README.md:38-39`，凭据字面量命中位于
+  `tests/test_model_services_deployment.py:301-302`；两文件最近共同引入提交均为
+  `d7d2546f51d912be0cb0025757922d770f05d833`。`release_smoke.py:377` 明确把
+  `model-services` 列为 sidecar 禁止项，因此该目录不会进入 smoke 顶层七文件，
+  但完整 Git 索引 release-safety 仍按硬门禁失败，不能据此绕过。
+- [x] 为测试启动的精确本地容器 `rag-final-three-qdrant` 已停止，最终为
+  `status=exited`、running=false、restart_count=0、policy=no、mounts=0；运行中
+  `rag-worker` 数量为 0。
+- [x] 最终 HEAD 仍为 `306ec72271dc96865aeabc65314c2708b2e3868a`；工作树只有
+  `tests/test_index_job_runner.py`、`tests/test_target_verifier.py`、`PROGRESS.md`、
+  `BLOCKED.md` 四个获授权修改，staged=0，`git diff --check` 退出 0；完整日志均
+  位于 ignored `artifacts/logs/`。本轮未访问 `.57/.58/.60`，未 SSH/SCP、未上传、
+  未 push、未启动 worker。
+
+## 2026-08-03 full/incremental 生命周期稳定化任务 3：关联集红→绿修复
+
+- [x] 依赖扫描得到 38 个直接使用 SQLite/Qdrant/index job 的测试文件；关联集用
+  `-x` 首错即停，首轮为 `1 failed, 209 passed, 61 warnings in 389.26s`。唯一
+  失败是 `test_target_verifier_rejects_corrupt_sqlite_state` 原地截断 WAL 主库后
+  没有抛错；没有继续全量测试。
+- [x] 失败临时目录中的目标文件在进程结束后是有效 65536 字节 SQLite，而测试
+  写入仅 21 字节；孤立运行同一测试为 `1 passed, 1 warning in 4.45s`，直接证明
+  失败依赖前序连接/WAL 生命周期，不是 `TargetIndexVerifier` 生产完整性漏检。
+- [x] 最小测试修复不改变异常类型或 verifier：先创建独立损坏文件，再用
+  `Path.replace()` 原子替换主库 inode，确保遗留连接/WAL 不能把同一路径原地恢复；
+  未修改任何生产代码。
+- [x] 红测定向转绿：单测 `1 passed, 1 warning in 4.12s`；所在文件全文件
+  `6 passed, 6 warnings in 20.75s`。后续本地集成命令统一显式设置
+  `NO_PROXY/no_proxy=127.0.0.1,localhost`，不再让其他 Qdrant helper 经过 7890。
+
+## 2026-08-03 release-safety 第三次连续阻塞审计
+
+- [x] 按断点规则重新读取 `PROGRESS.md`、`BLOCKED.md` 并复核当前状态：HEAD 仍为
+  `306ec72271dc96865aeabc65314c2708b2e3868a`；仅四个授权文件有未暂存修改，
+  staged=0。
+- [x] 完整 Git 索引 release-safety 再次稳定退出 1：`passed=false`、
+  `tracked_files=265`、`violations=2`，仍仅命中既有且未修改的
+  `deployment/model-services/README.md` 与
+  `tests/test_model_services_deployment.py`，其他违规类别均为 0。
+- [x] 同一越权阻塞已连续三个目标回合成立，授权内没有可继续推进的修复；按硬门禁
+  正式保持未 commit、未运行 smoke、未生成 handoff，目标状态转为 blocked，等待
+  单独授权处理上述两个既有基线文件后再恢复。
+
+## 2026-08-03 三模式 release-safety 任务 0：可审计基线
+
+- [x] 本轮新授权解除上一设计阻塞；基线 HEAD 为
+  `306ec72271dc96865aeabc65314c2708b2e3868a`。工作树仍只有
+  `tests/test_index_job_runner.py`、`tests/test_target_verifier.py`、`PROGRESS.md`、
+  `BLOCKED.md` 四个既有授权修改，staged=0。
+- [x] 旧完整仓库入口再次退出 1：`tracked_files=265`、`violations=2`，只命中
+  `deployment/model-services/README.md` 的内网地址和
+  `tests/test_model_services_deployment.py` 的凭据字面量；两文件相对 HEAD 均无
+  diff，必须继续如实报告，禁止修改或历史 allowlist 刷绿。
+- [x] 只读检查 `deployment/package.sh` 对上述两个完整路径及
+  `model-services` 目录名均无引用，证明它们不会进入 smoke runtime/corpus；现有
+  `release_smoke.py` 还反向断言 runtime 不得出现 `model-services`。
+- [x] 继承且待最终代码后重跑的最近门禁证据：目标 20/20、关联集
+  `234 passed`、全量 `822 passed, 61 warnings, skipped=0`；compileall、Ruff、
+  strict mypy、Google docstring、11 个 Shell、两种 Compose、六份资产 SHA 和
+  `git diff --check` 均已通过。
+
+## 2026-08-03 三模式 release-safety 任务 1/3：红测
+
+- [x] 新增三模式边界红测，覆盖 repository 两个既有命中、staged index blob、
+  rename/deletion、release 三份 exact-set manifest、摘要、symlink/越界、精确五份
+  归档、verified DOCX、额外二进制/大文件，以及 smoke 安全失败后无 handoff。
+- [x] 首轮 `pytest -q tests/test_release_safety.py tests/test_release_smoke.py`
+  退出 2：两个收集错误分别缺少 `ReleaseSafetyError` 与 `_execute_smoke`，证明旧实现
+  不具备 staged/release 扫描边界和 smoke 稳定失败契约；未删测、未 skip/xfail。
+
+## 2026-08-03 三模式 release-safety 任务 1—3：实现与专项转绿
+
+- [x] CLI 改为显式 `repository <root>`、`staged <root>` 和带三个 canonical root
+  的 `release` 子命令。repository 与 staged 均读取 Git index blob；staged 只取
+  ACMR 目标、rename 只扫目标路径、纯删除/空 index 返回稳定零违规。
+- [x] release 模式先拒绝非 canonical root、symlink 祖先/目录项和特殊文件，再对
+  delivery/runtime/corpus 三份 manifest 校验 SHA256 与文件 exact set；顶层锁定
+  七文件，只批准两份命名明确的 tar.gz、三份精确 `images/*.tar` 和经 canonical
+  corpus manifest 验证的 DOCX 跳过文本扫描，其他二进制或大文件继续失败。
+- [x] `release_smoke.py` 在 fresh_verify 安全解包并运行 verify-offline 后调用真实
+  release 模式；非零、非 release 报告或 `violations != 0` 均以
+  `RELEASE_SAFETY_FAILED` 记入 `fresh_verify`。失败报告不输出 release_dir 且不写
+  handoff；全部阶段及安全门禁通过后才原子写只含批准字段的 handoff。
+- [x] 专项首轮实现后为 `22 passed, 2 failed`：大文件用例的 128 字节阈值同时命中
+  合法 manifest；新增编排职责使原 520 行结构上限失真。测试改为 10,000 字节只让
+  新增 10,001 字节文件越界，并把结构上限调整为 640 行；未放宽任何风险分类。
+- [x] 补齐 staged 私有路径/二进制/大文件、未登记于 corpus manifest 的 DOCX 和
+  FIFO 特殊文件反测后，release-safety/release-smoke 专项最终为
+  `29 passed in 0.66s`；局部 compileall、Ruff 与 strict mypy 均退出 0。
+- [x] 新 CLI 实测：repository 继续稳定为 `tracked_files=265, violations=2`；当前
+  空 staged 为 `tracked_files=0, violations=0`，没有历史 allowlist、路径排除、
+  noqa/ignore 或工作树内容替代 index blob。
+
+## 2026-08-03 三模式 release-safety 任务 4：稳定性验证
+
+- [x] 恢复精确的本地无挂载 Qdrant 测试容器并确认 `/readyz=200`；未访问服务器。
+  目标测试随后在 `set -e` 下连续运行 20 个独立 pytest 进程，全部为
+  `1 passed, 1 warning`，耗时 8.68—9.66 秒，最终 **20/20**。PowerShell 提前
+  展开输出标签变量导致仅显示 `/20`，但 `{1..20}` 循环、20 组摘要和退出 0 均
+  完整，不为美化标签重跑或挑选结果。
+- [x] 专项按文件独立复核：`tests/test_release_safety.py` 为
+  `24 passed in 0.61s`，`tests/test_release_smoke.py` 为
+  `5 passed in 0.02s`。
+- [x] 最终代码全量 pytest 退出 0：`845 passed, 61 warnings in 539.63s`，
+  skipped=0；高于 822 下限，warning 总数与类别仍只有既有的
+  `StarletteDeprecationWarning` 和 `UserWarning`，没有增加。
+- [x] 完整静态/部署门禁全绿：compileall 无输出；Ruff
+  `All checks passed!`；strict mypy
+  `Success: no issues found in 103 source files`；Google docstring
+  `missing_google_sections=0`；11 个 deployment Shell、默认/index Compose、
+  deployment 11、OCR wheels 59、OCR models 6、OCR assets 69、runtime wheels
+  39、evaluation frozen 1 条 SHA 及 `git diff --check` 全部退出 0。
+- [x] 完整 repository 模式仍如实报告既有两项，staged 空候选与 release 合成
+  正例均为 `violations=0`；本轮 release-safety smoke 设计阻塞已解除并从
+  `BLOCKED.md` 删除，真实模型契约、retrieval 定参、GPU OCR、EMF、Word 自动
+  编号及 production 验收六类阻塞保持不变。
+- [x] 验证专用的本地无挂载 Qdrant 容器已停止；本轮未启动 worker，未访问
+  `.57/.58/.60`，未 SSH/SCP、未上传、未 push。
+- [x] 提交候选恰好为 8 个授权文件、`1526 insertions(+), 97 deletions(-)`；两个
+  禁止修改的既有命中文件 diff 为空。显式 staged 模式从 Git index blob 扫描
+  `tracked_files=8`，结果 `passed=true, violations=0`；cached diff check 退出 0，
+  未纳入 artifacts、docs、模型、tokenizer、wheel、镜像、数据库或日志。
+
+## 2026-08-03 三模式 release-safety 任务 5/6：提交与 smoke 首轮
+
+- [x] 创建唯一的本地提交
+  `85f8b2ee3b5972079293daf9ec35b9c54527652d`，message 为
+  `fix(release): scope safety checks to release payload`；提交后工作树 clean、
+  staged=0，未 push。
+- [ ] 真实 smoke 第 1 轮运行 829.8 秒后按首错退出 1：前 9 个阶段 passed，
+  `fresh_verify` 为 `FRESH_VERIFY_FAILED`，首错为安全解包后的
+  `runtime/bootstrap.sh` 不可执行；release-safety 尚未开始。失败报告的
+  `source_revision` 精确等于该提交，`release_dir=null`，且未生成
+  `artifacts/deployment-handoff.txt`。
+- [x] 权限根因直接证据：源 `deployment/bootstrap.sh` 为文件系统 755、Git
+  `100755`，当前 runtime tar entry 为 `-rwx------`；但既有
+  `scripts/offline_bundle.py::_extract_regular_members` 仅以 `open("xb")` 复制
+  字节，从未恢复 tar mode。服务器说明要求使用该解包器后立即运行
+  `bash runtime/verify-offline.sh`，而 verifier 明确要求 bootstrap 可执行；因此
+  不能在 smoke 内临时 chmod 掩盖真实交付缺陷。
+- [x] 继续不受权限问题影响的真实 payload 门禁时，首轮 release 扫描没有 OOM，
+  严格命中 `runtime/images/docx-rag-ocr.inspect.json` 中
+  `/home/cmake-3.18.0-Linux-x86_64/`。该值是 OCI 内部工具目录，不是宿主用户目录；
+  旧正则误把任意 `/home/<组件>/` 当作用户 home。
+- [x] 本轮未按文件或字符串 allowlist 绕过：Linux home 规则收紧为 POSIX 用户名
+  组件语义，新增正反测试继续拒绝 `/home/<user>/...`；同时新增反测证明五份批准
+  归档与 verified DOCX 不通过 `read_bytes()` 整包进入内存。专项最终为
+  `31 passed in 0.83s`，局部 compileall、Ruff、strict mypy 均通过。
+- [x] 对第 1 轮真实候选使用交付包自带解包器重新安全解包（未 chmod）后，release
+  模式在 58 个登记文件上退出 0：`passed=true, violations=0`，六类风险与
+  integrity error 全部为 0。真实 payload 安全边界已验证；只有随后
+  verify-offline 所需的执行权限恢复仍阻塞完整 smoke。
+- [x] 上述最终修正后全量 pytest 重新退出 0：
+  `847 passed, 61 warnings in 544.29s`，skipped=0，warning 数量和类别未增加。
+  随后 compileall、Ruff、strict mypy（103 source files）、Google docstring、
+  11 个 Shell、默认/index Compose、六份资产 SHA 和 `git diff --check` 再次全绿。
+  Shell/Compose 首次并行复核仅触发 WSL Service `0x8007274c`、没有业务结果，改为
+  串行后各项均退出 0。
+- [x] 最终验证用本地 Qdrant 已再次停止；运行中 worker=0。本轮仍未访问
+  `.57/.58/.60`，未 SSH/SCP、未上传、未 push。完整 smoke 因置顶解包权限阻塞
+  未达成，禁止生成 handoff 或把第 1 轮目录描述为可交付 release。
+- [x] amend 候选首次 staged 门禁如实失败：4 个 index blob 中 `PROGRESS.md` 的
+  审计示例写入了一个具体 POSIX 用户 home，结果 `local_path_matches=1`；未提交。
+  改为抽象 `<user>` 占位后重跑为 `tracked_files=4, violations=0`，cached diff
+  check 退出 0；repository 仍稳定为 `tracked_files=265, violations=2`，只命中两个
+  既有文件。

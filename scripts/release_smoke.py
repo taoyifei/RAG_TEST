@@ -57,6 +57,7 @@ class SmokeContext:
     sbom_available: bool = False
     images: list[dict[str, str]] = field(default_factory=list)
     files: list[dict[str, str | int]] = field(default_factory=list)
+    release_safety: dict[str, bool | int | str] | None = None
 
 
 def execute_stages(
@@ -84,15 +85,22 @@ def execute_stages(
         try:
             stage.action()
         except Exception as error:
+            error_code = (
+                error.code
+                if isinstance(error, SmokeError)
+                else stage.error_code
+            )
             results.append(
                 {
                     "duration_seconds": round(time.monotonic() - started, 3),
-                    "error_code": stage.error_code,
+                    "error_code": error_code,
                     "name": stage.name,
                     "status": "failed",
                 }
             )
-            raise SmokeError(stage.error_code) from error
+            if isinstance(error, SmokeError):
+                raise
+            raise SmokeError(error_code) from error
         results.append(
             {
                 "duration_seconds": round(time.monotonic() - started, 3),
@@ -368,7 +376,14 @@ def _fresh_verify(context: SmokeContext) -> None:
                 root=context.root,
             )
         runtime = runtime_output / "runtime"
+        corpus = corpus_output / "corpus"
         _run(["bash", str(runtime / "verify-offline.sh")], root=runtime)
+        _run_release_safety(
+            context,
+            delivery=release,
+            runtime=runtime,
+            corpus=corpus,
+        )
         metadata = json.loads(
             (runtime / "RELEASE_METADATA.json").read_text(encoding="utf-8")
         )
@@ -407,6 +422,50 @@ def _fresh_verify(context: SmokeContext) -> None:
         raise RuntimeError("release file count mismatch")
 
 
+def _run_release_safety(
+    context: SmokeContext,
+    *,
+    delivery: Path,
+    runtime: Path,
+    corpus: Path,
+) -> None:
+    """对真实解包结果运行 release 模式硬门禁。"""
+    completed = subprocess.run(  # noqa: S603
+        [
+            sys.executable,
+            "scripts/check_release_safety.py",
+            "release",
+            "--delivery-root",
+            str(delivery),
+            "--runtime-root",
+            str(runtime),
+            "--corpus-root",
+            str(corpus),
+        ],
+        cwd=context.root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise SmokeError("RELEASE_SAFETY_FAILED") from error
+    if (
+        completed.returncode != 0
+        or not isinstance(payload, dict)
+        or payload.get("mode") != "release"
+        or payload.get("passed") is not True
+        or payload.get("violations") != 0
+    ):
+        raise SmokeError("RELEASE_SAFETY_FAILED")
+    context.release_safety = {
+        "mode": "release",
+        "passed": True,
+        "violations": 0,
+    }
+
+
 def _write_report(context: SmokeContext, report: dict[str, object]) -> None:
     """原子写入脱敏 smoke 报告。"""
     report.update(
@@ -416,9 +475,12 @@ def _write_report(context: SmokeContext, report: dict[str, object]) -> None:
             "head": context.head or None,
             "images": context.images,
             "release_dir": (
-                str(context.release_dir) if context.release_dir else None
+                str(context.release_dir)
+                if report.get("status") == "passed" and context.release_dir
+                else None
             ),
             "release_id": context.release_id or None,
+            "release_safety": context.release_safety,
             "release_tier": "smoke",
             "sbom_available": context.sbom_available,
             "schema_version": "1",
@@ -432,6 +494,71 @@ def _write_report(context: SmokeContext, report: dict[str, object]) -> None:
         encoding="utf-8",
     )
     temporary.replace(context.report_path)
+
+
+def _write_handoff(context: SmokeContext) -> Path:
+    """原子写入只含批准字段的 smoke deployment handoff。"""
+    if (
+        not context.head
+        or not context.release_id
+        or not context.corpus_id
+        or context.release_dir is None
+        or len(context.files) != _RELEASE_FILE_COUNT
+        or context.release_safety
+        != {"mode": "release", "passed": True, "violations": 0}
+    ):
+        raise RuntimeError("handoff 前置发布身份或安全门禁不完整")
+    rows = [
+        f"source_revision={context.head}",
+        f"release_id={context.release_id}",
+        f"corpus_id={context.corpus_id}",
+        f"release_dir={context.release_dir}",
+    ]
+    rows.extend(
+        (
+            "file="
+            f"{file_info['name']}\t"
+            f"size_bytes={file_info['size_bytes']}\t"
+            f"sha256={file_info['sha256']}"
+        )
+        for file_info in context.files
+    )
+    rows.append("仅 smoke，不启动 worker，/ready=503 为预期")
+    handoff = context.root / "artifacts/deployment-handoff.txt"
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    temporary = handoff.with_suffix(".txt.new")
+    temporary.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    temporary.replace(handoff)
+    return handoff
+
+
+def _execute_smoke(context: SmokeContext, stages: Sequence[Stage]) -> int:
+    """执行阶段并只在全部通过后写报告与 handoff。"""
+    report: dict[str, object] = {"stages": []}
+    try:
+        execute_stages(stages, report)
+    except SmokeError as error:
+        report.update({"error_code": error.code, "status": "failed"})
+        _write_report(context, report)
+        print(error.code, file=sys.stderr)
+        return 1
+    if context.release_safety != {
+        "mode": "release",
+        "passed": True,
+        "violations": 0,
+    }:
+        report.update(
+            {"error_code": "RELEASE_SAFETY_FAILED", "status": "failed"}
+        )
+        _write_report(context, report)
+        print("RELEASE_SAFETY_FAILED", file=sys.stderr)
+        return 1
+    report["status"] = "passed"
+    _write_report(context, report)
+    _write_handoff(context)
+    print(f"report={context.report_path}")
+    print(f"release_dir={context.release_dir}")
+    return 0
 
 
 def main() -> int:
@@ -449,7 +576,6 @@ def main() -> int:
         root=root,
         report_path=root / "artifacts" / _REPORT_NAME,
     )
-    report: dict[str, object] = {"stages": []}
     stages = tuple(
         Stage(name, error_code, action)
         for name, error_code, action in (
@@ -493,18 +619,7 @@ def main() -> int:
             ),
         )
     )
-    try:
-        execute_stages(stages, report)
-    except SmokeError as error:
-        report.update({"error_code": error.code, "status": "failed"})
-        _write_report(context, report)
-        print(error.code, file=sys.stderr)
-        return 1
-    report["status"] = "passed"
-    _write_report(context, report)
-    print(f"report={context.report_path}")
-    print(f"release_dir={context.release_dir}")
-    return 0
+    return _execute_smoke(context, stages)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,24 @@
 # 阻塞项
 
-本文件只保留当前 smoke release 目标明确要求继续保留的六类真实阻塞。历史审计、
-已解决环境问题和不再阻塞本目标的职责说明均已移至 `PROGRESS.md`。
+本文件保留当前目标明确要求继续保留的六类外部阻塞，以及真实 smoke 新发现且
+超出本轮授权范围的安全解包权限阻塞。历史审计、已解决环境问题和不再阻塞本目标
+的职责说明均已移至 `PROGRESS.md`。
+
+## 置顶：安全解包器丢失 runtime 执行权限
+
+- 稳定错误码：`FRESH_VERIFY_FAILED`；真实 smoke 第 1 轮前 9 阶段通过后，
+  `verify-offline.sh` 报 `runtime bootstrap.sh 不可执行`，release-safety 尚未执行，
+  handoff 未生成，失败报告没有可交付 `release_dir`。
+- 源 bootstrap 为 755/Git 100755，runtime tar entry 也保留执行位；既有
+  `scripts/offline_bundle.py::_extract_regular_members` 只复制普通文件字节且没有
+  恢复任何 mode，导致其“安全解包”结果统一丢失执行位。服务器部署说明使用同一
+  解包器后立即运行 runtime verifier，因此在 `release_smoke.py` 内额外 chmod 会
+  掩盖真实交付缺陷，禁止用该方式刷绿。
+- 本轮授权只允许修改 release-safety、release-smoke 及对应测试，不允许修改
+  `scripts/offline_bundle.py` 和对应解包契约测试。解除条件：另行授权让安全解包器
+  只恢复 manifest 已登记普通文件的受控权限（至少精确恢复批准的 runtime 可执行
+  文件），新增恶意 mode/symlink/特殊文件反测，并从最新 clean HEAD 重跑全部门禁
+  与真实 smoke。
 
 ## 1. 真实模型契约
 

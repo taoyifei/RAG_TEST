@@ -290,7 +290,9 @@ def test_target_verifier_rejects_qdrant_and_state_drift(
 def test_target_verifier_rejects_corrupt_sqlite_state(tmp_path: Path) -> None:
     target = _target_fixture(tmp_path)
     try:
-        target.state.path.write_bytes(b"not-a-sqlite-database")
+        corrupt_path = tmp_path / "corrupt.sqlite3"
+        corrupt_path.write_bytes(b"not-a-sqlite-database")
+        corrupt_path.replace(target.state.path)
 
         with pytest.raises((sqlite3.DatabaseError, RuntimeError, ValueError)):
             _verifier(target).verify()
