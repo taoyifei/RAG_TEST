@@ -10,6 +10,10 @@ release_parent="${artifact_root}/releases"
 git_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 release_id="${RELEASE_ID:-${git_revision:0:12}}"
 corpus_manifest_input="${CORPUS_MANIFEST:-}"
+pipeline_config="${repo_root}/deployment/config/pipeline.json"
+retrieval_config="${repo_root}/deployment/config/retrieval.json"
+corpus_policy_config="${repo_root}/deployment/config/corpus-policy.json"
+freeze_decision="${repo_root}/deployment/config/FREEZE_DECISION.json"
 app_image="${RAG_APP_IMAGE:-docx-rag:${release_id}}"
 ocr_image="${RAG_OCR_IMAGE:-docx-rag-ocr:${release_id}}"
 qdrant_image="${RAG_QDRANT_IMAGE:-${RAG_APPROVED_QDRANT_SOURCE_IMAGE}}"
@@ -90,6 +94,49 @@ if [[ -z "${corpus_manifest_input}" \
   fail "必须通过 CORPUS_MANIFEST 提供绝对路径的普通 manifest 文件。"
 fi
 corpus_manifest_input="$(realpath -e "${corpus_manifest_input}")"
+for config_path in \
+  "${pipeline_config}" \
+  "${retrieval_config}" \
+  "${corpus_policy_config}"; do
+  if [[ ! -f "${config_path}" || ! -s "${config_path}" \
+    || -L "${config_path}" ]]; then
+    fail "runtime 配置必须是非空普通文件：${config_path}"
+  fi
+done
+(
+  cd "${repo_root}/evaluation/frozen"
+  sha256sum --check MANIFEST.sha256
+)
+configuration_status="$(python3 - "${retrieval_config}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+try:
+    value = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    raise SystemExit("retrieval 配置不是有效 UTF-8 JSON。") from error
+if type(value) is not dict or value.get("status") not in {
+    "provisional",
+    "frozen",
+}:
+    raise SystemExit("retrieval 配置 status 必须是 provisional 或 frozen。")
+print(value["status"])
+PY
+)"
+if [[ -e "${freeze_decision}" || -L "${freeze_decision}" ]]; then
+  if [[ ! -f "${freeze_decision}" || ! -s "${freeze_decision}" \
+    || -L "${freeze_decision}" ]]; then
+    fail "FREEZE_DECISION.json 必须是非空普通文件。"
+  fi
+  include_freeze_decision="true"
+else
+  include_freeze_decision="false"
+fi
+if [[ "${configuration_status}" == "frozen" \
+  && "${include_freeze_decision}" != "true" ]]; then
+  fail "frozen runtime 必须包含 FREEZE_DECISION.json。"
+fi
 corpus_id="$(
   cd "${repo_root}"
   python3 -m scripts.freeze_corpus_manifest \
@@ -145,10 +192,12 @@ runtime_archive="${stage}/rag-runtime-${release_id}.tar.gz"
 corpus_archive="${stage}/rag-corpus-${corpus_id}.tar.gz"
 unpacker="${stage}/offline_bundle.py"
 mkdir -p \
+  "${runtime_root}/config" \
   "${runtime_root}/evaluation/runtime/evaluation" \
   "${runtime_root}/evaluation/runtime/scripts" \
   "${runtime_root}/images" \
   "${runtime_root}/licenses" \
+  "${runtime_root}/model-services" \
   "${runtime_root}/provenance/ocr" \
   "${runtime_root}/scripts" \
   "${runtime_root}/sbom" \
@@ -162,11 +211,31 @@ cp "${repo_root}/deployment/.env.example" "${runtime_root}/.env.example"
 cp "${repo_root}/deployment/deploy.sh" "${runtime_root}/deploy.sh"
 cp "${repo_root}/deployment/rollback.sh" "${runtime_root}/rollback.sh"
 cp "${repo_root}/deployment/backup.sh" "${runtime_root}/backup.sh"
+cp "${repo_root}/deployment/acceptance.sh" \
+  "${runtime_root}/acceptance.sh"
+chmod 0700 "${runtime_root}/acceptance.sh"
 cp "${repo_root}/deployment/install.sh" "${runtime_root}/install.sh"
 cp "${repo_root}/deployment/verify-offline.sh" \
   "${runtime_root}/verify-offline.sh"
 cp "${repo_root}/deployment/qdrant-policy.sh" \
   "${runtime_root}/qdrant-policy.sh"
+cp "${repo_root}/deployment/model-services/compose.yaml" \
+  "${runtime_root}/model-services/compose.yaml"
+cp "${repo_root}/deployment/model-services/.env.example" \
+  "${runtime_root}/model-services/.env.example"
+cp "${repo_root}/deployment/model-services/preflight.sh" \
+  "${runtime_root}/model-services/preflight.sh"
+cp "${repo_root}/deployment/model-services/README.md" \
+  "${runtime_root}/model-services/README.md"
+chmod 0700 "${runtime_root}/model-services/preflight.sh"
+cp "${pipeline_config}" "${runtime_root}/config/pipeline.json"
+cp "${retrieval_config}" "${runtime_root}/config/retrieval.json"
+cp "${corpus_policy_config}" \
+  "${runtime_root}/config/corpus-policy.json"
+if [[ "${include_freeze_decision}" == "true" ]]; then
+  cp "${freeze_decision}" \
+    "${runtime_root}/config/FREEZE_DECISION.json"
+fi
 cp "${repo_root}/design/public/offline-build-and-server-deployment.md" \
   "${runtime_root}/README.md"
 cp "${repo_root}/scripts/offline_bundle.py" \
@@ -183,7 +252,11 @@ cp "${repo_root}/scripts/load_test_chat.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/scripts/benchmark_qdrant.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
+cp "${repo_root}/scripts/build_model_deployment_manifest.py" \
+  "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/scripts/verify_model_contracts.py" \
+  "${runtime_root}/evaluation/runtime/scripts/"
+cp "${repo_root}/scripts/verify_model_fleet.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/deployment/ocr/assets/licenses/PaddleOCR-LICENSE.txt" \
   "${runtime_root}/licenses/"

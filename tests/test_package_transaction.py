@@ -50,14 +50,18 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     project = Path(__file__).parents[1]
     for relative in (
         "deployment/package.sh",
+        "deployment/acceptance.sh",
         "deployment/install.sh",
         "deployment/qdrant-policy.sh",
         "deployment/verify-offline.sh",
+        "deployment/model-services/preflight.sh",
         "scripts/freeze_corpus_manifest.py",
         "scripts/docker_archive_identity.py",
         "scripts/docker_archive_reader.py",
         "scripts/offline_bundle.py",
+        "scripts/build_model_deployment_manifest.py",
         "scripts/verify_model_contracts.py",
+        "scripts/verify_model_fleet.py",
     ):
         source = project / relative
         target = repository / relative
@@ -71,6 +75,9 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         "deployment/deploy.sh",
         "deployment/rollback.sh",
         "deployment/backup.sh",
+        "deployment/model-services/compose.yaml",
+        "deployment/model-services/.env.example",
+        "deployment/model-services/README.md",
         "deployment/ocr/THIRD_PARTY_NOTICES.md",
         "deployment/ocr/ASSET_SOURCES.json",
         "deployment/ocr/BASE_RUNTIME.json",
@@ -80,12 +87,41 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         "design/public/offline-build-and-server-deployment.md",
         "scripts/load_test_chat.py",
         "scripts/benchmark_qdrant.py",
+        "evaluation/__init__.py",
+        "evaluation/active_state.py",
+        "evaluation/chunking_ablation.py",
+        "evaluation/chunking_experiment.py",
+        "evaluation/dataset.py",
         "evaluation/evaluate.py",
+        "evaluation/freeze_release.py",
+        "evaluation/legacy_chunking.py",
         "evaluation/metrics.py",
-        "evaluation/frozen/dataset.json",
-        "evaluation/frozen/MANIFEST.sha256",
+        "evaluation/validate_dataset.py",
     ):
         _write_file(repository, relative)
+    _write_file(
+        repository,
+        "deployment/config/pipeline.json",
+        '{"schema_version":"2"}\n',
+    )
+    _write_file(
+        repository,
+        "deployment/config/retrieval.json",
+        '{"status":"provisional"}\n',
+    )
+    _write_file(
+        repository,
+        "deployment/config/corpus-policy.json",
+        "{}\n",
+    )
+    dataset_path = repository / "evaluation/frozen/dataset.json"
+    _write_file(repository, "evaluation/frozen/dataset.json", "{}\n")
+    dataset_sha = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
+    _write_file(
+        repository,
+        "evaluation/frozen/MANIFEST.sha256",
+        f"{dataset_sha}  dataset.json\n",
+    )
     license_path = (
         repository
         / "deployment/ocr/assets/licenses/PaddleOCR-LICENSE.txt"
@@ -534,6 +570,23 @@ def test_atomic_rename_race_preserves_competing_output(
     )
 
 
+def _assert_model_runtime_scripts(
+    runtime_names: set[str],
+    runtime_manifest: str,
+) -> None:
+    scripts = {
+        "runtime/evaluation/runtime/scripts/"
+        "build_model_deployment_manifest.py",
+        "runtime/evaluation/runtime/scripts/verify_model_contracts.py",
+        "runtime/evaluation/runtime/scripts/verify_model_fleet.py",
+    }
+    assert scripts <= runtime_names
+    assert all(
+        script.removeprefix("runtime/") in runtime_manifest
+        for script in scripts
+    )
+
+
 def test_success_publishes_only_complete_verified_release(
     tmp_path: Path,
 ) -> None:
@@ -563,9 +616,6 @@ def test_success_publishes_only_complete_verified_release(
     runtime_archive = (
         sandbox.release / f"rag-runtime-{_RELEASE_ID}.tar.gz"
     )
-    contract_script = (
-        "runtime/evaluation/runtime/scripts/verify_model_contracts.py"
-    )
     archive_helpers = {
         "runtime/scripts/docker_archive_identity.py",
         "runtime/scripts/docker_archive_reader.py",
@@ -583,12 +633,13 @@ def test_success_publishes_only_complete_verified_release(
             line.split("\t")
             for line in image_manifest_file.read().decode().splitlines()
         ]
-    assert contract_script in runtime_names
+    _assert_model_runtime_scripts(runtime_names, runtime_manifest)
     assert archive_helpers <= runtime_names
-    assert (
-        "evaluation/runtime/scripts/verify_model_contracts.py"
-        in runtime_manifest
-    )
+    assert "runtime/acceptance.sh" in runtime_names
+    assert "runtime/config/pipeline.json" in runtime_names
+    assert "runtime/config/retrieval.json" in runtime_names
+    assert "runtime/config/corpus-policy.json" in runtime_names
+    assert "runtime/config/FREEZE_DECISION.json" not in runtime_names
     for helper in archive_helpers:
         assert helper.removeprefix("runtime/") in runtime_manifest
     expected_images = (
@@ -647,6 +698,8 @@ def test_success_publishes_only_complete_verified_release(
     with tarfile.open(corpus_archive, mode="r:gz") as archive:
         names = set(archive.getnames())
     assert "corpus/CORPUS_MANIFEST.json" in names
+    assert "corpus/evaluation/dataset.json" in names
+    assert "corpus/evaluation/FROZEN_MANIFEST.sha256" in names
     assert "corpus/docs/group/one.docx" in names
     assert "corpus/docs/group/two.docx" in names
     assert not any(
@@ -685,6 +738,43 @@ def test_runtime_verifier_detects_model_contract_script_tamper(
     assert rejected.returncode != 0
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "evaluation/runtime/scripts/verify_model_fleet.py",
+        "evaluation/runtime/scripts/build_model_deployment_manifest.py",
+    ),
+)
+def test_runtime_verifier_rejects_rehashed_missing_fleet_tool(
+    tmp_path: Path,
+    relative_path: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    completed = _run_package(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "extracted-fleet-tools")
+    tool = runtime / relative_path
+
+    verified = _run_runtime_verifier(runtime)
+    assert verified.returncode == 0, verified.stderr
+    tool.unlink()
+    runtime_manifest = runtime / "MANIFEST.sha256"
+    retained_rows = [
+        row
+        for row in runtime_manifest.read_text(encoding="utf-8").splitlines()
+        if not row.endswith(f"  ./{relative_path}")
+    ]
+    runtime_manifest.write_text(
+        "\n".join(retained_rows) + "\n",
+        encoding="utf-8",
+    )
+
+    rejected = _run_runtime_verifier(runtime)
+
+    assert rejected.returncode != 0
+    assert relative_path in rejected.stderr
+
+
 def test_runtime_verifier_rejects_rehashed_qdrant_provenance_tamper(
     tmp_path: Path,
 ) -> None:
@@ -715,3 +805,34 @@ def test_runtime_verifier_rejects_rehashed_qdrant_provenance_tamper(
 
     assert rejected.returncode != 0
     assert "批准白名单" in rejected.stderr
+
+
+def test_package_rejects_frozen_config_without_decision(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    retrieval = sandbox.repository / "deployment/config/retrieval.json"
+    retrieval.write_text('{"status":"frozen"}\n', encoding="utf-8")
+
+    completed = _run_package(sandbox)
+
+    assert completed.returncode != 0
+    assert "FREEZE_DECISION.json" in completed.stderr
+    assert not sandbox.command_log.exists()
+
+
+def test_runtime_verifier_rejects_rehashed_frozen_config_without_decision(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    completed = _run_package(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "extracted-frozen")
+    retrieval = runtime / "config/retrieval.json"
+    retrieval.write_text('{"status":"frozen"}\n', encoding="utf-8")
+    _refresh_runtime_manifest(runtime, ("config/retrieval.json",))
+
+    rejected = _run_runtime_verifier(runtime)
+
+    assert rejected.returncode != 0
+    assert "FREEZE_DECISION.json" in rejected.stderr

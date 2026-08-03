@@ -46,10 +46,22 @@ def test_qdrant_health_precedes_app_and_worker_restore(
         "curl -fsS --connect-timeout 2 --max-time 5 "
         "http://127.0.0.1:8088/live"
     )
+    qdrant_ready = log.index("docker exec rag-app python -c")
     worker_up = log.index(
         " up -d --no-deps --no-build --pull never rag-worker"
     )
-    assert qdrant_up < last_health < app_up < app_live < worker_up
+    assert (
+        qdrant_up
+        < last_health
+        < app_up
+        < app_live
+        < qdrant_ready
+        < worker_up
+    )
+    assert (
+        'headers={"api-key": os.environ["RAG_QDRANT_API_KEY"]}' in log
+    )
+    assert 'f"{base_url}/readyz"' in log
     assert log.count(".State.Health.Status") == 3
     assert log.count("sleep 1") == 2
 
@@ -142,6 +154,42 @@ def test_app_live_bounded_wait_recovers_before_worker(
     assert log.rindex("curl ") < log.index(
         " up -d --no-deps --no-build --pull never rag-worker"
     )
+
+
+def test_authenticated_qdrant_ready_failure_is_hard_restore_failure(
+    tmp_path: Path,
+) -> None:
+    """证明认证就绪检查失败时保留备份并阻止 worker 恢复。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    Returns:
+        无返回值。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    sandbox.state_file.write_text(
+        "APP_RUNNING=true\n"
+        "WORKER_RUNNING=true\n"
+        "QDRANT_RUNNING=true\n",
+        encoding="ascii",
+    )
+
+    completed = _run_backup(
+        sandbox,
+        FAKE_QDRANT_READY_MODE="fail",
+    )
+
+    assert completed.returncode == 70
+    assert (sandbox.backups / "backup-a/MANIFEST.sha256").is_file()
+    log = sandbox.command_log.read_text(encoding="utf-8")
+    assert log.count("docker exec rag-app python -c") == 30
+    assert (
+        'headers={"api-key": os.environ["RAG_QDRANT_API_KEY"]}' in log
+    )
+    assert 'f"{base_url}/readyz"' in log
+    assert " up -d --no-deps --no-build --pull never rag-worker" not in log
 
 
 @pytest.mark.parametrize("worker_was_running", (False, True))

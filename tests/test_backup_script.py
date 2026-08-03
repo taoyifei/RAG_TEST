@@ -158,6 +158,20 @@ if [[ "$1 $2" == "container inspect" ]]; then
   esac
   exit 0
 fi
+if [[ "$1 $2 $3" == "exec rag-app python" ]]; then
+  count=0
+  if [[ -f "${FAKE_QDRANT_READY_COUNT}" ]]; then
+    count="$(cat "${FAKE_QDRANT_READY_COUNT}")"
+  fi
+  count="$((count + 1))"
+  printf '%s\n' "${count}" > "${FAKE_QDRANT_READY_COUNT}"
+  case "${FAKE_QDRANT_READY_MODE:-healthy}" in
+    healthy) exit 0 ;;
+    fail_then_success) ((count >= 3)) ;;
+    fail) exit 47 ;;
+    *) exit 48 ;;
+  esac
+fi
 if [[ "$1" == "compose" && "$*" == *" stop "* ]]; then
   if [[ "${FAKE_STOP_FAIL:-0}" == "1" ]]; then
     exit 42
@@ -300,6 +314,9 @@ def _run_backup(
             ),
             "FAKE_CURL_COUNT": str(
                 sandbox.script.parent / "curl-count",
+            ),
+            "FAKE_QDRANT_READY_COUNT": str(
+                sandbox.script.parent / "qdrant-ready-count",
             ),
         }
     )

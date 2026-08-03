@@ -253,6 +253,41 @@ wait_for_app_live() {
   return 1
 }
 
+wait_for_qdrant_ready() {
+  local attempt
+  local max_attempts=30
+  local request_timeout=3
+  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+    if [[ "$(container_running_state rag-app)" != "true" \
+      || "$(container_running_state rag-qdrant)" != "true" ]]; then
+      echo "恢复后的 Qdrant /readyz 检查缺少运行中的核心容器。" >&2
+      return 1
+    fi
+    if docker exec rag-app python -c '
+import os
+import sys
+import urllib.request
+
+base_url = os.environ["RAG_QDRANT_URL"].rstrip("/")
+request = urllib.request.Request(
+    f"{base_url}/readyz",
+    headers={"api-key": os.environ["RAG_QDRANT_API_KEY"]},
+)
+response = urllib.request.urlopen(request, timeout=float(sys.argv[1]))
+status = response.status
+response.close()
+raise SystemExit(0 if status == 200 else 1)
+' "${request_timeout}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if ((attempt < max_attempts)); then
+      sleep 1
+    fi
+  done
+  echo "恢复后的 Qdrant /readyz 在固定期限内未通过认证检查。" >&2
+  return 1
+}
+
 verify_original_service_set() {
   local actual
   local expected
@@ -285,6 +320,9 @@ restore_services() {
       return 1
     fi
     wait_for_app_live || return 1
+    if [[ "${qdrant_was_running}" == "true" ]]; then
+      wait_for_qdrant_ready || return 1
+    fi
   fi
   if [[ "${worker_was_running}" == "true" ]]; then
     if ! start_service rag-worker; then

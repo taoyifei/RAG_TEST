@@ -15,6 +15,16 @@ required_files=(
   "SOURCE_REVISION"
   "QDRANT_SOURCE_IMAGE"
   "IMAGE_ARCHIVES.tsv"
+  "README.md"
+  "compose.yaml"
+  ".env.example"
+  "model-services/compose.yaml"
+  "model-services/.env.example"
+  "model-services/preflight.sh"
+  "model-services/README.md"
+  "deploy.sh"
+  "rollback.sh"
+  "verify-offline.sh"
   "images/docx-rag-linux-amd64.tar"
   "images/docx-rag-ocr-linux-amd64.tar"
   "images/qdrant-linux-amd64.tar"
@@ -33,24 +43,133 @@ required_files=(
   "provenance/ocr/MODELS.sha256"
   "provenance/ocr/requirements.lock"
   "provenance/ocr/pipeline.yaml"
+  "evaluation/runtime/evaluation/__init__.py"
+  "evaluation/runtime/evaluation/active_state.py"
+  "evaluation/runtime/evaluation/chunking_ablation.py"
+  "evaluation/runtime/evaluation/chunking_experiment.py"
+  "evaluation/runtime/evaluation/dataset.py"
   "evaluation/runtime/evaluation/evaluate.py"
+  "evaluation/runtime/evaluation/freeze_release.py"
+  "evaluation/runtime/evaluation/legacy_chunking.py"
   "evaluation/runtime/evaluation/metrics.py"
+  "evaluation/runtime/evaluation/validate_dataset.py"
   "evaluation/runtime/scripts/load_test_chat.py"
+  "evaluation/runtime/scripts/build_model_deployment_manifest.py"
   "evaluation/runtime/scripts/verify_model_contracts.py"
+  "evaluation/runtime/scripts/verify_model_fleet.py"
+  "config/pipeline.json"
+  "config/retrieval.json"
+  "config/corpus-policy.json"
   "offline_bundle.py"
   "freeze_corpus_manifest.py"
   "qdrant-policy.sh"
   "scripts/docker_archive_identity.py"
   "scripts/docker_archive_reader.py"
   "backup.sh"
+  "acceptance.sh"
   "install.sh"
 )
 for path in "${required_files[@]}"; do
-  if [[ ! -s "${path}" || -L "${path}" ]]; then
+  if [[ ! -f "${path}" || ! -s "${path}" || -L "${path}" ]]; then
     echo "runtime 缺少普通文件：${path}" >&2
     exit 1
   fi
 done
+if [[ ! -x acceptance.sh ]]; then
+  echo "runtime acceptance.sh 不可执行。" >&2
+  exit 1
+fi
+if [[ ! -x model-services/preflight.sh ]]; then
+  echo "runtime model-services/preflight.sh 不可执行。" >&2
+  exit 1
+fi
+
+if ! python3 - "${release_dir}/config/retrieval.json" \
+  "${release_dir}/config/FREEZE_DECISION.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+
+def load_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"{label} 不是有效 UTF-8 JSON。") from error
+    if type(value) is not dict:
+        raise ValueError(f"{label} 必须是 JSON object。")
+    return value
+
+
+try:
+    retrieval_path = Path(sys.argv[1])
+    decision_path = Path(sys.argv[2])
+    retrieval = load_object(retrieval_path, "retrieval 配置")
+    status = retrieval.get("status")
+    if status not in {"provisional", "frozen"}:
+        raise ValueError(
+            "retrieval status 必须是 provisional 或 frozen。"
+        )
+    decision_exists = decision_path.exists() or decision_path.is_symlink()
+    if decision_exists and (
+        decision_path.is_symlink() or not decision_path.is_file()
+    ):
+        raise ValueError("FREEZE_DECISION.json 必须是普通文件。")
+    if status == "frozen":
+        if not decision_exists:
+            raise ValueError(
+                "frozen runtime 缺少普通 FREEZE_DECISION.json。"
+            )
+        decision = load_object(decision_path, "freeze decision")
+        canonical = json.dumps(
+            decision,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        decision_sha256 = (
+            "sha256:" + hashlib.sha256(canonical).hexdigest()
+        )
+        model_revisions = decision.get("model_revisions")
+        if (
+            retrieval.get("freeze_decision_sha256")
+            != decision_sha256
+            or decision.get("schema_version") != "1"
+            or type(model_revisions) is not dict
+            or not isinstance(
+                model_revisions.get("calibration_source_revision"), str
+            )
+            or len(model_revisions["calibration_source_revision"]) != 40
+            or any(
+                character not in "0123456789abcdef"
+                for character in model_revisions[
+                    "calibration_source_revision"
+                ]
+            )
+        ):
+            raise ValueError(
+                "freeze decision 摘要、schema 或 calibration revision 无效。"
+            )
+        for key in ("index_fingerprint", "serving_fingerprint"):
+            value = decision.get(key)
+            if (
+                type(value) is not str
+                or len(value) != 71
+                or not value.startswith("sha256:")
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in value[7:]
+                )
+            ):
+                raise ValueError("freeze decision 指纹无效。")
+except ValueError as error:
+    print(f"冻结配置离线校验失败：{error}", file=sys.stderr)
+    raise SystemExit(1) from None
+PY
+then
+  exit 1
+fi
 
 # shellcheck source=deployment/qdrant-policy.sh
 source "${release_dir}/qdrant-policy.sh"
