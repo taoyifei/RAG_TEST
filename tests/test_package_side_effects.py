@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -49,6 +50,22 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         f"{empty_sha}  model.bin\n",
         encoding="ascii",
     )
+    for relative, content in (
+        ("deployment/config/pipeline.json", "{}\n"),
+        ("deployment/config/retrieval.json", '{"status":"frozen"}\n'),
+        ("deployment/config/corpus-policy.json", "{}\n"),
+        ("deployment/config/FREEZE_DECISION.json", "{}\n"),
+        ("evaluation/frozen/dataset.json", "{}\n"),
+    ):
+        path = repository / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    dataset = repository / "evaluation/frozen/dataset.json"
+    dataset_sha = hashlib.sha256(dataset.read_bytes()).hexdigest()
+    (repository / "evaluation/frozen/MANIFEST.sha256").write_text(
+        f"{dataset_sha}  dataset.json\n",
+        encoding="ascii",
+    )
     source = Path(__file__).parents[1] / "deployment/package.sh"
     package = deployment / "package.sh"
     shutil.copyfile(source, package)
@@ -71,7 +88,7 @@ if [[ "$*" == *"rev-parse HEAD"* ]]; then
 elif [[ "$*" == *"status --porcelain"* ]]; then
   exit 0
 else
-  exit 2
+  exec /usr/bin/python3 "$@"
 fi
 """,
     )
@@ -130,7 +147,7 @@ if [[ "$*" == *"freeze_corpus_manifest id"* ]]; then
 elif [[ "$*" == *"freeze_corpus_manifest verify"* ]]; then
   exit 0
 else
-  exit 2
+  exec /usr/bin/python3 "$@"
 fi
 """,
     )
@@ -166,6 +183,7 @@ def _run_package(
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
             "CORPUS_MANIFEST": str(sandbox.corpus_manifest),
             "FAKE_DOCKER_LOG": str(sandbox.docker_log),
+            "RELEASE_TIER": "production",
         }
     )
     environment.update(overrides)

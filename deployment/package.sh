@@ -9,6 +9,7 @@ artifact_root="${repo_root}/artifacts"
 release_parent="${artifact_root}/releases"
 git_revision="$(git -C "${repo_root}" rev-parse HEAD)"
 release_id="${RELEASE_ID:-${git_revision:0:12}}"
+release_tier="${RELEASE_TIER:-}"
 corpus_manifest_input="${CORPUS_MANIFEST:-}"
 pipeline_config="${repo_root}/deployment/config/pipeline.json"
 retrieval_config="${repo_root}/deployment/config/retrieval.json"
@@ -87,6 +88,11 @@ write_sidecar() {
   )
 }
 
+if [[ "${release_tier}" != "smoke" \
+  && "${release_tier}" != "production" ]]; then
+  fail "RELEASE_TIER 必须显式设置为 smoke 或 production。"
+fi
+
 if [[ -z "${corpus_manifest_input}" \
   || "${corpus_manifest_input}" != /* \
   || ! -f "${corpus_manifest_input}" \
@@ -103,10 +109,6 @@ for config_path in \
     fail "runtime 配置必须是非空普通文件：${config_path}"
   fi
 done
-(
-  cd "${repo_root}/evaluation/frozen"
-  sha256sum --check MANIFEST.sha256
-)
 configuration_status="$(python3 - "${retrieval_config}" <<'PY'
 import json
 import sys
@@ -124,6 +126,10 @@ if type(value) is not dict or value.get("status") not in {
 print(value["status"])
 PY
 )"
+if [[ "${release_tier}" == "production" \
+  && "${configuration_status}" != "frozen" ]]; then
+  fail "production release 必须使用 frozen retrieval 配置。"
+fi
 if [[ -e "${freeze_decision}" || -L "${freeze_decision}" ]]; then
   if [[ ! -f "${freeze_decision}" || ! -s "${freeze_decision}" \
     || -L "${freeze_decision}" ]]; then
@@ -136,6 +142,12 @@ fi
 if [[ "${configuration_status}" == "frozen" \
   && "${include_freeze_decision}" != "true" ]]; then
   fail "frozen runtime 必须包含 FREEZE_DECISION.json。"
+fi
+if [[ "${release_tier}" == "production" ]]; then
+  (
+    cd "${repo_root}/evaluation/frozen"
+    sha256sum --check MANIFEST.sha256
+  )
 fi
 corpus_id="$(
   cd "${repo_root}"
@@ -175,7 +187,9 @@ if ! grep -Fxq -- \
   "${RAG_APPROVED_QDRANT_REPO_DIGEST}" <<< "${qdrant_repo_digests}"; then
   fail "Qdrant RepoDigests 不包含批准的 canonical digest。"
 fi
-docker sbom --help >/dev/null
+if [[ "${release_tier}" == "production" ]]; then
+  docker sbom --help >/dev/null
+fi
 (
   cd "${repo_root}/deployment/ocr/assets"
   sha256sum --check MANIFEST.sha256
@@ -193,41 +207,51 @@ corpus_archive="${stage}/rag-corpus-${corpus_id}.tar.gz"
 unpacker="${stage}/offline_bundle.py"
 mkdir -p \
   "${runtime_root}/config" \
-  "${runtime_root}/evaluation/runtime/evaluation" \
   "${runtime_root}/evaluation/runtime/scripts" \
   "${runtime_root}/images" \
   "${runtime_root}/licenses" \
-  "${runtime_root}/model-services" \
   "${runtime_root}/provenance/ocr" \
   "${runtime_root}/scripts" \
-  "${runtime_root}/sbom" \
   "${corpus_root}/evaluation"
+if [[ "${release_tier}" == "production" ]]; then
+  mkdir -p \
+    "${runtime_root}/evaluation/runtime/evaluation" \
+    "${runtime_root}/sbom"
+fi
 
 printf '%s\n' "${release_id}" > "${runtime_root}/RELEASE_ID"
 printf '%s\n' "${git_revision}" > "${runtime_root}/SOURCE_REVISION"
 printf '%s\n' "${qdrant_image}" > "${runtime_root}/QDRANT_SOURCE_IMAGE"
+python3 - "${runtime_root}/RELEASE_METADATA.json" \
+  "${release_tier}" "${configuration_status}" "${git_revision}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = {
+    "configuration_status": sys.argv[3],
+    "release_tier": sys.argv[2],
+    "schema_version": "1",
+    "source_revision": sys.argv[4],
+}
+Path(sys.argv[1]).write_text(
+    json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
 cp "${repo_root}/deployment/compose.yaml" "${runtime_root}/compose.yaml"
 cp "${repo_root}/deployment/.env.example" "${runtime_root}/.env.example"
 cp "${repo_root}/deployment/deploy.sh" "${runtime_root}/deploy.sh"
 cp "${repo_root}/deployment/rollback.sh" "${runtime_root}/rollback.sh"
 cp "${repo_root}/deployment/backup.sh" "${runtime_root}/backup.sh"
-cp "${repo_root}/deployment/acceptance.sh" \
-  "${runtime_root}/acceptance.sh"
-chmod 0700 "${runtime_root}/acceptance.sh"
 cp "${repo_root}/deployment/install.sh" "${runtime_root}/install.sh"
+cp "${repo_root}/deployment/server-preflight.sh" \
+  "${runtime_root}/server-preflight.sh"
+chmod 0700 "${runtime_root}/server-preflight.sh"
 cp "${repo_root}/deployment/verify-offline.sh" \
   "${runtime_root}/verify-offline.sh"
 cp "${repo_root}/deployment/qdrant-policy.sh" \
   "${runtime_root}/qdrant-policy.sh"
-cp "${repo_root}/deployment/model-services/compose.yaml" \
-  "${runtime_root}/model-services/compose.yaml"
-cp "${repo_root}/deployment/model-services/.env.example" \
-  "${runtime_root}/model-services/.env.example"
-cp "${repo_root}/deployment/model-services/preflight.sh" \
-  "${runtime_root}/model-services/preflight.sh"
-cp "${repo_root}/deployment/model-services/README.md" \
-  "${runtime_root}/model-services/README.md"
-chmod 0700 "${runtime_root}/model-services/preflight.sh"
 cp "${pipeline_config}" "${runtime_root}/config/pipeline.json"
 cp "${retrieval_config}" "${runtime_root}/config/retrieval.json"
 cp "${corpus_policy_config}" \
@@ -236,7 +260,7 @@ if [[ "${include_freeze_decision}" == "true" ]]; then
   cp "${freeze_decision}" \
     "${runtime_root}/config/FREEZE_DECISION.json"
 fi
-cp "${repo_root}/design/public/offline-build-and-server-deployment.md" \
+cp "${repo_root}/deployment/README.md" \
   "${runtime_root}/README.md"
 cp "${repo_root}/scripts/offline_bundle.py" \
   "${runtime_root}/offline_bundle.py"
@@ -246,18 +270,25 @@ cp "${repo_root}/scripts/docker_archive_identity.py" \
   "${runtime_root}/scripts/docker_archive_identity.py"
 cp "${repo_root}/scripts/docker_archive_reader.py" \
   "${runtime_root}/scripts/docker_archive_reader.py"
-cp "${repo_root}/evaluation/"*.py \
-  "${runtime_root}/evaluation/runtime/evaluation/"
-cp "${repo_root}/scripts/load_test_chat.py" \
-  "${runtime_root}/evaluation/runtime/scripts/"
-cp "${repo_root}/scripts/benchmark_qdrant.py" \
-  "${runtime_root}/evaluation/runtime/scripts/"
+cp "${repo_root}/scripts/docker_archive_loaded_identity.py" \
+  "${runtime_root}/scripts/docker_archive_loaded_identity.py"
 cp "${repo_root}/scripts/build_model_deployment_manifest.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
 cp "${repo_root}/scripts/verify_model_contracts.py" \
   "${runtime_root}/evaluation/runtime/scripts/"
-cp "${repo_root}/scripts/verify_model_fleet.py" \
-  "${runtime_root}/evaluation/runtime/scripts/"
+if [[ "${release_tier}" == "production" ]]; then
+  cp "${repo_root}/deployment/acceptance.sh" \
+    "${runtime_root}/acceptance.sh"
+  chmod 0700 "${runtime_root}/acceptance.sh"
+  cp "${repo_root}/evaluation/"*.py \
+    "${runtime_root}/evaluation/runtime/evaluation/"
+  cp "${repo_root}/scripts/load_test_chat.py" \
+    "${runtime_root}/evaluation/runtime/scripts/"
+  cp "${repo_root}/scripts/benchmark_qdrant.py" \
+    "${runtime_root}/evaluation/runtime/scripts/"
+  cp "${repo_root}/scripts/verify_model_fleet.py" \
+    "${runtime_root}/evaluation/runtime/scripts/"
+fi
 cp "${repo_root}/deployment/ocr/assets/licenses/PaddleOCR-LICENSE.txt" \
   "${runtime_root}/licenses/"
 cp "${repo_root}/deployment/ocr/THIRD_PARTY_NOTICES.md" \
@@ -335,12 +366,14 @@ printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
   "${qdrant_config_id}" "${qdrant_platform}" \
   > "${runtime_root}/IMAGE_ARCHIVES.tsv"
 
-docker sbom --format cyclonedx-json "${app_image}" \
-  > "${runtime_root}/sbom/docx-rag.cdx.json"
-docker sbom --format cyclonedx-json "${ocr_image}" \
-  > "${runtime_root}/sbom/docx-rag-ocr.cdx.json"
-docker sbom --format cyclonedx-json "${qdrant_image}" \
-  > "${runtime_root}/sbom/qdrant.cdx.json"
+if [[ "${release_tier}" == "production" ]]; then
+  docker sbom --format cyclonedx-json "${app_image}" \
+    > "${runtime_root}/sbom/docx-rag.cdx.json"
+  docker sbom --format cyclonedx-json "${ocr_image}" \
+    > "${runtime_root}/sbom/docx-rag-ocr.cdx.json"
+  docker sbom --format cyclonedx-json "${qdrant_image}" \
+    > "${runtime_root}/sbom/qdrant.cdx.json"
+fi
 docker image inspect "${app_image}" \
   > "${runtime_root}/images/docx-rag.inspect.json"
 docker image inspect "${ocr_image}" \
@@ -357,10 +390,12 @@ cp "${corpus_manifest_input}" "${corpus_root}/CORPUS_MANIFEST.json"
     --manifest "${corpus_manifest_input}" \
     --destination "${corpus_root}/docs"
 ) >/dev/null
-cp "${repo_root}/evaluation/frozen/dataset.json" \
-  "${corpus_root}/evaluation/dataset.json"
-cp "${repo_root}/evaluation/frozen/MANIFEST.sha256" \
-  "${corpus_root}/evaluation/FROZEN_MANIFEST.sha256"
+if [[ "${release_tier}" == "production" ]]; then
+  cp "${repo_root}/evaluation/frozen/dataset.json" \
+    "${corpus_root}/evaluation/dataset.json"
+  cp "${repo_root}/evaluation/frozen/MANIFEST.sha256" \
+    "${corpus_root}/evaluation/FROZEN_MANIFEST.sha256"
+fi
 
 write_manifest "${runtime_root}"
 write_manifest "${corpus_root}"
@@ -410,7 +445,8 @@ find -P "${work}" -depth -delete
 )
 stage=""
 
-printf 'release_dir=%s\nruntime=%s\ncorpus=%s\nunpacker=%s\n' \
+printf 'release_tier=%s\nrelease_dir=%s\nruntime=%s\ncorpus=%s\nunpacker=%s\n' \
+  "${release_tier}" \
   "${final_release}" \
   "${final_release}/$(basename "${runtime_archive}")" \
   "${final_release}/$(basename "${corpus_archive}")" \

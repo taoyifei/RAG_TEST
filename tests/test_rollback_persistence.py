@@ -42,6 +42,8 @@ class _Sandbox:
     clock_file: Path
     original_env: str
     original_rollback: str
+    rollback_images: tuple[str, str, str]
+    store_mode: str
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -49,7 +51,41 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
-def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
+def _copy_identity_helper(target: Path) -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "scripts/docker_archive_loaded_identity.py"
+    )
+    target.parent.mkdir()
+    target.write_text(
+        source.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+
+def _prepare_sandbox(
+    tmp_path: Path,
+    *,
+    store_mode: str = "containerd",
+) -> _Sandbox:
+    """创建 rollback 集成沙箱。
+
+    Args:
+        tmp_path: pytest 临时目录。
+        store_mode: 模拟 `containerd` 或 `classic` image store。
+
+    Returns:
+        完整 rollback 测试沙箱。
+
+    """
+    if store_mode not in {"containerd", "classic"}:
+        raise ValueError("store_mode 无效。")
+    rollback_images = (
+        (_APP_IMAGE, _OCR_IMAGE, _QDRANT_IMAGE)
+        if store_mode == "containerd"
+        else (_APP_CONFIG, _OCR_CONFIG, _QDRANT_CONFIG)
+    )
+    rollback_app, rollback_ocr, rollback_qdrant = rollback_images
     root = tmp_path / "RAG"
     shared_env = root / "shared/env"
     old_release = root / "releases/old-release"
@@ -73,21 +109,21 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     env_file.chmod(0o600)
     rollback_file = shared_env / "rollback-images.env"
     rollback_env = (
-        original_env.replace("sha256:" + "d" * 64, _APP_IMAGE)
-        .replace("sha256:" + "e" * 64, _OCR_IMAGE)
-        .replace("sha256:" + "f" * 64, _QDRANT_IMAGE)
+        original_env.replace("sha256:" + "d" * 64, rollback_app)
+        .replace("sha256:" + "e" * 64, rollback_ocr)
+        .replace("sha256:" + "f" * 64, rollback_qdrant)
         .replace("2" * 40, _SOURCE_REVISION)
     )
     rollback_env_bytes = rollback_env.encode()
     original_rollback = (
         "ROLLBACK_SCHEMA_VERSION=2\n"
         f"ROLLBACK_RELEASE_DIR={old_release}\n"
-        f"ROLLBACK_APP_IMAGE={_APP_IMAGE}\n"
-        f"ROLLBACK_OCR_IMAGE={_OCR_IMAGE}\n"
-        f"ROLLBACK_QDRANT_IMAGE={_QDRANT_IMAGE}\n"
+        f"ROLLBACK_APP_IMAGE={rollback_app}\n"
+        f"ROLLBACK_OCR_IMAGE={rollback_ocr}\n"
+        f"ROLLBACK_QDRANT_IMAGE={rollback_qdrant}\n"
         "ROLLBACK_WORKER_EXISTS=true\n"
         "ROLLBACK_WORKER_WAS_RUNNING=false\n"
-        f"ROLLBACK_WORKER_IMAGE={_APP_IMAGE}\n"
+        f"ROLLBACK_WORKER_IMAGE={rollback_app}\n"
         f"ROLLBACK_SOURCE_REVISION={_SOURCE_REVISION}\n"
         "ROLLBACK_ENV_SHA256="
         f"{hashlib.sha256(rollback_env_bytes).hexdigest()}\n"
@@ -167,6 +203,8 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
         policy_source.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    helper_target = tmp_path / "scripts/docker_archive_loaded_identity.py"
+    _copy_identity_helper(helper_target)
     binaries = tmp_path / "bin"
     binaries.mkdir()
     docker_log = tmp_path / "docker.log"
@@ -194,6 +232,15 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
 set -euo pipefail
 printf '%s\n' "$*" >> "${FAKE_DOCKER_LOG}"
 source "${FAKE_STATE_FILE}"
+classic_inspect_format='[{"Architecture":"amd64",'
+classic_inspect_format+='"Config":{"Labels":{'
+classic_inspect_format+='"org.opencontainers.image.revision":"%s"}},'
+classic_inspect_format+='"Id":"%s","Os":"linux"}]'
+containerd_inspect_format='[{"Architecture":"amd64",'
+containerd_inspect_format+='"Config":{"Labels":{'
+containerd_inspect_format+='"org.opencontainers.image.revision":"%s"}},'
+containerd_inspect_format+='"Descriptor":{"digest":"%s"},'
+containerd_inspect_format+='"Id":"%s","Os":"linux"}]'
 write_state() {
   {
     printf 'APP_EXISTS=%q\n' "${APP_EXISTS}"
@@ -215,7 +262,30 @@ if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "${FAKE_MISSING_IMAGE:-}" == "${image}" ]]; then
     exit 41
   fi
-  if [[ "$*" == *"json .Descriptor"* ]]; then
+  if [[ "$#" == "3" ]]; then
+    case "${image}" in
+      "${FAKE_APP_IMAGE}") config="${FAKE_APP_CONFIG}" ;;
+      "${FAKE_OCR_IMAGE}") config="${FAKE_OCR_CONFIG}" ;;
+      "${FAKE_QDRANT_IMAGE}") config="${FAKE_QDRANT_CONFIG}" ;;
+      *) exit 41 ;;
+    esac
+    revision="${FAKE_SOURCE_REVISION}"
+    if [[ "${FAKE_BAD_REVISION:-0}" == "1" \
+      && "${image}" == "${FAKE_APP_IMAGE}" ]]; then
+      revision="$(printf '%040d' 9)"
+    fi
+    descriptor_id="${image}"
+    if [[ "${FAKE_BAD_DESCRIPTOR_IMAGE:-}" == "${image}" ]]; then
+      descriptor_id="sha256:$(printf '%064d' 8)"
+    fi
+    if [[ "${FAKE_STORE_MODE}" == "classic" ]]; then
+      printf "${classic_inspect_format}\n" \
+        "${revision}" "${image}"
+    else
+      printf "${containerd_inspect_format}\n" \
+        "${revision}" "${descriptor_id}" "${image}"
+    fi
+  elif [[ "$*" == *"json .Descriptor"* ]]; then
     descriptor_id="${image}"
     if [[ "${FAKE_BAD_DESCRIPTOR_IMAGE:-}" == "${image}" ]]; then
       descriptor_id="sha256:$(printf '%064d' 8)"
@@ -521,6 +591,8 @@ fi
         clock_file=clock_file,
         original_env=original_env,
         original_rollback=original_rollback,
+        rollback_images=rollback_images,
+        store_mode=store_mode,
     )
 
 
@@ -546,10 +618,14 @@ def _run_rollback(
             ),
             "FAKE_ENV_FILE": str(sandbox.env_file),
             "FAKE_CURRENT_LINK": str(sandbox.current_link),
-            "FAKE_APP_IMAGE": _APP_IMAGE,
-            "FAKE_OCR_IMAGE": _OCR_IMAGE,
-            "FAKE_QDRANT_IMAGE": _QDRANT_IMAGE,
+            "FAKE_APP_IMAGE": sandbox.rollback_images[0],
+            "FAKE_APP_CONFIG": _APP_CONFIG,
+            "FAKE_OCR_IMAGE": sandbox.rollback_images[1],
+            "FAKE_OCR_CONFIG": _OCR_CONFIG,
+            "FAKE_QDRANT_IMAGE": sandbox.rollback_images[2],
+            "FAKE_QDRANT_CONFIG": _QDRANT_CONFIG,
             "FAKE_SOURCE_REVISION": _SOURCE_REVISION,
+            "FAKE_STORE_MODE": sandbox.store_mode,
         }
     )
     environment.update(overrides)
@@ -582,7 +658,7 @@ def test_rollback_revalidates_old_release_and_image_identity() -> None:
         "ROLLBACK_ENV_BASE64",
         "docker compose",
         "config -q",
-        "org.opencontainers.image.revision",
+        "docker_archive_loaded_identity.py",
     ):
         assert required in script
 
@@ -596,6 +672,26 @@ def test_rollback_atomically_persists_only_release_image_keys() -> None:
     assert "RAG_RELEASE_REVISION" in script
     assert 'mv -T "${active_new}" "${active_env}"' in script
     assert "sed -i" not in script
+
+
+def test_classic_store_rolls_back_with_config_digest_identity(
+    tmp_path: Path,
+) -> None:
+    """证明 classic store 使用 config digest 完成回滚。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path, store_mode="classic")
+
+    completed = _run_rollback(sandbox)
+
+    assert completed.returncode == 0, completed.stderr
+    state = sandbox.state_file.read_text(encoding="ascii")
+    assert f"APP_IMAGE={_APP_CONFIG}\n" in state
+    assert f"OCR_IMAGE={_OCR_CONFIG}\n" in state
+    assert f"QDRANT_IMAGE={_QDRANT_CONFIG}\n" in state
 
 
 def test_original_release_verify_failure_prevents_runtime_mutation(

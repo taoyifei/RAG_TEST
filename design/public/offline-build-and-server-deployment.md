@@ -87,12 +87,13 @@ git status --short
 git rev-parse HEAD
 ```
 
-构建端与服务器统一使用 Docker Engine 29 和 containerd image store。上述
-`DriverStatus` 必须包含
-`["driver-type","io.containerd.snapshotter.v1"]`；只有显示
-`Storage Driver: overlayfs` 还不够。该约束用于保证执行
-`docker save/load --platform linux/amd64` 后可通过 `.Descriptor.digest` 复核单平台 manifest
-身份，缺失时停止，不得回退到跳过镜像身份校验。
+构建端使用当前支持 `buildx --platform linux/amd64 --load` 和
+`docker image save --platform` 的 Docker。服务器不再绑定 Docker 29 或单一
+image store：`server-preflight.sh` 只读判定 containerd/classic。containerd
+加载后必须满足 `Descriptor.digest=manifest digest`，`.Id` 只允许等于
+manifest/config digest；classic 没有 Descriptor 时必须满足
+`.Id=config digest`。两种模式都继续严格校验 tag、平台、OCI revision、归档
+SHA256，不允许退化为跳过身份校验。
 
 先运行本地质量门：
 
@@ -174,15 +175,18 @@ runtime wheel 准备器先在三件套的同一父目录内完整生成并复核
 任何模型文件变化都必须先更新来源、revision 和固定摘要并复核，不能只改
 摘要求通过。
 
-Embedding/Reranker 模型服务是独立的共享基础设施，不进入本次 release 的七个
-上传文件。若服务器上的
+Embedding/Reranker/LLM 模型服务是独立的共享基础设施，不进入本次 release 的
+七个上传文件，RAG package 也不含模型权重或模型镜像。若服务器上的
 `/data/tyf/RAG/shared/model-services/qwen3-embedding-reranker-0.6b-v1/`
 已经按其独立交付清单完成摘要与 revision 校验，两个服务正在运行，且本手册
 第 8 节的 embedding/reranker 模型契约能够通过，则直接复用现有端点：不要重新
 上传 8 GB 级模型资产包，不要重复解包或重新加载其镜像。若是 fresh 服务器，
 或者目录、摘要、revision、服务健康任一项缺失或不一致，必须在创建 candidate
 之前停止，先按独立模型服务交付完成安装和只读验证；本 RAG 双包不会补齐模型
-服务。模型资产包不得混入 release delivery，否则会破坏恰好七文件的交付契约。
+服务。只有操作员明确选择 self-hosted 时，才单独执行
+`deployment/model-services/preflight.sh` 与该目录的 Compose；现有端点契约
+通过后不得重复部署或额外占用 GPU。模型资产包不得混入 release delivery，
+否则会破坏恰好七文件的交付契约。
 
 ## 4. 构建和断网自检
 
@@ -315,6 +319,7 @@ export CORPUS_MANIFEST="$(
 export RAG_APP_IMAGE="docx-rag:${release_id}"
 export RAG_OCR_IMAGE="docx-rag-ocr:${release_id}"
 export RAG_QDRANT_IMAGE="${qdrant_ref}"
+export RELEASE_TIER=smoke
 bash deployment/package.sh
 release_output="artifacts/releases/${release_id}-${corpus_id}"
 (
@@ -329,7 +334,10 @@ printf 'RELEASE_ID=%s\nCORPUS_ID=%s\nRELEASE_OUTPUT=%s\n' \
 runtime 中的 `IMAGE_ARCHIVES.tsv` 固定为三行六列，字段依次为：归档相对路径、
 镜像 tag、可移植的 `linux/amd64` platform manifest digest、provenance、config
 digest、平台。第三列来自 `docker save` 完成后对归档内容的解析，不再记录保存前
-daemon 私有的 `.Id`；第六列必须精确为 `linux/amd64`。`package.sh` 和
+daemon 私有的 `.Id`；第六列必须精确为 `linux/amd64`。smoke metadata 允许
+provisional，且 acceptance、freeze、完整 evaluation、model-services 和 SBOM
+不构成必需项。production metadata 只接受 frozen，并要求 FREEZE_DECISION、
+SBOM、acceptance 和完整 evaluation。`package.sh` 和
 `verify-offline.sh` 都会逐张打开归档复核这六列。
 
 在 WSL 的全新临时目录验证两个外层摘要、tar 路径和内部逐文件清单：
@@ -509,22 +517,6 @@ chown -R root:root "${delivery}"
 find -P "${delivery}" -mindepth 1 -maxdepth 1 \
   -type f -exec chmod 0600 {} +
 
-docker_server_version="$(docker version --format '{{.Server.Version}}')"
-if [[ "${docker_server_version}" != 29.* ]]; then
-  echo "服务器必须使用 Docker Engine 29：${docker_server_version}" >&2
-  exit 1
-fi
-docker_driver_status="$(docker info --format '{{json .DriverStatus}}')"
-python3 -c '
-import json
-import sys
-
-payload = json.load(sys.stdin)
-expected = ["driver-type", "io.containerd.snapshotter.v1"]
-raise SystemExit(0 if expected in payload else 1)
-' <<< "${docker_driver_status}" \
-  || { echo 'DOCKER_CONTAINERD_IMAGE_STORE_REQUIRED' >&2; exit 1; }
-
 (
   cd "${delivery}"
   sha256sum -c RELEASE_MANIFEST.sha256
@@ -667,14 +659,15 @@ RAG_ACCESS_MODE=shared_corpus
 
 ## 8. 启动与 GPU 冒烟
 
-部署脚本要求 Docker Engine 29 的 containerd image store，按白名单依次使用
-`docker load --platform linux/amd64` 加载三个归档，再以
-`--no-build --pull never` 启动。六列 `IMAGE_ARCHIVES.tsv` 的第三列是可移植
-platform manifest digest；加载后必须同时满足
-`docker image inspect .Id == .Descriptor.digest == 第三列`，且平台等于第六列
-`linux/amd64`。第五列 config digest 用于归档内身份复核，不得拿它替代第三列或
-放宽加载后的比较。当前 provisional release 的默认路径只启动 app、OCR 和
-Qdrant，不启动 worker；这时 `/ready=503` 是正确结果。
+先运行 runtime 中的 `server-preflight.sh`；它不创建目录、不 load 镜像、不启动
+容器，只输出脱敏 PASS/FAIL/WARN JSON。部署脚本按白名单依次 `docker load`
+三个单平台归档，再以 `--no-build --pull never` 启动。六列
+`IMAGE_ARCHIVES.tsv` 的第三、第五列分别是 platform manifest digest 与 config
+digest。containerd 必须满足 `Descriptor.digest=第三列` 且 `.Id` 属于第三/第五
+列；classic 无 Descriptor 时 `.Id` 必须等于第五列。两者的平台都必须等于
+`linux/amd64`，app/OCR revision 必须等于 release `SOURCE_REVISION`。当前 smoke
+release 默认只启动 app、OCR 和 Qdrant，不启动 worker；provisional 时
+`/ready=503` 是正确结果。
 
 在第一条 `docker load` 前，脚本会把现场唯一分类为 fresh、installed 或
 degraded。fresh 要求 active env、current、三个核心容器、worker 和 rollback
@@ -1443,7 +1436,7 @@ echo 'OBSOLETE_C2_SERVER_ASSETS_REMOVED'
 ```
 
 确认服务器清理成功后，才在 WSL 删除无效 c2 双包、旧单体 tar 和旧阻塞日志。
-新 release 双包和 `artifacts/model-services/` 必须保留：
+新 release 双包必须保留；独立 self-hosted 模型服务资产不属于 RAG release：
 
 ```bash
 (
@@ -1457,7 +1450,6 @@ old_release="${repo_root}/artifacts/releases/c2a69038d5f7-frozen-docx-v1"
 legacy_tar="${repo_root}/artifacts/rag-docx-offline-0.1.0-linux-amd64-20260727T055740Z.tar"
 
 test -d "${new_release}"
-test -d "${repo_root}/artifacts/model-services"
 (
   cd "${new_release}"
   sha256sum -c RELEASE_MANIFEST.sha256

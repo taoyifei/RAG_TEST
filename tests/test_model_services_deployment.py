@@ -306,7 +306,8 @@ def test_model_services_files_contain_no_network_or_secret_action() -> None:
         )
 
 
-def test_model_services_template_is_packaged_and_verified() -> None:
+def test_model_services_template_is_not_part_of_rag_runtime() -> None:
+    """证明自托管模型服务工具不混入 RAG runtime 包。"""
     root = Path(__file__).parents[1]
     package = (root / "deployment/package.sh").read_text(encoding="utf-8")
     verifier = (root / "deployment/verify-offline.sh").read_text(
@@ -319,8 +320,5 @@ def test_model_services_template_is_packaged_and_verified() -> None:
         "model-services/preflight.sh",
         "model-services/README.md",
     ):
-        assert relative_path in package
-        assert f'"{relative_path}"' in verifier
-    assert 'chmod 0700 "${runtime_root}/model-services/preflight.sh"' in (
-        package
-    )
+        assert relative_path not in package
+        assert f'"{relative_path}"' not in verifier

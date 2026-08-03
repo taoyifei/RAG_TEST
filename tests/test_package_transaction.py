@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -53,10 +54,12 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         "deployment/acceptance.sh",
         "deployment/install.sh",
         "deployment/qdrant-policy.sh",
+        "deployment/server-preflight.sh",
         "deployment/verify-offline.sh",
         "deployment/model-services/preflight.sh",
         "scripts/freeze_corpus_manifest.py",
         "scripts/docker_archive_identity.py",
+        "scripts/docker_archive_loaded_identity.py",
         "scripts/docker_archive_reader.py",
         "scripts/offline_bundle.py",
         "scripts/build_model_deployment_manifest.py",
@@ -79,6 +82,7 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
         "deployment/model-services/.env.example",
         "deployment/model-services/README.md",
         "deployment/ocr/THIRD_PARTY_NOTICES.md",
+        "deployment/README.md",
         "deployment/ocr/ASSET_SOURCES.json",
         "deployment/ocr/BASE_RUNTIME.json",
         "deployment/ocr/WHEELS.sha256",
@@ -350,7 +354,7 @@ if [[ "$1 $2" == "image inspect" ]]; then
   elif [[ "$*" == *".Id"* ]]; then
     image_id
   elif [[ "$*" == *"org.opencontainers.image.revision"* ]]; then
-    echo "{_REVISION}"
+    echo "${{FAKE_IMAGE_REVISION:-{_REVISION}}}"
   elif [[ "$*" == *"RepoDigests"* ]]; then
     echo "qdrant/qdrant@sha256:{_QDRANT_DIGEST}"
   else
@@ -359,9 +363,11 @@ if [[ "$1 $2" == "image inspect" ]]; then
   exit 0
 fi
 if [[ "$1 $2" == "sbom --help" ]]; then
+  [[ "${{FAKE_SBOM_FAIL:-0}}" != "1" ]]
   exit 0
 fi
 if [[ "$1" == "sbom" ]]; then
+  [[ "${{FAKE_SBOM_FAIL:-0}}" != "1" ]]
   echo '{{"bom":true}}'
   exit 0
 fi
@@ -436,6 +442,7 @@ def _run_package(
     environment.update(
         {
             "CORPUS_MANIFEST": str(sandbox.manifest),
+            "RELEASE_TIER": "smoke",
             "FAKE_ARCHIVE_WRITER": str(
                 sandbox.binaries / "write_docker_archive.py"
             ),
@@ -578,7 +585,6 @@ def _assert_model_runtime_scripts(
         "runtime/evaluation/runtime/scripts/"
         "build_model_deployment_manifest.py",
         "runtime/evaluation/runtime/scripts/verify_model_contracts.py",
-        "runtime/evaluation/runtime/scripts/verify_model_fleet.py",
     }
     assert scripts <= runtime_names
     assert all(
@@ -618,6 +624,7 @@ def test_success_publishes_only_complete_verified_release(
     )
     archive_helpers = {
         "runtime/scripts/docker_archive_identity.py",
+        "runtime/scripts/docker_archive_loaded_identity.py",
         "runtime/scripts/docker_archive_reader.py",
     }
     with tarfile.open(runtime_archive, mode="r:gz") as archive:
@@ -635,7 +642,8 @@ def test_success_publishes_only_complete_verified_release(
         ]
     _assert_model_runtime_scripts(runtime_names, runtime_manifest)
     assert archive_helpers <= runtime_names
-    assert "runtime/acceptance.sh" in runtime_names
+    assert "runtime/RELEASE_METADATA.json" in runtime_names
+    assert "runtime/acceptance.sh" not in runtime_names
     assert "runtime/config/pipeline.json" in runtime_names
     assert "runtime/config/retrieval.json" in runtime_names
     assert "runtime/config/corpus-policy.json" in runtime_names
@@ -698,8 +706,8 @@ def test_success_publishes_only_complete_verified_release(
     with tarfile.open(corpus_archive, mode="r:gz") as archive:
         names = set(archive.getnames())
     assert "corpus/CORPUS_MANIFEST.json" in names
-    assert "corpus/evaluation/dataset.json" in names
-    assert "corpus/evaluation/FROZEN_MANIFEST.sha256" in names
+    assert "corpus/evaluation/dataset.json" not in names
+    assert "corpus/evaluation/FROZEN_MANIFEST.sha256" not in names
     assert "corpus/docs/group/one.docx" in names
     assert "corpus/docs/group/two.docx" in names
     assert not any(
@@ -738,17 +746,12 @@ def test_runtime_verifier_detects_model_contract_script_tamper(
     assert rejected.returncode != 0
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    (
-        "evaluation/runtime/scripts/verify_model_fleet.py",
-        "evaluation/runtime/scripts/build_model_deployment_manifest.py",
-    ),
-)
-def test_runtime_verifier_rejects_rehashed_missing_fleet_tool(
+def test_runtime_verifier_rejects_rehashed_missing_manifest_tool(
     tmp_path: Path,
-    relative_path: str,
 ) -> None:
+    relative_path = (
+        "evaluation/runtime/scripts/build_model_deployment_manifest.py"
+    )
     sandbox = _prepare_sandbox(tmp_path)
     completed = _run_package(sandbox)
     assert completed.returncode == 0, completed.stderr
@@ -835,4 +838,128 @@ def test_runtime_verifier_rejects_rehashed_frozen_config_without_decision(
     rejected = _run_runtime_verifier(runtime)
 
     assert rejected.returncode != 0
-    assert "FREEZE_DECISION.json" in rejected.stderr
+    assert "release metadata 与 runtime 配置不一致" in rejected.stderr
+
+
+def test_smoke_package_uses_tier_metadata_without_production_payload(
+    tmp_path: Path,
+) -> None:
+    """证明 provisional smoke 不依赖生产验收、模型服务或 SBOM。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_package(sandbox, FAKE_SBOM_FAIL="1")
+
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "smoke-runtime")
+    metadata = json.loads(
+        (runtime / "RELEASE_METADATA.json").read_text(encoding="utf-8")
+    )
+    assert metadata == {
+        "configuration_status": "provisional",
+        "release_tier": "smoke",
+        "schema_version": "1",
+        "source_revision": _REVISION,
+    }
+    for production_only in (
+        "acceptance.sh",
+        "model-services",
+        "sbom",
+        "evaluation/runtime/evaluation",
+        "evaluation/runtime/scripts/load_test_chat.py",
+        "evaluation/runtime/scripts/verify_model_fleet.py",
+    ):
+        assert not (runtime / production_only).exists()
+    assert (
+        runtime / "evaluation/runtime/scripts/verify_model_contracts.py"
+    ).is_file()
+    verified = _run_runtime_verifier(runtime)
+    assert verified.returncode == 0, verified.stderr
+
+
+def test_production_package_rejects_provisional_before_docker(
+    tmp_path: Path,
+) -> None:
+    """证明 production 不能把 provisional 配置伪装成冻结发布。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_package(sandbox, RELEASE_TIER="production")
+
+    assert completed.returncode != 0
+    assert "production" in completed.stderr
+    assert "frozen" in completed.stderr
+    assert not sandbox.command_log.exists()
+
+
+def test_production_package_requires_and_verifies_full_payload(
+    tmp_path: Path,
+) -> None:
+    """证明 frozen production 携带并严格校验完整发布证据。
+
+    Args:
+        tmp_path: pytest 临时目录。
+
+    """
+    sandbox = _prepare_sandbox(tmp_path)
+    decision = {
+        "index_fingerprint": "sha256:" + "2" * 64,
+        "model_revisions": {"calibration_source_revision": "3" * 40},
+        "schema_version": "1",
+        "serving_fingerprint": "sha256:" + "4" * 64,
+    }
+    canonical = json.dumps(
+        decision,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    decision_sha = "sha256:" + hashlib.sha256(canonical).hexdigest()
+    retrieval = sandbox.repository / "deployment/config/retrieval.json"
+    retrieval.write_text(
+        json.dumps(
+            {
+                "freeze_decision_sha256": decision_sha,
+                "status": "frozen",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    decision_path = (
+        sandbox.repository / "deployment/config/FREEZE_DECISION.json"
+    )
+    decision_path.write_text(
+        json.dumps(decision) + "\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_package(sandbox, RELEASE_TIER="production")
+
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "production-runtime")
+    metadata = json.loads(
+        (runtime / "RELEASE_METADATA.json").read_text(encoding="utf-8")
+    )
+    assert metadata["release_tier"] == "production"
+    assert metadata["configuration_status"] == "frozen"
+    for required in (
+        "acceptance.sh",
+        "config/FREEZE_DECISION.json",
+        "evaluation/runtime/evaluation/evaluate.py",
+        "evaluation/runtime/scripts/verify_model_fleet.py",
+        "sbom/docx-rag.cdx.json",
+        "sbom/docx-rag-ocr.cdx.json",
+        "sbom/qdrant.cdx.json",
+    ):
+        assert (runtime / required).is_file()
+    verified = _run_runtime_verifier(runtime)
+    assert verified.returncode == 0, verified.stderr

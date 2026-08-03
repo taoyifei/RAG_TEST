@@ -60,6 +60,15 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
+def _copy_identity_helper(target: Path) -> None:
+    source = (
+        Path(__file__).parents[1]
+        / "scripts/docker_archive_loaded_identity.py"
+    )
+    target.parent.mkdir()
+    shutil.copyfile(source, target)
+
+
 def _prepare_sandbox(
     tmp_path: Path,
     *,
@@ -189,6 +198,10 @@ def _prepare_sandbox(
         encoding="utf-8",
     )
     script.chmod(0o755)
+    helper_target = (
+        new_release / "scripts/docker_archive_loaded_identity.py"
+    )
+    _copy_identity_helper(helper_target)
 
     binaries = tmp_path / "bin"
     binaries.mkdir()
@@ -236,6 +249,11 @@ def _install_fake_commands(binaries: Path) -> None:
 set -euo pipefail
 printf 'docker %s\n' "$*" >> "${{FAKE_COMMAND_LOG}}"
 source "${{FAKE_CONTAINER_STATE}}"
+inspect_format='[{{\"Architecture\":\"amd64\",'
+inspect_format+='\"Config\":{{\"Labels\":{{'
+inspect_format+='\"org.opencontainers.image.revision\":'
+inspect_format+='\"{_NEW_REVISION}\"}}}},'
+inspect_format+='\"Id\":\"%s\",\"Os\":\"linux\"%s}}]'
 write_state() {{
   {{
     printf 'APP_EXISTS=%s\n' "${{APP_EXISTS}}"
@@ -276,6 +294,8 @@ resolve_image() {{
     new-app:new)
       if [[ "${{FAKE_BAD_LOADED_APP_ID:-0}}" == "1" ]]; then
         echo "sha256:$(printf '%064d' 6)"
+      elif [[ "${{FAKE_CLASSIC_STORE:-0}}" == "1" ]]; then
+        echo "{_NEW_APP_CONFIG}"
       else
         echo "{_NEW_APP_IMAGE}"
       fi
@@ -283,6 +303,8 @@ resolve_image() {{
     new-ocr:new)
       if [[ "${{FAKE_BAD_LOADED_OCR_ID:-0}}" == "1" ]]; then
         echo "sha256:$(printf '%064d' 7)"
+      elif [[ "${{FAKE_CLASSIC_STORE:-0}}" == "1" ]]; then
+        echo "{_NEW_OCR_CONFIG}"
       else
         echo "{_NEW_OCR_IMAGE}"
       fi
@@ -290,6 +312,8 @@ resolve_image() {{
     new-qdrant:new)
       if [[ "${{FAKE_BAD_LOADED_QDRANT_ID:-0}}" == "1" ]]; then
         echo "sha256:$(printf '%064d' 8)"
+      elif [[ "${{FAKE_CLASSIC_STORE:-0}}" == "1" ]]; then
+        echo "{_NEW_QDRANT_CONFIG}"
       else
         echo "{_NEW_QDRANT_IMAGE}"
       fi
@@ -424,7 +448,26 @@ if [[ "$1 $2 $3" == "container rm -f" ]]; then
 fi
 if [[ "$1 $2" == "image inspect" ]]; then
   image="${{@: -1}}"
-  if [[ "$*" == *".Architecture"* ]]; then
+  if [[ "$#" == "3" ]]; then
+    image_id="$(resolve_image "${{image}}")"
+    descriptor=""
+    if [[ "${{FAKE_CLASSIC_STORE:-0}}" != "1" ]]; then
+      descriptor_id="${{image_id}}"
+      case "${{image}}" in
+        new-app:new) descriptor_id="{_NEW_APP_IMAGE}" ;;
+        new-ocr:new) descriptor_id="{_NEW_OCR_IMAGE}" ;;
+        new-qdrant:new) descriptor_id="{_NEW_QDRANT_IMAGE}" ;;
+      esac
+      if [[ "${{FAKE_BAD_LOADED_APP_DESCRIPTOR:-0}}" == "1" \
+        && "${{image}}" == "new-app:new" ]]; then
+        descriptor_id="sha256:$(printf '%064d' 9)"
+      fi
+      printf -v descriptor \
+        ',"Descriptor":{{"digest":"%s"}}' "${{descriptor_id}}"
+    fi
+    printf "${{inspect_format}}\n" \
+      "${{image_id}}" "${{descriptor}}"
+  elif [[ "$*" == *".Architecture"* ]]; then
     echo amd64
   elif [[ "$*" == *".Os"* ]]; then
     echo linux
@@ -1228,22 +1271,22 @@ def test_failure_restores_old_core_worker_env_and_current(
     _assert_old_runtime_restored(sandbox)
 
 
-def test_non_containerd_store_fails_before_image_load(
+def test_classic_store_loads_with_config_digest_identity(
     tmp_path: Path,
 ) -> None:
     sandbox = _prepare_sandbox(tmp_path)
 
     completed = _run_deploy(
         sandbox,
-        FAKE_NON_CONTAINERD_STORE="1",
+        FAKE_CLASSIC_STORE="1",
     )
 
-    assert completed.returncode != 0
-    assert "DOCKER_CONTAINERD_IMAGE_STORE_REQUIRED" in completed.stderr
-    assert not sandbox.command_log.exists() or "docker load " not in (
-        sandbox.command_log.read_text(encoding="utf-8")
-    )
-    _assert_old_runtime_restored(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    state = _state(sandbox)
+    assert state["APP_IMAGE"] == _NEW_APP_CONFIG
+    assert state["OCR_IMAGE"] == _NEW_OCR_CONFIG
+    assert state["QDRANT_IMAGE"] == _NEW_QDRANT_CONFIG
+    assert "docker load " in _command_log(sandbox)
 
 
 def test_unapproved_qdrant_provenance_fails_before_image_load(

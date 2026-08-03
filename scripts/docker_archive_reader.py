@@ -279,10 +279,14 @@ def _parse_descriptor(payload: dict[str, object]) -> _Descriptor:
             annotation_mapping.get("vnd.docker.reference.type")
             == "attestation-manifest"
         )
-        image_name = annotation_mapping.get(_IMAGE_NAME_ANNOTATION)
-        reference_name = annotation_mapping.get(
+        annotated_image = annotation_mapping.get(_IMAGE_NAME_ANNOTATION)
+        annotated_reference = annotation_mapping.get(
             _REFERENCE_NAME_ANNOTATION
         )
+        if isinstance(annotated_image, str):
+            image_name = annotated_image
+        if isinstance(annotated_reference, str):
+            reference_name = annotated_reference
     return _Descriptor(
         digest=digest,
         media_type=media_type,

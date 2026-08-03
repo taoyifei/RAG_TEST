@@ -11,6 +11,7 @@ _DEPLOYMENT_DOCUMENTS = (
 _LONG_DEPLOYMENT_DOCUMENT = Path(
     "design/public/offline-build-and-server-deployment.md"
 )
+_SMOKE_QUICKSTART = Path("deployment/README.md")
 _ACTIVE_ENV = "/data/tyf/RAG/shared/env/rag.env"
 _CANDIDATE_DIR = "/data/tyf/RAG/shared/env/candidates"
 _CANDIDATE_ENV = f"{_CANDIDATE_DIR}/${{release_id}}.env"
@@ -116,8 +117,13 @@ def test_documents_distinguish_release_id_from_source_revision() -> None:
     for path in _DEPLOYMENT_DOCUMENTS:
         document = _document(path)
         normalized = _normalize_shell_continuations(document)
-        assert _REVISION_COMMAND in document
-        assert _DEFAULT_RELEASE_ID_COMMAND in document
+        if path == _SMOKE_QUICKSTART:
+            assert '["source_revision"]' in document
+            assert '["release_id"]' in document
+            assert 'SOURCE_REVISION")" = "${source_revision}"' in document
+        else:
+            assert _REVISION_COMMAND in document
+            assert _DEFAULT_RELEASE_ID_COMMAND in document
         assert "RELEASE_ID" in document
         assert "SOURCE_REVISION" in document
         assert not forbidden_assignment.search(document)
@@ -126,7 +132,8 @@ def test_documents_distinguish_release_id_from_source_revision() -> None:
         assert "归档名" in document
         assert "candidate env" in document
         assert re.search(
-            r"`?RAG_RELEASE_REVISION`?\s*使用\s*完整\s*`?revision`?",
+            r"`?RAG_RELEASE_REVISION`?\s*使用\s*完整\s*`?"
+            r"(?:source_)?revision`?",
             document,
         )
         assert "releases/${release_id}" in normalized
@@ -179,7 +186,10 @@ def test_installed_runtime_documents_model_contract_commands() -> None:
     assert 'report_dir="$(mktemp -d \\' in document
     assert '"${logs_root}/model-contract-${release_id}.XXXXXXXX")"' in document
     assert 'python3 - "${report_dir}"' in document
-    assert 'paths = sorted(report_dir.glob("model-contract-*.json"))' in document
+    assert (
+        'paths = sorted(report_dir.glob("model-contract-*.json"))'
+        in document
+    )
     assert 'chown -R root:root "${report_dir}"' in document
     assert "报告不含令牌、问题或完整响应" in document
 

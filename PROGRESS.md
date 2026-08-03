@@ -3954,3 +3954,125 @@
   `BLOCKED.md`。
 - [x] 本轮没有 build/package、联网、访问 `.57/.58/.60` 或其他服务器，
   没有 commit 或 push。
+
+## 2026-08-03 本地 smoke release 收敛任务 0：真实基线
+
+- [x] 中断后已先读取 `PROGRESS.md`、`BLOCKED.md`；当前 HEAD 精确为
+  `bfe86da9b0d5980f49b49e917f4ed18ec19fec6b`，工作区与暂存区起始为空。
+- [x] 本地实测 Docker Client/Engine `29.4.0`、Docker Desktop `4.70.0`、
+  Compose `5.1.2`、buildx `0.33.0-desktop.1`、BuildKit `0.29.0`、
+  docker-sbom `0.6.0`/syft `0.43.0` 均可调用；Docker DriverStatus 为
+  `io.containerd.snapshotter.v1`，当前本地模式是 containerd store。
+- [x] WSL 根盘为 ext4，总计约 1007 GiB、可用约 895 GiB；本地 buildx
+  `default` builder 支持 `linux/amd64`。`desktop-linux` 这个未选中 builder
+  返回 `protocol not available`，不影响当前 `default` builder。
+- [x] `deployment/ASSETS.sha256` 11/11、OCR 资产总清单、OCR 模型清单和
+  59 个 CPython 3.10 wheel 均已按各自相对根真实校验通过。首次人工命令把
+  `WHEELS.sha256` 错放到不存在的 `deployment/ocr/wheelhouse` 下而失败；改为
+  正确的 `deployment/ocr/assets/wheelhouse` 后全绿，资产本身没有缺失。
+- [x] 三张固定基础镜像均已在本地且为 `linux/amd64`：Python config digest
+  `sha256:86adf8db...372d2e1`、Paddle config digest
+  `sha256:bb84347b...34ebd776`、Qdrant config digest
+  `sha256:0bd98fa7...09d5286`。本地还存在旧 revision 的 app/OCR 镜像，不能
+  作为当前 HEAD 的构建完成证据。
+- [x] 基线未访问 `.57/.58/.60` 或其他服务器。按用户在持久目标之后的明确
+  指令，本阶段开始前曾对已存在 HEAD 执行一次 `git push origin main`，结果
+  为 `Everything up-to-date`，没有创建新 commit；从本任务实现阶段起不再
+  commit/push。
+
+## 2026-08-03 本地 smoke release 任务 1—3：首组红测
+
+- [x] 新增 smoke metadata/production payload、production 冻结门禁和模型服务
+  独立边界三项反测。测试夹具首次因 shell 变量在 Python f-string 中少一层
+  转义而提前失败；只修测试夹具后，同组稳定得到 `3 failed, 18 deselected`
+  （0.89s）：smoke 仍被 SBOM 失败阻塞、production 错误接受 provisional、
+  model-services 仍被复制进 RAG runtime。
+- [x] 新增加载后镜像身份单测；当前模块尚不存在，定向运行在 collection 阶段
+  以 `ModuleNotFoundError: scripts.docker_archive_loaded_identity` 退出 1。测试已
+  冻结 containerd（Descriptor=manifest，Id 可为 manifest/config）与 classic
+ （无 Descriptor 时 Id=config）的正例和错误身份反例。
+
+## 2026-08-03 本地 smoke release 任务 1—3：分层与双 store 修复
+
+- [x] `package.sh` 现在要求显式 `RELEASE_TIER=smoke|production`，写入受
+  `MANIFEST.sha256` 保护的 `RELEASE_METADATA.json`。production 在任何 Docker
+  调用前拒绝 provisional，并要求 frozen/`FREEZE_DECISION`、SBOM、acceptance
+  与完整 evaluation；smoke 不调用 SBOM，也不携带这些生产专属负载。
+- [x] `verify-offline.sh` 先交叉校验 metadata、retrieval status 与完整
+  `SOURCE_REVISION`，再按 tier 使用不同必需文件白名单。smoke 即使 SBOM
+  不可用仍成功，production metadata 不能靠补放文件伪装。
+- [x] `deployment/model-services` 保留在仓库作为独立 self-hosted 工具，但已
+  从 RAG runtime 打包和校验清单移除；smoke/production RAG 包均不携带模型
+  服务 Compose，更不携带模型权重或模型镜像。
+- [x] 新增 `docker_archive_loaded_identity.py`。独立单测 `6 passed`：
+  containerd 要求 `Descriptor.digest=manifest` 且 `.Id` 属于 manifest/config；
+  classic 无 Descriptor 时要求 `.Id=config`；两者均检查平台和可选 revision。
+- [x] deploy 去除 Docker 29/containerd 硬门禁和服务器 `docker load --platform`
+  依赖；加载后统一调用上述验证器，再使用当前 store 的实际 `.Id` 校验容器。
+  containerd、classic 与 14 个失败补偿定向场景为
+  `16 passed, 52 deselected in 6.63s`。
+- [x] rollback 同样接受 manifest/config 两种已记录 ID，并重验 Descriptor、
+  平台和 revision；containerd、classic 及既有补偿定向场景为
+  `4 passed, 23 deselected in 2.91s`。
+- [x] release tier、SBOM 非阻塞和模型服务独立三项原红测修复后为
+  `3 passed, 18 deselected in 1.37s`。相关文件全套首次为
+  `121 passed, 9 failed`；9 项均是旧断言/测试 fake 仍绑定 production payload
+  或旧 revision 模板，已逐项收敛，尚待本阶段完整关联套件复核。
+
+## 2026-08-03 本地 smoke release 任务 5—6：只读 preflight 与 quickstart
+
+- [x] 红测真实为 `3 failed in 0.37s`：`server-preflight.sh` 不存在，旧部署
+  README 为 243 行且仍硬绑定 Docker 29/containerd。
+- [x] 新增只读 `server-preflight.sh`，单个 JSON 报告覆盖 Docker/Compose、
+  containerd/classic 模式、NVIDIA runtime、GPU 索引/显存、可用磁盘、
+  8088/8091/8092、既有 rag 容器/网络、固定目录和模型端点 TCP 连通性；只汇总
+  数量/状态，不输出端点或 token，FAIL 返回非零、WARN 返回 0。
+- [x] fake classic Docker/GPU 环境下逐文件快照前后完全一致，且静态禁止
+  load/pull/up/run/mkdir/install/rm/touch；对应测试 `2 passed in 0.09s`。
+- [x] `deployment/README.md` 已收敛为 158 行唯一 smoke quickstart，主路径按
+  本地 preflight→`release_smoke.py`→七文件→server preflight→install→deploy
+  →冒烟验证固定；长文档只作参考，模型服务只在显式 self-hosted 时独立使用。
+  quickstart 与 preflight 合并复核为 `3 passed in 0.10s`。
+
+## 2026-08-03 本地 smoke release 任务 4：编排器与真实构建红证据
+
+- [x] `release_smoke.py` 首次定向测试在 collection 阶段以
+  `ModuleNotFoundError: scripts.release_smoke` 退出 1；实现后定向测试为
+  `2 passed`，Ruff 与 strict mypy 均退出 0。编排器固定执行 clean Git、
+  Python/Docker/Compose/buildx、磁盘和资产 preflight，随后离线准备 wheels、
+  构建和自检 app/OCR、冻结 corpus、打 smoke 包并在新临时目录复验。
+- [x] 关联 deployment/package/deploy/rollback/release 测试为
+  `134 passed in 45.45s`；production 正例、provisional 拒绝和 smoke 分层定向
+  复核为 `3 passed, 11 deselected in 1.49s`。
+- [ ] 为保持 clean Git 硬门禁且不伪造 provenance，实际镜像构建从 detached
+  clean worktree `/tmp/rag-smoke-build-bfe86da` 启动。离线 runtime wheel 准备
+  成功（`verified_wheels=39`），首次 app 构建随后在 Dockerfile
+  `COPY deployment/assets` 处退出 1：clean worktree 不包含被 Git 忽略的固定
+  资产目录。该失败不是镜像成功证据，尚未完成 app/OCR 镜像和 smoke 双包。
+- [x] 本轮没有修改 `src/rag_app`、检索算法、冻结题集、模型权重或服务器；
+  没有访问 `.57/.58/.60`。用户随后明确要求提交并推送，因此后续只在门禁
+  全绿后提交当前可追溯状态，不把未完成的真实构建写成完成。
+
+## 2026-08-03 smoke 发布链提交前验证
+
+- [x] 首轮全仓 Ruff 真实发现本轮 5 项测试夹具问题及 1 项既有测试长行；
+  仅通过提取复制 helper、拆分 fake JSON 格式和换行断言修复。全仓 mypy
+  首轮另发现 `docker_archive_reader.py` 两处 `object` 赋给可选字符串；使用
+  `isinstance` 显式收窄后不改变运行分支。
+- [x] Google docstring 首轮对新增编排器报 `main:Args`、
+  `execute_stages:Returns`；补齐中文 Google 契约后
+  `missing_google_sections=0`。
+- [x] 最终静态门禁全部退出 0：compileall；Ruff `All checks passed!`；
+  strict mypy `Success: no issues found in 103 source files`；Google docstring；
+  `bash -n deployment/*.sh`；默认/index Compose；`git diff --check`；
+  `deployment/ASSETS.sha256` 11/11。
+- [x] 部署契约专项首次有 4 个旧文档断言未同步双 store/唯一 quickstart；
+  更新为 `docker load --input`、补齐 candidate/active env、revision 与明确冒烟
+  标准后为 `14 passed`。最终发布/归档/部署关联集为
+  `161 passed in 47.22s`，skipped=0。
+- [ ] 全量 pytest 第 1 轮为
+  `68 failed, 738 passed, 61 warnings in 579.77s`，skipped=0。其中本轮 4 项
+  文档契约随后已专项修复；其余 63 项均因本地 Qdrant
+  `127.0.0.1:6333` 返回 `502 Bad Gateway`，另 1 项为未修改的 provisional
+  retrieval 文件 SHA 与既有冻结断言不一致。未 skip/xfail、未修改冻结哈希、
+  未把专项绿测冒充全量全绿。

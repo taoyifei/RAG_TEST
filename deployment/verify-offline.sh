@@ -10,20 +10,18 @@ if find . -type f -name '*Zone.Identifier*' -print -quit | grep -q .; then
   exit 1
 fi
 
-required_files=(
+required_common_files=(
   "RELEASE_ID"
+  "RELEASE_METADATA.json"
   "SOURCE_REVISION"
   "QDRANT_SOURCE_IMAGE"
   "IMAGE_ARCHIVES.tsv"
   "README.md"
   "compose.yaml"
   ".env.example"
-  "model-services/compose.yaml"
-  "model-services/.env.example"
-  "model-services/preflight.sh"
-  "model-services/README.md"
   "deploy.sh"
   "rollback.sh"
+  "server-preflight.sh"
   "verify-offline.sh"
   "images/docx-rag-linux-amd64.tar"
   "images/docx-rag-ocr-linux-amd64.tar"
@@ -31,9 +29,6 @@ required_files=(
   "images/docx-rag.inspect.json"
   "images/docx-rag-ocr.inspect.json"
   "images/qdrant.inspect.json"
-  "sbom/docx-rag.cdx.json"
-  "sbom/docx-rag-ocr.cdx.json"
-  "sbom/qdrant.cdx.json"
   "licenses/NVIDIA-CONTAINER-LICENSE"
   "licenses/PaddleOCR-LICENSE.txt"
   "licenses/THIRD_PARTY_NOTICES.md"
@@ -43,20 +38,8 @@ required_files=(
   "provenance/ocr/MODELS.sha256"
   "provenance/ocr/requirements.lock"
   "provenance/ocr/pipeline.yaml"
-  "evaluation/runtime/evaluation/__init__.py"
-  "evaluation/runtime/evaluation/active_state.py"
-  "evaluation/runtime/evaluation/chunking_ablation.py"
-  "evaluation/runtime/evaluation/chunking_experiment.py"
-  "evaluation/runtime/evaluation/dataset.py"
-  "evaluation/runtime/evaluation/evaluate.py"
-  "evaluation/runtime/evaluation/freeze_release.py"
-  "evaluation/runtime/evaluation/legacy_chunking.py"
-  "evaluation/runtime/evaluation/metrics.py"
-  "evaluation/runtime/evaluation/validate_dataset.py"
-  "evaluation/runtime/scripts/load_test_chat.py"
   "evaluation/runtime/scripts/build_model_deployment_manifest.py"
   "evaluation/runtime/scripts/verify_model_contracts.py"
-  "evaluation/runtime/scripts/verify_model_fleet.py"
   "config/pipeline.json"
   "config/retrieval.json"
   "config/corpus-policy.json"
@@ -64,28 +47,23 @@ required_files=(
   "freeze_corpus_manifest.py"
   "qdrant-policy.sh"
   "scripts/docker_archive_identity.py"
+  "scripts/docker_archive_loaded_identity.py"
   "scripts/docker_archive_reader.py"
   "backup.sh"
-  "acceptance.sh"
   "install.sh"
 )
-for path in "${required_files[@]}"; do
+for path in "${required_common_files[@]}"; do
   if [[ ! -f "${path}" || ! -s "${path}" || -L "${path}" ]]; then
     echo "runtime 缺少普通文件：${path}" >&2
     exit 1
   fi
 done
-if [[ ! -x acceptance.sh ]]; then
-  echo "runtime acceptance.sh 不可执行。" >&2
-  exit 1
-fi
-if [[ ! -x model-services/preflight.sh ]]; then
-  echo "runtime model-services/preflight.sh 不可执行。" >&2
-  exit 1
-fi
 
-if ! python3 - "${release_dir}/config/retrieval.json" \
-  "${release_dir}/config/FREEZE_DECISION.json" <<'PY'
+if ! release_tier="$(python3 - \
+  "${release_dir}/RELEASE_METADATA.json" \
+  "${release_dir}/config/retrieval.json" \
+  "${release_dir}/config/FREEZE_DECISION.json" \
+  "${release_dir}/SOURCE_REVISION" <<'PY'
 import hashlib
 import json
 import sys
@@ -103,14 +81,33 @@ def load_object(path: Path, label: str) -> dict[str, object]:
 
 
 try:
-    retrieval_path = Path(sys.argv[1])
-    decision_path = Path(sys.argv[2])
+    metadata = load_object(Path(sys.argv[1]), "release metadata")
+    retrieval_path = Path(sys.argv[2])
+    decision_path = Path(sys.argv[3])
+    source_revision = Path(sys.argv[4]).read_text(encoding="ascii").strip()
     retrieval = load_object(retrieval_path, "retrieval 配置")
     status = retrieval.get("status")
     if status not in {"provisional", "frozen"}:
         raise ValueError(
             "retrieval status 必须是 provisional 或 frozen。"
         )
+    if set(metadata) != {
+        "configuration_status",
+        "release_tier",
+        "schema_version",
+        "source_revision",
+    }:
+        raise ValueError("release metadata 字段集合无效。")
+    release_tier = metadata.get("release_tier")
+    if (
+        metadata.get("schema_version") != "1"
+        or release_tier not in {"smoke", "production"}
+        or metadata.get("configuration_status") != status
+        or metadata.get("source_revision") != source_revision
+    ):
+        raise ValueError("release metadata 与 runtime 配置不一致。")
+    if release_tier == "production" and status != "frozen":
+        raise ValueError("production release 必须使用 frozen 配置。")
     decision_exists = decision_path.exists() or decision_path.is_symlink()
     if decision_exists and (
         decision_path.is_symlink() or not decision_path.is_file()
@@ -163,12 +160,46 @@ try:
                 )
             ):
                 raise ValueError("freeze decision 指纹无效。")
+    print(release_tier)
 except ValueError as error:
-    print(f"冻结配置离线校验失败：{error}", file=sys.stderr)
+    print(f"release metadata 离线校验失败：{error}", file=sys.stderr)
     raise SystemExit(1) from None
 PY
-then
+)"; then
   exit 1
+fi
+
+if [[ "${release_tier}" == "production" ]]; then
+  required_production_files=(
+    "acceptance.sh"
+    "config/FREEZE_DECISION.json"
+    "evaluation/runtime/evaluation/__init__.py"
+    "evaluation/runtime/evaluation/active_state.py"
+    "evaluation/runtime/evaluation/chunking_ablation.py"
+    "evaluation/runtime/evaluation/chunking_experiment.py"
+    "evaluation/runtime/evaluation/dataset.py"
+    "evaluation/runtime/evaluation/evaluate.py"
+    "evaluation/runtime/evaluation/freeze_release.py"
+    "evaluation/runtime/evaluation/legacy_chunking.py"
+    "evaluation/runtime/evaluation/metrics.py"
+    "evaluation/runtime/evaluation/validate_dataset.py"
+    "evaluation/runtime/scripts/benchmark_qdrant.py"
+    "evaluation/runtime/scripts/load_test_chat.py"
+    "evaluation/runtime/scripts/verify_model_fleet.py"
+    "sbom/docx-rag.cdx.json"
+    "sbom/docx-rag-ocr.cdx.json"
+    "sbom/qdrant.cdx.json"
+  )
+  for path in "${required_production_files[@]}"; do
+    if [[ ! -f "${path}" || ! -s "${path}" || -L "${path}" ]]; then
+      echo "production runtime 缺少普通文件：${path}" >&2
+      exit 1
+    fi
+  done
+  if [[ ! -x acceptance.sh ]]; then
+    echo "production runtime acceptance.sh 不可执行。" >&2
+    exit 1
+  fi
 fi
 
 # shellcheck source=deployment/qdrant-policy.sh
@@ -250,4 +281,4 @@ while IFS=$'\t' read -r \
   fi
 done < IMAGE_ARCHIVES.tsv
 
-echo "runtime 包逐文件摘要、OCI 镜像身份、来源与 SBOM 校验通过。"
+echo "${release_tier} runtime 包逐文件摘要、OCI 镜像身份与来源校验通过。"

@@ -178,34 +178,24 @@ image_id() {
   docker image inspect --format '{{.Id}}' "$1"
 }
 
-image_descriptor_digest() {
-  local descriptor_json
-  descriptor_json="$(docker image inspect \
-    --format '{{json .Descriptor}}' "$1")"
-  python3 -c '
-import json
-import re
-import sys
-
-payload = json.load(sys.stdin)
-digest = payload.get("digest") if isinstance(payload, dict) else None
-if not isinstance(digest, str) or re.fullmatch(
-    r"sha256:[0-9a-f]{64}", digest
-) is None:
-    raise SystemExit(1)
-print(digest)
-' <<< "${descriptor_json}"
-}
-
-inspect_revision() {
+inspect_loaded_image() {
   local image="$1"
-  local expected_revision="$2"
-  local actual_revision
-  actual_revision="$(docker image inspect \
-    --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-    "${image}")"
-  if [[ "${actual_revision}" != "${expected_revision}" ]]; then
-    echo "镜像 OCI revision 与 rollback release 不一致。" >&2
+  local expected_manifest_id="$2"
+  local expected_config_id="$3"
+  local expected_platform="$4"
+  local expected_revision="$5"
+  local arguments=(
+    python3
+    "${script_dir}/scripts/docker_archive_loaded_identity.py"
+    --manifest-digest "${expected_manifest_id}"
+    --config-digest "${expected_config_id}"
+    --platform "${expected_platform}"
+  )
+  if [[ "${expected_revision}" =~ ^[0-9a-f]{40}$ ]]; then
+    arguments+=(--expected-revision "${expected_revision}")
+  fi
+  if ! docker image inspect "${image}" | "${arguments[@]}" >/dev/null; then
+    echo "rollback 镜像离线身份不一致。" >&2
     return 1
   fi
 }
@@ -416,15 +406,10 @@ for image in \
   "${rollback_ocr_image}" \
   "${rollback_qdrant_image}"; do
   if [[ ! "${image}" =~ ^sha256:[0-9a-f]{64}$ \
-    || "$(image_id "${image}")" != "${image}" \
-    || "$(image_descriptor_digest "${image}")" != "${image}" ]]; then
+    || "$(image_id "${image}")" != "${image}" ]]; then
     fail "rollback image ID 不存在或不精确。"
   fi
 done
-inspect_revision "${rollback_app_image}" "${rollback_revision}" \
-  || fail "rollback app revision 无效。"
-inspect_revision "${rollback_ocr_image}" "${rollback_revision}" \
-  || fail "rollback OCR revision 无效。"
 if [[ "${rollback_worker_exists}" == "true" \
   && ! "${rollback_worker_image}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
   fail "rollback worker image ID 无效。"
@@ -449,12 +434,18 @@ if [[ "${qdrant_source_image}" \
     != "${RAG_APPROVED_QDRANT_REPO_DIGEST}" ]]; then
   fail "rollback Qdrant provenance 不在批准白名单。"
 fi
-if [[ "$(image_manifest_value \
-      images/docx-rag-linux-amd64.tar 3)" != "${rollback_app_image}" \
-  || "$(image_manifest_value \
-      images/docx-rag-ocr-linux-amd64.tar 3)" != "${rollback_ocr_image}" \
-  || "$(image_manifest_value \
-      images/qdrant-linux-amd64.tar 3)" != "${rollback_qdrant_image}" \
+app_manifest_id="$(image_manifest_value images/docx-rag-linux-amd64.tar 3)"
+ocr_manifest_id="$(image_manifest_value images/docx-rag-ocr-linux-amd64.tar 3)"
+qdrant_manifest_id="$(image_manifest_value images/qdrant-linux-amd64.tar 3)"
+app_config_id="$(image_manifest_value images/docx-rag-linux-amd64.tar 5)"
+ocr_config_id="$(image_manifest_value images/docx-rag-ocr-linux-amd64.tar 5)"
+qdrant_config_id="$(image_manifest_value images/qdrant-linux-amd64.tar 5)"
+if [[ "${rollback_app_image}" != "${app_manifest_id}" \
+    && "${rollback_app_image}" != "${app_config_id}" \
+  || "${rollback_ocr_image}" != "${ocr_manifest_id}" \
+    && "${rollback_ocr_image}" != "${ocr_config_id}" \
+  || "${rollback_qdrant_image}" != "${qdrant_manifest_id}" \
+    && "${rollback_qdrant_image}" != "${qdrant_config_id}" \
   || "$(image_manifest_value \
       images/docx-rag-linux-amd64.tar 4)" != "${rollback_revision}" \
   || "$(image_manifest_value \
@@ -462,6 +453,18 @@ if [[ "$(image_manifest_value \
   ]]; then
   fail "rollback release IMAGE_ARCHIVES.tsv 身份不一致。"
 fi
+inspect_loaded_image \
+  "${rollback_app_image}" "${app_manifest_id}" "${app_config_id}" \
+  linux/amd64 "${rollback_revision}" \
+  || fail "rollback app 镜像身份无效。"
+inspect_loaded_image \
+  "${rollback_ocr_image}" "${ocr_manifest_id}" "${ocr_config_id}" \
+  linux/amd64 "${rollback_revision}" \
+  || fail "rollback OCR 镜像身份无效。"
+inspect_loaded_image \
+  "${rollback_qdrant_image}" "${qdrant_manifest_id}" \
+  "${qdrant_config_id}" linux/amd64 - \
+  || fail "rollback Qdrant 镜像身份无效。"
 target_env="$(mktemp "${shared_env_dir}/.rag.env.rollback-target.XXXXXXXX")"
 if ! printf '%s' "${rollback_env_base64}" | base64 -d > "${target_env}"; then
   fail "rollback env 快照无法解码。"

@@ -1,5 +1,9 @@
 # 共享 Embedding/Reranker 服务
 
+这是显式选择 self-hosted 时才使用的独立可选工具。默认 RAG 部署复用已经通过
+真实模型契约核验的 embedding、reranker 和四个 LLM；现有服务契约通过后不得
+重复部署或额外占用 GPU。该目录、模型权重和模型镜像都不进入 RAG smoke 包。
+
 该 Compose 只运行 `.60` 上共享的 Qwen3-Embedding-0.6B 和
 Qwen3-Reranker-0.6B。它不 build、不 pull、不下载模型，也不属于某个 RAG
 release 的生命周期。模型资产必须预先完整解包，两个固定镜像也必须预先加载。

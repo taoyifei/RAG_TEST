@@ -55,7 +55,8 @@ def test_server_scripts_never_build_pull_install_or_delete_volumes() -> None:
     assert "ROLLBACK_OCR_IMAGE" in joined
     assert "/data/tyf/RAG" in joined
     assert "current" in joined
-    assert "docker load --platform linux/amd64" in scripts[0]
+    assert "docker load --input" in scripts[0]
+    assert "docker load --platform" not in scripts[0]
     assert '--input "${release_dir}/${app_archive}"' in scripts[0]
     assert "*.tar" not in scripts[0]
 

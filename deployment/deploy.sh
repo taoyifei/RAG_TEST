@@ -217,76 +217,28 @@ image_id() {
   docker image inspect --format '{{.Id}}' "$1"
 }
 
-image_descriptor_digest() {
-  local descriptor_json
-  descriptor_json="$(docker image inspect \
-    --format '{{json .Descriptor}}' "$1")"
-  python3 -c '
-import json
-import re
-import sys
-
-payload = json.load(sys.stdin)
-digest = payload.get("digest") if isinstance(payload, dict) else None
-if not isinstance(digest, str) or re.fullmatch(
-    r"sha256:[0-9a-f]{64}", digest
-) is None:
-    raise SystemExit(1)
-print(digest)
-' <<< "${descriptor_json}"
-}
-
-verify_containerd_image_store() {
-  local driver_status
-  driver_status="$(docker info --format '{{json .DriverStatus}}')"
-  python3 -c '
-import json
-import sys
-
-payload = json.load(sys.stdin)
-expected = ["driver-type", "io.containerd.snapshotter.v1"]
-raise SystemExit(0 if expected in payload else 1)
-' <<< "${driver_status}"
-}
-
 inspect_loaded_image() {
   local image="$1"
   local expected_manifest_id="$2"
   local expected_config_id="$3"
   local expected_platform="$4"
   local expected_provenance="$5"
-  local actual_descriptor_id
-  local actual_id
-  local actual_revision
-  local architecture
-  local operating_system
-  architecture="$(docker image inspect --format '{{.Architecture}}' "${image}")"
-  operating_system="$(docker image inspect --format '{{.Os}}' "${image}")"
-  actual_id="$(image_id "${image}")"
-  if ! actual_descriptor_id="$(image_descriptor_digest "${image}")"; then
-    echo "镜像缺少可信 containerd descriptor：${image}" >&2
-    return 1
-  fi
-  if [[ "${operating_system}/${architecture}" != "${expected_platform}" \
-    || "${actual_id}" != "${expected_manifest_id}" \
-    || "${actual_descriptor_id}" != "${expected_manifest_id}" \
-    || ! "${actual_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-    printf '%s\n' \
-      "IMAGE_IDENTITY_MISMATCH image=${image} expected_manifest=${expected_manifest_id} actual_id=${actual_id} actual_descriptor=${actual_descriptor_id} expected_config=${expected_config_id} expected_platform=${expected_platform} actual_platform=${operating_system}/${architecture}" \
-      >&2
-    return 1
-  fi
+  local arguments=(
+    python3
+    "${release_dir}/scripts/docker_archive_loaded_identity.py"
+    --manifest-digest "${expected_manifest_id}"
+    --config-digest "${expected_config_id}"
+    --platform "${expected_platform}"
+  )
   if [[ "${expected_provenance}" =~ ^[0-9a-f]{40}$ ]]; then
-    actual_revision="$(docker image inspect \
-      --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-      "${image}")"
-    if [[ "${actual_revision}" != "${expected_provenance}" ]]; then
-      echo "镜像 revision 与 runtime 包不一致。" >&2
-      return 1
-    fi
+    arguments+=(--expected-revision "${expected_provenance}")
   elif [[ ! "${expected_provenance}" \
     =~ ^qdrant/qdrant@sha256:[0-9a-f]{64}$ ]]; then
     echo "镜像 provenance 记录无效。" >&2
+    return 1
+  fi
+  if ! docker image inspect "${image}" | "${arguments[@]}" >/dev/null; then
+    echo "IMAGE_IDENTITY_MISMATCH image=${image}" >&2
     return 1
   fi
 }
@@ -568,9 +520,6 @@ if [[ "${qdrant_provenance}" \
   != "${RAG_APPROVED_QDRANT_REPO_DIGEST}" ]]; then
   fail "Qdrant provenance 不在批准白名单。"
 fi
-verify_containerd_image_store \
-  || fail "DOCKER_CONTAINERD_IMAGE_STORE_REQUIRED"
-
 container_names="$(docker ps -a --format '{{.Names}}')"
 existing_count="$(printf '%s\n' "${container_names}" | awk '
   $0 == "rag-app" || $0 == "rag-ocr" || $0 == "rag-qdrant" {
@@ -750,12 +699,9 @@ perform_deploy() {
       -f "${old_release}/compose.yaml" stop rag-worker \
       || return 1
   fi
-  docker load --platform linux/amd64 \
-    --input "${release_dir}/${app_archive}" || return 1
-  docker load --platform linux/amd64 \
-    --input "${release_dir}/${ocr_archive}" || return 1
-  docker load --platform linux/amd64 \
-    --input "${release_dir}/${qdrant_archive}" || return 1
+  docker load --input "${release_dir}/${app_archive}" || return 1
+  docker load --input "${release_dir}/${ocr_archive}" || return 1
+  docker load --input "${release_dir}/${qdrant_archive}" || return 1
   inspect_loaded_image \
     "${app_image}" "${new_app_id}" "${new_app_config_id}" \
     "${app_platform}" "${app_provenance}" || return 1
@@ -765,6 +711,9 @@ perform_deploy() {
   inspect_loaded_image \
     "${qdrant_image}" "${new_qdrant_id}" "${new_qdrant_config_id}" \
     "${qdrant_platform}" "${qdrant_provenance}" || return 1
+  new_app_id="$(image_id "${app_image}")" || return 1
+  new_ocr_id="$(image_id "${ocr_image}")" || return 1
+  new_qdrant_id="$(image_id "${qdrant_image}")" || return 1
   docker compose --env-file "${candidate_env}" \
     -f "${compose_file}" config -q || return 1
   docker compose --env-file "${candidate_env}" -f "${compose_file}" \
