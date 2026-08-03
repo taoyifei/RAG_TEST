@@ -25,16 +25,16 @@ _OLD_REVISION = "1" * 40
 _NEW_REVISION = "2" * 40
 _MODEL_NETWORK_PREFIX = ".".join(("10", "242", "180"))
 _VALID_EMBEDDING_ENDPOINTS = (
-    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1"]'
+    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000"]'
 )
 _VALID_RERANKER_ENDPOINTS = (
     f'["http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
 )
 _VALID_LLM_ENDPOINTS = (
-    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1",'
-    f'"http://{_MODEL_NETWORK_PREFIX}.57:8001/v1",'
-    f'"http://{_MODEL_NETWORK_PREFIX}.58:8000/v1",'
-    f'"https://{_MODEL_NETWORK_PREFIX}.60:8001/v1"]'
+    f'["http://{_MODEL_NETWORK_PREFIX}.57:8000",'
+    f'"http://{_MODEL_NETWORK_PREFIX}.57:8001",'
+    f'"http://{_MODEL_NETWORK_PREFIX}.58:8000",'
+    f'"https://{_MODEL_NETWORK_PREFIX}.60:8001"]'
 )
 
 
@@ -747,6 +747,49 @@ def test_valid_internal_model_endpoint_arrays_are_accepted(
 
 
 @pytest.mark.parametrize(
+    ("endpoint_key", "endpoint_value"),
+    (
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            (
+                f'["http://{_MODEL_NETWORK_PREFIX}.57:8000",'
+                f'"http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
+            ),
+        ),
+        (
+            "RAG_RERANKER_ENDPOINTS",
+            (
+                f'["http://{_MODEL_NETWORK_PREFIX}.57:8000",'
+                f'"http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
+            ),
+        ),
+        (
+            "RAG_LLM_ENDPOINTS",
+            (
+                f'["http://{_MODEL_NETWORK_PREFIX}.57:8000",'
+                f'"http://{_MODEL_NETWORK_PREFIX}.58:8000"]'
+            ),
+        ),
+    ),
+)
+def test_model_endpoint_count_mismatch_fails_before_docker(
+    tmp_path: Path,
+    endpoint_key: str,
+    endpoint_value: str,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    _replace_env_value(sandbox, endpoint_key, endpoint_value)
+
+    completed = _run_deploy(sandbox)
+
+    combined_output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert "MODEL_ENDPOINT_COUNT_MISMATCH" in combined_output
+    assert endpoint_value not in combined_output
+    assert _command_log(sandbox) == ""
+
+
+@pytest.mark.parametrize(
     ("endpoint_key", "endpoint_value", "expected_category"),
     (
         (
@@ -756,7 +799,7 @@ def test_valid_internal_model_endpoint_arrays_are_accepted(
         ),
         (
             "RAG_RERANKER_ENDPOINTS",
-            '["https://model.zone.invalid/v1"]',
+            '["https://model.zone.invalid"]',
             "MODEL_ENDPOINT_HOST_FORBIDDEN",
         ),
         (
@@ -791,6 +834,11 @@ def test_valid_internal_model_endpoint_arrays_are_accepted(
             "RAG_RERANKER_ENDPOINTS",
             f'["http://{_MODEL_NETWORK_PREFIX}.58:8000/v1#probe"]',
             "MODEL_ENDPOINT_FRAGMENT_FORBIDDEN",
+        ),
+        (
+            "RAG_EMBEDDING_ENDPOINTS",
+            f'["http://{_MODEL_NETWORK_PREFIX}.57:8000/v1"]',
+            "MODEL_ENDPOINT_PATH_FORBIDDEN",
         ),
         (
             "RAG_LLM_ENDPOINTS",

@@ -10,9 +10,9 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -53,9 +53,30 @@ _SAFE_REVISION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}")
 _FULL_GIT_SHA = re.compile(r"[0-9a-f]{40}")
 _SHA256_REVISION = re.compile(r"sha256:[0-9a-f]{64}")
 _PINNED_VERSION = re.compile(r"\d+\.\d+(?:\.\d+)?(?:[A-Za-z0-9._+-]+)?")
+_CUDA_DEVICE = re.compile(r"cuda(?::(?:0|[1-9]\d*))?")
 _FORBIDDEN_REVISIONS = frozenset({"unknown", "main", "latest"})
 _MAX_MANIFEST_BYTES = 1024 * 1024
-_MANIFEST_FIELDS = frozenset(
+_RERANKER_HEALTH_FIELDS = frozenset({"status", "model_path", "device"})
+_TEI_INFO_FIELDS = frozenset(
+    {
+        "model_id",
+        "model_sha",
+        "model_dtype",
+        "served_model_name",
+        "model_type",
+        "max_concurrent_requests",
+        "max_input_length",
+        "max_batch_tokens",
+        "max_batch_requests",
+        "max_client_batch_size",
+        "auto_truncate",
+        "tokenization_workers",
+        "version",
+        "sha",
+        "docker_label",
+    }
+)
+_MANIFEST_V1_FIELDS = frozenset(
     {
         "schema_version",
         "service",
@@ -71,6 +92,31 @@ _MANIFEST_FIELDS = frozenset(
         "manifest_sha256",
     }
 )
+_MANIFEST_V2_FIELDS = frozenset(
+    {
+        "schema_version",
+        "service",
+        "endpoint",
+        "model",
+        "model_revision",
+        "tokenizer_revision",
+        "runtime",
+        "service_contract",
+        "manifest_sha256",
+    }
+)
+_RUNTIME_FIELDS = frozenset({"name", "version", "revision"})
+_SERVICE_CONTRACT_FIELDS = {
+    "embedding": frozenset({"dimension"}),
+    "reranker": frozenset({"score_min", "score_max"}),
+    "llm": frozenset(
+        {
+            "quantization",
+            "max_context_tokens",
+            "chat_template_sha256",
+        }
+    ),
+}
 
 
 class ContractError(RuntimeError):
@@ -152,6 +198,72 @@ class ModelContractOptions:
 
 
 @dataclass(frozen=True, slots=True)
+class DeploymentManifestV2Spec:
+    """schema v2 部署清单的待签名字段。
+
+    Attributes:
+        service: 模型服务角色。
+        endpoint: 不含凭据、query 或 fragment 的 HTTP 端点。
+        model: 端点公开的精确模型 ID。
+        model_revision: 固定的模型 revision。
+        tokenizer_revision: 固定的 tokenizer revision。
+        runtime_name: 推理运行时名称。
+        runtime_version: 固定的运行时版本。
+        runtime_revision: 40 位 Git SHA、SHA256 或固定版本。
+        service_contract: 与服务角色严格对应的契约字段。
+
+    """
+
+    service: ServiceName
+    endpoint: str
+    model: str
+    model_revision: str
+    tokenizer_revision: str
+    runtime_name: str
+    runtime_version: str
+    runtime_revision: str
+    service_contract: Mapping[str, object]
+
+
+def build_deployment_manifest_v2(
+    spec: DeploymentManifestV2Spec,
+) -> dict[str, object]:
+    """构造经严格 schema 校验并带规范摘要的 v2 部署清单。
+
+    Args:
+        spec: 待校验并签名的 v2 清单字段。
+
+    Returns:
+        可直接序列化的 schema v2 部署清单。
+
+    Raises:
+        ValueError: 任一字段不满足 v2 schema 或固定 revision 要求。
+
+    """
+    payload: dict[str, object] = {
+        "schema_version": "2",
+        "service": spec.service,
+        "endpoint": _normalize_endpoint(spec.endpoint),
+        "model": spec.model,
+        "model_revision": spec.model_revision,
+        "tokenizer_revision": spec.tokenizer_revision,
+        "runtime": {
+            "name": spec.runtime_name,
+            "version": spec.runtime_version,
+            "revision": spec.runtime_revision,
+        },
+        "service_contract": dict(spec.service_contract),
+        "manifest_sha256": "sha256:" + "0" * 64,
+    }
+    try:
+        _validate_deployment_manifest_v2_schema(payload)
+    except ContractError as error:
+        raise ValueError("部署清单字段不满足 schema v2。") from error
+    payload["manifest_sha256"] = _canonical_manifest_sha256(payload)
+    return payload
+
+
+@dataclass(frozen=True, slots=True)
 class _LlmProbeRequest:
     """一次不输出正文的合成 LLM 契约请求。"""
 
@@ -186,22 +298,12 @@ def verify_model_contract(
         "GET",
         f"{endpoint}/health",
     )
-    models = _request_json(
-        client,
+    revision_source, manifest_sha256 = _verify_model_identity(
         options,
-        "GET",
-        f"{endpoint}/v1/models",
+        client=client,
+        endpoint=endpoint,
+        health=health,
     )
-    model_entry = _require_model(models, options.model)
-    observed_revision = _endpoint_revision(model_entry, health)
-    manifest_sha256: str | None = None
-    if observed_revision is not None:
-        if observed_revision != options.expected_revision:
-            raise ContractError("REVISION_MISMATCH")
-        revision_source = "endpoint"
-    else:
-        manifest_sha256 = _require_deployment_manifest(options)
-        revision_source = "deployment_manifest"
     probe = _run_probe(options, client, endpoint)
     report: dict[str, object] = {
         "schema_version": "1",
@@ -218,6 +320,149 @@ def verify_model_contract(
     if manifest_sha256 is not None:
         report["deployment_manifest_sha256"] = manifest_sha256
     return report
+
+
+def _verify_model_identity(
+    options: ModelContractOptions,
+    *,
+    client: httpx.Client,
+    endpoint: str,
+    health: httpx.Response,
+) -> tuple[str, str | None]:
+    if options.service == "embedding":
+        info = _request_json(
+            client,
+            options,
+            "GET",
+            f"{endpoint}/info",
+        )
+        _require_tei_embedding_info(info, expected_model=options.model)
+        manifest_sha256 = _require_deployment_manifest(
+            options,
+            required_schema_version="2",
+        )
+        return "deployment_manifest", manifest_sha256
+    if options.service == "reranker":
+        _require_reranker_health(health, expected_model=options.model)
+        manifest_sha256 = _require_deployment_manifest(
+            options,
+            required_schema_version="2",
+        )
+        return "deployment_manifest", manifest_sha256
+    models = _request_json(
+        client,
+        options,
+        "GET",
+        f"{endpoint}/v1/models",
+    )
+    model_entry = _require_model(models, options.model)
+    observed_revision = _endpoint_revision(model_entry, health)
+    if observed_revision is not None:
+        if observed_revision != options.expected_revision:
+            raise ContractError("REVISION_MISMATCH")
+        return "endpoint", None
+    manifest_sha256 = _require_deployment_manifest(options)
+    return "deployment_manifest", manifest_sha256
+
+
+def _require_tei_embedding_info(
+    payload: object,
+    *,
+    expected_model: str,
+) -> None:
+    if not isinstance(payload, dict) or set(payload) != _TEI_INFO_FIELDS:
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    model_id = payload.get("model_id")
+    served_model_name = payload.get("served_model_name")
+    if (
+        not isinstance(model_id, str)
+        or not isinstance(served_model_name, str)
+    ):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    if (
+        served_model_name != expected_model
+        or PurePosixPath(model_id).name != expected_model
+    ):
+        raise ContractError("MODEL_MISMATCH")
+    model_type = payload.get("model_type")
+    if not isinstance(model_type, dict) or set(model_type) != {"embedding"}:
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    embedding = model_type.get("embedding")
+    if (
+        not isinstance(embedding, dict)
+        or set(embedding) != {"pooling"}
+        or not isinstance(embedding.get("pooling"), str)
+        or not embedding["pooling"]
+    ):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    _require_tei_runtime_info(payload)
+
+
+def _require_tei_runtime_info(payload: dict[str, object]) -> None:
+    required_positive_integers = (
+        "max_concurrent_requests",
+        "max_input_length",
+        "max_batch_tokens",
+        "max_client_batch_size",
+        "tokenization_workers",
+    )
+    if any(
+        not _is_positive_integer(payload.get(field))
+        for field in required_positive_integers
+    ):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    max_batch_requests = payload.get("max_batch_requests")
+    if max_batch_requests is not None and not _is_positive_integer(
+        max_batch_requests
+    ):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    version = payload.get("version")
+    if (
+        not isinstance(payload.get("model_dtype"), str)
+        or not payload["model_dtype"]
+        or not isinstance(payload.get("auto_truncate"), bool)
+        or not isinstance(version, str)
+        or _PINNED_VERSION.fullmatch(version) is None
+    ):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    for field in ("model_sha", "sha", "docker_label"):
+        value = payload.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ContractError("RESPONSE_SCHEMA_INVALID")
+
+
+def _is_positive_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _require_reranker_health(
+    health: httpx.Response,
+    *,
+    expected_model: str,
+) -> None:
+    try:
+        payload: object = health.json()
+    except ValueError as error:
+        raise ContractError("RESPONSE_SCHEMA_INVALID") from error
+    if not isinstance(payload, dict) or set(payload) != _RERANKER_HEALTH_FIELDS:
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    status = payload.get("status")
+    model_path = payload.get("model_path")
+    device = payload.get("device")
+    if not all(isinstance(value, str) for value in payload.values()):
+        raise ContractError("RESPONSE_SCHEMA_INVALID")
+    if status != "ok":
+        raise ContractError("HEALTH_INVALID")
+    if (
+        not isinstance(model_path, str)
+        or PurePosixPath(model_path).name != expected_model
+    ):
+        raise ContractError("MODEL_MISMATCH")
+    if (
+        not isinstance(device, str)
+        or _CUDA_DEVICE.fullmatch(device) is None
+    ):
+        raise ContractError("RERANK_DEVICE_INVALID")
 
 
 def _run_probe(
@@ -719,26 +964,24 @@ def _endpoint_revision(
     return observed[0]
 
 
-def _require_deployment_manifest(options: ModelContractOptions) -> str:
+def _require_deployment_manifest(
+    options: ModelContractOptions,
+    *,
+    required_schema_version: str | None = None,
+) -> str:
     path = options.deployment_manifest
     if path is None:
         raise ContractError("REVISION_MISSING")
     payload = _load_deployment_manifest(path)
+    if (
+        required_schema_version is not None
+        and payload["schema_version"] != required_schema_version
+    ):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
     declared_sha256 = payload["manifest_sha256"]
     if not isinstance(declared_sha256, str):
         raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
-    content = {
-        key: value
-        for key, value in payload.items()
-        if key != "manifest_sha256"
-    }
-    canonical = json.dumps(
-        content,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode()
-    actual_sha256 = f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+    actual_sha256 = _canonical_manifest_sha256(payload)
     if declared_sha256 != actual_sha256:
         raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
     _validate_deployment_manifest(payload, options)
@@ -759,10 +1002,16 @@ def _load_deployment_manifest(path: Path) -> dict[str, object]:
         raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ContractError("DEPLOYMENT_MANIFEST_INVALID") from error
-    if (
-        not isinstance(raw_payload, dict)
-        or set(raw_payload) != _MANIFEST_FIELDS
-    ):
+    if not isinstance(raw_payload, dict):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    schema_version = raw_payload.get("schema_version")
+    if not isinstance(schema_version, str):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    expected_fields = {
+        "1": _MANIFEST_V1_FIELDS,
+        "2": _MANIFEST_V2_FIELDS,
+    }.get(schema_version)
+    if expected_fields is None or set(raw_payload) != expected_fields:
         raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
     return raw_payload
 
@@ -771,7 +1020,20 @@ def _validate_deployment_manifest(
     payload: dict[str, object],
     options: ModelContractOptions,
 ) -> None:
-    if payload["schema_version"] != "1":
+    if payload["schema_version"] == "1":
+        _validate_deployment_manifest_v1(payload, options)
+        return
+    if payload["schema_version"] == "2":
+        _validate_deployment_manifest_v2(payload, options)
+        return
+    raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+
+
+def _validate_deployment_manifest_v1(
+    payload: dict[str, object],
+    options: ModelContractOptions,
+) -> None:
+    if set(payload) != _MANIFEST_V1_FIELDS:
         raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
     expected_values = {
         "service": options.service,
@@ -825,6 +1087,169 @@ def _validate_deployment_manifest(
         raise ContractError("DEPLOYMENT_MANIFEST_MISMATCH")
 
 
+def _validate_deployment_manifest_v2(
+    payload: dict[str, object],
+    options: ModelContractOptions,
+) -> None:
+    _validate_deployment_manifest_v2_schema(payload)
+    expected_values = {
+        "service": options.service,
+        "endpoint": _normalize_endpoint(options.endpoint),
+        "model": options.model,
+    }
+    if any(payload[field] != value for field, value in expected_values.items()):
+        raise ContractError("DEPLOYMENT_MANIFEST_MISMATCH")
+    if payload["model_revision"] != options.expected_revision:
+        raise ContractError("REVISION_MISMATCH")
+    service_contract = payload["service_contract"]
+    if not isinstance(service_contract, dict):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    if options.service == "embedding":
+        if service_contract["dimension"] != options.dimension:
+            raise ContractError("DEPLOYMENT_MANIFEST_MISMATCH")
+    elif options.service == "reranker":
+        if (
+            float(service_contract["score_min"]) != 0.0
+            or float(service_contract["score_max"]) != 1.0
+        ):
+            raise ContractError("DEPLOYMENT_MANIFEST_MISMATCH")
+    else:
+        budget = options.llm_budget
+        if (
+            budget is None
+            or service_contract["max_context_tokens"]
+            != budget.context_limit
+        ):
+            raise ContractError("DEPLOYMENT_MANIFEST_MISMATCH")
+
+
+def _validate_deployment_manifest_v2_schema(
+    payload: dict[str, object],
+) -> None:
+    service = payload.get("service")
+    endpoint = payload.get("endpoint")
+    model = payload.get("model")
+    model_revision = payload.get("model_revision")
+    tokenizer_revision = payload.get("tokenizer_revision")
+    manifest_sha256 = payload.get("manifest_sha256")
+    if (
+        set(payload) != _MANIFEST_V2_FIELDS
+        or payload.get("schema_version") != "2"
+        or not isinstance(service, str)
+        or service not in _SERVICES
+        or not isinstance(endpoint, str)
+        or not isinstance(model, str)
+        or not model.strip()
+        or not isinstance(model_revision, str)
+        or not isinstance(tokenizer_revision, str)
+        or not isinstance(manifest_sha256, str)
+        or _SHA256_REVISION.fullmatch(manifest_sha256) is None
+    ):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    try:
+        _normalize_endpoint(endpoint)
+        _require_pinned_revision(
+            model_revision,
+            label="model_revision",
+        )
+        _require_pinned_revision(
+            tokenizer_revision,
+            label="tokenizer_revision",
+        )
+    except ValueError as error:
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID") from error
+    runtime = payload.get("runtime")
+    if not isinstance(runtime, dict) or set(runtime) != _RUNTIME_FIELDS:
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    runtime_name = runtime.get("name")
+    runtime_version = runtime.get("version")
+    runtime_revision = runtime.get("revision")
+    if (
+        not isinstance(runtime_name, str)
+        or _SAFE_REVISION.fullmatch(runtime_name) is None
+        or runtime_name.casefold() in _FORBIDDEN_REVISIONS
+        or not isinstance(runtime_version, str)
+        or _PINNED_VERSION.fullmatch(runtime_version) is None
+        or not isinstance(runtime_revision, str)
+        or not _is_pinned_runtime_revision(runtime_revision)
+    ):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    service_contract = payload.get("service_contract")
+    if (
+        not isinstance(service_contract, dict)
+        or set(service_contract) != _SERVICE_CONTRACT_FIELDS[service]
+    ):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    if service == "embedding":
+        dimension = service_contract["dimension"]
+        if (
+            not isinstance(dimension, int)
+            or isinstance(dimension, bool)
+            or dimension <= 0
+        ):
+            raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    elif service == "reranker":
+        score_min = service_contract["score_min"]
+        score_max = service_contract["score_max"]
+        if (
+            not _is_finite_number(score_min)
+            or not _is_finite_number(score_max)
+            or float(score_min) >= float(score_max)
+        ):
+            raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+    else:
+        _validate_llm_service_contract(service_contract)
+
+
+def _validate_llm_service_contract(
+    service_contract: dict[str, object],
+) -> None:
+    quantization = service_contract["quantization"]
+    context_limit = service_contract["max_context_tokens"]
+    chat_template_sha256 = service_contract["chat_template_sha256"]
+    if (
+        not isinstance(quantization, str)
+        or _SAFE_REVISION.fullmatch(quantization) is None
+        or quantization.casefold() in _FORBIDDEN_REVISIONS
+        or not isinstance(context_limit, int)
+        or isinstance(context_limit, bool)
+        or context_limit <= 0
+        or not isinstance(chat_template_sha256, str)
+        or _SHA256_REVISION.fullmatch(chat_template_sha256) is None
+    ):
+        raise ContractError("DEPLOYMENT_MANIFEST_INVALID")
+
+
+def _is_finite_number(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
+
+
+def _is_pinned_runtime_revision(value: str) -> bool:
+    return any(
+        pattern.fullmatch(value) is not None
+        for pattern in (_FULL_GIT_SHA, _SHA256_REVISION, _PINNED_VERSION)
+    )
+
+
+def _canonical_manifest_sha256(payload: dict[str, object]) -> str:
+    content = {
+        key: value
+        for key, value in payload.items()
+        if key != "manifest_sha256"
+    }
+    canonical = json.dumps(
+        content,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
 def _require_pinned_revision(value: str, *, label: str) -> None:
     if (
         _SAFE_REVISION.fullmatch(value) is None
@@ -834,19 +1259,30 @@ def _require_pinned_revision(value: str, *, label: str) -> None:
 
 
 def _normalize_endpoint(endpoint: str) -> str:
-    parsed = urlsplit(endpoint.strip())
+    stripped = endpoint.strip()
+    parsed = urlsplit(stripped)
+    try:
+        _ = parsed.port
+    except ValueError as error:
+        raise ValueError(
+            "endpoint 必须是有效的 HTTP origin 根 URL。"
+        ) from error
+    origin = f"{parsed.scheme}://{parsed.netloc}"
     if (
         parsed.scheme not in {"http", "https"}
         or parsed.hostname is None
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
+        or stripped.rstrip("/") != origin
     ):
         raise ValueError(
-            "endpoint 必须是不含凭据、query 或 fragment 的 HTTP URL。"
+            "endpoint 必须是不含凭据、path、query 或 fragment 的 "
+            "HTTP origin 根 URL。"
         )
-    return endpoint.strip().rstrip("/")
+    return origin
 
 
 def _arguments() -> argparse.Namespace:

@@ -58,7 +58,24 @@ def _common_response(
 ) -> httpx.Response | None:
     assert request.headers["authorization"] == f"Bearer {_TOKEN}"
     if request.url.path == "/health":
+        if model == _MODELS["reranker"]:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "ok",
+                    "model_path": f"/models/{model}",
+                    "device": "cuda:0",
+                },
+            )
         return httpx.Response(200, json={"status": "ok"})
+    if request.url.path == "/info":
+        return httpx.Response(
+            200,
+            json=_tei_info_payload(
+                model_id=f"/models/{model}",
+                served_model_name=model,
+            ),
+        )
     if request.url.path == "/v1/models":
         return httpx.Response(
             200,
@@ -114,8 +131,17 @@ def _llm_response(
 
 
 @pytest.mark.parametrize("service", ["embedding", "reranker", "llm"])
-def test_model_contract_success_is_sanitized(service: str) -> None:
+def test_model_contract_success_is_sanitized(
+    tmp_path: Path,
+    service: str,
+) -> None:
     request_bodies: list[str] = []
+    if service == "embedding":
+        options = _embedding_options_with_v2_manifest(tmp_path)
+    elif service == "reranker":
+        options = _reranker_options_with_v2_manifest(tmp_path)
+    else:
+        options = _options(service)
 
     def handler(request: httpx.Request) -> httpx.Response:
         common = _common_response(request, model=_MODELS[service])
@@ -151,7 +177,7 @@ def test_model_contract_success_is_sanitized(service: str) -> None:
         return _llm_response(request)
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        report = verify_model_contract(_options(service), client=client)
+        report = verify_model_contract(options, client=client)
 
     assert report["status"] == "passed"
     assert report["service"] == service
@@ -192,7 +218,7 @@ def test_model_contract_success_is_sanitized(service: str) -> None:
     assert "synthetic evidence is insufficient" not in serialized
 
 
-def test_model_contract_rejects_wrong_model() -> None:
+def test_model_contract_rejects_wrong_model(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         common = _common_response(request, model="wrong-model")
         assert common is not None
@@ -202,7 +228,10 @@ def test_model_contract_rejects_wrong_model() -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ContractError, match="MODEL_MISMATCH") as raised,
     ):
-        verify_model_contract(_options("embedding"), client=client)
+        verify_model_contract(
+            _embedding_options_with_v2_manifest(tmp_path),
+            client=client,
+        )
 
     assert raised.value.code == "MODEL_MISMATCH"
 
@@ -234,6 +263,7 @@ def test_model_contract_rejects_wrong_llm_schema() -> None:
     ],
 )
 def test_model_contract_rejects_bad_embedding(
+    tmp_path: Path,
     vector: list[float],
     expected_code: str,
 ) -> None:
@@ -258,7 +288,10 @@ def test_model_contract_rejects_bad_embedding(
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ContractError, match=expected_code) as raised,
     ):
-        verify_model_contract(_options("embedding"), client=client)
+        verify_model_contract(
+            _embedding_options_with_v2_manifest(tmp_path),
+            client=client,
+        )
 
     assert raised.value.code == expected_code
 
@@ -274,6 +307,7 @@ def test_model_contract_rejects_bad_embedding(
     ],
 )
 def test_model_contract_rejects_bad_reranker_results(
+    tmp_path: Path,
     results: list[dict[str, object]],
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
@@ -286,7 +320,10 @@ def test_model_contract_rejects_bad_reranker_results(
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ContractError) as raised,
     ):
-        verify_model_contract(_options("reranker"), client=client)
+        verify_model_contract(
+            _reranker_options_with_v2_manifest(tmp_path),
+            client=client,
+        )
 
     assert raised.value.code in {
         "RERANK_INDEX_MISMATCH",
@@ -326,25 +363,28 @@ def test_model_contract_reports_endpoint_failure_without_response() -> None:
     assert _TOKEN not in str(raised.value)
 
 
-def test_model_contract_allows_endpoint_without_token() -> None:
-    options = replace(_options("embedding"), token=None)
+def test_model_contract_rejects_non_origin_endpoint_before_request() -> None:
+    with pytest.raises(ValueError, match="origin 根 URL"):
+        replace(
+            _options("embedding"),
+            endpoint="http://model.internal:8000/v1",
+        )
+
+
+def test_model_contract_allows_endpoint_without_token(
+    tmp_path: Path,
+) -> None:
+    options = replace(
+        _embedding_options_with_v2_manifest(tmp_path),
+        token=None,
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "authorization" not in request.headers
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        if request.url.path == "/v1/models":
-            return httpx.Response(
-                200,
-                json={
-                    "data": [
-                        {
-                            "id": _MODELS["embedding"],
-                            "revision": _REVISION,
-                        }
-                    ]
-                },
-            )
+            return httpx.Response(200)
+        if request.url.path == "/info":
+            return httpx.Response(200, json=_tei_info_payload())
         return httpx.Response(
             200,
             json={
@@ -372,28 +412,19 @@ def test_model_contract_rejects_endpoint_revision_drift() -> None:
                 json={
                     "data": [
                         {
-                            "id": _MODELS["embedding"],
+                            "id": _MODELS["llm"],
                             "revision": "unexpected-revision",
                         }
                     ]
                 },
             )
-        return httpx.Response(
-            200,
-            json={
-                "model": _MODELS["embedding"],
-                "data": [
-                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
-                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
-                ],
-            },
-        )
+        return _llm_response(request)
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ContractError, match="REVISION_MISMATCH"),
     ):
-        verify_model_contract(_options("embedding"), client=client)
+        verify_model_contract(_options("llm"), client=client)
 
 
 def test_llm_contract_uses_maximum_initial_and_repair_requests() -> None:
@@ -441,6 +472,19 @@ def _write_manifest(
         "max_context_tokens": 8192,
         "chat_template_sha256": "sha256:" + "3" * 64,
     }
+    _write_sealed_manifest(
+        path,
+        payload,
+        digest_matches=digest_matches,
+    )
+
+
+def _write_sealed_manifest(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    digest_matches: bool = True,
+) -> None:
     canonical = json.dumps(
         payload,
         ensure_ascii=False,
@@ -458,11 +502,299 @@ def _write_manifest(
     path.chmod(0o444)
 
 
+def _manifest_v2_payload(
+    service: str,
+    *,
+    runtime_revision: str = "4" * 40,
+) -> dict[str, object]:
+    service_contracts: dict[str, dict[str, object]] = {
+        "embedding": {"dimension": 3},
+        "reranker": {"score_max": 1.0, "score_min": 0.0},
+        "llm": {
+            "chat_template_sha256": "sha256:" + "3" * 64,
+            "max_context_tokens": 8192,
+            "quantization": "awq",
+        },
+    }
+    runtime_names = {
+        "embedding": "text-embeddings-inference",
+        "reranker": "covlink-rerank-api",
+        "llm": "vllm",
+    }
+    return {
+        "schema_version": "2",
+        "service": service,
+        "endpoint": "http://model.internal:8000",
+        "model": _MODELS[service],
+        "model_revision": _REVISION,
+        "tokenizer_revision": "sha256:" + "1" * 64,
+        "runtime": {
+            "name": runtime_names[service],
+            "revision": runtime_revision,
+            "version": "1.9.1",
+        },
+        "service_contract": service_contracts[service],
+    }
+
+
+def _manifest_endpoint_response(
+    request: httpx.Request,
+    *,
+    service: str,
+) -> httpx.Response:
+    assert request.headers["authorization"] == f"Bearer {_TOKEN}"
+    if request.url.path in {"/health", "/info"}:
+        if request.url.path == "/info":
+            payload: object = _tei_info_payload()
+        elif service == "reranker":
+            payload = {
+                "status": "ok",
+                "model_path": f"/models/{_MODELS[service]}",
+                "device": "cuda:0",
+            }
+        else:
+            payload = {"status": "ok"}
+        return httpx.Response(200, json=payload)
+    if request.url.path == "/v1/models":
+        return httpx.Response(
+            200,
+            json={"data": [{"id": _MODELS[service]}]},
+        )
+    if request.url.path == "/v1/embeddings":
+        return httpx.Response(
+            200,
+            json={
+                "model": _MODELS["embedding"],
+                "data": [
+                    {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                    {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                ],
+            },
+        )
+    if request.url.path == "/rerank":
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 0, "score": 0.8},
+                    {"index": 1, "score": 0.2},
+                ]
+            },
+        )
+    return _llm_response(request)
+
+
+@pytest.mark.parametrize("service", ["embedding", "reranker", "llm"])
+def test_service_specific_v2_manifest_supplies_missing_revision(
+    tmp_path: Path,
+    service: str,
+) -> None:
+    manifest_path = tmp_path / f"{service}-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload(service),
+    )
+    options = replace(
+        _options(service),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service=service)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert report["status"] == "passed"
+    assert report["revision_source"] == "deployment_manifest"
+    assert report["deployment_manifest_sha256"].startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    "runtime_revision",
+    ["5" * 40, "sha256:" + "6" * 64, "1.9.1"],
+)
+def test_v2_manifest_accepts_supported_runtime_revisions(
+    tmp_path: Path,
+    runtime_revision: str,
+) -> None:
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload(
+            "embedding",
+            runtime_revision=runtime_revision,
+        ),
+    )
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service="embedding")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert report["status"] == "passed"
+
+
+@pytest.mark.parametrize("service", ["embedding", "reranker", "llm"])
+@pytest.mark.parametrize("location", ["top", "runtime", "contract"])
+def test_v2_manifest_rejects_extra_fields(
+    tmp_path: Path,
+    service: str,
+    location: str,
+) -> None:
+    payload = _manifest_v2_payload(service)
+    if location == "top":
+        payload["unexpected"] = "forbidden"
+    else:
+        field = "runtime" if location == "runtime" else "service_contract"
+        nested = payload[field]
+        assert isinstance(nested, dict)
+        nested["unexpected"] = "forbidden"
+    manifest_path = tmp_path / f"{service}-deployment-manifest.json"
+    _write_sealed_manifest(manifest_path, payload)
+    options = replace(
+        _options(service),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service=service)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+def test_v2_manifest_rejects_bad_canonical_digest(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload("embedding"),
+        digest_matches=False,
+    )
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service="embedding")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+def test_v2_manifest_rejects_symlink(tmp_path: Path) -> None:
+    real_manifest = tmp_path / "real-manifest.json"
+    _write_sealed_manifest(
+        real_manifest,
+        _manifest_v2_payload("embedding"),
+    )
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    manifest_path.symlink_to(real_manifest)
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service="embedding")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+@pytest.mark.parametrize("runtime_revision", ["main", "latest", "branch"])
+def test_v2_manifest_rejects_unpinned_runtime_revision(
+    tmp_path: Path,
+    runtime_revision: str,
+) -> None:
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload(
+            "embedding",
+            runtime_revision=runtime_revision,
+        ),
+    )
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service="embedding")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
+@pytest.mark.parametrize(
+    "revision_field",
+    ["model_revision", "tokenizer_revision"],
+)
+def test_v2_manifest_rejects_unpinned_common_revision(
+    tmp_path: Path,
+    revision_field: str,
+) -> None:
+    payload = _manifest_v2_payload("embedding")
+    payload[revision_field] = "main"
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_sealed_manifest(manifest_path, payload)
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _manifest_endpoint_response(request, service="embedding")
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ),
+    ):
+        verify_model_contract(options, client=client)
+
+
 def test_model_contract_uses_verified_manifest_when_revision_missing(
     tmp_path: Path,
 ) -> None:
     manifest_path = tmp_path / "deployment-model-manifest.json"
-    _write_manifest(manifest_path, service="embedding")
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload("embedding"),
+    )
     options = replace(
         _options("embedding"),
         deployment_manifest=manifest_path,
@@ -470,12 +802,9 @@ def test_model_contract_uses_verified_manifest_when_revision_missing(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        if request.url.path == "/v1/models":
-            return httpx.Response(
-                200,
-                json={"data": [{"id": _MODELS["embedding"]}]},
-            )
+            return httpx.Response(200)
+        if request.url.path == "/info":
+            return httpx.Response(200, json=_tei_info_payload())
         return httpx.Response(
             200,
             json={
@@ -499,9 +828,9 @@ def test_model_contract_rejects_bad_manifest_digest(
     tmp_path: Path,
 ) -> None:
     manifest_path = tmp_path / "deployment-model-manifest.json"
-    _write_manifest(
+    _write_sealed_manifest(
         manifest_path,
-        service="embedding",
+        _manifest_v2_payload("embedding"),
         digest_matches=False,
     )
     options = replace(
@@ -511,11 +840,8 @@ def test_model_contract_rejects_bad_manifest_digest(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        return httpx.Response(
-            200,
-            json={"data": [{"id": _MODELS["embedding"]}]},
-        )
+            return httpx.Response(200)
+        return httpx.Response(200, json=_tei_info_payload())
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
@@ -531,7 +857,10 @@ def test_model_contract_rejects_writable_manifest(
     tmp_path: Path,
 ) -> None:
     manifest_path = tmp_path / "deployment-model-manifest.json"
-    _write_manifest(manifest_path, service="embedding")
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload("embedding"),
+    )
     manifest_path.chmod(0o644)
     options = replace(
         _options("embedding"),
@@ -540,11 +869,8 @@ def test_model_contract_rejects_writable_manifest(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/health":
-            return httpx.Response(200, json={"status": "ok"})
-        return httpx.Response(
-            200,
-            json={"data": [{"id": _MODELS["embedding"]}]},
-        )
+            return httpx.Response(200)
+        return httpx.Response(200, json=_tei_info_payload())
 
     with (
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
@@ -569,7 +895,7 @@ def test_model_contract_rejects_conflicting_endpoint_revisions() -> None:
             json={
                 "data": [
                     {
-                        "id": _MODELS["embedding"],
+                        "id": _MODELS["llm"],
                         "revision": _REVISION,
                     }
                 ]
@@ -580,7 +906,7 @@ def test_model_contract_rejects_conflicting_endpoint_revisions() -> None:
         httpx.Client(transport=httpx.MockTransport(handler)) as client,
         pytest.raises(ContractError, match="REVISION_MISMATCH"),
     ):
-        verify_model_contract(_options("embedding"), client=client)
+        verify_model_contract(_options("llm"), client=client)
 
 
 def test_model_contract_rejects_llm_context_overflow() -> None:
@@ -620,3 +946,295 @@ def test_model_contract_rejects_unpinned_expected_revision(
 ) -> None:
     with pytest.raises(ValueError, match="expected_revision"):
         replace(_options("embedding"), expected_revision=revision)
+
+
+def _reranker_options_with_v2_manifest(
+    tmp_path: Path,
+) -> ModelContractOptions:
+    manifest_path = tmp_path / "reranker-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload("reranker"),
+    )
+    return replace(
+        _options("reranker"),
+        deployment_manifest=manifest_path,
+    )
+
+
+def _reranker_health_payload(
+    *,
+    model_path: str = "/models/Qwen3-Reranker-0.6B",
+    device: str = "cuda:0",
+    status: str = "ok",
+) -> dict[str, str]:
+    return {
+        "status": status,
+        "model_path": model_path,
+        "device": device,
+    }
+
+
+def test_reranker_contract_skips_v1_models_and_uses_v2_manifest(
+    tmp_path: Path,
+) -> None:
+    options = _reranker_options_with_v2_manifest(tmp_path)
+    request_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_paths.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200, json=_reranker_health_payload())
+        if request.url.path == "/rerank":
+            assert json.loads(request.content) == {
+                "query": "contract probe",
+                "texts": ["candidate alpha", "candidate beta"],
+                "truncate": False,
+            }
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {"index": 0, "score": 0.8},
+                        {"index": 1, "score": 0.2},
+                    ]
+                },
+            )
+        pytest.fail(f"reranker 不应请求 {request.url.path}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert request_paths == ["/health", "/rerank"]
+    assert report["revision_source"] == "deployment_manifest"
+    assert report["deployment_manifest_sha256"].startswith("sha256:")
+    serialized = json.dumps(report, ensure_ascii=False)
+    assert "/models/Qwen3-Reranker-0.6B" not in serialized
+    assert "cuda:0" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("health_payload", "expected_code"),
+    [
+        (
+            _reranker_health_payload(
+                model_path="/models/wrong-reranker",
+            ),
+            "MODEL_MISMATCH",
+        ),
+        (
+            _reranker_health_payload(device="cpu"),
+            "RERANK_DEVICE_INVALID",
+        ),
+        (
+            _reranker_health_payload(status="unavailable"),
+            "HEALTH_INVALID",
+        ),
+    ],
+)
+def test_reranker_contract_rejects_invalid_health_identity(
+    tmp_path: Path,
+    health_payload: dict[str, str],
+    expected_code: str,
+) -> None:
+    options = _reranker_options_with_v2_manifest(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(200, json=health_payload)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match=expected_code) as raised,
+    ):
+        verify_model_contract(options, client=client)
+
+    assert raised.value.code == expected_code
+    assert health_payload["model_path"] not in str(raised.value)
+    assert health_payload["device"] not in str(raised.value)
+
+
+def test_reranker_contract_rejects_missing_deployment_manifest() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(200, json=_reranker_health_payload())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match="REVISION_MISSING") as raised,
+    ):
+        verify_model_contract(_options("reranker"), client=client)
+
+    assert raised.value.code == "REVISION_MISSING"
+
+
+def test_reranker_contract_rejects_schema_v1_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "reranker-deployment-manifest.json"
+    _write_manifest(manifest_path, service="reranker")
+    options = replace(
+        _options("reranker"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/health"
+        return httpx.Response(200, json=_reranker_health_payload())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ) as raised,
+    ):
+        verify_model_contract(options, client=client)
+
+    assert raised.value.code == "DEPLOYMENT_MANIFEST_INVALID"
+
+
+def _embedding_options_with_v2_manifest(
+    tmp_path: Path,
+) -> ModelContractOptions:
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_sealed_manifest(
+        manifest_path,
+        _manifest_v2_payload("embedding"),
+    )
+    return replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+
+def _tei_info_payload(
+    *,
+    model_id: str = "/models/Qwen3-Embedding-0.6B",
+    served_model_name: str = "Qwen3-Embedding-0.6B",
+) -> dict[str, object]:
+    return {
+        "model_id": model_id,
+        "model_sha": None,
+        "model_dtype": "float16",
+        "served_model_name": served_model_name,
+        "model_type": {"embedding": {"pooling": "lasttoken"}},
+        "max_concurrent_requests": 512,
+        "max_input_length": 32768,
+        "max_batch_tokens": 16384,
+        "max_batch_requests": None,
+        "max_client_batch_size": 32,
+        "auto_truncate": False,
+        "tokenization_workers": 8,
+        "version": "1.9.3",
+        "sha": "06670157fb6c1523482219bdb2d1660277d38088",
+        "docker_label": None,
+    }
+
+
+def test_embedding_contract_skips_v1_models_and_uses_tei_info(
+    tmp_path: Path,
+) -> None:
+    options = _embedding_options_with_v2_manifest(tmp_path)
+    request_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_paths.append(request.url.path)
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        if request.url.path == "/info":
+            return httpx.Response(200, json=_tei_info_payload())
+        if request.url.path == "/v1/embeddings":
+            return httpx.Response(
+                200,
+                json={
+                    "model": _MODELS["embedding"],
+                    "data": [
+                        {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                        {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+                    ],
+                },
+            )
+        pytest.fail(f"embedding 不应请求 {request.url.path}")
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        report = verify_model_contract(options, client=client)
+
+    assert request_paths == ["/health", "/info", "/v1/embeddings"]
+    assert report["revision_source"] == "deployment_manifest"
+    assert report["deployment_manifest_sha256"].startswith("sha256:")
+    serialized = json.dumps(report, ensure_ascii=False)
+    assert "/models/Qwen3-Embedding-0.6B" not in serialized
+    assert "06670157fb6c1523482219bdb2d1660277d38088" not in serialized
+
+
+@pytest.mark.parametrize(
+    "info_payload",
+    [
+        _tei_info_payload(served_model_name="wrong-embedding"),
+        _tei_info_payload(model_id="/models/wrong-embedding"),
+    ],
+)
+def test_embedding_contract_rejects_wrong_tei_model_identity(
+    tmp_path: Path,
+    info_payload: dict[str, object],
+) -> None:
+    options = _embedding_options_with_v2_manifest(tmp_path)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        assert request.url.path == "/info"
+        return httpx.Response(200, json=info_payload)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match="MODEL_MISMATCH") as raised,
+    ):
+        verify_model_contract(options, client=client)
+
+    assert raised.value.code == "MODEL_MISMATCH"
+
+
+def test_embedding_contract_rejects_missing_deployment_manifest() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        assert request.url.path == "/info"
+        return httpx.Response(200, json=_tei_info_payload())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(ContractError, match="REVISION_MISSING") as raised,
+    ):
+        verify_model_contract(_options("embedding"), client=client)
+
+    assert raised.value.code == "REVISION_MISSING"
+
+
+def test_embedding_contract_rejects_schema_v1_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "embedding-deployment-manifest.json"
+    _write_manifest(manifest_path, service="embedding")
+    options = replace(
+        _options("embedding"),
+        deployment_manifest=manifest_path,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/health":
+            return httpx.Response(200)
+        assert request.url.path == "/info"
+        return httpx.Response(200, json=_tei_info_payload())
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handler)) as client,
+        pytest.raises(
+            ContractError,
+            match="DEPLOYMENT_MANIFEST_INVALID",
+        ) as raised,
+    ):
+        verify_model_contract(options, client=client)
+
+    assert raised.value.code == "DEPLOYMENT_MANIFEST_INVALID"

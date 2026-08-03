@@ -99,6 +99,7 @@ optional_env_value() {
 
 validate_model_endpoint_array() {
   local raw_value="$1"
+  local expected_count="$2"
   local error_category
   if error_category="$(
     printf '%s' "${raw_value}" | python3 -c '
@@ -116,6 +117,10 @@ try:
     endpoints = json.load(sys.stdin)
 except (UnicodeDecodeError, json.JSONDecodeError):
     reject("MODEL_ENDPOINTS_INVALID_JSON")
+try:
+    expected_count = int(sys.argv[1])
+except (IndexError, ValueError):
+    reject("MODEL_ENDPOINT_EXPECTED_COUNT_INVALID")
 if not isinstance(endpoints, list):
     reject("MODEL_ENDPOINTS_NOT_ARRAY")
 if not endpoints:
@@ -153,13 +158,17 @@ for endpoint in endpoints:
         reject("MODEL_ENDPOINT_URL_INVALID")
     if parsed.username is not None or parsed.password is not None:
         reject("MODEL_ENDPOINT_CREDENTIALS_FORBIDDEN")
+    if parsed.path not in {"", "/"}:
+        reject("MODEL_ENDPOINT_PATH_FORBIDDEN")
     normalized_hostname = hostname.rstrip(".").casefold()
     if (
         normalized_hostname == "invalid"
         or normalized_hostname.endswith(".invalid")
     ):
         reject("MODEL_ENDPOINT_HOST_FORBIDDEN")
-' 2>/dev/null
+if len(endpoints) != expected_count:
+    reject("MODEL_ENDPOINT_COUNT_MISMATCH")
+' "${expected_count}" 2>/dev/null
   )"; then
     return 0
   fi
@@ -493,9 +502,9 @@ if ! llm_endpoints="$(
 )"; then
   fail "MODEL_ENDPOINTS_ENV_INVALID"
 fi
-validate_model_endpoint_array "${embedding_endpoints}"
-validate_model_endpoint_array "${reranker_endpoints}"
-validate_model_endpoint_array "${llm_endpoints}"
+validate_model_endpoint_array "${embedding_endpoints}" 1
+validate_model_endpoint_array "${reranker_endpoints}" 1
+validate_model_endpoint_array "${llm_endpoints}" 4
 candidate_revision="$(exact_env_value \
   "${candidate_env}" RAG_RELEASE_REVISION)"
 if [[ "${candidate_revision}" != "${source_revision}" ]]; then
