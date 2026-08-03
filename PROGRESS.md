@@ -4158,3 +4158,24 @@
   `Status=exited`、restart policy=`no`；未删除该容器或其测试数据。停止命令
   使用仍兼容但已弃用的 `--time` 参数并输出改用 `--timeout` 的提示，退出码仍为
   0。除正式 smoke 镜像/双包外，没有遗留额外运行容器。
+
+## 2026-08-03 fresh smoke 操作契约任务 0：事实基线
+
+- [x] 中断后已先读取 `PROGRESS.md`、`BLOCKED.md`。当前 HEAD 为
+  `c6fdc2165f86aba5606e6f52605b50c792c03865`，`main` 与 `origin/main`
+  同步，起始工作树和暂存区均为空；上一轮审计文件已由外部提交为
+  `c6fdc21 docs: 更新 smoke release 审计状态`。
+- [x] Python 为 `3.11.15`，工程 `requires-python >=3.11,<3.12`，Ruff 与
+  mypy 均固定 Python 3.11；本轮 Python 改动继续遵循中文 Google docstring、
+  完整类型和窄职责。
+- [x] 保护基线：`src` Git tree 为
+  `ee0f05932e6b2ad57a14d894c938157b6c44f3d6`，Compose blob 为
+  `0c6bf436197f95cd0f6a2a8a6de9f3d31b82ebc3`。pipeline/retrieval/corpus
+  policy SHA256 分别为 `87734d37...d54bbf`、`7f3d2775...e2c1bd5`、
+  `0d6553c1...07ab0`。
+- [x] 模型/资源清单本体 SHA256：应用 `deployment/ASSETS.sha256` 为
+  `140f4254...a0bb6`；OCR assets manifest 为 `5d312b6d...c97f7`，OCR
+  MODELS/WHEELS 分别为 `18be60dc...b9880` / `35e47a59...32d1`。
+- [x] 本目标只修改明确白名单内的 smoke 操作契约和对应测试；不修改 RAG、
+  Parser、chunking、检索、Prompt、索引、模型参数、生产源码、Compose、三份
+  配置或模型资产。未 build/package、未联网、未访问服务器、未 commit/push。
