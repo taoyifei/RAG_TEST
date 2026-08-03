@@ -22,6 +22,7 @@ _MIN_FREE_BYTES = 80 * 1024**3
 _REPORT_NAME = "release-smoke-report.json"
 _ARCHIVE_FIELD_COUNT = 6
 _IMAGE_COUNT = 3
+_RELEASE_FILE_COUNT = 7
 
 
 class SmokeError(RuntimeError):
@@ -402,6 +403,8 @@ def _fresh_verify(context: SmokeContext) -> None:
         for path in sorted(release.iterdir())
         if path.is_file()
     ]
+    if len(context.files) != _RELEASE_FILE_COUNT:
+        raise RuntimeError("release file count mismatch")
 
 
 def _write_report(context: SmokeContext, report: dict[str, object]) -> None:
@@ -419,6 +422,7 @@ def _write_report(context: SmokeContext, report: dict[str, object]) -> None:
             "release_tier": "smoke",
             "sbom_available": context.sbom_available,
             "schema_version": "1",
+            "source_revision": context.head or None,
         }
     )
     context.report_path.parent.mkdir(parents=True, exist_ok=True)

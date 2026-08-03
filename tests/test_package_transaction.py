@@ -52,6 +52,7 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     for relative in (
         "deployment/package.sh",
         "deployment/acceptance.sh",
+        "deployment/bootstrap.sh",
         "deployment/install.sh",
         "deployment/qdrant-policy.sh",
         "deployment/server-preflight.sh",
@@ -591,6 +592,8 @@ def _assert_model_runtime_scripts(
         script.removeprefix("runtime/") in runtime_manifest
         for script in scripts
     )
+    assert "runtime/bootstrap.sh" in runtime_names
+    assert "bootstrap.sh" in runtime_manifest
 
 
 def test_success_publishes_only_complete_verified_release(
@@ -776,6 +779,33 @@ def test_runtime_verifier_rejects_rehashed_missing_manifest_tool(
 
     assert rejected.returncode != 0
     assert relative_path in rejected.stderr
+
+
+def test_runtime_verifier_rejects_rehashed_missing_bootstrap(
+    tmp_path: Path,
+) -> None:
+    """证明离线校验器独立要求 bootstrap 存在。"""
+    sandbox = _prepare_sandbox(tmp_path)
+    completed = _run_package(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "extracted-bootstrap")
+    bootstrap = runtime / "bootstrap.sh"
+    bootstrap.unlink()
+    manifest_path = runtime / "MANIFEST.sha256"
+    retained_rows = [
+        row
+        for row in manifest_path.read_text(encoding="utf-8").splitlines()
+        if not row.endswith("  ./bootstrap.sh")
+    ]
+    manifest_path.write_text(
+        "\n".join(retained_rows) + "\n",
+        encoding="utf-8",
+    )
+
+    rejected = _run_runtime_verifier(runtime)
+
+    assert rejected.returncode != 0
+    assert "bootstrap.sh" in rejected.stderr
 
 
 def test_runtime_verifier_rejects_rehashed_qdrant_provenance_tamper(

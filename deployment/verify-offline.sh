@@ -50,6 +50,7 @@ required_common_files=(
   "scripts/docker_archive_loaded_identity.py"
   "scripts/docker_archive_reader.py"
   "backup.sh"
+  "bootstrap.sh"
   "install.sh"
 )
 for path in "${required_common_files[@]}"; do
@@ -58,6 +59,11 @@ for path in "${required_common_files[@]}"; do
     exit 1
   fi
 done
+
+if [[ ! -x bootstrap.sh ]]; then
+  echo "runtime bootstrap.sh 不可执行。" >&2
+  exit 1
+fi
 
 if ! release_tier="$(python3 - \
   "${release_dir}/RELEASE_METADATA.json" \

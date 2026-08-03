@@ -244,6 +244,8 @@ cp "${repo_root}/deployment/.env.example" "${runtime_root}/.env.example"
 cp "${repo_root}/deployment/deploy.sh" "${runtime_root}/deploy.sh"
 cp "${repo_root}/deployment/rollback.sh" "${runtime_root}/rollback.sh"
 cp "${repo_root}/deployment/backup.sh" "${runtime_root}/backup.sh"
+cp "${repo_root}/deployment/bootstrap.sh" "${runtime_root}/bootstrap.sh"
+chmod 0700 "${runtime_root}/bootstrap.sh"
 cp "${repo_root}/deployment/install.sh" "${runtime_root}/install.sh"
 cp "${repo_root}/deployment/server-preflight.sh" \
   "${runtime_root}/server-preflight.sh"

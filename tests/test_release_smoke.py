@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from scripts.release_smoke import SmokeError, Stage, execute_stages
+from scripts.release_smoke import (
+    SmokeContext,
+    SmokeError,
+    Stage,
+    _write_report,
+    execute_stages,
+)
 
 
 def test_execute_stages_stops_on_first_stable_error() -> None:
@@ -70,3 +77,36 @@ def test_release_smoke_is_shallow_and_offline() -> None:
         assert marker in source
     for forbidden in ("ssh ", "scp ", "docker push", ".57", ".58", ".60"):
         assert forbidden not in source
+
+
+def test_release_smoke_report_has_complete_identity_and_file_summary(
+    tmp_path: Path,
+) -> None:
+    """锁定报告身份字段和恰好七项交付文件摘要。"""
+    report_path = tmp_path / "release-smoke-report.json"
+    context = SmokeContext(
+        root=tmp_path,
+        report_path=report_path,
+        head="a" * 40,
+        release_id="release-1",
+        corpus_id="corpus-1",
+        release_dir=tmp_path / "release",
+        files=[
+            {
+                "name": f"delivery-{index}",
+                "sha256": f"{index:064x}",
+                "size_bytes": index,
+            }
+            for index in range(7)
+        ],
+    )
+
+    _write_report(context, {"stages": [], "status": "passed"})
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["head"] == "a" * 40
+    assert report["source_revision"] == report["head"]
+    assert report["release_id"] == "release-1"
+    assert report["corpus_id"] == "corpus-1"
+    assert report["release_dir"] == str(tmp_path / "release")
+    assert len(report["files"]) == 7

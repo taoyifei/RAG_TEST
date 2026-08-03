@@ -41,6 +41,8 @@ df -hT .
 
 一条命令完成固定资产检查、runtime wheel 准备、两个 `--network none` 镜像
 构建、两个断网自检、corpus manifest、smoke 双包及全新目录复验：
+这些证据只证明 RUN/selfcheck 网络隔离；BuildKit registry 元数据行为另计，且
+不代表 frontend 完全断网。
 
 ```bash
 .venv/bin/python scripts/release_smoke.py
@@ -50,21 +52,27 @@ df -hT .
 
 ```bash
 report=artifacts/release-smoke-report.json
-release_dir="$(${PWD}/.venv/bin/python -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["release_dir"])' \
-  "${report}")"
-release_id="$(${PWD}/.venv/bin/python -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["release_id"])' \
-  "${report}")"
-source_revision="$(${PWD}/.venv/bin/python -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["source_revision"])' \
-  "${report}")"
-corpus_id="$(${PWD}/.venv/bin/python -c \
-  'import json,sys; print(json.load(open(sys.argv[1]))["corpus_id"])' \
-  "${report}")"
+eval "$(
+  "${PWD}/.venv/bin/python" - "${report}" <<'PY'
+# quickstart-report-reader-begin
+import json
+import shlex
+import sys
+from pathlib import Path
+
+required = ("release_dir", "release_id", "source_revision", "corpus_id")
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+missing = [name for name in required if not report.get(name)]
+if missing:
+    raise SystemExit("missing report fields: " + ",".join(missing))
+identity = {"release_id": report["release_id"], "source_revision": report["source_revision"]}
+for name in required:
+    value = identity.get(name, report[name])
+    print(f"{name}={shlex.quote(str(value))}")
+# quickstart-report-reader-end
+PY
+)"
 (cd "${release_dir}" && sha256sum -c RELEASE_MANIFEST.sha256)
-test "$(cat "${release_dir}/RELEASE_ID")" = "${release_id}"
-test "$(cat "${release_dir}/SOURCE_REVISION")" = "${source_revision}"
 ```
 
 `SOURCE_REVISION` 是完整 40 位 Git revision，`RELEASE_ID` 是本次唯一发布 ID。
@@ -78,7 +86,7 @@ test "$(cat "${release_dir}/SOURCE_REVISION")" = "${source_revision}"
 ```bash
 RAG_SERVER='<server-host>'
 delivery="/data/tyf/RAG/incoming/${release_id}-${corpus_id}"
-scp \
+rsync --partial --append-verify --protect-args \
   "${release_dir}/RELEASE_MANIFEST.sha256" \
   "${release_dir}/offline_bundle.py" \
   "${release_dir}/offline_bundle.py.sha256" \
@@ -88,6 +96,9 @@ scp \
   "${release_dir}/rag-corpus-${corpus_id}.tar.gz.sha256" \
   "${RAG_SERVER}:${delivery}/"
 ```
+
+13GB runtime 推荐用上述参数断点续传；传输工具不是完整性依据。
+SHA256 仍是完整性交付的唯一权威，服务器必须重新执行 `sha256sum -c`。
 
 ## 3. 服务器校验、解包与 server-preflight.sh
 
@@ -109,8 +120,11 @@ python3 offline_bundle.py \
   extracted-corpus --top-level corpus
 runtime_dir="$(pwd -P)/extracted-runtime/runtime"
 corpus_dir="$(pwd -P)/extracted-corpus/corpus"
+test "$(cat "${runtime_dir}/RELEASE_ID")" = "${release_id}"
+test "$(cat "${runtime_dir}/SOURCE_REVISION")" = "${source_revision}"
 bash "${runtime_dir}/verify-offline.sh"
-bash "${runtime_dir}/server-preflight.sh"
+bash "${runtime_dir}/server-preflight.sh" "${runtime_dir}" - fresh
+bash "${runtime_dir}/bootstrap.sh" /data/tyf/RAG
 ```
 
 `server-preflight.sh` 只读检查 Docker/Compose、store 模式、NVIDIA runtime、
@@ -135,6 +149,8 @@ install -m 0600 "${release_dir}/.env.example" "${candidate}"
 endpoint 数组和令牌变量。禁止把 token 打到终端或日志。随后执行：
 
 ```bash
+bash "${runtime_dir}/server-preflight.sh" \
+  "${runtime_dir}" "${candidate}" fresh
 bash "${release_dir}/deploy.sh" "${candidate}"
 ```
 
@@ -168,7 +184,7 @@ docker ps --filter name=rag- --format '{{.Names}} {{.Status}}'
 test "$(curl -fsS -o /dev/null -w '%{http_code}' \
   http://127.0.0.1:8088/live)" = 200
 docker exec rag-app python -c \
-  "import urllib.request; assert urllib.request.urlopen('http://rag-qdrant:6333/readyz', timeout=2).status == 200"
+  "import os,urllib.request as u;r=u.Request('http://rag-qdrant:6333/readyz',headers={'api-key':os.environ['RAG_QDRANT_API_KEY']});assert u.urlopen(r,timeout=2).status==200"
 docker exec rag-app python -c \
   "import urllib.request; assert urllib.request.urlopen('http://rag-ocr:8090/ready', timeout=2).status == 200"
 docker exec rag-ocr python -c \
@@ -179,4 +195,5 @@ test -z "$(docker ps --filter name=rag-worker -q)"
 ```
 
 embedding、reranker 和四个 LLM 未全部通过前不得声称 production ready。
-完整备份、生产验收和清理步骤见上述完整参考。
+只在上述 smoke 成功后才清理本次 incoming/extracted；保留 active 与 rollback release。
+完整备份、生产验收和其他清理边界见上述完整参考。

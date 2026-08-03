@@ -8,16 +8,21 @@ from pathlib import Path
 
 import yaml
 
-_PIPELINE_SHA256 = (
-    "87734d37e2fab9d08585b84adf65a61751af1021b74f888195cc3c5f37d54bbf"
-)
-_RETRIEVAL_SHA256 = (
-    "267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3"
-)
-
 
 def _root() -> Path:
     return Path(__file__).parents[1]
+
+
+def _asset_digest(relative_path: str) -> str:
+    manifest = _root() / "deployment/ASSETS.sha256"
+    matches = []
+    for line in manifest.read_text(encoding="utf-8").splitlines():
+        digest, declared_path = line.split(maxsplit=1)
+        if declared_path == relative_path:
+            matches.append(digest)
+
+    assert len(matches) == 1
+    return matches[0]
 
 
 def _compose_services(*, profile: str | None = None) -> set[str]:
@@ -177,8 +182,16 @@ def test_worker_keeps_strict_image_and_finite_restart_policy() -> None:
 
 def test_provisional_configuration_files_remain_unchanged() -> None:
     root = _root()
-    pipeline = (root / "deployment/config/pipeline.json").read_bytes()
-    retrieval = (root / "deployment/config/retrieval.json").read_bytes()
+    paths = (
+        "deployment/config/pipeline.json",
+        "deployment/config/retrieval.json",
+    )
+    for relative_path in paths:
+        content = (root / relative_path).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == _asset_digest(
+            relative_path
+        )
 
-    assert hashlib.sha256(pipeline).hexdigest() == _PIPELINE_SHA256
-    assert hashlib.sha256(retrieval).hexdigest() == _RETRIEVAL_SHA256
+    retrieval = json.loads((root / paths[1]).read_text(encoding="utf-8"))
+    assert retrieval["status"] == "provisional"
+    assert retrieval["freeze_decision_sha256"] is None
