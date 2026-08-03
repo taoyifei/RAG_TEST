@@ -1,0 +1,115 @@
+name: rag-model-services
+
+services:
+  rag-embedding:
+    image: ghcr.m.daocloud.io/huggingface/text-embeddings-inference:1.9
+    pull_policy: never
+    container_name: rag-embedding
+    restart: unless-stopped
+    init: true
+    command:
+      - --model-id
+      - /models/Qwen3-Embedding-0.6B
+      - --served-model-name
+      - Qwen3-Embedding-0.6B
+      - --pooling
+      - last-token
+      - --auto-truncate
+      - "false"
+      - --max-batch-tokens
+      - "32768"
+      - --max-batch-requests
+      - "8"
+      - --max-client-batch-size
+      - "8"
+      - --max-concurrent-requests
+      - "32"
+      - --hostname
+      - 0.0.0.0
+      - --port
+      - "80"
+    environment:
+      HF_HUB_OFFLINE: "1"
+      HUGGINGFACE_HUB_CACHE: /tmp/huggingface
+    volumes:
+      - >-
+        ${RAG_MODEL_ASSET_ROOT:?required}/models/Qwen3-Embedding-0.6B:/models/Qwen3-Embedding-0.6B:ro
+    ports:
+      - ${RAG_MODEL_BIND_ADDRESS:-0.0.0.0}:${RAG_EMBEDDING_PORT:-8091}:80
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - ${RAG_EMBEDDING_GPU_DEVICE_ID:?required}
+              capabilities:
+                - gpu
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://127.0.0.1:80/health
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 90s
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    shm_size: 1gb
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  rag-reranker:
+    image: covlink-rerank-api:server
+    pull_policy: never
+    container_name: rag-reranker
+    restart: unless-stopped
+    init: true
+    environment:
+      HF_HUB_OFFLINE: "1"
+      HF_HOME: /tmp/huggingface
+      TRANSFORMERS_OFFLINE: "1"
+      RERANK_MODEL_PATH: /models/Qwen3-Reranker-0.6B
+      RERANK_DEVICE: cuda:0
+      RERANK_PORT: "8001"
+    volumes:
+      - >-
+        ${RAG_MODEL_ASSET_ROOT:?required}/models/Qwen3-Reranker-0.6B:/models/Qwen3-Reranker-0.6B:ro
+    ports:
+      - ${RAG_MODEL_BIND_ADDRESS:-0.0.0.0}:${RAG_RERANKER_PORT:-8092}:8001
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - ${RAG_RERANKER_GPU_DEVICE_ID:?required}
+              capabilities:
+                - gpu
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 20
+      start_period: 90s
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+    shm_size: 1gb
+    pids_limit: 512
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
