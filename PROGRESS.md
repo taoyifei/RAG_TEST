@@ -4076,3 +4076,85 @@
   `127.0.0.1:6333` 返回 `502 Bad Gateway`，另 1 项为未修改的 provisional
   retrieval 文件 SHA 与既有冻结断言不一致。未 skip/xfail、未修改冻结哈希、
   未把专项绿测冒充全量全绿。
+
+## 2026-08-03 真实一键 smoke release 演练
+
+- [x] 中断恢复后的事实 HEAD 为
+  `d7d2546f51d912be0cb0025757922d770f05d833`；这是用户明确要求提交并推送后
+  形成的新基线，运行编排器前工作树干净。此后未再 commit/push。
+- [x] `.venv/bin/python scripts/release_smoke.py` 实际退出 0，总耗时
+  `900.8s`；报告 schema v1、tier=`smoke`、status=`passed`。十个阶段全部
+  passed：preflight 0.612s、assets 2.145s、runtime wheels 1.719s、app build
+  15.430s、OCR build 29.063s、app/OCR 断网自检 2.039s/0.389s、corpus
+  freeze 0.061s、package 707.387s、fresh verify 140.291s。
+- [x] app 镜像为
+  `docx-rag:d7d2546f51d9-smoke-20260803090131`，manifest/config 分别为
+  `sha256:6c53f8af...a86d189` / `sha256:f1088bc4...aa5b8de`；OCR 镜像为
+  `docx-rag-ocr:d7d2546f51d9-smoke-20260803090131`，manifest/config 分别为
+  `sha256:a403a53d...a09b973a` / `sha256:45ad8653...ba098c30`。两者均为
+  `linux/amd64` 且 OCI revision 精确等于当前完整 HEAD。
+- [x] 新 release 位于
+  `artifacts/releases/d7d2546f51d9-smoke-20260803090131-smoke-20260803090131`；
+  runtime/corpus 分别为 `13,338,317,899` / `21,953,456` bytes，SHA256 为
+  `0689e106...b097ddb5` / `1fe52bfa...6032e4c5`。七个交付文件及其 SHA/大小
+  已写入脱敏 `artifacts/release-smoke-report.json`。
+- [x] 编排器已在全新临时目录复核总 sidecar、runtime/corpus sidecar、安全
+  解包和 runtime `verify-offline.sh`，`fresh_verify=passed`。smoke 未被
+  provisional、freeze、acceptance、model-services 或 SBOM 生产负载阻塞。
+- [x] buildx 的 `RUN` 均使用 `--network none`，应用和 OCR 自检容器均使用
+  `--network none`。BuildKit 仍为固定 digest 基础镜像执行了 registry metadata/
+  auth 解析，但没有换版本或拉取缺失层；该事实不冒充“builder 完全无外网”。
+- [x] 本阶段未 SSH/SCP、未访问 `.57/.58/.60`、未部署服务器，也未启动生产
+  worker；GPU OCR 与真实模型/production 验收继续保持阻塞。
+- [x] 编排器之外又在固定全新目录独立复验：release 根目录恰好七个普通文件，
+  `RELEASE_MANIFEST.sha256` 6/6 条目全部 `OK`；runtime/corpus sidecar 安全解包
+  均退出 0，包内 `verify-offline.sh` 对 39 个 runtime 条目和三份 OCI 归档校验
+  通过。metadata 精确为 schema v1、smoke、provisional、当前完整 HEAD；
+  acceptance、model-services、SBOM 和完整 evaluation/load-test 负载均不存在，
+  `verify_model_contracts.py` 存在。
+- [x] 独立 corpus `MANIFEST.sha256` 对 `CORPUS_ID`、manifest 和 6/6 DOCX
+  全部 `OK`。两张已加载镜像再次直接 inspect 为 `linux/amd64`、revision 等于
+  `d7d2546f...5d833`；当前 containerd `.Id/Descriptor` 分别为 app
+  `sha256:86000b9c...59efd`、OCR `sha256:5f8b8f42...6dd98b`。
+- [x] 独立复验临时目录经 `realpath -e` 确认为
+  `/tmp/rag-smoke-audit-d7d2546-20260803`，大小 `13G`；验证结束后只删除该明确
+  `/tmp` 子目录并确认不存在。正式 release、报告和镜像均保留。
+
+## 2026-08-03 本地 Qdrant 与全量门禁恢复
+
+- [x] 全量首轮的 63 个 Qdrant 失败根因不是代码：本地专用容器
+  `rag-final-three-qdrant` 在 Docker Desktop 重启后为 `Exited (255)`，restart
+  policy=`no`，无挂载；6333 由 Desktop 代理返回 502。容器固定 API key 与测试
+  常量匹配，历史日志只含本仓库测试 collection。
+- [x] 仅启动该既有本地测试容器后，`http://127.0.0.1:6333/readyz` 返回
+  HTTP 200 `all shards are ready`。未新建容器、网络或卷。
+- [ ] 原 63 个 Qdrant 失败所在 12 个文件重跑为
+  `74 passed, 1 failed, 57 warnings in 416.88s`。唯一失败为已有
+  `test_target_verifier_rejects_corrupt_sqlite_state` 的 WAL/checkpoint 时序：同一
+  用例随后独立进程为 `1 passed in 5.39s`；本目标禁止修改索引事务，未改生产
+  verifier、未 skip/xfail 或放宽异常断言，等待全量轮验证其稳定性。
+- [ ] provisional retrieval SHA 失败已定位为仓库内部既有不一致：工作树与
+  HEAD 的 `retrieval.json` 均为 `7f3d2775...e2c1bd5`；提交 `7492835` 在测试
+  常量之后向该配置增加字段，但 `test_worker_deployment_policy.py` 仍冻结旧值
+  `267e419f...db41f3`。本目标禁止修改 retrieval/model 参数和放宽冻结断言，
+  因此不改配置或期望值；待最终全量结果决定是否作为 retrieval 定参阻塞保留。
+- [ ] 完整验收第 2 轮为
+  `1 failed, 805 passed, 61 warnings in 572.71s`，skipped=0；唯一失败精确为上述
+  provisional retrieval SHA 断言。63 个 Qdrant 失败、4 个本轮文档契约失败和
+  SQLite 损坏夹具在本轮均通过。全量通过数从首轮 738 增至 805，未用
+  skip/xfail、删测、改题或改阈值换绿。
+- [x] 最终静态门禁再次全部退出 0：compileall；Ruff；strict mypy
+  `Success: no issues found in 103 source files`；Google docstring
+  `missing_google_sections=0`；全部 deployment Shell；默认/index Compose；
+  `git diff --check`；应用资产 11/11。
+- [x] 完成条件专项复核：containerd/classic 加载身份、server-preflight
+  零副作用、release 编排器与 ≤200 行 Quickstart 合计
+  `11 passed in 0.09s`；smoke 不含生产负载、production 拒绝 provisional、
+  production 完整负载正例合计 `3 passed in 1.39s`。
+- [x] `BLOCKED.md` 已删除历史审计和已解决项，只保留真实模型契约、retrieval
+  定参、GPU OCR、EMF、Word 自动编号和 production 验收六类；其中 retrieval
+  条目如实绑定当前唯一 pytest 失败，没有把它伪装为完成。
+- [x] 为全量测试临时启动的既有 `rag-final-three-qdrant` 已在测试后停止，最终
+  `Status=exited`、restart policy=`no`；未删除该容器或其测试数据。停止命令
+  使用仍兼容但已弃用的 `--time` 参数并输出改用 `--timeout` 的提示，退出码仍为
+  0。除正式 smoke 镜像/双包外，没有遗留额外运行容器。
