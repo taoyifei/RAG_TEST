@@ -13,7 +13,13 @@ import pytest
 _APP_IMAGE = "sha256:" + "a" * 64
 _OCR_IMAGE = "sha256:" + "b" * 64
 _QDRANT_IMAGE = "sha256:" + "c" * 64
-_QDRANT_REGISTRY_DIGEST = "sha256:" + "9" * 64
+_APP_CONFIG = "sha256:" + "3" * 64
+_OCR_CONFIG = "sha256:" + "4" * 64
+_QDRANT_CONFIG = "sha256:" + "5" * 64
+_QDRANT_REGISTRY_DIGEST = (
+    "sha256:0bd98fa7977f1e75694779359ca4e212"
+    "822e5a71334e28421182f72f209d5286"
+)
 _SOURCE_REVISION = "1" * 40
 
 
@@ -119,11 +125,14 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
     )
     (old_release / "IMAGE_ARCHIVES.tsv").write_text(
         "images/docx-rag-linux-amd64.tar\tapp\t"
-        f"{_APP_IMAGE}\t{_SOURCE_REVISION}\n"
+        f"{_APP_IMAGE}\t{_SOURCE_REVISION}\t"
+        f"{_APP_CONFIG}\tlinux/amd64\n"
         "images/docx-rag-ocr-linux-amd64.tar\tocr\t"
-        f"{_OCR_IMAGE}\t{_SOURCE_REVISION}\n"
+        f"{_OCR_IMAGE}\t{_SOURCE_REVISION}\t"
+        f"{_OCR_CONFIG}\tlinux/amd64\n"
         "images/qdrant-linux-amd64.tar\tqdrant\t"
-        f"{_QDRANT_IMAGE}\tqdrant/qdrant@{_QDRANT_REGISTRY_DIGEST}\n",
+        f"{_QDRANT_IMAGE}\tqdrant/qdrant@{_QDRANT_REGISTRY_DIGEST}\t"
+        f"{_QDRANT_CONFIG}\tlinux/amd64\n",
         encoding="ascii",
     )
     (new_release / "compose.yaml").write_text(
@@ -151,6 +160,13 @@ def _prepare_sandbox(tmp_path: Path) -> _Sandbox:
         encoding="utf-8",
     )
     script.chmod(0o755)
+    policy_source = (
+        Path(__file__).parents[1] / "deployment/qdrant-policy.sh"
+    )
+    (tmp_path / "qdrant-policy.sh").write_text(
+        policy_source.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     binaries = tmp_path / "bin"
     binaries.mkdir()
     docker_log = tmp_path / "docker.log"
@@ -199,7 +215,13 @@ if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "${FAKE_MISSING_IMAGE:-}" == "${image}" ]]; then
     exit 41
   fi
-  if [[ "$*" == *"org.opencontainers.image.revision"* ]]; then
+  if [[ "$*" == *"json .Descriptor"* ]]; then
+    descriptor_id="${image}"
+    if [[ "${FAKE_BAD_DESCRIPTOR_IMAGE:-}" == "${image}" ]]; then
+      descriptor_id="sha256:$(printf '%064d' 8)"
+    fi
+    printf '{"digest":"%s"}\n' "${descriptor_id}"
+  elif [[ "$*" == *"org.opencontainers.image.revision"* ]]; then
     if [[ "${FAKE_BAD_REVISION:-0}" == "1" \
       && "${image}" == "${FAKE_APP_IMAGE}" ]]; then
       printf '%040d\n' 9
@@ -793,6 +815,8 @@ def test_rollback_readyz_does_not_expose_secret_or_body(
     (
         ("verify", ""),
         ("missing_image", ""),
+        ("descriptor_mismatch", ""),
+        ("qdrant_policy", "批准白名单"),
         ("bad_revision", "revision"),
         ("compose_up", "ROLLBACK_FAILED_RECOVERED"),
         ("container_image", "ROLLBACK_FAILED_RECOVERED"),
@@ -812,6 +836,22 @@ def test_precommit_failures_leave_metadata_unchanged(
         )
     elif failure_mode == "missing_image":
         overrides["FAKE_MISSING_IMAGE"] = _OCR_IMAGE
+    elif failure_mode == "descriptor_mismatch":
+        overrides["FAKE_BAD_DESCRIPTOR_IMAGE"] = _APP_IMAGE
+    elif failure_mode == "qdrant_policy":
+        fake_digest = "sha256:" + "f" * 64
+        (sandbox.old_release / "QDRANT_SOURCE_IMAGE").write_text(
+            f"qdrant/qdrant:v1.18.3@{fake_digest}\n",
+            encoding="ascii",
+        )
+        image_manifest_path = sandbox.old_release / "IMAGE_ARCHIVES.tsv"
+        image_manifest_path.write_text(
+            image_manifest_path.read_text(encoding="ascii").replace(
+                _QDRANT_REGISTRY_DIGEST,
+                fake_digest,
+            ),
+            encoding="ascii",
+        )
     elif failure_mode == "bad_revision":
         overrides["FAKE_BAD_REVISION"] = "1"
     elif failure_mode == "compose_up":

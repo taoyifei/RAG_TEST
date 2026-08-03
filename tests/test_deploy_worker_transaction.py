@@ -14,6 +14,13 @@ _OLD_QDRANT_IMAGE = "sha256:" + "c" * 64
 _NEW_APP_IMAGE = "sha256:" + "d" * 64
 _NEW_OCR_IMAGE = "sha256:" + "e" * 64
 _NEW_QDRANT_IMAGE = "sha256:" + "f" * 64
+_NEW_APP_CONFIG = "sha256:" + "3" * 64
+_NEW_OCR_CONFIG = "sha256:" + "4" * 64
+_NEW_QDRANT_CONFIG = "sha256:" + "5" * 64
+_QDRANT_REGISTRY_DIGEST = (
+    "0bd98fa7977f1e75694779359ca4e212"
+    "822e5a71334e28421182f72f209d5286"
+)
 _OLD_REVISION = "1" * 40
 _NEW_REVISION = "2" * 40
 _MODEL_NETWORK_PREFIX = ".".join(("10", "242", "180"))
@@ -125,12 +132,23 @@ def _prepare_sandbox(
     )
     (new_release / "IMAGE_ARCHIVES.tsv").write_text(
         "images/docx-rag-linux-amd64.tar\tnew-app:new\t"
-        f"{_NEW_APP_IMAGE}\t{_NEW_REVISION}\n"
+        f"{_NEW_APP_IMAGE}\t{_NEW_REVISION}\t"
+        f"{_NEW_APP_CONFIG}\tlinux/amd64\n"
         "images/docx-rag-ocr-linux-amd64.tar\tnew-ocr:new\t"
-        f"{_NEW_OCR_IMAGE}\t{_NEW_REVISION}\n"
+        f"{_NEW_OCR_IMAGE}\t{_NEW_REVISION}\t"
+        f"{_NEW_OCR_CONFIG}\tlinux/amd64\n"
         "images/qdrant-linux-amd64.tar\tnew-qdrant:new\t"
-        f"{_NEW_QDRANT_IMAGE}\tqdrant/qdrant@sha256:{'9' * 64}\n",
+        f"{_NEW_QDRANT_IMAGE}\tqdrant/qdrant@sha256:"
+        f"{_QDRANT_REGISTRY_DIGEST}\t"
+        f"{_NEW_QDRANT_CONFIG}\tlinux/amd64\n",
         encoding="ascii",
+    )
+    policy_source = (
+        Path(__file__).parents[1] / "deployment/qdrant-policy.sh"
+    )
+    (new_release / "qdrant-policy.sh").write_text(
+        policy_source.read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
     (new_release / "verify-offline.sh").write_text(
         "#!/usr/bin/env bash\nexit 0\n",
@@ -280,6 +298,14 @@ resolve_image() {{
     *) exit 82 ;;
   esac
 }}
+if [[ "$1" == "info" ]]; then
+  if [[ "${{FAKE_NON_CONTAINERD_STORE:-0}}" == "1" ]]; then
+    echo '[["driver-type","overlay2"]]'
+  else
+    echo '[["driver-type","io.containerd.snapshotter.v1"]]'
+  fi
+  exit 0
+fi
 if [[ "$1" == "ps" ]]; then
   for item in \
     "rag-app:${{APP_EXISTS}}" \
@@ -404,6 +430,13 @@ if [[ "$1 $2" == "image inspect" ]]; then
     echo linux
   elif [[ "$*" == *".Id"* ]]; then
     resolve_image "${{image}}"
+  elif [[ "$*" == *"json .Descriptor"* ]]; then
+    descriptor_id="$(resolve_image "${{image}}")"
+    if [[ "${{FAKE_BAD_LOADED_APP_DESCRIPTOR:-0}}" == "1" \
+      && "${{image}}" == "new-app:new" ]]; then
+      descriptor_id="sha256:$(printf '%064d' 9)"
+    fi
+    printf '{{"digest":"%s"}}\n' "${{descriptor_id}}"
   elif [[ "$*" == *"org.opencontainers.image.revision"* ]]; then
     echo "{_NEW_REVISION}"
   fi
@@ -1119,6 +1152,7 @@ def test_invalid_ocr_health_fails_immediately_and_compensates(
     (
         "FAKE_LOAD_FAIL",
         "FAKE_BAD_LOADED_APP_ID",
+        "FAKE_BAD_LOADED_APP_DESCRIPTOR",
         "FAKE_BAD_LOADED_OCR_ID",
         "FAKE_BAD_LOADED_QDRANT_ID",
         "FAKE_CORE_UP_PARTIAL_FAIL",
@@ -1143,6 +1177,47 @@ def test_failure_restores_old_core_worker_env_and_current(
 
     assert completed.returncode != 0
     assert "DEPLOY_FAILED_RECOVERED" in completed.stderr
+    _assert_old_runtime_restored(sandbox)
+
+
+def test_non_containerd_store_fails_before_image_load(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+
+    completed = _run_deploy(
+        sandbox,
+        FAKE_NON_CONTAINERD_STORE="1",
+    )
+
+    assert completed.returncode != 0
+    assert "DOCKER_CONTAINERD_IMAGE_STORE_REQUIRED" in completed.stderr
+    assert not sandbox.command_log.exists() or "docker load " not in (
+        sandbox.command_log.read_text(encoding="utf-8")
+    )
+    _assert_old_runtime_restored(sandbox)
+
+
+def test_unapproved_qdrant_provenance_fails_before_image_load(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    manifest_path = sandbox.new_release / "IMAGE_ARCHIVES.tsv"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="ascii").replace(
+            _QDRANT_REGISTRY_DIGEST,
+            "9" * 64,
+        ),
+        encoding="ascii",
+    )
+
+    completed = _run_deploy(sandbox)
+
+    assert completed.returncode != 0
+    assert "Qdrant provenance 不在批准白名单" in completed.stderr
+    assert not sandbox.command_log.exists() or "docker load " not in (
+        sandbox.command_log.read_text(encoding="utf-8")
+    )
     _assert_old_runtime_restored(sandbox)
 
 

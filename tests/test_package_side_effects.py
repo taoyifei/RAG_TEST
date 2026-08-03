@@ -52,6 +52,10 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     source = Path(__file__).parents[1] / "deployment/package.sh"
     package = deployment / "package.sh"
     shutil.copyfile(source, package)
+    shutil.copyfile(
+        Path(__file__).parents[1] / "deployment/qdrant-policy.sh",
+        deployment / "qdrant-policy.sh",
+    )
     package.chmod(0o755)
     corpus_manifest = repository / "operator-corpus.json"
     corpus_manifest.write_text("{}\n", encoding="utf-8")

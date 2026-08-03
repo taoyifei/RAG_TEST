@@ -2,6 +2,9 @@
 set -euo pipefail
 umask 077
 
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=deployment/qdrant-policy.sh
+source "${script_dir}/qdrant-policy.sh"
 project_root="/data/tyf/RAG"
 shared_env_dir="${project_root}/shared/env"
 active_env="${shared_env_dir}/rag.env"
@@ -173,6 +176,25 @@ verify_container_state() {
 
 image_id() {
   docker image inspect --format '{{.Id}}' "$1"
+}
+
+image_descriptor_digest() {
+  local descriptor_json
+  descriptor_json="$(docker image inspect \
+    --format '{{json .Descriptor}}' "$1")"
+  python3 -c '
+import json
+import re
+import sys
+
+payload = json.load(sys.stdin)
+digest = payload.get("digest") if isinstance(payload, dict) else None
+if not isinstance(digest, str) or re.fullmatch(
+    r"sha256:[0-9a-f]{64}", digest
+) is None:
+    raise SystemExit(1)
+print(digest)
+' <<< "${descriptor_json}"
 }
 
 inspect_revision() {
@@ -394,7 +416,8 @@ for image in \
   "${rollback_ocr_image}" \
   "${rollback_qdrant_image}"; do
   if [[ ! "${image}" =~ ^sha256:[0-9a-f]{64}$ \
-    || "$(image_id "${image}")" != "${image}" ]]; then
+    || "$(image_id "${image}")" != "${image}" \
+    || "$(image_descriptor_digest "${image}")" != "${image}" ]]; then
     fail "rollback image ID 不存在或不精确。"
   fi
 done
@@ -418,10 +441,14 @@ if [[ "$(cat "${rollback_release}/SOURCE_REVISION")" \
   fail "rollback source revision 与 release 不一致。"
 fi
 qdrant_source_image="$(cat "${rollback_release}/QDRANT_SOURCE_IMAGE")"
-qdrant_provenance="$(printf '%s\n' "${qdrant_source_image}" \
-  | awk -F@ '{print $NF}')"
 manifest_qdrant_provenance="$(image_manifest_value \
   images/qdrant-linux-amd64.tar 4)"
+if [[ "${qdrant_source_image}" \
+    != "${RAG_APPROVED_QDRANT_SOURCE_IMAGE}" \
+  || "${manifest_qdrant_provenance}" \
+    != "${RAG_APPROVED_QDRANT_REPO_DIGEST}" ]]; then
+  fail "rollback Qdrant provenance 不在批准白名单。"
+fi
 if [[ "$(image_manifest_value \
       images/docx-rag-linux-amd64.tar 3)" != "${rollback_app_image}" \
   || "$(image_manifest_value \
@@ -432,11 +459,7 @@ if [[ "$(image_manifest_value \
       images/docx-rag-linux-amd64.tar 4)" != "${rollback_revision}" \
   || "$(image_manifest_value \
       images/docx-rag-ocr-linux-amd64.tar 4)" != "${rollback_revision}" \
-  || "$(image_manifest_value \
-      images/qdrant-linux-amd64.tar 4)" \
-      != "qdrant/qdrant@${qdrant_provenance}" \
-  || "${manifest_qdrant_provenance}" \
-      != "qdrant/qdrant@${qdrant_provenance}" ]]; then
+  ]]; then
   fail "rollback release IMAGE_ARCHIVES.tsv 身份不一致。"
 fi
 target_env="$(mktemp "${shared_env_dir}/.rag.env.rollback-target.XXXXXXXX")"

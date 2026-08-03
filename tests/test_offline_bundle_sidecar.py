@@ -73,6 +73,24 @@ def test_public_upload_verifies_unpacker_before_python() -> None:
     ).read_text(encoding="utf-8")
 
     assert '"${release_output}/offline_bundle.py.sha256"' in tutorial
-    verification = tutorial.index("sha256sum -c offline_bundle.py.sha256")
-    execution = tutorial.index("python3 offline_bundle.py")
-    assert verification < execution
+    server_start = tutorial.index("required_uploads=(")
+    server_section = tutorial[server_start:]
+    execution = server_section.index(
+        'python3 "${delivery}/offline_bundle.py"'
+    )
+    before_execution = " ".join(
+        server_section[:execution].replace("\\\n", " ").split()
+    )
+    for verification in (
+        "sha256sum -c RELEASE_MANIFEST.sha256",
+        "sha256sum -c offline_bundle.py.sha256",
+        (
+            "sha256sum -c "
+            '"rag-runtime-${expected_release_id}.tar.gz.sha256"'
+        ),
+        (
+            "sha256sum -c "
+            '"rag-corpus-${expected_corpus_id}.tar.gz.sha256"'
+        ),
+    ):
+        assert verification in before_execution

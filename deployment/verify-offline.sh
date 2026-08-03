@@ -39,6 +39,9 @@ required_files=(
   "evaluation/runtime/scripts/verify_model_contracts.py"
   "offline_bundle.py"
   "freeze_corpus_manifest.py"
+  "qdrant-policy.sh"
+  "scripts/docker_archive_identity.py"
+  "scripts/docker_archive_reader.py"
   "backup.sh"
   "install.sh"
 )
@@ -49,14 +52,22 @@ for path in "${required_files[@]}"; do
   fi
 done
 
+# shellcheck source=deployment/qdrant-policy.sh
+source "${release_dir}/qdrant-policy.sh"
+if [[ "$(cat QDRANT_SOURCE_IMAGE)" \
+  != "${RAG_APPROVED_QDRANT_SOURCE_IMAGE}" ]]; then
+  echo "Qdrant 来源镜像不在批准白名单。" >&2
+  exit 1
+fi
+
 if [[ "$(wc -l < IMAGE_ARCHIVES.tsv)" -ne 3 ]]; then
   echo "IMAGE_ARCHIVES.tsv 必须恰有三行。" >&2
   exit 1
 fi
-if awk -F '\t' 'NF != 4 {exit 1}' IMAGE_ARCHIVES.tsv; then
+if awk -F '\t' 'NF != 6 {exit 1}' IMAGE_ARCHIVES.tsv; then
   :
 else
-  echo "IMAGE_ARCHIVES.tsv 每行必须恰有四列。" >&2
+  echo "IMAGE_ARCHIVES.tsv 每行必须恰有六列。" >&2
   exit 1
 fi
 if [[ "$(cut -f1 IMAGE_ARCHIVES.tsv | paste -sd ',')" \
@@ -69,21 +80,55 @@ if [[ ! "$(cat SOURCE_REVISION)" =~ ^[0-9a-f]{40}$ ]]; then
   exit 1
 fi
 source_revision="$(cat SOURCE_REVISION)"
-if ! awk -F '\t' -v revision="${source_revision}" '
+if ! awk -F '\t' \
+  -v revision="${source_revision}" \
+  -v approved_qdrant="${RAG_APPROVED_QDRANT_REPO_DIGEST}" '
+  function is_sha256(value) {
+    return length(value) == 71 && value ~ /^sha256:[0-9a-f]+$/
+  }
   NR <= 2 {
-    if ($3 !~ /^sha256:[0-9a-f]{64}$/ || $4 != revision) {
+    if (!is_sha256($3) \
+      || $4 != revision \
+      || !is_sha256($5) \
+      || $6 != "linux/amd64") {
       exit 1
     }
   }
   NR == 3 {
-    if ($3 !~ /^sha256:[0-9a-f]{64}$/ \
-      || $4 !~ /^qdrant\/qdrant@sha256:[0-9a-f]{64}$/) {
+    if (!is_sha256($3) \
+      || $4 != approved_qdrant \
+      || !is_sha256($5) \
+      || $6 != "linux/amd64") {
       exit 1
     }
   }
 ' IMAGE_ARCHIVES.tsv; then
-  echo "镜像 image ID 或 provenance 无效。" >&2
+  echo "镜像 manifest/config digest、provenance 或平台无效。" >&2
   exit 1
 fi
 
-echo "runtime 包逐文件摘要、固定镜像白名单、来源与 SBOM 校验通过。"
+line_number=0
+while IFS=$'\t' read -r \
+  archive_path image manifest_digest provenance config_digest platform; do
+  line_number="$((line_number + 1))"
+  identity_arguments=(
+    python3 -m scripts.docker_archive_identity
+    "${archive_path}"
+    --tag "${image}"
+    --platform "${platform}"
+  )
+  if ((line_number <= 2)); then
+    identity_arguments+=(--expected-revision "${source_revision}")
+  fi
+  if ! actual_identity="$("${identity_arguments[@]}")"; then
+    echo "镜像归档语义身份校验失败：${archive_path}" >&2
+    exit 1
+  fi
+  expected_identity="${manifest_digest}"$'\t'"${config_digest}"$'\t'"${platform}"
+  if [[ "${actual_identity}" != "${expected_identity}" ]]; then
+    echo "镜像归档身份与 IMAGE_ARCHIVES.tsv 不一致：${archive_path}" >&2
+    exit 1
+  fi
+done < IMAGE_ARCHIVES.tsv
+
+echo "runtime 包逐文件摘要、OCI 镜像身份、来源与 SBOM 校验通过。"

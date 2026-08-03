@@ -3,6 +3,8 @@ set -euo pipefail
 umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=deployment/qdrant-policy.sh
+source "${repo_root}/deployment/qdrant-policy.sh"
 artifact_root="${repo_root}/artifacts"
 release_parent="${artifact_root}/releases"
 git_revision="$(git -C "${repo_root}" rev-parse HEAD)"
@@ -10,9 +12,7 @@ release_id="${RELEASE_ID:-${git_revision:0:12}}"
 corpus_manifest_input="${CORPUS_MANIFEST:-}"
 app_image="${RAG_APP_IMAGE:-docx-rag:${release_id}}"
 ocr_image="${RAG_OCR_IMAGE:-docx-rag-ocr:${release_id}}"
-approved_qdrant_image="qdrant/qdrant:v1.18.3@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
-approved_qdrant_repo_digest="qdrant/qdrant@sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286"
-qdrant_image="${RAG_QDRANT_IMAGE:-${approved_qdrant_image}}"
+qdrant_image="${RAG_QDRANT_IMAGE:-${RAG_APPROVED_QDRANT_SOURCE_IMAGE}}"
 qdrant_runtime_image="rag-qdrant:${release_id}"
 stage=""
 
@@ -104,7 +104,7 @@ if [[ -n "$(git -C "${repo_root}" status \
   --porcelain --untracked-files=all)" ]]; then
   fail "源码含未提交改动，无法把镜像可靠绑定到 Git revision。"
 fi
-if [[ "${qdrant_image}" != "${approved_qdrant_image}" ]]; then
+if [[ "${qdrant_image}" != "${RAG_APPROVED_QDRANT_SOURCE_IMAGE}" ]]; then
   fail "Qdrant 镜像必须使用已批准的固定 digest。"
 fi
 final_release="${release_parent}/${release_id}-${corpus_id}"
@@ -121,14 +121,11 @@ fi
 validate_image "${app_image}" "${git_revision}"
 validate_image "${ocr_image}" "${git_revision}"
 validate_image "${qdrant_image}" "-"
-app_image_id="$(docker image inspect --format '{{.Id}}' "${app_image}")"
-ocr_image_id="$(docker image inspect --format '{{.Id}}' "${ocr_image}")"
-qdrant_image_id="$(docker image inspect --format '{{.Id}}' "${qdrant_image}")"
 qdrant_repo_digests="$(docker image inspect \
   --format '{{range .RepoDigests}}{{println .}}{{end}}' \
   "${qdrant_image}")"
 if ! grep -Fxq -- \
-  "${approved_qdrant_repo_digest}" <<< "${qdrant_repo_digests}"; then
+  "${RAG_APPROVED_QDRANT_REPO_DIGEST}" <<< "${qdrant_repo_digests}"; then
   fail "Qdrant RepoDigests 不包含批准的 canonical digest。"
 fi
 docker sbom --help >/dev/null
@@ -153,6 +150,7 @@ mkdir -p \
   "${runtime_root}/images" \
   "${runtime_root}/licenses" \
   "${runtime_root}/provenance/ocr" \
+  "${runtime_root}/scripts" \
   "${runtime_root}/sbom" \
   "${corpus_root}/evaluation"
 
@@ -167,12 +165,18 @@ cp "${repo_root}/deployment/backup.sh" "${runtime_root}/backup.sh"
 cp "${repo_root}/deployment/install.sh" "${runtime_root}/install.sh"
 cp "${repo_root}/deployment/verify-offline.sh" \
   "${runtime_root}/verify-offline.sh"
+cp "${repo_root}/deployment/qdrant-policy.sh" \
+  "${runtime_root}/qdrant-policy.sh"
 cp "${repo_root}/design/public/offline-build-and-server-deployment.md" \
   "${runtime_root}/README.md"
 cp "${repo_root}/scripts/offline_bundle.py" \
   "${runtime_root}/offline_bundle.py"
 cp "${repo_root}/scripts/freeze_corpus_manifest.py" \
   "${runtime_root}/freeze_corpus_manifest.py"
+cp "${repo_root}/scripts/docker_archive_identity.py" \
+  "${runtime_root}/scripts/docker_archive_identity.py"
+cp "${repo_root}/scripts/docker_archive_reader.py" \
+  "${runtime_root}/scripts/docker_archive_reader.py"
 cp "${repo_root}/evaluation/"*.py \
   "${runtime_root}/evaluation/runtime/evaluation/"
 cp "${repo_root}/scripts/load_test_chat.py" \
@@ -209,14 +213,53 @@ docker image save --platform linux/amd64 \
 docker image save --platform linux/amd64 \
   --output "${runtime_root}/images/qdrant-linux-amd64.tar" \
   "${qdrant_runtime_image}"
-printf '%s\t%s\t%s\t%s\n' \
+
+inspect_archive() {
+  local archive="$1"
+  local image="$2"
+  local expected_revision="$3"
+  local arguments=(
+    python3 -m scripts.docker_archive_identity
+    "${archive}"
+    --tag "${image}"
+    --platform linux/amd64
+  )
+  if [[ "${expected_revision}" != "-" ]]; then
+    arguments+=(--expected-revision "${expected_revision}")
+  fi
+  (
+    cd "${repo_root}"
+    "${arguments[@]}"
+  )
+}
+
+app_identity="$(inspect_archive \
+  "${runtime_root}/images/docx-rag-linux-amd64.tar" \
+  "${app_image}" "${git_revision}")"
+ocr_identity="$(inspect_archive \
+  "${runtime_root}/images/docx-rag-ocr-linux-amd64.tar" \
+  "${ocr_image}" "${git_revision}")"
+qdrant_identity="$(inspect_archive \
+  "${runtime_root}/images/qdrant-linux-amd64.tar" \
+  "${qdrant_runtime_image}" -)"
+IFS=$'\t' read -r app_manifest_id app_config_id app_platform \
+  <<< "${app_identity}"
+IFS=$'\t' read -r ocr_manifest_id ocr_config_id ocr_platform \
+  <<< "${ocr_identity}"
+IFS=$'\t' read -r qdrant_manifest_id qdrant_config_id qdrant_platform \
+  <<< "${qdrant_identity}"
+
+printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
   'images/docx-rag-linux-amd64.tar' \
-  "${app_image}" "${app_image_id}" "${git_revision}" \
+  "${app_image}" "${app_manifest_id}" "${git_revision}" \
+  "${app_config_id}" "${app_platform}" \
   'images/docx-rag-ocr-linux-amd64.tar' \
-  "${ocr_image}" "${ocr_image_id}" "${git_revision}" \
+  "${ocr_image}" "${ocr_manifest_id}" "${git_revision}" \
+  "${ocr_config_id}" "${ocr_platform}" \
   'images/qdrant-linux-amd64.tar' \
-  "${qdrant_runtime_image}" "${qdrant_image_id}" \
-  "${approved_qdrant_repo_digest}" \
+  "${qdrant_runtime_image}" "${qdrant_manifest_id}" \
+  "${RAG_APPROVED_QDRANT_REPO_DIGEST}" \
+  "${qdrant_config_id}" "${qdrant_platform}" \
   > "${runtime_root}/IMAGE_ARCHIVES.tsv"
 
 docker sbom --format cyclonedx-json "${app_image}" \

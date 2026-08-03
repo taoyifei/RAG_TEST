@@ -51,8 +51,11 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     for relative in (
         "deployment/package.sh",
         "deployment/install.sh",
+        "deployment/qdrant-policy.sh",
         "deployment/verify-offline.sh",
         "scripts/freeze_corpus_manifest.py",
+        "scripts/docker_archive_identity.py",
+        "scripts/docker_archive_reader.py",
         "scripts/offline_bundle.py",
         "scripts/verify_model_contracts.py",
     ):
@@ -132,7 +135,150 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     )
 
 
+def _install_archive_writer(path: Path) -> None:
+    path.write_text(
+        '''from __future__ import annotations
+
+import hashlib
+import io
+import json
+import sys
+import tarfile
+from pathlib import Path
+
+
+OCI_CONFIG = "application/vnd.oci.image.config.v1+json"
+OCI_INDEX = "application/vnd.oci.image.index.v1+json"
+OCI_LAYER = "application/vnd.oci.image.layer.v1.tar"
+OCI_MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+
+
+def digest(content: bytes) -> str:
+    return f"sha256:{hashlib.sha256(content).hexdigest()}"
+
+
+def json_bytes(payload: object) -> bytes:
+    text = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"{text}\\n".encode()
+
+
+def descriptor(
+    content: bytes,
+    media_type: str,
+    *,
+    platform: dict[str, str] | None = None,
+) -> dict[str, object]:
+    value: dict[str, object] = {
+        "digest": digest(content),
+        "mediaType": media_type,
+        "size": len(content),
+    }
+    if platform is not None:
+        value["platform"] = platform
+    return value
+
+
+def blob_path(content_digest: str) -> str:
+    algorithm, value = content_digest.split(":", maxsplit=1)
+    return f"blobs/{algorithm}/{value}"
+
+
+def add_member(
+    archive: tarfile.TarFile,
+    name: str,
+    content: bytes,
+) -> None:
+    member = tarfile.TarInfo(name)
+    member.mode = 0o644
+    member.mtime = 0
+    member.size = len(content)
+    archive.addfile(member, io.BytesIO(content))
+
+
+def main() -> None:
+    output = Path(sys.argv[1])
+    tag = sys.argv[2]
+    revision = sys.argv[3]
+    layer = f"layer:{tag}\\n".encode()
+    layer_digest = digest(layer)
+    config = json_bytes(
+        {
+            "architecture": "amd64",
+            "config": {
+                "Labels": {
+                    "org.opencontainers.image.revision": revision,
+                }
+            },
+            "os": "linux",
+            "rootfs": {
+                "diff_ids": [layer_digest],
+                "type": "layers",
+            },
+        }
+    )
+    config_digest = digest(config)
+    manifest = json_bytes(
+        {
+            "config": descriptor(config, OCI_CONFIG),
+            "layers": [descriptor(layer, OCI_LAYER)],
+            "mediaType": OCI_MANIFEST,
+            "schemaVersion": 2,
+        }
+    )
+    manifest_digest = digest(manifest)
+    manifest_descriptor = descriptor(
+        manifest,
+        OCI_MANIFEST,
+        platform={"architecture": "amd64", "os": "linux"},
+    )
+    manifest_descriptor["annotations"] = {
+        "io.containerd.image.name": f"docker.io/library/{tag}",
+        "org.opencontainers.image.ref.name": tag.rsplit(":", maxsplit=1)[1],
+    }
+    index = json_bytes(
+        {
+            "manifests": [manifest_descriptor],
+            "mediaType": OCI_INDEX,
+            "schemaVersion": 2,
+        }
+    )
+    legacy = json_bytes(
+        [
+            {
+                "Config": blob_path(config_digest),
+                "Layers": [blob_path(layer_digest)],
+                "RepoTags": [tag],
+            }
+        ]
+    )
+    members = {
+        "index.json": index,
+        "manifest.json": legacy,
+        "oci-layout": json_bytes({"imageLayoutVersion": "1.0.0"}),
+        blob_path(config_digest): config,
+        blob_path(layer_digest): layer,
+        blob_path(manifest_digest): manifest,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(output, mode="w") as archive:
+        for name in sorted(members):
+            add_member(archive, name, members[name])
+
+
+if __name__ == "__main__":
+    main()
+''',
+        encoding="utf-8",
+    )
+
+
 def _install_fake_commands(binaries: Path) -> None:
+    _install_archive_writer(binaries / "write_docker_archive.py")
     _write_executable(
         binaries / "git",
         f"""#!/usr/bin/env bash
@@ -191,13 +337,19 @@ if [[ "$1" == "run" ]]; then
   exit 0
 fi
 if [[ "$1 $2" == "image save" ]]; then
+  output=""
   while (($#)); do
     if [[ "$1" == "--output" ]]; then
-      printf 'fake-image-archive\n' > "$2"
-      exit 0
+      output="$2"
+      shift 2
+      continue
     fi
     shift
   done
+  [[ -n "${{output}}" ]]
+  "${{FAKE_REAL_PYTHON}}" "${{FAKE_ARCHIVE_WRITER}}" \
+    "${{output}}" "${{image}}" "{_REVISION}"
+  exit 0
 fi
 exit 81
 """,
@@ -248,7 +400,11 @@ def _run_package(
     environment.update(
         {
             "CORPUS_MANIFEST": str(sandbox.manifest),
+            "FAKE_ARCHIVE_WRITER": str(
+                sandbox.binaries / "write_docker_archive.py"
+            ),
             "FAKE_COMMAND_LOG": str(sandbox.command_log),
+            "FAKE_REAL_PYTHON": sys.executable,
             "FAKE_TAR_LOG": str(sandbox.tar_log),
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
         }
@@ -296,6 +452,28 @@ def _run_runtime_verifier(
         capture_output=True,
         text=True,
     )
+
+
+def _refresh_runtime_manifest(
+    runtime: Path,
+    relative_paths: tuple[str, ...],
+) -> None:
+    manifest_path = runtime / "MANIFEST.sha256"
+    replacements = {
+        relative_path: hashlib.sha256(
+            (runtime / relative_path).read_bytes()
+        ).hexdigest()
+        for relative_path in relative_paths
+    }
+    output: list[str] = []
+    for line in manifest_path.read_text(encoding="utf-8").splitlines():
+        digest, relative_path = line.split("  ", maxsplit=1)
+        normalized_path = relative_path.removeprefix("./")
+        output.append(
+            f"{replacements.pop(normalized_path, digest)}  {relative_path}"
+        )
+    assert not replacements
+    manifest_path.write_text("\n".join(output) + "\n", encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -388,16 +566,62 @@ def test_success_publishes_only_complete_verified_release(
     contract_script = (
         "runtime/evaluation/runtime/scripts/verify_model_contracts.py"
     )
+    archive_helpers = {
+        "runtime/scripts/docker_archive_identity.py",
+        "runtime/scripts/docker_archive_reader.py",
+    }
     with tarfile.open(runtime_archive, mode="r:gz") as archive:
         runtime_names = set(archive.getnames())
         manifest_file = archive.extractfile("runtime/MANIFEST.sha256")
         assert manifest_file is not None
         runtime_manifest = manifest_file.read().decode("utf-8")
+        image_manifest_file = archive.extractfile(
+            "runtime/IMAGE_ARCHIVES.tsv"
+        )
+        assert image_manifest_file is not None
+        image_manifest_rows = [
+            line.split("\t")
+            for line in image_manifest_file.read().decode().splitlines()
+        ]
     assert contract_script in runtime_names
+    assert archive_helpers <= runtime_names
     assert (
         "evaluation/runtime/scripts/verify_model_contracts.py"
         in runtime_manifest
     )
+    for helper in archive_helpers:
+        assert helper.removeprefix("runtime/") in runtime_manifest
+    expected_images = (
+        (
+            "images/docx-rag-linux-amd64.tar",
+            f"docx-rag:{_RELEASE_ID}",
+            _REVISION,
+        ),
+        (
+            "images/docx-rag-ocr-linux-amd64.tar",
+            f"docx-rag-ocr:{_RELEASE_ID}",
+            _REVISION,
+        ),
+        (
+            "images/qdrant-linux-amd64.tar",
+            f"rag-qdrant:{_RELEASE_ID}",
+            f"qdrant/qdrant@sha256:{_QDRANT_DIGEST}",
+        ),
+    )
+    assert len(image_manifest_rows) == len(expected_images)
+    for row, expected_image in zip(
+        image_manifest_rows,
+        expected_images,
+        strict=True,
+    ):
+        assert len(row) == 6
+        archive_path, tag, manifest_id, provenance, config_id, platform = row
+        assert (archive_path, tag, provenance) == expected_image
+        assert platform == "linux/amd64"
+        for digest in (manifest_id, config_id):
+            assert digest.startswith("sha256:")
+            assert len(digest) == 71
+        assert manifest_id != config_id
     for forbidden_prefix in (
         "runtime/.git",
         "runtime/src",
@@ -459,3 +683,35 @@ def test_runtime_verifier_detects_model_contract_script_tamper(
     rejected = _run_runtime_verifier(runtime)
 
     assert rejected.returncode != 0
+
+
+def test_runtime_verifier_rejects_rehashed_qdrant_provenance_tamper(
+    tmp_path: Path,
+) -> None:
+    sandbox = _prepare_sandbox(tmp_path)
+    completed = _run_package(sandbox)
+    assert completed.returncode == 0, completed.stderr
+    runtime = _extract_runtime(sandbox, tmp_path / "extracted-qdrant")
+    fake_digest = "f" * 64
+    source_path = runtime / "QDRANT_SOURCE_IMAGE"
+    source_path.write_text(
+        f"qdrant/qdrant:v1.18.3@sha256:{fake_digest}\n",
+        encoding="ascii",
+    )
+    image_manifest_path = runtime / "IMAGE_ARCHIVES.tsv"
+    image_manifest_path.write_text(
+        image_manifest_path.read_text(encoding="ascii").replace(
+            f"qdrant/qdrant@sha256:{_QDRANT_DIGEST}",
+            f"qdrant/qdrant@sha256:{fake_digest}",
+        ),
+        encoding="ascii",
+    )
+    _refresh_runtime_manifest(
+        runtime,
+        ("QDRANT_SOURCE_IMAGE", "IMAGE_ARCHIVES.tsv"),
+    )
+
+    rejected = _run_runtime_verifier(runtime)
+
+    assert rejected.returncode != 0
+    assert "批准白名单" in rejected.stderr

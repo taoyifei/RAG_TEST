@@ -16,12 +16,6 @@ _CANDIDATE_DIR = "/data/tyf/RAG/shared/env/candidates"
 _CANDIDATE_ENV = f"{_CANDIDATE_DIR}/${{release_id}}.env"
 _REVISION_COMMAND = 'revision="$(git rev-parse HEAD)"'
 _DEFAULT_RELEASE_ID_COMMAND = 'release_id="${revision:0:12}"'
-_RUNTIME_RELEASE_ID_COMMAND = (
-    'release_id="$(cat "${runtime_dir}/RELEASE_ID")"'
-)
-_RUNTIME_REVISION_COMMAND = (
-    'revision="$(cat "${runtime_dir}/SOURCE_REVISION")"'
-)
 _CANONICAL_REPO_DIGESTS = (
     "python@sha256:"
     "86adf8dbadc3d6e82ee5dd2c74bec2e1c2467cdad47886280501df722372d2e1",
@@ -52,18 +46,26 @@ def test_documents_follow_candidate_and_active_env_contract() -> None:
     assert 'candidate_env="${1:-}"' in deploy
     assert 'requested_env="${1:-${active_env}}"' in rollback
 
+    detailed_document = _normalize_shell_continuations(
+        _document(_LONG_DEPLOYMENT_DOCUMENT)
+    )
+    assert 'install -d -m 0700 "${candidate_dir}"' in detailed_document
+    assert (
+        'install -m 0600 "${release_dir}/.env.example" '
+        '"${candidate}"'
+    ) in detailed_document
+    assert (
+        'install -m 0600 "${active_env}" "${candidate}"'
+        in detailed_document
+    )
+    assert '"${EDITOR:-vi}" "${candidate}"' in detailed_document
+
     for path in _DEPLOYMENT_DOCUMENTS:
         document = _normalize_shell_continuations(_document(path))
-        assert f"install -d -m 0700 {_CANDIDATE_DIR}" in document
-        assert (
-            '"/data/tyf/RAG/releases/${release_id}/.env.example" '
-            f"{_CANDIDATE_ENV}"
-        ) in document
-        assert f"cp -- {_ACTIVE_ENV} {_CANDIDATE_ENV}" in document
-        assert f"chmod 0600 {_CANDIDATE_ENV}" in document
-        assert f"editor {_CANDIDATE_ENV}" in document
+        assert _CANDIDATE_DIR in document
+        assert "test ! -e" in document
         assert re.search(
-            rf'deploy\.sh"?\s+{re.escape(_CANDIDATE_ENV)}',
+            r'deploy\.sh"?\s+"?\$\{candidate\}"?',
             document,
         )
         assert not re.search(
@@ -74,7 +76,10 @@ def test_documents_follow_candidate_and_active_env_contract() -> None:
             rf'rollback\.sh"?\s+{re.escape(_ACTIVE_ENV)}',
             document,
         )
-        assert "active rag.env 只能由 deploy.sh 成功后发布" in document
+        assert (
+            "active rag.env 只能由 deploy.sh 成功后发布"
+            in document.replace("`", "")
+        )
 
 
 def test_documents_distinguish_release_id_from_source_revision() -> None:
@@ -105,13 +110,16 @@ def test_documents_distinguish_release_id_from_source_revision() -> None:
         r"40\s*位小写\s*Git\s*SHA",
         re.IGNORECASE,
     )
+    detailed_document = _document(_LONG_DEPLOYMENT_DOCUMENT)
+    assert 'cat "${runtime_stage}/RELEASE_ID"' in detailed_document
+    assert 'cat "${runtime_stage}/SOURCE_REVISION"' in detailed_document
     for path in _DEPLOYMENT_DOCUMENTS:
         document = _document(path)
         normalized = _normalize_shell_continuations(document)
         assert _REVISION_COMMAND in document
         assert _DEFAULT_RELEASE_ID_COMMAND in document
-        assert _RUNTIME_RELEASE_ID_COMMAND in document
-        assert _RUNTIME_REVISION_COMMAND in document
+        assert "RELEASE_ID" in document
+        assert "SOURCE_REVISION" in document
         assert not forbidden_assignment.search(document)
         assert "release 目录" in document
         assert "镜像 tag" in document
@@ -168,7 +176,11 @@ def test_installed_runtime_documents_model_contract_commands() -> None:
     assert "run_model_contract model-contract-embedding" in document
     assert "run_model_contract model-contract-reranker" in document
     assert document.count("run_model_contract model-contract-llm-") == 4
-    assert "/data/tyf/RAG/logs/model-contract-" in document
+    assert 'report_dir="$(mktemp -d \\' in document
+    assert '"${logs_root}/model-contract-${release_id}.XXXXXXXX")"' in document
+    assert 'python3 - "${report_dir}"' in document
+    assert 'paths = sorted(report_dir.glob("model-contract-*.json"))' in document
+    assert 'chown -R root:root "${report_dir}"' in document
     assert "报告不含令牌、问题或完整响应" in document
 
 

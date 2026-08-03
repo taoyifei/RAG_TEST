@@ -31,56 +31,85 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
 
 ## 服务器步骤
 
-1. 先用 `offline_bundle.py.sha256` 校验固定解包器，再分别校验
-   runtime/corpus 外层 SHA256 和内部 manifest；解包器摘要失败时禁止执行。
-2. 把 release 与 corpus 安装到 `/data/tyf/RAG` 固定布局；候选环境文件保存在
-   `/data/tyf/RAG/shared/env/candidates`，活动环境文件固定为
-   `/data/tyf/RAG/shared/env/rag.env`。`install.sh` 必须由 root 执行；
-   发布前会把 release 全部固定为 `root:root`，目录与 Shell 为 0555，
-   其他普通文件为 0444。复用既有 release 时只验证身份、文件集、owner 和
-   mode，发现漂移会拒绝而不会静默修复。corpus 仍固定为
-   `10001:10001`、目录 0700、文件 0400。
-3. 从已校验的 runtime 重新读取 `release_id` 和完整 `revision`，再创建候选
-   目录。首次部署从 release 样例安装候选文件；升级则从当前活动文件复制到
-   新 release 的候选文件。两种路径都只编辑候选文件：
+1. 每个交付固定使用
+   `/data/tyf/RAG/incoming/<release-id>-<corpus-id>/`，不得把不同版本平铺到
+   `incoming/`，也不得使用共享的 `/incoming/extracted`。上传内容恰好七个
+   文件：两个归档、三个 `.sha256` sidecar、`offline_bundle.py` 和
+   `RELEASE_MANIFEST.sha256`。服务器 root 先只为本次交付创建
+   `user4a:0700` 目录，并仅在上传窗口内把 `RAG/` 与 `incoming/` 设为
+   `root:<user4a-primary-group>/0710` 供该用户穿越；WSL 上传结束后，root 立即
+   将父目录和本次 delivery 收回为 `root:root/0700`，文件设为 0600。禁止对
+   `/data` 或任一父目录执行 `chmod 777`。Embedding/Reranker 共享模型资产
+   不属于这七个文件；服务器现有 `shared/model-services` 已通过独立清单、revision、
+   服务健康和模型契约校验时直接复用，不重传、不重复解包或加载。fresh 服务器或
+   任一校验不满足时，必须先完成独立模型服务部署，不能靠本 release 补齐。
+2. 服务器必须使用 Docker Engine 29 和 containerd image store；
+   `docker info --format '{{json .DriverStatus}}'` 必须包含
+   `["driver-type","io.containerd.snapshotter.v1"]`。六列
+   `IMAGE_ARCHIVES.tsv` 依次记录归档、tag、platform manifest digest、
+   provenance、config digest 和 `linux/amd64`。加载后必须满足
+   `.Id == .Descriptor.digest == 第三列`；不得再比较保存前 daemon 的本地 ID。
+3. root 在唯一 delivery 内校验 `RELEASE_MANIFEST.sha256`、解包器 sidecar 和
+   两个归档 sidecar，再原子解到该 delivery 自己的 `extracted/runtime` 与
+   `extracted/corpus`。禁止覆盖或复用部分解包目录。随后只用绝对路径调用实际
+   两参数安装器：
 
    ```bash
-   runtime_dir=/data/tyf/RAG/incoming/extracted/runtime
-   release_id="$(cat "${runtime_dir}/RELEASE_ID")"
-   revision="$(cat "${runtime_dir}/SOURCE_REVISION")"
-   [[ "${revision}" =~ ^[0-9a-f]{40}$ ]]
-   test "$(cat "/data/tyf/RAG/releases/${release_id}/SOURCE_REVISION")" \
-     = "${revision}"
-   install -d -m 0700 /data/tyf/RAG/shared/env/candidates
+   (
+   set -euo pipefail
 
-   # 首次部署：
-   install -m 0600 \
-     "/data/tyf/RAG/releases/${release_id}/.env.example" \
-     /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   test "$(id -u)" -eq 0
+   release_id='<本次 12 位 release-id>'
+   corpus_id='<本次 corpus-id>'
+   delivery="/data/tyf/RAG/incoming/${release_id}-${corpus_id}"
+   runtime_dir="${delivery}/extracted/runtime"
+   corpus_dir="${delivery}/extracted/corpus"
 
-   # 升级：
-   test ! -e /data/tyf/RAG/shared/env/candidates/${release_id}.env
-   cp -- /data/tyf/RAG/shared/env/rag.env \
-     /data/tyf/RAG/shared/env/candidates/${release_id}.env
-   chmod 0600 /data/tyf/RAG/shared/env/candidates/${release_id}.env
-
-   editor /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   test "$(cat "${runtime_dir}/RELEASE_ID")" = "${release_id}"
+   test "$(cat "${corpus_dir}/CORPUS_ID")" = "${corpus_id}"
+   bash "${runtime_dir}/verify-offline.sh"
+   (
+     cd "${corpus_dir}"
+     sha256sum -c MANIFEST.sha256
+   )
+   bash "${runtime_dir}/install.sh" \
+     "$(realpath -e "${runtime_dir}")" \
+     "$(realpath -e "${corpus_dir}")"
+   )
    ```
 
-   设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
+   创建父目录、七文件收权、原子解包和完整安装的唯一可复制命令见
+   `design/public/offline-build-and-server-deployment.md` 第 6、7 节；不要从本摘要
+   拼接零散命令。
+4. 候选配置始终在 release 外。首次部署从 `.env.example` 创建，升级从 active
+   `rag.env` 复制；两种情况都必须先执行
+   `test ! -e /data/tyf/RAG/shared/env/candidates/<release-id>.env`，禁止覆盖既有
+   candidate。只编辑新 candidate，设置四个互不相同且至少 32 字符的令牌、经实测的模型端点、三个 bind
    mount 路径、`RAG_RELEASE_REVISION`、`RAG_ACCESS_MODE=shared_corpus`、
    普通查询 `RAG_TRACE_MODE` 和 OCR 使用的宿主 GPU ID；其中
-   `RAG_RELEASE_REVISION` 必须等于上面读取的完整 `revision`。首次部署与
-   升级命令二选一，不要覆盖既有候选文件。
-4. 执行 `bash verify-offline.sh`。
-5. 只把候选文件传给 deploy；active rag.env 只能由 deploy.sh 成功后发布：
+   `RAG_RELEASE_REVISION` 必须等于 runtime 的完整 `SOURCE_REVISION`，
+   `RAG_DOCS_PATH` 必须指向本次 corpus。模型端点应复用上述已验证服务，不得仅为
+   新 release 重传 8 GB 级共享模型包。文档集合变化时必须使用新的 corpus ID。
+5. 只把 candidate 传给 deploy；active `rag.env` 只能由 `deploy.sh` 成功后发布：
 
    ```bash
-   bash "/data/tyf/RAG/releases/${release_id}/deploy.sh" \
-     /data/tyf/RAG/shared/env/candidates/${release_id}.env
+   (
+   set -euo pipefail
+
+   test "$(id -u)" -eq 0
+   release_id='<本次 12 位 release-id>'
+   release_dir="/data/tyf/RAG/releases/${release_id}"
+   candidate="/data/tyf/RAG/shared/env/candidates/${release_id}.env"
+
+   test -f "${candidate}"
+   test ! -L "${candidate}"
+   test "$(stat -c '%a' "${candidate}")" = 600
+   bash "${release_dir}/deploy.sh" "${candidate}"
+   )
    ```
 
-   脚本先校验，再按白名单 `docker load`，最后只启动 app、OCR 和 Qdrant。
+   脚本先校验 Docker 29/containerd 与六列镜像身份，再按白名单执行
+   `docker load --platform linux/amd64`，最后只启动 app、OCR 和 Qdrant。
    默认 Compose 路径不启动 worker。部署、回滚与失败补偿均按 deadline 等待：
    Qdrant 端口 health、容器内 Qdrant `/readyz`、app health 和 app
    `/live` 各最多 60 秒，OCR 最多 240 秒；OCR 的期限覆盖 90 秒 start
@@ -96,6 +125,9 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
 6. 检查 Compose、应用存活和容器内 OCR readiness：
 
    ```bash
+   (
+   set -euo pipefail
+
    docker compose \
      --env-file /data/tyf/RAG/shared/env/rag.env \
      -f /data/tyf/RAG/current/compose.yaml ps
@@ -103,6 +135,7 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
    docker exec rag-ocr python -c \
      "import urllib.request; print(urllib.request.urlopen(
      'http://127.0.0.1:8090/ready').read().decode())"
+   )
    ```
    安装后的模型验证器固定为
    `/data/tyf/RAG/current/evaluation/runtime/scripts/verify_model_contracts.py`。
@@ -113,8 +146,10 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
    端点分别执行，LLM 固定读取
    `/app/deployment/config/retrieval.json` 与
    `/app/deployment/assets/tokenizers/llm/tokenizer.json`。完整命令模板见
-   current `README.md` 的“启动与 GPU 冒烟”；六份脱敏报告只写入
-   `/data/tyf/RAG/logs`，不得输出令牌、探测问题或完整模型响应。
+   current `README.md` 的“启动与 GPU 冒烟”；每次尝试在
+   `/data/tyf/RAG/logs/model-contract-<release-id>.<unique>/` 使用唯一目录，六份
+   脱敏报告的汇总只读取该精确目录，不得复用旧 passed 报告，也不得输出令牌、
+   探测问题或完整模型响应。
 
    ### 冒烟成功标准
 
@@ -132,10 +167,14 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
    启动单索引 worker，再通过管理 API 创建任务：
 
    ```bash
+   (
+   set -euo pipefail
+
    docker compose --profile index \
      --env-file /data/tyf/RAG/shared/env/rag.env \
      -f /data/tyf/RAG/current/compose.yaml \
      up -d --no-build --pull never rag-worker
+   )
    ```
 
 `/ready` 只有在活动索引与 manifest 一致且全部模型健康时才返回 200。
@@ -144,9 +183,13 @@ runtime `RELEASE_ID`；服务器必须以该文件为 `release_id` 的权威来�
 mount 执行 `tar -czf`：
 
 ```bash
+(
+set -euo pipefail
+
 bash /data/tyf/RAG/current/backup.sh \
   "$(date -u +%Y%m%dT%H%M%SZ)" \
   /data/tyf/RAG/shared/env/rag.env
+)
 ```
 
 脚本只读取固定的 `data/state` 和 `data/qdrant`，验证归档与 SHA 后原子发布，
@@ -159,12 +202,41 @@ RAG readiness：普通查询捕获失败继续回答，显式 FULL Debug 则在�
 503。详细内容边界与 72 小时/30 天保留策略见
 `design/public/trace-observability.md`。
 
-执行 `bash rollback.sh /data/tyf/RAG/shared/env/rag.env` 可切回部署前记录的
+执行下面整块可切回部署前记录的版本：
+
+```bash
+(
+set -euo pipefail
+
+test "$(id -u)" -eq 0
+project_root='/data/tyf/RAG'
+active_env="${project_root}/shared/env/rag.env"
+test -f "${project_root}/current/rollback.sh"
+test -f "${active_env}"
+test ! -L "${active_env}"
+bash /data/tyf/RAG/current/rollback.sh \
+  /data/tyf/RAG/shared/env/rag.env
+)
+```
+
+回滚脚本使用部署前记录的
 应用、OCR 和 Qdrant 镜像 ID。脚本先重验旧 release、Compose、镜像 digest
 与 OCI revision，再按回滚前实际状态决定是否恢复 worker；全部存活与镜像
 检查通过后，才原子持久化共享 env 和 `current`，提交失败会恢复原元数据。
 SQLite/Qdrant bind mount 不会被删除。索引数据恢复仍以应用 manifest 中记录的
 Qdrant snapshot 为准，不能通过删除数据目录回滚。
+
+过期 DOCX 只接受数据负责人给出的 `docs/` 下精确相对路径；打包前先移动到
+Git 已忽略的 `artifacts/docx-quarantine/<id>/`，文件集合变化后必须使用新的
+corpus ID。只有新 release 健康且 `current` 精确指向它后，才能永久删除该精确
+quarantine。不得根据当前六个文件的名称或日期猜测过期项。
+
+旧 release、incoming、corpus 和镜像同样只能在新版本健康后清理。必须保护
+active release/env/corpus，以及 `rollback-images.env` 记录的上一版 release、
+三个 image ID 和旧 env 引用的 corpus；禁止 `docker image prune`，禁止删除
+`data/state`、`data/qdrant`、`backups`、`logs` 或
+`shared/model-services`。当前无效 c2 资产的精确受保护清理命令见完整手册
+“过期 DOCX 与旧失败发布清理”。
 
 资产下载、断网构建、双包、GPU 冒烟到回滚的完整命令见
 `design/public/offline-build-and-server-deployment.md`；PaddleOCR 专用入口
