@@ -56,10 +56,13 @@ def freeze_corpus_manifest(
         已写入的冻结清单。
 
     Raises:
+        FileExistsError: 输出 manifest 已存在。
         ValueError: 标识、路径或语料集合不安全。
 
     """
     _validate_corpus_id(corpus_id)
+    if output_path.exists() or output_path.is_symlink():
+        raise FileExistsError("corpus manifest 输出已存在，拒绝覆盖。")
     documents = _discover_documents(docs_root)
     manifest = CorpusManifest(
         corpus_digest=_documents_digest(documents),
@@ -69,8 +72,6 @@ def freeze_corpus_manifest(
         schema_version=_SCHEMA_VERSION,
         total_bytes=sum(document.size for document in documents),
     )
-    if output_path.is_symlink():
-        raise ValueError("corpus manifest 输出不能是符号链接。")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         dir=output_path.parent,
@@ -82,7 +83,11 @@ def freeze_corpus_manifest(
         temporary.flush()
         os.fsync(temporary.fileno())
     try:
-        temporary_path.replace(output_path)
+        os.link(temporary_path, output_path)
+    except FileExistsError as error:
+        raise FileExistsError(
+            "corpus manifest 输出已存在，拒绝覆盖。"
+        ) from error
     finally:
         temporary_path.unlink(missing_ok=True)
     return manifest

@@ -27,7 +27,10 @@ def _result_and_manifest(
     results = []
     evidence_records = []
     for case in dataset.cases:
-        if case.validation_state != "verified_text":
+        if (
+            case.split != "holdout"
+            or case.validation_state != "verified_text"
+        ):
             continue
         ranked = tuple(
             RankedEvidence(

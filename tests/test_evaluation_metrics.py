@@ -21,7 +21,10 @@ def _oracle_results(
 ) -> tuple[QueryEvaluationResult, ...]:
     results = []
     for case in dataset.cases:
-        if case.validation_state != "verified_text":
+        if (
+            case.split != "holdout"
+            or case.validation_state != "verified_text"
+        ):
             continue
         ranked = tuple(
             RankedEvidence(
@@ -71,7 +74,10 @@ def _active_manifest(
             text=label.quote or "OCR",
         )
         for case in dataset.cases
-        if case.validation_state == "verified_text"
+        if (
+            case.split == "holdout"
+            and case.validation_state == "verified_text"
+        )
         for index, label in enumerate(case.expected.evidence, start=1)
     )
     return active_evidence_manifest(records)
@@ -87,6 +93,15 @@ def test_evaluator_accepts_complete_human_reviewed_results() -> None:
     )
 
     assert report.passed
+    assert report.schema_version == "1"
+    assert report.status == "passed"
+    assert report.thresholds["recall_at_20"] == 0.95
+    assert len(report.active_evidence_manifest_sha256) == 64
+    assert report.pipeline_fingerprint.startswith("sha256:")
+    assert len(report.dataset_sha256) == 64
+    assert len(report.results_sha256) == 64
+    assert report.metrics["holdout_cases"] == 15
+    assert report.metrics["verified_holdout_cases"] == 15
     assert report.metrics["recall_at_5"] == 1.0
     assert report.metrics["recall_at_10"] == 1.0
     assert report.metrics["recall_at_20"] == 1.0
@@ -152,7 +167,28 @@ def test_wrong_source_makes_quality_gate_fail() -> None:
     )
 
     assert not report.passed
+    assert report.status == "failed"
     assert any("recall_at_20" in failure for failure in report.failures)
+
+
+def test_evaluation_identity_is_stable_when_result_order_changes() -> None:
+    dataset = synthetic_evaluation_dataset()
+    results = _oracle_results(dataset)
+    manifest = _active_manifest(dataset)
+
+    original = evaluate_results(
+        dataset,
+        results,
+        active_evidence_manifest=manifest,
+    )
+    reversed_report = evaluate_results(
+        dataset,
+        tuple(reversed(results)),
+        active_evidence_manifest=manifest,
+    )
+
+    assert original.dataset_sha256 == reversed_report.dataset_sha256
+    assert original.results_sha256 == reversed_report.results_sha256
 
 
 def test_completion_thresholds_are_not_weaker_than_task_contract() -> None:
@@ -199,3 +235,43 @@ def test_ocr_error_counts_must_be_complete_pairs() -> None:
                 "ocr_reference_characters": None,
             }
         )
+
+
+def test_evaluator_rejects_tuning_results_in_production() -> None:
+    dataset = synthetic_evaluation_dataset()
+    results = list(_oracle_results(dataset))
+    tuning_case = next(case for case in dataset.cases if case.split == "tuning")
+    results.append(results[0].model_copy(update={"id": tuning_case.id}))
+
+    with pytest.raises(ValueError, match="未知或阻塞题号"):
+        evaluate_results(
+            dataset,
+            tuple(results),
+            active_evidence_manifest=_active_manifest(dataset),
+        )
+
+
+def test_blocked_holdout_prevents_production_acceptance() -> None:
+    payload = synthetic_evaluation_dataset().model_dump(mode="json")
+    target = next(
+        case for case in payload["cases"] if case["split"] == "holdout"
+    )
+    target["categories"] = ["ocr"]
+    target["validation_state"] = "blocked_gpu_ocr"
+    target["expected"] = {
+        "answerable": None,
+        "required_facts": [],
+        "refusal_code": None,
+        "evidence": [],
+    }
+    dataset = EvaluationDataset.model_validate(payload)
+
+    report = evaluate_results(
+        dataset,
+        _oracle_results(dataset),
+        active_evidence_manifest=_active_manifest(dataset),
+    )
+
+    assert report.blocked_holdout_ids == (target["id"],)
+    assert report.metrics["verified_holdout_cases"] == 14
+    assert not report.passed

@@ -59,6 +59,29 @@ def test_freeze_verify_and_stage_variable_corpus_sizes(
     ) == frozen
 
 
+def test_freeze_rejects_existing_manifest_without_modifying_it(
+    tmp_path: Path,
+) -> None:
+    docs = tmp_path / "docs"
+    _write_docs(docs, 1)
+    manifest = tmp_path / "manifest.json"
+    freeze_corpus_manifest(
+        docs_root=docs,
+        corpus_id="existing",
+        output_path=manifest,
+    )
+    original = manifest.read_bytes()
+
+    with pytest.raises(FileExistsError, match="已存在"):
+        freeze_corpus_manifest(
+            docs_root=docs,
+            corpus_id="existing",
+            output_path=manifest,
+        )
+
+    assert manifest.read_bytes() == original
+
+
 @pytest.mark.parametrize("mutation", ("add", "delete", "modify"))
 def test_verify_rejects_any_docx_set_or_content_change(
     tmp_path: Path,

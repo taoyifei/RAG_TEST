@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Self
 
@@ -100,27 +102,19 @@ _DEFAULT_THRESHOLDS = Thresholds()
 class EvaluationReport:
     """确定性指标、人工指标完整性与门槛结论。"""
 
+    schema_version: str
+    status: str
+    passed: bool
+    thresholds: dict[str, float | int]
+    active_evidence_manifest_sha256: str
+    pipeline_fingerprint: str
+    dataset_sha256: str
+    results_sha256: str
     metrics: dict[str, float | int]
+    blocked_holdout_ids: tuple[str, ...]
     missing_result_ids: tuple[str, ...]
     manual_review_missing_ids: tuple[str, ...]
     failures: tuple[str, ...]
-
-    @property
-    def passed(self) -> bool:
-        """返回是否满足全部门槛且无缺失。
-
-        Args:
-            无参数；使用当前报告中的指标和缺失项。
-
-        Returns:
-            全部门槛通过且输入完整时为真。
-
-        """
-        return (
-            not self.missing_result_ids
-            and not self.manual_review_missing_ids
-            and not self.failures
-        )
 
 
 def load_results(path: Path) -> tuple[QueryEvaluationResult, ...]:
@@ -154,7 +148,7 @@ def evaluate_results(
     active_evidence_manifest: ActiveEvidenceManifest,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
 ) -> EvaluationReport:
-    """评估全部非阻塞题，禁止缺题或重复题。
+    """仅用全部 holdout 题执行生产质量验收。
 
     Args:
         dataset: 人工冻结题集。
@@ -166,13 +160,21 @@ def evaluate_results(
         可直接决定进程退出码的完整报告。
 
     Raises:
-        ValueError: 结果含重复题号或未知题号。
+        ValueError: 结果含重复题号、调参题号或未知题号。
 
     """
     result_by_id = _unique_results(results)
+    holdout = tuple(
+        case for case in dataset.cases if case.split == "holdout"
+    )
+    blocked_holdout = tuple(
+        case.id
+        for case in holdout
+        if case.validation_state != "verified_text"
+    )
     evaluable = tuple(
         case
-        for case in dataset.cases
+        for case in holdout
         if case.validation_state == "verified_text"
     )
     expected_ids = {case.id for case in evaluable}
@@ -207,13 +209,58 @@ def evaluate_results(
         dataset.documents,
         active_records,
     )
+    metrics["holdout_cases"] = len(holdout)
+    metrics["verified_holdout_cases"] = len(evaluable)
     failures = _threshold_failures(metrics, thresholds)
+    passed = (
+        not blocked_holdout
+        and not missing
+        and not manual_missing
+        and not failures
+    )
     return EvaluationReport(
+        schema_version="1",
+        status="passed" if passed else "failed",
+        passed=passed,
+        thresholds=asdict(thresholds),
+        active_evidence_manifest_sha256=(
+            active_evidence_manifest.manifest_sha256
+        ),
+        pipeline_fingerprint=active_evidence_manifest.pipeline_fingerprint,
+        dataset_sha256=_canonical_sha256(
+            dataset.model_dump(mode="json"),
+        ),
+        results_sha256=_canonical_sha256(
+            [
+                result.model_dump(mode="json")
+                for result in sorted(results, key=lambda item: item.id)
+            ],
+        ),
         metrics=metrics,
+        blocked_holdout_ids=blocked_holdout,
         missing_result_ids=missing,
         manual_review_missing_ids=manual_missing,
         failures=failures,
     )
+
+
+def _canonical_sha256(value: object) -> str:
+    """计算 JSON 值的稳定 SHA-256 摘要。
+
+    Args:
+        value: 可序列化为 JSON 的值。
+
+    Returns:
+        64 位小写十六进制摘要。
+
+    """
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _unique_results(
