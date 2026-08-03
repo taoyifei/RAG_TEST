@@ -64,6 +64,11 @@ def _retrieval_settings(
 ) -> RetrievalSettings:
     return RetrievalSettings(
         status=status,
+        freeze_decision_sha256=(
+            "sha256:" + "d" * 64
+            if status == ConfigurationState.FROZEN
+            else None
+        ),
         dense_limit=40,
         bm25_limit=40,
         rrf_rank_constant=60,

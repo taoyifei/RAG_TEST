@@ -23,4 +23,4 @@ def test_provisional_retrieval_refuses_indexing() -> None:
     )
 
     with pytest.raises(ValueError, match="冻结集"):
-        require_indexable_configuration(pipeline, retrieval)
+        require_indexable_configuration(pipeline, retrieval, None)

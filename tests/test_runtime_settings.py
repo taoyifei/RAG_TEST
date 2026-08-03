@@ -89,6 +89,16 @@ def test_runtime_settings_parse_bounded_endpoint_lists(
     assert not hasattr(settings, "max_model_concurrency")
 
 
+def test_runtime_settings_reject_endpoint_with_api_path(
+    tmp_path: Path,
+) -> None:
+    values = _runtime_values(tmp_path)
+    values["llm_endpoints"] = '["http://llm-1:8000/v1"]'
+
+    with pytest.raises(ValidationError, match="无路径"):
+        RuntimeSettings(**values)
+
+
 @pytest.mark.parametrize(
     "revision",
     (None, "1" * 12, "A" * 40, "0.1.0"),

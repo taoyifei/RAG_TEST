@@ -24,6 +24,7 @@ from rag_app.clients.model_services import (
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
 from rag_app.contracts import DocumentMetadata, PipelineSpec
 from rag_app.corpus_policy import CorpusPolicy
+from rag_app.freeze_evidence import FreezeDecision
 from rag_app.index.build import (
     DocxBuildConfig,
     DocxBuildServices,
@@ -108,12 +109,13 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
     require_release_revision(settings)
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
-    require_indexable_configuration(pipeline, retrieval)
     metadata_by_source = _validate_worker_contract(
         settings,
         pipeline,
         retrieval,
     )
+    decision = _load_freeze_decision(settings.retrieval_path, retrieval)
+    require_indexable_configuration(pipeline, retrieval, decision)
     with ExitStack() as rollback:
         bundle = _assemble_worker_runtime(
             settings,
@@ -331,12 +333,14 @@ def _reject_incompatible_active_collection(
 def require_indexable_configuration(
     pipeline: PipelineSpec,
     retrieval: RetrievalSettings,
+    decision: FreezeDecision | None,
 ) -> None:
     """阻止临时检索参数或未核验模型 revision 写入生产索引。
 
     Args:
         pipeline: 待写入 manifest 的完整 pipeline。
         retrieval: 冻结集确定的检索配置。
+        decision: 与配置同目录加载的冻结决策；临时配置时为空。
 
     Returns:
         无返回值；校验通过即允许继续构建索引。
@@ -347,6 +351,41 @@ def require_indexable_configuration(
     """
     if retrieval.status != ConfigurationState.FROZEN:
         raise ValueError("检索参数尚未由冻结集定标，拒绝索引。")
+    if decision is None:
+        raise ValueError("frozen retrieval 缺少 freeze decision。")
+    if retrieval.freeze_decision_sha256 != decision.sha256():
+        raise ValueError("retrieval freeze decision hash 不一致。")
+    if pipeline.index_fingerprint() != decision.index_fingerprint:
+        raise ValueError("pipeline index fingerprint 与决策不一致。")
+    if (
+        retrieval.serving_fingerprint(pipeline)
+        != decision.serving_fingerprint
+    ):
+        raise ValueError("retrieval serving fingerprint 与决策不一致。")
+    expected_parameters = {
+        "target_tokens": str(
+            decision.selected_candidate.config.target_tokens
+        ),
+        "hard_max_tokens": str(
+            decision.selected_candidate.config.hard_max_tokens
+        ),
+        "overlap_tokens": str(
+            decision.selected_candidate.config.overlap_tokens
+        ),
+    }
+    if (
+        pipeline.chunker_revision
+        != decision.selected_candidate.chunker_revision
+        or dict(pipeline.chunker_parameters) != expected_parameters
+    ):
+        raise ValueError("pipeline chunker 与 freeze decision 不一致。")
+    revisions = decision.model_revisions
+    if (
+        pipeline.embedding_revision != revisions.embedding_revision
+        or pipeline.reranker_revision != revisions.reranker_revision
+        or pipeline.llm_revisions != revisions.llm_revisions
+    ):
+        raise ValueError("pipeline model revisions 与 freeze decision 不一致。")
     required_revisions = (
         pipeline.chunker_revision,
         pipeline.ocr_revision,
@@ -360,6 +399,31 @@ def require_indexable_configuration(
         for marker in ("provisional", "pending", "unknown")
     ):
         raise ValueError("必要模型或 chunker revision 尚未核验，拒绝索引。")
+
+
+def _load_freeze_decision(
+    retrieval_path: Path,
+    retrieval: RetrievalSettings,
+) -> FreezeDecision | None:
+    """只为 frozen retrieval 加载同目录冻结决策。
+
+    Args:
+        retrieval_path: 当前 retrieval JSON 路径。
+        retrieval: 已完成严格 schema 校验的配置。
+
+    Returns:
+        provisional 配置返回空；frozen 配置返回严格决策。
+
+    Raises:
+        ValueError: 决策文件缺失、含符号链接或 schema 无效。
+
+    """
+    if retrieval.status != ConfigurationState.FROZEN:
+        return None
+    decision_path = retrieval_path.with_name("FREEZE_DECISION.json")
+    if not decision_path.is_file() or decision_path.is_symlink():
+        raise ValueError("frozen retrieval 缺少普通 FREEZE_DECISION.json。")
+    return FreezeDecision.load(decision_path)
 
 
 def _chunker_config(pipeline: PipelineSpec) -> ChunkerConfig:

@@ -85,6 +85,10 @@ class RetrievalSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     status: ConfigurationState
+    freeze_decision_sha256: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     dense_limit: int = Field(gt=0)
     bm25_limit: int = Field(gt=0)
     rrf_rank_constant: int = Field(gt=0)
@@ -117,6 +121,20 @@ class RetrievalSettings(BaseModel):
     @model_validator(mode="after")
     def _validate_limits(self) -> Self:
         """校验召回、精排与证据条数的包含关系。"""
+        if (
+            self.status == ConfigurationState.PROVISIONAL
+            and self.freeze_decision_sha256 is not None
+        ):
+            raise ValueError(
+                "provisional 配置的 freeze_decision_sha256 必须为空。"
+            )
+        if (
+            self.status == ConfigurationState.FROZEN
+            and self.freeze_decision_sha256 is None
+        ):
+            raise ValueError(
+                "frozen 配置必须提供 freeze_decision_sha256。"
+            )
         if not (
             self.final_limit
             <= self.max_final_limit
@@ -391,9 +409,10 @@ def _validate_http_url(value: str) -> None:
         or not parsed.netloc
         or parsed.username is not None
         or parsed.password is not None
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
     ):
         raise ValueError(
-            "服务 URL 必须是无凭据、query 和 fragment 的 HTTP(S)。"
+            "服务 URL 必须是无路径、凭据、query 和 fragment 的 HTTP(S)。"
         )
