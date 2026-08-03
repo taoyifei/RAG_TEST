@@ -4179,3 +4179,109 @@
 - [x] 本目标只修改明确白名单内的 smoke 操作契约和对应测试；不修改 RAG、
   Parser、chunking、检索、Prompt、索引、模型参数、生产源码、Compose、三份
   配置或模型资产。未 build/package、未联网、未访问服务器、未 commit/push。
+
+## 2026-08-03 fresh smoke 操作契约断点续作
+
+- [x] 用户在上一阶段另行明确要求提交并推送，因此仅含上述 21 行事实基线的
+  `bfe70b868ece9a9fa21c789a7fb57fced972bb9c` 已成为当前 HEAD；本目标从该断点
+  继续，并恢复“不 commit/push”硬约束。
+- [x] 断点工作树与暂存区均为空；`src` tree、Compose blob、三份配置 SHA256、
+  应用/OCR 资源清单 SHA256 均与任务 0 保护基线一致，`BLOCKED.md` 仍恰好保留
+  六类真实阻塞。
+
+## 2026-08-03 fresh smoke 操作契约任务 1：冻结测试契约
+
+- [x] 原定向红测退出 1：实际 retrieval SHA256 为 `7f3d2775...e2c1bd5`，旧测试
+  重复硬编码 `267e419f...db41f3`，精确复现全量测试的唯一既有失败。
+- [x] 删除 pipeline/retrieval 的测试内摘要常量；测试改为从
+  `deployment/ASSETS.sha256` 按完整相对路径读取且要求恰好一条摘要，再核对
+  两个实际文件，同时继续断言 `status=provisional` 和显式
+  `freeze_decision_sha256=null`。未修改任何配置或检索参数。
+- [x] `pytest -q tests/test_worker_deployment_policy.py` 退出 0：`7 passed in
+  1.31s`。
+
+## 2026-08-03 fresh smoke 操作契约任务 2：报告与 Quickstart 字段
+
+- [x] 新行为测试首轮退出 1：`3 failed, 3 passed`，分别证明报告缺少
+  `source_revision`、Quickstart 没有可执行的统一字段读取器；另一定向红测证明
+  文档仍读取 release 输出顶层不存在的 `RELEASE_ID`。
+- [x] 报告同时输出同值 `head`/`source_revision`、`release_id`、`corpus_id`、
+  `release_dir` 与文件摘要，并在 fresh verify 阶段要求顶层恰好七个普通文件。
+- [x] Quickstart 现用一段可直接执行且 fail-closed 的 Python 读取器取得四个
+  必需字段；缺字段立即非零退出。`RELEASE_ID`/`SOURCE_REVISION` 只在服务器安全
+  解包后从 runtime 核对，不再访问 release 输出顶层不存在的文件。
+- [x] `pytest -q tests/test_release_smoke.py tests/test_smoke_quickstart.py` 退出 0：
+  `6 passed in 0.09s`。
+
+## 2026-08-03 fresh smoke 操作契约任务 3：fresh bootstrap
+
+- [x] bootstrap/Quickstart 红测为 `6 failed, 2 deselected`，打包红测另为
+  `1 failed`：脚本不存在、Quickstart 未调用且 runtime 无法纳入该文件。
+- [x] 新增 root-only `bootstrap.sh`；只在既有规范绝对 project root 下创建所需
+  目录及必要父目录，全部为 0700。`releases`、`shared/corpora`、
+  `shared/env/candidates`、`data`、`data/qdrant`、`backups` 为 root:root，
+  `data/state`、`logs` 为 10001:10001；任何既有非目录、符号链接或不匹配
+  owner/mode 均在创建前失败，不 chown/chmod 历史目录。
+- [x] 在临时根目录通过持久 fakeroot 身份库真实执行脚本：普通用户拒绝、首次
+  创建、第二次 inode 不变、精确 owner/mode、危险 owner/mode 保持原状并拒绝、
+  符号链接且无部分创建均通过；结果为 `6 passed, 2 deselected in 1.20s`。
+- [x] `package.sh` 把可执行 bootstrap 纳入 runtime，`verify-offline.sh` 将其列为
+  必需普通且可执行文件；Quickstart 在 install 前调用。成功打包内容与删除后重写
+  manifest 的反测为 `2 passed in 1.09s`。
+
+## 2026-08-03 fresh smoke 操作契约任务 4：server preflight
+
+- [x] 新契约红测为 `8 failed, 2 passed`：旧脚本无三参数入口、固定 80GiB、
+  8088 只告警、8091/8092 无条件检查，且没有 DockerRootDir、同盘合并、candidate
+  GPU 与端点来源契约。
+- [x] `server-preflight.sh` 现接受 runtime 绝对目录、candidate 绝对普通文件或
+  basic sentinel `-`、以及 `fresh|upgrade`；全程只调用 Docker info/list、
+  `nvidia-smi`、`ss`、`df`、TCP connect 和文件只读元数据，不创建或修复状态。
+- [x] runtime 大小与三张 image tar 大小分别作为 project/DockerRootDir 需求；
+  分盘独立判断，同盘按两者之和判断。两种单盘不足与同盘合并反测均非零退出，且
+  Quickstart 的 basic/full preflight 都位于 deploy 的 `docker load` 之前。
+- [x] fresh 的 8088 占用为 FAIL，upgrade 为 WARN；8091/8092 仅当 candidate
+  端点选择这些端口时检查。模型 TCP 只来自 candidate，OCR GPU 索引必须存在并
+  报告所选卡空闲显存；JSON 不含端点、token、candidate 路径或 env 内容。
+- [x] server-preflight 行为集为 `9 passed in 12.42s`，Quickstart 顺序定向测试
+  为 `1 passed in 0.02s`；四个本轮 Shell 的 `bash -n` 均退出 0。
+
+## 2026-08-03 fresh smoke 操作契约任务 5：文档验收
+
+- [x] 文档契约红测先因缺少 rsync 主命令退出 1；Quickstart 已改用
+  `rsync --partial --append-verify --protect-args` 推荐 13GB 断点续传，并明确
+  SHA256 仍是完整性交付的唯一权威，服务器继续强制 `sha256sum -c`。
+- [x] Qdrant `/readyz` 通过 `docker exec rag-app` 从容器环境读取
+  `RAG_QDRANT_API_KEY`，用 `api-key` 请求头认证；命令不打印 key。
+- [x] 文档明确 `--network none` 证据只证明 RUN/selfcheck 网络隔离，不宣称
+  BuildKit registry 元数据或 frontend 完全断网；只有 smoke 全部成功后才清理
+  本次 incoming/extracted，并保留 active 与 rollback release。
+- [x] Quickstart 保持唯一主路径；任务 5 初次为 197 行，补齐既有身份静态合同后
+  当前为 199 行。文档契约定向测试退出 0：`1 passed in 0.01s`。
+
+## 2026-08-03 fresh smoke 操作契约最终验收
+
+- [x] 五个白名单关联测试文件首次合并为 `42 passed in 20.92s`；Ruff 首轮只发现
+  本轮测试的导入顺序、长行、子进程绝对路径和一个 statement 阈值问题，机械
+  收敛后 Ruff 全绿，关联集复跑为 `42 passed in 21.08s`。
+- [x] 全量 pytest 第 1 轮为 `1 failed, 821 passed, 61 warnings in 567.47s`，
+  skipped=0；唯一失败是既有文档合同要求 Quickstart 显式出现
+  `report["source_revision"]` 与 `report["release_id"]`。统一读取器补充两个身份
+  锚点后，合同与 Quickstart 行为集为 `9 passed in 1.36s`。
+- [x] 全量 pytest 第 2 轮退出 0：`822 passed, 61 warnings in 560.20s`，
+  skipped=0；通过数达到 ≥806，warning 总数与既有基线相同，类别仍只有
+  `StarletteDeprecationWarning` 和 `UserWarning`。
+- [x] 全量测试仅临时启动既有、无挂载、restart policy=`no` 的本地
+  `rag-final-three-qdrant`；结束后以 `docker stop --timeout 10` 停止并复核为
+  `exited|no|0`，未创建或删除容器、网络、卷。
+- [x] 本目标未执行真实 build/package，未访问外网或 `.57/.58/.60`，未
+  SSH/SCP，未部署服务器；从断点续作开始未 commit/push。
+- [x] 最终静态门禁再次全部退出 0：compileall；Ruff `All checks passed!`；
+  mypy `Success: no issues found in 103 source files`；Google docstring
+  `missing_google_sections=0`；10 个 deployment Shell；默认/index Compose；
+  `git diff --check`；应用、OCR assets/models/wheels 清单。
+- [x] 最终保护审计：HEAD 仍为 `bfe70b868ece9a9fa21c789a7fb57fced972bb9c`，
+  `src` tree 与 Compose blob 仍为 `ee0f0593...3d6` / `0c6bf436...ebc3`；三份
+  配置、应用/OCR 清单 SHA256 均与任务 0 完全一致。变更只在本任务白名单，
+  暂存区为空；`BLOCKED.md` 恰好为真实模型、retrieval 定参、GPU OCR、EMF、
+  Word 编号和 production 验收六类。

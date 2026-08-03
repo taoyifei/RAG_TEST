@@ -17,11 +17,11 @@
 
 - `deployment/config/retrieval.json` 继续为 `provisional`，没有使用真实模型与
   人工冻结集完成 tuning/holdout，因此不能改为 frozen 或使生产 ready。
-- 当前 HEAD 配置 SHA256 为
-  `7f3d27750d5a5129bf26357fcb1627cbf389d9671f4c3118f765896fae2c1bd5`；既有
-  `tests/test_worker_deployment_policy.py` 仍冻结提交 `7492835` 之前的
-  `267e419f41f995aaa61f7750a0753d27be7f90c534e04e8c7e87db07b3db41f3`，导致
-  全量 pytest 唯一失败。本目标禁止修改 retrieval 参数，也禁止放宽冻结断言。
+- 当前配置 SHA256 为
+  `7f3d27750d5a5129bf26357fcb1627cbf389d9671f4c3118f765896fae2c1bd5`；配置完整性
+  测试已改为从 `deployment/ASSETS.sha256` 读取唯一摘要并核对实际文件，继续
+  断言 `status=provisional` 与 `freeze_decision_sha256=null`。该修复只消除重复
+  摘要来源，不代表 retrieval 已完成定参或冻结。
 - 解除条件：核验真实模型契约后，用 tuning 集确定参数、独立 holdout 验收并生成
   `FREEZE_DECISION`；届时由获授权任务原子更新配置及其冻结契约。
 
