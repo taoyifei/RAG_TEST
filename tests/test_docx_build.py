@@ -24,6 +24,7 @@ from rag_app.index.build import (
     DocxBuildConfig,
     DocxBuildServices,
     DocxChunkBuilder,
+    OcrElementProcessor,
     discover_docx_sources,
 )
 from rag_app.index.qdrant import IndexedChunk
@@ -311,6 +312,52 @@ def test_builder_calls_ocr_once_and_indexes_image_evidence(
         for item in chunks
     )
     assert cached_chunks == chunks
+
+
+def test_public_ocr_processor_enriches_image_once(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    input_root.mkdir()
+    _write_synthetic_docx(input_root / "synthetic.docx", image_count=1)
+    discovered = discover_docx_sources(input_root)[0]
+    state = StateStore(tmp_path / "state.sqlite3")
+    state.initialize()
+    ocr_client = _OcrClient()
+    version = SourceVersion(
+        source_id=f"src_{discovered.content_sha256[:32]}",
+        doc_version=f"sha256:{discovered.content_sha256}",
+        content_sha256=discovered.content_sha256,
+        source_path=discovered.source_path,
+        pipeline_fingerprint="sha256:" + ("5" * 64),
+        state=VersionState.STAGING,
+        job_id="job_processor",
+        chunk_count=None,
+        error_code=None,
+    )
+    elements = DocxParser().parse(
+        input_root / discovered.source_path,
+        display_path=discovered.source_path,
+    )
+    processor = OcrElementProcessor(
+        state=state,
+        ocr_client=ocr_client,
+        ocr_revision=DEFAULT_OCR_REVISION,
+        minimum_confidence=0.80,
+    )
+
+    processed = processor.process(elements, version)
+    cached = processor.process(elements, version)
+
+    assert ocr_client.calls == 1
+    assert [element.text for element in processed if element.binary_data] == [
+        "公开合成 OCR 文本"
+    ]
+    assert cached == processed
+    assert state.count_ocr_results(
+        ocr_revision=DEFAULT_OCR_REVISION,
+        state="succeeded",
+    ) == 1
 
 
 def test_builder_retries_transient_ocr_failure(

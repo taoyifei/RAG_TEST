@@ -7,11 +7,13 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 import uuid
 from collections import Counter, defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,7 +30,7 @@ if not __package__:
     )
 
 from evaluation.chunking_experiment import summarize_token_lengths
-from evaluation.dataset import EvaluationCase, load_tuning_cases
+from evaluation.dataset import EvaluationCase, load_dataset, load_tuning_cases
 from evaluation.legacy_chunking import (
     LegacyElementChunk,
     legacy_element_chunks,
@@ -59,21 +61,35 @@ from rag_app.contracts import (
     validate_chunk_source_spans,
 )
 from rag_app.corpus_policy import CorpusPolicy
+from rag_app.freeze_evidence import (
+    FreezeCandidateConfig,
+    ModelFleetIdentity,
+    RetrievalModelEndpoints,
+    build_candidate_pipeline,
+    canonical_tuning_digest,
+    verify_model_fleet,
+)
+from rag_app.index.build import OcrElementProcessor
 from rag_app.index.qdrant import QdrantIndex
+from rag_app.ocr.client import OcrClient
 from rag_app.parsers.docx import DocxParser
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
 from rag_app.retrieval.filters import MetadataPolicy
 from rag_app.retrieval.fusion import FusedHit, reciprocal_rank_fusion
 from rag_app.retrieval.rerank import RerankConfig, RerankStage
 from rag_app.runtime import load_pipeline
-from rag_app.settings import RetrievalSettings
-from rag_app.state import StateStore
+from rag_app.settings import ConfigurationState, RetrievalSettings
+from rag_app.state import SourceVersion, StateStore, VersionState
+from scripts.freeze_corpus_manifest import CorpusManifest, verify_corpus
 
 __all__ = [
     "DEFAULT_SECTION_CANDIDATES",
     "LEGACY_CANDIDATE",
     "AblationCandidate",
+    "AblationInputFiles",
+    "CalibrationEvidenceFiles",
     "RetrievalEnvironment",
+    "RetrievalEvidenceFiles",
     "load_tuning_cases_only",
     "parse_candidate",
     "run_retrieval_ablation",
@@ -85,6 +101,14 @@ _RETRIEVAL_CATEGORIES = ("cross_chunk", "table", "numeric")
 _CANDIDATE_PART_COUNT = 3
 _SMALL_CHUNK_32 = 32
 _SMALL_CHUNK_64 = 64
+_SHA256_HEX_LENGTH = 64
+_OCR_MAX_INPUT_BYTES = 10 * 1024 * 1024
+_OCR_CALIBRATION_STATES = (
+    OcrState.SUCCEEDED,
+    OcrState.LOW_CONFIDENCE,
+    OcrState.FAILED,
+    OcrState.PENDING,
+)
 _LEGACY_CONFIG = ChunkerConfig(
     target_tokens=384,
     hard_max_tokens=512,
@@ -153,14 +177,16 @@ DEFAULT_SECTION_CANDIDATES = (
 
 @dataclass(frozen=True, slots=True)
 class RetrievalEnvironment:
-    """真实 embedding、reranker 与临时 Qdrant 的连接参数。"""
+    """真实 embedding、reranker、OCR 与临时 Qdrant 的连接参数。"""
 
     qdrant_url: str
     qdrant_api_key: str
     embedding_endpoints: tuple[str, ...]
     reranker_endpoints: tuple[str, ...]
+    ocr_endpoints: tuple[str, ...]
     embedding_api_token: str | None
     reranker_api_token: str | None
+    ocr_api_token: str | None
     document_paths: dict[str, str]
     timeout_seconds: float = 30.0
 
@@ -182,10 +208,39 @@ class RetrievalEnvironment:
             or not self.qdrant_api_key
             or not self.embedding_endpoints
             or not self.reranker_endpoints
+            or not self.ocr_endpoints
             or not self.document_paths
             or self.timeout_seconds <= 0
         ):
-            raise ValueError("retrieval 消融的真实服务配置不完整。")
+            raise ValueError("retrieval 消融的真实 OCR/模型配置不完整。")
+
+
+@dataclass(frozen=True, slots=True)
+class AblationInputFiles:
+    """结构与检索消融共享的四个 operator 输入。"""
+
+    input_directory: Path
+    tokenizer_path: Path
+    pipeline_path: Path
+    corpus_policy_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class CalibrationEvidenceFiles:
+    """结构消融必须绑定的源码与 corpus 证据。"""
+
+    calibration_source_revision: str
+    corpus_manifest_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalEvidenceFiles(CalibrationEvidenceFiles):
+    """真实检索额外绑定的配置、数据集和模型证据。"""
+
+    retrieval_path: Path
+    dataset_path: Path
+    fleet_report_path: Path
+    model_contract_directory: Path
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,6 +275,7 @@ class _RetrievalServices:
     embedding: TeiEmbeddingClient
     reranker: RerankerClient
     document_paths: dict[str, str]
+    fleet: ModelFleetIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,10 +351,8 @@ def load_tuning_cases_only(path: Path) -> tuple[EvaluationCase, ...]:
 
 
 def run_structural_ablation(
-    input_directory: Path,
-    tokenizer_path: Path,
-    pipeline_path: Path,
-    corpus_policy_path: Path,
+    inputs: AblationInputFiles,
+    evidence: CalibrationEvidenceFiles,
     *,
     candidates: tuple[AblationCandidate, ...] = (
         DEFAULT_SECTION_CANDIDATES
@@ -307,10 +361,8 @@ def run_structural_ablation(
     """在真实只读 DOCX 上生成不含私有内容的结构消融。
 
     Args:
-        input_directory: 冻结 DOCX 根目录。
-        tokenizer_path: 冻结 embedding tokenizer。
-        pipeline_path: operator 指定 pipeline。
-        corpus_policy_path: operator 指定 corpus policy。
+        inputs: DOCX、tokenizer、pipeline 与 corpus policy 路径。
+        evidence: 本次源码 revision 与 canonical corpus 清单。
         candidates: 至少一个 section-pack-v2 参数候选。
 
     Returns:
@@ -320,11 +372,15 @@ def run_structural_ablation(
         ValueError: 配置、资产或候选不兼容。
 
     """
+    corpus = verify_corpus(
+        docs_root=inputs.input_directory,
+        manifest_path=evidence.corpus_manifest_path,
+    )
     pipeline, counter, documents = _load_documents(
-        input_directory,
-        tokenizer_path,
-        pipeline_path,
-        corpus_policy_path,
+        inputs.input_directory,
+        inputs.tokenizer_path,
+        inputs.pipeline_path,
+        inputs.corpus_policy_path,
     )
     _require_section_candidates(candidates)
     reports: list[dict[str, object]] = []
@@ -382,6 +438,15 @@ def run_structural_ablation(
     return {
         "mode": "structural",
         "status": "provisional_no_parameter_selection",
+        "identity": _calibration_identity(
+            calibration_source_revision=(
+                evidence.calibration_source_revision
+            ),
+            pipeline_path=inputs.pipeline_path,
+            pipeline=pipeline,
+            corpus_manifest_path=evidence.corpus_manifest_path,
+            corpus=corpus,
+        ),
         "documents": len(documents),
         "parser_counts": _parser_counts(documents),
         "candidates": reports,
@@ -486,9 +551,8 @@ def summarize_section_candidate(
 
 
 def run_retrieval_ablation(
-    structural_inputs: tuple[Path, Path, Path, Path],
-    retrieval_path: Path,
-    dataset_path: Path,
+    inputs: AblationInputFiles,
+    evidence: RetrievalEvidenceFiles,
     environment: RetrievalEnvironment,
     *,
     candidates: tuple[AblationCandidate, ...] = (
@@ -498,10 +562,9 @@ def run_retrieval_ablation(
     """用真实模型和候选独立临时 collection 运行 tuning-only 检索。
 
     Args:
-        structural_inputs: DOCX、tokenizer、pipeline、corpus policy 路径。
-        retrieval_path: 保持不变的召回与重排参数。
-        dataset_path: 人工冻结集；只经 tuning loader 读取。
-        environment: 真实 embedding、reranker 和 Qdrant 服务。
+        inputs: DOCX、tokenizer、pipeline、corpus policy 路径。
+        evidence: retrieval、dataset、corpus 与同次 fleet 证据路径。
+        environment: 真实 embedding、reranker、OCR 和 Qdrant 服务。
         candidates: section-pack-v2 候选。
 
     Returns:
@@ -511,13 +574,38 @@ def run_retrieval_ablation(
         ValueError: 配置、tuning 隔离或模型响应不满足契约。
 
     """
-    pipeline, counter, documents = _load_documents(
-        *structural_inputs,
+    corpus = verify_corpus(
+        docs_root=inputs.input_directory,
+        manifest_path=evidence.corpus_manifest_path,
     )
-    retrieval = RetrievalSettings.load(retrieval_path)
-    tuning_cases = load_tuning_cases_only(dataset_path)
+    pipeline, counter, documents = _load_documents(
+        inputs.input_directory,
+        inputs.tokenizer_path,
+        inputs.pipeline_path,
+        inputs.corpus_policy_path,
+    )
+    retrieval = RetrievalSettings.load(evidence.retrieval_path)
+    if (
+        retrieval.status != ConfigurationState.PROVISIONAL
+        or retrieval.freeze_decision_sha256 is not None
+    ):
+        raise ValueError("retrieval 消融必须使用 provisional 配置。")
+    dataset = load_dataset(evidence.dataset_path)
+    tuning_cases = load_tuning_cases_only(evidence.dataset_path)
+    if environment.document_paths != dataset.documents:
+        raise ValueError("document map 必须与 calibration dataset 完全一致。")
     _require_document_map(tuning_cases, environment.document_paths)
     _require_section_candidates(candidates)
+    fleet = verify_model_fleet(
+        evidence.fleet_report_path,
+        evidence.model_contract_directory,
+        pipeline=pipeline,
+        calibration_source_revision=evidence.calibration_source_revision,
+        retrieval_endpoints=RetrievalModelEndpoints(
+            embedding=environment.embedding_endpoints,
+            reranker=environment.reranker_endpoints,
+        ),
+    )
     qdrant = QdrantClient(
         url=environment.qdrant_url,
         api_key=environment.qdrant_api_key,
@@ -530,6 +618,11 @@ def run_retrieval_ablation(
         follow_redirects=False,
     )
     reranker_http = httpx.Client(
+        timeout=environment.timeout_seconds,
+        trust_env=False,
+        follow_redirects=False,
+    )
+    ocr_http = httpx.Client(
         timeout=environment.timeout_seconds,
         trust_env=False,
         follow_redirects=False,
@@ -549,6 +642,29 @@ def run_retrieval_ablation(
             _pool(environment.reranker_endpoints, reranker_http),
             api_token=environment.reranker_api_token,
         )
+        ocr = OcrClient(
+            _pool(environment.ocr_endpoints, ocr_http),
+            revision=pipeline.ocr_revision,
+            api_token=environment.ocr_api_token,
+            max_input_bytes=_OCR_MAX_INPUT_BYTES,
+        )
+        with tempfile.TemporaryDirectory(
+            prefix="rag-ablation-ocr-state-"
+        ) as state_dir:
+            state = StateStore(Path(state_dir) / "state.sqlite3")
+            state.initialize()
+            documents, ocr_states = _enrich_documents_with_ocr(
+                documents,
+                tuning_cases,
+                environment.document_paths,
+                processor=OcrElementProcessor(
+                    state=state,
+                    ocr_client=ocr,
+                    ocr_revision=pipeline.ocr_revision,
+                    minimum_confidence=pipeline.ocr_minimum_confidence,
+                ),
+                pipeline_fingerprint=pipeline.fingerprint(),
+            )
         services = _RetrievalServices(
             pipeline=pipeline,
             counter=counter,
@@ -559,12 +675,14 @@ def run_retrieval_ablation(
             embedding=embedding,
             reranker=reranker,
             document_paths=environment.document_paths,
+            fleet=fleet,
         )
         reports = [
             _run_retrieval_candidate(candidate, services)
             for candidate in (LEGACY_CANDIDATE, *candidates)
         ]
     finally:
+        ocr_http.close()
         reranker_http.close()
         embedding_http.close()
         qdrant.close()
@@ -572,68 +690,254 @@ def run_retrieval_ablation(
         "mode": "retrieval",
         "split": "tuning",
         "status": "real_model_results_provisional",
+        "identity": {
+            **_calibration_identity(
+                calibration_source_revision=(
+                    evidence.calibration_source_revision
+                ),
+                pipeline_path=inputs.pipeline_path,
+                pipeline=pipeline,
+                corpus_manifest_path=evidence.corpus_manifest_path,
+                corpus=corpus,
+            ),
+            "retrieval_file_sha256": _prefixed_file_sha256(
+                evidence.retrieval_path
+            ),
+            "retrieval_serving_fingerprint": (
+                retrieval.serving_fingerprint(pipeline)
+            ),
+            "evaluation_dataset_sha256": _prefixed_file_sha256(
+                evidence.dataset_path
+            ),
+            "tuning_digest": canonical_tuning_digest(
+                dataset.documents,
+                tuple(
+                    case.model_dump(mode="json") for case in dataset.cases
+                ),
+            ),
+            "fleet": fleet.model_dump(mode="json"),
+        },
         "cases": len(tuning_cases),
+        "ocr_calibrated": True,
+        "ocr_states": ocr_states,
         "candidates": reports,
     }
+
+
+def _enrich_documents_with_ocr(
+    documents: tuple[_ParsedDocument, ...],
+    cases: tuple[EvaluationCase, ...],
+    document_paths: dict[str, str],
+    *,
+    processor: OcrElementProcessor,
+    pipeline_fingerprint: str,
+) -> tuple[tuple[_ParsedDocument, ...], dict[str, int]]:
+    """在候选建库前只执行一次生产一致的图片 OCR。
+
+    Args:
+        documents: 解析器产生的全部只读文档。
+        cases: 仅含 tuning split 的校准题。
+        document_paths: 冻结题文档键到相对路径的映射。
+        processor: 与生产 builder 共用的 OCR 状态处理器。
+        pipeline_fingerprint: 校准输入 pipeline 的稳定指纹。
+
+    Returns:
+        已补充 OCR 文本的文档和按图片出现次数统计的状态计数。
+
+    Raises:
+        ValueError: 出现 pending 图片，或 tuning OCR locator 缺失或失败。
+
+    """
+    enriched = tuple(
+        _ParsedDocument(
+            source_id=document.source_id,
+            source_path=document.source_path,
+            doc_version=document.doc_version,
+            elements=tuple(
+                processor.process(
+                    list(document.elements),
+                    _calibration_source_version(
+                        document,
+                        pipeline_fingerprint,
+                    ),
+                )
+            ),
+            metadata=document.metadata,
+        )
+        for document in documents
+    )
+    counts = _ocr_state_counts(enriched)
+    if counts[OcrState.PENDING.value] > 0:
+        raise ValueError("OCR 校准仍含 pending 图片，拒绝候选建库。")
+    _require_tuning_ocr_evidence(enriched, cases, document_paths)
+    return enriched, counts
+
+
+def _calibration_source_version(
+    document: _ParsedDocument,
+    pipeline_fingerprint: str,
+) -> SourceVersion:
+    content_sha256 = document.doc_version.removeprefix("sha256:")
+    if len(content_sha256) != _SHA256_HEX_LENGTH:
+        raise ValueError("校准文档 doc_version 不是 SHA256。")
+    return SourceVersion(
+        source_id=document.source_id,
+        doc_version=document.doc_version,
+        content_sha256=content_sha256,
+        source_path=document.source_path,
+        pipeline_fingerprint=pipeline_fingerprint,
+        state=VersionState.STAGING,
+        job_id="calibration-ocr",
+        chunk_count=None,
+        error_code=None,
+    )
+
+
+def _ocr_state_counts(
+    documents: tuple[_ParsedDocument, ...],
+) -> dict[str, int]:
+    counts = {state.value: 0 for state in _OCR_CALIBRATION_STATES}
+    for document in documents:
+        for element in document.elements:
+            if element.kind != ElementKind.IMAGE:
+                continue
+            state = element.ocr_state
+            if state not in _OCR_CALIBRATION_STATES:
+                raise ValueError("OCR 校准图片缺少终态或 pending 状态。")
+            counts[state.value] += 1
+    return counts
+
+
+def _require_tuning_ocr_evidence(
+    documents: tuple[_ParsedDocument, ...],
+    cases: tuple[EvaluationCase, ...],
+    document_paths: dict[str, str],
+) -> None:
+    images = tuple(
+        (document.source_path, element)
+        for document in documents
+        for element in document.elements
+        if element.kind == ElementKind.IMAGE
+    )
+    for case in cases:
+        if "ocr" not in case.categories:
+            continue
+        for label in case.expected.evidence:
+            if label.quote is not None:
+                continue
+            expected_path = document_paths.get(label.document)
+            if expected_path is None:
+                raise ValueError("tuning OCR 文档键不在 document map。")
+            matches = tuple(
+                element
+                for source_path, element in images
+                if source_path == expected_path
+                and label.locator_contains in element.locator.display()
+            )
+            if not matches:
+                raise ValueError("tuning OCR locator 未命中校准图片。")
+            if any(
+                element.ocr_state in {OcrState.FAILED, OcrState.PENDING}
+                for element in matches
+            ):
+                raise ValueError("tuning OCR locator 对应图片识别失败。")
 
 
 def _run_retrieval_candidate(
     candidate: AblationCandidate,
     services: _RetrievalServices,
 ) -> dict[str, object]:
-    fingerprint = _candidate_fingerprint(services.pipeline, candidate)
+    candidate_pipeline = build_candidate_pipeline(
+        services.pipeline,
+        FreezeCandidateConfig(
+            target_tokens=candidate.target_tokens,
+            hard_max_tokens=candidate.hard_max_tokens,
+            overlap_tokens=candidate.overlap_tokens,
+        ),
+        strategy=candidate.strategy,
+        fleet=services.fleet,
+    )
+    with _temporary_candidate_index(
+        services.qdrant,
+        candidate_pipeline,
+        candidate,
+        pipeline_fingerprint=candidate_pipeline.index_fingerprint(),
+    ) as index:
+        chunks = _retrieval_chunks(
+            candidate,
+            pipeline=candidate_pipeline,
+            counter=services.counter,
+            documents=services.documents,
+        )
+        _index_retrieval_chunks(
+            chunks,
+            _IndexingServices(
+                index=index,
+                qdrant=services.qdrant,
+                embedding=services.embedding,
+                sparse=QdrantBm25Encoder(
+                    tokenizer=candidate_pipeline.sparse_tokenizer,
+                    language=candidate_pipeline.sparse_language,
+                ),
+                document_instruction=(
+                    candidate_pipeline.document_embedding_instruction
+                ),
+            ),
+        )
+        metrics = _retrieval_metrics(
+            services.cases,
+            _QueryServices(
+                index=index,
+                embedding=services.embedding,
+                reranker=services.reranker,
+                sparse=QdrantBm25Encoder(
+                    tokenizer=candidate_pipeline.sparse_tokenizer,
+                    language=candidate_pipeline.sparse_language,
+                ),
+                retrieval=services.retrieval,
+                document_paths=services.document_paths,
+            ),
+        )
+    payload = _candidate_payload(candidate, metrics)
+    payload.update(
+        {
+            "index_fingerprint": candidate_pipeline.index_fingerprint(),
+            "serving_fingerprint": services.retrieval.serving_fingerprint(
+                candidate_pipeline
+            ),
+        }
+    )
+    return payload
+
+
+@contextmanager
+def _temporary_candidate_index(
+    qdrant: QdrantClient,
+    pipeline: PipelineSpec,
+    candidate: AblationCandidate,
+    *,
+    pipeline_fingerprint: str | None = None,
+) -> Iterator[QdrantIndex]:
+    """创建且只清理本次校准使用的随机 collection。"""
     collection = f"rag-ablation-{uuid.uuid4().hex}"
     index = QdrantIndex(
-        services.qdrant,
+        qdrant,
         collection_name=collection,
-        dense_dimension=services.pipeline.embedding_dimension,
-        pipeline_fingerprint=fingerprint,
+        dense_dimension=pipeline.embedding_dimension,
+        pipeline_fingerprint=(
+            pipeline_fingerprint
+            if pipeline_fingerprint is not None
+            else _candidate_fingerprint(pipeline, candidate)
+        ),
     )
-    with tempfile.TemporaryDirectory(prefix="rag-ablation-state-") as state_dir:
-        state = StateStore(Path(state_dir) / "state.sqlite3")
-        state.initialize()
-        del state
-        try:
-            index.create_collection()
-            chunks = _retrieval_chunks(
-                candidate,
-                pipeline=services.pipeline,
-                counter=services.counter,
-                documents=services.documents,
-            )
-            _index_retrieval_chunks(
-                chunks,
-                _IndexingServices(
-                    index=index,
-                    qdrant=services.qdrant,
-                    embedding=services.embedding,
-                    sparse=QdrantBm25Encoder(
-                        tokenizer=services.pipeline.sparse_tokenizer,
-                        language=services.pipeline.sparse_language,
-                    ),
-                    document_instruction=(
-                        services.pipeline.document_embedding_instruction
-                    ),
-                ),
-            )
-            metrics = _retrieval_metrics(
-                services.cases,
-                _QueryServices(
-                    index=index,
-                    embedding=services.embedding,
-                    reranker=services.reranker,
-                    sparse=QdrantBm25Encoder(
-                        tokenizer=services.pipeline.sparse_tokenizer,
-                        language=services.pipeline.sparse_language,
-                    ),
-                    retrieval=services.retrieval,
-                    document_paths=services.document_paths,
-                ),
-            )
-        finally:
-            if services.qdrant.collection_exists(collection):
-                services.qdrant.delete_collection(collection)
-    return _candidate_payload(candidate, metrics)
+    if qdrant.collection_exists(collection):
+        raise ValueError("随机校准 collection 已存在，拒绝接管。")
+    try:
+        index.create_collection()
+        yield index
+    finally:
+        if qdrant.collection_exists(collection):
+            qdrant.delete_collection(collection)
 
 
 def _retrieval_chunks(
@@ -664,10 +968,7 @@ def _retrieval_chunks(
     chunker = Chunker(
         candidate.chunker_config(),
         counter,
-        pipeline_fingerprint=_candidate_fingerprint(
-            pipeline,
-            candidate,
-        ),
+        pipeline_fingerprint=pipeline.index_fingerprint(),
     )
     for document in documents:
         section_chunks = chunker.chunk(
@@ -1411,16 +1712,6 @@ def _require_document_map(
         raise ValueError("document map 的键和值必须非空。")
 
 
-def _load_document_map(path: Path) -> dict[str, str]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or any(
-        not isinstance(key, str) or not isinstance(value, str)
-        for key, value in payload.items()
-    ):
-        raise ValueError("document map 必须是字符串到字符串的 JSON object。")
-    return {str(key): str(value) for key, value in payload.items()}
-
-
 def _pool(
     endpoints: tuple[str, ...],
     client: httpx.Client,
@@ -1453,6 +1744,52 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _prefixed_file_sha256(path: Path) -> str:
+    """计算普通证据文件的带算法前缀摘要。"""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("calibration 证据必须是普通文件。")
+    return f"sha256:{_sha256_file(path)}"
+
+
+def _calibration_identity(
+    *,
+    calibration_source_revision: str,
+    pipeline_path: Path,
+    pipeline: PipelineSpec,
+    corpus_manifest_path: Path,
+    corpus: CorpusManifest,
+) -> dict[str, str]:
+    """构造结构与检索报告共享的不可泄密身份。
+
+    Args:
+        calibration_source_revision: 本次执行的 Git revision。
+        pipeline_path: 本次加载的 operator pipeline 文件。
+        pipeline: 已完成严格校验的 pipeline。
+        corpus_manifest_path: 已核验 exact DOCX set 的清单文件。
+        corpus: 已核验的 canonical corpus 清单。
+
+    Returns:
+        不含文件名、原文、endpoint 或密钥的身份字段。
+
+    Raises:
+        ValueError: calibration revision 不是 40 位小写十六进制。
+
+    """
+    if re.fullmatch(r"[0-9a-f]{40}", calibration_source_revision) is None:
+        raise ValueError("calibration source revision 必须是 40 位 Git SHA。")
+    return {
+        "schema_version": "1",
+        "calibration_source_revision": calibration_source_revision,
+        "pipeline_file_sha256": _prefixed_file_sha256(pipeline_path),
+        "pipeline_index_fingerprint": pipeline.index_fingerprint(),
+        "corpus_id": corpus.corpus_id,
+        "corpus_digest": corpus.corpus_digest,
+        "corpus_manifest_sha256": _prefixed_file_sha256(
+            corpus_manifest_path
+        ),
+    }
+
+
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("input_directory", type=Path)
@@ -1464,13 +1801,17 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--pipeline", type=Path, required=True)
     parser.add_argument("--corpus-policy", type=Path, required=True)
+    parser.add_argument("--corpus-manifest", type=Path, required=True)
+    parser.add_argument("--calibration-source-revision", required=True)
     parser.add_argument("--candidate", action="append", default=[])
     parser.add_argument("--retrieval-config", type=Path)
     parser.add_argument("--dataset", type=Path)
-    parser.add_argument("--document-map", type=Path)
+    parser.add_argument("--fleet-report", type=Path)
+    parser.add_argument("--model-contract-directory", type=Path)
     parser.add_argument("--qdrant-url")
     parser.add_argument("--embedding-endpoint", action="append", default=[])
     parser.add_argument("--reranker-endpoint", action="append", default=[])
+    parser.add_argument("--ocr-endpoint", action="append", default=[])
     parser.add_argument(
         "--qdrant-api-key-env",
         default="RAG_QDRANT_API_KEY",
@@ -1482,6 +1823,10 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument(
         "--reranker-api-token-env",
         default="RAG_RERANKER_API_TOKEN",
+    )
+    parser.add_argument(
+        "--ocr-api-token-env",
+        default="RAG_OCR_API_TOKEN",
     )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
@@ -1501,22 +1846,35 @@ def main() -> None:
     candidates = tuple(
         parse_candidate(raw) for raw in arguments.candidate
     ) or DEFAULT_SECTION_CANDIDATES
+    inputs = AblationInputFiles(
+        input_directory=arguments.input_directory,
+        tokenizer_path=arguments.tokenizer,
+        pipeline_path=arguments.pipeline,
+        corpus_policy_path=arguments.corpus_policy,
+    )
     if arguments.mode == "structural":
         result = run_structural_ablation(
-            arguments.input_directory,
-            arguments.tokenizer,
-            arguments.pipeline,
-            arguments.corpus_policy,
+            inputs,
+            CalibrationEvidenceFiles(
+                calibration_source_revision=(
+                    arguments.calibration_source_revision
+                ),
+                corpus_manifest_path=arguments.corpus_manifest,
+            ),
             candidates=candidates,
         )
     else:
         required = {
             "--retrieval-config": arguments.retrieval_config,
             "--dataset": arguments.dataset,
-            "--document-map": arguments.document_map,
+            "--fleet-report": arguments.fleet_report,
+            "--model-contract-directory": (
+                arguments.model_contract_directory
+            ),
             "--qdrant-url": arguments.qdrant_url,
             "--embedding-endpoint": arguments.embedding_endpoint,
             "--reranker-endpoint": arguments.reranker_endpoint,
+            "--ocr-endpoint": arguments.ocr_endpoint,
         }
         missing = [name for name, value in required.items() if not value]
         if missing:
@@ -1527,27 +1885,36 @@ def main() -> None:
         if not qdrant_key:
             raise ValueError("retrieval mode 缺少 Qdrant API key 环境变量。")
         result = run_retrieval_ablation(
-            (
-                arguments.input_directory,
-                arguments.tokenizer,
-                arguments.pipeline,
-                arguments.corpus_policy,
+            inputs,
+            RetrievalEvidenceFiles(
+                calibration_source_revision=(
+                    arguments.calibration_source_revision
+                ),
+                corpus_manifest_path=arguments.corpus_manifest,
+                retrieval_path=arguments.retrieval_config,
+                dataset_path=arguments.dataset,
+                fleet_report_path=arguments.fleet_report,
+                model_contract_directory=(
+                    arguments.model_contract_directory
+                ),
             ),
-            arguments.retrieval_config,
-            arguments.dataset,
             RetrievalEnvironment(
                 qdrant_url=arguments.qdrant_url,
                 qdrant_api_key=qdrant_key,
                 embedding_endpoints=tuple(arguments.embedding_endpoint),
                 reranker_endpoints=tuple(arguments.reranker_endpoint),
+                ocr_endpoints=tuple(arguments.ocr_endpoint),
                 embedding_api_token=os.environ.get(
                     arguments.embedding_api_token_env
                 ),
                 reranker_api_token=os.environ.get(
                     arguments.reranker_api_token_env
                 ),
-                document_paths=_load_document_map(
-                    arguments.document_map
+                ocr_api_token=os.environ.get(
+                    arguments.ocr_api_token_env
+                ),
+                document_paths=dict(
+                    load_dataset(arguments.dataset).documents
                 ),
             ),
             candidates=candidates,

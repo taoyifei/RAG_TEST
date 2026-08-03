@@ -227,8 +227,11 @@ def _normalize_endpoint(value: str) -> str:
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
+        or parsed.path not in {"", "/"}
         or parsed.query
         or parsed.fragment
     ):
-        raise ValueError("外部端点必须是无 query/fragment 的 http(s) URL。")
+        raise ValueError(
+            "外部端点必须是无路径、query 和 fragment 的 http(s) URL。"
+        )
     return normalized

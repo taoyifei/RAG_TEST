@@ -9,6 +9,20 @@ from rag_app.clients.resilience import (
 )
 
 
+def test_pool_rejects_base_url_with_api_path() -> None:
+    with pytest.raises(ValueError, match="无路径"):
+        ResilientHttpPool(
+            ("http://llm:8000/v1",),
+            client=httpx.Client(),
+            policy=ResiliencePolicy(
+                max_attempts=1,
+                failure_threshold=1,
+                cooldown_seconds=30,
+                max_concurrency=1,
+            ),
+        )
+
+
 def test_pool_fails_over_and_opens_circuit_without_logging_payload() -> None:
     calls: list[str] = []
 

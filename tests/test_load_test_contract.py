@@ -1,5 +1,6 @@
 """端到端负载验收的固定边界。"""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,110 @@ def test_invalid_citation_is_not_counted_as_answered() -> None:
     )
 
     assert outcome == load_test_chat.RequestOutcome.INVALID_CITATION
+
+
+def test_retrieval_and_rerank_p95_over_two_seconds_fails_gate() -> None:
+    results = [
+        load_test_chat.RequestResult(
+            elapsed_seconds=1.0,
+            outcome=load_test_chat.RequestOutcome.ANSWERED,
+            target=True,
+            multiturn=False,
+            retrieval_rerank_seconds=2.001,
+        )
+    ]
+
+    report = load_test_chat.summarize_results(
+        results,
+        concurrency=5,
+        duration_seconds=1800,
+    )
+
+    assert report["retrieval_rerank_p95_seconds"] == 2.001
+    assert report["missing_retrieval_rerank_latencies"] == 0
+    assert report["passed"] is False
+
+
+def test_retrieval_and_rerank_stage_latency_is_required() -> None:
+    results = [
+        load_test_chat.RequestResult(
+            elapsed_seconds=1.0,
+            outcome=load_test_chat.RequestOutcome.ANSWERED,
+            target=True,
+            multiturn=False,
+        )
+    ]
+
+    report = load_test_chat.summarize_results(
+        results,
+        concurrency=5,
+        duration_seconds=1800,
+    )
+
+    assert report["retrieval_rerank_p95_seconds"] is None
+    assert report["missing_retrieval_rerank_latencies"] == 1
+    assert report["passed"] is False
+
+
+def test_stage_events_measure_retrieval_and_rerank_delta() -> None:
+    messages = [
+        {
+            "type": "stage",
+            "stage": "rewrite",
+            "elapsed_ms": 125,
+        },
+        {
+            "type": "stage",
+            "stage": "retrieve",
+            "elapsed_ms": 725,
+        },
+        {
+            "type": "stage",
+            "stage": "rerank",
+            "elapsed_ms": 1625,
+        },
+    ]
+
+    assert load_test_chat._retrieval_rerank_elapsed(messages) == 1.5
+
+
+def test_load_cases_use_verified_holdout_only(tmp_path: Path) -> None:
+    dataset = tmp_path / "dataset.json"
+    dataset.write_text(
+        json.dumps(
+            {
+                "cases": [
+                    {
+                        "id": "Q001",
+                        "split": "tuning",
+                        "question": "调参题",
+                        "history_questions": [],
+                        "validation_state": "verified_text",
+                        "expected": {"answerable": True},
+                    },
+                    {
+                        "id": "Q046",
+                        "split": "holdout",
+                        "question": "验收题",
+                        "history_questions": [],
+                        "validation_state": "verified_text",
+                        "expected": {"answerable": False},
+                    },
+                    {
+                        "id": "Q060",
+                        "split": "holdout",
+                        "question": "阻塞题",
+                        "history_questions": [],
+                        "validation_state": "blocked_gpu_ocr",
+                        "expected": {"answerable": None},
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    cases = load_test_chat._load_cases(dataset)
+
+    assert tuple(case.identifier for case in cases) == ("Q046",)

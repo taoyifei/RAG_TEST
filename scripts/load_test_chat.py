@@ -29,6 +29,7 @@ from rag_app.active_evidence import (
 
 _MAX_ERROR_RATE = 0.01
 _MAX_ANSWER_P95_SECONDS = 60.0
+_MAX_RETRIEVAL_RERANK_P95_SECONDS = 2.0
 _HTTP_OK = 200
 _EVIDENCE_ID_PATTERN = re.compile(r"^E[1-9][0-9]*$")
 
@@ -65,6 +66,7 @@ class RequestResult:
     outcome: RequestOutcome
     target: bool
     multiturn: bool
+    retrieval_rerank_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +179,20 @@ def summarize_results(
         if result.outcome in accepted_outcomes
     ]
     answer_p95 = _percentile(latencies, 0.95) if latencies else None
+    retrieval_rerank_latencies = [
+        result.retrieval_rerank_seconds
+        for result in target_results
+        if result.outcome in accepted_outcomes
+        and result.retrieval_rerank_seconds is not None
+    ]
+    retrieval_rerank_p95 = (
+        _percentile(retrieval_rerank_latencies, 0.95)
+        if retrieval_rerank_latencies
+        else None
+    )
+    missing_retrieval_rerank_latencies = (
+        len(latencies) - len(retrieval_rerank_latencies)
+    )
     quality_failures = sum(
         counts[outcome.value]
         for outcome in (
@@ -222,6 +238,10 @@ def summarize_results(
         "errors": transport_errors,
         "error_rate": error_rate,
         "answer_p95_seconds": answer_p95,
+        "retrieval_rerank_p95_seconds": retrieval_rerank_p95,
+        "missing_retrieval_rerank_latencies": (
+            missing_retrieval_rerank_latencies
+        ),
         "passed": bool(
             target_results
             and latencies
@@ -229,6 +249,10 @@ def summarize_results(
             and quality_failures == 0
             and answer_p95 is not None
             and answer_p95 <= _MAX_ANSWER_P95_SECONDS
+            and missing_retrieval_rerank_latencies == 0
+            and retrieval_rerank_p95 is not None
+            and retrieval_rerank_p95
+            <= _MAX_RETRIEVAL_RERANK_P95_SECONDS
         ),
     }
     return report
@@ -312,6 +336,8 @@ def _load_cases(path: Path) -> tuple[LoadCase, ...]:
     for item in raw_cases:
         if not isinstance(item, dict):
             continue
+        if item.get("split") != "holdout":
+            continue
         if item.get("validation_state", "verified_text") != "verified_text":
             continue
         expected = item.get("expected")
@@ -334,7 +360,7 @@ def _load_cases(path: Path) -> tuple[LoadCase, ...]:
             )
         )
     if not cases:
-        raise ValueError("冻结集没有可压测问题。")
+        raise ValueError("冻结集没有可压测的 verified holdout 问题。")
     return tuple(cases)
 
 
@@ -446,11 +472,13 @@ def _ask(
             expected_answerable=context.expected_answerable,
             active_evidence_manifest=runtime.active_manifest,
         )
+    retrieval_rerank_seconds = _retrieval_rerank_elapsed(messages)
     return _request_result(
         started,
         outcome,
         context.target,
         context.multiturn,
+        retrieval_rerank_seconds=retrieval_rerank_seconds,
     )
 
 
@@ -459,13 +487,57 @@ def _request_result(
     outcome: RequestOutcome,
     target: bool,
     multiturn: bool,
+    *,
+    retrieval_rerank_seconds: float | None = None,
 ) -> RequestResult:
     return RequestResult(
         elapsed_seconds=time.perf_counter() - started,
         outcome=outcome,
         target=target,
         multiturn=multiturn,
+        retrieval_rerank_seconds=retrieval_rerank_seconds,
     )
+
+
+def _retrieval_rerank_elapsed(
+    messages: Sequence[object],
+) -> float | None:
+    """从累计阶段耗时计算检索、重排和邻居扩展耗时。
+
+    Args:
+        messages: 单次 NDJSON 响应解析后的全部消息。
+
+    Returns:
+        从 rewrite 完成到 rerank 完成的秒数；阶段缺失或乱序时返回
+        `None`。
+
+    """
+    elapsed_by_stage: dict[str, int] = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("type") != "stage":
+            continue
+        stage = message.get("stage")
+        elapsed = message.get("elapsed_ms")
+        if (
+            not isinstance(stage, str)
+            or not isinstance(elapsed, int)
+            or isinstance(elapsed, bool)
+            or elapsed < 0
+            or stage in elapsed_by_stage
+        ):
+            return None
+        elapsed_by_stage[stage] = elapsed
+    rewrite_elapsed = elapsed_by_stage.get("rewrite")
+    retrieve_elapsed = elapsed_by_stage.get("retrieve")
+    rerank_elapsed = elapsed_by_stage.get("rerank")
+    if (
+        rewrite_elapsed is None
+        or retrieve_elapsed is None
+        or rerank_elapsed is None
+        or not rewrite_elapsed <= retrieve_elapsed <= rerank_elapsed
+    ):
+        return None
+    return round((rerank_elapsed - rewrite_elapsed) / 1000, 3)
 
 
 def _citations_are_valid(

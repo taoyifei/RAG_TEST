@@ -36,6 +36,7 @@ __all__ = [
     "DocxBuildConfig",
     "DocxBuildServices",
     "DocxChunkBuilder",
+    "OcrElementProcessor",
     "discover_docx_sources",
 ]
 
@@ -110,95 +111,40 @@ class DocxBuildServices:
     ocr_client: _OcrClient | None = None
 
 
-class DocxChunkBuilder:
-    """解析、登记待处理媒体、切块并完成 dense/sparse 编码。"""
+class OcrElementProcessor:
+    """以生产一致的状态语义补充 DOCX 图片 OCR 结果。"""
 
     def __init__(
         self,
         *,
-        config: DocxBuildConfig,
-        services: DocxBuildServices,
+        state: StateStore,
+        ocr_client: _OcrClient | None,
+        ocr_revision: str,
+        minimum_confidence: float,
     ) -> None:
-        """保存构建依赖。
+        """保存 OCR 客户端、缓存与冻结阈值。
 
         Args:
-            config: 输入路径、OCR revision 与 embedding 指令。
-            services: 解析、切块、编码和状态持久化依赖。
-
-        """
-        self._input_root = config.input_root.resolve(strict=True)
-        self._parser = services.parser
-        self._chunker = services.chunker
-        self._embedder = services.embedder
-        self._sparse_encoder = services.sparse_encoder
-        self._state = services.state
-        self._ocr_client = services.ocr_client
-        self._ocr_revision = config.ocr_revision
-        self._metadata_by_source = dict(config.metadata_by_source)
-        if not 0.0 <= config.minimum_ocr_confidence <= 1.0:
-            raise ValueError("OCR 最低置信度必须位于 [0,1]。")
-        self._minimum_ocr_confidence = config.minimum_ocr_confidence
-        self._embedding_instruction = config.embedding_instruction
-
-    def __call__(
-        self,
-        source_path: str,
-        version: SourceVersion,
-    ) -> tuple[IndexedChunk, ...]:
-        """构建一个不可变来源版本。
-
-        Args:
-            source_path: 相对输入根目录的稳定展示路径。
-            version: 已持久化的 staging 来源版本。
+            state: 持久化 OCR 缓存和媒体引用的状态库。
+            ocr_client: 可选真实 OCR 客户端；缺失时记录 pending。
+            ocr_revision: OCR 服务必须返回的冻结 revision。
+            minimum_confidence: succeeded 与 low_confidence 的分界值。
 
         Returns:
-            完成 dense 与 sparse 编码的全部非 OCR 分块。
+            无返回值。
 
         Raises:
-            ValueError: 路径越界、来源身份不一致或文件在构建中变化。
+            ValueError: 置信度阈值不在闭区间 `[0, 1]`。
 
         """
-        path = _safe_source_path(self._input_root, source_path)
-        metadata = self._metadata_by_source.get(source_path)
-        if metadata is None:
-            raise ValueError("source_path 缺少已解析的 corpus policy 元数据。")
-        before = _file_identity(path)
-        if before[0] != version.content_sha256:
-            raise ValueError("DOCX 内容摘要与冻结同步计划不一致。")
-        elements = self._parser.parse(path, display_path=source_path)
-        after = _file_identity(path)
-        if before != after:
-            raise ValueError("DOCX 在解析期间发生变化。")
+        if not 0.0 <= minimum_confidence <= 1.0:
+            raise ValueError("OCR 最低置信度必须位于 [0,1]。")
+        self._state = state
+        self._ocr_client = ocr_client
+        self._ocr_revision = ocr_revision
+        self._minimum_confidence = minimum_confidence
 
-        elements = self._process_images(elements, version)
-        chunks = self._chunker.chunk(
-            version.source_id,
-            version.doc_version,
-            elements,
-            metadata=metadata,
-        )
-        embeddings = self._embedder.embed(
-            tuple(chunk.embedding_text for chunk in chunks),
-            instruction=self._embedding_instruction,
-        )
-        if len(embeddings.vectors) != len(chunks):
-            raise ValueError("embedding 数量与 chunk 数量不一致。")
-        return tuple(
-            IndexedChunk(
-                chunk=chunk,
-                dense=list(vector),
-                sparse=self._sparse_encoder.embed_document(
-                    chunk.embedding_text
-                ),
-            )
-            for chunk, vector in zip(
-                chunks,
-                embeddings.vectors,
-                strict=True,
-            )
-        )
-
-    def _process_images(
+    def process(
         self,
         elements: list[Element],
         version: SourceVersion,
@@ -244,45 +190,18 @@ class DocxChunkBuilder:
                     error_code=result.error_code,
                 )
             )
+            update = {
+                "ocr_state": OcrState(result.state),
+                "ocr_confidence": result.confidence,
+                "ocr_error": result.error_code,
+            }
             if result.text:
-                processed.append(
-                    element.model_copy(
-                        update={
-                            "text": result.text,
-                            "ocr_state": OcrState(result.state),
-                            "ocr_confidence": result.confidence,
-                            "ocr_error": result.error_code,
-                        }
-                    )
-                )
-            else:
-                processed.append(
-                    element.model_copy(
-                        update={
-                            "ocr_state": OcrState(result.state),
-                            "ocr_confidence": result.confidence,
-                            "ocr_error": result.error_code,
-                        }
-                    )
-                )
+                update["text"] = result.text
+            processed.append(element.model_copy(update=update))
         return processed
 
     def _ocr_result(self, element: Element) -> OcrResult:
-        """读取缓存或调用 OCR，并归一化为可持久化结果。
-
-        缓存未命中且已配置 OCR 客户端时会发起外部请求。预期的服务错误、
-        无效响应和低置信度不会向上泄漏，而会转换为明确的 OCR 状态。
-
-        Args:
-            element: 包含内容摘要及媒体字段的图片元素。
-
-        Returns:
-            已缓存或新生成的 OCR 结果。
-
-        Raises:
-            ValueError: 发起 OCR 时图片缺少原始数据或媒体类型。
-
-        """
+        """读取缓存或调用 OCR，并归一化为可持久化结果。"""
         cached = self._state.get_ocr_result(
             element.content_sha256,
             self._ocr_revision,
@@ -330,7 +249,7 @@ class DocxChunkBuilder:
             )
         state = (
             OcrState.SUCCEEDED
-            if response.confidence >= self._minimum_ocr_confidence
+            if response.confidence >= self._minimum_confidence
             else OcrState.LOW_CONFIDENCE
         )
         return OcrResult(
@@ -346,6 +265,94 @@ class DocxChunkBuilder:
             ),
         )
 
+
+class DocxChunkBuilder:
+    """解析、登记待处理媒体、切块并完成 dense/sparse 编码。"""
+
+    def __init__(
+        self,
+        *,
+        config: DocxBuildConfig,
+        services: DocxBuildServices,
+    ) -> None:
+        """保存构建依赖。
+
+        Args:
+            config: 输入路径、OCR revision 与 embedding 指令。
+            services: 解析、切块、编码和状态持久化依赖。
+
+        """
+        self._input_root = config.input_root.resolve(strict=True)
+        self._parser = services.parser
+        self._chunker = services.chunker
+        self._embedder = services.embedder
+        self._sparse_encoder = services.sparse_encoder
+        self._metadata_by_source = dict(config.metadata_by_source)
+        self._ocr_processor = OcrElementProcessor(
+            state=services.state,
+            ocr_client=services.ocr_client,
+            ocr_revision=config.ocr_revision,
+            minimum_confidence=config.minimum_ocr_confidence,
+        )
+        self._embedding_instruction = config.embedding_instruction
+
+    def __call__(
+        self,
+        source_path: str,
+        version: SourceVersion,
+    ) -> tuple[IndexedChunk, ...]:
+        """构建一个不可变来源版本。
+
+        Args:
+            source_path: 相对输入根目录的稳定展示路径。
+            version: 已持久化的 staging 来源版本。
+
+        Returns:
+            完成 dense 与 sparse 编码的全部非 OCR 分块。
+
+        Raises:
+            ValueError: 路径越界、来源身份不一致或文件在构建中变化。
+
+        """
+        path = _safe_source_path(self._input_root, source_path)
+        metadata = self._metadata_by_source.get(source_path)
+        if metadata is None:
+            raise ValueError("source_path 缺少已解析的 corpus policy 元数据。")
+        before = _file_identity(path)
+        if before[0] != version.content_sha256:
+            raise ValueError("DOCX 内容摘要与冻结同步计划不一致。")
+        elements = self._parser.parse(path, display_path=source_path)
+        after = _file_identity(path)
+        if before != after:
+            raise ValueError("DOCX 在解析期间发生变化。")
+
+        elements = self._ocr_processor.process(elements, version)
+        chunks = self._chunker.chunk(
+            version.source_id,
+            version.doc_version,
+            elements,
+            metadata=metadata,
+        )
+        embeddings = self._embedder.embed(
+            tuple(chunk.embedding_text for chunk in chunks),
+            instruction=self._embedding_instruction,
+        )
+        if len(embeddings.vectors) != len(chunks):
+            raise ValueError("embedding 数量与 chunk 数量不一致。")
+        return tuple(
+            IndexedChunk(
+                chunk=chunk,
+                dense=list(vector),
+                sparse=self._sparse_encoder.embed_document(
+                    chunk.embedding_text
+                ),
+            )
+            for chunk, vector in zip(
+                chunks,
+                embeddings.vectors,
+                strict=True,
+            )
+        )
 
 def discover_docx_sources(input_root: Path) -> tuple[DiscoveredSource, ...]:
     """递归发现受控目录中的 DOCX，并计算稳定内容摘要。
