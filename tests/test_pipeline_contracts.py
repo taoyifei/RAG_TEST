@@ -271,6 +271,11 @@ def test_serving_fingerprint_covers_serving_fields_but_not_status() -> None:
     assert fingerprint != retrieval.serving_fingerprint(
         pipeline.model_copy(update={"llm_tokenizer_sha256": "d" * 64})
     )
+    prompt_changed = pipeline.model_copy(
+        update={"prompt_revision": "claims-only-answer-v1"}
+    )
+    assert prompt_changed.index_fingerprint() == pipeline.index_fingerprint()
+    assert fingerprint != retrieval.serving_fingerprint(prompt_changed)
 
 
 def test_manifest_rejects_mismatched_pipeline_fingerprint() -> None:

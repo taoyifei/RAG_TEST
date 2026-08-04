@@ -1077,22 +1077,29 @@ def _record_answer_children(
         trace.get("first_validation_code"),
         DecisionCode.VALIDATION_OK,
     )
+    generations = _dict_list(trace.get("generations"))
+    first_generation = _generation_for_phase(generations, "first")
+    validation_attributes = {
+        "validation_code": trace.get(
+            "first_validation_code",
+            "VALIDATION_OK",
+        ),
+        "repair_triggered": trace.get(
+            "repair_triggered",
+            False,
+        ),
+    }
+    if first_generation is not None:
+        validation_attributes.update(
+            _safe_generation_attributes(first_generation)
+        )
     session.completed_span(
         TraceSpanSpec(
             name="answer.validate",
             kind=SpanKind.GUARDRAIL,
             parent_span_id=answer_span_id,
             reason_code=first_code,
-            attributes={
-                "validation_code": trace.get(
-                    "first_validation_code",
-                    "VALIDATION_OK",
-                ),
-                "repair_triggered": trace.get(
-                    "repair_triggered",
-                    False,
-                ),
-            },
+            attributes=validation_attributes,
         )
     )
     if bool(trace.get("repair_triggered", False)):
@@ -1100,6 +1107,17 @@ def _record_answer_children(
             trace.get("repair_validation_code"),
             DecisionCode.REPAIR_FAILED,
         )
+        repair_attributes: dict[str, object] = {
+            "validation_code": trace.get(
+                "repair_validation_code",
+                "",
+            )
+        }
+        repair_generation = _generation_for_phase(generations, "repair")
+        if repair_generation is not None:
+            repair_attributes.update(
+                _safe_generation_attributes(repair_generation)
+            )
         session.completed_span(
             TraceSpanSpec(
                 name="llm.repair",
@@ -1110,12 +1128,7 @@ def _record_answer_children(
                     if repair_code is DecisionCode.VALIDATION_OK
                     else DecisionCode.REPAIR_FAILED
                 ),
-                attributes={
-                    "validation_code": trace.get(
-                        "repair_validation_code",
-                        "",
-                    )
-                },
+                attributes=repair_attributes,
                 duration_ms=_repair_duration(trace),
             )
         )
@@ -1176,24 +1189,51 @@ def _answer_attributes(
         ),
     }
     generations = _dict_list(trace.get("generations"))
-    if generations:
-        latest = generations[-1]
-        for key in (
-            "model",
-            "endpoint",
-            "retry_count",
-            "prompt_tokens",
-            "completion_tokens",
-            "total_tokens",
-            "max_output_tokens",
-        ):
-            if key in latest:
-                attributes[key] = (
-                    _sanitize_endpoint(str(latest[key]))
-                    if key == "endpoint"
-                    else latest[key]
-                )
+    first_generation = _generation_for_phase(generations, "first")
+    if first_generation is not None:
+        attributes.update(_safe_generation_attributes(first_generation))
     return attributes
+
+
+def _safe_generation_attributes(
+    generation: Mapping[str, object],
+) -> dict[str, object]:
+    attributes: dict[str, object] = {}
+    for key in (
+        "phase",
+        "model",
+        "endpoint",
+        "retry_count",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "max_output_tokens",
+        "claims_count",
+        "top_level_keys",
+        "json_parse_ok",
+        "validation_code",
+    ):
+        if key in generation:
+            attributes[key] = (
+                _sanitize_endpoint(str(generation[key]))
+                if key == "endpoint"
+                else generation[key]
+            )
+    return attributes
+
+
+def _generation_for_phase(
+    generations: list[dict[str, object]],
+    phase: str,
+) -> dict[str, object] | None:
+    return next(
+        (
+            generation
+            for generation in generations
+            if generation.get("phase") == phase
+        ),
+        None,
+    )
 
 
 def _rerank_artifact(
@@ -1293,9 +1333,9 @@ def _decision_code(
 
 def _repair_duration(trace: Mapping[str, object]) -> int:
     generations = _dict_list(trace.get("generations"))
-    if not generations:
+    repair = _generation_for_phase(generations, "repair")
+    if repair is None:
         return 0
-    repair = generations[-1]
     duration = repair.get("elapsed_ms")
     return duration if isinstance(duration, int) else 0
 

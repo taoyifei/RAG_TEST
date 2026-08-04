@@ -182,6 +182,18 @@ def test_app_update_has_only_app_archive_sidecar_and_script(
     assert "rag-qdrant" not in source
 
 
+def test_update_script_accepts_package_relative_archives() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "deployment/simple/update-app.sh"
+    ).read_text(encoding="utf-8")
+
+    assert '[[ "$3" == /* ]]' in source
+    assert '[[ "$1" == /* && "$2" == /* && "$3" == /* ]]' not in source
+    assert 'archive="$(realpath "$1")"' in source
+    assert 'sidecar="$(realpath "$2")"' in source
+
+
 def test_builders_do_not_reference_complex_release_entrypoints() -> None:
     root = Path(__file__).resolve().parents[1]
     source = "\n".join(

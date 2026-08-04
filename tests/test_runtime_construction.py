@@ -248,6 +248,51 @@ def test_runtime_http_construction_failure_closes_partial_clients(
     ]
 
 
+def test_runtime_uses_service_specific_readiness_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    probes: list[tuple[str, str | None]] = []
+    _install_runtime_fakes(
+        monkeypatch,
+        calls,
+        fail_readiness_start=False,
+    )
+
+    def endpoint_probe(**kwargs: object) -> object:
+        expected_model = kwargs["expected_model"]
+        assert expected_model is None or isinstance(expected_model, str)
+        probes.append(
+            (
+                str(kwargs["name"]),
+                expected_model,
+            )
+        )
+        return object()
+
+    monkeypatch.setattr(runtime_module, "HttpEndpointProbe", endpoint_probe)
+
+    def create_app(services: object) -> object:
+        del services
+        return object()
+
+    monkeypatch.setattr(
+        runtime_module,
+        "create_app",
+        create_app,
+    )
+
+    bundle = build_runtime(_settings(tmp_path))
+    bundle.close()
+
+    assert probes == [
+        ("embedding", None),
+        ("reranker", None),
+        ("llm", "Qwen/Qwen3-8B-AWQ"),
+    ]
+
+
 def test_worker_initialize_failure_closes_network_in_reverse_order(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -91,13 +91,18 @@ def _bundle(
     )
 
 
-def _generator(handler: object) -> AnswerGenerator:
+def _generator(
+    handler: object,
+    *,
+    endpoints: tuple[str, ...] = ("http://llm",),
+    max_attempts: int = 1,
+) -> AnswerGenerator:
     llm = BufferedLlmClient(
         ResilientHttpPool(
-            ("http://llm",),
+            endpoints,
             client=httpx.Client(transport=httpx.MockTransport(handler)),
             policy=ResiliencePolicy(
-                max_attempts=1,
+                max_attempts=max_attempts,
                 failure_threshold=1,
                 cooldown_seconds=30,
                 max_concurrency=1,
@@ -137,7 +142,6 @@ def _response(content: dict[str, object]) -> httpx.Response:
 
 def _valid_answer() -> dict[str, object]:
     return {
-        "status": "answered",
         "claims": [
             {
                 "text": "验收期为30天。",
@@ -149,7 +153,6 @@ def _valid_answer() -> dict[str, object]:
                 ],
             }
         ],
-        "refusal_reason": None,
     }
 
 
@@ -167,6 +170,72 @@ def test_answer_is_published_only_after_exact_quote_validation() -> None:
     assert result.model_calls == 1
     assert result.trace["first_validation_code"] == "VALIDATION_OK"
     assert result.trace["repair_triggered"] is False
+
+
+def test_empty_claims_refuse_without_repair() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _response({"claims": []})
+
+    result = _generator(handler).answer(
+        "没有足够证据时应当怎样处理？",
+        _bundle("该片段与问题无关。"),
+    )
+
+    assert result.status == AnswerStatus.REFUSED
+    assert result.refusal_code == RefusalCode.EVIDENCE_INSUFFICIENT
+    assert result.model_calls == 1
+    assert result.trace["first_validation_code"] == (
+        RefusalCode.EVIDENCE_INSUFFICIENT.value
+    )
+    assert result.trace["repair_triggered"] is False
+    assert calls == 1
+
+
+def test_broad_answer_with_five_valid_claims_uses_one_endpoint() -> None:
+    evidence_text = "；".join(f"主要要求{index}" for index in range(1, 6))
+    claims = [
+        {
+            "text": f"要求概括{index}",
+            "supports": [
+                {
+                    "evidence_id": "E1",
+                    "quote": f"主要要求{index}",
+                }
+            ],
+        }
+        for index in range(1, 6)
+    ]
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return _response({"claims": claims})
+
+    result = _generator(
+        handler,
+        endpoints=(
+            "http://llm-a",
+            "http://llm-b",
+            "http://llm-c",
+            "http://llm-d",
+        ),
+        max_attempts=4,
+    ).answer(
+        "请概括文档中的主要要求，并给出引用。",
+        _bundle(evidence_text),
+    )
+
+    assert result.status == AnswerStatus.ANSWERED
+    assert len(result.claims) == 5
+    assert result.model_calls == 1
+    assert result.trace["first_validation_code"] == "VALIDATION_OK"
+    assert "INVALID_ANSWER_SCHEMA" not in result.trace.values()
+    assert len(requests) == 1
+    assert result.calls[0].retry_count == 0
 
 
 def test_invalid_citation_is_repaired_at_most_once() -> None:
@@ -370,14 +439,12 @@ def test_quote_crossing_source_spans_is_rejected_after_one_repair() -> None:
         },
     ]
     answer = {
-        "status": "answered",
         "claims": [
             {
                 "text": "甲乙",
                 "supports": [{"evidence_id": "E1", "quote": "甲乙"}],
             }
         ],
-        "refusal_reason": None,
     }
 
     result = _generator(lambda _: _response(answer)).answer(

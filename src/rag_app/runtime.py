@@ -373,14 +373,14 @@ def _assemble_runtime(
                 endpoints=settings.embedding_endpoint_urls(),
                 client=clients[3],
                 minimum_healthy=1,
-                expected_model=settings.embedding_model,
+                expected_model=None,
             ),
             HttpEndpointProbe(
                 name="reranker",
                 endpoints=settings.reranker_endpoint_urls(),
                 client=clients[4],
                 minimum_healthy=1,
-                expected_model=settings.reranker_model,
+                expected_model=None,
             ),
             HttpEndpointProbe(
                 name="llm",

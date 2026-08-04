@@ -212,10 +212,12 @@ class AnswerGenerator:
                 evidence,
                 calls=tuple(calls),
             )
+            validation_code = _result_validation_code(validated)
+            _record_generation_validation(generations, validation_code)
             return replace(
                 validated,
                 trace={
-                    "first_validation_code": "VALIDATION_OK",
+                    "first_validation_code": validation_code,
                     "repair_triggered": False,
                     "messages": _messages_payload(messages),
                     "response_format": answer_response_format(),
@@ -225,6 +227,7 @@ class AnswerGenerator:
             )
         except _ValidationError as first_error:
             validation_code = first_error.code
+            _record_generation_validation(generations, validation_code)
         repair_request = repair_answer_request(
             first_request,
             validation_error=validation_code,
@@ -252,12 +255,14 @@ class AnswerGenerator:
                 evidence,
                 calls=tuple(calls),
             )
+            repair_code = _result_validation_code(validated)
+            _record_generation_validation(generations, repair_code)
             return replace(
                 validated,
                 trace={
                     "first_validation_code": validation_code,
                     "repair_triggered": True,
-                    "repair_validation_code": "VALIDATION_OK",
+                    "repair_validation_code": repair_code,
                     "messages": _messages_payload(messages),
                     "repair_messages": _messages_payload(repair_messages),
                     "response_format": answer_response_format(),
@@ -289,6 +294,7 @@ class AnswerGenerator:
                 if isinstance(error, _ValidationError)
                 else "INVALID_MODEL_RESPONSE"
             )
+            _record_generation_validation(generations, repair_code)
             return _refusal(
                 RefusalCode.VALIDATION_FAILED,
                 model_calls=2,
@@ -342,14 +348,13 @@ def _validate_answer(
         raise _ValidationError("INVALID_JSON") from error
     except ValueError as error:
         raise _ValidationError(str(error)) from error
-    status = payload["status"]
-    if status == AnswerStatus.REFUSED.value:
+    raw_claims = cast(list[object], payload["claims"])
+    if not raw_claims:
         return _refusal(
             RefusalCode.EVIDENCE_INSUFFICIENT,
             model_calls=len(calls),
             calls=calls,
         )
-    raw_claims = cast(list[object], payload["claims"])
     evidence_by_id = {item.evidence_id: item for item in evidence.items}
     claims = tuple(
         _validate_claim(raw_claim, evidence_by_id) for raw_claim in raw_claims
@@ -537,8 +542,46 @@ def _generation_trace(
         "max_output_tokens": max_output_tokens,
         "messages": _messages_payload(messages),
         "response_format": answer_response_format(),
+        **_response_shape(generated.content),
         "raw_output": generated.content,
     }
+
+
+def _response_shape(content: str) -> dict[str, JsonValue]:
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError:
+        return {
+            "claims_count": None,
+            "top_level_keys": [],
+            "json_parse_ok": False,
+        }
+    if not isinstance(payload, dict):
+        return {
+            "claims_count": None,
+            "top_level_keys": [],
+            "json_parse_ok": True,
+        }
+    claims = payload.get("claims")
+    return {
+        "claims_count": len(claims) if isinstance(claims, list) else None,
+        "top_level_keys": sorted(payload),
+        "json_parse_ok": True,
+    }
+
+
+def _record_generation_validation(
+    generations: list[JsonValue],
+    validation_code: str,
+) -> None:
+    if generations and isinstance(generations[-1], dict):
+        generations[-1]["validation_code"] = validation_code
+
+
+def _result_validation_code(result: AnswerResult) -> str:
+    if result.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT:
+        return RefusalCode.EVIDENCE_INSUFFICIENT.value
+    return "VALIDATION_OK"
 
 
 def _messages_payload(

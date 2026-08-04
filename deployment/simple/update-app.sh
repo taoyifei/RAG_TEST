@@ -81,8 +81,7 @@ if [[ "$#" -eq 4 ]]; then
   [[ "$4" == "--restart-worker" ]] || fail "未知选项：$4"
   restart_worker=true
 fi
-[[ "$1" == /* && "$2" == /* && "$3" == /* ]] \
-  || fail "归档、sidecar 和 env 都必须使用绝对路径。"
+[[ "$3" == /* ]] || fail "env 必须使用绝对路径。"
 [[ -f "$1" && -f "$2" && -f "$3" ]] \
   || fail "归档、sidecar 或 env 不存在。"
 

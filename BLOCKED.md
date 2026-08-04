@@ -1,6 +1,6 @@
 # 阻塞项
 
-本文件只保留当前目标明确要求继续保留的六类外部阻塞。已解决环境、测试和安全
+本文件只保留当前目标明确要求继续保留的七类外部阻塞。已解决环境、测试和安全
 解包问题均已移至 `PROGRESS.md`。
 
 ## 1. 真实模型契约
@@ -58,3 +58,12 @@
   6/6 入库、50 题指标、10 万 chunk、5 并发、备份/回滚与生产 ready 证据。
 - 解除条件：前五类依赖满足后，在获授权服务器窗口执行 SHA 校验、离线 load、
   `compose up --no-build --pull never`、全新卷启动、完整质量/性能/故障与回滚验收。
+
+## 7. claims-only 回答协议服务器复验
+
+- 本地已将模型内部回答协议收敛为顶层只有 `claims` 的无条件 Schema；空 claims
+  直接返回 `EVIDENCE_INSUFFICIENT`，原有逐字引用、source span、数字和 OCR 门禁
+  均继续执行。本任务明确禁止访问 `.60`，因此本地通过不能替代真实宽泛问答。
+- 解除条件：上传本轮 app-only 三文件更新包，只更新 `rag-app`，确认 worker
+  保持原状态且活动 alias/manifest 未变化；再用新 conversation 重试原问题，
+  最终必须为 `type=final,status=answered` 且包含非空、已验证 claims。

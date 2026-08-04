@@ -167,11 +167,53 @@ class _Answerer:
         )
 
 
+class _StructuredAnswerer:
+    def answer(
+        self,
+        question: str,
+        evidence: EvidenceBundle,
+    ) -> AnswerResult:
+        del question, evidence
+        return AnswerResult(
+            status=AnswerStatus.REFUSED,
+            answer=None,
+            claims=(),
+            refusal_code=RefusalCode.EVIDENCE_INSUFFICIENT,
+            model_calls=1,
+            calls=(),
+            trace={
+                "first_validation_code": "EVIDENCE_INSUFFICIENT",
+                "repair_triggered": False,
+                "generations": [
+                    {
+                        "phase": "first",
+                        "model": "Qwen/Qwen3-8B-AWQ",
+                        "endpoint": "http://10.0.0.1:8000",
+                        "retry_count": 0,
+                        "elapsed_ms": 1000,
+                        "prompt_tokens": 4829,
+                        "completion_tokens": 20,
+                        "total_tokens": 4849,
+                        "max_output_tokens": 2048,
+                        "claims_count": 0,
+                        "top_level_keys": ["claims"],
+                        "json_parse_ok": True,
+                        "validation_code": "EVIDENCE_INSUFFICIENT",
+                        "raw_output": (
+                            '{"claims":[],"raw_secret":"must-not-export"}'
+                        ),
+                    }
+                ],
+            },
+        )
+
+
 def _service(
     tmp_path: Path,
     *,
     recorder: TraceRecorder | None,
     assembler: object | None = None,
+    answerer: object | None = None,
 ) -> QueryService:
     tmp_path.mkdir(parents=True, exist_ok=True)
     conversations = ConversationStore(
@@ -200,7 +242,9 @@ def _service(
             reranker=_Reranker(),  # type: ignore[arg-type]
             neighbors=_Neighbors(),  # type: ignore[arg-type]
             assembler=(_Assembler() if assembler is None else assembler),  # type: ignore[arg-type]
-            answerer=_Answerer(),  # type: ignore[arg-type]
+            answerer=(
+                _Answerer() if answerer is None else answerer
+            ),  # type: ignore[arg-type]
         ),
         trace_recorder=recorder,
         trace_identity=identity,
@@ -308,6 +352,84 @@ def test_full_trace_persists_exact_input_without_changing_outcome(
     assert b"synthetic-secret-value" not in exported
     assert b"embedding_vector" not in exported
     assert b"ocr_base64" not in exported
+    recorder.close()
+
+
+def test_safe_trace_records_only_answer_shape_diagnostics(
+    tmp_path: Path,
+) -> None:
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    recorder = TraceRecorder(store)
+    service = _service(
+        tmp_path,
+        recorder=recorder,
+        answerer=_StructuredAnswerer(),
+    )
+    trace_id = "d" * 32
+
+    service.ask(
+        trace_id=trace_id,
+        conversation_id="conversation",
+        question="public synthetic question",
+        now=datetime.now(UTC),
+        emit=lambda _event: None,
+    )
+    recorder.flush()
+    detail = store.get_trace(trace_id)
+    answer_span = next(
+        span for span in detail.spans if span.name == "llm.answer"
+    )
+    exported = store.export_trace(trace_id)
+    recorder.close()
+
+    assert answer_span.attributes["phase"] == "first"
+    assert answer_span.attributes["endpoint"] == "http://10.0.0.1:8000"
+    assert answer_span.attributes["retry_count"] == 0
+    assert answer_span.attributes["prompt_tokens"] == 4829
+    assert answer_span.attributes["completion_tokens"] == 20
+    assert answer_span.attributes["claims_count"] == 0
+    assert answer_span.attributes["top_level_keys"] == ["claims"]
+    assert answer_span.attributes["json_parse_ok"] is True
+    assert answer_span.attributes["validation_code"] == (
+        "EVIDENCE_INSUFFICIENT"
+    )
+    assert "raw_output" not in answer_span.attributes
+    assert b"must-not-export" not in exported
+
+
+def test_full_trace_keeps_raw_answer_only_in_artifact(tmp_path: Path) -> None:
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    recorder = TraceRecorder(store)
+    service = _service(
+        tmp_path,
+        recorder=recorder,
+        answerer=_StructuredAnswerer(),
+    )
+    trace_id = "e" * 32
+    now = datetime.now(UTC)
+
+    service.ask_debug(
+        trace_id=trace_id,
+        conversation_id="conversation",
+        question="public synthetic question",
+        now=now,
+        emit=lambda _event: None,
+    )
+    recorder.flush()
+    detail = store.get_trace(trace_id)
+    answer_metadata = next(
+        artifact for artifact in detail.artifacts if artifact.kind == "answer"
+    )
+    answer_artifact = store.get_artifact(
+        trace_id,
+        answer_metadata.artifact_id,
+        now=now,
+    ).payload
+    recorder.close()
+
+    assert b"must-not-export" in answer_artifact
     recorder.close()
 
 

@@ -4790,3 +4790,85 @@
   改为抽象 `<user>` 占位后重跑为 `tracked_files=4, violations=0`，cached diff
   check 退出 0；repository 仍稳定为 `tracked_files=265, violations=2`，只命中两个
   既有文件。
+
+## 2026-08-04 简单模块化部署最终交付
+
+- 提交 SHA：`fb1b994406aca38c098d0679cb9ce1ba29b9164c`
+- 完整部署包目录：
+  `/home/jerry/work/RAG/artifacts/simple-deploy/fb1b994406ac`
+  - `.env.example`：1478 bytes，
+    SHA256 `9b9466340826c8eae7c83af980cd728801542d639d5c35ca2a13e4f14521d230`
+  - `app-image.tar.gz`：166482170 bytes，
+    SHA256 `a65c061c17cd9d62ff50e132d12a81c37b468d5c8c6a95f2b8d0166b08c06bb2`
+  - `app-image.tar.gz.sha256`：83 bytes，
+    SHA256 `5f89ee54763f2bd0ce063e165c7c6c353ddebdd14161ee03a95b8014a10ca9be`
+  - `compose.yaml`：7253 bytes，
+    SHA256 `da79f7ce00ee0461d8bfbb8915ee11ae2fe197ad2f4eed68ed0a8208a70654db`
+  - `corpus.tar.gz`：21969853 bytes，
+    SHA256 `05a3c37cfe1a67fbb603a0c9b5530f9c348d8b7428b467c0952fe7e1b8f10e37`
+  - `corpus.tar.gz.sha256`：80 bytes，
+    SHA256 `2851edb400058438b5941512e54304cd2a55a6558b0d55874a8d6c4e14a9c814`
+  - `deploy.sh`：6090 bytes，
+    SHA256 `275e5c5c677e5e4fecebcbd568b0a85faa26677db1b64061ebcf058eafe1d3ef`
+  - `DEPLOYMENT_GUIDE.md`：10417 bytes，
+    SHA256 `3fba3eb57ed44c6c32fe1a3cb95b6b340ca43538aa2602fd1dff0045fa1593e6`
+  - `ocr-image.tar.gz`：13103784826 bytes，
+    SHA256 `95ab86c760070b966ef6fbc6286b0780a55b73896894fdc554385fc843c75dbc`
+  - `ocr-image.tar.gz.sha256`：83 bytes，
+    SHA256 `79a24664ff85b62cbb7d482b1386c023584a539a1976fe30ee45188c35b96d37`
+  - `qdrant-image.tar.gz`：70063557 bytes，
+    SHA256 `8133e1f0dd0db3cfe185d2e91008040c22194958bf14e5b74132d3fe99a863ec`
+  - `qdrant-image.tar.gz.sha256`：86 bytes，
+    SHA256 `2a36d4a01b586a24af8ee928cd423c524797ad3353c1db26af82ae47d77eb52b`
+  - `update-app.sh`：5803 bytes，
+    SHA256 `4e288d08b570058fa9fc1c78dc58036c6ea022c7daaae3a81257deec563ee1fe`
+- 应用更新包目录：
+  `/home/jerry/work/RAG/artifacts/app-update/fb1b994406ac`
+  - `app-image.tar.gz`：166482710 bytes，
+    SHA256 `ea218449f7216377e9c9dd6e4ccb38fffbd40f9e0d57ef4783a2f56fc0b73500`
+  - `app-image.tar.gz.sha256`：83 bytes，
+    SHA256 `30b334786e6a533126cad770d1d6ed062c759576e4019927e12003ec26db30bb`
+  - `update-app.sh`：5803 bytes，
+    SHA256 `4e288d08b570058fa9fc1c78dc58036c6ea022c7daaae3a81257deec563ee1fe`
+- 服务器首次部署：
+  `bash /data/tyf/RAG/simple/fb1b994406ac/deploy.sh /data/tyf/RAG/rag.env /data/tyf/RAG/simple/fb1b994406ac`
+- 后续应用更新：
+  `bash /data/tyf/RAG/app-update/fb1b994406ac/update-app.sh /data/tyf/RAG/app-update/fb1b994406ac/app-image.tar.gz /data/tyf/RAG/app-update/fb1b994406ac/app-image.tar.gz.sha256 /data/tyf/RAG/rag.env`
+
+## 2026-08-04 claims-only 回答协议 app-only 更新
+
+- [x] 真实阻塞已固定为回答外形契约矛盾：首次回答和唯一 repair 均为 HTTP/模型
+  成功，但连续得到 `INVALID_ANSWER_SCHEMA`；2048 token 只延长到约 143 秒，不能
+  消除 `status/refusal_reason/claims` 的相互冲突。
+- [x] 新模型协议顶层只允许 `claims`；最多 5 条 claim、每条最多 2 个 support，
+  claim/quote 上限分别为 240/300 字符，全部 object 均拒绝额外字段。没有使用
+  `anyOf/oneOf/if-then`，模型不再输出 `status/refusal_reason`。
+- [x] `claims=[]` 是合法且确定性的证据不足结果：一次模型调用后直接返回
+  `EVIDENCE_INSUFFICIENT`，不触发 repair。非空 claims 仍必须全部通过 evidence
+  ID、逐字 quote、单一 source span、数字、重复项和低置信 OCR 门禁；失败时最多
+  repair 一次。
+- [x] SAFE/DIAGNOSTIC Trace 只记录 phase、脱敏 endpoint、retry/token、JSON
+  解析状态、顶层键、claims 数量和 validation code；raw output 仅保留在 FULL
+  artifact。`retry_count=0` 明确表示没有 endpoint failover，readiness 探测不计为
+  回答生成调用。
+- [x] 首轮红测为 `16 failed, 23 passed`，直接命中旧顶层字段、空 claims repair、
+  1—5 条 claims 和宽泛问题失败；实现后回答/契约/Trace/runtime/simple app-update
+  专项为 `90 passed, 2 warnings in 4.24s`。
+- [x] 当前 prompt revision 与 pipeline 均为
+  `sha256:1d38a149ab6db8d533dabf9e3e5d343baa335d2d8bd8b94fdeffafd35f15431e`。
+  base/target index fingerprint 均为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`；
+  serving fingerprint 从 `sha256:9a56a82d...` 变为 `sha256:a6ba0cd4...`。
+- [x] compileall、全仓 Ruff、strict mypy（74 source files）、simple Compose、
+  `update-app.sh` 语法、应用 ASSETS SHA 和 `git diff --check` 均退出 0。没有运行
+  OCR/Qdrant/索引全量测试，没有访问服务器、启动 worker 或 push。
+- 服务器收到三文件并进入更新包目录后只执行：
+
+  ```bash
+  bash update-app.sh \
+    app-image.tar.gz \
+    app-image.tar.gz.sha256 \
+    /data/tyf/RAG/rag.env
+  ```
+
+  该流程只重建 `rag-app`，不重建索引；worker 当前若停止则保持停止。
