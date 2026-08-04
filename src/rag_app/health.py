@@ -73,14 +73,21 @@ class _FreezableConfiguration(Protocol):
 class FrozenConfigurationProbe:
     """拒绝把尚未由冻结集确定的参数报告为生产就绪。"""
 
-    def __init__(self, configuration: _FreezableConfiguration) -> None:
+    def __init__(
+        self,
+        configuration: _FreezableConfiguration,
+        *,
+        allow_provisional: bool = False,
+    ) -> None:
         """保存待检查配置。
 
         Args:
             configuration: 具有 `status` 字段的配置。
+            allow_provisional: 为 True 时允许显式 demo 使用临时参数。
 
         """
         self._configuration = configuration
+        self._allow_provisional = allow_provisional
 
     def check(self) -> ComponentStatus:
         """仅当状态明确为 frozen 时返回 ready。
@@ -92,12 +99,17 @@ class FrozenConfigurationProbe:
             冻结配置健康摘要。
 
         """
-        ready = str(self._configuration.status) == "frozen"
+        status = str(self._configuration.status)
+        ready = status == "frozen" or (
+            self._allow_provisional and status == "provisional"
+        )
         return ComponentStatus(
             name="retrieval_configuration",
             ready=ready,
             detail=(
-                "ready"
+                "demo parameters accepted"
+                if ready and status == "provisional"
+                else "ready"
                 if ready
                 else "retrieval parameters are not frozen"
             ),

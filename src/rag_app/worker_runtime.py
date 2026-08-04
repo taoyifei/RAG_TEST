@@ -42,10 +42,15 @@ from rag_app.manifest import ManifestRepository
 from rag_app.ocr.client import OcrClient
 from rag_app.parsers import DocxParser
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
-from rag_app.runtime import load_pipeline, require_release_revision
+from rag_app.runtime import (
+    load_pipeline,
+    log_run_mode_startup,
+    require_release_revision,
+)
 from rag_app.settings import (
     ConfigurationState,
     RetrievalSettings,
+    RunMode,
     RuntimeSettings,
 )
 from rag_app.state import StateStore
@@ -107,6 +112,7 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
 
     """
     require_release_revision(settings)
+    log_run_mode_startup(settings.run_mode, component="rag-worker")
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
     metadata_by_source = _validate_worker_contract(
@@ -115,7 +121,12 @@ def build_worker_runtime(settings: RuntimeSettings) -> WorkerRuntimeBundle:
         retrieval,
     )
     decision = _load_freeze_decision(settings.retrieval_path, retrieval)
-    require_indexable_configuration(pipeline, retrieval, decision)
+    require_indexable_configuration(
+        pipeline,
+        retrieval,
+        decision,
+        run_mode=settings.run_mode,
+    )
     with ExitStack() as rollback:
         bundle = _assemble_worker_runtime(
             settings,
@@ -334,6 +345,8 @@ def require_indexable_configuration(
     pipeline: PipelineSpec,
     retrieval: RetrievalSettings,
     decision: FreezeDecision | None,
+    *,
+    run_mode: RunMode = RunMode.PRODUCTION,
 ) -> None:
     """阻止临时检索参数或未核验模型 revision 写入生产索引。
 
@@ -341,6 +354,7 @@ def require_indexable_configuration(
         pipeline: 待写入 manifest 的完整 pipeline。
         retrieval: 冻结集确定的检索配置。
         decision: 与配置同目录加载的冻结决策；临时配置时为空。
+        run_mode: production 保持冻结门禁；demo 允许 provisional。
 
     Returns:
         无返回值；校验通过即允许继续构建索引。
@@ -349,6 +363,11 @@ def require_indexable_configuration(
         ValueError: 配置仍含 provisional、pending 或 unknown 标记。
 
     """
+    if (
+        run_mode is RunMode.DEMO
+        and retrieval.status is ConfigurationState.PROVISIONAL
+    ):
+        return
     if retrieval.status != ConfigurationState.FROZEN:
         raise ValueError("检索参数尚未由冻结集定标，拒绝索引。")
     if decision is None:

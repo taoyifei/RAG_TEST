@@ -1,0 +1,208 @@
+name: rag-simple
+
+services:
+  rag-qdrant:
+    image: ${RAG_QDRANT_IMAGE:?required}
+    pull_policy: never
+    container_name: rag-qdrant
+    restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${RAG_QDRANT_API_KEY:?required}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    volumes:
+      - ${RAG_QDRANT_PATH:?required}:/qdrant/storage
+    networks:
+      - rag-internal
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/grep
+        - -Eq
+        - ^[[:space:]]*[0-9]+:[[:space:]]+[0-9A-Fa-f]{8}:18BD[[:space:]]+[0-9A-Fa-f]{8}:[0-9A-Fa-f]{4}[[:space:]]+0A[[:space:]]
+        - /proc/net/tcp
+        - /proc/net/tcp6
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 15s
+
+  rag-ocr:
+    image: ${RAG_OCR_IMAGE:?required}
+    pull_policy: never
+    container_name: rag-ocr
+    restart: unless-stopped
+    environment:
+      RAG_OCR_API_TOKEN: ${RAG_OCR_API_TOKEN:?required}
+      RAG_OCR_DEVICE: gpu:0
+      RAG_OCR_MAX_CONCURRENCY: "1"
+      RAG_OCR_MAX_INPUT_BYTES: "10485760"
+      RAG_OCR_MAX_PIXELS: "40000000"
+      RAG_OCR_REQUEST_TIMEOUT_SECONDS: "30"
+    networks:
+      - rag-internal
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - ${RAG_OCR_GPU_DEVICE_ID:-0}
+              capabilities:
+                - gpu
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/ready', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 18
+      start_period: 90s
+    user: 10001:10001
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    shm_size: 1gb
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  rag-app:
+    image: ${RAG_APP_IMAGE:?required}
+    pull_policy: never
+    container_name: rag-app
+    restart: unless-stopped
+    depends_on:
+      rag-qdrant:
+        condition: service_healthy
+    environment:
+      RAG_RUN_MODE: demo
+      RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}
+      RAG_QUERY_TOKEN: ${RAG_QUERY_TOKEN:?required}
+      RAG_ADMIN_TOKEN: ${RAG_ADMIN_TOKEN:?required}
+      RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:?required}
+      RAG_QDRANT_URL: http://rag-qdrant:6333
+      RAG_QDRANT_ALIAS: ${RAG_QDRANT_ALIAS:-rag-docx-active}
+      RAG_STATE_DATABASE: /state/state.sqlite3
+      RAG_MANIFEST_DATABASE: /state/manifest.sqlite3
+      RAG_TRACE_DATABASE: /state/traces.sqlite3
+      RAG_RELEASE_REVISION: ${RAG_RELEASE_REVISION:?required}
+      RAG_TRACE_MODE: ${RAG_TRACE_MODE:-SAFE}
+      RAG_PIPELINE_PATH: /app/deployment/config/pipeline.json
+      RAG_RETRIEVAL_PATH: /app/deployment/config/retrieval.json
+      RAG_CORPUS_POLICY_PATH: /app/deployment/config/corpus-policy.json
+      RAG_FRONTEND_DIR: /app/frontend
+      RAG_LLM_TOKENIZER_PATH: /app/deployment/assets/tokenizers/llm/tokenizer.json
+      RAG_EMBEDDING_TOKENIZER_PATH: /app/deployment/assets/tokenizers/embedding/tokenizer.json
+      RAG_INPUT_ROOT: /data/docs
+      RAG_INDEX_STATE_DIR: /state/indexes
+      RAG_EMBEDDING_ENDPOINTS: ${RAG_EMBEDDING_ENDPOINTS:?required}
+      RAG_RERANKER_ENDPOINTS: ${RAG_RERANKER_ENDPOINTS:?required}
+      RAG_LLM_ENDPOINTS: ${RAG_LLM_ENDPOINTS:?required}
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-Qwen3-Embedding-0.6B}
+      RAG_RERANKER_MODEL: ${RAG_RERANKER_MODEL:-Qwen3-Reranker-0.6B}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-Qwen/Qwen3-8B-AWQ}
+      RAG_EMBEDDING_API_TOKEN: ${RAG_EMBEDDING_API_TOKEN:-}
+      RAG_RERANKER_API_TOKEN: ${RAG_RERANKER_API_TOKEN:-}
+      RAG_LLM_API_TOKEN: ${RAG_LLM_API_TOKEN:-}
+      RAG_MAX_EMBEDDING_CONCURRENCY: ${RAG_MAX_EMBEDDING_CONCURRENCY:-4}
+      RAG_MAX_RERANKER_CONCURRENCY: ${RAG_MAX_RERANKER_CONCURRENCY:-4}
+      RAG_MAX_LLM_CONCURRENCY: ${RAG_MAX_LLM_CONCURRENCY:-4}
+      RAG_PORT: "8088"
+    volumes:
+      - ${RAG_STATE_PATH:?required}:/state
+      - ${RAG_DOCS_PATH:?required}:/data/docs:ro
+      - ${RAG_LOGS_PATH:?required}:/logs
+    networks:
+      - rag-internal
+      - rag-egress
+    ports:
+      - ${RAG_PORT:-8088}:8088
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/live', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  rag-worker:
+    profiles:
+      - index
+    image: ${RAG_APP_IMAGE:?required}
+    pull_policy: never
+    container_name: rag-worker
+    restart: "no"
+    command:
+      - worker
+    depends_on:
+      rag-ocr:
+        condition: service_healthy
+      rag-qdrant:
+        condition: service_healthy
+    environment:
+      RAG_RUN_MODE: demo
+      RAG_ACCESS_MODE: ${RAG_ACCESS_MODE:?required}
+      RAG_QUERY_TOKEN: ${RAG_QUERY_TOKEN:?required}
+      RAG_ADMIN_TOKEN: ${RAG_ADMIN_TOKEN:?required}
+      RAG_QDRANT_API_KEY: ${RAG_QDRANT_API_KEY:?required}
+      RAG_QDRANT_URL: http://rag-qdrant:6333
+      RAG_QDRANT_ALIAS: ${RAG_QDRANT_ALIAS:-rag-docx-active}
+      RAG_STATE_DATABASE: /state/state.sqlite3
+      RAG_MANIFEST_DATABASE: /state/manifest.sqlite3
+      RAG_TRACE_DATABASE: /state/traces.sqlite3
+      RAG_RELEASE_REVISION: ${RAG_RELEASE_REVISION:?required}
+      RAG_TRACE_MODE: ${RAG_TRACE_MODE:-SAFE}
+      RAG_PIPELINE_PATH: /app/deployment/config/pipeline.json
+      RAG_RETRIEVAL_PATH: /app/deployment/config/retrieval.json
+      RAG_CORPUS_POLICY_PATH: /app/deployment/config/corpus-policy.json
+      RAG_FRONTEND_DIR: /app/frontend
+      RAG_LLM_TOKENIZER_PATH: /app/deployment/assets/tokenizers/llm/tokenizer.json
+      RAG_EMBEDDING_TOKENIZER_PATH: /app/deployment/assets/tokenizers/embedding/tokenizer.json
+      RAG_INPUT_ROOT: /data/docs
+      RAG_INDEX_STATE_DIR: /state/indexes
+      RAG_EMBEDDING_ENDPOINTS: ${RAG_EMBEDDING_ENDPOINTS:?required}
+      RAG_RERANKER_ENDPOINTS: ${RAG_RERANKER_ENDPOINTS:?required}
+      RAG_LLM_ENDPOINTS: ${RAG_LLM_ENDPOINTS:?required}
+      RAG_OCR_ENDPOINTS: '["http://rag-ocr:8090"]'
+      RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-Qwen3-Embedding-0.6B}
+      RAG_RERANKER_MODEL: ${RAG_RERANKER_MODEL:-Qwen3-Reranker-0.6B}
+      RAG_LLM_MODEL: ${RAG_LLM_MODEL:-Qwen/Qwen3-8B-AWQ}
+      RAG_EMBEDDING_API_TOKEN: ${RAG_EMBEDDING_API_TOKEN:-}
+      RAG_RERANKER_API_TOKEN: ${RAG_RERANKER_API_TOKEN:-}
+      RAG_LLM_API_TOKEN: ${RAG_LLM_API_TOKEN:-}
+      RAG_OCR_API_TOKEN: ${RAG_OCR_API_TOKEN:?required}
+      RAG_MAX_EMBEDDING_CONCURRENCY: ${RAG_MAX_EMBEDDING_CONCURRENCY:-4}
+      RAG_MAX_RERANKER_CONCURRENCY: ${RAG_MAX_RERANKER_CONCURRENCY:-4}
+      RAG_MAX_LLM_CONCURRENCY: ${RAG_MAX_LLM_CONCURRENCY:-4}
+      RAG_MAX_OCR_CONCURRENCY: "1"
+    volumes:
+      - ${RAG_STATE_PATH:?required}:/state
+      - ${RAG_DOCS_PATH:?required}:/data/docs:ro
+      - ${RAG_LOGS_PATH:?required}:/logs
+    networks:
+      - rag-internal
+      - rag-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  rag-internal:
+    name: rag-simple-internal
+    internal: true
+  rag-egress:
+    name: rag-simple-egress

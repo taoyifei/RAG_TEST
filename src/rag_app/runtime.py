@@ -55,7 +55,7 @@ from rag_app.retrieval.neighbors import NeighborExpander
 from rag_app.retrieval.rerank import RerankConfig, RerankStage
 from rag_app.retrieval.rewrite import QueryRewriteConfig, QueryRewriter
 from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
-from rag_app.settings import RetrievalSettings, RuntimeSettings
+from rag_app.settings import RetrievalSettings, RunMode, RuntimeSettings
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
@@ -68,6 +68,7 @@ __all__ = [
     "RuntimeBundle",
     "build_runtime",
     "load_pipeline",
+    "log_run_mode_startup",
     "require_release_revision",
 ]
 
@@ -174,6 +175,24 @@ def require_release_revision(settings: RuntimeSettings) -> None:
         )
 
 
+def log_run_mode_startup(run_mode: RunMode, *, component: str) -> None:
+    """为显式 demo 进程输出稳定启动标记。
+
+    Args:
+        run_mode: 当前运行模式。
+        component: 启动中的容器角色。
+
+    Returns:
+        无返回值；production 模式不写额外日志。
+
+    """
+    if run_mode is RunMode.DEMO:
+        logging.getLogger("rag_app.run_mode").warning(
+            "DEMO_MODE_ACTIVE component=%s",
+            component,
+        )
+
+
 def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
     """组装查询链、状态库与严格 readiness。
 
@@ -188,6 +207,7 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
 
     """
     require_release_revision(settings)
+    log_run_mode_startup(settings.run_mode, component="rag-app")
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
     _validate_runtime_contract(settings, pipeline, retrieval)
@@ -337,7 +357,10 @@ def _assemble_runtime(
     )
     readiness = ReadinessService(
         (
-            FrozenConfigurationProbe(retrieval),
+            FrozenConfigurationProbe(
+                retrieval,
+                allow_provisional=settings.run_mode is RunMode.DEMO,
+            ),
             QdrantServiceProbe(qdrant),
             ManifestAliasProbe(
                 index=index,
@@ -376,6 +399,7 @@ def _assemble_runtime(
             readiness=readiness,
             query_token=settings.query_token.get_secret_value(),
             admin_token=settings.admin_token.get_secret_value(),
+            run_mode=settings.run_mode,
             query=query,
             query_executor=query_executor,
             conversations=conversations,

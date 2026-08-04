@@ -32,6 +32,7 @@ from rag_app.health import ReadinessService
 from rag_app.observability import StructuredAuditLogger
 from rag_app.query_executor import QueryAdmissionError, QueryExecutor
 from rag_app.query_service import QueryService
+from rag_app.settings import RunMode
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
@@ -60,6 +61,7 @@ class ApiServices:
     readiness: ReadinessService
     query_token: str
     admin_token: str
+    run_mode: RunMode = RunMode.PRODUCTION
     query: QueryService | None = None
     query_executor: QueryExecutor | None = None
     conversations: ConversationStore | None = None
@@ -256,6 +258,11 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
                 asdict(component) for component in report.components
             ],
         }
+        if services.run_mode is RunMode.DEMO:
+            payload.update(
+                run_mode=RunMode.DEMO.value,
+                production_ready=False,
+            )
         return JSONResponse(
             status_code=200 if report.ready else 503,
             content=payload,

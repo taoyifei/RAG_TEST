@@ -26,6 +26,7 @@ __all__ = [
     "AccessMode",
     "ConfigurationState",
     "RetrievalSettings",
+    "RunMode",
     "RuntimeSettings",
     "SoftRouteSettings",
 ]
@@ -45,6 +46,13 @@ class ConfigurationState(StrEnum):
 
     PROVISIONAL = "provisional"
     FROZEN = "frozen"
+
+
+class RunMode(StrEnum):
+    """区分严格生产门禁与显式内网 demo。"""
+
+    DEMO = "demo"
+    PRODUCTION = "production"
 
 
 class SoftRouteSettings(BaseModel):
@@ -265,6 +273,7 @@ class RuntimeSettings(BaseSettings):
     )
 
     access_mode: AccessMode
+    run_mode: RunMode = RunMode.PRODUCTION
     query_token: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)
     admin_token: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)
     qdrant_api_key: SecretStr = Field(min_length=_MIN_SECRET_LENGTH)
