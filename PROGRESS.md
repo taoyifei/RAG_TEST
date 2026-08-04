@@ -1,5 +1,151 @@
 # DOCX RAG 交付进度
 
+## 2026-08-04 模块化 app update 任务 0：可审计基线
+
+- [x] 中断后重新读取 `PROGRESS.md`、`BLOCKED.md`；当前 HEAD 为
+  `90111d0b2c62593282076bbf26afc73f7169e007`，`main` 与 `origin/main`
+  一致，工作树 clean、staged=0。最近完整门禁仍为
+  `847 passed, 61 warnings, skipped=0`，其余静态/部署门禁全绿。
+- [x] 当前完整 release 仍固定生成七文件并携带 app/OCR/Qdrant 三张镜像；
+  runtime 尚无 `app-update.sh`，`verify-offline.sh` 也尚未校验该工具。
+- [x] 直接复核 `scripts/offline_bundle.py::_extract_regular_members`：普通文件
+  仍通过 `target.open("xb")` 复制且没有受控 `chmod`，安全解包后会丢失 tar
+  中的执行位；这与上一轮真实 smoke 的 `FRESH_VERIFY_FAILED` 证据一致。
+- [x] 本轮允许修改清单不包含 `scripts/offline_bundle.py` 及其契约测试，故不得
+  越权修复或在 smoke 内临时补权限。先继续 app update 的构建、服务器事务、
+  完整 runtime 携带工具及全部不受影响测试；最终 smoke 仍受该已知首错约束。
+
+## 2026-08-04 模块化 app update 任务 1/2：首组红测
+
+- [x] 新增 builder/classifier 红测，锁定 app 允许路径、Compose/OCR/Qdrant/
+  corpus/部署脚本拒绝、base 祖先、四文件 exact set、指纹与
+  `reindex_required`、只构建/自检/保存 app 镜像；同时新增安全解包后
+  `app-update.sh` 必须保留执行位的直接反测。
+- [x] 首轮专项在收集阶段退出 1：
+  `ImportError: cannot import name 'build_app_update' from 'scripts'`，证明当前
+  HEAD 尚无 app update 构建入口；未 skip/xfail、未放宽断言。执行位反测因收集
+  首错尚未运行，后续会单独保留其真实失败证据。
+- [x] 新增服务器事务红测，覆盖 runtime 工具、四类身份拒绝、worker 闸门、
+  仅重建 rag-app、OCR/Qdrant/active env/current/SQLite/corpus 不变、失败恢复、
+  status/rollback 幂等、production reindex 拒绝及完整 deploy/rollback 互斥。
+  首轮为 `11 failed in 0.30s`：runtime 未携带工具、`app-update.sh` 不存在，且
+  完整 deploy 仍先报候选环境缺失而没有识别活动 app update；这是预期红灯。
+
+## 2026-08-04 模块化 app update 任务 1—5：首轮实现
+
+- [x] 新增 `scripts/build_app_update.py`：要求 clean HEAD 和完整 base SHA，验证
+  base 为 target 祖先；Git name-status 对 rename 只取目标路径。app Python、
+  frontend、Dockerfile、依赖、app 资产及 serving 配置允许，Compose、部署脚本、
+  OCR、Qdrant、corpus/model-services 等路径拒绝并要求完整 release。
+- [x] 构建器复用已固定依赖 wheel，只重建当前项目 wheel；随后仅执行 app
+  `buildx --network none`、`asset-selfcheck` 和单次 `docker image save`。输出
+  exact 四文件，metadata 只含 base/target、OCI digest、平台、分类及两类指纹；
+  builder 专项由收集错误转为 `21 passed in 0.30s`。
+- [x] 新增 `deployment/app-update.sh` 的 apply/status/rollback：严格校验四文件、
+  SHA、OCI revision/platform/digest 和基础 revision；worker 运行时拒绝；固定
+  override 只覆盖 `rag-app.image` 与容器内 `RAG_RELEASE_REVISION`，失败恢复基础
+  app，state 原子发布。服务器事务专项由 11 项全红转为
+  `11 passed in 1.19s`。
+- [x] 完整 package 现携带 mode 0700 的 `app-update.sh`，runtime verifier 要求其
+  为非空普通文件且可执行；完整 deploy/rollback 在其他前置检查前拒绝活动
+  state/override，要求先执行 app update rollback。
+- [x] 独立执行位反测曾真实退出 1：解包后的 `app-update.sh` 为 0644，断言
+  `st_mode & 0o111 == 0o100` 失败。该结果再次直接证明唯一未授权的
+  `offline_bundle.py` 权限恢复曾阻塞完整 runtime/smoke；未绕过 verifier，后在
+  用户扩大白名单后按下方安全契约修复。
+
+## 2026-08-04 模块化 app update：首轮完整门禁
+
+- [x] builder/server/package/deploy/rollback 关联集为 `88 passed in 15.18s`，
+  release-safety/release-smoke 专项为 `31 passed in 0.80s`；新增 reindex 兼容
+  反测后 builder+server 最终专项为 `34 passed in 1.71s`。
+- [x] 首轮全量 pytest 完整运行到 100%，结果
+  `880 passed, 2 failed, 61 warnings in 549.53s`，skipped=0。一个失败是已知
+  offline bundle 执行位；另一个是 `deployment/README.md` 增至 234 行，违反
+  Quickstart ≤200 行既有契约。
+- [x] README 回归属于授权范围，已把 app update 移到 smoke 主路径之后并压缩
+  重复说明，保留全部命令和兼容规则，文件精确为 200 行；对应测试转为
+  `8 passed in 1.41s`。下一轮全量预期只剩未授权执行位首错。
+- [x] 第二轮全量 pytest 完整运行到 100%，结果
+  `881 passed, 1 failed, 61 warnings in 553.55s`，skipped=0；唯一失败为
+  `test_safe_extract_preserves_registered_executable_mode`，没有新增 warning 类别。
+- [x] 最终 app-update/builder/package/Quickstart/release-smoke/release-safety 关联集
+  为 `88 passed in 11.41s`。执行位反测随后独立稳定退出 1：tar 登记 mode 为
+  0700，安全解包后的实际 `st_mode=33188`（0644），证明其余授权实现已经与
+  唯一未授权解包缺陷隔离。
+- [x] compileall、Ruff、strict mypy（104 source files）、Google docstring、12 个
+  deployment Shell、默认及 index Compose、应用/OCR/runtime/frozen 资产 SHA、
+  release-smoke/release-safety 专项及 `git diff --check` 均通过。临时 index 扫描
+  本轮 13 个候选文件为 `violations=0`；repository 审计继续如实报告既有
+  `tracked_files=265, violations=2`，真实 Git index 未被改变。
+- [x] 当时因全量门禁非零，按任务书未创建 commit、未执行真实 smoke、未 push；
+  也未访问服务器、上传文件或启动 worker。需另行授权修改
+  `scripts/offline_bundle.py` 后，才能完成唯一提交与 clean-HEAD smoke 闭环。
+- [x] 本地全量测试使用的临时 `rag-final-three-qdrant` 已停止；没有删除镜像、
+  卷、旧 release 或 artifacts。
+- [x] 新增 `scripts/build_app_update.py` 为 524 行、`deployment/app-update.sh`
+  为 665 行，超过手写模块宜不高于 400 行的建议值。任务白名单只允许这两个新
+  入口，构建器需封装 Git 分类/指纹/wheel/OCI/four-file 原子发布，服务器脚本需
+  封装 apply/status/rollback 与失败恢复；拆出新模块会越过白名单。现有函数职责
+  已分离且 Ruff、strict mypy、Google docstring、Shell 语法和专项测试均通过，故
+  本轮保留该取舍，不扩展授权范围。
+
+## 2026-08-04 模块化 app update：完成性补审
+
+- [x] 逐条复核“apply 任一步失败必须恢复”时发现真实事务缺口：原实现的
+  `docker load` 与 load 后 OCI identity 校验位于恢复事务之外，失败会直接退出，
+  且条件函数内 state 写入没有逐命令返回失败。新增 load/loaded-identity 两项
+  红测稳定为 `2 failed`，分别得到裸退出 94 和仅报身份不一致，均未执行恢复。
+- [x] 将从 `docker load` 起的镜像加载、loaded identity、override、Compose、
+  health/live、invariant 和 state 原子发布全部收进同一失败恢复边界；每个命令
+  显式传播非零，临时 override/state 也按精确路径收敛。两项红测转为
+  `2 passed in 0.52s`，均证明基础 compose 被重建、`/live` 被复核、状态未激活。
+- [x] 补齐纯 Python 与纯 frontend 都实际走四文件构建路径，以及 dirty worktree
+  在构建前拒绝的直接测试；builder/server 最终专项为
+  `39 passed in 1.97s`。Ruff、strict mypy（104 source files）、Google docstring、
+  `bash -n deployment/app-update.sh` 与 `git diff --check` 再次退出 0。
+- [x] 补审后的 app-update/builder/package/Quickstart/release-smoke/
+  release-safety 关联集为 `93 passed in 11.32s`。最新全量 pytest 完整运行至
+  100%，结果 `886 passed, 1 failed, 61 warnings in 574.97s`，skipped=0；唯一
+  失败仍为未授权的安全解包执行位契约，新增测试及全部既有业务测试均通过。
+- [x] 全量使用的本地 `rag-final-three-qdrant` 再次停止；未访问服务器、未上传、
+  未启动 worker。全量非零期间继续不 commit、不 push、不执行真实 smoke。
+- [x] 补审后再次通过 compileall、全量 Ruff、strict mypy（104 source files）、
+  Google docstring、全部 deployment Shell、默认/index Compose、六份资产 manifest
+  和 `git diff --check`；临时 Git index 扫描 13 个候选文件仍为
+  `violations=0`，真实 index 前后均保持 staged=0。
+- [x] 用户随后明确授权 commit 并 push，故 push 权限本身不再是限制；但该指令
+  未扩大文件白名单，也未豁免全量测试和真实 smoke 硬门禁。第三次连续复核时
+  HEAD 仍为 `90111d0b2c62593282076bbf26afc73f7169e007`、分支 `main`、
+  staged=0，唯一失败仍是安全解包执行位。为避免把已知不可执行的首次发布包推到
+  `origin/main`，没有 stage、commit 或 push。
+
+## 2026-08-04 模块化 app update：解除安全解包阻塞
+
+- [x] 用户明确扩大白名单，允许最小修改 `scripts/offline_bundle.py` 及安全契约
+  测试。WSL 从 `Wsl/Service/E_UNEXPECTED` 恢复；恢复时 HEAD 仍为
+  `90111d0b2c62593282076bbf26afc73f7169e007`、分支 `main`、staged=0，
+  工作树仅含本目标文件，没有半提交或半推送。
+- [x] 在既有执行位反测基础上新增恶意 setuid/group-other writable mode、symlink
+  和字符设备反测；修复前专项真实结果为 `3 failed, 5 passed`。失败分别证明
+  app-update 仍被解为 0644，且两个危险 mode 未在 tar 成员校验阶段拒绝。
+- [x] 最小修复不直接恢复 tar 权限：先拒绝 setuid/setgid/sticky 与 group/other
+  可写 mode，把全部普通文件固定为 0600、目录固定为 0700；只有 exact manifest
+  集合和逐文件 SHA 全部通过后，才把已登记且带执行语义的普通文件提升为 owner-only
+  0700。专项转为 `8 passed in 1.15s`，symlink/特殊文件继续 fail closed。
+- [x] app-update/offline-bundle/package/Quickstart/release-smoke/
+  release-safety 关联集为 `101 passed in 12.36s`；随后全量 pytest 一次运行到
+  100%，结果 `891 passed, 61 warnings in 573.16s`，skipped=0，warning 类别
+  未增加。此前唯一失败已转绿，全部既有 SQLite/Qdrant 业务测试同轮通过。
+- [x] compileall、全量 Ruff、strict mypy（104 source files）、Google docstring、
+  全部 deployment Shell、默认/index Compose、六份资产 manifest 和
+  `git diff --check` 均退出 0；临时 Git index 的 14 个本轮候选文件为
+  `violations=0`。repository 模式继续如实报告两个未改历史文件，不作为本次
+  commit 或 release payload 的门禁。
+- [x] 全量使用的本地无挂载 Qdrant 已停止；仍未访问服务器、上传交付物或启动
+  worker。下一步只在真实 staged 门禁通过后创建单一提交，再从 clean HEAD 执行
+  完整 release smoke。
+
 ## 2026-07-28 正式镜像前本地阻塞修复：目标、顺序与风险（8 行）
 
 1. 只修全仓 docstring、真实 DOCX 边界、严格配置、OCR cache key、查询准入和资源回收。

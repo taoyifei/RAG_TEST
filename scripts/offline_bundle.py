@@ -9,6 +9,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import sys
 import tarfile
 import tempfile
@@ -19,6 +20,17 @@ _PUBLISH_ARGUMENT_COUNT = 4
 _SHA_LINE = re.compile(r"^([0-9a-f]{64})  ([^\r\n]+)$")
 _AT_FDCWD = -100
 _RENAME_NOREPLACE = 1
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+_PRIVATE_EXECUTABLE_MODE = 0o700
+_EXECUTE_MODE_MASK = stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+_UNSAFE_MODE_MASK = (
+    stat.S_ISUID
+    | stat.S_ISGID
+    | stat.S_ISVTX
+    | stat.S_IWGRP
+    | stat.S_IWOTH
+)
 
 
 def verify_outer_sidecar(archive: Path, sidecar: Path) -> str:
@@ -140,10 +152,19 @@ def safe_extract_bundle(
         with tarfile.open(archive, mode="r:gz") as bundle:
             members = bundle.getmembers()
             _validate_members(members, expected_top_level)
-            _extract_regular_members(bundle, members, temporary)
+            member_modes = _extract_regular_members(
+                bundle,
+                members,
+                temporary,
+            )
         extracted = temporary / expected_top_level
         manifest = extracted / "MANIFEST.sha256"
         verify_file_manifest(extracted, manifest, require_exact=True)
+        _restore_verified_file_modes(
+            extracted,
+            expected_top_level,
+            member_modes,
+        )
         extracted.replace(final_path)
     return final_path
 
@@ -216,13 +237,16 @@ def _validate_members(
         seen.add(relative)
         if not (member.isdir() or member.isfile()):
             raise ValueError("离线归档只允许普通文件和目录。")
+        if member.mode & _UNSAFE_MODE_MASK:
+            raise ValueError("离线归档成员包含不安全权限。")
 
 
 def _extract_regular_members(
     bundle: tarfile.TarFile,
     members: list[tarfile.TarInfo],
     destination: Path,
-) -> None:
+) -> dict[PurePosixPath, int]:
+    file_modes: dict[PurePosixPath, int] = {}
     resolved_destination = destination.resolve(strict=True)
     for member in members:
         relative = _safe_relative_path(member.name)
@@ -233,11 +257,37 @@ def _extract_regular_members(
         if member.isdir():
             target.mkdir(parents=True, exist_ok=True)
             continue
+        file_modes[relative] = (
+            _PRIVATE_EXECUTABLE_MODE
+            if member.mode & _EXECUTE_MODE_MASK
+            else _PRIVATE_FILE_MODE
+        )
         source = bundle.extractfile(member)
         if source is None:
             raise ValueError("离线归档普通文件无法读取。")
         with source, target.open("xb") as output:
             shutil.copyfileobj(source, output, length=_HASH_BLOCK_BYTES)
+        target.chmod(_PRIVATE_FILE_MODE)
+    for path in (destination, *destination.rglob("*")):
+        if path.is_dir():
+            path.chmod(_PRIVATE_DIRECTORY_MODE)
+    return file_modes
+
+
+def _restore_verified_file_modes(
+    extracted: Path,
+    expected_top_level: str,
+    member_modes: dict[PurePosixPath, int],
+) -> None:
+    manifest_member = PurePosixPath(expected_top_level, "MANIFEST.sha256")
+    for member, mode in member_modes.items():
+        if member == manifest_member:
+            continue
+        relative = PurePosixPath(*member.parts[1:])
+        target = extracted.joinpath(*relative.parts)
+        if not target.is_file() or target.is_symlink():
+            raise ValueError(f"已验证普通文件状态异常：{relative}")
+        target.chmod(mode)
 
 
 def _safe_relative_path(value: str) -> PurePosixPath:

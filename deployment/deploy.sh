@@ -9,6 +9,8 @@ candidate_dir="${shared_env_dir}/candidates"
 active_env="${shared_env_dir}/rag.env"
 rollback_file="${shared_env_dir}/rollback-images.env"
 current_link="${project_root}/current"
+app_update_state="${project_root}/shared/app-update/state.json"
+app_update_override="${project_root}/shared/app-update/app-update.override.yaml"
 compose_file="${release_dir}/compose.yaml"
 candidate_env="${1:-}"
 active_new=""
@@ -415,6 +417,10 @@ wait_for_runtime_health() {
   wait_for_app_live "${port}" "${APP_LIVE_TIMEOUT_SECONDS}"
 }
 
+if [[ -e "${app_update_state}" || -L "${app_update_state}" \
+  || -e "${app_update_override}" || -L "${app_update_override}" ]]; then
+  fail "检测到活动 app update；请先执行 current/app-update.sh rollback。"
+fi
 if [[ -z "${candidate_env}" || "${candidate_env}" != /* ]]; then
   fail "必须显式提供候选环境文件。"
 fi

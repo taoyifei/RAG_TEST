@@ -52,6 +52,7 @@ def _prepare_sandbox(tmp_path: Path) -> _PackageSandbox:
     for relative in (
         "deployment/package.sh",
         "deployment/acceptance.sh",
+        "deployment/app-update.sh",
         "deployment/bootstrap.sh",
         "deployment/install.sh",
         "deployment/qdrant-policy.sh",
@@ -643,14 +644,22 @@ def test_success_publishes_only_complete_verified_release(
             line.split("\t")
             for line in image_manifest_file.read().decode().splitlines()
         ]
+        app_update_member = archive.getmember("runtime/app-update.sh")
     _assert_model_runtime_scripts(runtime_names, runtime_manifest)
     assert archive_helpers <= runtime_names
     assert "runtime/RELEASE_METADATA.json" in runtime_names
     assert "runtime/acceptance.sh" not in runtime_names
-    assert "runtime/config/pipeline.json" in runtime_names
-    assert "runtime/config/retrieval.json" in runtime_names
-    assert "runtime/config/corpus-policy.json" in runtime_names
+    assert {
+        "runtime/config/pipeline.json",
+        "runtime/config/retrieval.json",
+        "runtime/config/corpus-policy.json",
+    } <= runtime_names
     assert "runtime/config/FREEZE_DECISION.json" not in runtime_names
+    assert (
+        app_update_member.isfile()
+        and app_update_member.mode & 0o111 == 0o100
+        and "app-update.sh" in runtime_manifest
+    )
     for helper in archive_helpers:
         assert helper.removeprefix("runtime/") in runtime_manifest
     expected_images = (

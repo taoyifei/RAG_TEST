@@ -21,6 +21,7 @@ required_common_files=(
   ".env.example"
   "deploy.sh"
   "rollback.sh"
+  "app-update.sh"
   "server-preflight.sh"
   "verify-offline.sh"
   "images/docx-rag-linux-amd64.tar"
@@ -62,6 +63,10 @@ done
 
 if [[ ! -x bootstrap.sh ]]; then
   echo "runtime bootstrap.sh 不可执行。" >&2
+  exit 1
+fi
+if [[ ! -x app-update.sh ]]; then
+  echo "runtime app-update.sh 不可执行。" >&2
   exit 1
 fi
 
