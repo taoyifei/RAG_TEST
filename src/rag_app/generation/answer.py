@@ -1,4 +1,4 @@
-"""逐 claim 精确引文校验与最多一次修复。"""
+"""逐 claim 引文校验、空回答复核与最多一次修复。"""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ from rag_app.clients.resilience import (
 )
 from rag_app.generation.evidence import EvidenceBundle, EvidenceItem
 from rag_app.model_contracts import (
+    StructuredModelRequest,
+    abstention_review_request,
     answer_contract_revision,
     answer_request,
     answer_response_format,
@@ -116,7 +118,7 @@ class _ValidationError(ValueError):
 
 
 class AnswerGenerator:
-    """缓冲生成、确定性验证、一次修复后才发布。"""
+    """缓冲生成，经确定性验证和至多一次二次调用后发布。"""
 
     def __init__(
         self,
@@ -168,6 +170,7 @@ class AnswerGenerator:
             evidence_bundle=json.loads(evidence.rendered_json),
             max_output_tokens=self._config.max_output_tokens,
         )
+        trace_context = _answer_trace_context(first_request, evidence)
         messages = first_request.messages
         calls: list[ExternalCallAudit] = []
         generations: list[JsonValue] = []
@@ -196,9 +199,11 @@ class AnswerGenerator:
                 model_calls=1,
                 calls=tuple(calls),
                 trace={
+                    **trace_context,
                     "first_validation_code": (
                         RefusalCode.MODEL_UNAVAILABLE.value
                     ),
+                    "review_triggered": False,
                     "repair_triggered": False,
                     "messages": _messages_payload(messages),
                     "response_format": answer_response_format(),
@@ -213,11 +218,25 @@ class AnswerGenerator:
                 calls=tuple(calls),
             )
             validation_code = _result_validation_code(validated)
+            if validated.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT:
+                _record_generation_validation(
+                    generations,
+                    "MODEL_ABSTAINED",
+                )
+                return self._review_abstention(
+                    first_request=first_request,
+                    evidence=evidence,
+                    calls=calls,
+                    generations=generations,
+                    trace_context=trace_context,
+                )
             _record_generation_validation(generations, validation_code)
             return replace(
                 validated,
                 trace={
+                    **trace_context,
                     "first_validation_code": validation_code,
+                    "review_triggered": False,
                     "repair_triggered": False,
                     "messages": _messages_payload(messages),
                     "response_format": answer_response_format(),
@@ -260,7 +279,9 @@ class AnswerGenerator:
             return replace(
                 validated,
                 trace={
+                    **trace_context,
                     "first_validation_code": validation_code,
+                    "review_triggered": False,
                     "repair_triggered": True,
                     "repair_validation_code": repair_code,
                     "messages": _messages_payload(messages),
@@ -286,6 +307,7 @@ class AnswerGenerator:
                     repair_messages,
                     generations,
                     self._config,
+                    trace_context,
                 ),
             )
         except (ValueError, _ValidationError) as error:
@@ -306,8 +328,126 @@ class AnswerGenerator:
                     repair_messages,
                     generations,
                     self._config,
+                    trace_context,
                 ),
             )
+
+    def _review_abstention(
+        self,
+        *,
+        first_request: StructuredModelRequest,
+        evidence: EvidenceBundle,
+        calls: list[ExternalCallAudit],
+        generations: list[JsonValue],
+        trace_context: dict[str, JsonValue],
+    ) -> AnswerResult:
+        """对首次空 claims 执行且只执行一次专用复核。
+
+        Args:
+            first_request: 已执行的首次回答请求。
+            evidence: 首次请求使用的同一证据包。
+            calls: 已完成的外部调用审计记录。
+            generations: 已记录的首次生成诊断。
+            trace_context: 不含业务正文的回答诊断上下文。
+
+        Returns:
+            复核后安全发布的回答或稳定拒答。
+
+        """
+        review_request = abstention_review_request(
+            first_request,
+            max_output_tokens=self._config.max_repair_tokens,
+        )
+        review_messages = review_request.messages
+        try:
+            reviewed = self._llm.generate(
+                review_messages,
+                max_output_tokens=review_request.max_output_tokens,
+                response_format=review_request.response_format,
+            )
+            calls.append(reviewed.call)
+            generations.append(
+                _generation_trace(
+                    reviewed,
+                    phase="abstention_review",
+                    messages=review_messages,
+                    max_output_tokens=self._config.max_repair_tokens,
+                )
+            )
+        except (
+            ExternalRequestRejectedError,
+            ExternalServiceUnavailableError,
+            ValueError,
+        ) as error:
+            review_code = (
+                "MODEL_UNAVAILABLE"
+                if isinstance(
+                    error,
+                    (
+                        ExternalRequestRejectedError,
+                        ExternalServiceUnavailableError,
+                    ),
+                )
+                else "INVALID_MODEL_RESPONSE"
+            )
+            return _refusal(
+                RefusalCode.VALIDATION_FAILED,
+                model_calls=2,
+                calls=tuple(calls),
+                trace=_abstention_trace(
+                    first_request,
+                    review_request,
+                    generations,
+                    trace_context,
+                    review_reason_code="ABSTENTION_REVIEW_INVALID",
+                    review_validation_code=review_code,
+                    config=self._config,
+                ),
+            )
+        try:
+            validated = _validate_answer(
+                reviewed.content,
+                evidence,
+                calls=tuple(calls),
+            )
+        except _ValidationError as error:
+            _record_generation_validation(generations, error.code)
+            return _refusal(
+                RefusalCode.VALIDATION_FAILED,
+                model_calls=2,
+                calls=tuple(calls),
+                trace=_abstention_trace(
+                    first_request,
+                    review_request,
+                    generations,
+                    trace_context,
+                    review_reason_code="ABSTENTION_REVIEW_INVALID",
+                    review_validation_code=error.code,
+                    config=self._config,
+                ),
+            )
+        review_validation_code = _result_validation_code(validated)
+        _record_generation_validation(
+            generations,
+            review_validation_code,
+        )
+        review_reason_code = (
+            "ABSTENTION_REVIEW_EMPTY"
+            if validated.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT
+            else "ABSTENTION_REVIEW_ANSWERED"
+        )
+        return replace(
+            validated,
+            trace=_abstention_trace(
+                first_request,
+                review_request,
+                generations,
+                trace_context,
+                review_reason_code=review_reason_code,
+                review_validation_code=review_validation_code,
+                config=self._config,
+            ),
+        )
 
     def revision(self) -> str:
         """返回回答 prompt 与 JSON Schema 的规范化 SHA256。
@@ -511,6 +651,35 @@ def _refusal(
     )
 
 
+def _answer_trace_context(
+    request: StructuredModelRequest,
+    evidence: EvidenceBundle,
+) -> dict[str, JsonValue]:
+    """构造 SAFE Trace 可见的非正文回答上下文。
+
+    Args:
+        request: 已包含确定性问题意图的首次请求。
+        evidence: 已完成隔离的证据包。
+
+    Returns:
+        只含意图和证据计数的诊断属性。
+
+    Raises:
+        ValueError: 内部回答请求缺少确定性意图。
+
+    """
+    intent = request.user_payload.get("question_intent")
+    if not isinstance(intent, str):
+        raise ValueError("回答请求缺少 question_intent。")
+    return {
+        "intent": intent,
+        "evidence_count": len(evidence.items),
+        "non_low_ocr_evidence_count": sum(
+            not item.low_confidence_ocr for item in evidence.items
+        ),
+    }
+
+
 def _generation_trace(
     generated: LlmGeneration,
     *,
@@ -593,6 +762,47 @@ def _messages_payload(
     ]
 
 
+def _abstention_trace(  # noqa: PLR0913
+    first_request: StructuredModelRequest,
+    review_request: StructuredModelRequest,
+    generations: list[JsonValue],
+    trace_context: dict[str, JsonValue],
+    *,
+    review_reason_code: str,
+    review_validation_code: str,
+    config: AnswerConfig,
+) -> dict[str, JsonValue]:
+    """构造一次空回答复核的完整诊断属性。
+
+    Args:
+        first_request: 已执行的首次请求。
+        review_request: 已执行的专用复核请求。
+        generations: 最多两次模型调用的诊断记录。
+        trace_context: 不含业务正文的意图和证据计数。
+        review_reason_code: 复核 answered、empty 或 invalid 结果码。
+        review_validation_code: 复核输出的确定性校验码。
+        config: 冻结的回答输出预算。
+
+    Returns:
+        可供 SAFE 属性筛选和 FULL artifact 使用的诊断对象。
+
+    """
+    return {
+        **trace_context,
+        "first_validation_code": "MODEL_ABSTAINED",
+        "review_triggered": True,
+        "review_reason_code": review_reason_code,
+        "review_validation_code": review_validation_code,
+        "repair_triggered": False,
+        "messages": _messages_payload(first_request.messages),
+        "review_messages": _messages_payload(review_request.messages),
+        "response_format": answer_response_format(),
+        "max_output_tokens": config.max_output_tokens,
+        "max_review_tokens": config.max_repair_tokens,
+        "generations": generations,
+    }
+
+
 def _repair_failure_trace(  # noqa: PLR0913, PLR0917
     first_code: str,
     repair_code: str,
@@ -600,6 +810,7 @@ def _repair_failure_trace(  # noqa: PLR0913, PLR0917
     repair_messages: tuple[ChatMessage, ...],
     generations: list[JsonValue],
     config: AnswerConfig,
+    trace_context: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
     """构造回答修复仍失败时的完整诊断属性。
 
@@ -610,13 +821,16 @@ def _repair_failure_trace(  # noqa: PLR0913, PLR0917
         repair_messages: 修复生成使用的消息。
         generations: 两次模型调用的诊断记录。
         config: 冻结的回答输出预算。
+        trace_context: 不含业务正文的意图和证据计数。
 
     Returns:
         描述两次校验失败及调用上下文的 Trace 属性。
 
     """
     return {
+        **trace_context,
         "first_validation_code": first_code,
+        "review_triggered": False,
         "repair_triggered": True,
         "repair_validation_code": repair_code,
         "messages": _messages_payload(messages),

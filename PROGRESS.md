@@ -4872,3 +4872,47 @@
   ```
 
   该流程只重建 `rag-app`，不重建索引；worker 当前若停止则保持停止。
+
+## 2026-08-05 空 claims 专用复核 app-only 更新
+
+- [x] 现场根因保持在当前 claims-only 协议：有高分、非低置信证据时，模型仍可能
+  直接返回 `{"claims":[]}`；本轮未把旧版 `INVALID_ANSWER_SCHEMA` 或
+  `MODEL_UNAVAILABLE` 混入修复。
+- [x] 新增确定性问题意图 `PROCEDURE/LIST/DEFINITION/GENERAL`。首次回答请求固定
+  携带 `allow_partial_answer=true`、
+  `empty_only_if_no_evidence_supports_any_material_part=true` 和
+  `inspect_all_evidence=true`；Prompt 明确允许部分回答、动作序列语义对应和跨文档
+  互补。
+- [x] 首次合法空 claims 现在记录 `MODEL_ABSTAINED`，并且只触发一次
+  `abstention_review`。复核有效则执行原有全部引用门禁后发布；复核仍空才返回
+  `EVIDENCE_INSUFFICIENT`；复核 JSON、claim 或 quote 非法时直接返回
+  `VALIDATION_FAILED`，不再触发普通 repair，总调用不超过 2 次。
+- [x] SAFE Trace 新增 `ABSTENTION_REVIEW_TRIGGERED/ANSWERED/EMPTY/INVALID`，回答
+  spans 只保留 intent、证据计数、claims 数量、phase、脱敏 endpoint、retry、
+  validation code 和 review 标记，不记录问题、证据、claim、quote 或 raw output。
+- [x] 红测先得到回答/契约 `12 failed`，Trace 专项另有 `1 failed`。实现后全部
+  answer/model-contract/Trace/runtime 限定测试为
+  `191 passed, 2 warnings in 64.26s`；未运行全量索引或 800 多项全量测试。
+- [x] 全仓 Ruff、strict mypy（75 source files）、相关 compileall、11 项
+  asset-selfcheck 和 `git diff --check` 均退出 0。模型契约测试中 4 个仍模拟旧
+  `status/refusal_reason` 的夹具只改为现行 `{"claims":[]}`，验证器逻辑未改。
+- [x] prompt revision 从 `sha256:1d38a149...` 变为
+  `sha256:66672711...`；serving fingerprint 从 `sha256:a6ba0cd4...` 变为
+  `sha256:aff28148...`；index fingerprint 前后均为
+  `sha256:dd16e57d...`，因此不需要重新索引。
+- [ ] 服务器验收待执行。本地提交后只运行 `scripts/build_app_update.py` 生成
+  三文件包；把 `<NEW12>` 替换为新提交 SHA 前 12 位，先经 `.54` 转传到 `.60`，
+  再仅更新 `rag-app`：
+
+  ```bash
+  cd /data/tyf/RAG/uploads/app-update/<NEW12>
+  sed -i 's/\r$//' app-image.tar.gz.sha256
+  sha256sum -c app-image.tar.gz.sha256
+  bash ./update-app.sh \
+    ./app-image.tar.gz \
+    ./app-image.tar.gz.sha256 \
+    /data/tyf/RAG/rag.env
+  ```
+
+  更新脚本必须输出 `reindex_required=false` 和 `worker_restarted=false`；不得运行
+  `deploy.sh`、索引任务或重建 OCR/Qdrant/Embedding/Reranker/LLM 服务。

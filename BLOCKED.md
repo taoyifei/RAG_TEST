@@ -59,11 +59,14 @@
 - 解除条件：前五类依赖满足后，在获授权服务器窗口执行 SHA 校验、离线 load、
   `compose up --no-build --pull never`、全新卷启动、完整质量/性能/故障与回滚验收。
 
-## 7. claims-only 回答协议服务器复验
+## 7. 空 claims 专用复核服务器验收
 
-- 本地已将模型内部回答协议收敛为顶层只有 `claims` 的无条件 Schema；空 claims
-  直接返回 `EVIDENCE_INSUFFICIENT`，原有逐字引用、source span、数字和 OCR 门禁
-  均继续执行。本任务明确禁止访问 `.60`，因此本地通过不能替代真实宽泛问答。
-- 解除条件：上传本轮 app-only 三文件更新包，只更新 `rag-app`，确认 worker
-  保持原状态且活动 alias/manifest 未变化；再用新 conversation 重试原问题，
-  最终必须为 `type=final,status=answered` 且包含非空、已验证 claims。
+- 本地已把首次空 claims 改为最多一次专用 abstention review，并保持逐字引用、
+  source span、唯一 locator、数字、重复项和 OCR 门禁不变；限定测试和静态门禁
+  已通过，index fingerprint 未变化。
+- 仍缺 `.60` 的更新后验收证据：新 conversation 下的已知变更问题、至少两个
+  历史空 claims 常规问题和一个确实无答案问题，以及更新前后 alias、manifest、
+  index 与 Qdrant 点数不变的对比。
+- 解除条件：经 `.54` 上传本轮 app-only 三文件包，只更新 `rag-app`；有证据问题
+  必须 answered 且 claims 非空，真正无答案仍为 `EVIDENCE_INSUFFICIENT`，正常回答
+  `model_calls=1`，仅首次错误弃答时为 2，任何请求不得出现第三次 LLM 调用。

@@ -55,6 +55,26 @@ def test_checked_in_pipeline_matches_actual_prompt_revision() -> None:
     assert pipeline.prompt_revision == actual_prompt_revision()
 
 
+def test_abstention_review_changes_serving_but_not_index_fingerprint() -> None:
+    pipeline = load_pipeline(Path("deployment/config/pipeline.json"))
+    retrieval = RetrievalSettings.load(
+        Path("deployment/config/retrieval.json")
+    )
+
+    assert pipeline.prompt_revision != (
+        "sha256:1d38a149ab6db8d533dabf9e3e5d343b"
+        "aa335d2d8bd8b94fdeffafd35f15431e"
+    )
+    assert pipeline.index_fingerprint() == (
+        "sha256:dd16e57d6b39e95af18ea5317d66682"
+        "c71f4044e927a09bc6cc0599a8f7f192a"
+    )
+    assert retrieval.serving_fingerprint(pipeline) != (
+        "sha256:a6ba0cd4790839fd8bc115c6d74e1723"
+        "e5e8129e5c3408d74371c869e7971631"
+    )
+
+
 def _write_configuration(tmp_path: Path) -> dict[str, Path]:
     llm_tokenizer = tmp_path / "llm-tokenizer.json"
     embedding_tokenizer = tmp_path / "embedding-tokenizer.json"

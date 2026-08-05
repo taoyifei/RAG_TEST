@@ -1079,16 +1079,11 @@ def _record_answer_children(
     )
     generations = _dict_list(trace.get("generations"))
     first_generation = _generation_for_phase(generations, "first")
-    validation_attributes = {
-        "validation_code": trace.get(
-            "first_validation_code",
-            "VALIDATION_OK",
-        ),
-        "repair_triggered": trace.get(
-            "repair_triggered",
-            False,
-        ),
-    }
+    validation_attributes = _safe_answer_context(trace)
+    if "first_validation_code" in trace:
+        validation_attributes["validation_code"] = trace[
+            "first_validation_code"
+        ]
     if first_generation is not None:
         validation_attributes.update(
             _safe_generation_attributes(first_generation)
@@ -1102,6 +1097,45 @@ def _record_answer_children(
             attributes=validation_attributes,
         )
     )
+    if bool(trace.get("review_triggered", False)):
+        session.completed_span(
+            TraceSpanSpec(
+                name="answer.abstention_review",
+                kind=SpanKind.GUARDRAIL,
+                parent_span_id=answer_span_id,
+                reason_code=DecisionCode.ABSTENTION_REVIEW_TRIGGERED,
+                attributes=_safe_answer_context(trace),
+            )
+        )
+        review_generation = _generation_for_phase(
+            generations,
+            "abstention_review",
+        )
+        review_attributes = _safe_answer_context(trace)
+        if "review_validation_code" in trace:
+            review_attributes["validation_code"] = trace[
+                "review_validation_code"
+            ]
+        if review_generation is not None:
+            review_attributes.update(
+                _safe_generation_attributes(review_generation)
+            )
+        session.completed_span(
+            TraceSpanSpec(
+                name="llm.abstention_review",
+                kind=SpanKind.LLM,
+                parent_span_id=answer_span_id,
+                reason_code=_decision_code(
+                    trace.get("review_reason_code"),
+                    DecisionCode.ABSTENTION_REVIEW_INVALID,
+                ),
+                attributes=review_attributes,
+                duration_ms=_generation_duration(
+                    trace,
+                    "abstention_review",
+                ),
+            )
+        )
     if bool(trace.get("repair_triggered", False)):
         repair_code = _decision_code(
             trace.get("repair_validation_code"),
@@ -1177,22 +1211,29 @@ def _answer_reason(answer: AnswerResult) -> DecisionCode:
 def _answer_attributes(
     trace: Mapping[str, object],
 ) -> dict[str, object]:
-    attributes: dict[str, object] = {
-        "first_validation_code": trace.get(
-            "first_validation_code",
-            "",
-        ),
-        "repair_triggered": trace.get("repair_triggered", False),
-        "repair_validation_code": trace.get(
-            "repair_validation_code",
-            "",
-        ),
-    }
+    attributes = _safe_answer_context(trace)
+    if "first_validation_code" in trace:
+        attributes["validation_code"] = trace["first_validation_code"]
     generations = _dict_list(trace.get("generations"))
     first_generation = _generation_for_phase(generations, "first")
     if first_generation is not None:
         attributes.update(_safe_generation_attributes(first_generation))
     return attributes
+
+
+def _safe_answer_context(
+    trace: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        key: trace[key]
+        for key in (
+            "intent",
+            "evidence_count",
+            "non_low_ocr_evidence_count",
+            "review_triggered",
+        )
+        if key in trace
+    }
 
 
 def _safe_generation_attributes(
@@ -1201,16 +1242,9 @@ def _safe_generation_attributes(
     attributes: dict[str, object] = {}
     for key in (
         "phase",
-        "model",
         "endpoint",
         "retry_count",
-        "prompt_tokens",
-        "completion_tokens",
-        "total_tokens",
-        "max_output_tokens",
         "claims_count",
-        "top_level_keys",
-        "json_parse_ok",
         "validation_code",
     ):
         if key in generation:
@@ -1332,11 +1366,18 @@ def _decision_code(
 
 
 def _repair_duration(trace: Mapping[str, object]) -> int:
+    return _generation_duration(trace, "repair")
+
+
+def _generation_duration(
+    trace: Mapping[str, object],
+    phase: str,
+) -> int:
     generations = _dict_list(trace.get("generations"))
-    repair = _generation_for_phase(generations, "repair")
-    if repair is None:
+    generation = _generation_for_phase(generations, phase)
+    if generation is None:
         return 0
-    duration = repair.get("elapsed_ms")
+    duration = generation.get("elapsed_ms")
     return duration if isinstance(duration, int) else 0
 
 

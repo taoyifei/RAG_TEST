@@ -208,6 +208,61 @@ class _StructuredAnswerer:
         )
 
 
+class _AbstentionReviewAnswerer:
+    def answer(
+        self,
+        question: str,
+        evidence: EvidenceBundle,
+    ) -> AnswerResult:
+        del question, evidence
+        return AnswerResult(
+            status=AnswerStatus.REFUSED,
+            answer=None,
+            claims=(),
+            refusal_code=RefusalCode.EVIDENCE_INSUFFICIENT,
+            model_calls=2,
+            calls=(),
+            trace={
+                "intent": "PROCEDURE",
+                "evidence_count": 3,
+                "non_low_ocr_evidence_count": 3,
+                "first_validation_code": "MODEL_ABSTAINED",
+                "review_triggered": True,
+                "review_reason_code": "ABSTENTION_REVIEW_EMPTY",
+                "review_validation_code": "EVIDENCE_INSUFFICIENT",
+                "repair_triggered": False,
+                "generations": [
+                    {
+                        "phase": "first",
+                        "model": "Qwen/Qwen3-8B-AWQ",
+                        "endpoint": "http://10.0.0.1:8000",
+                        "retry_count": 0,
+                        "prompt_tokens": 4829,
+                        "completion_tokens": 5,
+                        "claims_count": 0,
+                        "top_level_keys": ["claims"],
+                        "json_parse_ok": True,
+                        "validation_code": "MODEL_ABSTAINED",
+                        "raw_output": '{"claims":[]}',
+                    },
+                    {
+                        "phase": "abstention_review",
+                        "model": "Qwen/Qwen3-8B-AWQ",
+                        "endpoint": "http://10.0.0.1:8001",
+                        "retry_count": 0,
+                        "prompt_tokens": 4900,
+                        "completion_tokens": 5,
+                        "claims_count": 0,
+                        "top_level_keys": ["claims"],
+                        "json_parse_ok": True,
+                        "validation_code": "EVIDENCE_INSUFFICIENT",
+                        "raw_output": '{"claims":[]}',
+                    },
+                ],
+            },
+        )
+
+
 def _service(
     tmp_path: Path,
     *,
@@ -386,16 +441,76 @@ def test_safe_trace_records_only_answer_shape_diagnostics(
     assert answer_span.attributes["phase"] == "first"
     assert answer_span.attributes["endpoint"] == "http://10.0.0.1:8000"
     assert answer_span.attributes["retry_count"] == 0
-    assert answer_span.attributes["prompt_tokens"] == 4829
-    assert answer_span.attributes["completion_tokens"] == 20
     assert answer_span.attributes["claims_count"] == 0
-    assert answer_span.attributes["top_level_keys"] == ["claims"]
-    assert answer_span.attributes["json_parse_ok"] is True
     assert answer_span.attributes["validation_code"] == (
         "EVIDENCE_INSUFFICIENT"
     )
+    assert set(answer_span.attributes) == {
+        "phase",
+        "endpoint",
+        "retry_count",
+        "claims_count",
+        "validation_code",
+    }
     assert "raw_output" not in answer_span.attributes
     assert b"must-not-export" not in exported
+
+
+def test_safe_trace_records_abstention_review_without_business_content(
+    tmp_path: Path,
+) -> None:
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    recorder = TraceRecorder(store)
+    service = _service(
+        tmp_path,
+        recorder=recorder,
+        answerer=_AbstentionReviewAnswerer(),
+    )
+    trace_id = "f" * 32
+
+    service.ask(
+        trace_id=trace_id,
+        conversation_id="conversation",
+        question="private procedure question",
+        now=datetime.now(UTC),
+        emit=lambda _event: None,
+    )
+    recorder.flush()
+    detail = store.get_trace(trace_id)
+    spans = {span.name: span for span in detail.spans}
+    exported = store.export_trace(trace_id)
+    recorder.close()
+
+    assert spans["answer.validate"].reason_code == (
+        DecisionCode.MODEL_ABSTAINED
+    )
+    assert spans["answer.abstention_review"].reason_code == (
+        DecisionCode.ABSTENTION_REVIEW_TRIGGERED
+    )
+    assert spans["llm.abstention_review"].reason_code == (
+        DecisionCode.ABSTENTION_REVIEW_EMPTY
+    )
+    allowed_keys = {
+        "intent",
+        "evidence_count",
+        "non_low_ocr_evidence_count",
+        "claims_count",
+        "phase",
+        "endpoint",
+        "retry_count",
+        "validation_code",
+        "review_triggered",
+    }
+    assert set(spans["llm.answer"].attributes) <= allowed_keys
+    assert set(spans["answer.validate"].attributes) <= allowed_keys
+    assert set(spans["answer.abstention_review"].attributes) <= allowed_keys
+    assert set(spans["llm.abstention_review"].attributes) <= allowed_keys
+    assert spans["llm.answer"].attributes["intent"] == "PROCEDURE"
+    assert spans["llm.answer"].attributes["evidence_count"] == 3
+    assert spans["llm.answer"].attributes["review_triggered"] is True
+    assert b"private procedure question" not in exported
+    assert b"raw_output" not in exported
 
 
 def test_full_trace_keeps_raw_answer_only_in_artifact(tmp_path: Path) -> None:

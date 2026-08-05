@@ -105,11 +105,7 @@ def _llm_response(
         content = (
             {"standalone_query": "standalone synthetic query"}
             if schema_name == "query_rewrite"
-            else {
-                "status": "refused",
-                "claims": [],
-                "refusal_reason": "synthetic evidence is insufficient",
-            }
+            else {"claims": []}
         )
     return httpx.Response(
         200,
@@ -215,7 +211,6 @@ def test_model_contract_success_is_sanitized(
     assert _TOKEN not in serialized
     assert all(body not in serialized for body in request_bodies)
     assert "standalone synthetic query" not in serialized
-    assert "synthetic evidence is insufficient" not in serialized
 
 
 def test_model_contract_rejects_wrong_model(tmp_path: Path) -> None:

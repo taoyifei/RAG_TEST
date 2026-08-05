@@ -141,7 +141,22 @@ def test_answer_and_repair_prompts_freeze_claims_only_rules() -> None:
     )
     assert "最多输出 5 条" in first.messages[0].content
     assert '{"claims":[]}' in first.messages[0].content
+    assert "不能因为无法完整覆盖全部步骤而返回空" in (
+        first.messages[0].content
+    )
+    assert "不同文档的补充信息默认视为互补" in (
+        first.messages[0].content
+    )
     assert "不得输出 status、refusal_reason" in first.messages[0].content
+    assert first.user_payload["question_intent"] == "LIST"
+    assert first.user_payload["allow_partial_answer"] is True
+    assert (
+        first.user_payload[
+            "empty_only_if_no_evidence_supports_any_material_part"
+        ]
+        is True
+    )
+    assert first.user_payload["inspect_all_evidence"] is True
 
     repaired = repair_answer_request(
         first,
@@ -153,3 +168,25 @@ def test_answer_and_repair_prompts_freeze_claims_only_rules() -> None:
     assert repair_payload["validation_error"] == "QUOTE_NOT_IN_EVIDENCE"
     assert "逐字复制" in repair_payload["repair_instruction"]
     assert repaired.response_format == first.response_format
+
+
+@pytest.mark.parametrize(
+    ("question", "expected_intent"),
+    (
+        ("需求变更需要经过哪些审批步骤？", "PROCEDURE"),
+        ("需要准备哪些材料？", "LIST"),
+        ("什么是需求基线？", "DEFINITION"),
+        ("介绍一下需求基线。", "GENERAL"),
+    ),
+)
+def test_answer_request_exposes_deterministic_question_intent(
+    question: str,
+    expected_intent: str,
+) -> None:
+    request = answer_request(
+        question,
+        evidence_bundle={"evidence": []},
+        max_output_tokens=512,
+    )
+
+    assert request.user_payload["question_intent"] == expected_intent
