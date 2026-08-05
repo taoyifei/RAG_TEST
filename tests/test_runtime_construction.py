@@ -9,6 +9,7 @@ from pydantic import SecretStr
 
 import rag_app.runtime as runtime_module
 import rag_app.worker_runtime as worker_runtime_module
+from rag_app.clients.resilience import ExternalServiceUnavailableError
 from rag_app.runtime import build_runtime
 from rag_app.settings import AccessMode, RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
@@ -109,6 +110,30 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         reranker_model="Qwen3-Reranker-0.6B",
         llm_model="Qwen/Qwen3-8B-AWQ",
     )
+
+
+def test_pool_override_caps_transport_failover_to_two(
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+
+    def unavailable(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host or "")
+        return httpx.Response(503)
+
+    pool = runtime_module._pool(
+        tuple(f"http://llm-{index}" for index in range(4)),
+        httpx.Client(transport=httpx.MockTransport(unavailable)),
+        _settings(tmp_path),
+        max_concurrency=4,
+        max_attempts=2,
+    )
+
+    with pytest.raises(ExternalServiceUnavailableError):
+        pool.request_json("POST", "/v1/chat/completions", payload={})
+
+    assert len(calls) == 2
+    assert len(set(calls)) == 2
 
 
 def _install_runtime_fakes(

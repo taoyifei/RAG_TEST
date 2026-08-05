@@ -5,8 +5,11 @@ from pathlib import Path
 import pytest
 
 from rag_app.generation.answer import (
+    AnswerClaim,
+    AnswerMode,
     AnswerResult,
     AnswerStatus,
+    ClaimSupport,
     RefusalCode,
 )
 from rag_app.generation.evidence import EvidenceBundle
@@ -16,6 +19,7 @@ from rag_app.retrieval.hybrid import HybridRetrievalResult
 from rag_app.retrieval.neighbors import NeighborExpansionResult
 from rag_app.retrieval.rerank import RerankedHit, RerankStageResult
 from rag_app.retrieval.rewrite import QueryVariants
+from rag_app.state.answer_cache import AnswerCache
 from rag_app.state.conversations import ConversationStore
 from rag_app.tracing.models import (
     JsonValue,
@@ -150,8 +154,10 @@ class _Answerer:
         self,
         question: str,
         evidence: EvidenceBundle,
+        *,
+        rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence
+        del question, evidence, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -167,13 +173,49 @@ class _Answerer:
         )
 
 
+class _CacheableAnswerer:
+    def revision(self) -> str:
+        return "sha256:" + "4" * 64
+
+    def answer(
+        self,
+        question: str,
+        evidence: EvidenceBundle,
+        *,
+        rerank_scores: tuple[float, ...] = (),
+    ) -> AnswerResult:
+        del question, evidence, rerank_scores
+        support = ClaimSupport(
+            evidence_id="E1",
+            chunk_id="chunk-1",
+            quote="验收测试包括功能验收。",
+            locator="规范.docx > 验收",
+        )
+        return AnswerResult(
+            status=AnswerStatus.ANSWERED,
+            answer="验收测试包括功能验收。",
+            claims=(
+                AnswerClaim(
+                    text="验收测试包括功能验收。",
+                    supports=(support,),
+                ),
+            ),
+            refusal_code=None,
+            model_calls=1,
+            calls=(),
+            answer_mode=AnswerMode.ANSWERED,
+        )
+
+
 class _StructuredAnswerer:
     def answer(
         self,
         question: str,
         evidence: EvidenceBundle,
+        *,
+        rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence
+        del question, evidence, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -191,9 +233,12 @@ class _StructuredAnswerer:
                         "endpoint": "http://10.0.0.1:8000",
                         "retry_count": 0,
                         "elapsed_ms": 1000,
+                        "queue_ms": None,
+                        "ttft_ms": None,
                         "prompt_tokens": 4829,
                         "completion_tokens": 20,
                         "total_tokens": 4849,
+                        "completion_tokens_per_second": 20.0,
                         "max_output_tokens": 2048,
                         "claims_count": 0,
                         "top_level_keys": ["claims"],
@@ -213,8 +258,10 @@ class _AbstentionReviewAnswerer:
         self,
         question: str,
         evidence: EvidenceBundle,
+        *,
+        rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence
+        del question, evidence, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -269,6 +316,7 @@ def _service(
     recorder: TraceRecorder | None,
     assembler: object | None = None,
     answerer: object | None = None,
+    answer_cache: AnswerCache | None = None,
 ) -> QueryService:
     tmp_path.mkdir(parents=True, exist_ok=True)
     conversations = ConversationStore(
@@ -279,7 +327,7 @@ def _service(
     conversations.initialize()
     identity = (
         None
-        if recorder is None
+        if recorder is None and answer_cache is None
         else TraceIdentity(
             pipeline_fingerprint="sha256:" + "1" * 64,
             serving_fingerprint="sha256:" + "2" * 64,
@@ -303,6 +351,7 @@ def _service(
         ),
         trace_recorder=recorder,
         trace_identity=identity,
+        answer_cache=answer_cache,
     )
 
 
@@ -358,6 +407,56 @@ def test_safe_trace_has_complete_tree_without_business_artifacts(
         assert span.finished_at <= parent.finished_at
     assert b"public synthetic question" not in store.export_trace(trace_id)
     recorder.close()
+
+
+def test_cache_trace_distinguishes_miss_store_and_hit(
+    tmp_path: Path,
+) -> None:
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    recorder = TraceRecorder(store)
+    cache = AnswerCache(tmp_path / "answer-cache.sqlite3")
+    cache.initialize()
+    service = _service(
+        tmp_path,
+        recorder=recorder,
+        answerer=_CacheableAnswerer(),
+        answer_cache=cache,
+    )
+    now = datetime(2026, 8, 5, 8, 0, tzinfo=UTC)
+
+    first = service.ask(
+        trace_id="7" * 32,
+        conversation_id="conversation-1",
+        question="验收测试包括哪些内容？",
+        now=now,
+        emit=lambda _event: None,
+    )
+    second = service.ask(
+        trace_id="8" * 32,
+        conversation_id="conversation-2",
+        question="验收测试包括哪些内容？",
+        now=now,
+        emit=lambda _event: None,
+    )
+    recorder.flush()
+    first_detail = store.get_trace("7" * 32)
+    second_detail = store.get_trace("8" * 32)
+    recorder.close()
+
+    first_spans = {span.name: span for span in first_detail.spans}
+    second_spans = {span.name: span for span in second_detail.spans}
+    assert first.answer.model_calls == 1
+    assert {"cache.lookup", "cache.miss", "cache.wait", "cache.store"} <= (
+        first_spans.keys()
+    )
+    assert first_spans["cache.store"].attributes["cache_store_status"] == (
+        "stored"
+    )
+    assert second.answer.model_calls == 0
+    assert {"cache.lookup", "cache.hit"} <= second_spans.keys()
+    assert "retrieve" not in second_spans
+    assert "llm.answer" not in second_spans
 
 
 def test_full_trace_persists_exact_input_without_changing_outcome(
@@ -449,6 +548,13 @@ def test_safe_trace_records_only_answer_shape_diagnostics(
         "phase",
         "endpoint",
         "retry_count",
+        "elapsed_ms",
+        "queue_ms",
+        "ttft_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "completion_tokens_per_second",
         "claims_count",
         "validation_code",
     }
@@ -499,6 +605,13 @@ def test_safe_trace_records_abstention_review_without_business_content(
         "phase",
         "endpoint",
         "retry_count",
+        "elapsed_ms",
+        "queue_ms",
+        "ttft_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "completion_tokens_per_second",
         "validation_code",
         "review_triggered",
     }

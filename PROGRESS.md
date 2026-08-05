@@ -4916,3 +4916,88 @@
 
   更新脚本必须输出 `reindex_required=false` 和 `worker_restarted=false`；不得运行
   `deploy.sh`、索引任务或重建 OCR/Qdrant/Embedding/Reranker/LLM 服务。
+
+## 2026-08-05 support-id 回答、精确缓存与四副本调度
+
+- [x] 以用户提供的 `RAG_log/1` 中 9 份真实 Trace 为回归基线：
+  6 份 answered 平均总耗时约 20.8 秒、LLM 约 19.9 秒；两份 top rerank
+  `>=0.99` 的可回答问题因模型抄写 quote 失败；火星基地 `RAG-999/2099` 样本
+  top rerank 约 0.35，确实无答案。未把历史结果当作更新后服务器验收。
+- [x] 模型协议改为最多 4 条 `{text,support_ids}`；模型不再输出 quote、chunk ID
+  或 locator。应用从已经校验的 source span 构造 `EvidenceUnit`，并按 support ID
+  确定性恢复逐字 quote、完整 locator 和 chunk ID；数字、重复项、低置信 OCR 与
+  source-group 门禁保持失败关闭。
+- [x] 问题意图扩展为 PROCEDURE、LIST、DEFINITION、ACTOR、DELIVERABLE、COMPARE；
+  多文档交付物按来源分别发布，缺失责任人的来源不得借用其他文档角色。Answerability
+  Gate 对高分可回答样本继续生成，对低分且强锚点全部缺失的 `RAG-999/2099` 直接
+  返回友好 NOT_FOUND，`model_calls=0`。
+- [x] 首次输出逐 claim 校验并保留合法项；零合法项最多执行一次 review 或 repair，
+  总模型调用不超过 2。高置信 SUPPORTED 在第二次仍无合法项时，只从匹配问题的
+  原子证据做确定性抽取兜底；NOT_FOUND 永不启用兜底。
+- [x] 新增与 manifest、serving fingerprint、访问模式和回答 revision 绑定的 SQLite
+  exact cache：ANSWERED/PARTIAL 为 24 小时，NOT_FOUND 为 10 分钟，瞬时失败不
+  持久化。同键并发由 singleflight 合并；4 路专项证明 retrieve、rerank、assemble、
+  answer 各只执行 1 次，其余请求复用结果。
+- [x] 四个 Qwen 作为副本池按 in-flight、EWMA latency、连续失败与 cooldown 调度；
+  业务 schema/support 校验失败不切副本，只有 transport、408/425/429/5xx 才
+  failover，且 LLM 最多尝试 2 个端点。4 路并发专项覆盖四个健康副本，单问题
+  正常生成只命中一个端点。
+- [x] answer/review 预算固定为 768/384；SAFE Trace 增加 answerability、丢弃
+  claim、cache lookup/hit/miss/wait/store、endpoint、retry、elapsed、token、
+  queue/TTFT（端点提供时）和生成吞吐指标。NDJSON 向后兼容增加 answer_mode 与
+  user_message，前端对 PARTIAL/CONFLICT 同时展示友好说明和已验证回答。
+- [x] Python 3.11 专项最终为 `145 passed, 2 warnings in 6.30s`；只运行了
+  evidence/answer/model-contract/cache/endpoint/query/API/fingerprint/asset 相关测试，
+  没有运行 800 多项全量测试。compileall 退出 0；全仓 Ruff 为
+  `All checks passed!`；strict mypy 为
+  `Success: no issues found in 76 source files`；simple Compose、11 项 ASSETS SHA
+  和 `git diff --check` 均退出 0。
+- [x] prompt revision 为
+  `sha256:f5362ae5dbc523bda5ef9f80c830ae79d316184b30a45a6fe69c91f46421b6df`；
+  index fingerprint 继续为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`，
+  serving fingerprint 已变为
+  `sha256:ef36f23a12d32e67c847d48f4a879712c396a088299e476116ee11139a06128b`，
+  因此 app-only 更新不需要重新索引。
+- [ ] `.60` 真实延迟与 9 问回归仍待用户在部署后验收；本轮按约束未访问服务器、
+  未重新索引、未启动 worker、未修改模型服务且未 push。`BLOCKED.md` 第 7 项给出
+  p50/p95、cache 和四副本解除条件。
+
+本地提交并生成 app-only 包后，设 `REV12` 为产物目录名。先从本地 WSL 上传到
+`.54`：
+
+```bash
+REV12=<本轮产物目录名>
+rsync -av --partial --info=progress2 \
+  "artifacts/app-update/${REV12}/" \
+  "user4a@10.242.180.54:/data/tyf/RAG/uploads/app-update/${REV12}/"
+```
+
+登录 `.54` 后转传到 `.60`：
+
+```bash
+REV12=<本轮产物目录名>
+ssh user4a@10.242.180.60 \
+  "mkdir -p /data/tyf/RAG/uploads/app-update/${REV12}"
+rsync -av --partial --info=progress2 \
+  "/data/tyf/RAG/uploads/app-update/${REV12}/" \
+  "user4a@10.242.180.60:/data/tyf/RAG/uploads/app-update/${REV12}/"
+```
+
+最后只在 `.60` 执行：
+
+```bash
+REV12=<本轮产物目录名>
+cd "/data/tyf/RAG/uploads/app-update/${REV12}"
+sed -i 's/\r$//' app-image.tar.gz.sha256 update-app.sh
+sha256sum -c app-image.tar.gz.sha256
+bash ./update-app.sh \
+  ./app-image.tar.gz \
+  ./app-image.tar.gz.sha256 \
+  /data/tyf/RAG/rag.env
+curl -fsS http://127.0.0.1:8088/live
+curl -fsS http://127.0.0.1:8088/ready
+```
+
+更新脚本必须输出 `reindex_required=false`、`worker_restarted=false`；不得执行
+`deploy.sh`、全量索引或重建 OCR/Qdrant/Embedding/Reranker/LLM。

@@ -56,6 +56,7 @@ from rag_app.retrieval.rerank import RerankConfig, RerankStage
 from rag_app.retrieval.rewrite import QueryRewriteConfig, QueryRewriter
 from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
 from rag_app.settings import RetrievalSettings, RunMode, RuntimeSettings
+from rag_app.state.answer_cache import AnswerCache
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
@@ -289,6 +290,7 @@ def _assemble_runtime(
         clients[2],
         settings,
         max_concurrency=settings.max_llm_concurrency,
+        max_attempts=min(settings.max_attempts, 2),
     )
     embedding = TeiEmbeddingClient(
         embedding_pool,
@@ -317,6 +319,10 @@ def _assemble_runtime(
         max_rounds=retrieval.max_history_turns,
     )
     conversations.initialize()
+    answer_cache = AnswerCache(
+        settings.state_database.with_name("answer-cache.sqlite3")
+    )
+    answer_cache.initialize()
     jobs = JobStore(settings.state_database)
     jobs.initialize()
     feedback = FeedbackStore(settings.state_database)
@@ -354,6 +360,8 @@ def _assemble_runtime(
             release_revision=settings.release_revision,
         ),
         default_trace_mode=settings.trace_mode,
+        answer_cache=answer_cache,
+        access_mode=settings.access_mode.value,
     )
     readiness = ReadinessService(
         (
@@ -424,13 +432,15 @@ def _assemble_runtime(
     )
 
 
-def _build_query_service(
+def _build_query_service(  # noqa: PLR0913
     *,
     retrieval: RetrievalSettings,
     parts: _QueryParts,
     trace_recorder: TraceRecorder,
     trace_identity: Callable[[], TraceIdentity],
     default_trace_mode: TraceMode,
+    answer_cache: AnswerCache,
+    access_mode: str,
 ) -> QueryService:
     """把冻结检索参数绑定为一条完整且可追踪的查询链。
 
@@ -440,6 +450,8 @@ def _build_query_service(
         trace_recorder: 持久化查询追踪的记录器。
         trace_identity: 在请求时绑定活动索引身份的工厂。
         default_trace_mode: 普通查询默认使用的追踪模式。
+        answer_cache: 与活动索引和回答协议绑定的精确缓存。
+        access_mode: 当前查询访问范围模式。
 
     Returns:
         依赖和阶段配置均已固定的查询服务。
@@ -529,6 +541,8 @@ def _build_query_service(
         trace_recorder=trace_recorder,
         trace_identity=trace_identity,
         default_trace_mode=default_trace_mode,
+        answer_cache=answer_cache,
+        access_mode=access_mode,
     )
 
 
@@ -612,12 +626,17 @@ def _pool(
     settings: RuntimeSettings,
     *,
     max_concurrency: int,
+    max_attempts: int | None = None,
 ) -> ResilientHttpPool:
     return ResilientHttpPool(
         endpoints,
         client=client,
         policy=ResiliencePolicy(
-            max_attempts=settings.max_attempts,
+            max_attempts=(
+                settings.max_attempts
+                if max_attempts is None
+                else max_attempts
+            ),
             failure_threshold=settings.failure_threshold,
             cooldown_seconds=settings.cooldown_seconds,
             max_concurrency=max_concurrency,

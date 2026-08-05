@@ -18,7 +18,13 @@ let currentTraceId = null;
 
 const refusalMessages = {
   EVIDENCE_INSUFFICIENT:
-    "未找到足够的文档证据，无法可靠回答。请换一种问法或补充相关文档。",
+    "知识库中暂未找到能够支持该问题的资料。请核对名称、编号或时间，或补充相关文档。",
+  NO_EVIDENCE: "知识库中暂未检索到可用资料。",
+  LOW_CONFIDENCE_OCR_ONLY:
+    "当前仅检索到低置信度 OCR 内容，暂不能作为可靠回答依据。",
+  MODEL_UNAVAILABLE: "回答服务暂时不可用，请稍后重试并查看 Trace。",
+  VALIDATION_FAILED:
+    "已找到相关资料，但回答引用校验未通过，请稍后重试并查看 Trace。",
 };
 
 function authorization() {
@@ -55,8 +61,10 @@ function renderFinal(event) {
   notUsefulButton.disabled = false;
   answerNode.textContent =
     event.status === "answered"
-      ? event.answer
-      : refusalMessages[event.refusal_code] || `无法回答：${event.refusal_code}`;
+      ? [event.user_message, event.answer].filter(Boolean).join("\n\n")
+      : event.user_message ||
+        refusalMessages[event.refusal_code] ||
+        "当前无法生成可靠回答，请稍后重试并查看 Trace。";
   for (const claim of event.claims) {
     for (const support of claim.supports) {
       const item = document.createElement("article");
@@ -118,7 +126,8 @@ async function readEvents(response) {
       if (event.type === "stage") renderStage(event);
       if (event.type === "final") renderFinal(event);
       if (event.type === "error") {
-        answerNode.textContent = `处理失败：${event.code}`;
+        answerNode.textContent =
+          "请求处理失败，请稍后重试；如持续出现，请通过 Trace 页面排查。";
       }
     }
     if (result.done) return;

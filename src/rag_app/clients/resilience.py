@@ -65,6 +65,8 @@ class _EndpointState:
     base_url: str
     consecutive_failures: int = 0
     circuit_open_until: float = 0.0
+    in_flight: int = 0
+    ewma_latency_seconds: float | None = None
 
 
 class ResilientHttpPool:
@@ -142,6 +144,7 @@ class ResilientHttpPool:
                 state = self._select_endpoint()
                 if state is None:
                     break
+                attempt_started = self._clock()
                 try:
                     response = self._client.request(
                         method,
@@ -151,22 +154,36 @@ class ResilientHttpPool:
                     )
                 except httpx.HTTPError:
                     last_reason = "HTTP_TRANSPORT"
-                    self._record_failure(state)
+                    self._record_failure(
+                        state,
+                        self._clock() - attempt_started,
+                    )
                     continue
                 if response.status_code in _TRANSIENT_STATUSES:
                     last_reason = f"HTTP_{response.status_code}"
-                    self._record_failure(state)
+                    self._record_failure(
+                        state,
+                        self._clock() - attempt_started,
+                    )
                     continue
                 if response.is_error or response.is_redirect:
+                    self._record_rejection(
+                        state,
+                        self._clock() - attempt_started,
+                    )
                     raise ExternalRequestRejectedError(
                         f"外部请求被拒绝：HTTP_{response.status_code}。"
                     )
                 try:
                     response_payload = response.json()
                 except ValueError:
-                    last_reason = "INVALID_JSON"
-                    self._record_failure(state)
-                    continue
+                    self._record_rejection(
+                        state,
+                        self._clock() - attempt_started,
+                    )
+                    raise ExternalRequestRejectedError(
+                        "外部请求返回不可用内容：INVALID_JSON。"
+                    ) from None
                 active_validator = (
                     validator
                     if validator is not None
@@ -177,11 +194,19 @@ class ResilientHttpPool:
                         response_payload = active_validator(
                             response_payload
                         )
-                    except (OverflowError, TypeError, ValueError):
-                        last_reason = "INVALID_RESPONSE_SCHEMA"
-                        self._record_failure(state)
-                        continue
-                self._record_success(state)
+                    except (OverflowError, TypeError, ValueError) as error:
+                        self._record_rejection(
+                            state,
+                            self._clock() - attempt_started,
+                        )
+                        raise ExternalRequestRejectedError(
+                            "外部请求返回不可用内容："
+                            "INVALID_RESPONSE_SCHEMA。"
+                        ) from error
+                self._record_success(
+                    state,
+                    self._clock() - attempt_started,
+                )
                 return HttpJsonResponse(
                     endpoint=state.base_url,
                     payload=response_payload,
@@ -195,17 +220,48 @@ class ResilientHttpPool:
     def _select_endpoint(self) -> _EndpointState | None:
         now = self._clock()
         with self._lock:
-            for offset in range(len(self._states)):
-                index = (self._next_index + offset) % len(self._states)
-                state = self._states[index]
-                if state.circuit_open_until > now:
-                    continue
-                self._next_index = (index + 1) % len(self._states)
-                return state
+            candidates = [
+                (index, state)
+                for index, state in enumerate(self._states)
+                if state.circuit_open_until <= now
+            ]
+            if not candidates:
+                return None
+            minimum_in_flight = min(
+                state.in_flight for _, state in candidates
+            )
+            least_busy = [
+                (index, state)
+                for index, state in candidates
+                if state.in_flight == minimum_in_flight
+            ]
+            minimum_latency = min(
+                state.ewma_latency_seconds or 0.0
+                for _, state in least_busy
+            )
+            fastest = [
+                (index, state)
+                for index, state in least_busy
+                if (state.ewma_latency_seconds or 0.0) == minimum_latency
+            ]
+            index, state = min(
+                fastest,
+                key=lambda item: (
+                    item[0] - self._next_index
+                ) % len(self._states),
+            )
+            state.in_flight += 1
+            self._next_index = (index + 1) % len(self._states)
+            return state
         return None
 
-    def _record_failure(self, state: _EndpointState) -> None:
+    def _record_failure(
+        self,
+        state: _EndpointState,
+        elapsed_seconds: float,
+    ) -> None:
         with self._lock:
+            self._finish_attempt(state, elapsed_seconds)
             state.consecutive_failures += 1
             if (
                 state.consecutive_failures
@@ -215,10 +271,36 @@ class ResilientHttpPool:
                     self._clock() + self._policy.cooldown_seconds
                 )
 
-    def _record_success(self, state: _EndpointState) -> None:
+    def _record_success(
+        self,
+        state: _EndpointState,
+        elapsed_seconds: float,
+    ) -> None:
         with self._lock:
+            self._finish_attempt(state, elapsed_seconds)
             state.consecutive_failures = 0
             state.circuit_open_until = 0.0
+
+    def _record_rejection(
+        self,
+        state: _EndpointState,
+        elapsed_seconds: float,
+    ) -> None:
+        with self._lock:
+            self._finish_attempt(state, elapsed_seconds)
+
+    @staticmethod
+    def _finish_attempt(
+        state: _EndpointState,
+        elapsed_seconds: float,
+    ) -> None:
+        state.in_flight -= 1
+        previous = state.ewma_latency_seconds
+        state.ewma_latency_seconds = (
+            elapsed_seconds
+            if previous is None
+            else (0.2 * elapsed_seconds) + (0.8 * previous)
+        )
 
 
 def _normalize_endpoint(value: str) -> str:

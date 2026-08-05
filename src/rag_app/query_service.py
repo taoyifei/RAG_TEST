@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from contextlib import ExitStack
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -23,6 +25,7 @@ from rag_app.generation.evidence import (
     EvidenceDecision,
     InvalidEvidencePayloadError,
 )
+from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.retrieval.fusion import FusedHit
 from rag_app.retrieval.hybrid import HybridRetriever
 from rag_app.retrieval.neighbors import (
@@ -34,6 +37,7 @@ from rag_app.retrieval.rewrite import (
     QueryRewriter,
     RewriteTokenLimitError,
 )
+from rag_app.state.answer_cache import AnswerCache, AnswerCacheKey
 from rag_app.state.conversations import ConversationStore
 from rag_app.tracing.models import (
     SpanKind,
@@ -156,7 +160,7 @@ class _QueryRequest:
 class QueryService:
     """顺序执行检索生成链，并通过 callback 发非敏感阶段事件。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         dependencies: QueryDependencies,
@@ -166,6 +170,8 @@ class QueryService:
             TraceIdentity | Callable[[], TraceIdentity] | None
         ) = None,
         default_trace_mode: TraceMode = TraceMode.SAFE,
+        answer_cache: AnswerCache | None = None,
+        access_mode: str = "source-only",
     ) -> None:
         """保存完整查询链依赖。
 
@@ -175,10 +181,20 @@ class QueryService:
             trace_recorder: 可选的独立 Trace writer。
             trace_identity: 与 recorder 同时提供的运行身份或实时提供器。
             default_trace_mode: 普通 chat 的 SAFE/DIAGNOSTIC 边界。
+            answer_cache: 可选的索引与回答协议绑定精确缓存。
+            access_mode: 缓存键绑定的访问范围模式。
 
         """
-        if (trace_recorder is None) != (trace_identity is None):
+        if trace_recorder is not None and trace_identity is None:
             raise ValueError("Trace recorder 和 identity 必须同时配置。")
+        if (
+            trace_recorder is None
+            and trace_identity is not None
+            and answer_cache is None
+        ):
+            raise ValueError("独立 Trace identity 只能用于回答缓存。")
+        if answer_cache is not None and trace_identity is None:
+            raise ValueError("回答缓存必须绑定实时 Trace identity。")
         self._dependencies = dependencies
         self._clock = clock
         self._trace_recorder = trace_recorder
@@ -186,6 +202,8 @@ class QueryService:
         if default_trace_mode is TraceMode.FULL:
             raise ValueError("普通 chat 不能配置为 FULL Trace。")
         self._default_trace_mode = default_trace_mode
+        self._answer_cache = answer_cache
+        self._access_mode = access_mode
 
     def ask(
         self,
@@ -258,7 +276,7 @@ class QueryService:
             TraceMode.FULL,
         )
 
-    def _ask(  # noqa: PLR0915
+    def _ask(  # noqa: PLR0912, PLR0915
         self,
         request: _QueryRequest,
         mode: TraceMode,
@@ -292,6 +310,8 @@ class QueryService:
         event_count = 0
         session = self._begin_trace(request, mode)
         current_span: TraceSpanHandle | None = None
+        cache_key: AnswerCacheKey | None = None
+        singleflight_stack = ExitStack()
         failure_stage = "context.load"
         try:
             current_span = _start_span(
@@ -380,6 +400,114 @@ class QueryService:
                     "query_count": len(variants.queries),
                 },
             )
+
+            if self._answer_cache is not None:
+                failure_stage = "cache.lookup"
+                cache_key = self._answer_cache_key(
+                    variants.resolved_query,
+                    context_digest=_conversation_context_digest(
+                        variants.rewritten,
+                        previous_questions,
+                        context.verified_claims,
+                    ),
+                )
+                current_span = _start_span(
+                    session,
+                    failure_stage,
+                    SpanKind.STORAGE,
+                )
+                cached = self._answer_cache.lookup(
+                    cache_key,
+                    now=request.now,
+                )
+                _finish_span(
+                    session,
+                    current_span,
+                    DecisionCode.ACCEPTED,
+                    {"cache_status": "hit" if cached else "miss"},
+                )
+                current_span = None
+                cache_outcome = "cache.hit" if cached else "cache.miss"
+                outcome_span = _start_span(
+                    session,
+                    cache_outcome,
+                    SpanKind.STORAGE,
+                )
+                _finish_span(
+                    session,
+                    outcome_span,
+                    DecisionCode.ACCEPTED,
+                    {"cache_status": cache_outcome.removeprefix("cache.")},
+                )
+                if cached is not None:
+                    return self._publish_cached(
+                        request=request,
+                        answer=cached,
+                        rewritten=variants.rewritten,
+                        rewrite_call=variants.call,
+                        event_count=event_count,
+                        emitter=event_emitter,
+                        session=session,
+                    )
+
+                wait_span = _start_span(
+                    session,
+                    "cache.wait",
+                    SpanKind.STORAGE,
+                )
+                flight = singleflight_stack.enter_context(
+                    self._answer_cache.singleflight(cache_key)
+                )
+                cached = flight.result
+                if flight.waited and cached is None:
+                    cached = self._answer_cache.lookup(
+                        cache_key,
+                        now=request.now,
+                    )
+                _finish_span(
+                    session,
+                    wait_span,
+                    DecisionCode.ACCEPTED,
+                    {
+                        "waited": flight.waited,
+                        "cache_status": (
+                            "hit_after_wait"
+                            if cached is not None
+                            else (
+                                "miss_after_wait"
+                                if flight.waited
+                                else "leader"
+                            )
+                        ),
+                    },
+                )
+                if cached is not None:
+                    hit_span = _start_span(
+                        session,
+                        "cache.hit",
+                        SpanKind.STORAGE,
+                    )
+                    _finish_span(
+                        session,
+                        hit_span,
+                        DecisionCode.ACCEPTED,
+                        {
+                            "cache_status": (
+                                "singleflight"
+                                if flight.result is not None
+                                else "persistent_after_wait"
+                            )
+                        },
+                    )
+                    return self._publish_cached(
+                        request=request,
+                        answer=cached,
+                        rewritten=variants.rewritten,
+                        rewrite_call=variants.call,
+                        event_count=event_count,
+                        emitter=event_emitter,
+                        session=session,
+                    )
 
             failure_stage = "retrieve"
             current_span = _start_span(
@@ -552,6 +680,9 @@ class QueryService:
             answer = self._dependencies.answerer.answer(
                 request.question,
                 evidence,
+                rerank_scores=tuple(
+                    hit.rerank_score for hit in reranked.scored_hits
+                ),
             )
             answer_span_id = (
                 None if current_span is None else current_span.span_id
@@ -572,6 +703,8 @@ class QueryService:
                 {
                     "status": answer.status.value,
                     "answer": answer.answer,
+                    "answer_mode": answer.answer_mode.value,
+                    "user_message": answer.user_message,
                     "refusal_code": (
                         None
                         if answer.refusal_code is None
@@ -580,6 +713,24 @@ class QueryService:
                     "claims": [asdict(claim) for claim in answer.claims],
                 },
             )
+            if self._answer_cache is not None and cache_key is not None:
+                self._answer_cache.publish_singleflight(cache_key, answer)
+                cache_span = _start_span(
+                    session,
+                    "cache.store",
+                    SpanKind.STORAGE,
+                )
+                cache_status = self._answer_cache.store(
+                    cache_key,
+                    answer,
+                    now=request.now,
+                )
+                _finish_span(
+                    session,
+                    cache_span,
+                    DecisionCode.ACCEPTED,
+                    {"cache_store_status": cache_status.value},
+                )
             event_count += 1
             event_emitter.emit(
                 StageName.VALIDATE,
@@ -670,6 +821,99 @@ class QueryService:
                     attributes={"failure_stage": failure_stage},
                 )
             raise
+        finally:
+            singleflight_stack.close()
+
+    def _answer_cache_key(
+        self,
+        resolved_query: str,
+        *,
+        context_digest: str,
+    ) -> AnswerCacheKey:
+        """用活动索引、服务指纹和回答协议构造精确缓存键。"""
+        identity_source = self._trace_identity
+        if identity_source is None:
+            raise RuntimeError("回答缓存缺少 Trace identity。")
+        identity = (
+            identity_source()
+            if callable(identity_source)
+            else identity_source
+        )
+        return AnswerCacheKey.from_inputs(
+            resolved_query=resolved_query,
+            conversation_context_digest=context_digest,
+            index_manifest_sha256=identity.index_manifest_sha256,
+            serving_fingerprint=identity.serving_fingerprint,
+            access_mode=self._access_mode,
+            answer_revision=self._dependencies.answerer.revision(),
+        )
+
+    def _publish_cached(  # noqa: PLR0913
+        self,
+        *,
+        request: _QueryRequest,
+        answer: AnswerResult,
+        rewritten: bool,
+        rewrite_call: ExternalCallAudit | None,
+        event_count: int,
+        emitter: _StageEmitter,
+        session: TraceSession | None,
+    ) -> QueryOutcome:
+        """跳过检索与模型调用并发布已绑定当前版本的精确命中。"""
+        cached = replace(
+            answer,
+            trace={**answer.trace, "cache_status": "hit"},
+        )
+        _full_artifact(
+            session,
+            "final",
+            {
+                "status": cached.status.value,
+                "answer": cached.answer,
+                "answer_mode": cached.answer_mode.value,
+                "user_message": cached.user_message,
+                "refusal_code": (
+                    None
+                    if cached.refusal_code is None
+                    else cached.refusal_code.value
+                ),
+                "claims": [asdict(claim) for claim in cached.claims],
+                "cache_status": "hit",
+            },
+        )
+        emitter.emit(
+            StageName.VALIDATE,
+            {
+                "status": cached.status.value,
+                "model_calls": 0,
+                "refusal_code": (
+                    ""
+                    if cached.refusal_code is None
+                    else cached.refusal_code.value
+                ),
+                "cache_status": "hit",
+            },
+        )
+        self._dependencies.conversations.append_turn(
+            request.conversation_id,
+            request.question,
+            answer=cached,
+            now=request.now,
+            turn_id=request.trace_id,
+        )
+        emitter.emit(
+            StageName.COMPLETE,
+            {"status": cached.status.value, "cache_status": "hit"},
+        )
+        outcome = QueryOutcome(
+            trace_id=request.trace_id,
+            answer=cached,
+            rewritten=rewritten,
+            stage_count=event_count + 2,
+            calls=() if rewrite_call is None else (rewrite_call,),
+        )
+        _finish_trace(session, cached)
+        return outcome
 
     def _begin_trace(
         self,
@@ -722,6 +966,28 @@ def _start_span(
         kind,
         parent_span_id=session.root.span_id,
     )
+
+
+def _conversation_context_digest(
+    rewritten: bool,
+    previous_questions: tuple[str, ...],
+    verified_claims: tuple[VerifiedClaimContext, ...],
+) -> str:
+    """独立问题使用空摘要，依赖上下文的问题绑定有限会话内容。"""
+    if not rewritten:
+        return ""
+    canonical = json.dumps(
+        {
+            "questions": list(previous_questions),
+            "verified_claims": [
+                claim.as_payload() for claim in verified_claims
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _finish_span(
@@ -1230,6 +1496,14 @@ def _safe_answer_context(
             "intent",
             "evidence_count",
             "non_low_ocr_evidence_count",
+            "answerability_decision",
+            "answerability_top_score",
+            "strong_anchor_count",
+            "covered_anchor_count",
+            "answerability_non_low_ocr_count",
+            "dropped_claim_count",
+            "dropped_claim_codes",
+            "extractive_fallback",
             "review_triggered",
         )
         if key in trace
@@ -1244,6 +1518,13 @@ def _safe_generation_attributes(
         "phase",
         "endpoint",
         "retry_count",
+        "elapsed_ms",
+        "queue_ms",
+        "ttft_ms",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "completion_tokens_per_second",
         "claims_count",
         "validation_code",
     ):

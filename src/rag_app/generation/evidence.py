@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
+from enum import StrEnum
 
 from rag_app.chunking import TokenCounter
 from rag_app.contracts import (
@@ -15,12 +18,16 @@ from rag_app.retrieval.rerank import RerankedHit
 from rag_app.tracing.reasons import DecisionCode
 
 __all__ = [
+    "AnswerabilityDecision",
+    "AnswerabilityStatus",
     "EvidenceAssembler",
     "EvidenceBundle",
     "EvidenceConfig",
     "EvidenceDecision",
     "EvidenceItem",
+    "EvidenceUnit",
     "InvalidEvidencePayloadError",
+    "decide_answerability",
 ]
 
 _UNTRUSTED_DATA_NOTICE = (
@@ -33,6 +40,34 @@ _PROMPT_INJECTION_PATTERNS = (
     "system prompt",
     "<|im_start|>system",
 )
+_NOT_FOUND_SCORE_MAX = 0.45
+_SUPPORTED_SCORE_MIN = 0.90
+_SAFE_UNIT_BOUNDARY = re.compile(r"[^。；;\n]*(?:[。；;\n]|$)")
+_STRONG_ANCHOR_PATTERNS = (
+    re.compile(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"),
+    re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)"),
+    re.compile(r"《[^》]{2,40}》"),
+    re.compile(r"[“\"]([^”\"]{2,40})[”\"]"),
+)
+
+
+class AnswerabilityStatus(StrEnum):
+    """生成前的确定性回答性结论。"""
+
+    SUPPORTED = "SUPPORTED"
+    AMBIGUOUS = "AMBIGUOUS"
+    NOT_FOUND = "NOT_FOUND"
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerabilityDecision:
+    """记录回答性门禁使用的非正文指标。"""
+
+    status: AnswerabilityStatus
+    top_score: float
+    strong_anchor_count: int
+    covered_anchor_count: int
+    non_low_ocr_evidence_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +96,8 @@ class EvidenceItem:
     locators: tuple[Locator, ...]
     source_spans: tuple[ChunkSourceSpan, ...]
     low_confidence_ocr: bool
+    source_id: str
+    neighbor_group_id: str
 
     def to_prompt_payload(self) -> dict[str, object]:
         """生成不含 embedding 上下文的 prompt 数据。
@@ -84,6 +121,32 @@ class EvidenceItem:
 
 
 @dataclass(frozen=True, slots=True)
+class EvidenceUnit:
+    """可由模型通过短 ID 引用的单一来源原文片段。"""
+
+    unit_id: str
+    evidence_id: str
+    source_group: str
+    source_label: str
+    text: str
+    low_confidence_ocr: bool
+    chunk_id: str
+    start_char: int
+    end_char: int
+    locator: Locator
+
+    def to_prompt_payload(self) -> dict[str, object]:
+        """仅输出模型选择证据所需的安全字段。"""
+        return {
+            "unit_id": self.unit_id,
+            "source_group": self.source_group,
+            "source_label": self.source_label,
+            "text": self.text,
+            "low_confidence_ocr": self.low_confidence_ocr,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class EvidenceBundle:
     """已通过预算检查的证据与序列化 JSON。"""
 
@@ -92,6 +155,7 @@ class EvidenceBundle:
     token_count: int
     quarantined_chunk_ids: tuple[str, ...]
     decisions: tuple[EvidenceDecision, ...] = ()
+    units: tuple[EvidenceUnit, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,7 +271,8 @@ class EvidenceAssembler:
                     )
                 ) from error
             proposed = (*selected, candidate)
-            proposed_rendered = _render(proposed)
+            proposed_units = _evidence_units(proposed)
+            proposed_rendered = _render(proposed_units)
             proposed_tokens = self._token_counter.count(proposed_rendered)
             candidate_tokens = self._token_counter.count(candidate.text)
             if proposed_tokens > self._config.max_evidence_tokens:
@@ -234,12 +299,14 @@ class EvidenceAssembler:
                     actual_candidate_tokens=candidate_tokens,
                 )
             )
+        units = _evidence_units(tuple(selected))
         return EvidenceBundle(
             items=tuple(selected),
             rendered_json=rendered,
             token_count=self._token_counter.count(rendered),
             quarantined_chunk_ids=tuple(quarantined),
             decisions=tuple(decisions),
+            units=units,
         )
 
 
@@ -302,19 +369,144 @@ def _evidence_item(
         locators=locators,
         source_spans=source_spans,
         low_confidence_ocr=low_confidence,
+        source_id=_optional_identity(payload, "source_id", ranked.hit.chunk_id),
+        neighbor_group_id=_optional_identity(
+            payload,
+            "neighbor_group_id",
+            ranked.hit.chunk_id,
+        ),
     )
 
 
-def _render(items: tuple[EvidenceItem, ...]) -> str:
+def _optional_identity(
+    payload: dict[str, object],
+    field: str,
+    fallback: str,
+) -> str:
+    value = payload.get(field)
+    return value if isinstance(value, str) and value else fallback
+
+
+def _render(units: tuple[EvidenceUnit, ...]) -> str:
     return json.dumps(
         {
             "notice": _UNTRUSTED_DATA_NOTICE,
-            "evidence": [item.to_prompt_payload() for item in items],
+            "evidence_units": [unit.to_prompt_payload() for unit in units],
         },
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
+
+
+def _evidence_units(
+    items: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceUnit, ...]:
+    """把已校验 source span 确定性拆成短引用单元。"""
+    units: list[EvidenceUnit] = []
+    for item in items:
+        unit_index = 0
+        source_group = _source_group(item)
+        for span in item.source_spans:
+            span_text = item.text[span.start_char : span.end_char]
+            for relative_start, relative_end in _split_unit_ranges(
+                span_text,
+                span.locator,
+            ):
+                unit_index += 1
+                start_char = span.start_char + relative_start
+                end_char = span.start_char + relative_end
+                units.append(
+                    EvidenceUnit(
+                        unit_id=f"{item.evidence_id}:S{unit_index}",
+                        evidence_id=item.evidence_id,
+                        source_group=source_group,
+                        source_label=_source_label(span.locator),
+                        text=item.text[start_char:end_char],
+                        low_confidence_ocr=item.low_confidence_ocr,
+                        chunk_id=item.chunk_id,
+                        start_char=start_char,
+                        end_char=end_char,
+                        locator=span.locator,
+                    )
+                )
+    return tuple(units)
+
+
+def _split_unit_ranges(
+    text: str,
+    locator: Locator,
+) -> tuple[tuple[int, int], ...]:
+    """只在中文句号、分号或换行后拆分，不强切连续文本。"""
+    if locator.table_index is not None:
+        return ((0, len(text)),)
+    ranges: list[tuple[int, int]] = []
+    for match in _SAFE_UNIT_BOUNDARY.finditer(text):
+        start, end = match.span()
+        if end > start:
+            ranges.append((start, end))
+    return tuple(ranges) if ranges else ((0, len(text)),)
+
+
+def _source_group(item: EvidenceItem) -> str:
+    """生成同一文档邻居组内稳定且不泄露内部 ID 的标签。"""
+    identity = f"{item.source_id}\x1f{item.neighbor_group_id}"
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return f"SG-{digest}"
+
+
+def _source_label(locator: Locator) -> str:
+    """生成不含内部序号和原文 fragment 的简短来源标签。"""
+    return " > ".join((locator.file_path, *locator.heading_path))
+
+
+def decide_answerability(
+    question: str,
+    evidence: EvidenceBundle,
+    *,
+    rerank_scores: tuple[float, ...],
+) -> AnswerabilityDecision:
+    """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。"""
+    anchors = _strong_anchors(question)
+    searchable = "\n".join(
+        unit.text.casefold()
+        for unit in evidence.units
+        if not unit.low_confidence_ocr
+    )
+    covered = sum(anchor.casefold() in searchable for anchor in anchors)
+    top_score = rerank_scores[0] if rerank_scores else 0.0
+    non_low_ocr = sum(not item.low_confidence_ocr for item in evidence.items)
+
+    # 真实 trace 中已回答样本的 top score 为 0.9961/1.0，明确未命中样本
+    # 为 0.3477；中间区间保守落入 AMBIGUOUS，避免把未知分布误判为无资料。
+    if (
+        rerank_scores
+        and anchors
+        and covered == 0
+        and top_score <= _NOT_FOUND_SCORE_MAX
+    ):
+        status = AnswerabilityStatus.NOT_FOUND
+    elif top_score >= _SUPPORTED_SCORE_MIN and non_low_ocr > 0:
+        status = AnswerabilityStatus.SUPPORTED
+    else:
+        status = AnswerabilityStatus.AMBIGUOUS
+    return AnswerabilityDecision(
+        status=status,
+        top_score=top_score,
+        strong_anchor_count=len(anchors),
+        covered_anchor_count=covered,
+        non_low_ocr_evidence_count=non_low_ocr,
+    )
+
+
+def _strong_anchors(question: str) -> tuple[str, ...]:
+    anchors: list[str] = []
+    for pattern in _STRONG_ANCHOR_PATTERNS:
+        for match in pattern.finditer(question):
+            anchor = match.group(1) if match.lastindex else match.group(0)
+            if anchor not in anchors:
+                anchors.append(anchor)
+    return tuple(anchors)
 
 
 def _suspected_prompt_injection(text: str) -> bool:

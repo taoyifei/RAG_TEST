@@ -143,6 +143,8 @@ def test_chat_streams_only_stages_before_validated_final(
     assert events[1]["type"] == "final"
     assert events[1]["answer"] == "已验证答案"
     assert events[1]["claims"][0]["supports"][0]["chunk_id"] == "chunk-1"
+    assert events[1]["answer_mode"] == "ANSWERED"
+    assert events[1]["user_message"] is None
 
 
 def test_query_and_admin_tokens_are_not_interchangeable(

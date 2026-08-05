@@ -13,10 +13,21 @@ class QuestionIntent(StrEnum):
     PROCEDURE = "PROCEDURE"
     LIST = "LIST"
     DEFINITION = "DEFINITION"
-    GENERAL = "GENERAL"
+    ACTOR = "ACTOR"
+    DELIVERABLE = "DELIVERABLE"
+    COMPARE = "COMPARE"
 
 
-_DEFINITION_MARKERS = ("什么是", "含义", "定义")
+_COMPARE_MARKERS = ("区别", "不同", "是否相同", "对比", "比较")
+_DEFINITION_MARKERS = ("什么是", "是什么", "含义", "定义", "介绍一下")
+_ACTOR_MARKERS = ("由谁", "谁负责", "责任人", "负责人")
+_DELIVERABLE_MARKERS = (
+    "输出什么",
+    "什么文档",
+    "什么报告",
+    "交付物",
+    "产出物",
+)
 _PROCEDURE_MARKERS = (
     "步骤",
     "流程",
@@ -32,8 +43,8 @@ _LIST_MARKERS = ("哪些", "要求", "条件", "材料", "职责", "内容")
 def classify_question_intent(question: str) -> QuestionIntent:
     """按固定关键词优先级识别问题意图。
 
-    定义短语比通用流程词更具体；其余情况下流程词优先于列表词，确保
-    “哪些审批步骤”归入 PROCEDURE。
+    比较、定义、责任人和交付物短语优先于通用流程词；其余情况下流程词
+    优先于列表词，确保“哪些审批步骤”归入 PROCEDURE。
 
     Args:
         question: 已确认非空的当前问题。
@@ -48,10 +59,15 @@ def classify_question_intent(question: str) -> QuestionIntent:
     normalized = question.strip()
     if not normalized:
         raise ValueError("question 不能为空。")
-    if any(marker in normalized for marker in _DEFINITION_MARKERS):
-        return QuestionIntent.DEFINITION
-    if any(marker in normalized for marker in _PROCEDURE_MARKERS):
-        return QuestionIntent.PROCEDURE
-    if any(marker in normalized for marker in _LIST_MARKERS):
-        return QuestionIntent.LIST
-    return QuestionIntent.GENERAL
+    classifiers = (
+        (QuestionIntent.COMPARE, _COMPARE_MARKERS),
+        (QuestionIntent.DEFINITION, _DEFINITION_MARKERS),
+        (QuestionIntent.ACTOR, _ACTOR_MARKERS),
+        (QuestionIntent.DELIVERABLE, _DELIVERABLE_MARKERS),
+        (QuestionIntent.PROCEDURE, _PROCEDURE_MARKERS),
+        (QuestionIntent.LIST, _LIST_MARKERS),
+    )
+    for intent, markers in classifiers:
+        if any(marker in normalized for marker in markers):
+            return intent
+    return QuestionIntent.LIST

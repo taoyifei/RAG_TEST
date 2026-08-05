@@ -18,7 +18,7 @@
 - `deployment/config/retrieval.json` 继续为 `provisional`，没有使用真实模型与
   人工冻结集完成 tuning/holdout，因此不能改为 frozen 或使生产 ready。
 - 当前配置 SHA256 为
-  `7f3d27750d5a5129bf26357fcb1627cbf389d9671f4c3118f765896fae2c1bd5`；配置完整性
+  `ee0a6356a6939635f7f7da433198283e7f6592c8ea6067cd6b5ae3ec68b92539`；配置完整性
   测试已改为从 `deployment/ASSETS.sha256` 读取唯一摘要并核对实际文件，继续
   断言 `status=provisional` 与 `freeze_decision_sha256=null`。该修复只消除重复
   摘要来源，不代表 retrieval 已完成定参或冻结。
@@ -59,14 +59,21 @@
 - 解除条件：前五类依赖满足后，在获授权服务器窗口执行 SHA 校验、离线 load、
   `compose up --no-build --pull never`、全新卷启动、完整质量/性能/故障与回滚验收。
 
-## 7. 空 claims 专用复核服务器验收
+## 7. support-id 回答、缓存与性能服务器验收
 
-- 本地已把首次空 claims 改为最多一次专用 abstention review，并保持逐字引用、
-  source span、唯一 locator、数字、重复项和 OCR 门禁不变；限定测试和静态门禁
-  已通过，index fingerprint 未变化。
-- 仍缺 `.60` 的更新后验收证据：新 conversation 下的已知变更问题、至少两个
-  历史空 claims 常规问题和一个确实无答案问题，以及更新前后 alias、manifest、
-  index 与 Qdrant 点数不变的对比。
-- 解除条件：经 `.54` 上传本轮 app-only 三文件包，只更新 `rag-app`；有证据问题
-  必须 answered 且 claims 非空，真正无答案仍为 `EVIDENCE_INSUFFICIENT`，正常回答
-  `model_calls=1`，仅首次错误弃答时为 2，任何请求不得出现第三次 LLM 调用。
+- 本地已把模型回答改为只选择原子 `support_id`，最终 quote/locator 由应用从
+  source span 确定性恢复；同时增加 Answerability Gate、来源关系隔离、部分回答、
+  高置信抽取兜底、精确 SQLite 缓存、同键 singleflight 和四副本负载调度。索引
+  fingerprint 仍为 `sha256:dd16e57d...`，不需要重新索引。
+- 当前任务禁止访问服务器，因此还没有 `.60` 更新后的 9 问回归、exact cache
+  `<200ms`、非缓存回答 p50/p95、四副本并发分布，以及更新前后 alias、manifest、
+  index fingerprint 与 Qdrant 点数不变的现场证据。不能把本地模拟延迟描述为真实
+  Qwen 性能。
+- 解除条件：经 `.54` 转传 app-only 三文件包并只更新 `rag-app`。7 个可回答问题
+  必须 answered/partial，火星基地 `RAG-999/2099` 必须 NOT_FOUND 且
+  `model_calls=0`；重复独立问题必须命中 exact cache 且不调用 embedding、reranker、
+  LLM；正常请求只使用一个 Qwen，4 个并发不同问题应分布到多个副本。非缓存回答
+  目标 p50 `<=10s`、p95 `<=15s`，检索到证据组装继续 `<2s`。
+- 若完成 app-only 更新后非缓存回答仍超过 15 秒，只做 A/B 取证建议，不直接修改
+  模型服务：核对 vLLM Automatic Prefix Caching；单 endpoint 对比 n-gram/suffix
+  speculative decoding；对比 TP 配置；分别记录 queue 与 decode 指标。

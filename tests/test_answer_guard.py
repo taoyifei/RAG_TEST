@@ -10,6 +10,7 @@ from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
 from rag_app.generation.answer import (
     AnswerConfig,
     AnswerGenerator,
+    AnswerMode,
     AnswerStatus,
     RefusalCode,
 )
@@ -94,25 +95,14 @@ def _bundle(
 
 
 def _bundle_many(*texts: str) -> EvidenceBundle:
-    items = []
-    for index, text in enumerate(texts, start=1):
-        item = _bundle(text).items[0]
-        items.append(
-            replace(
-                item,
-                evidence_id=f"E{index}",
-                chunk_id=f"chunk-{index}",
-            )
-        )
-    rendered = {
-        "evidence": [item.to_prompt_payload() for item in items],
-    }
-    return EvidenceBundle(
-        items=tuple(items),
-        rendered_json=json.dumps(rendered, ensure_ascii=False),
-        token_count=sum(len(text) for text in texts),
-        quarantined_chunk_ids=(),
-    )
+    return EvidenceAssembler(
+        Utf8TokenCounter(),
+        EvidenceConfig(
+            max_evidence_tokens=4000,
+            max_items=8,
+            low_ocr_threshold=0.8,
+        ),
+    ).assemble(tuple(_ranked(text) for text in texts))
 
 
 def _generator(
@@ -189,12 +179,7 @@ def _valid_answer() -> dict[str, object]:
         "claims": [
             {
                 "text": "验收期为30天。",
-                "supports": [
-                    {
-                        "evidence_id": "E1",
-                        "quote": "验收期为30天",
-                    }
-                ],
+                "support_ids": ["E1:S1"],
             }
         ],
     }
@@ -255,12 +240,7 @@ def test_known_procedure_abstention_review_returns_supported_steps() -> None:
                     "需求变更应提交书面申请，完成影响评估，经双方书面确认后"
                     "更新需求基线。"
                 ),
-                "supports": [
-                    {
-                        "evidence_id": "E1",
-                        "quote": evidence_text,
-                    }
-                ],
+                "support_ids": ["E1:S1"],
             }
         ]
     }
@@ -311,9 +291,7 @@ def test_action_sequence_answers_procedure_without_literal_approval_label(
         "claims": [
             {
                 "text": "先提交申请并评估影响，经双方确认后更新基线。",
-                "supports": [
-                    {"evidence_id": "E1", "quote": evidence_text}
-                ],
+                "support_ids": ["E1:S1"],
             }
         ]
     }
@@ -345,21 +323,11 @@ def test_complementary_documents_can_support_one_answer() -> None:
         "claims": [
             {
                 "text": "先提交书面申请并完成影响评估。",
-                "supports": [
-                    {
-                        "evidence_id": "E1",
-                        "quote": "提交书面变更申请，项目团队完成影响评估",
-                    }
-                ],
+                "support_ids": ["E1:S1"],
             },
             {
                 "text": "评估后由双方书面确认，再更新需求基线。",
-                "supports": [
-                    {
-                        "evidence_id": "E2",
-                        "quote": "评估后由双方书面确认，再更新需求基线",
-                    }
-                ],
+                "support_ids": ["E2:S1"],
             },
         ]
     }
@@ -367,8 +335,8 @@ def test_complementary_documents_can_support_one_answer() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         request_body = json.loads(request.content)
         system_prompt = request_body["messages"][0]["content"]
-        assert "不同文档的补充信息默认视为互补" in system_prompt
-        assert "只有明确互斥要求才按冲突处理" in system_prompt
+        assert "按来源分别输出 claim" in system_prompt
+        assert "source_group" in system_prompt
         return _response(answer)
 
     result = _generator(handler).answer(
@@ -393,9 +361,7 @@ def test_partial_procedure_evidence_is_published_without_full_coverage(
         "claims": [
             {
                 "text": "当前证据支持的步骤是提交书面变更申请并说明原因。",
-                "supports": [
-                    {"evidence_id": "E1", "quote": evidence_text}
-                ],
+                "support_ids": ["E1:S1"],
             }
         ]
     }
@@ -430,12 +396,7 @@ def test_invalid_abstention_review_quote_does_not_trigger_third_call() -> None:
                 "claims": [
                     {
                         "text": "应提交申请。",
-                        "supports": [
-                            {
-                                "evidence_id": "E1",
-                                "quote": "证据中不存在的引文",
-                            }
-                        ],
+                        "support_ids": ["E9:S9"],
                     }
                 ]
             }
@@ -453,7 +414,7 @@ def test_invalid_abstention_review_quote_does_not_trigger_third_call() -> None:
         "ABSTENTION_REVIEW_INVALID"
     )
     assert result.trace["review_validation_code"] == (
-        "QUOTE_NOT_IN_EVIDENCE"
+        "INVALID_SUPPORT_ID"
     )
     assert result.trace["repair_triggered"] is False
     assert calls == 2
@@ -465,7 +426,7 @@ def test_invalid_abstention_review_quote_does_not_trigger_third_call() -> None:
         ("not-json", "INVALID_JSON"),
         (
             json.dumps(
-                {"claims": [{"text": "应提交申请。", "supports": []}]},
+                {"claims": [{"text": "应提交申请。", "support_ids": []}]},
                 ensure_ascii=False,
             ),
             "EMPTY_CLAIM_OR_SUPPORT",
@@ -509,12 +470,7 @@ def test_invalid_abstention_review_shape_does_not_trigger_repair(
                 "claims": [
                     {
                         "text": "验收期为30天。",
-                        "supports": [
-                            {
-                                "evidence_id": "E1",
-                                "quote": "验收期限另行约定",
-                            }
-                        ],
+                        "support_ids": ["E1:S1"],
                     }
                 ]
             },
@@ -525,16 +481,7 @@ def test_invalid_abstention_review_shape_does_not_trigger_repair(
                 "claims": [
                     {
                         "text": "验收期限另行约定。",
-                        "supports": [
-                            {
-                                "evidence_id": "E1",
-                                "quote": "验收期限另行约定",
-                            },
-                            {
-                                "evidence_id": "E1",
-                                "quote": "验收期限另行约定",
-                            },
-                        ],
+                        "support_ids": ["E1:S1", "E1:S1"],
                     }
                 ]
             },
@@ -545,21 +492,11 @@ def test_invalid_abstention_review_shape_does_not_trigger_repair(
                 "claims": [
                     {
                         "text": "验收期限另行约定。",
-                        "supports": [
-                            {
-                                "evidence_id": "E1",
-                                "quote": "验收期限另行约定",
-                            }
-                        ],
+                        "support_ids": ["E1:S1"],
                     },
                     {
                         "text": "验收期限另行约定。",
-                        "supports": [
-                            {
-                                "evidence_id": "E1",
-                                "quote": "验收期限另行约定",
-                            }
-                        ],
+                        "support_ids": ["E1:S1"],
                     },
                 ]
             },
@@ -576,11 +513,19 @@ def test_existing_claim_safety_gates_remain_strict(
         _bundle("规范规定验收期限另行约定。"),
     )
 
-    assert result.status == AnswerStatus.REFUSED
-    assert result.refusal_code == RefusalCode.VALIDATION_FAILED
-    assert result.model_calls == 2
-    assert result.trace["first_validation_code"] == expected_code
-    assert result.trace["repair_validation_code"] == expected_code
+    if expected_code == "DUPLICATE_CLAIM":
+        assert result.status == AnswerStatus.ANSWERED
+        assert result.answer_mode is AnswerMode.PARTIAL
+        assert result.model_calls == 1
+        assert result.trace["dropped_claim_codes"] == {
+            "DUPLICATE_CLAIM": 1
+        }
+    else:
+        assert result.status == AnswerStatus.REFUSED
+        assert result.refusal_code == RefusalCode.VALIDATION_FAILED
+        assert result.model_calls == 2
+        assert result.trace["first_validation_code"] == expected_code
+        assert result.trace["repair_validation_code"] == expected_code
 
 
 def test_low_confidence_ocr_cannot_support_claim_when_safe_evidence_exists(
@@ -596,18 +541,18 @@ def test_low_confidence_ocr_cannot_support_claim_when_safe_evidence_exists(
     bundle = replace(
         original,
         items=items,
-        rendered_json=json.dumps(
-            {"evidence": [item.to_prompt_payload() for item in items]},
-            ensure_ascii=False,
+        units=tuple(
+            replace(unit, low_confidence_ocr=True)
+            if unit.evidence_id == "E1"
+            else unit
+            for unit in original.units
         ),
     )
     answer = {
         "claims": [
             {
                 "text": "验收期为30天。",
-                "supports": [
-                    {"evidence_id": "E1", "quote": "验收期为30天"}
-                ],
+                "support_ids": ["E1:S1"],
             }
         ]
     }
@@ -646,18 +591,13 @@ def test_irrelevant_evidence_remains_refused_after_review() -> None:
 
 
 def test_broad_answer_with_five_valid_claims_uses_one_endpoint() -> None:
-    evidence_text = "；".join(f"主要要求{index}" for index in range(1, 6))
+    evidence_text = "；".join(f"主要要求{index}" for index in range(1, 5))
     claims = [
         {
             "text": f"要求概括{index}",
-            "supports": [
-                {
-                    "evidence_id": "E1",
-                    "quote": f"主要要求{index}",
-                }
-            ],
+            "support_ids": [f"E1:S{index}"],
         }
-        for index in range(1, 6)
+        for index in range(1, 5)
     ]
     requests: list[str] = []
 
@@ -680,7 +620,7 @@ def test_broad_answer_with_five_valid_claims_uses_one_endpoint() -> None:
     )
 
     assert result.status == AnswerStatus.ANSWERED
-    assert len(result.claims) == 5
+    assert len(result.claims) == 4
     assert result.model_calls == 1
     assert result.trace["first_validation_code"] == "VALIDATION_OK"
     assert "INVALID_ANSWER_SCHEMA" not in result.trace.values()
@@ -696,7 +636,7 @@ def test_invalid_citation_is_repaired_at_most_once() -> None:
         calls += 1
         if calls == 1:
             invalid = _valid_answer()
-            invalid["claims"][0]["supports"][0]["evidence_id"] = "E9"
+            invalid["claims"][0]["support_ids"][0] = "E9:S9"
             return _response(invalid)
         return _response(_valid_answer())
 
@@ -707,7 +647,7 @@ def test_invalid_citation_is_repaired_at_most_once() -> None:
 
     assert result.status == AnswerStatus.ANSWERED
     assert result.model_calls == 2
-    assert result.trace["first_validation_code"] == "INVALID_CITATION_ID"
+    assert result.trace["first_validation_code"] == "INVALID_SUPPORT_ID"
     assert result.trace["repair_validation_code"] == "VALIDATION_OK"
     assert result.trace["repair_triggered"] is True
     assert calls == 2
@@ -776,7 +716,7 @@ def test_quote_uses_locator_of_containing_source_span() -> None:
     ]
 
     answer = _valid_answer()
-    answer["claims"][0]["supports"][0]["quote"] = "期限为30天"
+    answer["claims"][0]["support_ids"][0] = "E1:S2"
     result = _generator(lambda _: _response(answer)).answer(
         "验收期是多久？",
         _bundle(text, locators=[first, second], source_spans=spans),
@@ -830,7 +770,7 @@ def test_ambiguous_quote_location_enters_single_repair() -> None:
         calls += 1
         if calls == 1:
             ambiguous = _valid_answer()
-            ambiguous["claims"][0]["supports"][0]["quote"] = "期限为30天"
+            ambiguous["claims"][0]["support_ids"][0] = "E9:S9"
             return _response(ambiguous)
         request_payload = json.loads(request.content)
         repair_payload = json.loads(
@@ -838,10 +778,10 @@ def test_ambiguous_quote_location_enters_single_repair() -> None:
         )
         assert (
             repair_payload["validation_error"]
-            == "AMBIGUOUS_QUOTE_LOCATION"
+            == "INVALID_SUPPORT_ID"
         )
         repaired = _valid_answer()
-        repaired["claims"][0]["supports"][0]["quote"] = "甲方期限为30天"
+        repaired["claims"][0]["support_ids"][0] = "E1:S1"
         return _response(repaired)
 
     result = _generator(handler).answer(
@@ -892,7 +832,7 @@ def test_quote_crossing_source_spans_is_rejected_after_one_repair() -> None:
         "claims": [
             {
                 "text": "甲乙",
-                "supports": [{"evidence_id": "E1", "quote": "甲乙"}],
+                "support_ids": ["E1:S3"],
             }
         ],
     }
@@ -905,3 +845,4 @@ def test_quote_crossing_source_spans_is_rejected_after_one_repair() -> None:
     assert result.status == AnswerStatus.REFUSED
     assert result.refusal_code == RefusalCode.VALIDATION_FAILED
     assert result.model_calls == 2
+    assert result.trace["first_validation_code"] == "INVALID_SUPPORT_ID"

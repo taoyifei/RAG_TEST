@@ -26,7 +26,7 @@ def test_frontend_focuses_result_and_explains_insufficient_evidence() -> None:
     assert "scrollIntoView" in javascript
     assert "prefers-reduced-motion: reduce" in javascript
     assert "EVIDENCE_INSUFFICIENT" in javascript
-    assert "未找到足够的文档证据" in javascript
+    assert "知识库中暂未找到能够支持该问题的资料" in javascript
     assert 'document.querySelector("#view-trace")' in javascript
     assert '"/debug/?trace_id="' in javascript
 

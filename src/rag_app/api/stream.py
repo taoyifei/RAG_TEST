@@ -180,6 +180,8 @@ def _final_payload(outcome: QueryOutcome) -> dict[str, object]:
         "trace_id": outcome.trace_id,
         "status": answer.status.value,
         "answer": answer.answer,
+        "answer_mode": answer.answer_mode.value,
+        "user_message": answer.user_message,
         "refusal_code": (
             None
             if answer.refusal_code is None

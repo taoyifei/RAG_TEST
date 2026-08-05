@@ -1,3 +1,5 @@
+import threading
+
 import httpx
 import pytest
 
@@ -92,7 +94,7 @@ def test_pool_distinguishes_terminal_4xx_from_unavailable() -> None:
         unavailable_pool.request_json("POST", "/work", payload={})
 
 
-def test_schema_validator_fails_over_and_opens_circuits() -> None:
+def test_schema_validator_error_does_not_switch_endpoint() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -116,32 +118,8 @@ def test_schema_validator_fails_over_and_opens_circuits() -> None:
         ),
     )
 
-    response = pool.request_json(
-        "POST",
-        "/work",
-        payload={"question": "private"},
-        validator=validate,
-    )
-
-    assert response.endpoint == "http://good"
-    assert response.retry_count == 1
-    assert calls == ["bad", "good"]
-
-    all_bad = ResilientHttpPool(
-        ("http://bad-a", "http://bad-b"),
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-        policy=ResiliencePolicy(
-            max_attempts=2,
-            failure_threshold=1,
-            cooldown_seconds=30,
-            max_concurrency=1,
-        ),
-    )
-    with pytest.raises(
-        ExternalServiceUnavailableError,
-        match="INVALID_RESPONSE_SCHEMA",
-    ) as captured:
-        all_bad.request_json(
+    with pytest.raises(ExternalRequestRejectedError) as captured:
+        pool.request_json(
             "POST",
             "/work",
             payload={"question": "private"},
@@ -149,15 +127,45 @@ def test_schema_validator_fails_over_and_opens_circuits() -> None:
         )
     assert "secret" not in str(captured.value)
     assert "private" not in str(captured.value)
-    calls_before_circuit_check = len(calls)
-    with pytest.raises(
-        ExternalServiceUnavailableError,
-        match="NO_HEALTHY_ENDPOINT",
-    ):
-        all_bad.request_json(
-            "POST",
-            "/work",
-            payload={},
-            validator=validate,
-        )
-    assert len(calls) == calls_before_circuit_check
+    assert calls == ["bad"]
+
+
+def test_four_concurrent_requests_use_multiple_healthy_endpoints() -> None:
+    barrier = threading.Barrier(4)
+    calls: list[str] = []
+    calls_lock = threading.Lock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host or ""
+        with calls_lock:
+            calls.append(host)
+        barrier.wait(timeout=2)
+        return httpx.Response(200, json={"host": host})
+
+    pool = ResilientHttpPool(
+        tuple(f"http://llm-{index}" for index in range(4)),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        policy=ResiliencePolicy(
+            max_attempts=1,
+            failure_threshold=1,
+            cooldown_seconds=30,
+            max_concurrency=4,
+        ),
+    )
+    errors: list[Exception] = []
+
+    def request() -> None:
+        try:
+            pool.request_json("POST", "/work", payload={})
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=request) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3)
+
+    assert errors == []
+    assert all(not thread.is_alive() for thread in threads)
+    assert set(calls) == {"llm-0", "llm-1", "llm-2", "llm-3"}

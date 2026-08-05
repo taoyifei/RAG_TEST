@@ -5,7 +5,7 @@ import pytest
 
 from rag_app.clients.llm import BufferedLlmClient, ChatMessage
 from rag_app.clients.resilience import (
-    ExternalServiceUnavailableError,
+    ExternalRequestRejectedError,
     ResiliencePolicy,
     ResilientHttpPool,
 )
@@ -120,7 +120,7 @@ def test_buffered_llm_rejects_truncated_generation() -> None:
         api_token=None,
     )
     with pytest.raises(
-        ExternalServiceUnavailableError,
+        ExternalRequestRejectedError,
         match="INVALID_RESPONSE_SCHEMA",
     ):
         client.generate(
@@ -129,7 +129,7 @@ def test_buffered_llm_rejects_truncated_generation() -> None:
         )
 
 
-def test_llm_schema_error_fails_over_before_completion() -> None:
+def test_llm_schema_error_does_not_generate_on_another_replica() -> None:
     calls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -165,12 +165,13 @@ def test_llm_schema_error_fails_over_before_completion() -> None:
         api_token=None,
     )
 
-    result = client.generate(
-        (ChatMessage(role="user", content="问题"),),
-        max_output_tokens=128,
-    )
+    with pytest.raises(
+        ExternalRequestRejectedError,
+        match="INVALID_RESPONSE_SCHEMA",
+    ):
+        client.generate(
+            (ChatMessage(role="user", content="问题"),),
+            max_output_tokens=128,
+        )
 
-    assert result.content == "完整答案"
-    assert result.call.endpoint == "http://good"
-    assert result.call.retry_count == 1
-    assert calls == ["bad", "good"]
+    assert calls == ["bad"]
