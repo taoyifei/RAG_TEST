@@ -8,8 +8,10 @@ from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Annotated, TypeVar
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import (
     FastAPI,
@@ -26,6 +28,7 @@ from rag_app.api.schemas import (
     ChatRequest,
     CreateJobRequest,
     FeedbackRequest,
+    TraceExportRequest,
 )
 from rag_app.api.stream import QueryStreamRequest, stream_query
 from rag_app.health import ReadinessService
@@ -584,6 +587,58 @@ def _register_trace_endpoints(
             }
         )
 
+    @app.post("/api/admin/traces/export")
+    def export_traces(
+        request: TraceExportRequest,
+        authorization: Annotated[
+            str | None,
+            Header(alias="Authorization"),
+        ] = None,
+    ) -> Response:
+        """将选中的 Trace 以 canonical JSON 打包导出。
+
+        Args:
+            request: 需要导出的 Trace ID，按请求顺序写入压缩包。
+            authorization: 管理 API Bearer 认证头。
+
+        Returns:
+            禁止缓存的 ZIP 下载响应。
+
+        """
+        _require_bearer(authorization, services.admin_token)
+        if len(set(request.trace_ids)) != len(request.trace_ids):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="duplicate trace id",
+            )
+        store = _require_service(services.trace_store)
+        try:
+            payloads = [
+                (trace_id, store.export_trace(trace_id))
+                for trace_id in request.trace_ids
+            ]
+        except TraceNotFoundError as error:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="trace not found",
+            ) from error
+
+        output = BytesIO()
+        with ZipFile(output, mode="w", compression=ZIP_DEFLATED) as archive:
+            for trace_id, payload in payloads:
+                archive.writestr(f"{trace_id}.json", payload)
+        return Response(
+            content=output.getvalue(),
+            media_type="application/zip",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    'attachment; filename="rag-traces.zip"'
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
     @app.get("/api/admin/traces/{trace_id}")
     def get_trace(
         trace_id: str,
@@ -707,6 +762,9 @@ def _register_trace_endpoints(
             media_type="application/json",
             headers={
                 "Cache-Control": "no-store",
+                "Content-Disposition": (
+                    f'attachment; filename="{trace_id}.json"'
+                ),
                 "X-Content-Type-Options": "nosniff",
             },
         )

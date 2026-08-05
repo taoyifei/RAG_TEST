@@ -44,6 +44,7 @@ section {
 }
 
 .filters,
+.bulk-actions,
 .pager,
 .detail-heading,
 .tabs {
@@ -51,6 +52,23 @@ section {
   align-items: end;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.bulk-actions {
+  margin-top: 14px;
+  align-items: center;
+}
+
+.select-page {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
 }
 
 .detail-heading {
@@ -71,6 +89,11 @@ button {
   border: 1px solid #87978d;
   border-radius: 4px;
   font: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 button {

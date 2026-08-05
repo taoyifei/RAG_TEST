@@ -4,14 +4,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>Query Trace 管理</title>
+    <title>RAGv1 Trace</title>
     <link rel="stylesheet" href="/assets/debug.css">
   </head>
   <body>
     <header class="topbar">
       <div>
-        <p class="eyebrow">DOCX RAG 管理诊断</p>
-        <h1>Query Trace v1</h1>
+        <p class="eyebrow">RAGv1</p>
+        <h1>Trace 诊断</h1>
       </div>
       <label>
         管理令牌
@@ -35,13 +35,21 @@
           </label>
           <label>拒答码 <input id="filter-refusal"></label>
           <label>错误码 <input id="filter-error"></label>
-          <button id="load-list" type="button">查询</button>
+          <button id="load-list" type="button">查看 Trace</button>
+        </div>
+        <div class="bulk-actions">
+          <label class="select-page">
+            <input id="select-page" type="checkbox">
+            全选当前页
+          </label>
+          <button id="export-selected" type="button" disabled>导出所选</button>
+          <span id="selected-count">已选择 0 条</span>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Trace ID</th><th>时间</th><th>总耗时</th>
+                <th>选择</th><th>Trace ID</th><th>时间</th><th>总耗时</th>
                 <th>状态</th><th>拒答/错误</th><th>FULL</th><th>反馈</th>
               </tr>
             </thead>
@@ -55,7 +63,7 @@
         </div>
       </section>
 
-      <section id="detail-section" hidden>
+      <section id="detail-section" tabindex="-1" hidden>
         <div class="detail-heading">
           <div>
             <h2>Trace 详情</h2>

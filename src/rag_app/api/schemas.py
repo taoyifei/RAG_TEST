@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from rag_app.state.models import JobKind
 
-__all__ = ["ChatRequest", "CreateJobRequest", "FeedbackRequest"]
+__all__ = [
+    "ChatRequest",
+    "CreateJobRequest",
+    "FeedbackRequest",
+    "TraceExportRequest",
+]
+
+_TraceId = Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
 
 
 class ChatRequest(BaseModel):
@@ -34,3 +43,11 @@ class FeedbackRequest(BaseModel):
 
     trace_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     useful: bool
+
+
+class TraceExportRequest(BaseModel):
+    """一次批量 Trace 导出请求。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trace_ids: list[_TraceId] = Field(min_length=1, max_length=100)

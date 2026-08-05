@@ -1,6 +1,7 @@
 "use strict";
 
 const tokenNode = document.querySelector("#admin-token");
+const filterTraceNode = document.querySelector("#filter-trace");
 const listNode = document.querySelector("#trace-list");
 const detailSection = document.querySelector("#detail-section");
 const selectedTraceNode = document.querySelector("#selected-trace");
@@ -15,10 +16,17 @@ const chunkIdNode = document.querySelector("#chunk-id");
 const chunkDetailNode = document.querySelector("#chunk-detail");
 const errorNode = document.querySelector("#error");
 const exportLink = document.querySelector("#export-link");
+const selectPageNode = document.querySelector("#select-page");
+const exportSelectedNode = document.querySelector("#export-selected");
+const selectedCountNode = document.querySelector("#selected-count");
 let page = 1;
 let total = 0;
 let selectedTrace = null;
 let artifactPayloads = new Map();
+let pageTraceIds = [];
+const selectedTraceIds = new Set();
+const storedAdminToken = sessionStorage.getItem("ragv1.adminToken");
+if (storedAdminToken) tokenNode.value = storedAdminToken;
 
 function headers() {
   return { Authorization: `Bearer ${tokenNode.value}` };
@@ -32,12 +40,16 @@ function appendCell(row, value, code = false) {
   row.append(cell);
 }
 
-async function adminFetch(path) {
+async function adminFetch(path, options = {}) {
+  if (!tokenNode.value) throw new Error("请先填写管理令牌。");
+  const { headers: extraHeaders = {}, ...requestOptions } = options;
   const response = await fetch(path, {
-    headers: headers(),
+    ...requestOptions,
+    headers: { ...headers(), ...extraHeaders },
     cache: "no-store",
   });
   if (!response.ok) throw new Error(`请求失败：${response.status}`);
+  sessionStorage.setItem("ragv1.adminToken", tokenNode.value);
   return response;
 }
 
@@ -56,14 +68,43 @@ function listQuery() {
   return params;
 }
 
+function updateSelection() {
+  const selectedOnPage = pageTraceIds.filter((traceId) =>
+    selectedTraceIds.has(traceId)).length;
+  selectPageNode.disabled = pageTraceIds.length === 0;
+  selectPageNode.checked =
+    pageTraceIds.length > 0 && selectedOnPage === pageTraceIds.length;
+  selectPageNode.indeterminate =
+    selectedOnPage > 0 && selectedOnPage < pageTraceIds.length;
+  exportSelectedNode.disabled = selectedTraceIds.size === 0;
+  selectedCountNode.textContent = `已选择 ${selectedTraceIds.size} 条`;
+}
+
+function appendSelectionCell(row, traceId) {
+  const cell = document.createElement("td");
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.setAttribute("aria-label", `选择 Trace ${traceId}`);
+  checkbox.addEventListener("change", () => {
+    if (checkbox.checked) selectedTraceIds.add(traceId);
+    else selectedTraceIds.delete(traceId);
+    updateSelection();
+  });
+  cell.append(checkbox);
+  row.append(cell);
+}
+
 async function loadList() {
   errorNode.textContent = "";
   const response = await adminFetch(`/api/admin/traces?${listQuery()}`);
   const payload = await response.json();
   total = payload.total;
+  pageTraceIds = payload.items.map((trace) => trace.trace_id);
+  selectedTraceIds.clear();
   listNode.replaceChildren();
   for (const trace of payload.items) {
     const row = document.createElement("tr");
+    appendSelectionCell(row, trace.trace_id);
     const traceCell = document.createElement("td");
     const button = document.createElement("button");
     button.type = "button";
@@ -85,6 +126,21 @@ async function loadList() {
   }
   document.querySelector("#page-state").textContent =
     `第 ${page} 页 · 共 ${total} 条`;
+  updateSelection();
+}
+
+async function downloadResponse(response, fallbackName) {
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const filenameMatch = disposition.match(/filename="([^"]+)"/);
+  const filename = filenameMatch ? filenameMatch[1] : fallbackName;
+  const objectUrl = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
 }
 
 function diagnostic(detail) {
@@ -224,29 +280,70 @@ async function loadDetail(traceId) {
   diagnosticNode.textContent = diagnostic(selectedTrace);
   detailSection.hidden = false;
   exportLink.href = `/api/admin/traces/${traceId}/export`;
-  exportLink.addEventListener("click", (event) => {
+  exportLink.onclick = async (event) => {
     event.preventDefault();
-    adminFetch(exportLink.href)
-      .then((item) => item.text())
-      .then((text) => {
-        artifactNode.textContent = text;
-      })
-      .catch(showError);
-  }, { once: true });
+    errorNode.textContent = "";
+    try {
+      const exported = await adminFetch(exportLink.href);
+      await downloadResponse(exported, `${traceId}.json`);
+    } catch (error) {
+      showError(error);
+    }
+  };
   renderWaterfall(selectedTrace);
   renderFunnel(selectedTrace);
   renderTabs(traceId, selectedTrace.artifacts);
   expectedLoss();
   chunkDetails();
+  window.history.replaceState(
+    null,
+    "",
+    `/debug/?trace_id=${encodeURIComponent(traceId)}`,
+  );
+  detailSection.focus({ preventScroll: true });
+  detailSection.scrollIntoView({ block: "start" });
 }
 
 function showError(error) {
   errorNode.textContent = String(error);
 }
 
-document.querySelector("#load-list").addEventListener("click", () => {
+function loadSelection() {
+  const traceId = filterTraceNode.value.trim();
+  if (traceId) {
+    loadDetail(traceId).catch(showError);
+    return;
+  }
   page = 1;
   loadList().catch(showError);
+}
+
+document.querySelector("#load-list").addEventListener("click", loadSelection);
+selectPageNode.addEventListener("change", () => {
+  for (const traceId of pageTraceIds) {
+    if (selectPageNode.checked) selectedTraceIds.add(traceId);
+    else selectedTraceIds.delete(traceId);
+  }
+  for (const checkbox of listNode.querySelectorAll('input[type="checkbox"]')) {
+    checkbox.checked = selectPageNode.checked;
+  }
+  updateSelection();
+});
+exportSelectedNode.addEventListener("click", async () => {
+  errorNode.textContent = "";
+  exportSelectedNode.disabled = true;
+  try {
+    const response = await adminFetch("/api/admin/traces/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trace_ids: [...selectedTraceIds] }),
+    });
+    await downloadResponse(response, "rag-traces.zip");
+  } catch (error) {
+    showError(error);
+  } finally {
+    updateSelection();
+  }
 });
 document.querySelector("#previous-page").addEventListener("click", () => {
   if (page > 1) {
@@ -262,3 +359,16 @@ document.querySelector("#next-page").addEventListener("click", () => {
 });
 expectedNode.addEventListener("input", expectedLoss);
 chunkIdNode.addEventListener("input", chunkDetails);
+tokenNode.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") loadSelection();
+});
+
+const requestedTraceId = new URLSearchParams(window.location.search).get("trace_id");
+if (requestedTraceId && /^[0-9a-f]{32}$/.test(requestedTraceId)) {
+  filterTraceNode.value = requestedTraceId;
+  if (tokenNode.value) {
+    loadDetail(requestedTraceId).catch(showError);
+  } else {
+    tokenNode.focus();
+  }
+}

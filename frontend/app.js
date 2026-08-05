@@ -4,15 +4,22 @@ const tokenInput = document.querySelector("#token");
 const questionInput = document.querySelector("#question");
 const askButton = document.querySelector("#ask");
 const clearButton = document.querySelector("#clear");
+const resultSection = document.querySelector("#result");
 const stageList = document.querySelector("#stages");
 const answerNode = document.querySelector("#answer");
 const citationsNode = document.querySelector("#citations");
 const traceIdNode = document.querySelector("#trace-id");
 const copyTraceButton = document.querySelector("#copy-trace");
+const viewTraceLink = document.querySelector("#view-trace");
 const usefulButton = document.querySelector("#feedback-useful");
 const notUsefulButton = document.querySelector("#feedback-not-useful");
 const conversationId = crypto.randomUUID();
 let currentTraceId = null;
+
+const refusalMessages = {
+  EVIDENCE_INSUFFICIENT:
+    "未找到足够的文档证据，无法可靠回答。请换一种问法或补充相关文档。",
+};
 
 function authorization() {
   return { Authorization: `Bearer ${tokenInput.value}` };
@@ -25,6 +32,8 @@ function resetOutput() {
   currentTraceId = null;
   traceIdNode.textContent = "尚无";
   copyTraceButton.disabled = true;
+  viewTraceLink.hidden = true;
+  viewTraceLink.href = "/debug/";
   usefulButton.disabled = true;
   notUsefulButton.disabled = true;
 }
@@ -39,12 +48,15 @@ function renderFinal(event) {
   currentTraceId = event.trace_id;
   traceIdNode.textContent = event.trace_id;
   copyTraceButton.disabled = false;
+  viewTraceLink.href =
+    "/debug/?trace_id=" + encodeURIComponent(event.trace_id);
+  viewTraceLink.hidden = false;
   usefulButton.disabled = false;
   notUsefulButton.disabled = false;
   answerNode.textContent =
     event.status === "answered"
       ? event.answer
-      : `拒答：${event.refusal_code}`;
+      : refusalMessages[event.refusal_code] || `无法回答：${event.refusal_code}`;
   for (const claim of event.claims) {
     for (const support of claim.supports) {
       const item = document.createElement("article");
@@ -59,6 +71,13 @@ function renderFinal(event) {
       citationsNode.append(item);
     }
   }
+  resultSection.focus({ preventScroll: true });
+  resultSection.scrollIntoView({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+      ? "auto"
+      : "smooth",
+    block: "start",
+  });
 }
 
 async function submitFeedback(useful) {
@@ -144,6 +163,8 @@ clearButton.addEventListener("click", async () => {
     currentTraceId = null;
     traceIdNode.textContent = "尚无";
     copyTraceButton.disabled = true;
+    viewTraceLink.hidden = true;
+    viewTraceLink.href = "/debug/";
     usefulButton.disabled = true;
     notUsefulButton.disabled = true;
   } else {

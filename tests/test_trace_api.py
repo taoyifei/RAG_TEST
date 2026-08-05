@@ -3,7 +3,9 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -199,6 +201,11 @@ def test_query_token_cannot_access_any_trace_admin_api(
             headers=_bearer(trace_api.query_token),
         ).status_code == 401
     assert trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=_bearer(trace_api.query_token),
+        json={"trace_ids": [trace_id]},
+    ).status_code == 401
+    assert trace_api.client.post(
         "/api/admin/debug/chat",
         headers=_bearer(trace_api.query_token),
         json={"conversation_id": "c", "question": "公开合成问题"},
@@ -245,8 +252,70 @@ def test_admin_list_detail_artifact_and_export_are_no_store(
     assert content.json()["question"] == "public synthetic question"
     assert exported.status_code == 200
     assert json.loads(exported.content)["trace"]["trace_id"] == trace_id
+    assert exported.headers["content-disposition"] == (
+        f'attachment; filename="{trace_id}.json"'
+    )
     for response in (listed, detail, content, exported):
         assert response.headers["cache-control"] == "no-store"
+
+
+def test_admin_can_batch_export_selected_traces_as_zip(
+    trace_api: _ApiContext,
+) -> None:
+    first_id = "a" * 32
+    second_id = "b" * 32
+    trace_api.store.create_trace(_trace(first_id))
+    trace_api.store.create_trace(_trace(second_id))
+
+    response = trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=_bearer(trace_api.admin_token),
+        json={"trace_ids": [second_id, first_id]},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-type"] == "application/zip"
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="rag-traces.zip"'
+    )
+    with ZipFile(BytesIO(response.content)) as archive:
+        assert archive.namelist() == [f"{second_id}.json", f"{first_id}.json"]
+        assert json.loads(archive.read(f"{second_id}.json"))["trace"][
+            "trace_id"
+        ] == second_id
+        assert json.loads(archive.read(f"{first_id}.json"))["trace"][
+            "trace_id"
+        ] == first_id
+
+
+def test_batch_export_rejects_empty_duplicate_or_missing_trace(
+    trace_api: _ApiContext,
+) -> None:
+    trace_id = "a" * 32
+    trace_api.store.create_trace(_trace(trace_id))
+    headers = _bearer(trace_api.admin_token)
+
+    assert trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=headers,
+        json={"trace_ids": []},
+    ).status_code == 422
+    assert trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=headers,
+        json={"trace_ids": [trace_id, trace_id]},
+    ).status_code == 422
+    assert trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=headers,
+        json={"trace_ids": ["b" * 32]},
+    ).status_code == 404
+    assert trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=headers,
+        json={"trace_ids": [f"{index:032x}" for index in range(101)]},
+    ).status_code == 422
 
 
 def test_artifact_cannot_cross_trace_and_expired_returns_410(

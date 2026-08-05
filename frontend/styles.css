@@ -36,12 +36,19 @@ h2 {
   font-size: 1rem;
 }
 
-.eyebrow {
-  color: #35614b;
-  font-size: 0.8rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.result-section {
+  border-color: #759c87;
+}
+
+.result-section:focus {
+  outline: 2px solid #35614b;
+  outline-offset: 2px;
+}
+
+.answer-text {
+  min-height: 1.5em;
+  line-height: 1.7;
+  white-space: pre-wrap;
 }
 
 label {
@@ -81,6 +88,20 @@ button.secondary {
   background: #fff;
 }
 
+.secondary-link {
+  padding: 10px 16px;
+  border: 1px solid #234b37;
+  border-radius: 4px;
+  color: #234b37;
+  background: #fff;
+  text-decoration: none;
+}
+
+.secondary-link:focus-visible {
+  outline: 2px solid #35614b;
+  outline-offset: 2px;
+}
+
 button:disabled {
   cursor: wait;
   opacity: 0.55;
@@ -99,6 +120,7 @@ button:disabled {
 
 .trace-reference {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 12px 0;
