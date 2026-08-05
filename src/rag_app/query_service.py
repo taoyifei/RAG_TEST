@@ -14,7 +14,12 @@ from enum import StrEnum
 from urllib.parse import urlsplit
 
 from rag_app.clients.model_services import ExternalCallAudit
+from rag_app.clients.resilience import (
+    StreamCancellation,
+    StreamCancelledError,
+)
 from rag_app.generation.answer import (
+    AnswerClaim,
     AnswerGenerator,
     AnswerResult,
     AnswerStatus,
@@ -56,11 +61,13 @@ from rag_app.tracing.recorder import (
 )
 
 __all__ = [
+    "AnswerStartEvent",
     "QueryDependencies",
     "QueryOutcome",
     "QueryService",
     "StageEvent",
     "StageName",
+    "ValidatedClaimEvent",
 ]
 
 
@@ -83,6 +90,24 @@ class StageEvent:
     stage: StageName
     elapsed_ms: int
     metrics: dict[str, int | bool | str]
+
+
+@dataclass(frozen=True, slots=True)
+class AnswerStartEvent:
+    """回答模型开始前可安全发布的无正文事件。"""
+
+    trace_id: str
+    elapsed_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedClaimEvent:
+    """已经通过全部引用门禁且可立即展示的一条 claim。"""
+
+    trace_id: str
+    elapsed_ms: int
+    claim_index: int
+    claim: AnswerClaim
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +180,10 @@ class _QueryRequest:
     question: str
     now: datetime
     emit: Callable[[StageEvent], None]
+    emit_answer: (
+        Callable[[AnswerStartEvent | ValidatedClaimEvent], None] | None
+    ) = None
+    cancellation: StreamCancellation | None = None
 
 
 class QueryService:
@@ -272,6 +301,95 @@ class QueryService:
                 question=question,
                 now=now,
                 emit=emit,
+            ),
+            TraceMode.FULL,
+        )
+
+    def ask_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: StreamCancellation,
+    ) -> QueryOutcome:
+        """执行普通查询并增量回调已验证 claim。
+
+        Args:
+            trace_id: 本次请求稳定追踪标识。
+            conversation_id: TTL 多轮会话标识。
+            question: 当前原始问题。
+            now: 有效期判断和会话 TTL 的带时区时点。
+            emit: 同步阶段事件 callback。
+            emit_answer: 回答开始及已验证 claim callback。
+            cancellation: 客户端断开时关闭上游模型流的令牌。
+
+        Returns:
+            与 ``ask`` 相同的 canonical 最终回答或拒答。
+
+        """
+        return self._ask(
+            _QueryRequest(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                question=question,
+                now=now,
+                emit=emit,
+                emit_answer=emit_answer,
+                cancellation=cancellation,
+            ),
+            self._default_trace_mode,
+        )
+
+    def ask_debug_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: StreamCancellation,
+    ) -> QueryOutcome:
+        """执行 FULL Debug 查询并增量回调已验证 claim。
+
+        Args:
+            trace_id: 本次请求稳定追踪标识。
+            conversation_id: TTL 多轮会话标识。
+            question: 当前原始问题。
+            now: 有效期判断和会话 TTL 的带时区时点。
+            emit: 同步阶段事件 callback。
+            emit_answer: 回答开始及已验证 claim callback。
+            cancellation: 客户端断开时关闭上游模型流的令牌。
+
+        Returns:
+            与 ``ask_debug`` 相同的 canonical 最终结果。
+
+        Raises:
+            RuntimeError: Trace recorder 未配置。
+
+        """
+        if self._trace_recorder is None:
+            raise RuntimeError("FULL Debug Trace recorder 未配置。")
+        return self._ask(
+            _QueryRequest(
+                trace_id=trace_id,
+                conversation_id=conversation_id,
+                question=question,
+                now=now,
+                emit=emit,
+                emit_answer=emit_answer,
+                cancellation=cancellation,
             ),
             TraceMode.FULL,
         )
@@ -677,13 +795,53 @@ class QueryService:
                 failure_stage,
                 SpanKind.LLM,
             )
-            answer = self._dependencies.answerer.answer(
-                request.question,
-                evidence,
-                rerank_scores=tuple(
-                    hit.rerank_score for hit in reranked.scored_hits
-                ),
+            rerank_scores = tuple(
+                hit.rerank_score for hit in reranked.scored_hits
             )
+            emit_answer = request.emit_answer
+            if emit_answer is None:
+                answer = self._dependencies.answerer.answer(
+                    request.question,
+                    evidence,
+                    rerank_scores=rerank_scores,
+                )
+            else:
+                cancellation = request.cancellation
+                if cancellation is None:
+                    raise RuntimeError("流式查询缺少 cancellation。")
+                emit_answer(
+                    AnswerStartEvent(
+                        trace_id=request.trace_id,
+                        elapsed_ms=_elapsed_ms(started, self._clock),
+                    )
+                )
+                streamed_claim_count = 0
+
+                def emit_claim(claim: AnswerClaim) -> None:
+                    """向当前请求回调一条已经完整验证的 claim。"""
+                    nonlocal streamed_claim_count
+                    if cancellation.is_cancelled():
+                        raise StreamCancelledError("LLM_STREAM_CANCELLED")
+                    emit_answer(
+                        ValidatedClaimEvent(
+                            trace_id=request.trace_id,
+                            elapsed_ms=_elapsed_ms(
+                                started,
+                                self._clock,
+                            ),
+                            claim_index=streamed_claim_count,
+                            claim=claim,
+                        )
+                    )
+                    streamed_claim_count += 1
+
+                answer = self._dependencies.answerer.answer_stream(
+                    request.question,
+                    evidence,
+                    rerank_scores=rerank_scores,
+                    on_claim=emit_claim,
+                    cancellation=cancellation,
+                )
             answer_span_id = (
                 None if current_span is None else current_span.span_id
             )
@@ -713,6 +871,7 @@ class QueryService:
                     "claims": [asdict(claim) for claim in answer.claims],
                 },
             )
+            _raise_if_cancelled(request.cancellation)
             if self._answer_cache is not None and cache_key is not None:
                 self._answer_cache.publish_singleflight(cache_key, answer)
                 cache_span = _start_span(
@@ -751,6 +910,7 @@ class QueryService:
                 failure_stage,
                 SpanKind.GUARDRAIL,
             )
+            _raise_if_cancelled(request.cancellation)
             self._dependencies.conversations.append_turn(
                 request.conversation_id,
                 request.question,
@@ -811,6 +971,10 @@ class QueryService:
                             reason_code=reason_code,
                             attributes={
                                 "failure_stage": failure_stage,
+                                "stream_cancelled": isinstance(
+                                    error,
+                                    StreamCancelledError,
+                                ),
                             },
                         ),
                     )
@@ -818,7 +982,13 @@ class QueryService:
                     status=TraceStatus.FAILED,
                     reason_code=DecisionCode.ERROR,
                     error_code=_failure_code(failure_stage),
-                    attributes={"failure_stage": failure_stage},
+                    attributes={
+                        "failure_stage": failure_stage,
+                        "stream_cancelled": isinstance(
+                            error,
+                            StreamCancelledError,
+                        ),
+                    },
                 )
             raise
         finally:
@@ -864,6 +1034,26 @@ class QueryService:
             answer,
             trace={**answer.trace, "cache_status": "hit"},
         )
+        if request.emit_answer is not None:
+            request.emit_answer(
+                AnswerStartEvent(
+                    trace_id=request.trace_id,
+                    elapsed_ms=_elapsed_ms(emitter.started, self._clock),
+                )
+            )
+            for claim_index, claim in enumerate(cached.claims):
+                _raise_if_cancelled(request.cancellation)
+                request.emit_answer(
+                    ValidatedClaimEvent(
+                        trace_id=request.trace_id,
+                        elapsed_ms=_elapsed_ms(
+                            emitter.started,
+                            self._clock,
+                        ),
+                        claim_index=claim_index,
+                        claim=claim,
+                    )
+                )
         _full_artifact(
             session,
             "final",
@@ -894,6 +1084,7 @@ class QueryService:
                 "cache_status": "hit",
             },
         )
+        _raise_if_cancelled(request.cancellation)
         self._dependencies.conversations.append_turn(
             request.conversation_id,
             request.question,
@@ -988,6 +1179,19 @@ def _conversation_context_digest(
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _elapsed_ms(started: float, clock: Callable[[], float]) -> int:
+    """计算不小于零的请求累计毫秒数。"""
+    return max(0, round((clock() - started) * 1000))
+
+
+def _raise_if_cancelled(
+    cancellation: StreamCancellation | None,
+) -> None:
+    """在任何持久化写入前阻止已取消查询继续发布。"""
+    if cancellation is not None and cancellation.is_cancelled():
+        raise StreamCancelledError("LLM_STREAM_CANCELLED")
 
 
 def _finish_span(
@@ -1503,6 +1707,16 @@ def _safe_answer_context(
             "answerability_non_low_ocr_count",
             "dropped_claim_count",
             "dropped_claim_codes",
+            "first_validated_claim_ms",
+            "validated_claim_count",
+            "stream_dropped_claim_count",
+            "stream_parser_error",
+            "llm_stream",
+            "first_delta_ms",
+            "delta_count",
+            "stream_cancelled",
+            "stream_finish_reason",
+            "retry_count",
             "extractive_fallback",
             "review_triggered",
         )
@@ -1517,10 +1731,16 @@ def _safe_generation_attributes(
     for key in (
         "phase",
         "endpoint",
+        "selected_endpoint",
         "retry_count",
         "elapsed_ms",
         "queue_ms",
         "ttft_ms",
+        "llm_stream",
+        "first_delta_ms",
+        "delta_count",
+        "stream_cancelled",
+        "stream_finish_reason",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
@@ -1531,7 +1751,7 @@ def _safe_generation_attributes(
         if key in generation:
             attributes[key] = (
                 _sanitize_endpoint(str(generation[key]))
-                if key == "endpoint"
+                if key in {"endpoint", "selected_endpoint"}
                 else generation[key]
             )
     return attributes

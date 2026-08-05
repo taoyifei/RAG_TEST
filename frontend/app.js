@@ -15,6 +15,9 @@ const usefulButton = document.querySelector("#feedback-useful");
 const notUsefulButton = document.querySelector("#feedback-not-useful");
 const conversationId = crypto.randomUUID();
 let currentTraceId = null;
+let activeRequestController = null;
+let streamedClaims = new Map();
+let streamStatus = null;
 
 const refusalMessages = {
   EVIDENCE_INSUFFICIENT:
@@ -42,6 +45,8 @@ function resetOutput() {
   viewTraceLink.href = "/debug/";
   usefulButton.disabled = true;
   notUsefulButton.disabled = true;
+  streamedClaims = new Map();
+  streamStatus = null;
 }
 
 function renderStage(event) {
@@ -50,7 +55,63 @@ function renderStage(event) {
   stageList.append(item);
 }
 
+function claimKey(event) {
+  return `${event.claim_index}\u0000${event.text}`;
+}
+
+function renderAnswerState() {
+  const claimTexts = Array.from(streamedClaims.values(), (claim) => claim.text);
+  answerNode.textContent = [streamStatus, ...claimTexts]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function appendSupports(supports) {
+  for (const support of supports) {
+    const item = document.createElement("article");
+    item.className = "citation";
+    const locator = document.createElement("strong");
+    locator.textContent = support.locator;
+    const quote = document.createElement("p");
+    quote.textContent = support.quote;
+    const chunk = document.createElement("code");
+    chunk.textContent = support.chunk_id;
+    item.append(locator, quote, chunk);
+    citationsNode.append(item);
+  }
+}
+
+function renderAnswerStart() {
+  streamStatus = "正在生成并校验回答…";
+  renderAnswerState();
+}
+
+function renderClaim(event) {
+  const key = claimKey(event);
+  if (streamedClaims.has(key)) return;
+  streamedClaims.set(key, event);
+  appendSupports(event.supports);
+  streamStatus = `正在生成并校验回答… 已验证 ${streamedClaims.size} 条`;
+  renderAnswerState();
+}
+
+function renderAnswerProgress(event) {
+  streamStatus =
+    `正在生成并校验回答… 已验证 ${event.validated_claims} 条，` +
+    `已用时 ${event.elapsed_ms} ms`;
+  renderAnswerState();
+}
+
+function renderInterrupted() {
+  streamStatus = "回答流中断，已显示内容可能不完整";
+  renderAnswerState();
+}
+
 function renderFinal(event) {
+  for (const [claimIndex, claim] of event.claims.entries()) {
+    renderClaim({ ...claim, claim_index: claimIndex });
+  }
+  streamStatus = null;
   currentTraceId = event.trace_id;
   traceIdNode.textContent = event.trace_id;
   copyTraceButton.disabled = false;
@@ -59,26 +120,15 @@ function renderFinal(event) {
   viewTraceLink.hidden = false;
   usefulButton.disabled = false;
   notUsefulButton.disabled = false;
+  const canonicalAnswer =
+    event.answer ||
+    Array.from(streamedClaims.values(), (claim) => claim.text).join("\n\n");
   answerNode.textContent =
     event.status === "answered"
-      ? [event.user_message, event.answer].filter(Boolean).join("\n\n")
+      ? [event.user_message, canonicalAnswer].filter(Boolean).join("\n\n")
       : event.user_message ||
         refusalMessages[event.refusal_code] ||
         "当前无法生成可靠回答，请稍后重试并查看 Trace。";
-  for (const claim of event.claims) {
-    for (const support of claim.supports) {
-      const item = document.createElement("article");
-      item.className = "citation";
-      const locator = document.createElement("strong");
-      locator.textContent = support.locator;
-      const quote = document.createElement("p");
-      quote.textContent = support.quote;
-      const chunk = document.createElement("code");
-      chunk.textContent = support.chunk_id;
-      item.append(locator, quote, chunk);
-      citationsNode.append(item);
-    }
-  }
   resultSection.focus({ preventScroll: true });
   resultSection.scrollIntoView({
     behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -113,6 +163,22 @@ async function readEvents(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
+  let finalReceived = false;
+
+  function handleEvent(event) {
+    if (event.type === "stage") renderStage(event);
+    if (event.type === "answer_start") renderAnswerStart(event);
+    if (event.type === "claim") renderClaim(event);
+    if (event.type === "answer_progress") renderAnswerProgress(event);
+    if (event.type === "final") {
+      renderFinal(event);
+      finalReceived = true;
+    }
+    if (event.type === "error") {
+      throw new Error("QUERY_FAILED");
+    }
+  }
+
   while (true) {
     const result = await reader.read();
     pending += decoder.decode(result.value || new Uint8Array(), {
@@ -122,23 +188,27 @@ async function readEvents(response) {
     pending = lines.pop() || "";
     for (const line of lines) {
       if (line.length === 0) continue;
-      const event = JSON.parse(line);
-      if (event.type === "stage") renderStage(event);
-      if (event.type === "final") renderFinal(event);
-      if (event.type === "error") {
-        answerNode.textContent =
-          "请求处理失败，请稍后重试；如持续出现，请通过 Trace 页面排查。";
-      }
+      handleEvent(JSON.parse(line));
     }
-    if (result.done) return;
+    if (result.done) {
+      if (pending.trim().length > 0) {
+        handleEvent(JSON.parse(pending));
+      }
+      if (!finalReceived) throw new Error("ANSWER_STREAM_INCOMPLETE");
+      return;
+    }
   }
 }
 
 askButton.addEventListener("click", async () => {
   const question = questionInput.value.trim();
   if (!question || !tokenInput.value) return;
+  if (activeRequestController !== null) {
+    activeRequestController.abort();
+  }
+  const controller = new AbortController();
+  activeRequestController = controller;
   resetOutput();
-  askButton.disabled = true;
   try {
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -150,16 +220,25 @@ askButton.addEventListener("click", async () => {
         conversation_id: conversationId,
         question,
       }),
+      signal: controller.signal,
     });
     await readEvents(response);
   } catch (error) {
-    answerNode.textContent = String(error);
+    if (activeRequestController === controller) {
+      renderInterrupted();
+    }
   } finally {
-    askButton.disabled = false;
+    if (activeRequestController === controller) {
+      activeRequestController = null;
+    }
   }
 });
 
 clearButton.addEventListener("click", async () => {
+  if (activeRequestController !== null) {
+    activeRequestController.abort();
+    activeRequestController = null;
+  }
   const response = await fetch(
     `/api/conversations/${encodeURIComponent(conversationId)}`,
     { method: "DELETE", headers: authorization() },
@@ -176,8 +255,16 @@ clearButton.addEventListener("click", async () => {
     viewTraceLink.href = "/debug/";
     usefulButton.disabled = true;
     notUsefulButton.disabled = true;
+    streamedClaims = new Map();
+    streamStatus = null;
   } else {
     answerNode.textContent = `清空失败：${response.status}`;
+  }
+});
+
+window.addEventListener("pagehide", () => {
+  if (activeRequestController !== null) {
+    activeRequestController.abort();
   }
 });
 

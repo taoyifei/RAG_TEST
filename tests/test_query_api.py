@@ -17,9 +17,11 @@ from rag_app.generation.answer import (
 from rag_app.health import ComponentStatus, ReadinessService
 from rag_app.query_executor import QueryExecutor
 from rag_app.query_service import (
+    AnswerStartEvent,
     QueryOutcome,
     StageEvent,
     StageName,
+    ValidatedClaimEvent,
 )
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
@@ -79,8 +81,35 @@ class _Query:
             stage_count=1,
         )
 
+    def ask_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: object,
+    ) -> QueryOutcome:
+        del emit_answer, cancellation
+        return self.ask(
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            question=question,
+            now=now,
+            emit=emit,
+        )
 
-def _client(tmp_path: Path) -> tuple[TestClient, str, str]:
+
+def _client(
+    tmp_path: Path,
+    *,
+    query: object | None = None,
+) -> tuple[TestClient, str, str]:
     query_token = uuid.uuid4().hex
     admin_token = uuid.uuid4().hex
     conversations = ConversationStore(
@@ -100,7 +129,7 @@ def _client(tmp_path: Path) -> tuple[TestClient, str, str]:
             readiness=readiness,
             query_token=query_token,
             admin_token=admin_token,
-            query=_Query(),  # type: ignore[arg-type]
+            query=query or _Query(),  # type: ignore[arg-type]
             query_executor=QueryExecutor(),
             conversations=conversations,
             jobs=jobs,
@@ -131,6 +160,8 @@ def test_chat_streams_only_stages_before_validated_final(
     )
 
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-transform"
+    assert response.headers["x-accel-buffering"] == "no"
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[0] == {
         "type": "stage",
@@ -145,6 +176,66 @@ def test_chat_streams_only_stages_before_validated_final(
     assert events[1]["claims"][0]["supports"][0]["chunk_id"] == "chunk-1"
     assert events[1]["answer_mode"] == "ANSWERED"
     assert events[1]["user_message"] is None
+
+
+class _StreamingQuery(_Query):
+    def ask_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: object,
+    ) -> QueryOutcome:
+        del cancellation
+        emit_answer(AnswerStartEvent(trace_id=trace_id, elapsed_ms=20))
+        outcome = super().ask(
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            question=question,
+            now=now,
+            emit=emit,
+        )
+        emit_answer(
+            ValidatedClaimEvent(
+                trace_id=trace_id,
+                elapsed_ms=30,
+                claim_index=0,
+                claim=outcome.answer.claims[0],
+            )
+        )
+        return outcome
+
+
+def test_chat_streams_validated_claim_before_canonical_final(
+    tmp_path: Path,
+) -> None:
+    client, query_token, _ = _client(tmp_path, query=_StreamingQuery())
+
+    response = client.post(
+        "/api/chat",
+        headers=_bearer(query_token),
+        json={
+            "conversation_id": "conversation-1",
+            "question": "核验问题",
+        },
+    )
+
+    events = [json.loads(line) for line in response.text.splitlines()]
+    types = [event["type"] for event in events]
+    assert types == ["answer_start", "stage", "claim", "final"]
+    claim = events[2]
+    assert claim["claim_index"] == 0
+    assert claim["text"] == "已验证答案"
+    assert claim["supports"][0]["quote"] == "证据原文"
+    assert "raw_output" not in response.text
+    assert "delta" not in response.text
 
 
 def test_query_and_admin_tokens_are_not_interchangeable(

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import cast
@@ -17,6 +19,7 @@ from rag_app.clients.model_services import ExternalCallAudit
 from rag_app.clients.resilience import (
     ExternalRequestRejectedError,
     ExternalServiceUnavailableError,
+    StreamCancellation,
 )
 from rag_app.generation.evidence import (
     AnswerabilityDecision,
@@ -29,6 +32,7 @@ from rag_app.generation.question_intent import (
     QuestionIntent,
     classify_question_intent,
 )
+from rag_app.generation.streaming_claims import IncrementalClaimsParser
 from rag_app.model_contracts import (
     StructuredModelRequest,
     abstention_review_request,
@@ -141,8 +145,118 @@ class _ValidationError(ValueError):
         self.code = code
 
 
+class _StreamFinalValidationError(RuntimeError):
+    """已有 claim 发布后，最终完整 JSON 未保持同一安全结果。"""
+
+
+@dataclass(slots=True)
+class _StreamingClaimState:
+    """在完整回答结束前增量校验并发布单条 claim。"""
+
+    units_by_id: dict[str, EvidenceUnit]
+    on_claim: Callable[[AnswerClaim], None]
+    started: float
+    parser: IncrementalClaimsParser = field(
+        default_factory=IncrementalClaimsParser
+    )
+    validated_claims: list[AnswerClaim] = field(default_factory=list)
+    dropped_codes: dict[str, int] = field(default_factory=dict)
+    parser_error: str | None = None
+    first_validated_claim_ms: int | None = None
+
+    def consume(self, fragment: str) -> None:
+        """解析并立即发布本分片中新完成且通过门禁的 claim。
+
+        Args:
+            fragment: 一个非空模型 content delta。
+
+        Returns:
+            无返回值；无效 claim 只累计非敏感错误码。
+
+        """
+        if self.parser_error is not None:
+            return
+        try:
+            raw_claims = self.parser.feed(fragment)
+        except ValueError as error:
+            self.parser_error = str(error)
+            return
+        for raw_claim in raw_claims:
+            try:
+                validated_raw = _validate_streamed_claim_shape(raw_claim)
+                claim, _ = _validate_claim(
+                    validated_raw,
+                    self.units_by_id,
+                )
+                if any(
+                    existing.text == claim.text
+                    for existing in self.validated_claims
+                ):
+                    raise _ValidationError("DUPLICATE_CLAIM")
+            except _ValidationError as error:
+                self.dropped_codes[error.code] = (
+                    self.dropped_codes.get(error.code, 0) + 1
+                )
+                continue
+            self.validated_claims.append(claim)
+            if self.first_validated_claim_ms is None:
+                self.first_validated_claim_ms = max(
+                    0,
+                    round((time.monotonic() - self.started) * 1000),
+                )
+            self.on_claim(claim)
+
+    def finish(self, content: str) -> None:
+        """用完整 JSON 契约确认增量结果与最终 claims 一致。
+
+        Args:
+            content: SSE 完成后累积的完整模型字符串。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            _StreamFinalValidationError: 已发布 claim 后完整结果不一致。
+
+        """
+        try:
+            self.parser.finish()
+            payload = parse_answer_response(content)
+            final_claims = cast(list[object], payload["claims"])
+        except (json.JSONDecodeError, ValueError) as error:
+            self.parser_error = str(error)
+            if self.validated_claims:
+                raise _StreamFinalValidationError(
+                    "STREAMED_ANSWER_FINAL_INVALID"
+                ) from error
+            return
+        if tuple(final_claims) != self.parser.claims:
+            self.parser_error = "STREAMED_CLAIMS_MISMATCH"
+            if self.validated_claims:
+                raise _StreamFinalValidationError(
+                    "STREAMED_CLAIMS_MISMATCH"
+                )
+
+    def trace(self) -> dict[str, JsonValue]:
+        """返回不含模型正文的增量校验指标。
+
+        Args:
+            无参数；读取当前流状态。
+
+        Returns:
+            首条校验耗时、有效/丢弃计数与解析状态。
+
+        """
+        return {
+            "first_validated_claim_ms": self.first_validated_claim_ms,
+            "validated_claim_count": len(self.validated_claims),
+            "stream_dropped_claim_count": sum(self.dropped_codes.values()),
+            "stream_parser_error": self.parser_error,
+        }
+
+
 class AnswerGenerator:
-    """缓冲生成，经确定性验证和至多一次二次调用后发布。"""
+    """增量发布已验证 claim，并以完整契约收束最终回答。"""
 
     def __init__(
         self,
@@ -165,6 +279,8 @@ class AnswerGenerator:
         evidence: EvidenceBundle,
         *,
         rerank_scores: tuple[float, ...] = (),
+        _on_claim: Callable[[AnswerClaim], None] | None = None,
+        _cancellation: StreamCancellation | None = None,
     ) -> AnswerResult:
         """回答当前问题，未通过门禁时返回稳定拒答。
 
@@ -172,43 +288,21 @@ class AnswerGenerator:
             question: 当前原始问题。
             evidence: 已隔离注入并满足 token 预算的证据包。
             rerank_scores: 按精排顺序排列的候选分数。
+            _on_claim: 仅由 ``answer_stream`` 注入的已验证 claim 回调。
+            _cancellation: 仅由 ``answer_stream`` 注入的上游取消令牌。
 
         Returns:
             可安全发布的回答或拒答。
 
         """
-        if not question.strip():
-            raise ValueError("question 不能为空。")
-        if not evidence.items:
-            code = (
-                RefusalCode.PROMPT_INJECTION
-                if evidence.quarantined_chunk_ids
-                else RefusalCode.NO_EVIDENCE
-            )
-            return _refusal(code, model_calls=0, calls=())
-        if all(item.low_confidence_ocr for item in evidence.items):
-            return _refusal(
-                RefusalCode.LOW_CONFIDENCE_OCR_ONLY,
-                model_calls=0,
-                calls=(),
-            )
-        answerability = decide_answerability(
+        preflight = _answer_preflight(
             question,
             evidence,
             rerank_scores=rerank_scores,
         )
-        if answerability.status is AnswerabilityStatus.NOT_FOUND:
-            return _refusal(
-                RefusalCode.EVIDENCE_INSUFFICIENT,
-                model_calls=0,
-                calls=(),
-                answer_mode=AnswerMode.NOT_FOUND,
-                user_message=(
-                    "知识库中暂未找到能够支持该问题的资料。请核对项目名称、"
-                    "编号或时间，或补充相关文档。"
-                ),
-                trace=_answerability_trace(answerability),
-            )
+        if isinstance(preflight, AnswerResult):
+            return preflight
+        answerability = preflight
         first_request = answer_request(
             question,
             evidence_bundle=json.loads(evidence.rendered_json),
@@ -221,27 +315,29 @@ class AnswerGenerator:
         messages = first_request.messages
         calls: list[ExternalCallAudit] = []
         generations: list[JsonValue] = []
+        stream_state = _new_streaming_claim_state(
+            evidence,
+            on_claim=_on_claim,
+            cancellation=_cancellation,
+        )
         try:
-            first = self._llm.generate(
-                messages,
-                max_output_tokens=first_request.max_output_tokens,
-                response_format=first_request.response_format,
-            )
-            calls.append(first.call)
-            generations.append(
-                _generation_trace(
-                    first,
-                    phase="first",
-                    messages=messages,
-                    max_output_tokens=self._config.max_output_tokens,
-                    response_format=first_request.response_format,
-                )
+            first = self._generate_first_answer(
+                request=first_request,
+                stream_state=stream_state,
+                cancellation=_cancellation,
+                calls=calls,
+                generations=generations,
+                trace_context=trace_context,
             )
         except (
             ExternalRequestRejectedError,
             ExternalServiceUnavailableError,
             ValueError,
-        ):
+        ) as error:
+            if stream_state is not None and stream_state.validated_claims:
+                raise _StreamFinalValidationError(
+                    "STREAMED_ANSWER_FINAL_INVALID"
+                ) from error
             return _refusal(
                 RefusalCode.MODEL_UNAVAILABLE,
                 model_calls=1,
@@ -259,6 +355,7 @@ class AnswerGenerator:
                     "generations": generations,
                 },
             )
+
         try:
             validated = _validate_answer(
                 first.content,
@@ -267,6 +364,14 @@ class AnswerGenerator:
                 calls=tuple(calls),
             )
             validation_code = _result_validation_code(validated)
+            if (
+                stream_state is not None
+                and stream_state.validated_claims
+                and tuple(stream_state.validated_claims) != validated.claims
+            ):
+                raise _StreamFinalValidationError(
+                    "STREAMED_CLAIMS_VALIDATION_MISMATCH"
+                )
             if validated.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT:
                 _record_generation_validation(
                     generations,
@@ -287,6 +392,11 @@ class AnswerGenerator:
                 trace={
                     **trace_context,
                     **validated.trace,
+                    **(
+                        {}
+                        if stream_state is None
+                        else stream_state.trace()
+                    ),
                     "first_validation_code": validation_code,
                     "review_triggered": False,
                     "repair_triggered": False,
@@ -297,6 +407,10 @@ class AnswerGenerator:
                 },
             )
         except _ValidationError as first_error:
+            if stream_state is not None and stream_state.validated_claims:
+                raise _StreamFinalValidationError(
+                    "STREAMED_ANSWER_FINAL_INVALID"
+                ) from first_error
             validation_code = first_error.code
             _record_generation_validation(generations, validation_code)
         repair_request = repair_answer_request(
@@ -400,6 +514,79 @@ class AnswerGenerator:
                     trace_context,
                 ),
             )
+
+    def _generate_first_answer(  # noqa: PLR0913
+        self,
+        *,
+        request: StructuredModelRequest,
+        stream_state: _StreamingClaimState | None,
+        cancellation: StreamCancellation | None,
+        calls: list[ExternalCallAudit],
+        generations: list[JsonValue],
+        trace_context: dict[str, JsonValue],
+    ) -> LlmGeneration:
+        """执行首次缓冲或流式生成并记录非敏感调用指标。"""
+        first = (
+            self._llm.generate(
+                request.messages,
+                max_output_tokens=request.max_output_tokens,
+                response_format=request.response_format,
+            )
+            if stream_state is None
+            else self._llm.generate_stream(
+                request.messages,
+                max_output_tokens=request.max_output_tokens,
+                response_format=request.response_format,
+                on_delta=stream_state.consume,
+                cancellation=cast(StreamCancellation, cancellation),
+            )
+        )
+        calls.append(first.call)
+        generations.append(
+            _generation_trace(
+                first,
+                phase="first",
+                messages=request.messages,
+                max_output_tokens=self._config.max_output_tokens,
+                response_format=request.response_format,
+            )
+        )
+        if stream_state is not None:
+            stream_state.finish(first.content)
+            trace_context.update(stream_state.trace())
+        if first.stream is not None:
+            trace_context.update(_stream_trace(first))
+        return first
+
+    def answer_stream(
+        self,
+        question: str,
+        evidence: EvidenceBundle,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: StreamCancellation,
+        rerank_scores: tuple[float, ...] = (),
+    ) -> AnswerResult:
+        """流式生成首次回答并只回调已经通过全部门禁的 claim。
+
+        Args:
+            question: 当前原始问题。
+            evidence: 与非流式回答相同的原子证据包。
+            on_claim: 按模型顺序接收可立即展示的已验证 claim。
+            cancellation: 客户端断开时关闭上游 SSE 的令牌。
+            rerank_scores: 按精排顺序排列的候选分数。
+
+        Returns:
+            与 ``answer`` 完全相同的 canonical 最终结果。
+
+        """
+        return self.answer(
+            question,
+            evidence,
+            rerank_scores=rerank_scores,
+            _on_claim=on_claim,
+            _cancellation=cancellation,
+        )
 
     def _review_abstention(  # noqa: PLR0913
         self,
@@ -568,6 +755,86 @@ class AnswerGenerator:
         return answer_contract_revision()
 
 
+def _new_streaming_claim_state(
+    evidence: EvidenceBundle,
+    *,
+    on_claim: Callable[[AnswerClaim], None] | None,
+    cancellation: StreamCancellation | None,
+) -> _StreamingClaimState | None:
+    """为首次流式回答创建增量门禁状态。"""
+    if on_claim is None:
+        return None
+    if cancellation is None:
+        raise ValueError("流式回答必须提供 cancellation。")
+    return _StreamingClaimState(
+        units_by_id={unit.unit_id: unit for unit in evidence.units},
+        on_claim=on_claim,
+        started=time.monotonic(),
+    )
+
+
+def _answer_preflight(
+    question: str,
+    evidence: EvidenceBundle,
+    *,
+    rerank_scores: tuple[float, ...],
+) -> AnswerabilityDecision | AnswerResult:
+    """执行不调用模型的基础证据与可回答性门禁。"""
+    if not question.strip():
+        raise ValueError("question 不能为空。")
+    if not evidence.items:
+        code = (
+            RefusalCode.PROMPT_INJECTION
+            if evidence.quarantined_chunk_ids
+            else RefusalCode.NO_EVIDENCE
+        )
+        return _refusal(code, model_calls=0, calls=())
+    if all(item.low_confidence_ocr for item in evidence.items):
+        return _refusal(
+            RefusalCode.LOW_CONFIDENCE_OCR_ONLY,
+            model_calls=0,
+            calls=(),
+        )
+    answerability = decide_answerability(
+        question,
+        evidence,
+        rerank_scores=rerank_scores,
+    )
+    if answerability.status is not AnswerabilityStatus.NOT_FOUND:
+        return answerability
+    return _refusal(
+        RefusalCode.EVIDENCE_INSUFFICIENT,
+        model_calls=0,
+        calls=(),
+        answer_mode=AnswerMode.NOT_FOUND,
+        user_message=(
+            "知识库中暂未找到能够支持该问题的资料。请核对项目名称、"
+            "编号或时间，或补充相关文档。"
+        ),
+        trace=_answerability_trace(answerability),
+    )
+
+
+def _stream_trace(generation: LlmGeneration) -> dict[str, JsonValue]:
+    """提取不含正文的首次 SSE 调用指标。"""
+    stream = generation.stream
+    if stream is None:
+        return {}
+    return {
+        "llm_stream": True,
+        "selected_endpoint": generation.call.endpoint,
+        "first_delta_ms": (
+            None
+            if stream.first_delta_seconds is None
+            else round(stream.first_delta_seconds * 1000)
+        ),
+        "delta_count": stream.delta_count,
+        "stream_cancelled": False,
+        "stream_finish_reason": stream.finish_reason,
+        "retry_count": generation.call.retry_count,
+    }
+
+
 def _validate_answer(
     content: str,
     evidence: EvidenceBundle,
@@ -651,6 +918,37 @@ def _validate_answer(
             "dropped_claim_codes": dropped_trace_codes,
         },
     )
+
+
+def _validate_streamed_claim_shape(
+    raw_claim: dict[str, object],
+) -> object:
+    """用现有完整契约校验一个刚闭合的 claim 外形。
+
+    Args:
+        raw_claim: 增量解析器通过标准 ``json.loads`` 得到的对象。
+
+    Returns:
+        与最终解析路径相同的规范 claim 对象。
+
+    Raises:
+        _ValidationError: claim 外形不满足当前 answer schema。
+
+    """
+    try:
+        payload = parse_answer_response(
+            json.dumps(
+                {"claims": [raw_claim]},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+    except (json.JSONDecodeError, ValueError) as error:
+        raise _ValidationError("INVALID_CLAIM_SCHEMA") from error
+    claims = cast(list[object], payload["claims"])
+    if len(claims) != 1:
+        raise _ValidationError("INVALID_CLAIM_SCHEMA")
+    return claims[0]
 
 
 def _validate_claim(
@@ -952,14 +1250,31 @@ def _generation_trace(
         包含调用、用量、请求和原始输出的 Trace 属性。
 
     """
+    stream = generated.stream
     return {
         "phase": phase,
         "model": generated.model,
         "endpoint": generated.call.endpoint,
+        "selected_endpoint": generated.call.endpoint,
         "retry_count": generated.call.retry_count,
         "elapsed_ms": round(generated.call.elapsed_seconds * 1000),
         "queue_ms": None,
-        "ttft_ms": None,
+        "ttft_ms": (
+            None
+            if stream is None or stream.first_delta_seconds is None
+            else round(stream.first_delta_seconds * 1000)
+        ),
+        "llm_stream": stream is not None,
+        "first_delta_ms": (
+            None
+            if stream is None or stream.first_delta_seconds is None
+            else round(stream.first_delta_seconds * 1000)
+        ),
+        "delta_count": 0 if stream is None else stream.delta_count,
+        "stream_cancelled": False,
+        "stream_finish_reason": (
+            None if stream is None else stream.finish_reason
+        ),
         "prompt_tokens": generated.usage.prompt_tokens,
         "completion_tokens": generated.usage.completion_tokens,
         "total_tokens": generated.usage.total_tokens,

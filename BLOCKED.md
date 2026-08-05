@@ -77,3 +77,17 @@
 - 若完成 app-only 更新后非缓存回答仍超过 15 秒，只做 A/B 取证建议，不直接修改
   模型服务：核对 vLLM Automatic Prefix Caching；单 endpoint 对比 n-gram/suffix
   speculative decoding；对比 TP 配置；分别记录 queue 与 decode 指标。
+
+## 8. 已校验 claim 流式回答服务器验收
+
+- 本地已实现严格 vLLM SSE、增量 claims-only 解析、逐 claim 引用门禁、NDJSON
+  `answer_start/claim/answer_progress`、前端去重与 AbortController 取消传播；本地专项
+  与静态门禁均已通过，index fingerprint 不变。
+- 当前任务只允许生成 app-only 更新包，未访问或更新 `.60`，因此尚无反向代理实际
+  不缓冲、首条合法 claim 到达时间、浏览器中途取消后上游 in-flight 立即释放，以及
+  取消请求不写 cache/conversation 的服务器现场证据。
+- 解除条件：经 `.54` 转传并只更新 `rag-app` 后，确认响应头包含
+  `Cache-Control: no-store, no-transform` 和 `X-Accel-Buffering: no`；可回答问题的
+  `claim` 事件早于 `final` 且页面不重复引用；中途取消后 Trace 为
+  `stream_cancelled=true`，没有对应 cache/conversation 写入；活动 alias、manifest、
+  index fingerprint 与 Qdrant 点数保持不变。

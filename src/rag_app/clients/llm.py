@@ -1,23 +1,33 @@
-"""Qwen OpenAI 兼容端点的非流式缓冲生成客户端。"""
+"""Qwen OpenAI 兼容端点的缓冲与严格 SSE 生成客户端。"""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+import codecs
+import json
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Literal
 
 from rag_app.clients.model_services import ExternalCallAudit
-from rag_app.clients.resilience import ResilientHttpPool
+from rag_app.clients.resilience import (
+    HttpStreamAttempt,
+    ResilientHttpPool,
+    StreamCancellation,
+    StreamCancelledError,
+)
 
 __all__ = [
     "BufferedLlmClient",
     "ChatMessage",
     "LlmGeneration",
+    "LlmStreamMetrics",
     "TokenUsage",
 ]
 
 ChatRole = Literal["system", "user", "assistant"]
+_MAX_STREAM_CONTENT_CHARS = 65_536
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +53,15 @@ class TokenUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class LlmStreamMetrics:
+    """一次完整 SSE 生成的非敏感流指标。"""
+
+    first_delta_seconds: float | None
+    delta_count: int
+    finish_reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class LlmGeneration:
     """尚未通过引用校验、不得直接发布的完整生成结果。"""
 
@@ -50,6 +69,106 @@ class LlmGeneration:
     model: str
     usage: TokenUsage
     call: ExternalCallAudit
+    stream: LlmStreamMetrics | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedStream:
+    """完成 SSE 协议校验后的内部累积结果。"""
+
+    content: str
+    usage: TokenUsage
+    metrics: LlmStreamMetrics
+
+
+@dataclass(slots=True)
+class _SseAccumulator:
+    """保存一次 SSE 的协议状态并隔离逐行分支。"""
+
+    attempt: HttpStreamAttempt
+    expected_model: str
+    on_delta: Callable[[str], None]
+    started: float
+    content_parts: list[str] = field(default_factory=list)
+    content_char_count: int = 0
+    usage: TokenUsage | None = None
+    finish_reason: str | None = None
+    first_delta_seconds: float | None = None
+    delta_count: int = 0
+    done: bool = False
+
+    def consume_line(self, line: str) -> None:
+        """校验并消费一条完整 SSE 行。"""
+        normalized = line.removesuffix("\r")
+        if not normalized:
+            return
+        if self.done or not normalized.startswith("data:"):
+            raise ValueError("INVALID_LLM_SSE_LINE")
+        data = normalized[5:].removeprefix(" ")
+        if data == "[DONE]":
+            self.done = True
+            return
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError as error:
+            raise ValueError("INVALID_LLM_SSE_JSON") from error
+        self._consume_event(event)
+
+    def complete(self) -> _ParsedStream:
+        """在 ``[DONE]`` 后构造完整且已校验的流结果。"""
+        if not self.done:
+            raise ValueError("LLM_STREAM_MISSING_DONE")
+        if self.finish_reason != "stop":
+            raise ValueError("LLM_FINISH_REASON_INVALID")
+        if self.usage is None:
+            raise ValueError("LLM_STREAM_MISSING_USAGE")
+        content = "".join(self.content_parts)
+        if not content.strip():
+            raise ValueError("LLM_STREAM_EMPTY_CONTENT")
+        return _ParsedStream(
+            content=content,
+            usage=self.usage,
+            metrics=LlmStreamMetrics(
+                first_delta_seconds=self.first_delta_seconds,
+                delta_count=self.delta_count,
+                finish_reason=self.finish_reason,
+            ),
+        )
+
+    def _consume_event(self, event: object) -> None:
+        event_finish, event_usage, content = _parse_sse_event(
+            event,
+            expected_model=self.expected_model,
+        )
+        if content:
+            self._consume_content(content)
+        if event_finish is not None:
+            if self.finish_reason is not None:
+                raise ValueError("DUPLICATE_LLM_FINISH_REASON")
+            self.finish_reason = event_finish
+        if event_usage is not None:
+            if self.usage is not None:
+                raise ValueError("DUPLICATE_LLM_STREAM_USAGE")
+            self.usage = event_usage
+
+    def _consume_content(self, content: str) -> None:
+        if self.finish_reason is not None:
+            raise ValueError("LLM_CONTENT_AFTER_FINISH")
+        if (
+            self.content_char_count + len(content)
+            > _MAX_STREAM_CONTENT_CHARS
+        ):
+            raise ValueError("LLM_STREAM_CONTENT_TOO_LARGE")
+        self.attempt.mark_content_delta()
+        if self.first_delta_seconds is None:
+            self.first_delta_seconds = max(
+                0.0,
+                time.monotonic() - self.started,
+            )
+        self.delta_count += 1
+        self.content_char_count += len(content)
+        self.content_parts.append(content)
+        self.on_delta(content)
 
 
 class BufferedLlmClient:
@@ -145,6 +264,82 @@ class BufferedLlmClient:
             ),
         )
 
+    def generate_stream(
+        self,
+        messages: tuple[ChatMessage, ...],
+        *,
+        max_output_tokens: int,
+        on_delta: Callable[[str], None],
+        cancellation: StreamCancellation,
+        response_format: Mapping[str, object] | None = None,
+    ) -> LlmGeneration:
+        """消费 OpenAI-compatible SSE 并逐个转发非空 content delta。
+
+        Args:
+            messages: 至少一条非空聊天消息。
+            max_output_tokens: 小于模型上下文上限的正数输出预算。
+            on_delta: 接收未发布模型字符串分片的同步解析回调。
+            cancellation: 客户端断开时立即关闭上游流的令牌。
+            response_format: 可选 OpenAI-compatible JSON Schema 约束。
+
+        Returns:
+            已完成 model、choice、finish reason、usage 校验的生成结果。
+
+        Raises:
+            ValueError: 请求预算无效。
+            ExternalRequestRejectedError: SSE 或模型响应结构不可用。
+            ExternalServiceUnavailableError: 首 delta 前有限端点均失败。
+            ExternalStreamInterruptedError: 首 delta 后上游中断。
+            StreamCancelledError: 调用方取消当前流。
+
+        """
+        if not messages:
+            raise ValueError("LLM messages 不能为空。")
+        if not 0 < max_output_tokens < self._max_context_tokens:
+            raise ValueError("LLM 输出预算超出上下文范围。")
+        payload: dict[str, object] = {
+            "model": self._model,
+            "messages": [
+                {"role": message.role, "content": message.content}
+                for message in messages
+            ],
+            "temperature": 0,
+            "max_tokens": max_output_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        if response_format is not None:
+            payload["response_format"] = response_format
+        started = time.monotonic()
+        response = self._pool.request_stream(
+            "POST",
+            "/v1/chat/completions",
+            payload=payload,
+            headers=self._headers,
+            cancellation=cancellation,
+            max_attempts=2,
+            consumer=lambda attempt: _consume_sse(
+                attempt,
+                expected_model=self._model,
+                on_delta=on_delta,
+                cancellation=cancellation,
+                started=started,
+            ),
+        )
+        parsed = response.value
+        return LlmGeneration(
+            content=parsed.content,
+            model=self._model,
+            usage=parsed.usage,
+            call=ExternalCallAudit(
+                endpoint=response.endpoint,
+                retry_count=response.retry_count,
+                elapsed_seconds=response.elapsed_seconds,
+            ),
+            stream=parsed.metrics,
+        )
+
 
 def _parse_generation(
     payload: object,
@@ -229,6 +424,88 @@ def _parse_usage(raw_usage: object) -> TokenUsage:
     if usage.total_tokens != usage.prompt_tokens + usage.completion_tokens:
         raise ValueError("LLM usage token 总数不一致。")
     return usage
+
+
+def _consume_sse(
+    attempt: HttpStreamAttempt,
+    *,
+    expected_model: str,
+    on_delta: Callable[[str], None],
+    cancellation: StreamCancellation,
+    started: float,
+) -> _ParsedStream:
+    """严格解码一次 OpenAI-compatible SSE 响应。
+
+    Args:
+        attempt: 已被韧性池选定且可标记首 content 的字节流。
+        expected_model: 请求时冻结的 served model id。
+        on_delta: 每个非空 content delta 的进程内解析回调。
+        cancellation: 跨线程取消令牌。
+        started: 逻辑模型调用开始的单调时点。
+
+    Returns:
+        完整模型 JSON 字符串、最终 usage 与流指标。
+
+    Raises:
+        ValueError: SSE 行、UTF-8、chunk schema 或结束条件无效。
+        StreamCancelledError: 调用方取消当前流。
+
+    """
+    accumulator = _SseAccumulator(
+        attempt=attempt,
+        expected_model=expected_model,
+        on_delta=on_delta,
+        started=started,
+    )
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="strict")
+    pending = ""
+    for chunk in attempt.iter_bytes():
+        if cancellation.is_cancelled():
+            raise StreamCancelledError("LLM_STREAM_CANCELLED")
+        pending += decoder.decode(chunk, final=False)
+        while "\n" in pending:
+            line, pending = pending.split("\n", 1)
+            accumulator.consume_line(line)
+    pending += decoder.decode(b"", final=True)
+    if pending:
+        accumulator.consume_line(pending)
+    return accumulator.complete()
+
+
+def _parse_sse_event(
+    payload: object,
+    *,
+    expected_model: str,
+) -> tuple[str | None, TokenUsage | None, str]:
+    """校验单个 SSE JSON chunk 的模型、choice、delta 和 usage。"""
+    if not isinstance(payload, dict) or payload.get("model") != expected_model:
+        raise ValueError("LLM_STREAM_MODEL_MISMATCH")
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        raise ValueError("INVALID_LLM_STREAM_CHOICES")
+    raw_usage = payload.get("usage")
+    parsed_usage = None if raw_usage is None else _parse_usage(raw_usage)
+    if not choices:
+        if parsed_usage is None:
+            raise ValueError("EMPTY_LLM_STREAM_CHOICES")
+        return None, parsed_usage, ""
+    if len(choices) != 1 or parsed_usage is not None:
+        raise ValueError("INVALID_LLM_STREAM_CHOICES")
+    choice = choices[0]
+    if not isinstance(choice, dict) or choice.get("index") != 0:
+        raise ValueError("INVALID_LLM_STREAM_CHOICE")
+    finish_reason = choice.get("finish_reason")
+    if finish_reason is not None and not isinstance(finish_reason, str):
+        raise ValueError("INVALID_LLM_FINISH_REASON")
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        raise ValueError("INVALID_LLM_STREAM_DELTA")
+    content = delta.get("content", "")
+    if content is None:
+        content = ""
+    if not isinstance(content, str):
+        raise ValueError("INVALID_LLM_STREAM_CONTENT")
+    return finish_reason, None, content
 
 
 def _authorization_headers(token: str | None) -> dict[str, str]:

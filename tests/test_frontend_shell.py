@@ -31,6 +31,20 @@ def test_frontend_focuses_result_and_explains_insufficient_evidence() -> None:
     assert '"/debug/?trace_id="' in javascript
 
 
+def test_frontend_progressively_renders_claims_and_aborts_old_streams() -> None:
+    javascript = (_ROOT / "frontend/app.js").read_text(encoding="utf-8")
+
+    assert 'event.type === "answer_start"' in javascript
+    assert 'event.type === "claim"' in javascript
+    assert 'event.type === "answer_progress"' in javascript
+    assert "claim_index" in javascript
+    assert "streamedClaims" in javascript
+    assert "new AbortController()" in javascript
+    assert "activeRequestController.abort()" in javascript
+    assert 'window.addEventListener("pagehide"' in javascript
+    assert "回答流中断，已显示内容可能不完整" in javascript
+
+
 def test_trace_page_opens_prefilled_trace_detail() -> None:
     html = (_ROOT / "frontend/debug.html").read_text(encoding="utf-8")
     javascript = (_ROOT / "frontend/debug.js").read_text(encoding="utf-8")

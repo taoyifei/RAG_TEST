@@ -5001,3 +5001,80 @@ curl -fsS http://127.0.0.1:8088/ready
 
 更新脚本必须输出 `reindex_required=false`、`worker_restarted=false`；不得执行
 `deploy.sh`、全量索引或重建 OCR/Qdrant/Embedding/Reranker/LLM。
+
+## 2026-08-05 已校验 claim 渐进流式展示
+
+- [x] 保持现有 POST + NDJSON，不引入 WebSocket。首次回答改用 vLLM SSE：请求
+  `stream=true`、`stream_options.include_usage=true`、`temperature=0` 和
+  `enable_thinking=false`；保留原 `generate()` 给 rewrite、review 与 repair。
+- [x] SSE 客户端严格校验 `data:`、`[DONE]`、served model、单 choice、
+  `finish_reason=stop` 与最终 usage。任意 TCP/UTF-8 分片均由增量解码器处理；只在
+  首个非空 content delta 前遇到 transport、408/425/429/任意 5xx 时最多切换一次
+  端点，首 delta 后中断固定返回 `LLM_STREAM_INTERRUPTED` 且不重放。
+- [x] 新增有界 `IncrementalClaimsParser`，只识别唯一 claims-only 顶层结构；最多
+  4 条 claim、总缓冲最多 32768 字符。每个完整 object 经标准 `json.loads` 后，
+  继续复用 support ID、source-group、数字、低置信 OCR 与重复项门禁；只有全部通过
+  的 `AnswerClaim` 才回调 QueryService。完整 SSE 结束后仍用原
+  `parse_answer_response()` 校验 canonical JSON，并核对最终与增量 claims 一致。
+- [x] NDJSON 向后兼容新增 `answer_start`、`claim` 与无正文
+  `answer_progress`；`stage` 和 `final` 字段未改。响应增加
+  `Cache-Control: no-store, no-transform` 与 `X-Accel-Buffering: no`。流中不发送
+  raw delta、问题、未验证 claim 或该 claim 引用范围之外的 evidence 正文。
+- [x] 前端按 `claim_index + text` 去重，逐条显示已验证回答和引用；final 只补齐
+  漏项并以 canonical answer 收束。错误或断流明确显示“回答流中断，已显示内容可能
+  不完整”。再次提交、清空会话和离开页面都会通过 `AbortController` 取消请求；后端
+  会立即关闭上游 SSE。取消在持久化前阻止 cache 和 conversation 写入。
+- [x] SAFE/DIAGNOSTIC Trace 只记录流状态与计数，包括 endpoint 脱敏值、首 delta、
+  首个已验证 claim、delta/有效/丢弃数量、结束原因、取消与 retry；原始模型正文仍
+  只允许在请求最终完成后的 FULL artifact 中保存。
+- [x] 红测最初因流式模块、事件和取消类型尚不存在得到 6 个 collection errors；
+  实现后相关最终专项为 `164 passed, 1 warning in 6.97s`，warning 仅为既有
+  Starlette TestClient 弃用提示。Node 内置 VM 的前端行为测试另为 `2 passed`，
+  实际证明流事件与 final 不会重复答案/引用，且断流会保留已验证内容并标记不完整。
+- [x] 首轮 app-only 构建按预期被 `asset-selfcheck` 的旧
+  `frontend/app.js` 摘要拦截；只更新 `deployment/ASSETS.sha256` 中该文件的一条
+  SHA256 后转绿。Python 3.11 compileall、全仓 Ruff、strict mypy（77 source
+  files）、simple Compose 和 `git diff --check` 均退出 0。prompt revision 与
+  pipeline 未修改；index fingerprint 继续为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`，
+  因此 `reindex_required=false`。
+- [ ] `.60` 现场首 claim 延迟、浏览器中途取消和代理不缓冲仍待 app-only 包部署后
+  验收；本轮按任务边界不访问服务器、不重建索引、不启动 worker 且不 push。
+
+本地提交和 app-only 构建完成后，先在本地 WSL 执行：
+
+```bash
+REV12=<本轮 artifacts/app-update 下的目录名>
+rsync -av --partial --info=progress2 \
+  "artifacts/app-update/${REV12}/" \
+  "user4a@10.242.180.54:/data/tyf/RAG/uploads/app-update/${REV12}/"
+```
+
+登录 `.54` 后转传到 `.60`：
+
+```bash
+REV12=<同一个目录名>
+ssh user4a@10.242.180.60 \
+  "mkdir -p /data/tyf/RAG/uploads/app-update/${REV12}"
+rsync -av --partial --info=progress2 \
+  "/data/tyf/RAG/uploads/app-update/${REV12}/" \
+  "user4a@10.242.180.60:/data/tyf/RAG/uploads/app-update/${REV12}/"
+```
+
+最后只在 `.60` 执行以下命令；不要运行 `deploy.sh` 或索引任务：
+
+```bash
+REV12=<同一个目录名>
+cd "/data/tyf/RAG/uploads/app-update/${REV12}"
+sed -i 's/\r$//' app-image.tar.gz.sha256 update-app.sh
+sha256sum -c app-image.tar.gz.sha256
+bash ./update-app.sh \
+  ./app-image.tar.gz \
+  ./app-image.tar.gz.sha256 \
+  /data/tyf/RAG/rag.env
+curl -fsS http://127.0.0.1:8088/live
+curl -fsS http://127.0.0.1:8088/ready
+```
+
+更新脚本必须输出 `reindex_required=false`、`worker_restarted=false`；不得重建
+worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。

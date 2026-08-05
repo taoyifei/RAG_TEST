@@ -3,6 +3,12 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
+from rag_app.clients.resilience import (
+    StreamCancellation,
+    StreamCancelledError,
+)
 from rag_app.generation.answer import (
     AnswerClaim,
     AnswerMode,
@@ -14,10 +20,12 @@ from rag_app.generation.answer import (
 from rag_app.generation.evidence import EvidenceBundle
 from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.query_service import (
+    AnswerStartEvent,
     QueryDependencies,
     QueryService,
     StageEvent,
     StageName,
+    ValidatedClaimEvent,
 )
 from rag_app.retrieval.hybrid import HybridRetrievalResult
 from rag_app.retrieval.neighbors import NeighborExpansionResult
@@ -241,6 +249,27 @@ class _CountingPipeline:
         )
 
 
+class _CancellingPipeline(_CountingPipeline):
+    def answer_stream(
+        self,
+        question: str,
+        evidence: EvidenceBundle,
+        *,
+        on_claim: object,
+        cancellation: StreamCancellation,
+        rerank_scores: tuple[float, ...] = (),
+    ) -> AnswerResult:
+        result = self.answer(
+            question,
+            evidence,
+            rerank_scores=rerank_scores,
+        )
+        assert callable(on_claim)
+        on_claim(result.claims[0])
+        cancellation.cancel()
+        return result
+
+
 def test_query_service_emits_only_stage_metadata_and_appends_question(
     tmp_path: Path,
 ) -> None:
@@ -344,6 +373,7 @@ def test_exact_cache_hit_skips_retrieval_rerank_and_llm(
     )
     cache.store(key, answer, now=now)
     events: list[StageEvent] = []
+    answer_events: list[AnswerStartEvent | ValidatedClaimEvent] = []
     service = QueryService(
         dependencies=QueryDependencies(
             conversations=conversations,
@@ -359,12 +389,14 @@ def test_exact_cache_hit_skips_retrieval_rerank_and_llm(
     )
 
     started = time.perf_counter()
-    outcome = service.ask(
+    outcome = service.ask_stream(
         trace_id="cache-hit",
         conversation_id="conversation",
         question="验收测试包括哪些内容？",
         now=now,
         emit=events.append,
+        emit_answer=answer_events.append,
+        cancellation=StreamCancellation(),
     )
 
     assert time.perf_counter() - started < 0.2
@@ -375,6 +407,69 @@ def test_exact_cache_hit_skips_retrieval_rerank_and_llm(
         StageName.VALIDATE,
         StageName.COMPLETE,
     ]
+    assert isinstance(answer_events[0], AnswerStartEvent)
+    assert isinstance(answer_events[1], ValidatedClaimEvent)
+    assert answer_events[1].claim.text == "验收测试包括功能验收。"
+
+
+def test_cancelled_stream_does_not_write_cache_or_conversation(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / "state.sqlite3"
+    conversations = ConversationStore(
+        state_path,
+        ttl_seconds=300,
+        max_rounds=3,
+    )
+    conversations.initialize()
+    cache = AnswerCache(tmp_path / "answer-cache.sqlite3")
+    cache.initialize()
+    identity = TraceIdentity(
+        pipeline_fingerprint="sha256:" + "a" * 64,
+        serving_fingerprint="sha256:" + "b" * 64,
+        release_revision="release",
+        active_collection="active",
+        index_manifest_sha256="d" * 64,
+        payload_schema_version=2,
+    )
+    pipeline = _CancellingPipeline()
+    service = QueryService(
+        dependencies=QueryDependencies(
+            conversations=conversations,
+            rewriter=_CachedRewriter(),  # type: ignore[arg-type]
+            retriever=pipeline,  # type: ignore[arg-type]
+            reranker=pipeline,  # type: ignore[arg-type]
+            neighbors=pipeline,  # type: ignore[arg-type]
+            assembler=pipeline,  # type: ignore[arg-type]
+            answerer=pipeline,  # type: ignore[arg-type]
+        ),
+        trace_identity=identity,
+        answer_cache=cache,
+    )
+    now = datetime(2026, 8, 5, 9, 0, tzinfo=UTC)
+    cancellation = StreamCancellation()
+
+    with pytest.raises(StreamCancelledError, match="LLM_STREAM_CANCELLED"):
+        service.ask_stream(
+            trace_id="cancelled-stream",
+            conversation_id="conversation",
+            question="验收测试包括哪些内容？",
+            now=now,
+            emit=lambda _: None,
+            emit_answer=lambda _: None,
+            cancellation=cancellation,
+        )
+
+    cache_key = AnswerCacheKey.from_inputs(
+        resolved_query="验收测试包括哪些内容？",
+        conversation_context_digest="",
+        index_manifest_sha256=identity.index_manifest_sha256,
+        serving_fingerprint=identity.serving_fingerprint,
+        access_mode="source-only",
+        answer_revision="sha256:" + "c" * 64,
+    )
+    assert cache.lookup(cache_key, now=now) is None
+    assert conversations.get_questions("conversation", now=now) == ()
 
 
 def test_same_key_concurrency_runs_retrieval_and_llm_once(

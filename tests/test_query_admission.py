@@ -14,9 +14,16 @@ from fastapi.testclient import TestClient
 
 from rag_app.api.app import ApiServices, create_app
 from rag_app.api.stream import QueryStreamRequest, stream_query
+from rag_app.clients.resilience import StreamCancellation
 from rag_app.health import ComponentStatus, ReadinessService
 from rag_app.query_executor import QueryExecutor
-from rag_app.query_service import QueryOutcome, StageEvent, StageName
+from rag_app.query_service import (
+    AnswerStartEvent,
+    QueryOutcome,
+    StageEvent,
+    StageName,
+    ValidatedClaimEvent,
+)
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
@@ -66,6 +73,55 @@ class _BlockingQuery:
         )
         self.release.wait()
         raise RuntimeError("synthetic query stop")
+
+    def ask_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: StreamCancellation,
+    ) -> QueryOutcome:
+        del emit_answer, cancellation
+        return self.ask(
+            trace_id=trace_id,
+            conversation_id=conversation_id,
+            question=question,
+            now=now,
+            emit=emit,
+        )
+
+
+class _CancellationAwareQuery:
+    def __init__(self) -> None:
+        self.cancelled = threading.Event()
+
+    def ask_stream(  # noqa: PLR0913
+        self,
+        *,
+        trace_id: str,
+        conversation_id: str,
+        question: str,
+        now: datetime,
+        emit: Callable[[StageEvent], None],
+        emit_answer: Callable[
+            [AnswerStartEvent | ValidatedClaimEvent],
+            None,
+        ],
+        cancellation: StreamCancellation,
+    ) -> QueryOutcome:
+        del conversation_id, question, now, emit
+        emit_answer(AnswerStartEvent(trace_id=trace_id, elapsed_ms=1))
+        cancellation.wait(timeout=2)
+        if cancellation.is_cancelled():
+            self.cancelled.set()
+        raise RuntimeError("synthetic cancellation stop")
 
 
 def _wait_for_in_flight(
@@ -217,4 +273,30 @@ def test_stream_close_does_not_hold_capacity_after_query_finishes() -> None:
         _wait_for_in_flight(executor, 0)
     finally:
         query.release.set()
+        executor.close()
+
+
+def test_stream_close_propagates_cancellation_to_query_and_upstream() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    query = _CancellationAwareQuery()
+    try:
+        stream = cast(
+            Generator[bytes, None, None],
+            stream_query(
+                executor=executor,
+                service=query,  # type: ignore[arg-type]
+                request=QueryStreamRequest(
+                    trace_id="b" * 32,
+                    conversation_id="conversation",
+                    question="合成问题",
+                ),
+            ),
+        )
+
+        assert b'"type":"answer_start"' in next(stream)
+        stream.close()
+
+        assert query.cancelled.wait(timeout=1)
+        _wait_for_in_flight(executor, 0)
+    finally:
         executor.close()

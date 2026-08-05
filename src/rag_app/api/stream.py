@@ -1,21 +1,24 @@
-"""只在回答校验完成后发布最终内容的 NDJSON 流。"""
+"""逐条发布已校验 claim，并以 canonical final 收束的 NDJSON 流。"""
 
 from __future__ import annotations
 
 import json
 import queue
-import threading
+import time
 from collections.abc import Iterator
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from typing import Final
+from typing import Final, TypeAlias
 
+from rag_app.clients.resilience import StreamCancellation
 from rag_app.observability import StructuredAuditLogger
 from rag_app.query_executor import QueryExecutor
 from rag_app.query_service import (
+    AnswerStartEvent,
     QueryOutcome,
     QueryService,
     StageEvent,
+    ValidatedClaimEvent,
 )
 from rag_app.tracing.models import TraceMode
 
@@ -27,6 +30,15 @@ _ERROR_EVENT: Final = {
     "code": "QUERY_FAILED",
 }
 
+_StreamMessage: TypeAlias = (
+    StageEvent
+    | AnswerStartEvent
+    | ValidatedClaimEvent
+    | QueryOutcome
+    | dict[str, str]
+    | object
+)
+
 
 @dataclass(frozen=True, slots=True)
 class QueryStreamRequest:
@@ -37,6 +49,141 @@ class QueryStreamRequest:
     question: str
     audit: StructuredAuditLogger | None = None
     trace_mode: TraceMode = TraceMode.SAFE
+
+
+@dataclass(slots=True)
+class _DeliveryState:
+    """记录 NDJSON 消费端公开进度。"""
+
+    answer_started: bool = False
+    validated_claims: int = 0
+
+
+@dataclass(slots=True)
+class _QueryStream:
+    """在查询工作线程与 HTTP 迭代器之间传递有界安全事件。"""
+
+    executor: QueryExecutor
+    service: QueryService
+    request: QueryStreamRequest
+    messages: queue.Queue[_StreamMessage] = field(
+        default_factory=lambda: queue.Queue(maxsize=16)
+    )
+    cancellation: StreamCancellation = field(
+        default_factory=StreamCancellation
+    )
+    started: float = field(default_factory=time.monotonic)
+
+    def start(self) -> Iterator[bytes]:
+        """提交查询工作并返回当前实例的 NDJSON 迭代器。"""
+        self.executor.submit(self._run)
+        return self._iterate()
+
+    def _put(self, message: _StreamMessage) -> None:
+        """在客户端仍消费时写入有界流队列。"""
+        while not self.cancellation.is_cancelled():
+            try:
+                self.messages.put(message, timeout=0.1)
+            except queue.Full:
+                continue
+            return
+
+    def _emit_stage(self, event: StageEvent) -> None:
+        """审计并转发一条非敏感阶段事件。"""
+        if self.request.audit is not None:
+            self.request.audit.query_stage(event)
+        self._put(event)
+
+    def _emit_answer(
+        self,
+        event: AnswerStartEvent | ValidatedClaimEvent,
+    ) -> None:
+        """转发回答开始或已通过门禁的完整 claim。"""
+        self._put(event)
+
+    def _run(self) -> None:
+        """执行同步查询并把阶段或终态写入有界队列。"""
+        try:
+            stream_method = (
+                self.service.ask_debug_stream
+                if self.request.trace_mode is TraceMode.FULL
+                else self.service.ask_stream
+            )
+            outcome = stream_method(
+                trace_id=self.request.trace_id,
+                conversation_id=self.request.conversation_id,
+                question=self.request.question,
+                now=datetime.now(UTC),
+                emit=self._emit_stage,
+                emit_answer=self._emit_answer,
+                cancellation=self.cancellation,
+            )
+            if self.request.audit is not None:
+                self.request.audit.query_outcome(outcome)
+            self._put(outcome)
+        except Exception:
+            if self.request.audit is not None:
+                self.request.audit.query_failed(
+                    self.request.trace_id,
+                    "QUERY_EXECUTION_FAILED",
+                )
+            self._put(_ERROR_EVENT)
+        finally:
+            self._put(_END)
+
+    def _iterate(self) -> Iterator[bytes]:
+        """消费有界队列并定期产生不含正文的回答进度。"""
+        state = _DeliveryState()
+        try:
+            while True:
+                try:
+                    message = self.messages.get(
+                        timeout=2.0 if state.answer_started else None
+                    )
+                except queue.Empty:
+                    yield _json_line(self._progress_payload(state))
+                    continue
+                if message is _END:
+                    return
+                yield _json_line(self._message_payload(message, state))
+        finally:
+            self.cancellation.cancel()
+
+    def _progress_payload(
+        self,
+        state: _DeliveryState,
+    ) -> dict[str, object]:
+        """构造无正文的两秒回答进度事件。"""
+        return {
+            "type": "answer_progress",
+            "trace_id": self.request.trace_id,
+            "elapsed_ms": max(
+                0,
+                round((time.monotonic() - self.started) * 1000),
+            ),
+            "validated_claims": state.validated_claims,
+        }
+
+    @staticmethod
+    def _message_payload(
+        message: _StreamMessage,
+        state: _DeliveryState,
+    ) -> object:
+        """转换一条队列消息并维护公开进度状态。"""
+        if isinstance(message, StageEvent):
+            return _stage_payload(message)
+        if isinstance(message, AnswerStartEvent):
+            state.answer_started = True
+            return _answer_start_payload(message)
+        if isinstance(message, ValidatedClaimEvent):
+            state.validated_claims = max(
+                state.validated_claims,
+                message.claim_index + 1,
+            )
+            return _claim_payload(message)
+        if isinstance(message, QueryOutcome):
+            return _final_payload(message)
+        return message
 
 
 def stream_query(
@@ -56,109 +203,11 @@ def stream_query(
         UTF-8 NDJSON 迭代器；最终回答只来自已校验的 QueryOutcome。
 
     """
-    messages: queue.Queue[StageEvent | QueryOutcome | dict[str, str] | object]
-    messages = queue.Queue(maxsize=16)
-    cancelled = threading.Event()
-
-    def put_message(
-        message: StageEvent | QueryOutcome | dict[str, str] | object,
-    ) -> None:
-        """在客户端仍消费时写入有界流队列。
-
-        Args:
-            message: 待发布的阶段、终态或内部结束信号。
-
-        Returns:
-            无返回值；流关闭后直接丢弃后续消息。
-
-        """
-        while not cancelled.is_set():
-            try:
-                messages.put(message, timeout=0.1)
-            except queue.Full:
-                continue
-            return
-
-    def run() -> None:
-        """执行同步查询并把阶段或终态写入有界队列。
-
-        Args:
-            无参数；使用外层请求上下文。
-
-        Returns:
-            无返回值。
-
-        """
-        try:
-            def emit(event: StageEvent) -> None:
-                """记录并转发一条非敏感阶段事件。
-
-                Args:
-                    event: 当前查询阶段事件。
-
-                Returns:
-                    无返回值。
-
-                """
-                if request.audit is not None:
-                    request.audit.query_stage(event)
-                put_message(event)
-
-            query_method = (
-                service.ask_debug
-                if request.trace_mode is TraceMode.FULL
-                else service.ask
-            )
-            outcome = query_method(
-                trace_id=request.trace_id,
-                conversation_id=request.conversation_id,
-                question=request.question,
-                now=datetime.now(UTC),
-                emit=emit,
-            )
-            if request.audit is not None:
-                request.audit.query_outcome(outcome)
-            put_message(outcome)
-        except Exception:
-            if request.audit is not None:
-                request.audit.query_failed(
-                    request.trace_id,
-                    "QUERY_EXECUTION_FAILED",
-                )
-            put_message(_ERROR_EVENT)
-        finally:
-            put_message(_END)
-
-    executor.submit(run)
-
-    def iterate() -> Iterator[bytes]:
-        """消费当前查询的有界消息队列。
-
-        Args:
-            无参数；消费外层查询队列。
-
-        Yields:
-            已编码的 UTF-8 NDJSON 行。
-
-        Returns:
-            查询结束或客户端关闭流后无额外返回值。
-
-        """
-        try:
-            while True:
-                message = messages.get()
-                if message is _END:
-                    return
-                if isinstance(message, StageEvent):
-                    yield _json_line(_stage_payload(message))
-                elif isinstance(message, QueryOutcome):
-                    yield _json_line(_final_payload(message))
-                else:
-                    yield _json_line(message)
-        finally:
-            cancelled.set()
-
-    return iterate()
+    return _QueryStream(
+        executor=executor,
+        service=service,
+        request=request,
+    ).start()
 
 
 def _stage_payload(event: StageEvent) -> dict[str, object]:
@@ -169,6 +218,26 @@ def _stage_payload(event: StageEvent) -> dict[str, object]:
         "stage": event.stage.value,
         "elapsed_ms": event.elapsed_ms,
         "metrics": event.metrics,
+    }
+
+
+def _answer_start_payload(event: AnswerStartEvent) -> dict[str, object]:
+    """转换不含模型正文的回答开始事件。"""
+    return {
+        "type": "answer_start",
+        "trace_id": event.trace_id,
+        "elapsed_ms": event.elapsed_ms,
+    }
+
+
+def _claim_payload(event: ValidatedClaimEvent) -> dict[str, object]:
+    """转换已经通过全部引用门禁的一条完整 claim。"""
+    return {
+        "type": "claim",
+        "trace_id": event.trace_id,
+        "claim_index": event.claim_index,
+        "text": event.claim.text,
+        "supports": [asdict(support) for support in event.claim.supports],
     }
 
 

@@ -305,7 +305,8 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
             stream,
             media_type="application/x-ndjson",
             headers={
-                "Cache-Control": "no-store",
+                "Cache-Control": "no-store, no-transform",
+                "X-Accel-Buffering": "no",
                 "X-Content-Type-Options": "nosniff",
                 "X-Trace-ID": trace_id,
             },
@@ -354,7 +355,8 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
             stream,
             media_type="application/x-ndjson",
             headers={
-                "Cache-Control": "no-store",
+                "Cache-Control": "no-store, no-transform",
+                "X-Accel-Buffering": "no",
                 "X-Content-Type-Options": "nosniff",
                 "X-Trace-ID": trace_id,
             },
