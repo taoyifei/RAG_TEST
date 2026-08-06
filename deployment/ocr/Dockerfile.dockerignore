@@ -4,9 +4,12 @@
 !deployment/ocr/Dockerfile
 !deployment/ocr/requirements.lock
 !deployment/ocr/WHEELS.sha256
+!deployment/ocr/DEBS.sha256
 !deployment/ocr/MODELS.sha256
 !deployment/ocr/pipeline.yaml
 !deployment/ocr/assets/
+!deployment/ocr/assets/debs/
+!deployment/ocr/assets/debs/**
 !deployment/ocr/assets/wheelhouse/
 !deployment/ocr/assets/wheelhouse/**
 !deployment/ocr/assets/models/

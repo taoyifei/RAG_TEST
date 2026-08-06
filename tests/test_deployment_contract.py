@@ -75,6 +75,9 @@ def test_images_and_package_are_bound_to_git_revision() -> None:
     assert "org.opencontainers.image.revision" in package
     assert 'git -C "${repo_root}" rev-parse HEAD' in package
     assert "MODELS.sha256" in ocr_dockerfile
+    assert "DEBS.sha256" in ocr_dockerfile
+    assert "dpkg-deb --extract" in ocr_dockerfile
+    assert 'python -c "import cv2; import paddleocr' in ocr_dockerfile
     assert "rag-runtime-" in package
     assert "rag-corpus-" in package
     assert 'write_sidecar "${runtime_archive}"' in package

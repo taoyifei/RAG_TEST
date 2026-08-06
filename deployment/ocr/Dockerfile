@@ -33,6 +33,16 @@ RUN test "${TARGETARCH}" = "amd64" \
     && python -m pip check \
     && rm -rf /tmp/wheelhouse /tmp/requirements.lock /tmp/WHEELS.sha256
 
+COPY deployment/ocr/DEBS.sha256 /tmp/DEBS.sha256
+COPY deployment/ocr/assets/debs/ /tmp/debs/
+
+RUN cd /tmp/debs \
+    && sha256sum --check /tmp/DEBS.sha256 \
+    && for package in ./*.deb; do dpkg-deb --extract "${package}" /; done \
+    && ldconfig \
+    && python -c "import cv2; import paddleocr" \
+    && rm -rf /tmp/debs /tmp/DEBS.sha256
+
 COPY deployment/ocr/assets/models/ /opt/rag-ocr/models/
 COPY deployment/ocr/MODELS.sha256 /opt/rag-ocr/MODELS.sha256
 COPY deployment/ocr/assets/licenses/ /opt/rag-ocr/licenses/
@@ -54,7 +64,7 @@ RUN groupadd --gid 10001 ragocr \
     && cp \
         /NGC-DL-CONTAINER-LICENSE \
         /opt/rag-ocr/licenses/NVIDIA-CONTAINER-LICENSE \
-    && python -c "from rag_app.ocr.main import main; assert callable(main)" \
+    && python -c "import cv2; import paddleocr; from rag_app.ocr.main import main; assert callable(main)" \
     && test -x /usr/bin/prlimit \
     && test -r /opt/rag-ocr/licenses/PaddleOCR-LICENSE.txt \
     && test -r /opt/rag-ocr/models/PP-OCRv5_server_det_infer/inference.json \

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import tarfile
 from pathlib import Path
 
@@ -56,3 +57,26 @@ def test_safe_extract_is_reentrant_and_rejects_drift(
             output,
             expected_top_level="model",
         )
+
+
+def test_runtime_deb_sources_match_frozen_manifest() -> None:
+    root = Path(__file__).parents[1]
+    payload = json.loads(
+        (root / "deployment/ocr/ASSET_SOURCES.json").read_text("utf-8")
+    )
+    runtime_debs = {
+        item["name"]: item["sha256"]
+        for item in payload["assets"]
+        if item["kind"] == "runtime_deb"
+    }
+    manifest = {
+        name: digest
+        for digest, name in (
+            line.split("  ", maxsplit=1)
+            for line in (
+                root / "deployment/ocr/DEBS.sha256"
+            ).read_text("ascii").splitlines()
+        )
+    }
+
+    assert runtime_debs == manifest

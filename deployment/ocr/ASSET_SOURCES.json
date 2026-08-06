@@ -27,6 +27,83 @@
       "sha256": "3840c5c0c61c294264d2dd77b8777be6ddd90121ef4e0e64abcd22edea581d6e",
       "bytes": 11376,
       "spdx": "Apache-2.0"
+    },
+    {
+      "name": "libbsd0_0.11.5-1_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libb/libbsd/libbsd0_0.11.5-1_amd64.deb",
+      "sha256": "09367acdf59f28ffb71ba7bc36c516cff03b2765930cf9be7bb7ea7273e4c312",
+      "bytes": 44760
+    },
+    {
+      "name": "libgl1_1.4.0-1_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libg/libglvnd/libgl1_1.4.0-1_amd64.deb",
+      "sha256": "4fb2bbff94bb1a59bbdb40041e7a8ab58db2a003a151f4055357af03f0b78666",
+      "bytes": 110500
+    },
+    {
+      "name": "libglib2.0-0_2.72.4-0ubuntu2.9_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glib2.0/libglib2.0-0_2.72.4-0ubuntu2.9_amd64.deb",
+      "sha256": "aeae7e349026617aa2a5109257631589646c8890996da1778115ac57c840f6fc",
+      "bytes": 1467084
+    },
+    {
+      "name": "libglvnd0_1.4.0-1_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libg/libglvnd/libglvnd0_1.4.0-1_amd64.deb",
+      "sha256": "6956d8be93b160b439a043141a061adfd54561d877423a956ace84d2fb3bfb4e",
+      "bytes": 73582
+    },
+    {
+      "name": "libglx0_1.4.0-1_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libg/libglvnd/libglx0_1.4.0-1_amd64.deb",
+      "sha256": "950068e8a3ad3905058d21a8c870c37989e48c0a537a7c57231c277af19f5395",
+      "bytes": 41024
+    },
+    {
+      "name": "libmd0_1.0.4-1build1_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libm/libmd/libmd0_1.0.4-1build1_amd64.deb",
+      "sha256": "bcdad5e400aeb660f0337a1c5c1a77e3effa91d0803e64ce2d000e9006f67cdb",
+      "bytes": 22964
+    },
+    {
+      "name": "libx11-6_2%3a1.7.5-1ubuntu0.3_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libx11/libx11-6_1.7.5-1ubuntu0.3_amd64.deb",
+      "sha256": "d382a3064ecd7576f24661a6d234adc737b854a9a0ec1d9f42cb4d007e77d547",
+      "bytes": 666946
+    },
+    {
+      "name": "libx11-data_2%3a1.7.5-1ubuntu0.3_all.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libx11/libx11-data_1.7.5-1ubuntu0.3_all.deb",
+      "sha256": "d2510de2e1aee7c2bcb149c1d8fac53f73efcf33f08664f563612fc16d16d4d9",
+      "bytes": 119766
+    },
+    {
+      "name": "libxau6_1%3a1.0.9-1build5_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxau/libxau6_1.0.9-1build5_amd64.deb",
+      "sha256": "551fa4101394af894f5f401285eeca9756da94bb31ecb08ed36a549ec580cd10",
+      "bytes": 7634
+    },
+    {
+      "name": "libxcb1_1.14-3ubuntu3_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxcb/libxcb1_1.14-3ubuntu3_amd64.deb",
+      "sha256": "9258f04136434e7a0ccd76041505421934284209693373cfa9c24acb3a641ec5",
+      "bytes": 49030
+    },
+    {
+      "name": "libxdmcp6_1%3a1.1.3-0ubuntu5_amd64.deb",
+      "kind": "runtime_deb",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxdmcp/libxdmcp6_1.1.3-0ubuntu5_amd64.deb",
+      "sha256": "6f6c869dcfc072fa77d24b72ba127bdf15d606bdffbeba4314fb39f4f324363d",
+      "bytes": 10904
     }
   ]
 }

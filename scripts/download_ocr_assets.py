@@ -15,6 +15,7 @@ from typing import IO
 
 _ALLOWED_HOSTS = frozenset(
     {
+        "archive.ubuntu.com",
         "paddle-model-ecology.bj.bcebos.com",
         "raw.githubusercontent.com",
     }
@@ -50,24 +51,29 @@ def main(arguments: Sequence[str] | None = None) -> int:
     options = _arguments(arguments)
     specs = _load_specs(options.sources)
     downloads = options.output / "downloads"
+    debs = options.output / "debs"
     models = options.output / "models"
     licenses = options.output / "licenses"
-    for directory in (downloads, models, licenses):
+    for directory in (downloads, debs, models, licenses):
         directory.mkdir(parents=True, exist_ok=True)
     for spec in specs:
-        archive = downloads / spec.name
-        _download_or_verify(spec, archive)
+        asset = (
+            debs / spec.name
+            if spec.kind == "runtime_deb"
+            else downloads / spec.name
+        )
+        _download_or_verify(spec, asset)
         if spec.kind == "model_archive":
             if spec.top_level_directory is None:
                 raise ValueError("模型归档缺少顶层目录约束。")
             safe_extract_tar(
-                archive,
+                asset,
                 models,
                 expected_top_level=spec.top_level_directory,
             )
         elif spec.kind == "license":
-            _copy_if_identical(archive, licenses / spec.name)
-        else:
+            _copy_if_identical(asset, licenses / spec.name)
+        elif spec.kind != "runtime_deb":
             raise ValueError(f"未知 OCR 资产类型：{spec.kind}")
     manifest_path = options.output / "MANIFEST.sha256"
     _write_manifest(options.output, manifest_path)
@@ -78,6 +84,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 "manifest": str(manifest_path),
                 "models": sum(
                     spec.kind == "model_archive" for spec in specs
+                ),
+                "runtime_debs": sum(
+                    spec.kind == "runtime_deb" for spec in specs
                 ),
             },
             sort_keys=True,
