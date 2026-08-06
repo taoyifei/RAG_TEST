@@ -1137,6 +1137,9 @@ class QueryService:
                 mode,
                 request.now,
                 identity,
+                question_sha256=hashlib.sha256(
+                    request.question.encode("utf-8")
+                ).hexdigest(),
             )
         except Exception:
             if mode is TraceMode.FULL:
@@ -1707,6 +1710,9 @@ def _safe_answer_context(
             "answerability_non_low_ocr_count",
             "dropped_claim_count",
             "dropped_claim_codes",
+            "selected_support_ranks",
+            "min_selected_support_score",
+            "low_rank_support_count",
             "first_validated_claim_ms",
             "validated_claim_count",
             "stream_dropped_claim_count",

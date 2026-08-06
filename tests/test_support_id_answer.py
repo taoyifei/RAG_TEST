@@ -26,6 +26,7 @@ def _ranked(  # noqa: PLR0913
     chunk_id: str,
     text: str,
     *,
+    rank: int = 1,
     score: float = 1.0,
     file_path: str = "规范.docx",
     source_id: str = "source-1",
@@ -39,7 +40,7 @@ def _ranked(  # noqa: PLR0913
         "fragment": text[:40],
     }
     return RerankedHit(
-        rank=1,
+        rank=rank,
         rerank_score=score,
         hit=FusedHit(
             chunk_id=chunk_id,
@@ -279,13 +280,117 @@ def test_deliverables_preserve_source_and_actor_relationships() -> None:
     )
 
     assert result.status is AnswerStatus.ANSWERED
-    assert result.answer_mode is AnswerMode.CONFLICT
+    assert result.answer_mode is AnswerMode.SOURCE_SEPARATED
+    assert result.user_message == "下面按模式或来源分别列出。"
     assert "《验收测试报告》" in result.claims[0].text
     assert "测试工程师" in result.claims[0].text
     assert "《测试交付报告》" in result.claims[1].text
     assert "当前证据未说明责任人" in result.claims[1].text
     assert result.claims[0].supports[0].chunk_id == "chunk-opc"
     assert result.claims[1].supports[0].chunk_id == "chunk-delivery"
+
+
+@pytest.mark.parametrize(
+    (
+        "question",
+        "expected_intent",
+    ),
+    (
+        ("项目交付、需求快验和产品开发三种模式有什么区别？", "COMPARE"),
+        ("一个需求先走快验还是直接产品开发？", "DECISION"),
+        ("快验可灵活，但项目交付不能省略哪些环节？", "COMPARE"),
+    ),
+)
+def test_compare_and_decision_keep_each_claim_in_one_source_group(
+    question: str,
+    expected_intent: str,
+) -> None:
+    bundle = _bundle(
+        _ranked(
+            "quick-check",
+            "需求快验用于验证可行性，团队可按实际情况安排研发环节。",
+            file_path="需求快验规范.docx",
+            source_id="quick-check",
+            neighbor_group_id="quick-check",
+        ),
+        _ranked(
+            "delivery",
+            "项目交付必须完成启动评审并提交项目交付材料。",
+            file_path="项目交付规范.docx",
+            source_id="delivery",
+            neighbor_group_id="delivery",
+        ),
+    )
+    first_id = bundle.units[0].unit_id
+    second_id = next(
+        unit.unit_id
+        for unit in bundle.units
+        if unit.evidence_id == "E2"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        payload = json.loads(body["messages"][1]["content"])
+        assert payload["question_intent"] == expected_intent
+        prompt = body["messages"][0]["content"]
+        assert "每个模式或来源单独输出一条 claim" in prompt
+        assert "优先输出高置信、单一来源的 claim" in prompt
+        return _response(
+            {
+                "claims": [
+                    {
+                        "text": "需求快验可按实际情况安排研发环节。",
+                        "support_ids": [first_id],
+                    },
+                    {
+                        "text": "项目交付必须完成启动评审并提交材料。",
+                        "support_ids": [second_id],
+                    },
+                ]
+            }
+        )
+
+    result = _generator(handler).answer(
+        question,
+        bundle,
+        rerank_scores=(1.0, 0.98),
+    )
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.answer_mode is AnswerMode.SOURCE_SEPARATED
+    assert result.user_message == "下面按模式或来源分别列出。"
+    assert result.trace["dropped_claim_codes"] == {}
+    assert result.model_calls == 1
+
+
+def test_final_support_quality_is_recorded_without_changing_selection() -> None:
+    bundle = _bundle(
+        _ranked(
+            "opc-owner",
+            "OPC owner 负责组织启动评审。",
+            rank=6,
+            score=0.0393,
+        )
+    )
+    support_id = bundle.units[0].unit_id
+
+    result = _generator(
+        lambda _: _response(
+            {
+                "claims": [
+                    {
+                        "text": "OPC owner 负责组织启动评审。",
+                        "support_ids": [support_id],
+                    }
+                ]
+            }
+        )
+    ).answer("我是 OPC owner，项目开始了我要干啥", bundle)
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.trace["selected_support_ranks"] == [6]
+    assert result.trace["min_selected_support_score"] == 0.0393
+    assert result.trace["low_rank_support_count"] == 1
 
 
 def test_supported_double_abstention_uses_matching_extractive_fallback(

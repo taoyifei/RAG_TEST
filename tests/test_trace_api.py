@@ -1,3 +1,4 @@
+import hashlib
 import json
 import uuid
 from collections.abc import Callable, Iterator
@@ -22,7 +23,13 @@ from rag_app.query_service import QueryOutcome, StageEvent
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
-from rag_app.tracing.models import TraceMode, TraceRecord, TraceStatus
+from rag_app.tracing.models import (
+    TraceIdentity,
+    TraceMode,
+    TraceRecord,
+    TraceStatus,
+)
+from rag_app.tracing.reasons import DecisionCode
 from rag_app.tracing.recorder import TraceRecorder
 from rag_app.tracing.store import TraceStore
 
@@ -280,13 +287,47 @@ def test_admin_can_batch_export_selected_traces_as_zip(
         'attachment; filename="rag-traces.zip"'
     )
     with ZipFile(BytesIO(response.content)) as archive:
-        assert archive.namelist() == [f"{second_id}.json", f"{first_id}.json"]
+        assert archive.namelist() == [
+            f"{second_id}.json",
+            f"{first_id}.json",
+            "TRACE_EXPORT_MANIFEST.json",
+        ]
         assert json.loads(archive.read(f"{second_id}.json"))["trace"][
             "trace_id"
         ] == second_id
         assert json.loads(archive.read(f"{first_id}.json"))["trace"][
             "trace_id"
         ] == first_id
+        manifest = json.loads(archive.read("TRACE_EXPORT_MANIFEST.json"))
+
+    assert manifest == {
+        "traces": [
+            {
+                "trace_id": second_id,
+                "json_file": f"{second_id}.json",
+                "json_sha256": hashlib.sha256(
+                    trace_api.store.export_trace(second_id)
+                ).hexdigest(),
+                "created_at": trace_api.store.get_trace(
+                    second_id
+                ).trace.created_at.isoformat(),
+                "status": "RUNNING",
+                "question_sha256": None,
+            },
+            {
+                "trace_id": first_id,
+                "json_file": f"{first_id}.json",
+                "json_sha256": hashlib.sha256(
+                    trace_api.store.export_trace(first_id)
+                ).hexdigest(),
+                "created_at": trace_api.store.get_trace(
+                    first_id
+                ).trace.created_at.isoformat(),
+                "status": "RUNNING",
+                "question_sha256": None,
+            },
+        ]
+    }
 
 
 def test_batch_export_rejects_empty_duplicate_or_missing_trace(
@@ -316,6 +357,47 @@ def test_batch_export_rejects_empty_duplicate_or_missing_trace(
         headers=headers,
         json={"trace_ids": [f"{index:032x}" for index in range(101)]},
     ).status_code == 422
+
+
+def test_batch_export_records_safe_question_hash_without_question_body(
+    trace_api: _ApiContext,
+) -> None:
+    trace_id = "c" * 32
+    question = "快验还是产品开发"
+    session = trace_api.recorder.begin_query(
+        trace_id,
+        TraceMode.SAFE,
+        datetime.now(UTC),
+        TraceIdentity(
+            pipeline_fingerprint="sha256:" + "1" * 64,
+            serving_fingerprint="sha256:" + "2" * 64,
+            release_revision="release-1",
+            active_collection="rag-active-v1",
+            index_manifest_sha256="3" * 64,
+            payload_schema_version=2,
+        ),
+        question_sha256=hashlib.sha256(question.encode("utf-8")).hexdigest(),
+    )
+    session.finish(
+        status=TraceStatus.ANSWERED,
+        reason_code=DecisionCode.ANSWERED,
+    )
+    trace_api.recorder.flush()
+
+    response = trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=_bearer(trace_api.admin_token),
+        json={"trace_ids": [trace_id]},
+    )
+
+    assert response.status_code == 200
+    assert question.encode("utf-8") not in response.content
+    with ZipFile(BytesIO(response.content)) as archive:
+        manifest = json.loads(archive.read("TRACE_EXPORT_MANIFEST.json"))
+
+    assert manifest["traces"][0]["question_sha256"] == hashlib.sha256(
+        question.encode("utf-8")
+    ).hexdigest()
 
 
 def test_artifact_cannot_cross_trace_and_expired_returns_410(

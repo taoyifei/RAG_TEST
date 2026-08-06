@@ -143,6 +143,7 @@ class TraceSession:
         trace: TraceRecord,
         *,
         clock: Callable[[], float] = time.monotonic,
+        root_attributes: dict[str, object] | None = None,
     ) -> None:
         """开始根 Trace 和 `rag.query` span。
 
@@ -150,6 +151,7 @@ class TraceSession:
             recorder: 单 writer Trace 录制器。
             trace: 已校验的 RUNNING 根记录。
             clock: span 独立耗时使用的单调时钟。
+            root_attributes: 只包含本次查询安全摘要的根 span 属性。
 
         """
         self._recorder = recorder
@@ -162,11 +164,13 @@ class TraceSession:
         self._sequence = 0
         self._decision_sequence = 0
         self._finished = False
+        self._root_attributes = dict(root_attributes or {})
         recorder.begin_trace(trace)
         self.root = self.start_span(
             "rag.query",
             SpanKind.CHAIN,
             parent_span_id=None,
+            attributes=root_attributes,
         )
 
     @property
@@ -551,7 +555,7 @@ class TraceSession:
                     else SpanStatus.OK
                 ),
                 reason_code=reason_code,
-                attributes=attributes,
+                attributes={**self._root_attributes, **(attributes or {})},
             ),
         )
         self._finished = True
@@ -650,6 +654,8 @@ class TraceRecorder:
         mode: TraceMode,
         created_at: datetime,
         identity: TraceIdentity,
+        *,
+        question_sha256: str | None = None,
     ) -> TraceSession:
         """开始带固定保留期和运行身份的查询 Trace。
 
@@ -658,6 +664,7 @@ class TraceRecorder:
             mode: SAFE、DIAGNOSTIC 或 FULL 内容边界。
             created_at: 带时区创建时点。
             identity: pipeline、服务和活动索引身份。
+            question_sha256: 可选的原始问题 SHA256；不保存问题正文。
 
         Returns:
             已开始根 span 的查询录制会话。
@@ -691,7 +698,12 @@ class TraceRecorder:
             capture_complete=True,
             expires_at=created_at + ttl,
         )
-        return TraceSession(self, trace)
+        root_attributes: dict[str, object] | None = (
+            None
+            if question_sha256 is None
+            else {"question_sha256": question_sha256}
+        )
+        return TraceSession(self, trace, root_attributes=root_attributes)
 
     def capture_failed(
         self,

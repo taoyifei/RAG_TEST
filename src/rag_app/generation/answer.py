@@ -56,6 +56,8 @@ __all__ = [
 
 _NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?%?")
 _LONG_CHINESE_TERM_LENGTH = 4
+_LOW_RANK_MAX = 4
+_LOW_SUPPORT_SCORE_MIN = 0.2
 
 
 class AnswerStatus(StrEnum):
@@ -71,6 +73,7 @@ class AnswerMode(StrEnum):
     ANSWERED = "ANSWERED"
     PARTIAL = "PARTIAL"
     CONFLICT = "CONFLICT"
+    SOURCE_SEPARATED = "SOURCE_SEPARATED"
     EXTRACTIVE_FALLBACK = "EXTRACTIVE_FALLBACK"
     NOT_FOUND = "NOT_FOUND"
     INTERNAL_VALIDATION_ERROR = "INTERNAL_VALIDATION_ERROR"
@@ -360,7 +363,6 @@ class AnswerGenerator:
             validated = _validate_answer(
                 first.content,
                 evidence,
-                question=question,
                 calls=tuple(calls),
             )
             validation_code = _result_validation_code(validated)
@@ -439,7 +441,6 @@ class AnswerGenerator:
             validated = _validate_answer(
                 repaired.content,
                 evidence,
-                question=question,
                 calls=tuple(calls),
             )
             repair_code = _result_validation_code(validated)
@@ -686,7 +687,6 @@ class AnswerGenerator:
             validated = _validate_answer(
                 reviewed.content,
                 evidence,
-                question=question,
                 calls=tuple(calls),
             )
         except _ValidationError as error:
@@ -839,7 +839,6 @@ def _validate_answer(
     content: str,
     evidence: EvidenceBundle,
     *,
-    question: str,
     calls: tuple[ExternalCallAudit, ...],
 ) -> AnswerResult:
     """校验模型回答 schema 及其全部证据约束。
@@ -847,7 +846,6 @@ def _validate_answer(
     Args:
         content: LLM 返回的原始 JSON 文本。
         evidence: 本次生成允许引用的证据集合。
-        question: 用于确定回答模式的当前原始问题。
         calls: 本次回答包含的外部调用审计记录。
 
     Returns:
@@ -873,6 +871,7 @@ def _validate_answer(
     units_by_id = {unit.unit_id: unit for unit in evidence.units}
     claims: list[AnswerClaim] = []
     claim_source_groups: list[frozenset[str]] = []
+    selected_units: list[EvidenceUnit] = []
     dropped_codes: dict[str, int] = {}
     for raw_claim in raw_claims:
         try:
@@ -881,16 +880,16 @@ def _validate_answer(
                 raise _ValidationError("DUPLICATE_CLAIM")
             claims.append(claim)
             claim_source_groups.append(source_groups)
+            selected_units.extend(
+                _claim_evidence_units(raw_claim, units_by_id)
+            )
         except _ValidationError as error:
             dropped_codes[error.code] = dropped_codes.get(error.code, 0) + 1
     if not claims:
         raise _ValidationError(next(iter(dropped_codes)))
-    intent = classify_question_intent(question)
     combined_source_groups: set[str] = set().union(*claim_source_groups)
-    if intent in {QuestionIntent.DELIVERABLE, QuestionIntent.COMPARE} and (
-        len(combined_source_groups) > 1
-    ):
-        mode = AnswerMode.CONFLICT
+    if len(combined_source_groups) > 1:
+        mode = AnswerMode.SOURCE_SEPARATED
     elif dropped_codes:
         mode = AnswerMode.PARTIAL
     else:
@@ -899,8 +898,8 @@ def _validate_answer(
         AnswerMode.PARTIAL: (
             "知识库只能确认以下部分，未找到其余内容的明确依据。"
         ),
-        AnswerMode.CONFLICT: (
-            "不同规范存在不同表述，下面按来源分别列出。"
+        AnswerMode.SOURCE_SEPARATED: (
+            "下面按模式或来源分别列出。"
         ),
     }.get(mode)
     dropped_trace_codes: dict[str, JsonValue] = dict(dropped_codes)
@@ -916,6 +915,7 @@ def _validate_answer(
         trace={
             "dropped_claim_count": sum(dropped_codes.values()),
             "dropped_claim_codes": dropped_trace_codes,
+            **_selected_support_quality(selected_units),
         },
     )
 
@@ -1004,6 +1004,36 @@ def _resolve_support(
     if unit is None:
         raise _ValidationError("INVALID_SUPPORT_ID")
     return unit
+
+
+def _claim_evidence_units(
+    raw_claim: object,
+    units_by_id: dict[str, EvidenceUnit],
+) -> tuple[EvidenceUnit, ...]:
+    """确定性恢复一条已验证 claim 的最终证据单元。"""
+    claim = cast(dict[str, object], raw_claim)
+    support_ids = cast(list[str], claim["support_ids"])
+    return tuple(
+        _resolve_support(support_id, units_by_id)
+        for support_id in support_ids
+    )
+
+
+def _selected_support_quality(
+    selected_units: list[EvidenceUnit],
+) -> dict[str, JsonValue]:
+    """生成只用于 SAFE Trace 的最终支持质量诊断。"""
+    ranks: list[JsonValue] = [unit.rerank_rank for unit in selected_units]
+    scores = [unit.rerank_score for unit in selected_units]
+    return {
+        "selected_support_ranks": ranks,
+        "min_selected_support_score": min(scores) if scores else None,
+        "low_rank_support_count": sum(
+            unit.rerank_rank > _LOW_RANK_MAX
+            or score < _LOW_SUPPORT_SCORE_MIN
+            for unit, score in zip(selected_units, scores, strict=True)
+        ),
+    }
 
 
 def _refusal(  # noqa: PLR0913

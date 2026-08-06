@@ -46,7 +46,8 @@ PROCEDURE 问题应从包含“提交、评估、确认、审批、更新、执�
 LIST 问题应逐项提取 evidence_units 明确支持的项目。
 ACTOR、DELIVERABLE 问题中责任人、动作和交付物必须来自同一 source_group；
 证据未说明责任人时明确写“当前证据未说明责任人”，不得从其他来源借用。
-COMPARE 问题按 source_group 分别陈述，不得把不同来源拼成同一事实。
+COMPARE、DECISION 问题按模式或 source_group 分别陈述，不得把不同来源拼成同一
+事实。每个模式或来源单独输出一条 claim，并优先输出高置信、单一来源的 claim。
 逐项检查全部 evidence_units；只有全部证据都与问题无实质关系时才输出
 {"claims":[]}。
 每条 claim 只提供简洁 text 和最多 3 个本次 support_ids；不得复制 quote。
@@ -94,7 +95,7 @@ _GENERATION_PARAMETERS: dict[str, JsonValue] = {
 _REWRITE_REQUEST_REVISION = (
     "rewrite-request-v3-discourse-and-verified-claim-references"
 )
-_ANSWER_REQUEST_REVISION = "answer-request-v4-support-id-source-group"
+_ANSWER_REQUEST_REVISION = "answer-request-v5-decision-source-separated"
 _REPAIR_INSTRUCTIONS = {
     "INVALID_JSON": "只输出一个完整 JSON 对象，不得输出 Markdown 或解释。",
     "INVALID_TOP_LEVEL_SCHEMA": "顶层只保留 claims 字段，删除其他字段。",

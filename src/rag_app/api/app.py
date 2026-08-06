@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import uuid
 from collections.abc import Iterator
 from contextlib import suppress
@@ -40,7 +42,13 @@ from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
 from rag_app.state.models import Job
-from rag_app.tracing.models import TraceListFilter, TraceMode, TraceStatus
+from rag_app.tracing.models import (
+    SpanRecord,
+    TraceDetail,
+    TraceListFilter,
+    TraceMode,
+    TraceStatus,
+)
 from rag_app.tracing.recorder import (
     TraceRecorder,
     TraceUnavailableError,
@@ -55,6 +63,7 @@ from rag_app.tracing.store import (
 __all__ = ["ApiServices", "create_app"]
 
 ServiceT = TypeVar("ServiceT")
+_SHA256_HEX_LENGTH = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -616,7 +625,11 @@ def _register_trace_endpoints(
         store = _require_service(services.trace_store)
         try:
             payloads = [
-                (trace_id, store.export_trace(trace_id))
+                (
+                    trace_id,
+                    store.export_trace(trace_id),
+                    store.get_trace(trace_id),
+                )
                 for trace_id in request.trace_ids
             ]
         except TraceNotFoundError as error:
@@ -625,12 +638,8 @@ def _register_trace_endpoints(
                 detail="trace not found",
             ) from error
 
-        output = BytesIO()
-        with ZipFile(output, mode="w", compression=ZIP_DEFLATED) as archive:
-            for trace_id, payload in payloads:
-                archive.writestr(f"{trace_id}.json", payload)
         return Response(
-            content=output.getvalue(),
+            content=_trace_export_zip(payloads),
             media_type="application/zip",
             headers={
                 "Cache-Control": "no-store",
@@ -780,6 +789,50 @@ def _no_store_json(payload: object) -> JSONResponse:
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+def _trace_export_zip(
+    payloads: list[tuple[str, bytes, TraceDetail]],
+) -> bytes:
+    """生成含 canonical JSON 和唯一清单的 Trace ZIP。"""
+    output = BytesIO()
+    manifest: list[dict[str, object]] = []
+    with ZipFile(output, mode="w", compression=ZIP_DEFLATED) as archive:
+        for trace_id, payload, detail in payloads:
+            archive.writestr(f"{trace_id}.json", payload)
+            manifest.append(
+                {
+                    "trace_id": trace_id,
+                    "json_file": f"{trace_id}.json",
+                    "json_sha256": hashlib.sha256(payload).hexdigest(),
+                    "created_at": detail.trace.created_at.isoformat(),
+                    "status": detail.trace.status.value,
+                    "question_sha256": _trace_question_sha256(
+                        detail.spans
+                    ),
+                }
+            )
+        archive.writestr(
+            "TRACE_EXPORT_MANIFEST.json",
+            json.dumps(
+                {"traces": manifest},
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+    return output.getvalue()
+
+
+def _trace_question_sha256(spans: tuple[SpanRecord, ...]) -> str | None:
+    """读取查询根 span 中不含正文的问题摘要。"""
+    for span in spans:
+        if span.name != "rag.query":
+            continue
+        value = span.attributes.get("question_sha256")
+        if isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH:
+            return value
+    return None
 
 
 def _register_feedback_endpoint(

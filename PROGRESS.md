@@ -1,5 +1,45 @@
 # DOCX RAG 交付进度
 
+## 2026-08-06 自由问题语义与 Trace 导出修复
+
+- [x] 以 `C:\Users\jerry\Desktop\RAG\RAG_log\2、自由问题.zip` 复核基线：6 个
+  JSON 文件中只有 5 个唯一 trace；`c4bcad71b8a54f2d8240eda24b9916af` 的两份
+  payload 字节完全相同。因此最后一个“快验可灵活、项目交付不能省略”问题已在本地
+  专项中重新作为独立回归问题执行。
+- [x] 新增 `DECISION`，并覆盖 6 个自由问法的固定分类回归；COMPARE/DECISION
+  提示词要求每个模式或来源单独输出一条 claim，优先输出高置信、单一来源 claim。
+  跨来源 claim 仍按 `CROSS_SOURCE_GROUP` 拒绝，应用不自动拆分。
+- [x] 多个合格 source_group 不再自动标为 `CONFLICT`，改为向后兼容新增
+  `SOURCE_SEPARATED`，用户提示为“下面按模式或来源分别列出。”；本轮没有实现
+  确定性的同一主体同一属性互斥值检测，故不会仅凭来源数宣称冲突。
+- [x] SAFE Trace 对最终支持记录 `selected_support_ranks`、
+  `min_selected_support_score` 和 `low_rank_support_count`。这只是诊断，不会因
+  rank>4 或 score<0.2 删除证据；rank 6、score 0.0393 的 OPC 回归已覆盖。
+- [x] 批量 Trace ZIP 现在固定包含各 `<trace_id>.json` 和唯一
+  `TRACE_EXPORT_MANIFEST.json`。清单记录 trace ID、文件名、JSON SHA256、创建
+  时点、状态和问题 SHA256，不记录问题正文；新 Trace 将问题 SHA256 放在 SAFE
+  根 span，历史 SAFE Trace 若未保存该摘要则为 `null`。
+- [x] 本地专项为 `96 passed, 1 warning`；完整 Ruff、strict mypy（77 个 source
+  files）、compileall、simple Compose config 和 `git diff --check` 均通过。索引
+  fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+
+完成本地 commit 和 app-only 包构建后，在目标服务器只更新 `rag-app`：
+
+```bash
+REVISION=<artifacts/app-update 下的本轮目录名>
+cd "/data/tyf/RAG/uploads/app-update/${REVISION}"
+sha256sum -c app-image.tar.gz.sha256
+bash ./update-app.sh \
+  ./app-image.tar.gz \
+  ./app-image.tar.gz.sha256 \
+  /data/tyf/RAG/rag.env
+curl -fsS http://127.0.0.1:8088/live
+curl -fsS http://127.0.0.1:8088/ready
+```
+
+不传 `--restart-worker`；不得运行 `deploy.sh`、首次部署或索引任务。
+
 ## 2026-08-04 模块化 app update 任务 0：可审计基线
 
 - [x] 中断后重新读取 `PROGRESS.md`、`BLOCKED.md`；当前 HEAD 为

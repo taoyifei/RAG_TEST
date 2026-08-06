@@ -16,6 +16,7 @@ def _ranked(  # noqa: PLR0913
     chunk_id: str,
     text: str,
     *,
+    rank: int = 1,
     score: float,
     file_path: str = "研发规范.docx",
     source_id: str = "source-1",
@@ -28,7 +29,7 @@ def _ranked(  # noqa: PLR0913
         "fragment": text[:40],
     }
     return RerankedHit(
-        rank=1,
+        rank=rank,
         rerank_score=score,
         hit=FusedHit(
             chunk_id=chunk_id,
@@ -85,6 +86,8 @@ def test_evidence_units_are_exact_atomic_spans_without_internal_locators(
     assert all(unit.evidence_id == "E1" for unit in bundle.units)
     assert len({unit.source_group for unit in bundle.units}) == 1
     assert all(unit.chunk_id == "chunk-1" for unit in bundle.units)
+    assert all(unit.rerank_rank == 1 for unit in bundle.units)
+    assert all(unit.rerank_score == 1.0 for unit in bundle.units)
     assert all(
         unit.locator.file_path == "研发规范.docx"
         for unit in bundle.units

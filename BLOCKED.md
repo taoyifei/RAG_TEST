@@ -1,5 +1,16 @@
 # 阻塞项
 
+## 0. 自由问题服务器回归与实际性能
+
+- 本地已用 6 个固定自由问法完成意图、逐 claim 来源隔离、SOURCE_SEPARATED、Trace
+  manifest 和支持质量诊断专项；但本轮没有访问或更新 `.60`，也没有调用真实 Qwen
+  endpoint。因此 6 个新 trace 的 ANSWERED/PARTIAL、VALIDATION_OK、model_calls=1、
+  retry_count=0、q5/q6 无 `CROSS_SOURCE_GROUP`、cache 命中、4 并发副本分布和首个
+  claim <3 秒，仍须在 app-only 更新后按任务书验收。
+- 解除条件：仅更新 `rag-app` 后重新执行 6 问，导出含
+  `TRACE_EXPORT_MANIFEST.json` 的 ZIP，核验 6 个不同 trace ID、manifest exact set、
+  index fingerprint 不变；顺序请求持续选择最快 `.58:8001` 不作为失败。
+
 本文件只保留当前目标明确要求继续保留的七类外部阻塞。已解决环境、测试和安全
 解包问题均已移至 `PROGRESS.md`。
 

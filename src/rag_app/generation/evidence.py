@@ -98,6 +98,8 @@ class EvidenceItem:
     low_confidence_ocr: bool
     source_id: str
     neighbor_group_id: str
+    rerank_rank: int
+    rerank_score: float
 
     def to_prompt_payload(self) -> dict[str, object]:
         """生成不含 embedding 上下文的 prompt 数据。
@@ -134,6 +136,8 @@ class EvidenceUnit:
     start_char: int
     end_char: int
     locator: Locator
+    rerank_rank: int
+    rerank_score: float
 
     def to_prompt_payload(self) -> dict[str, object]:
         """仅输出模型选择证据所需的安全字段。"""
@@ -375,6 +379,8 @@ def _evidence_item(
             "neighbor_group_id",
             ranked.hit.chunk_id,
         ),
+        rerank_rank=ranked.rank,
+        rerank_score=ranked.rerank_score,
     )
 
 
@@ -428,6 +434,8 @@ def _evidence_units(
                         start_char=start_char,
                         end_char=end_char,
                         locator=span.locator,
+                        rerank_rank=item.rerank_rank,
+                        rerank_score=item.rerank_score,
                     )
                 )
     return tuple(units)
