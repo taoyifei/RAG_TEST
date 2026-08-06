@@ -319,7 +319,7 @@ def test_deployment_guide_is_the_single_copyable_demo_path() -> None:
     guide_path = _root() / "deployment/simple/DEPLOYMENT_GUIDE.md"
     guide = guide_path.read_text(encoding="utf-8")
 
-    assert len(guide.splitlines()) <= 250
+    assert len(guide.splitlines()) <= 300
     for required in (
         "scripts/build_simple_bundle.py",
         "scripts/build_app_update.py",
@@ -331,5 +331,31 @@ def test_deployment_guide_is_the_single_copyable_demo_path() -> None:
         '"run_mode":"demo"',
         '"production_ready":false',
         "demo 不是 production",
+        "user4a@10.242.180.60",
+        "RAG_EMBEDDING_GPU_DEVICE_ID=1",
+        "RAG_RERANKER_GPU_DEVICE_ID=2",
+        "http://10.242.180.57:8000",
+        "http://10.242.180.57:8001",
+        "http://10.242.180.58:8000",
+        "http://10.242.180.58:8001",
+        "GPU_COUNT_OK=",
+        "DISK_FREE_GIB_OK=",
+        "LLM_MODELS_OK=",
+        "LLM_CHAT_OK=",
+        "RAG_SERVER_PREFLIGHT_OK",
+        "RAG_ROOT_PERMISSION_OK",
+        "UPLOAD_DIRS_OK",
+        "MODEL_IMAGES_LOAD_OK",
     ):
         assert required in guide
+    for forbidden in (
+        "covlink-llm-main_server.tar",
+        "TENSOR_PARALLEL_SIZE=1",
+        "docker logs --tail 300 rag-llm",
+    ):
+        assert forbidden not in guide
+    server_steps = guide.split(
+        "## 4. 服务器校验、解包并加载模型镜像",
+        maxsplit=1,
+    )[1]
+    assert 'ssh "${SERVER}"' not in server_steps
