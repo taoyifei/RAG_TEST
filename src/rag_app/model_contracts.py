@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass
 
 from rag_app.clients.llm import ChatMessage
-from rag_app.generation.question_intent import classify_question_intent
+from rag_app.generation.question_profile import QuestionProfile
 from rag_app.tracing.models import JsonValue
 
 __all__ = [
@@ -95,7 +95,7 @@ _GENERATION_PARAMETERS: dict[str, JsonValue] = {
 _REWRITE_REQUEST_REVISION = (
     "rewrite-request-v3-discourse-and-verified-claim-references"
 )
-_ANSWER_REQUEST_REVISION = "answer-request-v5-decision-source-separated"
+_ANSWER_REQUEST_REVISION = "answer-request-v6-question-profile"
 _REPAIR_INSTRUCTIONS = {
     "INVALID_JSON": "只输出一个完整 JSON 对象，不得输出 Markdown 或解释。",
     "INVALID_TOP_LEVEL_SCHEMA": "顶层只保留 claims 字段，删除其他字段。",
@@ -266,6 +266,7 @@ def answer_request(
     question: str,
     *,
     evidence_bundle: JsonValue,
+    question_profile: QuestionProfile,
     max_output_tokens: int,
 ) -> StructuredModelRequest:
     """构造生产初次证据回答请求。
@@ -273,6 +274,7 @@ def answer_request(
     Args:
         question: 当前用户原始问题。
         evidence_bundle: 已完成隔离和预算控制的证据 JSON。
+        question_profile: QueryService 已选择的多轴问题组织信息。
         max_output_tokens: 初次回答输出 token 硬上限。
 
     Returns:
@@ -285,17 +287,16 @@ def answer_request(
     stripped_question = question.strip()
     if not stripped_question:
         raise ValueError("question 不能为空。")
-    intent = classify_question_intent(stripped_question)
     max_claims = (
         _MAX_DEFINITION_CLAIMS
-        if intent.value == "DEFINITION"
+        if question_profile.primary_operation.value == "DEFINITION"
         else _MAX_ANSWER_CLAIMS
     )
     return _structured_request(
         system_prompt=_ANSWER_SYSTEM_PROMPT,
         user_payload={
             "question": stripped_question,
-            "question_intent": intent.value,
+            "question_profile": question_profile.as_prompt_payload(),
             "max_claims": max_claims,
             "allow_partial_answer": True,
             "empty_only_if_no_evidence_supports_any_material_part": True,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Self
@@ -178,11 +179,18 @@ class RetrievalSettings(BaseModel):
             load_json_file(path, label="retrieval")
         )
 
-    def serving_fingerprint(self, pipeline: PipelineSpec) -> str:
+    def serving_fingerprint(
+        self,
+        pipeline: PipelineSpec,
+        *,
+        question_profile_identity: Mapping[str, str] | None = None,
+    ) -> str:
         """计算查询服务配置的规范化指纹。
 
         Args:
             pipeline: 提供索引指纹和模型版本的 pipeline 契约。
+            question_profile_identity: 可选的语义路由配置、校准和协议身份；
+                不进入 index fingerprint。
 
         Returns:
             带算法前缀的 SHA256 服务指纹。
@@ -251,6 +259,8 @@ class RetrievalSettings(BaseModel):
                 "tokenizer_sha256": pipeline.llm_tokenizer_sha256,
             },
         }
+        if question_profile_identity is not None:
+            payload["question_profile"] = dict(question_profile_identity)
         canonical = json.dumps(
             payload,
             ensure_ascii=False,
@@ -286,6 +296,12 @@ class RuntimeSettings(BaseSettings):
     release_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     pipeline_path: Path
     retrieval_path: Path
+    intent_router_path: Path = Path(
+        "/app/deployment/config/intent-router.json"
+    )
+    intent_router_calibration_path: Path = Path(
+        "/app/deployment/config/intent-router-calibration.json"
+    )
     corpus_policy_path: Path = Path(
         "/app/deployment/config/corpus-policy.json"
     )

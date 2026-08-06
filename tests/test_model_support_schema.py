@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from rag_app.generation.question_profile import legacy_question_profile
 from rag_app.model_contracts import (
     answer_request,
     answer_response_format,
@@ -40,13 +41,17 @@ def test_answer_schema_uses_intent_limited_support_ids(
                 }
             ],
         },
+        question_profile=legacy_question_profile(question),
         max_output_tokens=768,
     )
     schema = request.response_format["json_schema"]["schema"]
     claim_schema = schema["properties"]["claims"]
     support_schema = claim_schema["items"]["properties"]["support_ids"]
 
-    assert request.user_payload["question_intent"] == intent
+    assert (
+        request.user_payload["question_profile"]["primary_operation"]
+        == ("LIST" if intent in {"ACTOR", "DELIVERABLE"} else intent)
+    )
     assert request.user_payload["max_claims"] == max_claims
     assert claim_schema["maxItems"] == max_claims
     assert support_schema["maxItems"] == 3

@@ -331,7 +331,10 @@ def test_compare_and_decision_keep_each_claim_in_one_source_group(
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         payload = json.loads(body["messages"][1]["content"])
-        assert payload["question_intent"] == expected_intent
+        assert (
+            payload["question_profile"]["primary_operation"]
+            == expected_intent
+        )
         prompt = body["messages"][0]["content"]
         assert "每个模式或来源单独输出一条 claim" in prompt
         assert "优先输出高置信、单一来源的 claim" in prompt

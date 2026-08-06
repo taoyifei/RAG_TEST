@@ -23,6 +23,7 @@ __all__ = [
     "HybridRetrievalResult",
     "HybridRetrievalServices",
     "HybridRetriever",
+    "QueryEmbeddingContext",
 ]
 
 
@@ -53,6 +54,26 @@ class HybridRetrievalConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class QueryEmbeddingContext:
+    """仅在当前请求内复用 resolved query embedding 的上下文。"""
+
+    resolved_query_sha256: str
+    vector: tuple[float, ...] = field(repr=False, compare=False)
+    dimension: int = 0
+    query_variant_count: int = 0
+
+    def __post_init__(self) -> None:
+        """校验纯内存向量与查询变体计数。"""
+        if (
+            not self.resolved_query_sha256
+            or not self.vector
+            or self.dimension != len(self.vector)
+            or self.query_variant_count <= 0
+        ):
+            raise ValueError("QueryEmbeddingContext 无效。")
+
+
+@dataclass(frozen=True, slots=True)
 class HybridRetrievalResult:
     """一次多查询混合召回的候选与调用计数。"""
 
@@ -63,6 +84,11 @@ class HybridRetrievalResult:
     route_confidence: float = 0.0
     route_fallback: bool = True
     calls: tuple[ExternalCallAudit, ...] = ()
+    query_embedding: QueryEmbeddingContext | None = field(
+        default=None,
+        compare=False,
+        repr=False,
+    )
     trace: dict[str, JsonValue] = field(
         default_factory=dict,
         compare=False,
@@ -215,6 +241,10 @@ class HybridRetriever:
             route_confidence=route.confidence,
             route_fallback=not route.routed,
             calls=embedding_result.calls,
+            query_embedding=_resolved_query_embedding_context(
+                variants,
+                embedding_result.vectors,
+            ),
             trace={
                 "embedding_duration_ms": embedding_duration_ms,
                 "embedding_query_count": len(variants.queries),
@@ -258,6 +288,28 @@ class HybridRetriever:
                 "candidate_limit": self._config.candidate_limit,
             },
         )
+
+
+def _resolved_query_embedding_context(
+    variants: QueryVariants,
+    vectors: tuple[tuple[float, ...], ...],
+) -> QueryEmbeddingContext | None:
+    """从同一批 embedding 响应中精确取回 resolved query 向量。"""
+    try:
+        index = variants.queries.index(variants.resolved_query)
+        vector = vectors[index]
+    except (IndexError, ValueError):
+        return None
+    if not vector:
+        return None
+    return QueryEmbeddingContext(
+        resolved_query_sha256=hashlib.sha256(
+            variants.resolved_query.encode("utf-8")
+        ).hexdigest(),
+        vector=vector,
+        dimension=len(vector),
+        query_variant_count=len(variants.queries),
+    )
 
 
 def _duration_ms(started: float, finished: float) -> int:

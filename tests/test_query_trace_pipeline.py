@@ -13,6 +13,7 @@ from rag_app.generation.answer import (
     RefusalCode,
 )
 from rag_app.generation.evidence import EvidenceBundle
+from rag_app.generation.question_profile import QuestionProfile
 from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.query_service import QueryDependencies, QueryService
 from rag_app.retrieval.hybrid import HybridRetrievalResult
@@ -155,9 +156,10 @@ class _Answerer:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence, rerank_scores
+        del question, evidence, question_profile, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -182,9 +184,10 @@ class _CacheableAnswerer:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence, rerank_scores
+        del question, evidence, question_profile, rerank_scores
         support = ClaimSupport(
             evidence_id="E1",
             chunk_id="chunk-1",
@@ -213,9 +216,10 @@ class _StructuredAnswerer:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence, rerank_scores
+        del question, evidence, question_profile, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -259,9 +263,10 @@ class _AbstentionReviewAnswerer:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence, rerank_scores
+        del question, evidence, question_profile, rerank_scores
         return AnswerResult(
             status=AnswerStatus.REFUSED,
             answer=None,
@@ -345,9 +350,7 @@ def _service(
             reranker=_Reranker(),  # type: ignore[arg-type]
             neighbors=_Neighbors(),  # type: ignore[arg-type]
             assembler=(_Assembler() if assembler is None else assembler),  # type: ignore[arg-type]
-            answerer=(
-                _Answerer() if answerer is None else answerer
-            ),  # type: ignore[arg-type]
+            answerer=(_Answerer() if answerer is None else answerer),  # type: ignore[arg-type]
         ),
         trace_recorder=recorder,
         trace_identity=identity,
@@ -384,6 +387,7 @@ def test_safe_trace_has_complete_tree_without_business_artifacts(
         "rewrite.decide",
         "route.decide",
         "route.fallback",
+        "intent.route",
         "retrieve",
         "embedding.query",
         "qdrant.q0.dense",
@@ -397,6 +401,11 @@ def test_safe_trace_has_complete_tree_without_business_artifacts(
         "answer.publish",
     }
     assert all(span.duration_ms is not None for span in detail.spans)
+    intent_span = next(
+        span for span in detail.spans if span.name == "intent.route"
+    )
+    assert intent_span.attributes["route_source"] == "LEGACY"
+    assert intent_span.attributes["selected_primary"] == "LIST"
     spans_by_id = {span.span_id: span for span in detail.spans}
     for span in detail.spans:
         if span.parent_span_id is None:

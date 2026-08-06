@@ -13,6 +13,7 @@ from datetime import datetime
 from enum import StrEnum
 from urllib.parse import urlsplit
 
+from rag_app.clients.intent_classifier import IntentClassifier
 from rag_app.clients.model_services import ExternalCallAudit
 from rag_app.clients.resilience import (
     StreamCancellation,
@@ -29,6 +30,18 @@ from rag_app.generation.evidence import (
     EvidenceBundle,
     EvidenceDecision,
     InvalidEvidencePayloadError,
+)
+from rag_app.generation.question_profile import (
+    PrimaryOperation,
+    QuestionProfile,
+    RequestedSlot,
+    RouteSource,
+    extract_structural_signals,
+    legacy_question_profile,
+)
+from rag_app.generation.semantic_router import (
+    IntentRouterMode,
+    SemanticQuestionRouter,
 )
 from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.retrieval.fusion import FusedHit
@@ -132,6 +145,8 @@ class QueryDependencies:
     neighbors: NeighborExpander
     assembler: EvidenceAssembler
     answerer: AnswerGenerator
+    question_profile_router: SemanticQuestionRouter | None = None
+    intent_classifier: IntentClassifier | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,11 +452,9 @@ class QueryService:
                 "context.load",
                 SpanKind.STORAGE,
             )
-            context = (
-                self._dependencies.conversations.get_rewrite_context(
-                    request.conversation_id,
-                    now=request.now,
-                )
+            context = self._dependencies.conversations.get_rewrite_context(
+                request.conversation_id,
+                now=request.now,
             )
             previous_questions = context.questions
             _finish_span(
@@ -450,9 +463,7 @@ class QueryService:
                 DecisionCode.ACCEPTED,
                 {
                     "history_count": len(previous_questions),
-                    "verified_claim_count": len(
-                        context.verified_claims
-                    ),
+                    "verified_claim_count": len(context.verified_claims),
                 },
             )
             current_span = None
@@ -463,8 +474,7 @@ class QueryService:
                     "question": request.question,
                     "history": list(previous_questions),
                     "verified_claims": [
-                        claim.as_payload()
-                        for claim in context.verified_claims
+                        claim.as_payload() for claim in context.verified_claims
                     ],
                 },
             )
@@ -592,9 +602,7 @@ class QueryService:
                             "hit_after_wait"
                             if cached is not None
                             else (
-                                "miss_after_wait"
-                                if flight.waited
-                                else "leader"
+                                "miss_after_wait" if flight.waited else "leader"
                             )
                         ),
                     },
@@ -674,6 +682,107 @@ class QueryService:
                     "route_fallback": retrieval.route_fallback,
                 },
             )
+
+            failure_stage = "intent.route"
+            current_span = _start_span(
+                session,
+                failure_stage,
+                SpanKind.CHAIN,
+            )
+            route_started = self._clock()
+            structural_signals = extract_structural_signals(
+                variants.resolved_query
+            )
+            legacy_profile = legacy_question_profile(request.question)
+            semantic_router = self._dependencies.question_profile_router
+            fallback_call: ExternalCallAudit | None = None
+            if semantic_router is None:
+                active_mode = IntentRouterMode.LEGACY
+                semantic_profile = _general_question_profile(
+                    structural_signals.requested_slots,
+                    reason_code="ROUTER_UNAVAILABLE",
+                )
+            else:
+                active_mode = semantic_router.config.mode
+                semantic_profile = semantic_router.route(
+                    variants.resolved_query,
+                    (
+                        None
+                        if retrieval.query_embedding is None
+                        else retrieval.query_embedding.vector
+                    ),
+                    structural_signals,
+                )
+            if (
+                active_mode is IntentRouterMode.HYBRID
+                and semantic_router is not None
+                and semantic_router.config.llm_fallback_enabled
+                and semantic_profile.reason_code == "SEMANTIC_UNCERTAIN"
+                and self._dependencies.intent_classifier is not None
+            ):
+                fallback = self._dependencies.intent_classifier.classify(
+                    variants.resolved_query,
+                    semantic_profile=semantic_profile,
+                    structural_signals=structural_signals,
+                )
+                semantic_profile = fallback.profile
+                fallback_call = fallback.call
+            active_profile = (
+                legacy_profile
+                if active_mode
+                in {IntentRouterMode.LEGACY, IntentRouterMode.SHADOW}
+                else semantic_profile
+            )
+            if (
+                fallback_call is not None
+                and session is not None
+                and current_span is not None
+            ):
+                _completed_span(
+                    session,
+                    TraceSpanSpec(
+                        name="llm.intent_classifier",
+                        kind=SpanKind.LLM,
+                        parent_span_id=current_span.span_id,
+                        reason_code=DecisionCode.ACCEPTED,
+                        attributes=_external_call_attributes(fallback_call),
+                        duration_ms=round(fallback_call.elapsed_seconds * 1000),
+                    ),
+                )
+            _finish_span(
+                session,
+                current_span,
+                DecisionCode.ACCEPTED,
+                _intent_route_attributes(
+                    active_mode=active_mode,
+                    legacy_profile=legacy_profile,
+                    semantic_profile=semantic_profile,
+                    selected_profile=active_profile,
+                    prototype_cache_ready=(
+                        False
+                        if semantic_router is None
+                        else semantic_router.prototype_cache_ready
+                    ),
+                    llm_fallback_enabled=(
+                        False
+                        if semantic_router is None
+                        else semantic_router.config.llm_fallback_enabled
+                    ),
+                    llm_fallback_used=fallback_call is not None
+                    or (
+                        active_mode is IntentRouterMode.HYBRID
+                        and semantic_router is not None
+                        and semantic_router.config.llm_fallback_enabled
+                        and semantic_profile.reason_code
+                        in {
+                            "LLM_FALLBACK_CONFIDENT",
+                            "LLM_FALLBACK_UNAVAILABLE",
+                        }
+                    ),
+                    elapsed_ms=_elapsed_ms(route_started, self._clock),
+                ),
+            )
+            current_span = None
 
             failure_stage = "rerank"
             current_span = _start_span(
@@ -803,6 +912,7 @@ class QueryService:
                 answer = self._dependencies.answerer.answer(
                     request.question,
                     evidence,
+                    question_profile=active_profile,
                     rerank_scores=rerank_scores,
                 )
             else:
@@ -838,6 +948,7 @@ class QueryService:
                 answer = self._dependencies.answerer.answer_stream(
                     request.question,
                     evidence,
+                    question_profile=active_profile,
                     rerank_scores=rerank_scores,
                     on_claim=emit_claim,
                     cancellation=cancellation,
@@ -1005,9 +1116,7 @@ class QueryService:
         if identity_source is None:
             raise RuntimeError("回答缓存缺少 Trace identity。")
         identity = (
-            identity_source()
-            if callable(identity_source)
-            else identity_source
+            identity_source() if callable(identity_source) else identity_source
         )
         return AnswerCacheKey.from_inputs(
             resolved_query=resolved_query,
@@ -1187,6 +1296,64 @@ def _conversation_context_digest(
 def _elapsed_ms(started: float, clock: Callable[[], float]) -> int:
     """计算不小于零的请求累计毫秒数。"""
     return max(0, round((clock() - started) * 1000))
+
+
+def _general_question_profile(
+    requested_slots: tuple[RequestedSlot, ...],
+    *,
+    reason_code: str,
+) -> QuestionProfile:
+    """构造无法路由时不改变回答可用性的 GENERAL profile。"""
+    return QuestionProfile(
+        primary_operation=PrimaryOperation.GENERAL,
+        secondary_operations=(),
+        requested_slots=requested_slots,
+        confidence=0.0,
+        margin=0.0,
+        route_source=RouteSource.GENERAL,
+        scores=(),
+        fallback_used=True,
+        reason_code=reason_code,
+    )
+
+
+def _intent_route_attributes(  # noqa: PLR0913
+    *,
+    active_mode: IntentRouterMode,
+    legacy_profile: QuestionProfile,
+    semantic_profile: QuestionProfile,
+    selected_profile: QuestionProfile,
+    prototype_cache_ready: bool,
+    llm_fallback_enabled: bool,
+    llm_fallback_used: bool,
+    elapsed_ms: int,
+) -> dict[str, object]:
+    """构造不含问题、样本或向量的 intent.route SAFE 属性。"""
+    return {
+        "active_mode": active_mode.value,
+        "legacy_primary": legacy_profile.primary_operation.value,
+        "semantic_primary": semantic_profile.primary_operation.value,
+        "selected_primary": selected_profile.primary_operation.value,
+        "secondary_operations": [
+            operation.value
+            for operation in selected_profile.secondary_operations
+        ],
+        "requested_slots": [
+            slot.value for slot in selected_profile.requested_slots
+        ],
+        "semantic_confidence_milli": round(semantic_profile.confidence * 1000),
+        "semantic_margin_milli": round(semantic_profile.margin * 1000),
+        "route_source": selected_profile.route_source.value,
+        "route_reason": selected_profile.reason_code,
+        "disagreement": (
+            legacy_profile.primary_operation
+            is not semantic_profile.primary_operation
+        ),
+        "prototype_cache_ready": prototype_cache_ready,
+        "llm_fallback_enabled": llm_fallback_enabled,
+        "llm_fallback_used": llm_fallback_used,
+        "route_elapsed_ms": elapsed_ms,
+    }
 
 
 def _raise_if_cancelled(
@@ -1955,9 +2122,7 @@ def _sanitize_artifact_payload(payload: object) -> object:
                     "password",
                 }
                 or normalized in {"vector", "vectors"}
-                or normalized.endswith(
-                    ("_base64", "_vector", "_vectors")
-                )
+                or normalized.endswith(("_base64", "_vector", "_vectors"))
             ):
                 continue
             sanitized[key] = (

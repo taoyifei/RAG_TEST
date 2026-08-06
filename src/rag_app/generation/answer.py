@@ -32,6 +32,10 @@ from rag_app.generation.question_intent import (
     QuestionIntent,
     classify_question_intent,
 )
+from rag_app.generation.question_profile import (
+    QuestionProfile,
+    legacy_question_profile,
+)
 from rag_app.generation.streaming_claims import IncrementalClaimsParser
 from rag_app.model_contracts import (
     StructuredModelRequest,
@@ -281,6 +285,7 @@ class AnswerGenerator:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile | None = None,
         rerank_scores: tuple[float, ...] = (),
         _on_claim: Callable[[AnswerClaim], None] | None = None,
         _cancellation: StreamCancellation | None = None,
@@ -290,6 +295,8 @@ class AnswerGenerator:
         Args:
             question: 当前原始问题。
             evidence: 已隔离注入并满足 token 预算的证据包。
+            question_profile: QueryService 选择的回答组织 profile；直接调用时
+                兼容 legacy profile。
             rerank_scores: 按精排顺序排列的候选分数。
             _on_claim: 仅由 ``answer_stream`` 注入的已验证 claim 回调。
             _cancellation: 仅由 ``answer_stream`` 注入的上游取消令牌。
@@ -306,9 +313,11 @@ class AnswerGenerator:
         if isinstance(preflight, AnswerResult):
             return preflight
         answerability = preflight
+        active_profile = question_profile or legacy_question_profile(question)
         first_request = answer_request(
             question,
             evidence_bundle=json.loads(evidence.rendered_json),
+            question_profile=active_profile,
             max_output_tokens=self._config.max_output_tokens,
         )
         trace_context = {
@@ -559,13 +568,14 @@ class AnswerGenerator:
             trace_context.update(_stream_trace(first))
         return first
 
-    def answer_stream(
+    def answer_stream(  # noqa: PLR0913
         self,
         question: str,
         evidence: EvidenceBundle,
         *,
         on_claim: Callable[[AnswerClaim], None],
         cancellation: StreamCancellation,
+        question_profile: QuestionProfile | None = None,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
         """流式生成首次回答并只回调已经通过全部门禁的 claim。
@@ -575,6 +585,7 @@ class AnswerGenerator:
             evidence: 与非流式回答相同的原子证据包。
             on_claim: 按模型顺序接收可立即展示的已验证 claim。
             cancellation: 客户端断开时关闭上游 SSE 的令牌。
+            question_profile: 与非流式路径完全相同的回答组织 profile。
             rerank_scores: 按精排顺序排列的候选分数。
 
         Returns:
@@ -584,6 +595,7 @@ class AnswerGenerator:
         return self.answer(
             question,
             evidence,
+            question_profile=question_profile,
             rerank_scores=rerank_scores,
             _on_claim=on_claim,
             _cancellation=cancellation,
@@ -1246,9 +1258,12 @@ def _answer_trace_context(
         ValueError: 内部回答请求缺少确定性意图。
 
     """
-    intent = request.user_payload.get("question_intent")
+    profile = request.user_payload.get("question_profile")
+    if not isinstance(profile, dict):
+        raise ValueError("回答请求缺少 question_profile。")
+    intent = profile.get("primary_operation")
     if not isinstance(intent, str):
-        raise ValueError("回答请求缺少 question_intent。")
+        raise ValueError("回答请求缺少 primary_operation。")
     return {
         "intent": intent,
         "response_format": request.response_format,

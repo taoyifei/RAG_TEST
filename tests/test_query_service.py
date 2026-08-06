@@ -18,6 +18,7 @@ from rag_app.generation.answer import (
     RefusalCode,
 )
 from rag_app.generation.evidence import EvidenceBundle
+from rag_app.generation.question_profile import QuestionProfile
 from rag_app.model_contracts import VerifiedClaimContext
 from rag_app.query_service import (
     AnswerStartEvent,
@@ -111,9 +112,10 @@ class _Answerer:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del rerank_scores
+        del question_profile, rerank_scores
         assert question == "当前问题"
         assert evidence.items == ()
         return AnswerResult(
@@ -222,9 +224,10 @@ class _CountingPipeline:
         question: str,
         evidence: EvidenceBundle,
         *,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
-        del question, evidence, rerank_scores
+        del question, evidence, question_profile, rerank_scores
         self._increment("answer")
         time.sleep(0.05)
         support = ClaimSupport(
@@ -250,18 +253,20 @@ class _CountingPipeline:
 
 
 class _CancellingPipeline(_CountingPipeline):
-    def answer_stream(
+    def answer_stream(  # noqa: PLR0913
         self,
         question: str,
         evidence: EvidenceBundle,
         *,
         on_claim: object,
         cancellation: StreamCancellation,
+        question_profile: QuestionProfile,
         rerank_scores: tuple[float, ...] = (),
     ) -> AnswerResult:
         result = self.answer(
             question,
             evidence,
+            question_profile=question_profile,
             rerank_scores=rerank_scores,
         )
         assert callable(on_claim)
@@ -317,10 +322,13 @@ def test_query_service_emits_only_stage_metadata_and_appends_question(
         "conversation",
         now=now,
     ) == ("历史问题", "当前问题")
-    assert conversations.get_rewrite_context(
-        "conversation",
-        now=now,
-    ).verified_claims == ()
+    assert (
+        conversations.get_rewrite_context(
+            "conversation",
+            now=now,
+        ).verified_claims
+        == ()
+    )
 
 
 def test_exact_cache_hit_skips_retrieval_rerank_and_llm(
@@ -523,8 +531,7 @@ def test_same_key_concurrency_runs_retrieval_and_llm_once(
             results.append(outcome.answer)
 
     threads = [
-        threading.Thread(target=ask, args=(index,))
-        for index in range(4)
+        threading.Thread(target=ask, args=(index,)) for index in range(4)
     ]
     for thread in threads:
         thread.start()

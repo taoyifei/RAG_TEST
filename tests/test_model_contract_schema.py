@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from rag_app.generation.question_profile import legacy_question_profile
 from rag_app.model_contracts import (
     answer_request,
     answer_response_format,
@@ -132,6 +133,7 @@ def test_answer_and_repair_prompts_freeze_claims_only_rules() -> None:
     first = answer_request(
         "概括主要要求",
         evidence_bundle={"evidence_units": []},
+        question_profile=legacy_question_profile("概括主要要求"),
         max_output_tokens=768,
     )
     assert "最多输出请求指定数量" in first.messages[0].content
@@ -141,7 +143,7 @@ def test_answer_and_repair_prompts_freeze_claims_only_rules() -> None:
     )
     assert "support_ids" in first.messages[0].content
     assert "不得输出 status、refusal_reason" in first.messages[0].content
-    assert first.user_payload["question_intent"] == "LIST"
+    assert first.user_payload["question_profile"]["primary_operation"] == "LIST"
     assert first.user_payload["max_claims"] == 4
     assert first.user_payload["allow_partial_answer"] is True
     assert (
@@ -173,14 +175,18 @@ def test_answer_and_repair_prompts_freeze_claims_only_rules() -> None:
         ("介绍一下需求基线。", "DEFINITION"),
     ),
 )
-def test_answer_request_exposes_deterministic_question_intent(
+def test_answer_request_exposes_question_profile(
     question: str,
     expected_intent: str,
 ) -> None:
     request = answer_request(
         question,
         evidence_bundle={"evidence_units": []},
+        question_profile=legacy_question_profile(question),
         max_output_tokens=512,
     )
 
-    assert request.user_payload["question_intent"] == expected_intent
+    assert (
+        request.user_payload["question_profile"]["primary_operation"]
+        == expected_intent
+    )

@@ -19,6 +19,7 @@ from qdrant_client import QdrantClient
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.api import ApiServices, create_app
 from rag_app.chunking import HuggingFaceTokenCounter
+from rag_app.clients.intent_classifier import IntentClassifier
 from rag_app.clients.llm import BufferedLlmClient
 from rag_app.clients.model_services import (
     EmbeddingClientConfig,
@@ -30,6 +31,16 @@ from rag_app.contracts import PipelineSpec
 from rag_app.corpus_policy import CorpusPolicy
 from rag_app.generation.answer import AnswerConfig, AnswerGenerator
 from rag_app.generation.evidence import EvidenceAssembler, EvidenceConfig
+from rag_app.generation.semantic_router import (
+    LLM_CLASSIFIER_CONTRACT_REVISION,
+    QUESTION_PROFILE_SCHEMA_REVISION,
+    IntentRouterConfig,
+    PrototypeWarmup,
+    QuestionProfileCalibration,
+    SemanticQuestionRouter,
+    load_intent_router_config,
+    load_question_profile_calibration,
+)
 from rag_app.health import (
     FrozenConfigurationProbe,
     HttpEndpointProbe,
@@ -59,6 +70,10 @@ from rag_app.settings import RetrievalSettings, RunMode, RuntimeSettings
 from rag_app.state.answer_cache import AnswerCache
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
+from rag_app.state.intent_router_cache import (
+    IntentRouterCache,
+    PrototypeNamespace,
+)
 from rag_app.state.jobs import JobStore
 from rag_app.strict_json import load_json_file
 from rag_app.tracing.models import TraceIdentity, TraceMode
@@ -149,9 +164,7 @@ def load_pipeline(path: Path) -> PipelineSpec:
         raise ValueError("pipeline 配置必须是 JSON object。")
     missing = sorted(_PIPELINE_CONFIG_FIELDS - set(payload))
     if missing:
-        raise ValueError(
-            f"pipeline 配置缺少显式字段：{','.join(missing)}"
-        )
+        raise ValueError(f"pipeline 配置缺少显式字段：{','.join(missing)}")
     return PipelineSpec.model_validate(payload)
 
 
@@ -211,22 +224,30 @@ def build_runtime(settings: RuntimeSettings) -> RuntimeBundle:
     log_run_mode_startup(settings.run_mode, component="rag-app")
     pipeline = load_pipeline(settings.pipeline_path)
     retrieval = RetrievalSettings.load(settings.retrieval_path)
+    intent_router = load_intent_router_config(settings.intent_router_path)
+    intent_calibration = load_question_profile_calibration(
+        settings.intent_router_calibration_path
+    )
     _validate_runtime_contract(settings, pipeline, retrieval)
     with ExitStack() as rollback:
         bundle = _assemble_runtime(
             settings,
             pipeline,
             retrieval,
+            intent_router,
+            intent_calibration,
             rollback,
         )
         rollback.pop_all()
         return bundle
 
 
-def _assemble_runtime(
+def _assemble_runtime(  # noqa: PLR0913, PLR0917
     settings: RuntimeSettings,
     pipeline: PipelineSpec,
     retrieval: RetrievalSettings,
+    intent_router: IntentRouterConfig,
+    intent_calibration: QuestionProfileCalibration,
     rollback: ExitStack,
 ) -> RuntimeBundle:
     """组装查询进程资源，并把未交付资源注册到回滚栈。
@@ -238,6 +259,8 @@ def _assemble_runtime(
         settings: 已完成环境校验的运行设置。
         pipeline: 当前索引必须匹配的冻结 pipeline。
         retrieval: 当前服务使用的冻结检索参数。
+        intent_router: 受控的 shadow 语义路由配置。
+        intent_calibration: 当前路由的真实或未验证校准状态。
         rollback: 在组装失败时按逆序关闭已创建资源的退出栈。
 
     Returns:
@@ -248,7 +271,21 @@ def _assemble_runtime(
 
     """
     fingerprint = pipeline.fingerprint()
-    serving_fingerprint = retrieval.serving_fingerprint(pipeline)
+    serving_fingerprint = retrieval.serving_fingerprint(
+        pipeline,
+        question_profile_identity={
+            "intent_router_sha256": intent_router.canonical_sha256,
+            "calibration_sha256": intent_calibration.canonical_sha256,
+            "router_revision": intent_router.router_revision,
+            "active_mode": intent_router.mode.value,
+            "question_profile_schema_revision": (
+                QUESTION_PROFILE_SCHEMA_REVISION
+            ),
+            "llm_classifier_contract_revision": (
+                LLM_CLASSIFIER_CONTRACT_REVISION
+            ),
+        },
+    )
     qdrant = QdrantClient(
         url=settings.qdrant_url.rstrip("/"),
         api_key=settings.qdrant_api_key.get_secret_value(),
@@ -302,6 +339,30 @@ def _assemble_runtime(
         ),
         api_token=_secret(settings.embedding_api_token),
     )
+    prototype_namespace = PrototypeNamespace(
+        config_sha256=intent_router.canonical_sha256,
+        embedding_model=pipeline.embedding_model,
+        embedding_revision=pipeline.embedding_revision,
+        tokenizer_sha256=pipeline.embedding_tokenizer_sha256,
+        dimension=pipeline.embedding_dimension,
+        expected_example_count=intent_router.example_count,
+    )
+    semantic_router = SemanticQuestionRouter(
+        config=intent_router,
+        calibration=intent_calibration,
+        namespace=prototype_namespace,
+    )
+    intent_cache = IntentRouterCache(
+        settings.state_database.with_name("intent-router.sqlite3")
+    )
+    intent_cache.initialize()
+    intent_warmup = PrototypeWarmup(
+        cache=intent_cache,
+        router=semantic_router,
+        embedding=embedding,
+        instruction=retrieval.query_instruction,
+    )
+    intent_warmup.start()
     reranker = RerankerClient(
         reranker_pool,
         api_token=_secret(settings.reranker_api_token),
@@ -362,6 +423,10 @@ def _assemble_runtime(
         default_trace_mode=settings.trace_mode,
         answer_cache=answer_cache,
         access_mode=settings.access_mode.value,
+        question_profile_router=semantic_router,
+        intent_classifier_max_output_tokens=(
+            intent_router.llm_fallback_max_output_tokens
+        ),
     )
     readiness = ReadinessService(
         (
@@ -441,6 +506,8 @@ def _build_query_service(  # noqa: PLR0913
     default_trace_mode: TraceMode,
     answer_cache: AnswerCache,
     access_mode: str,
+    question_profile_router: SemanticQuestionRouter,
+    intent_classifier_max_output_tokens: int,
 ) -> QueryService:
     """把冻结检索参数绑定为一条完整且可追踪的查询链。
 
@@ -452,6 +519,8 @@ def _build_query_service(  # noqa: PLR0913
         default_trace_mode: 普通查询默认使用的追踪模式。
         answer_cache: 与活动索引和回答协议绑定的精确缓存。
         access_mode: 当前查询访问范围模式。
+        question_profile_router: 复用检索向量的回答组织路由器。
+        intent_classifier_max_output_tokens: 关闭式 classifier 的输出上限。
 
     Returns:
         依赖和阶段配置均已固定的查询服务。
@@ -478,9 +547,7 @@ def _build_query_service(  # noqa: PLR0913
             bm25=bm25,
             metadata_policy=MetadataPolicy(
                 allowed_statuses=retrieval.allowed_statuses,
-                allowed_authority_levels=(
-                    retrieval.allowed_authority_levels
-                ),
+                allowed_authority_levels=(retrieval.allowed_authority_levels),
             ),
             router=KeywordSoftRouter(
                 tuple(
@@ -525,6 +592,10 @@ def _build_query_service(  # noqa: PLR0913
             max_repair_tokens=retrieval.repair_output_tokens,
         ),
     )
+    intent_classifier = IntentClassifier(
+        parts.llm,
+        max_output_tokens=intent_classifier_max_output_tokens,
+    )
     return QueryService(
         dependencies=QueryDependencies(
             conversations=parts.conversations,
@@ -537,6 +608,8 @@ def _build_query_service(  # noqa: PLR0913
             ),
             assembler=assembler,
             answerer=answerer,
+            question_profile_router=question_profile_router,
+            intent_classifier=intent_classifier,
         ),
         trace_recorder=trace_recorder,
         trace_identity=trace_identity,
@@ -633,9 +706,7 @@ def _pool(
         client=client,
         policy=ResiliencePolicy(
             max_attempts=(
-                settings.max_attempts
-                if max_attempts is None
-                else max_attempts
+                settings.max_attempts if max_attempts is None else max_attempts
             ),
             failure_threshold=settings.failure_threshold,
             cooldown_seconds=settings.cooldown_seconds,

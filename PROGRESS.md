@@ -1,5 +1,54 @@
 # DOCX RAG 交付进度
 
+## 2026-08-06 语义 QuestionProfile 任务 0：调用链事实审计
+
+- [x] 基线 HEAD 已核对为 `3404675f8c6c4e5a1beb438700614374334322e1`
+  （`fix(answer): 修正自由问法的跨来源语义`）；本轮不访问 `.57/.58/.60`、不
+  SSH/SCP、不 push。工作区已有 OCR/部署相关未提交改动不属于本轮，保持不动。
+- [x] 调用图（代码事实，不超过 30 行）：
+  `QueryService._ask()` 加载会话上下文 →
+  `QueryRewriter.rewrite()` 生成 `QueryVariants.resolved_query` 和 variants →
+  `AnswerCache.lookup()`（命中直接发布） →
+  `HybridRetriever.retrieve()` → `TeiEmbeddingClient.embed()` 对全部 variants
+  批量请求一次（`HybridRetrievalResult.embedding_calls` 取实际 HTTP calls 数） →
+  dense/BM25/RRF → rerank → neighbor → evidence → `AnswerGenerator.answer()` →
+  `answer_request()` → cache store。
+- [x] 具体职责：`src/rag_app/retrieval/rewrite.py` 定义并产生
+  `QueryVariants`；`src/rag_app/retrieval/hybrid.py::HybridRetriever.retrieve`
+  拥有原有 query embedding 调用；`src/rag_app/model_contracts.py::answer_request`
+  当前自行调用 legacy `classify_question_intent()`；`src/rag_app/settings.py::
+  RetrievalSettings.serving_fingerprint()` 绑定服务指纹，`QueryService._answer_cache_key`
+  将它与 answer revision 绑定；`TraceRecorder.begin_query()` 的根 span 以及
+  `llm.answer` span 都可增加非敏感路由计数、枚举和原因码。
+- [x] 本轮接入边界：semantic profile 将在 retrieval 返回 resolved query vector 后
+  生成，仅影响 `answer_request()` 的 prompt 组织；不改变检索、Answerability 或引用
+  门禁，且 cache hit 不重新 route/retrieve。
+
+## 2026-08-06 语义 QuestionProfile 本地实现与验证
+
+- [x] 新增可组合 `QuestionProfile`：primary/最多两个 secondary/requested slots/
+  confidence/margin/route source/reason；原有 `QuestionIntent` 保留为 legacy 映射，
+  结构信号继续优先，不降低角色、交付物等槽位精度。
+- [x] 新增默认 `shadow` 的 prototype 语义路由、独立 SQLite prototype cache 和后台
+  分批预热。语义路由只复用 `HybridRetriever.retrieve()` 已生成的 resolved query
+  vector；未校准、缓存缺失、向量异常或预热失败都 fail-closed 为 GENERAL，不增加
+  query embedding HTTP 调用。
+- [x] `QueryService` 在 cache miss 后记录安全 `intent.route` Trace，shadow 下仍以
+  legacy profile 调用回答器；cache hit 在 route/retrieve 前直接返回。`answer_request`
+  仅新增稳定 `question_profile` JSON 字段，未改变 SSE/NDJSON、检索、证据或引用门禁。
+- [x] 新增 140 条 tuning、70 条 holdout 和严格切分检查；`calibrate_intent_router.py`
+  只以真实 endpoint+tuning 搜索受控 aggregation/top-k/阈值，
+  `evaluate_intent_router.py` 只以固定校准产物报告 holdout。当前没有真实校准，
+  calibration 继续 `unverified`、运行模式继续 `shadow`。
+- [x] 本地通过：语义/回答/证据/流式 claim/Trace 专项 `62 passed`，
+  QuestionProfile/query service 专项 `54 passed`，Trace pipeline `8 passed`；
+  compileall、Ruff、strict mypy（12 个改动源文件）、asset-selfcheck 均通过。
+  Trace export 的实际 Qdrant 集成组因本地 `127.0.0.1:6333` 返回 502 阻塞，未修改
+  Qdrant 或索引。
+- [x] 审计补充：LLM fallback 合并结构槽位后按 `RequestedSlot` 枚举顺序重新稳定
+  排序，避免有效结构化结果因槽位次序被误回退 GENERAL；新增 strict-schema、低置信
+  失败关闭与最小请求内容专项测试，语义路由核心集为 `24 passed`。
+
 ## 2026-08-06 自由问题语义与 Trace 导出修复
 
 - [x] 以 `C:\Users\jerry\Desktop\RAG\RAG_log\2、自由问题.zip` 复核基线：6 个
@@ -24,10 +73,22 @@
   fingerprint 仍为
   `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
 
-完成本地 commit 和 app-only 包构建后，在目标服务器只更新 `rag-app`：
+已生成本地 app-only 包。将下方 `REVISION` 替换为
+`artifacts/app-update/` 下最终交付目录名；按以下链路传输并只更新 `rag-app`（命令
+未在本轮执行，两个服务器用户均为 `user4a`）：
 
 ```bash
-REVISION=<artifacts/app-update 下的本轮目录名>
+# 本地 WSL：先传到 .54 的中转目录。
+REVISION=<最终 app-update 目录名>
+scp -r "/home/jerry/work/RAG/artifacts/app-update/${REVISION}" \
+  user4a@10.242.180.54:/data/tyf/RAG/uploads/app-update/
+
+# .54：再从中转机传到 .60。
+ssh user4a@10.242.180.54
+scp -r "/data/tyf/RAG/uploads/app-update/${REVISION}" \
+  user4a@10.242.180.60:/data/tyf/RAG/uploads/app-update/
+
+# .60：校验并只替换 rag-app。
 cd "/data/tyf/RAG/uploads/app-update/${REVISION}"
 sha256sum -c app-image.tar.gz.sha256
 bash ./update-app.sh \

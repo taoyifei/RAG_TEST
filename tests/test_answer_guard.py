@@ -252,7 +252,10 @@ def test_known_procedure_abstention_review_returns_supported_steps() -> None:
         request_body = json.loads(request.content)
         user_payload = json.loads(request_body["messages"][1]["content"])
         if calls == 1:
-            assert user_payload["question_intent"] == "PROCEDURE"
+            assert (
+                user_payload["question_profile"]["primary_operation"]
+                == "PROCEDURE"
+            )
             assert user_payload["allow_partial_answer"] is True
             assert (
                 user_payload[
@@ -300,7 +303,10 @@ def test_action_sequence_answers_procedure_without_literal_approval_label(
         request_body = json.loads(request.content)
         system_prompt = request_body["messages"][0]["content"]
         user_payload = json.loads(request_body["messages"][1]["content"])
-        assert user_payload["question_intent"] == "PROCEDURE"
+        assert (
+            user_payload["question_profile"]["primary_operation"]
+            == "PROCEDURE"
+        )
         assert "提交、评估、确认、审批、更新、执行" in system_prompt
         assert "不要求字面完全相同" in system_prompt
         return _response(answer)
