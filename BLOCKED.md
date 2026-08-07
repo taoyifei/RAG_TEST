@@ -1,5 +1,21 @@
 # 阻塞项
 
+## Industry 仍需人工或服务器现场完成
+
+- LibreOffice Writer 阻塞已解除。用户授权后固定 Ubuntu Jammy Writer package 只安装
+  到本地 converter image；GM-01～GM-10 的真实转换、清洗、Parser audit 和确定性复跑
+  已通过。`封面.doc` 与 `管理制度清单.doc` 是用户主动删除的无用文件，不是缺失项。
+- GM-01 的图像文字可被 Parser 识别，但组织机构图的层级与连线仍需人工对照原件复核；
+  当前 corpus audit 保留 `MANUAL_STRUCTURE_REVIEW_REQUIRED`。
+- 受限转换用户不能在容器内二次创建 `unshare -n` namespace，公开 audit 因此保留
+  `NETWORK_NAMESPACE_UNAVAILABLE`。实际构建和转换由外层 Docker `--network none`
+  执行，但不把该事实改写成进程内 namespace 已启用。
+- 用户提供的服务器清单已确认 `.60` 有可复用的 OCR 镜像和当前
+  `qdrant/qdrant:v1.18.3`，但轻量包会在现场再次核对完整 image ID、平台与
+  revision，任一不一致即阻塞。目标服务器的 Industry 路径、未占用 OCR GPU、
+  内存/磁盘和模型 endpoint 仍需现场确认；首次部署、Industry full index、真实问题
+  retrieval tuning/holdout、备份、回滚、SLA 与生产安全验收均未在本地执行。
+
 ## 语义路由真实校准与服务器回归
 
 - 本轮按边界未访问 `.57/.58/.60`，没有调用真实 embedding 或 Qwen。因此

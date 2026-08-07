@@ -1,5 +1,120 @@
 # DOCX RAG 交付进度
 
+## 2026-08-06 Industry 首次部署任务 0：事实基线
+
+- [x] 当前分支为 `Industry`；`HEAD`、`main`、`Industry` 均为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`
+  （`fix(deployment): 完善 simple 部署配置与指引`）。工作区开始时 clean，
+  `main...Industry` 无差异；本轮不访问服务器、不部署、不 push。
+- [x] 工业源目录
+  `/home/jerry/work/RAG/docs/3、赫斯基电器规程文件` 是被 `.gitignore` 的真实目录。
+  用户确认已主动删除无用的
+  `封面.doc` 与 `管理制度清单.doc`，因此 exact inventory 改为 GM-01～GM-10
+  共 10 个普通 `.doc`，全部为 active，reference 为 0；不恢复桌面副本。
+- [x] 10 个源文件均为 `application/msword` 普通文件，无 symlink、子目录或特殊
+  文件；只记录文件名、size、mtime 和 SHA256，不读取或写出业务正文。
+- [x] 用户在唯一代码提交完成后明确授权联网安装 LibreOffice Writer。只在一次性
+  下载容器中从 Ubuntu Jammy 官方仓库获取固定
+  `libreoffice-writer=1:7.3.7-0ubuntu0.22.04.12` 及 108 个解析依赖，共
+  115736802 bytes；逐包 SHA256、package/version/architecture、apt policy 和下载
+  audit 均保存在 ignored 本地审计目录。包只安装进专用本地 converter image，未安装
+  到 WSL 或服务器；安装构建和文档转换均使用 Docker `--network none`。converter
+  运行版本为 `LibreOffice 7.3.7.2 30(Build:2)`，image ID 为
+  `sha256:1ebd2090...33079f`，主许可证为 MPL-2.0，并记录了 package copyright SHA。
+  受限用户仍不能在容器内二次执行 `unshare -n`，所以公开 corpus audit 如实保留
+  `NETWORK_NAMESPACE_UNAVAILABLE`，不把进程内 namespace 写成已启用。
+- [x] simple 基线：Compose project `rag-simple`，默认启动 app/Qdrant/OCR，worker
+  仅在 `index` profile 启动；app 与 worker 复用同一 app image。只有 app 暴露
+  `8088:8088`，Qdrant/OCR 无 host port；使用独立 internal/egress network。
+- [x] training 身份仅用于负向隔离：部署目录 `deployment/simple`，alias
+  `rag-docx-active`，corpus 为 ignored `docs/RAG资料库` 下 6 个 DOCX。state、docs、
+  logs、Qdrant 分别挂载到 `/state`、`/data/docs`、`/logs`、`/qdrant/storage`；
+  SQLite 与 index state 均位于 `/state`，未读取或输出培训正文。
+- [x] `RuntimeSettings` 支持 `RAG_PIPELINE_PATH`、`RAG_RETRIEVAL_PATH`、
+  `RAG_INTENT_ROUTER_PATH`、`RAG_INTENT_ROUTER_CALIBRATION_PATH`、
+  `RAG_CORPUS_POLICY_PATH` 和 `RAG_OCR_ENDPOINTS`，因此 Industry 可以挂载同一套
+  外部只读 config 给 app/worker，并选择独立或外部 OCR；Dockerfile 当前仍把
+  `deployment/config` 固化进镜像。
+- [x] 当前权威配置 SHA256：pipeline `5c4eb34c...f863`、retrieval
+  `ee0a6356...539`、intent router `c502fb15...a9ce`、calibration
+  `ef01744b...66e1`、corpus policy `0d6553c1...ab0`。router=`shadow`、
+  calibration=`unverified`、retrieval=`provisional`、`soft_routes=[]`；pipeline/index
+  fingerprint 均为 `sha256:dd16e57d...f192a`，serving fingerprint 为
+  `sha256:b0df6bd6...c64d2`。
+- [x] `CorpusPolicy` schema version 为 `1`，由 defaults + exact-path overrides
+  产生 `DocumentMetadata(document_status, authority_level, effective_from,
+  effective_to)`；source identity 优先显式 hint/current path/唯一 active content
+  digest，最后由 initial path 与 content SHA256 确定性分配。
+- [x] full index 真实入口是 `POST /api/index/jobs`（admin bearer，`kind=full`）和
+  `rag-app worker`；同步 CLI 为 `rag-app index full --idempotency-key ...`。发布顺序为
+  target 校验 → snapshot → staged manifest → alias 切换 → active manifest，异常回滚
+  Industry alias。
+- [x] 可复用安全构件：`build_simple_bundle.py` 的 clean revision、wheel/image identity、
+  network-none build、image save/gzip/sidecar；`freeze_corpus_manifest.py` 的安全
+  DOCX discovery/exact manifest/staging；`offline_bundle.py` 的 sidecar、safe tar
+  extraction、exact manifest、verified mode restore 和 no-replace 原子发布。
+- [x] 实际调用/部署图（19 行）：
+  `ignored legacy .doc source` → inventory/exact-set gate → isolated LibreOffice staging
+  → OOXML audit/clean → conservative heading repair → Parser audit → atomic corpus publish
+  → Industry config/policy exact-set → `rag-industry-worker` discover DOCX
+  → parser → chunk → embedding/BM25 → staging collection → target verify → snapshot
+  → `rag-industry-active` alias → active manifest → Industry app rewrite/retrieve/rerank
+  → evidence/answer → independent cache/conversation/trace。
+
+## 2026-08-06 Industry 第二套 simple 实现与本地门禁
+
+- [x] 按用户确认采用“第二套隔离 simple”而非修改现有 simple：新增
+  `deployment/industry`，复用同一个 app image 和一次性 index worker 流程，但固定
+  project `rag-industry`、app port `8188`、alias `rag-industry-active`，并隔离
+  app/worker/Qdrant/OCR、state、manifest、trace、cache、conversation、docs、config、
+  logs、Token、网络和宿主路径；`deployment/simple/**` 未修改。
+- [x] 新增 `scripts/industry_corpus` 与 `prepare_industry_corpus.py`：exact inventory、
+  随机受限 profile、硬超时/进程组终止、OOXML 路径/解压/宏/OLE/ActiveX/外链/XML
+  门禁、GM-03/04 专项、GM-01 人工结构告警、保守 heading 修复、Parser 再审计、
+  canonical manifest/audit 和 no-replace 原子发布均由合成 fixture 覆盖。每条最终
+  文档仍为 10 active、0 reference 的用户覆盖集合。
+- [x] Industry Compose 支持默认完整包的 dedicated OCR 和私有 env 提供的 external
+  OCR；worker 只在 `index` profile 运行，Qdrant/OCR 不暴露 host port，app/worker
+  保持 read-only、tmpfs、pids limit、cap-drop 与 no-new-privileges。preflight、install、
+  deploy、run-index、verify、rollback 均显式限定 `-p rag-industry`，不会操作 training。
+- [x] 新增 `scripts/industry_bundle` 与 `build_industry_bundle.py`：要求 clean Industry
+  commit，离线构建/保存 app，核对 app/Qdrant/OCR loaded identity，生成四个归档、
+  sidecar、exact `RELEASE_MANIFEST.json`、`SHA256SUMS`、外层上传归档，并在 fresh
+  extraction 后执行 package selfcheck 与 Compose；包内 secret、绝对路径、raw DOC、
+  training docs、`.git/.venv/cache/pyc`、symlink/特殊文件及危险 mode 均 fail closed。
+- [x] 真实 corpus 转换和文档更新后，任务书列出的专项 pytest 最终重跑为
+  `122 passed in 6.67s`；compileall 退出 0，
+  Ruff 为 `All checks passed!`，strict mypy 为
+  `Success: no issues found in 122 source files`。Industry dedicated-OCR Compose、
+  Industry index profile Compose、现有 simple index Compose、全部 Industry shell
+  `bash -n` 和 `git diff --check` 均退出 0。
+- [x] 临时 Git index 的完整候选树由 306 墠至 335 个 tracked 文件，repository
+  安全报告前后均为同一组 9 个历史违规路径，新增 Industry Python 的 secret 命中为
+  0。`staged` 模式仍因整文件扫描 `PROGRESS.md` 的既有服务器地址及任务书明确要求
+  记录的本地源目录返回 2 项；未删除历史记录、未放宽扫描器，也未把这些内容放进
+  Industry release payload。当前 Git diff 不含 core `src` 或 `deployment/simple`，
+  tracked business files=0。
+- [x] 用户授权后只为本地 converter 下载上述固定 Ubuntu package；没有 pull 未固定
+  runtime image，没有安装 WSL package。仍未访问服务器、未 SSH/SCP、未上传、未部署、
+  未 push，也未修改 `main`。
+- [x] 真实 GM-01～GM-10 已在受限、断网 converter 中完成两次独立转换；两次均为
+  10 active、0 reference、12 个发布文件且逐文件 SHA exact set 无差异。最终提交使用
+  固定 source-date epoch `1786064751`，corpus revision 为 `87860c8b7496b4df`，
+  完整 SHA256 为
+  `87860c8b7496b4df5b783a4b9796c6b476d1aaa15a77fc3b7259fd1991876f1e`。实际审计
+  统计为 767 段、163 个接受 heading、202 个保守拒绝 heading、5 表、1 图；GM-03
+  删除 62 个已知私有区格式字符且残留为 0，GM-04 删除 3 个外部 hyperlink
+  relationship；10 个最终 DOCX 均实际通过当前 `DocxParser`。GM-01 保留
+  `MANUAL_STRUCTURE_REVIEW_REQUIRED`，没有把图中层级关系宣称为已人工验真。
+- [x] 最终交付顺序固定为：交付记录进入唯一 Industry commit 后，从该 clean commit
+  重建 corpus 与 app image，再生成 full release、outer upload archive 并做 fresh
+  extraction 自检。release 身份由包内 `RELEASE_MANIFEST.json`、`SHA256SUMS` 和外层
+  sidecar 作为权威记录，不在构建后反向改写 identity-bearing commit。
+- [x] 2026-08-07 用户明确要求先提交代码，因此仅覆盖原任务书中的 commit 时序：先创建
+  一个本地 `Industry` 功能提交，不 push，也不据此宣称 corpus/release 已完成。后续若
+  LibreOffice Writer 到位后还需更新 tracked 交付记录，只 amend 该本地提交，保持本轮
+  仍为唯一一个 Industry commit。
+
 ## 2026-08-06 语义 QuestionProfile 任务 0：调用链事实审计
 
 - [x] 基线 HEAD 已核对为 `3404675f8c6c4e5a1beb438700614374334322e1`
@@ -5179,3 +5294,61 @@ curl -fsS http://127.0.0.1:8088/ready
 
 更新脚本必须输出 `reindex_required=false`、`worker_restarted=false`；不得重建
 worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。
+
+## 2026-08-07 Industry 轻量首次部署包（复用服务器镜像）
+
+- [x] 用户提供的 `.60` 现场清单确认目前只有 `rag-simple`：`rag-app` 运行
+  `docx-rag:18cc5a9c7e92`、端口 8088；`rag-ocr` 与 `rag-qdrant` 健康；8188
+  未监听，且不存在 `rag-industry-*` 容器、Industry corpus 或 alias。这里记录的是
+  用户执行命令后提供的输出，本地构建过程没有登录 `.54/.60`。
+- [x] 本次不是 `app-update`，也不调用 training 的 `update-app.sh`。新增 release
+  类型 `industry-first-deploy-reuse-images`：只交付新 `app-image.tar.gz`、最终
+  `corpus.tar.gz` 及隔离式 Industry Compose/config/脚本；明确排除 OCR/Qdrant
+  归档，仍创建独立 `rag-industry-ocr`、`rag-industry-qdrant` 容器和数据路径。
+- [x] 复用身份固定为服务器现有 OCR
+  `docx-rag-ocr:d6e38d57aab1-smoke-20260804011642-emf-hotfix`、image ID
+  `sha256:c390a5de6100f2ea0ad4c0fab94ac656adfa73862c45b4374a21dcad3c38b372`、
+  revision `d6e38d57aab1fd857283a41e3233f7f97d3b588f`，以及当前源码固定的
+  `qdrant/qdrant:v1.18.3`、image ID
+  `sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286`。
+  `preflight.sh` 与 `install.sh` 都会核对 tag、完整 ID、`linux/amd64` 和可用
+  revision；不一致即停止，禁止重新 tag 绕过。
+- [x] 原完整首次部署合同保持可校验；轻量合同使用独立 package revision 和 exact
+  set。专项覆盖两种合同、轻量包不含 OCR/Qdrant 归档、外层归档命名、服务器镜像
+  复核和 training Compose 不漂移。限定 pytest 为 `104 passed, 1 warning`；
+  compileall、全仓 Ruff、strict mypy（86 source files）、simple/Industry Compose、
+  shell 语法和 `git diff --check` 均退出 0。
+- [ ] `.60` 首次部署仍必须现场填写模型 endpoint 与未占用 OCR GPU，随后显式执行
+  Industry full index。因为服务器当前没有 Industry index，本项不能改成 app-only
+  更新，也不能省略 `run-index.sh`。整个流程不得停止、重建或修改 `rag-simple`。
+
+本地构建完成后，只上传 `artifacts/industry-upload` 中外层 `.tar.gz` 与同名
+`.sha256`。包内 `SERVER_UPLOAD_COMMANDS.txt` 已固定 `user4a`、`.54` 和 `.60`；
+每一跳均先执行 `sha256sum -c`。在 `.60` 解包后，先运行：
+
+```bash
+bash preflight.sh --package-only
+bash verify.sh --package-only
+```
+
+把 release 目录放到
+`/data/tyf/RAG-industry/releases/<RELEASE_ID>`，再从 `.env.example` 生成包外私有
+env，填写服务器真实模型 endpoint 和未占用 GPU 后，严格按以下顺序执行：
+
+```bash
+bash generate-secrets.sh \
+  /data/tyf/RAG-industry/releases/<RELEASE_ID>/.env.example \
+  /data/tyf/RAG-industry/rag-industry.env
+# 编辑 rag-industry.env：只替换模型 endpoint、API token（如有）和 OCR GPU ID。
+bash preflight.sh \
+  /data/tyf/RAG-industry/rag-industry.env \
+  /data/tyf/RAG-industry/releases/<RELEASE_ID>
+bash install.sh \
+  /data/tyf/RAG-industry/rag-industry.env \
+  /data/tyf/RAG-industry/releases/<RELEASE_ID>
+bash deploy.sh \
+  /data/tyf/RAG-industry/rag-industry.env \
+  /data/tyf/RAG-industry/releases/<RELEASE_ID>
+bash run-index.sh /data/tyf/RAG-industry/rag-industry.env
+bash verify.sh /data/tyf/RAG-industry/rag-industry.env
+```

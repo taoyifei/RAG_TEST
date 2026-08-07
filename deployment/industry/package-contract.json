@@ -1,0 +1,68 @@
+{
+  "schema_version": "1",
+  "package_contract_revision": "industry-package-v1",
+  "release_kind": "industry-first-deploy",
+  "git_branch": "Industry",
+  "compose_project": "rag-industry",
+  "active_document_count": 10,
+  "reference_document_count": 0,
+  "required_files": [
+    ".env.example",
+    "DEPLOYMENT_GUIDE.md",
+    "RELEASE_MANIFEST.json",
+    "SERVER_UPLOAD_COMMANDS.txt",
+    "SHA256SUMS",
+    "app-image.tar.gz",
+    "app-image.tar.gz.sha256",
+    "compose.yaml",
+    "config/corpus-policy.json",
+    "config/intent-router-calibration.json",
+    "config/intent-router.json",
+    "config/pipeline.json",
+    "config/retrieval.json",
+    "corpus.tar.gz",
+    "corpus.tar.gz.sha256",
+    "deploy.sh",
+    "generate-secrets.sh",
+    "install.sh",
+    "lib.sh",
+    "ocr-image.tar.gz",
+    "ocr-image.tar.gz.sha256",
+    "package-contract.json",
+    "package_selfcheck.py",
+    "preflight.sh",
+    "preflight_endpoints.py",
+    "qdrant-image.tar.gz",
+    "qdrant-image.tar.gz.sha256",
+    "rollback.sh",
+    "run-index.sh",
+    "runtime_check.py",
+    "validation/expected-corpus.json",
+    "validation/industry-smoke.jsonl",
+    "verify.sh"
+  ],
+  "required_archives": [
+    "app-image.tar.gz",
+    "qdrant-image.tar.gz",
+    "ocr-image.tar.gz",
+    "corpus.tar.gz"
+  ],
+  "required_config": [
+    "config/pipeline.json",
+    "config/retrieval.json",
+    "config/intent-router.json",
+    "config/intent-router-calibration.json",
+    "config/corpus-policy.json"
+  ],
+  "required_validation": [
+    "validation/industry-smoke.jsonl",
+    "validation/expected-corpus.json"
+  ],
+  "sha256sums_excludes": [
+    "SHA256SUMS"
+  ],
+  "release_manifest_payload_excludes": [
+    "RELEASE_MANIFEST.json",
+    "SHA256SUMS"
+  ]
+}

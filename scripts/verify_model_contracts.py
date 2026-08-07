@@ -26,6 +26,9 @@ from rag_app.chunking import (  # noqa: E402
     HuggingFaceTokenCounter,
     TokenCounter,
 )
+from rag_app.generation.question_profile import (  # noqa: E402
+    legacy_question_profile,
+)
 from rag_app.model_contracts import (  # noqa: E402
     StructuredModelRequest,
     answer_request,
@@ -632,6 +635,7 @@ def _llm_contracts(
     initial_answer = answer_request(
         maximum_question,
         evidence_bundle=maximum_evidence,
+        question_profile=legacy_question_profile(maximum_question),
         max_output_tokens=budget.answer_output_tokens,
     )
     maximum_invalid_output = _maximum_token_text(

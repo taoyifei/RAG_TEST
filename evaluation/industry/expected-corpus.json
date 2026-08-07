@@ -1,0 +1,23 @@
+{
+  "schema_version": "1",
+  "active_documents": [
+    "GM-01 质量管理机构图.docx",
+    "GM-02 岗位职责规定.docx",
+    "GM-03 质量管理制度.docx",
+    "GM-04 质量管理制度及考核办法.docx",
+    "GM-05 劳保用品发放管理制度.docx",
+    "GM-06 产品质量检验管理制度.docx",
+    "GM-07 技术文件管理规定.docx",
+    "GM-08 安全生产管理制度.docx",
+    "GM-09 仓库管理制度.docx",
+    "GM-10 计量器具管理制度.docx"
+  ],
+  "reference_documents": [],
+  "forbidden_source_patterns": [
+    "OPC",
+    "产品开发全流程",
+    "需求快验",
+    "禅道使用指导"
+  ],
+  "basis": "User confirmed GM-01 through GM-10 as the complete active set."
+}
