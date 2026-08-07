@@ -28,6 +28,7 @@ __all__ = [
     "EvidenceUnit",
     "InvalidEvidencePayloadError",
     "decide_answerability",
+    "strong_question_anchors",
 ]
 
 _UNTRUSTED_DATA_NOTICE = (
@@ -45,8 +46,11 @@ _SUPPORTED_SCORE_MIN = 0.90
 _SAFE_UNIT_BOUNDARY = re.compile(r"[^。；;\n]*(?:[。；;\n]|$)")
 _STRONG_ANCHOR_PATTERNS = (
     re.compile(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"),
+    re.compile(
+        r"(?<![A-Za-z0-9-])[A-Z][A-Z0-9]{1,9}(?![A-Za-z0-9-])"
+    ),
     re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)"),
-    re.compile(r"《[^》]{2,40}》"),
+    re.compile(r"《([^》]{2,40})》"),
     re.compile(r"[“\"]([^”\"]{2,40})[”\"]"),
 )
 
@@ -475,9 +479,9 @@ def decide_answerability(
     rerank_scores: tuple[float, ...],
 ) -> AnswerabilityDecision:
     """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。"""
-    anchors = _strong_anchors(question)
+    anchors = strong_question_anchors(question)
     searchable = "\n".join(
-        unit.text.casefold()
+        f"{unit.source_label}\n{unit.text}".casefold()
         for unit in evidence.units
         if not unit.low_confidence_ocr
     )
@@ -507,7 +511,8 @@ def decide_answerability(
     )
 
 
-def _strong_anchors(question: str) -> tuple[str, ...]:
+def strong_question_anchors(question: str) -> tuple[str, ...]:
+    """提取必须由证据直接支持的显式名称、缩写、编号或时间。"""
     anchors: list[str] = []
     for pattern in _STRONG_ANCHOR_PATTERNS:
         for match in pattern.finditer(question):

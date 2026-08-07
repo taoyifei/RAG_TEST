@@ -17,6 +17,7 @@ from deployment.industry.package_selfcheck import (
     verify_outer_archive,
     verify_release,
 )
+from rag_app.corpus_policy import CorpusPolicy
 from scripts.build_industry_bundle import (
     IndustryBuildError,
     require_industry_source,
@@ -111,7 +112,7 @@ def _create_corpus(root: Path, *, git_sha: str = _GIT_SHA) -> Path:
         manifest_documents.append(
             {
                 "actual_name": name.removesuffix("x"),
-                "canonical_name": name,
+                "canonical_name": name.removesuffix("x"),
                 "external_relationship_type_counts": {},
                 "heading_accepted_count": 0,
                 "heading_candidate_count": 0,
@@ -283,6 +284,17 @@ def test_release_and_outer_archive_are_self_contained(tmp_path: Path) -> None:
     assert {item["authority_level"] for item in policy["overrides"]} == {
         "verified"
     }
+    retrieval = json.loads((release / "config/retrieval.json").read_bytes())
+    assert retrieval["allowed_authority_levels"] == [
+        "official",
+        "verified",
+    ]
+    policy_path = release / "config/corpus-policy.json"
+    pipeline = json.loads((release / "config/pipeline.json").read_bytes())
+    assert pipeline["corpus_policy_sha256"] == CorpusPolicy.load(
+        policy_path
+    ).semantic_sha256()
+    assert pipeline["corpus_policy_sha256"] != _sha256(policy_path)
     assert not list(release.rglob("*.doc"))
     assert not list(release.rglob("*.docx"))
     assert not any(
@@ -339,6 +351,50 @@ def test_reuse_release_excludes_server_image_archives(tmp_path: Path) -> None:
     assert outer.outer_archive.name.startswith(
         "rag-industry-first-deploy-reuse-images-"
     )
+
+
+def test_release_rejects_pipeline_corpus_policy_mismatch(
+    tmp_path: Path,
+) -> None:
+    release = _assemble_reuse(tmp_path, "policy-mismatch")
+    pipeline_path = release / "config/pipeline.json"
+    pipeline = json.loads(pipeline_path.read_bytes())
+    pipeline["corpus_policy_sha256"] = "0" * 64
+    pipeline_path.write_bytes(_canonical_json(pipeline))
+
+    manifest_path = release / "RELEASE_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["config_sha256"]["pipeline.json"] = _sha256(pipeline_path)
+    manifest_path.write_bytes(_canonical_json(manifest))
+    _refresh_release_integrity(release)
+
+    with pytest.raises(
+        PackageSelfcheckError,
+        match="pipeline corpus policy SHA256",
+    ):
+        verify_release(release)
+
+
+def test_release_rejects_unqueryable_corpus_authority(
+    tmp_path: Path,
+) -> None:
+    release = _assemble_reuse(tmp_path, "authority-mismatch")
+    retrieval_path = release / "config/retrieval.json"
+    retrieval = json.loads(retrieval_path.read_bytes())
+    retrieval["allowed_authority_levels"] = ["official"]
+    retrieval_path.write_bytes(_canonical_json(retrieval))
+
+    manifest_path = release / "RELEASE_MANIFEST.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["config_sha256"]["retrieval.json"] = _sha256(retrieval_path)
+    manifest_path.write_bytes(_canonical_json(manifest))
+    _refresh_release_integrity(release)
+
+    with pytest.raises(
+        PackageSelfcheckError,
+        match="corpus policy 元数据被 retrieval 全量过滤",
+    ):
+        verify_release(release)
 
 
 def test_release_build_is_reproducible(tmp_path: Path) -> None:
@@ -580,3 +636,37 @@ def test_source_gate_rejects_wrong_branch_or_dirty_tree(
     )
     with pytest.raises(IndustryBuildError, match=message):
         require_industry_source(_repository_root())
+
+
+def test_industry_smoke_uses_source_specific_positive_questions() -> None:
+    smoke_path = _repository_root() / "evaluation" / "industry" / "smoke.jsonl"
+    rows = {
+        row["id"]: row
+        for row in (
+            json.loads(line)
+            for line in smoke_path.read_text(encoding="utf-8").splitlines()
+        )
+    }
+
+    assert rows["industry-smoke-005"]["question"] == (
+        "GM-06《产品质量检验管理制度》有哪些要求？"
+    )
+    assert rows["industry-smoke-008"]["question"] == (
+        "GM-03《质量管理制度》有哪些要求？"
+    )
+    assert rows["industry-smoke-012"]["question"] == (
+        "《岗位职责规定》中质量检验由谁负责？"
+    )
+    assert rows["industry-smoke-012"]["expected_source_patterns"] == [
+        "GM-02"
+    ]
+    assert rows["industry-smoke-016"]["question"] == (
+        "GM-07《技术文件管理规定》和 GM-09《仓库管理制度》"
+        "在归档保存与物资贮存搬运方面有什么不同？"
+    )
+    assert rows["industry-smoke-019"]["question"] == (
+        "《产品开发全流程》有哪些阶段？"
+    )
+    assert rows["industry-smoke-020"]["question"] == (
+        "《需求快验流程》中哪些环节可以灵活处理？"
+    )

@@ -12,6 +12,9 @@ env_file="$(realpath "$1")"
 compose_file="$(industry_compose_file "${env_file}")"
 release_dir="$(dirname "${compose_file}")"
 require_release_directory "${release_dir}"
+require_release_directory "${script_dir}"
+runtime_check="${script_dir}/runtime_check.py"
+expected_corpus="${script_dir}/validation/expected-corpus.json"
 port="$(exact_env_value "${env_file}" RAG_PORT)"
 base_url="http://127.0.0.1:${port}"
 wait_industry_http "${base_url}/live" 30 \
@@ -27,6 +30,16 @@ import sys
 print(json.loads(pathlib.Path(sys.argv[1]).read_bytes())["corpus"]["sha256"])
 PY
 )"
+script_corpus_sha="$(python3 - "${script_dir}/RELEASE_MANIFEST.json" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.loads(pathlib.Path(sys.argv[1]).read_bytes())["corpus"]["sha256"])
+PY
+)"
+[[ "${script_corpus_sha}" == "${corpus_sha}" ]] \
+  || industry_fail "INDEX_RESUME_CORPUS_MISMATCH"
 compose=(
   docker compose
   -p rag-industry
@@ -36,7 +49,7 @@ compose=(
 backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
 mkdir -p -- "${backup_path}"
 export RAG_RUNTIME_CHECK_TOKEN="${admin_token}"
-job_id="$(python3 "${release_dir}/runtime_check.py" create-job \
+job_id="$(python3 "${runtime_check}" create-job \
   "${base_url}" "industry-full-${revision}-${corpus_sha:0:16}")" \
   || industry_fail "FULL_INDEX_JOB_CREATE_FAILED"
 unset admin_token
@@ -44,29 +57,54 @@ printf 'job_id=%s\n' "${job_id}"
 [[ "${job_id}" =~ ^[A-Za-z0-9_-]+$ ]] \
   || industry_fail "INDEX_JOB_ID_UNSAFE"
 snapshot_name="manifest-before-${job_id}.sqlite3"
-capture_report="$("${compose[@]}" --profile index run --rm --no-deps \
-  --user 0:0 \
-  --entrypoint python \
-  --env "RAG_ROLLBACK_OWNER_UID=$(id -u)" \
-  --env "RAG_ROLLBACK_OWNER_GID=$(id -g)" \
-  --volume "${release_dir}/runtime_check.py:/runtime_check.py:ro" \
-  --volume "${backup_path}:/backup" \
-  rag-industry-worker \
-  /runtime_check.py capture-index-rollback "/backup/${snapshot_name}")" \
-  || industry_fail "INDEX_ROLLBACK_CAPTURE_FAILED"
+snapshot_path="${backup_path}/${snapshot_name}"
+rollback_runtime=(
+  --user 0:0
+  --cap-add DAC_OVERRIDE
+  --cap-add CHOWN
+  --entrypoint python
+  --volume "${runtime_check}:/runtime_check.py:ro"
+  --volume "${backup_path}:/backup"
+)
+job_state="$(python3 "${runtime_check}" job-state \
+  "${base_url}" "${job_id}")" \
+  || industry_fail "INDEX_JOB_STATE_INVALID"
+if [[ -e "${snapshot_path}" ]]; then
+  capture_report="$("${compose[@]}" --profile index run --rm --no-deps \
+    "${rollback_runtime[@]}" \
+    rag-industry-worker \
+    /runtime_check.py describe-index-rollback \
+    "/backup/${snapshot_name}")" \
+    || industry_fail "INDEX_ROLLBACK_SNAPSHOT_INVALID"
+elif [[ "${job_state}" == "pending" ]]; then
+  capture_report="$("${compose[@]}" --profile index run --rm --no-deps \
+    "${rollback_runtime[@]}" \
+    --env "RAG_ROLLBACK_OWNER_UID=$(id -u)" \
+    --env "RAG_ROLLBACK_OWNER_GID=$(id -g)" \
+    rag-industry-worker \
+    /runtime_check.py capture-index-rollback "/backup/${snapshot_name}")" \
+    || industry_fail "INDEX_ROLLBACK_CAPTURE_FAILED"
+else
+  industry_fail "INDEX_ROLLBACK_SNAPSHOT_MISSING"
+fi
 
-"${compose[@]}" --profile index run --rm --no-deps \
-  rag-industry-worker worker --once \
-  || industry_fail "INDUSTRY_WORKER_ONCE_FAILED"
-job_report="$(python3 "${release_dir}/runtime_check.py" wait-job \
+if [[ "${job_state}" == "pending" ]]; then
+  "${compose[@]}" --profile index run --rm --no-deps \
+    rag-industry-worker worker --once \
+    || industry_fail "INDUSTRY_WORKER_ONCE_FAILED"
+elif [[ "${job_state}" != "succeeded" ]]; then
+  industry_fail "INDEX_JOB_NOT_RESUMABLE: ${job_state}"
+fi
+job_report="$(python3 "${runtime_check}" wait-job \
   "${base_url}" "${job_id}")" \
   || industry_fail "FULL_INDEX_JOB_FAILED"
 unset RAG_RUNTIME_CHECK_TOKEN
 
 index_report="$("${compose[@]}" --profile index run --rm --no-deps \
+  --user 0:0 \
   --entrypoint python \
-  --volume "${release_dir}/runtime_check.py:/runtime_check.py:ro" \
-  --volume "${release_dir}/validation/expected-corpus.json:/expected-corpus.json:ro" \
+  --volume "${runtime_check}:/runtime_check.py:ro" \
+  --volume "${expected_corpus}:/expected-corpus.json:ro" \
   rag-industry-worker \
   /runtime_check.py index-state /expected-corpus.json)" \
   || industry_fail "INDUSTRY_INDEX_STATE_INVALID"

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 _FULL_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_OWNER_ONLY_MODE = 0o600
 _ROLLBACK_FIELDS = {
     "alias",
     "current_revision",
@@ -59,6 +60,37 @@ def create_full_job(base_url: str, idempotency_key: str, token: str) -> str:
     if not isinstance(job_id, str) or not job_id:
         raise RuntimeCheckError("创建索引任务未返回 job_id。")
     return job_id
+
+
+def get_job_state(base_url: str, job_id: str, token: str) -> str:
+    """读取索引任务当前状态而不等待。
+
+    Args:
+        base_url: Industry app 本机 URL。
+        job_id: 已创建的 job ID。
+        token: Industry admin token。
+
+    Returns:
+        pending、running、succeeded 或 failed。
+
+    Raises:
+        RuntimeCheckError: HTTP、任务身份或状态无效。
+
+    """
+    payload = _request_json(
+        f"{base_url.rstrip('/')}/api/index/jobs/{job_id}",
+        token=token,
+        method="GET",
+    )
+    state = payload.get("state")
+    if payload.get("job_id") != job_id or state not in {
+        "pending",
+        "running",
+        "succeeded",
+        "failed",
+    }:
+        raise RuntimeCheckError("索引任务身份或状态无效。")
+    return str(state)
 
 
 def wait_job(base_url: str, job_id: str, token: str) -> dict[str, object]:
@@ -225,6 +257,50 @@ def capture_index_rollback(snapshot_path: Path) -> dict[str, object]:
         "alias": alias,
         "manifest_snapshot": snapshot_path.name,
         "previous_collection": expected_target,
+        "previous_manifest_sha256": (
+            None if active is None else active.manifest_sha256
+        ),
+        "previous_pipeline_fingerprint": (
+            None if active is None else active.manifest.pipeline_fingerprint
+        ),
+        "schema_version": "1",
+    }
+
+
+def describe_index_rollback(snapshot_path: Path) -> dict[str, object]:
+    """从已完成的 manifest 快照恢复回滚描述。
+
+    用于 worker 已成功、但发布 index report 前中断的确定性续跑。
+
+    Args:
+        snapshot_path: 已存在的 owner-only manifest SQLite 快照。
+
+    Returns:
+        不含当前 revision 的回滚描述。
+
+    Raises:
+        RuntimeCheckError: 快照路径、权限或 SQLite 内容无效。
+
+    """
+    from rag_app.manifest import ReadOnlyManifestRepository  # noqa: PLC0415
+
+    if (
+        not snapshot_path.is_absolute()
+        or snapshot_path.name
+        != snapshot_path.as_posix().rsplit("/", maxsplit=1)[-1]
+        or snapshot_path.suffix != ".sqlite3"
+        or not snapshot_path.is_file()
+        or snapshot_path.is_symlink()
+        or snapshot_path.stat().st_mode & 0o777 != _OWNER_ONLY_MODE
+    ):
+        raise RuntimeCheckError("manifest rollback snapshot 无效。")
+    active = ReadOnlyManifestRepository(snapshot_path).get_active()
+    return {
+        "alias": "rag-industry-active",
+        "manifest_snapshot": snapshot_path.name,
+        "previous_collection": (
+            None if active is None else active.manifest.collection_name
+        ),
         "previous_manifest_sha256": (
             None if active is None else active.manifest_sha256
         ),
@@ -654,10 +730,15 @@ def _arguments() -> argparse.Namespace:
     wait = commands.add_parser("wait-job")
     wait.add_argument("base_url")
     wait.add_argument("job_id")
+    job_state = commands.add_parser("job-state")
+    job_state.add_argument("base_url")
+    job_state.add_argument("job_id")
     state = commands.add_parser("index-state")
     state.add_argument("expected", type=Path)
     capture = commands.add_parser("capture-index-rollback")
     capture.add_argument("snapshot", type=Path)
+    describe = commands.add_parser("describe-index-rollback")
+    describe.add_argument("snapshot", type=Path)
     restore = commands.add_parser("restore-index-rollback")
     restore.add_argument("descriptor", type=Path)
     smoke = commands.add_parser("smoke")
@@ -695,6 +776,14 @@ def main() -> int:
                 sort_keys=True,
             )
         )
+    elif arguments.command == "job-state":
+        print(
+            get_job_state(
+                arguments.base_url,
+                arguments.job_id,
+                runtime_credential,
+            )
+        )
     elif arguments.command == "index-state":
         print(
             json.dumps(
@@ -707,6 +796,14 @@ def main() -> int:
         print(
             json.dumps(
                 capture_index_rollback(arguments.snapshot),
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+    elif arguments.command == "describe-index-rollback":
+        print(
+            json.dumps(
+                describe_index_rollback(arguments.snapshot),
                 separators=(",", ":"),
                 sort_keys=True,
             )

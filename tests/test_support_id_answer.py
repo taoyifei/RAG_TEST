@@ -229,6 +229,160 @@ def test_missing_strong_anchors_return_friendly_not_found_without_llm() -> None:
     assert calls == 0
 
 
+def test_missing_uppercase_subject_returns_not_found_without_llm() -> None:
+    calls = 0
+    bundle = _bundle(
+        _ranked(
+            "chunk-1",
+            "品质部经理负责质量管理体系的建立、实施和保持。",
+            score=0.003,
+            file_path="GM-02 岗位职责规定.docx",
+        )
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise AssertionError("缺少 OPC 证据时不得调用 LLM。")
+
+    result = _generator(handler).answer(
+        "OPC owner 在项目启动后要做什么？",
+        bundle,
+        rerank_scores=(0.003, 0.0006),
+    )
+
+    assert result.status is AnswerStatus.REFUSED
+    assert result.answer_mode is AnswerMode.NOT_FOUND
+    assert result.model_calls == 0
+    assert result.trace["covered_anchor_count"] == 0
+    assert calls == 0
+
+
+def test_named_subject_is_allowed_when_selected_evidence_supports_it() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-opc",
+            "OPC owner 在项目启动后应确认项目范围。",
+            file_path="OPC 项目管理规范.docx",
+        )
+    )
+
+    result = _generator(
+        lambda _: _response(
+            {
+                "claims": [
+                    {
+                        "text": "OPC owner 应确认项目范围。",
+                        "support_ids": ["E1:S1"],
+                    }
+                ]
+            }
+        )
+    ).answer(
+        "OPC owner 在项目启动后要做什么？",
+        bundle,
+        rerank_scores=(1.0,),
+    )
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.model_calls == 1
+
+
+def test_unsupported_quoted_process_cannot_use_extractive_fallback() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-1",
+            "来料急需时，经批准后可以例外放行。",
+            score=1.0,
+            file_path="GM-06 产品质量检验管理制度.docx",
+        )
+    )
+    responses = iter(
+        (
+            {
+                "claims": [
+                    {
+                        "text": "《需求快验流程》允许对部分环节灵活处理。",
+                        "support_ids": ["E1:S1"],
+                    }
+                ]
+            },
+            {"claims": []},
+        )
+    )
+
+    result = _generator(lambda _: _response(next(responses))).answer(
+        "《需求快验流程》中哪些环节可以灵活处理？",
+        bundle,
+        rerank_scores=(1.0,),
+    )
+
+    assert result.status is AnswerStatus.REFUSED
+    assert result.answer_mode is AnswerMode.INTERNAL_VALIDATION_ERROR
+    assert result.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT
+    assert result.model_calls == 2
+    assert result.trace["first_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+    assert result.trace.get("extractive_fallback") is None
+
+
+def test_named_source_fallback_filters_before_limit() -> None:
+    bundle = _bundle(
+        *(
+            _ranked(
+                f"chunk-generic-{index}",
+                f"通用质量管理要求 {index}。",
+                rank=index,
+                score=1.0 - index / 100,
+                file_path=f"GM-0{index} 通用质量制度.docx",
+                source_id=f"source-generic-{index}",
+                neighbor_group_id=f"generic-{index}",
+            )
+            for index in range(1, 5)
+        ),
+        _ranked(
+            "chunk-gm06",
+            "检验人员应按规定填写检验记录。",
+            rank=5,
+            score=0.95,
+            file_path="GM-06 产品质量检验管理制度.docx",
+            source_id="source-gm06",
+            neighbor_group_id="gm06",
+        ),
+    )
+    invalid = {
+        "claims": [
+            {
+                "text": "通用质量管理要求。",
+                "support_ids": ["E1:S1"],
+            }
+        ]
+    }
+
+    result = _generator(lambda _: _response(invalid)).answer(
+        "GM-06《产品质量检验管理制度》有哪些要求？",
+        bundle,
+        rerank_scores=(0.99, 0.98, 0.97, 0.96, 0.95),
+    )
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.model_calls == 2
+    assert result.trace["first_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+    assert result.trace["repair_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+    assert result.trace["extractive_fallback"] is True
+    assert len(result.claims) == 1
+    assert result.claims[0].text == "检验人员应按规定填写检验记录。"
+    assert result.claims[0].supports[0].locator.startswith(
+        "GM-06 产品质量检验管理制度.docx"
+    )
+
+
 def test_deliverables_preserve_source_and_actor_relationships() -> None:
     bundle = _bundle(
         _ranked(

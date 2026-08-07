@@ -33,6 +33,12 @@ _AT_FDCWD = -100
 _RENAME_NOREPLACE = 1
 _HASH_BLOCK_BYTES = 1024 * 1024
 _EXPECTED_ACTIVE_COUNT = 10
+_CORPUS_METADATA_FIELDS = {
+    "authority_level",
+    "document_status",
+    "effective_from",
+    "effective_to",
+}
 _FULL_RELEASE_KIND = "industry-first-deploy"
 _REUSE_RELEASE_KIND = "industry-first-deploy-reuse-images"
 _CONTRACT_IDENTITIES: dict[str, tuple[str, set[str]]] = {
@@ -373,6 +379,100 @@ def _verify_release_manifest(
             "RELEASE_MANIFEST payload exact set 不一致。"
         )
     _verify_image_identities(root, manifest["images"], manifest["release_kind"])
+    _verify_config_identity(root, manifest, contract)
+
+
+def _verify_config_identity(
+    root: Path,
+    manifest: dict[str, Any],
+    contract: dict[str, Any],
+) -> None:
+    config_paths = [
+        _safe_relative(value) for value in contract["required_config"]
+    ]
+    actual = {
+        relative.name: _sha256(root.joinpath(*relative.parts))
+        for relative in config_paths
+    }
+    if manifest.get("config_sha256") != actual:
+        raise PackageSelfcheckError(
+            "RELEASE_MANIFEST config SHA256 不一致。"
+        )
+    pipeline = _load_object(root / "config/pipeline.json")
+    policy_sha256 = _corpus_policy_semantic_sha256(
+        root / "config/corpus-policy.json"
+    )
+    if pipeline.get("corpus_policy_sha256") != policy_sha256:
+        raise PackageSelfcheckError(
+            "pipeline corpus policy SHA256 不一致。"
+        )
+    _verify_metadata_compatibility(root)
+
+
+def _verify_metadata_compatibility(root: Path) -> None:
+    policy = _load_object(root / "config/corpus-policy.json")
+    retrieval = _load_object(root / "config/retrieval.json")
+    overrides = policy.get("overrides")
+    allowed_statuses = retrieval.get("allowed_statuses")
+    allowed_authorities = retrieval.get("allowed_authority_levels")
+    if (
+        not isinstance(overrides, list)
+        or len(overrides) != _EXPECTED_ACTIVE_COUNT
+        or not isinstance(allowed_statuses, list)
+        or not allowed_statuses
+        or not all(isinstance(item, str) for item in allowed_statuses)
+        or not isinstance(allowed_authorities, list)
+        or not allowed_authorities
+        or not all(isinstance(item, str) for item in allowed_authorities)
+    ):
+        raise PackageSelfcheckError("corpus/retrieval 元数据配置无效。")
+    incompatible = [
+        item
+        for item in overrides
+        if not isinstance(item, dict)
+        or item.get("document_status") not in allowed_statuses
+        or item.get("authority_level") not in allowed_authorities
+    ]
+    if len(incompatible) == len(overrides):
+        raise PackageSelfcheckError(
+            "corpus policy 元数据被 retrieval 全量过滤。"
+        )
+    if incompatible:
+        raise PackageSelfcheckError(
+            "corpus policy 元数据被 retrieval 部分过滤。"
+        )
+
+
+def _corpus_policy_semantic_sha256(path: Path) -> str:
+    policy = _load_object(path)
+    defaults = policy.get("defaults")
+    overrides = policy.get("overrides")
+    if (
+        set(policy) != {"defaults", "overrides", "schema_version"}
+        or policy.get("schema_version") != "1"
+        or not isinstance(defaults, dict)
+        or set(defaults) != _CORPUS_METADATA_FIELDS
+        or not isinstance(overrides, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != _CORPUS_METADATA_FIELDS | {"path"}
+            or not isinstance(item.get("path"), str)
+            for item in overrides
+        )
+    ):
+        raise PackageSelfcheckError("corpus policy schema 无效。")
+    semantic = {
+        "defaults": defaults,
+        "overrides": sorted(overrides, key=lambda item: item["path"]),
+        "schema_version": "1",
+    }
+    canonical = json.dumps(
+        semantic,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _verify_image_identities(

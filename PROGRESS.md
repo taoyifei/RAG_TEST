@@ -97,6 +97,29 @@
 - [x] 用户授权后只为本地 converter 下载上述固定 Ubuntu package；没有 pull 未固定
   runtime image，没有安装 WSL package。仍未访问服务器、未 SSH/SCP、未上传、未部署、
   未 push，也未修改 `main`。
+- [x] 2026-08-07 首次现场启动暴露出 Industry 生成的 `corpus-policy.json` 已变化、
+  但 `pipeline.json` 仍绑定基础配置旧语义 SHA256，导致 `rag-industry-app` 在启动
+  预检中 fail closed；失败 release 未执行 full index。bundle builder v2 现在使用
+  运行时 `CorpusPolicy.semantic_sha256()` 重写绑定，package selfcheck 同时独立核对
+  required config 的 raw SHA256 与 pipeline/policy 语义绑定。负向测试即使同步刷新
+  manifest 和包内完整性哈希，错误绑定仍会被拒绝。
+- [x] 修正后的 `b6274a1458c3-87860c8b7496` 已在 `.60` 完成 package-only 校验、
+  full preflight、install 与 deploy；app、OCR、Qdrant 均 healthy，`/live` 成功，
+  `/ready` 仅因尚无 active index 为 false。首次 `run-index.sh` 在 worker 消费 job 前
+  的 manifest 回滚快照阶段失败：一次性容器显式使用 UID 0，但继承 Compose 的
+  `cap_drop: ALL`，无法完整访问 UID 10001 所有的 SQLite/WAL。长期服务安全配置不变；
+  bundle builder v3 只给 capture/restore 两个一次性容器增加最小
+  `DAC_OVERRIDE` 与 `CHOWN`。本地以同样的 read-only rootfs、cap-drop、UID 和 bind
+  mount 条件实际完成 SQLite online backup，并核验产物 owner 与内容。
+- [x] v3 权限修复在现场成功续领原 job
+  `job_816f935265fe4c6291e7ef9227be0636`；worker 已完成 10 个 source，发布 collection
+  `rag-docx-d2497bc2813f-816f935265fe`，job 状态为 `succeeded`。随后 index-state
+  验收因 root 解包为 0600 的 `runtime_check.py` 被默认 UID 10001 一次性容器拒读而
+  停止；索引本体不得重跑。builder v5 对这类 root-owned 验收脚本显式使用 UID 0，
+  并支持从已存在的 owner-only manifest 快照重建回滚描述、识别 succeeded job、
+  跳过 worker 后继续生成 index report，防止中断续跑重复索引；恢复脚本固定使用自身
+  release 内的 helper/validation，并要求当前 env release 与恢复 release 的 corpus
+  SHA256 完全一致，避免跨 corpus 误恢复。
 - [x] 真实 GM-01～GM-10 已在受限、断网 converter 中完成两次独立转换；两次均为
   10 active、0 reference、12 个发布文件且逐文件 SHA exact set 无差异。最终提交使用
   固定 source-date epoch `1786064751`，corpus revision 为 `87860c8b7496b4df`，
@@ -187,6 +210,11 @@
   files）、compileall、simple Compose config 和 `git diff --check` 均通过。索引
   fingerprint 仍为
   `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+- [x] Industry 现场哈希绑定修复后重跑：自由问题 answer/evidence/streaming 专项
+  `57 passed`，Industry bundle/deployment/corpus 专项 `55 passed`，不依赖真实
+  Qdrant 的 Trace export 专项 `29 passed, 1 warning`；Ruff、strict mypy（81 个
+  source files）、compileall 和 `git diff --check` 均通过。真实 Qdrant Trace
+  集成组仍仅因本地 `127.0.0.1:6333` 返回 502 阻塞，未把它记为通过。
 
 已生成本地 app-only 包。将下方 `REVISION` 替换为
 `artifacts/app-update/` 下最终交付目录名；按以下链路传输并只更新 `rag-app`（命令
@@ -5308,9 +5336,12 @@ worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。
 - [x] 复用身份固定为服务器现有 OCR
   `docx-rag-ocr:d6e38d57aab1-smoke-20260804011642-emf-hotfix`、image ID
   `sha256:c390a5de6100f2ea0ad4c0fab94ac656adfa73862c45b4374a21dcad3c38b372`、
-  revision `d6e38d57aab1fd857283a41e3233f7f97d3b588f`，以及当前源码固定的
-  `qdrant/qdrant:v1.18.3`、image ID
-  `sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286`。
+  revision `d6e38d57aab1fd857283a41e3233f7f97d3b588f`，以及 `.60` 现场实测的
+  `qdrant/qdrant:v1.18.3`、`linux/amd64`、image ID
+  `sha256:ecc81d662bb9bb734db879b94461eb44be38604fc259491d478ad7e673238a0d`。
+  初版轻量包误传入本地同 tag 的 `sha256:0bd98fa…`，服务器预检按合同以
+  `SERVER_IMAGE_IDENTITY_MISMATCH` 正确停止；校正包必须使用上述服务器不可变 ID，
+  不允许修改 manifest 或重新 tag 绕过。
   `preflight.sh` 与 `install.sh` 都会核对 tag、完整 ID、`linux/amd64` 和可用
   revision；不一致即停止，禁止重新 tag 绕过。
 - [x] 原完整首次部署合同保持可校验；轻量合同使用独立 package revision 和 exact
@@ -5323,8 +5354,9 @@ worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。
   更新，也不能省略 `run-index.sh`。整个流程不得停止、重建或修改 `rag-simple`。
 
 本地构建完成后，只上传 `artifacts/industry-upload` 中外层 `.tar.gz` 与同名
-`.sha256`。包内 `SERVER_UPLOAD_COMMANDS.txt` 已固定 `user4a`、`.54` 和 `.60`；
-每一跳均先执行 `sha256sum -c`。在 `.60` 解包后，先运行：
+`.sha256`。包内 `SERVER_UPLOAD_COMMANDS.txt` 已固定 `user4a`、`.54`、`.60` 和
+两台服务器统一的 `/data/tyf/RAG/industry-transfer` 中转目录；每一跳均先执行
+`sha256sum -c`。在 `.60` 解包后，先运行：
 
 ```bash
 bash preflight.sh --package-only
@@ -5352,3 +5384,87 @@ bash deploy.sh \
 bash run-index.sh /data/tyf/RAG-industry/rag-industry.env
 bash verify.sh /data/tyf/RAG-industry/rag-industry.env
 ```
+
+## 2026-08-07 Industry 正向 smoke 零候选诊断
+
+- [x] `.60` 已完成隔离式 Industry 首次索引；活动 job
+  `job_816f935265fe4c6291e7ef9227be0636` 为 `succeeded`，10 个 source、活动
+  collection 与 alias 均已发布，`/ready` 为 true。builder v5 已从成功 job 和
+  manifest 快照补齐 full-index report，禁止再次运行 worker 或重新索引。
+- [x] 正向问题“计量器具如何管理？”的 SAFE Trace
+  `485dfd1854874a58a6ebf0cea5f30be6` 与
+  `2f3421aedd3f4f6a8cd4caff4c6e3a7e` 均显示 Dense/BM25/RRF 候选为 0，最终
+  `NO_EVIDENCE`；不是模型输出、claim 校验或 cache 故障。
+- [x] 根因是 Industry release 把 10 份 active 文档全部标为
+  `authority_level=verified`，却原样复制了只允许 `official` 的 training
+  retrieval 配置，Qdrant 元数据预过滤因此排除全部 point。
+- [x] builder v6 只把 Industry 专用 `allowed_authority_levels` 固定为
+  `official/verified`，并在离线 package selfcheck 中拒绝 active corpus 元数据被
+  retrieval 全量或部分过滤。没有修改 Parser、chunking、Dense/BM25、RRF、
+  reranker、neighbor 或任何阈值；pipeline/index fingerprint 不变，无需重新索引。
+- [x] 新增回归先稳定复现两项失败，修复后 Industry bundle/deployment/corpus 专项为
+  `60 passed in 5.97s`，变更文件 Ruff 退出 0。
+- [x] builder v6 已在 `.60` 只切换 release/app/config，复用现有 OCR、Qdrant、
+  manifest 和活动 collection；部署后 `/ready=true`，未运行 `run-index.sh`。后续
+  smoke 引用与培训概念隔离诊断见下一节。
+
+## 2026-08-07 Industry 正向来源与培训概念隔离修复
+
+- [x] builder v6 已由用户部署到 `.60`，`rag-industry-app`、OCR、Qdrant 均健康，
+  `/ready=true`，活动 job、collection、alias 与 index fingerprint 未变化；现场没有
+  再次运行 `run-index.sh`。
+- [x] 20 问诊断证明 001～004、006～007、009～011、013～015 均能命中预期来源；
+  005/008/012 的原问题可由多份制度合理回答，却把单一或多重文件名当成强制 citation，
+  属于 smoke 问题与验收约束不一致。016 的最终六条证据未包含 GM-09，原泛化比较问法
+  不足以稳定召回两个指定对象。现将四问改为带制度编号或名称的来源特定问题；012 只
+  验收真正回答 ACTOR 的 GM-02，016 仍必须同时覆盖 GM-07 与 GM-09。
+- [x] 005 的 Trace `20a2e1da7bfa410091819f12793ffdda` 显示 GM-06 已是 rerank
+  rank 4、score 0.957 并进入最终证据，模型选择 GM-03/GM-02 引用；因此本轮未修改
+  Dense/BM25、RRF、reranker、证据上限或任何阈值。
+- [x] 018～020 的完整回答表明模型会把通用岗位、质量制度和例外放行规则改名为
+  `OPC owner`、`产品开发全流程`、`需求快验流程`。新增确定性门禁：问题中的大写
+  缩写、编号、年份、书名号或引号主体，必须在每条 claim 所选 evidence unit 的正文
+  或来源标签中直接出现；否则记录 `UNSUPPORTED_QUESTION_ANCHOR` 并丢弃，且原文
+  fallback 也只能使用直接支持该主体的 unit。流式路径在发布前执行同一门禁。
+- [x] Prompt revision 更新为
+  `sha256:302ce25874ecbf3e4cb5552f9c174c3b2a3230648a6749903e214632350135f0`，
+  pipeline asset SHA256 更新为
+  `bcfcb38b9b6e218f66d467c37d8e7be75bac7f30989bf87f140e4a21708047a2`。
+  prompt 不参与 `PipelineSpec.index_fingerprint()`；本地 base index fingerprint 前后
+  均为 `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+- [x] 5 个新增红测先分别复现 OPC 低分误答、命名流程 fallback、流式提前发布与 smoke
+  问题漂移，修复后全部通过。不依赖本机 Qdrant 的专项为 `133 passed, 1 warning`
+  （warning 为既有 Starlette 弃用提示），变更文件 Ruff 与 asset/prompt selfcheck
+  通过。真实 Qdrant export 的 17 项仅因本机 `127.0.0.1:6333` 返回 502 失败，未据此
+  修改索引或 Trace export。
+- [x] `Industry` 已整理为 `origin/Industry` 之上的单一本地提交，工作树 clean，
+  分支只剩 `ahead 1`，可正常 fast-forward push；本轮仍不 push。最终 SHA 已完成
+  corpus manifest 重新绑定和复用镜像包构建，文档内容、corpus SHA 与 index
+  fingerprint 均未变化；sidecar、package preflight、package verify 全部通过。
+- [x] 用户已在 `.60` 无重索引部署 `70faf374acaa-87860c8b7496`；Industry app、
+  OCR、Qdrant 均健康，`/live` 与 `/ready` 成功，活动索引继续 ready。20 问首次
+  verify 在 005 停止；诊断 Trace `a8641c02ab0f442cb4a1c72940b65d3a`
+  显示 answerability=`SUPPORTED`、top score=0.9961，首次与唯一修复各生成 4 条
+  claim，但 8 条均因 `UNSUPPORTED_QUESTION_ANCHOR` 被拒，故不是检索或索引故障。
+- [x] 现场失败暴露出 extractive fallback 的真实缺口：旧实现先按正文关键词截取
+  4 条，再检查显式主体；来源标签直接支持主体但位于截断边界外的证据无法参与兜底。
+  新增红测先复现 `REFUSED/VALIDATION_FAILED`，随后只在显式主体存在时先按
+  `source_label/text` 排除无关 unit，再沿用既有匹配和数量限制；返回内容仍是本次
+  evidence unit 的原文和 locator，没有制度编号或固定答案生产特判。原有缺失主体、
+  命名流程误答和流式提前发布拒绝测试保持通过，相关专项为
+  `87 passed, 1 warning`。
+- [x] answer request revision 提升为 v8，使行为变化进入既有 cache key；缓存算法、
+  key 结构和 TTL 未修改。联合 prompt revision 为
+  `sha256:2da3259a7d6d22be5c37e6de509c0301965c36ed4667be19026333092c80d6e8`，
+  pipeline asset SHA256 为
+  `db29fce59b956952cc448b5a67ac4fec50381f707bfff8aa04d5fa4915e7ea36`；
+  asset-selfcheck 验证 13 个文件，index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+- [x] 已从唯一 clean Industry commit 重建 Industry 复用镜像轻量包和 training
+  app-only 三文件包；外层 sidecar、package preflight、package verify 与 app image
+  sidecar 均通过。最终交付目录按 clean HEAD 的 12 位短 SHA 命名，包内 app revision
+  必须与该完整 HEAD 一致；OCR/Qdrant 仍为服务器复用身份，未打入轻量包。
+- [ ] 待在 `.60` 只更新 Industry release/app/config 并复跑 20 问；禁止运行
+  `run-index.sh`。随后更新 training app，执行任务书固定六问与 app-only 验收，并按
+  当前容器、env 与 last-good 回滚指向列出旧 release/data/transfer/image 清理候选，
+  只交给用户自行删除。

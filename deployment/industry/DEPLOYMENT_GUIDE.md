@@ -94,5 +94,7 @@ state。索引发布失败会保留旧 Industry alias；失败 release、任务�
 
 最终只上传 `artifacts/industry-upload` 下的外层 `.tar.gz` 和同名 `.sha256`。按
 `SERVER_UPLOAD_COMMANDS.txt` 使用 `user4a` 先传到 `10.242.180.54`，校验后再从 .54
-传到 `10.242.180.60`；每一跳完成后都要执行 `sha256sum -c`。不要上传仓库、原始
+传到 `10.242.180.60`；两台服务器统一使用
+`/data/tyf/RAG/industry-transfer` 作为中转目录，每一跳完成后都要执行
+`sha256sum -c`。不要上传仓库、原始
 `.doc`、私有 env、服务器密码或本地 LibreOffice 转换器镜像。

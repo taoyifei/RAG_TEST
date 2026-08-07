@@ -58,6 +58,7 @@ compose=(
   -f "${compose_file}"
 )
 index_report="$("${compose[@]}" --profile index run --rm --no-deps \
+  --user 0:0 \
   --entrypoint python \
   --volume "${release_dir}/runtime_check.py:/runtime_check.py:ro" \
   --volume "${release_dir}/validation/expected-corpus.json:/expected-corpus.json:ro" \

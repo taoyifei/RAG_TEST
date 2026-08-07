@@ -1,21 +1,23 @@
 # Local WSL: verify, then transfer only the archive and its sidecar to .54.
 archive=REPLACE_ARCHIVE_PREFIX-REPLACE_RELEASE_ID.tar.gz
 sha256sum -c "${archive}.sha256"
-ssh user4a@10.242.180.54 'mkdir -p ~/rag-industry-transfer'
+ssh -t user4a@10.242.180.54 \
+  'sudo install -d -o user4a -g "$(id -gn user4a)" /data/tyf/RAG/industry-transfer'
 rsync -av --partial --append-verify \
   "${archive}" "${archive}.sha256" \
-  user4a@10.242.180.54:~/rag-industry-transfer/
+  user4a@10.242.180.54:/data/tyf/RAG/industry-transfer/
 
 # Run on .54: verify, then transfer the same two files to .60.
 archive=REPLACE_ARCHIVE_PREFIX-REPLACE_RELEASE_ID.tar.gz
-cd ~/rag-industry-transfer
+cd /data/tyf/RAG/industry-transfer
 sha256sum -c "${archive}.sha256"
-ssh user4a@10.242.180.60 'mkdir -p ~/rag-industry-transfer'
+ssh -t user4a@10.242.180.60 \
+  'sudo install -d -o user4a -g "$(id -gn user4a)" /data/tyf/RAG/industry-transfer'
 rsync -av --partial --append-verify \
   "${archive}" "${archive}.sha256" \
-  user4a@10.242.180.60:~/rag-industry-transfer/
+  user4a@10.242.180.60:/data/tyf/RAG/industry-transfer/
 
 # Run on .60 before extraction.
 archive=REPLACE_ARCHIVE_PREFIX-REPLACE_RELEASE_ID.tar.gz
-cd ~/rag-industry-transfer
+cd /data/tyf/RAG/industry-transfer
 sha256sum -c "${archive}.sha256"

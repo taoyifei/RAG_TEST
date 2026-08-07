@@ -47,6 +47,8 @@ if [[ -n "${current_revision}" \
     || industry_fail "无法停止当前 Industry app 以恢复索引状态。"
   "${compose[@]}" --profile index run --rm --no-deps \
     --user 0:0 \
+    --cap-add DAC_OVERRIDE \
+    --cap-add CHOWN \
     --entrypoint python \
     --volume "${script_dir}/runtime_check.py:/runtime_check.py:ro" \
     --volume "${backup_path}:/backup:ro" \

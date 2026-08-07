@@ -32,9 +32,9 @@ __all__ = [
     "build_outer_upload",
 ]
 
-_BUILDER_REVISION = "industry-bundle-v1"
+_BUILDER_REVISION = "industry-bundle-v6"
 _PACKAGE_CONTRACT_REVISION = "industry-package-v1"
-_REUSE_BUILDER_REVISION = "industry-bundle-reuse-images-v1"
+_REUSE_BUILDER_REVISION = "industry-bundle-reuse-images-v6"
 _REUSE_CONTRACT_REVISION = "industry-package-reuse-images-v1"
 _FULL_RELEASE_KIND = "industry-first-deploy"
 _REUSE_RELEASE_KIND = "industry-first-deploy-reuse-images"
@@ -393,12 +393,13 @@ def _validate_corpus(
         digest = item.get("target_sha256")
         size = item.get("target_size")
         name = PurePosixPath(relative).name if isinstance(relative, str) else ""
+        source_name = name.removesuffix("x")
         if (
             not isinstance(relative, str)
             or not relative.startswith("docs/")
             or not isinstance(digest, str)
             or not isinstance(size, int)
-            or item.get("canonical_name") != name
+            or item.get("canonical_name") != source_name
             or item.get("role") != "active"
         ):
             raise IndustryReleaseError("corpus document 身份字段无效。")
@@ -499,6 +500,8 @@ def _build_config(
         raise IndustryReleaseError(
             "Industry retrieval 必须 provisional/无 soft route。"
         )
+    retrieval["allowed_authority_levels"] = ["official", "verified"]
+    _write_json(destination / "retrieval.json", retrieval)
     if router.get("mode") != "shadow":
         raise IndustryReleaseError("Industry intent router 必须保持 shadow。")
     if calibration.get("status") != "unverified":
@@ -522,9 +525,20 @@ def _build_config(
         ],
         "schema_version": "1",
     }
-    _write_json(destination / "corpus-policy.json", policy)
-    loaded_policy = CorpusPolicy.load(destination / "corpus-policy.json")
-    pipeline = load_pipeline(destination / "pipeline.json")
+    policy_path = destination / "corpus-policy.json"
+    pipeline_path = destination / "pipeline.json"
+    _write_json(policy_path, policy)
+    loaded_policy = CorpusPolicy.load(policy_path)
+    pipeline_payload = _load_object(pipeline_path)
+    if not isinstance(pipeline_payload.get("corpus_policy_sha256"), str):
+        raise IndustryReleaseError(
+            "pipeline 缺少 corpus policy SHA256 绑定。"
+        )
+    pipeline_payload["corpus_policy_sha256"] = (
+        loaded_policy.semantic_sha256()
+    )
+    _write_json(pipeline_path, pipeline_payload)
+    pipeline = load_pipeline(pipeline_path)
     retrieval_settings = RetrievalSettings.load(destination / "retrieval.json")
     identity = {
         name: _sha256(destination / name) for name in _CONFIG_FILES

@@ -309,6 +309,34 @@ def test_rollback_is_strictly_scoped_to_industry_project() -> None:
     assert "rag-qdrant " not in rollback
 
 
+@pytest.mark.parametrize(
+    "script_name",
+    ("run-index.sh", "rollback.sh"),
+)
+def test_index_rollback_one_off_has_only_required_capabilities(
+    script_name: str,
+) -> None:
+    script = (
+        _root() / f"deployment/industry/{script_name}"
+    ).read_text(encoding="utf-8")
+
+    assert "--user 0:0" in script
+    assert script.count("--cap-add DAC_OVERRIDE") == 1
+    assert script.count("--cap-add CHOWN") == 1
+    assert "--privileged" not in script
+
+
+def test_root_owned_runtime_checks_use_explicit_root_user() -> None:
+    root = _root() / "deployment/industry"
+    run_index = (root / "run-index.sh").read_text(encoding="utf-8")
+    verify = (root / "verify.sh").read_text(encoding="utf-8")
+
+    assert run_index.count("--user 0:0") >= 2
+    assert "--user 0:0" in verify
+    assert 'runtime_check="${script_dir}/runtime_check.py"' in run_index
+    assert "INDEX_RESUME_CORPUS_MISMATCH" in run_index
+
+
 def test_training_simple_deployment_is_unchanged_from_baseline() -> None:
     simple = _root() / "deployment/simple"
     actual = {
@@ -376,6 +404,7 @@ def test_index_rollback_capture_and_restore_empty_state(
     captured = runtime_check.capture_index_rollback(snapshot)
     assert captured["previous_collection"] is None
     assert snapshot.is_file()
+    assert runtime_check.describe_index_rollback(snapshot) == captured
 
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE drift(value TEXT)")
@@ -399,6 +428,37 @@ def test_index_rollback_capture_and_restore_empty_state(
             )
         }
     assert "drift" not in tables
+
+
+def test_job_state_is_validated_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def request_json(*args: object, **kwargs: object) -> dict[str, object]:
+        del args, kwargs
+        return {"job_id": "job_expected", "state": "succeeded"}
+
+    monkeypatch.setattr(runtime_check, "_request_json", request_json)
+
+    assert runtime_check.get_job_state(
+        "http://127.0.0.1:8188",
+        "job_expected",
+        "token",
+    ) == "succeeded"
+
+    def invalid_request(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        del args, kwargs
+        return {"job_id": "job_other", "state": "unknown"}
+
+    monkeypatch.setattr(runtime_check, "_request_json", invalid_request)
+    with pytest.raises(runtime_check.RuntimeCheckError):
+        runtime_check.get_job_state(
+            "http://127.0.0.1:8188",
+            "job_expected",
+            "token",
+        )
 
 
 def test_preflight_allows_only_owned_industry_app_on_busy_port() -> None:
@@ -432,6 +492,17 @@ def test_reuse_package_verifies_existing_images_before_install() -> None:
     assert 'image["delivery"] == "server-existing"' in preflight
     assert "case \"${delivery}\"" in install
     assert "server-existing)" in install
+
+
+def test_upload_commands_use_shared_server_transfer_directory() -> None:
+    commands = (
+        _root() / "deployment/industry/SERVER_UPLOAD_COMMANDS.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "~/rag-industry-transfer" not in commands
+    assert "/data/tyf/RAG/industry-transfer" in commands
+    assert "user4a@10.242.180.54" in commands
+    assert "user4a@10.242.180.60" in commands
 
 
 def test_rollback_restores_only_industry_alias_and_manifest_state() -> None:

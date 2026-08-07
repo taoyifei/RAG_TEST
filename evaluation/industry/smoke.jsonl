@@ -2,19 +2,19 @@
 {"id":"industry-smoke-002","question":"仓库管理有哪些要求？","expected_source_patterns":["GM-09"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"仓库管理列表"}
 {"id":"industry-smoke-003","question":"安全生产工作怎么做？","expected_source_patterns":["GM-08"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"安全生产流程"}
 {"id":"industry-smoke-004","question":"技术文件如何管理？","expected_source_patterns":["GM-07"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"技术文件流程"}
-{"id":"industry-smoke-005","question":"产品质量检验有哪些要求？","expected_source_patterns":["GM-06"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"质量检验列表"}
+{"id":"industry-smoke-005","question":"GM-06《产品质量检验管理制度》有哪些要求？","expected_source_patterns":["GM-06"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"质量检验列表"}
 {"id":"industry-smoke-006","question":"劳保用品如何发放？","expected_source_patterns":["GM-05"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"劳保用品流程"}
 {"id":"industry-smoke-007","question":"各岗位分别由谁负责？","expected_source_patterns":["GM-02"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"ACTOR 槽位"}
-{"id":"industry-smoke-008","question":"质量管理制度有哪些要求？","expected_source_patterns":["GM-03"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"质量制度列表"}
+{"id":"industry-smoke-008","question":"GM-03《质量管理制度》有哪些要求？","expected_source_patterns":["GM-03"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"质量制度列表"}
 {"id":"industry-smoke-009","question":"质量管理制度如何考核？","expected_source_patterns":["GM-04"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"制度考核流程"}
 {"id":"industry-smoke-010","question":"这套工业管理制度覆盖哪些方面？","expected_source_patterns":["GM-"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"用户删除管理制度清单后的跨文件概览"}
 {"id":"industry-smoke-011","question":"质量管理机构图里有哪些文字信息？","expected_source_patterns":["GM-01"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"组织图仅核对文字并人工复核结构"}
-{"id":"industry-smoke-012","question":"质量检验由谁负责？","expected_source_patterns":["GM-02","GM-06"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"明确 ACTOR"}
+{"id":"industry-smoke-012","question":"《岗位职责规定》中质量检验由谁负责？","expected_source_patterns":["GM-02"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"明确 ACTOR"}
 {"id":"industry-smoke-013","question":"仓库管理有哪些禁止事项？","expected_source_patterns":["GM-09"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"LIST 问法"}
 {"id":"industry-smoke-014","question":"技术文件归档接下来怎么做？","expected_source_patterns":["GM-07"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"PROCEDURE 问法"}
 {"id":"industry-smoke-015","question":"为什么要管理计量器具？","expected_source_patterns":["GM-10"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"EXPLANATION 问法"}
-{"id":"industry-smoke-016","question":"技术文件管理和仓库管理有什么不同？","expected_source_patterns":["GM-07","GM-09"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"工业制度比较"}
+{"id":"industry-smoke-016","question":"GM-07《技术文件管理规定》和 GM-09《仓库管理制度》在归档保存与物资贮存搬运方面有什么不同？","expected_source_patterns":["GM-07","GM-09"],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"answered_or_partial","notes":"工业制度比较"}
 {"id":"industry-smoke-017","question":"GM-99 有哪些规定？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"不存在的工业编号"}
 {"id":"industry-smoke-018","question":"OPC owner 在项目启动后要做什么？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"培训专属 OPC 负向隔离"}
-{"id":"industry-smoke-019","question":"产品开发全流程有哪些阶段？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"培训产品开发负向隔离"}
-{"id":"industry-smoke-020","question":"需求快验流程中哪些环节可以灵活处理？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"培训需求快验负向隔离"}
+{"id":"industry-smoke-019","question":"《产品开发全流程》有哪些阶段？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"培训产品开发负向隔离"}
+{"id":"industry-smoke-020","question":"《需求快验流程》中哪些环节可以灵活处理？","expected_source_patterns":[],"forbidden_source_patterns":["OPC","产品开发","需求快验"],"expected_outcome":"not_found_or_refused","notes":"培训需求快验负向隔离"}
