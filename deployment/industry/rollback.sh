@@ -6,9 +6,37 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 source "${script_dir}/lib.sh"
 
 [[ "$#" -eq 1 ]] \
-  || industry_fail "用法: rollback.sh /absolute/previous-rag-industry.env"
-require_industry_env "$1"
-env_file="$(realpath "$1")"
+  || industry_fail "用法: rollback.sh /absolute/industry-backup-dir"
+backup_path="$1"
+[[ "${backup_path}" == /* && -d "${backup_path}" \
+  && ! -L "${backup_path}" ]] \
+  || industry_fail "Industry backup path 无效。"
+backup_path="$(realpath "${backup_path}")"
+last_good="$(industry_last_good_identity "${backup_path}")" \
+  || industry_fail "LAST_GOOD_POINTER_INVALID"
+env_file="$(python3 - "${last_good}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+env_path = value.get("env_path")
+if not isinstance(env_path, str):
+    raise SystemExit("LAST_GOOD_ENV_INVALID")
+print(env_path)
+PY
+)" || industry_fail "LAST_GOOD_ENV_INVALID"
+state_path="$(python3 - "${last_good}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+state_path = value.get("state_path")
+if not isinstance(state_path, str):
+    raise SystemExit("LAST_GOOD_STATE_INVALID")
+print(state_path)
+PY
+)" || industry_fail "LAST_GOOD_STATE_INVALID"
+require_industry_env "${env_file}"
 compose_file="$(industry_compose_file "${env_file}")"
 [[ "${compose_file}" == */releases/*/compose.yaml ]] \
   || industry_fail "previous env 未绑定 Industry release。"
@@ -19,7 +47,9 @@ port="$(exact_env_value "${env_file}" RAG_PORT)"
 if ! wait_industry_http "http://127.0.0.1:${port}/live" 10; then
   printf 'RAG_INDUSTRY_ROLLBACK_PRECHECK_UNHEALTHY\n' >&2
 fi
-backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
+env_backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
+[[ "${env_backup_path}" == "${backup_path}" ]] \
+  || industry_fail "last-good env backup path 不一致。"
 descriptor="${backup_path}/last-index-rollback.json"
 current_revision="$(docker container inspect --format \
   '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
@@ -76,13 +106,10 @@ wait_industry_http "http://127.0.0.1:${port}/live" 60 \
   || industry_fail "回滚后 Industry /live 未恢复。"
 verify_industry_app_identity "${env_file}" true \
   || industry_fail "回滚后 Industry app identity 未完整恢复。"
-if [[ -f "${backup_path}/last-good.json" \
-  && ! -L "${backup_path}/last-good.json" ]]; then
-  state_temp="$(mktemp "${backup_path}/.deployment-state.XXXXXX")"
-  trap 'rm -f -- "${state_temp}"' EXIT
-  cp -- "${backup_path}/last-good.json" "${state_temp}"
-  chmod 600 "${state_temp}"
-  mv -f -- "${state_temp}" "${backup_path}/deployment-state.json"
-  trap - EXIT
-fi
+state_temp="$(mktemp "${backup_path}/.deployment-state.XXXXXX")"
+trap 'rm -f -- "${state_temp}"' EXIT
+cp -- "${state_path}" "${state_temp}"
+chmod 600 "${state_temp}"
+mv -f -- "${state_temp}" "${backup_path}/deployment-state.json"
+trap - EXIT
 printf 'RAG_INDUSTRY_ROLLBACK_OK\n'

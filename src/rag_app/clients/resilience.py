@@ -274,7 +274,7 @@ class ResilientHttpPool:
         self._lock = threading.Lock()
         self._next_index = 0
 
-    def request_json(
+    def request_json(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         method: str,
         path: str,
@@ -282,8 +282,9 @@ class ResilientHttpPool:
         payload: object | None,
         headers: Mapping[str, str] | None = None,
         validator: Callable[[object], object] | None = None,
+        failover_on_invalid_response: bool = False,
     ) -> HttpJsonResponse:
-        """请求 JSON，并只对网络错误和瞬态状态码切换端点。
+        """请求 JSON，并按调用类型限制无效响应的副本切换。
 
         Args:
             method: HTTP 方法。
@@ -291,6 +292,8 @@ class ResilientHttpPool:
             payload: JSON 请求体；不会写入异常消息。
             headers: 可选请求头；不会写入返回审计信息。
             validator: 覆盖服务级校验器的本次响应 schema 校验器。
+            failover_on_invalid_response: 为真时把格式或 schema 错误视为
+                当前端点故障；生成式调用应保持默认值，避免重复生成。
 
         Returns:
             JSON 内容、所用端点、重试数与耗时。
@@ -340,9 +343,35 @@ class ResilientHttpPool:
                     raise ExternalRequestRejectedError(
                         f"外部请求被拒绝：HTTP_{response.status_code}。"
                     )
+                content_type = response.headers.get("content-type")
+                if content_type is not None and not _is_json_content_type(
+                    content_type
+                ):
+                    last_reason = "INVALID_CONTENT_TYPE"
+                    if failover_on_invalid_response:
+                        self._record_failure(
+                            state,
+                            self._clock() - attempt_started,
+                        )
+                        continue
+                    self._record_rejection(
+                        state,
+                        self._clock() - attempt_started,
+                    )
+                    raise ExternalRequestRejectedError(
+                        "外部请求返回不可用内容："
+                        "INVALID_CONTENT_TYPE。"
+                    )
                 try:
                     response_payload = response.json()
                 except ValueError:
+                    last_reason = "INVALID_JSON"
+                    if failover_on_invalid_response:
+                        self._record_failure(
+                            state,
+                            self._clock() - attempt_started,
+                        )
+                        continue
                     self._record_rejection(
                         state,
                         self._clock() - attempt_started,
@@ -361,6 +390,13 @@ class ResilientHttpPool:
                             response_payload
                         )
                     except (OverflowError, TypeError, ValueError) as error:
+                        last_reason = "INVALID_RESPONSE_SCHEMA"
+                        if failover_on_invalid_response:
+                            self._record_failure(
+                                state,
+                                self._clock() - attempt_started,
+                            )
+                            continue
                         self._record_rejection(
                             state,
                             self._clock() - attempt_started,
@@ -632,6 +668,12 @@ def _is_transient_status(status_code: int) -> bool:
         status_code in _TRANSIENT_STATUSES
         or _SERVER_ERROR_MIN <= status_code <= _SERVER_ERROR_MAX
     )
+
+
+def _is_json_content_type(value: str) -> bool:
+    """返回 Content-Type 是否为 JSON 或结构化 JSON media type。"""
+    media_type = value.split(";", maxsplit=1)[0].strip().casefold()
+    return media_type == "application/json" or media_type.endswith("+json")
 
 
 def _raise_if_stream_cancelled(

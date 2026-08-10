@@ -69,6 +69,7 @@ def _release(
         + "\n",
         encoding="utf-8",
     )
+    env_file.chmod(0o600)
     return release, env_file, backup
 
 
@@ -126,10 +127,15 @@ def test_release_state_promotes_only_after_verified(tmp_path: Path) -> None:
     )
 
     assert promoted.returncode == 0, promoted.stderr
-    assert (backup / "last-good.env").read_text() == env_file.read_text()
-    last_good = json.loads((backup / "last-good.json").read_text())
+    pointer = json.loads(
+        (backup / "last-good-pointer.json").read_text(encoding="utf-8")
+    )
+    snapshot = backup / "last-good-snapshots" / pointer["snapshot_id"]
+    assert (snapshot / "rag-industry.env").read_text() == env_file.read_text()
+    last_good = json.loads((snapshot / "state.json").read_text())
     assert last_good["stage"] == "verified"
     assert last_good["index"] == _INDEX
+    assert (snapshot / "SNAPSHOT_MANIFEST.json").is_file()
     assert json.loads((backup / "deployment-state.json").read_text())[
         "stage"
     ] == "last_good"
@@ -154,7 +160,9 @@ def test_candidate_cannot_skip_indexed_state(tmp_path: Path) -> None:
     assert not (backup / "last-good.env").exists()
 
 
-def test_app_candidate_promotes_without_reindex(tmp_path: Path) -> None:
+def test_legacy_app_candidate_is_not_a_second_last_good_authority(
+    tmp_path: Path,
+) -> None:
     _, env_file, backup = _release(tmp_path)
     backup.mkdir()
     candidate = {
@@ -180,11 +188,13 @@ def test_app_candidate_promotes_without_reindex(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert json.loads((backup / "app-candidate.json").read_text())[
         "stage"
-    ] == "last_good"
-    assert json.loads((backup / "last-good.json").read_text())[
+    ] == "candidate"
+    assert (backup / "last-good-pointer.json").is_file()
+    assert not (backup / "last-good.env").exists()
+    assert not (backup / "last-good.json").exists()
+    assert json.loads((backup / "deployment-state.json").read_text())[
         "stage"
-    ] == "verified"
-    assert not (backup / "deployment-state.json").exists()
+    ] == "last_good"
 
 
 def _write_ocr_fakes(

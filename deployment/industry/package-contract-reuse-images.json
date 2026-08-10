@@ -30,6 +30,7 @@
     "package_selfcheck.py",
     "preflight.sh",
     "preflight_endpoints.py",
+    "last_good.py",
     "rollback.sh",
     "run-index.sh",
     "runtime_check.py",

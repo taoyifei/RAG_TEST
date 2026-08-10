@@ -325,93 +325,41 @@ promote_industry_last_good() {
   local env_file="$1"
   local index_json="$2"
   local backup_path
-  local candidate_path
   local state_path
-  local temporary_env
-  local temporary_state
+  local revision
+  local library_dir
+  local last_good_helper
   backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)" || return 1
-  candidate_path="${backup_path}/app-candidate.json"
   state_path="${backup_path}/deployment-state.json"
-  if [[ -f "${candidate_path}" && ! -L "${candidate_path}" ]]; then
-    python3 - "${candidate_path}" "${env_file}" "${index_json}" <<'PY'
-import json
-import os
-import pathlib
-import sys
-import tempfile
-
-path = pathlib.Path(sys.argv[1])
-env_path = pathlib.Path(sys.argv[2])
-index = json.loads(sys.argv[3])
-candidate = json.loads(path.read_bytes())
-env = {}
-for line in env_path.read_text(encoding="utf-8").splitlines():
-    if "=" in line and not line.startswith("#"):
-        key, value = line.split("=", 1)
-        env[key] = value.strip("\"'")
-target = candidate.get("target", {})
-if (
-    candidate.get("stage") not in {"candidate", "verified"}
-    or target.get("image") != env.get("RAG_APP_IMAGE")
-    or target.get("revision") != env.get("RAG_RELEASE_REVISION")
-    or candidate.get("index") != index
-):
-    raise SystemExit("APP_CANDIDATE_INVALID")
-candidate["stage"] = "verified"
-descriptor, temporary_name = tempfile.mkstemp(prefix=".app-candidate.", dir=path.parent)
-try:
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(candidate, output, separators=(",", ":"), sort_keys=True)
-        output.write("\n")
-        output.flush()
-        os.fsync(output.fileno())
-    os.chmod(temporary_name, 0o600)
-    os.replace(temporary_name, path)
-finally:
-    if os.path.exists(temporary_name):
-        os.unlink(temporary_name)
-PY
-    state_path="${candidate_path}"
-  else
-    write_industry_release_state "${env_file}" verified "${index_json}" \
-      || return 1
+  revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)" || return 1
+  library_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  last_good_helper="${library_dir}/last_good.py"
+  if [[ ! -f "${last_good_helper}" ]]; then
+    last_good_helper="${library_dir}/serving_last_good.py"
   fi
-  temporary_env="$(mktemp "${backup_path}/.last-good-env.XXXXXX")"
-  temporary_state="$(mktemp "${backup_path}/.last-good-state.XXXXXX")"
-  cp --preserve=mode,ownership,timestamps -- "${env_file}" "${temporary_env}" \
+  write_industry_release_state "${env_file}" verified "${index_json}" \
     || return 1
-  cp -- "${state_path}" "${temporary_state}" || return 1
-  chmod 600 "${temporary_env}" "${temporary_state}"
-  mv -f -- "${temporary_env}" "${backup_path}/last-good.env"
-  mv -f -- "${temporary_state}" "${backup_path}/last-good.json"
-  if [[ "${state_path}" == "${candidate_path}" ]]; then
-    python3 - "${candidate_path}" <<'PY'
-import json
-import os
-import pathlib
-import tempfile
-import sys
+  python3 "${last_good_helper}" promote \
+    "${backup_path}" "${env_file}" "${state_path}" "${revision}" \
+    >/dev/null || return 1
+  write_industry_release_state "${env_file}" last_good "${index_json}" \
+    || return 1
+}
 
-path = pathlib.Path(sys.argv[1])
-value = json.loads(path.read_bytes())
-value["stage"] = "last_good"
-descriptor, temporary_name = tempfile.mkstemp(prefix=".app-candidate.", dir=path.parent)
-try:
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, separators=(",", ":"), sort_keys=True)
-        output.write("\n")
-        output.flush()
-        os.fsync(output.fileno())
-    os.chmod(temporary_name, 0o600)
-    os.replace(temporary_name, path)
-finally:
-    if os.path.exists(temporary_name):
-        os.unlink(temporary_name)
-PY
-  else
-    write_industry_release_state "${env_file}" last_good "${index_json}" \
-      || return 1
+industry_last_good_identity() {
+  local backup_path="$1"
+  local library_dir
+  local last_good_helper
+  library_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+  last_good_helper="${library_dir}/last_good.py"
+  if [[ ! -f "${last_good_helper}" ]]; then
+    last_good_helper="${library_dir}/serving_last_good.py"
   fi
+  if [[ ! -f "${backup_path}/last-good-pointer.json" ]]; then
+    python3 "${last_good_helper}" migrate "${backup_path}"
+    return
+  fi
+  python3 "${last_good_helper}" resolve "${backup_path}"
 }
 
 validate_industry_ocr_gpu_ownership() {

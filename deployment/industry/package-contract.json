@@ -32,6 +32,7 @@
     "package_selfcheck.py",
     "preflight.sh",
     "preflight_endpoints.py",
+    "last_good.py",
     "qdrant-image.tar.gz",
     "qdrant-image.tar.gz.sha256",
     "rollback.sh",

@@ -35,6 +35,7 @@ __all__ = [
 
 _MIN_SECRET_LENGTH = 32
 _SOURCE_ID_LENGTH = 36
+_INSECURE_HTTP_UI_SESSION_TTL_SECONDS = 1800
 
 
 class AccessMode(StrEnum):
@@ -80,17 +81,14 @@ class SoftRouteSettings(BaseModel):
             raise ValueError("软路由关键词和来源 ID 不能为空。")
         if len(set(self.keywords)) != len(self.keywords):
             raise ValueError("软路由关键词不能重复。")
-        if (
-            len(set(self.source_ids)) != len(self.source_ids)
+        if len(set(self.source_ids)) != len(self.source_ids) or any(
+            len(source_id) != _SOURCE_ID_LENGTH
+            or not source_id.startswith("src_")
             or any(
-                len(source_id) != _SOURCE_ID_LENGTH
-                or not source_id.startswith("src_")
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in source_id[4:]
-                )
-                for source_id in self.source_ids
+                character not in "0123456789abcdef"
+                for character in source_id[4:]
             )
+            for source_id in self.source_ids
         ):
             raise ValueError("软路由来源必须是唯一稳定 source ID。")
         return self
@@ -125,9 +123,7 @@ class RetrievalSettings(BaseModel):
     bm25_tokenizer: str = "multilingual"
     bm25_language: str = "none"
     allowed_statuses: tuple[DocumentStatus, ...] = Field(min_length=1)
-    allowed_authority_levels: tuple[AuthorityLevel, ...] = Field(
-        min_length=1
-    )
+    allowed_authority_levels: tuple[AuthorityLevel, ...] = Field(min_length=1)
     soft_route_min_confidence: float = Field(
         default=0.75,
         gt=0.0,
@@ -149,17 +145,12 @@ class RetrievalSettings(BaseModel):
             self.status == ConfigurationState.FROZEN
             and self.freeze_decision_sha256 is None
         ):
-            raise ValueError(
-                "frozen 配置必须提供 freeze_decision_sha256。"
-            )
+            raise ValueError("frozen 配置必须提供 freeze_decision_sha256。")
         if not (
-            self.final_limit
-            <= self.max_final_limit
-            <= self.candidate_limit
+            self.final_limit <= self.max_final_limit <= self.candidate_limit
         ):
             raise ValueError(
-                "必须满足 final_limit <= max_final_limit "
-                "<= candidate_limit。"
+                "必须满足 final_limit <= max_final_limit <= candidate_limit。"
             )
         route_ids = tuple(route.route_id for route in self.soft_routes)
         if len(set(route_ids)) != len(route_ids):
@@ -183,9 +174,7 @@ class RetrievalSettings(BaseModel):
             已完成 schema 校验的配置。
 
         """
-        return cls.model_validate(
-            load_json_file(path, label="retrieval")
-        )
+        return cls.model_validate(load_json_file(path, label="retrieval"))
 
     def serving_fingerprint(
         self,
@@ -223,9 +212,7 @@ class RetrievalSettings(BaseModel):
                 "history_token_budget": self.history_token_budget,
                 "max_question_tokens": self.max_question_tokens,
                 "output_tokens": self.rewrite_output_tokens,
-                "conversation_ttl_seconds": (
-                    self.conversation_ttl_seconds
-                ),
+                "conversation_ttl_seconds": (self.conversation_ttl_seconds),
             },
             "retrieval": {
                 "dense_limit": self.dense_limit,
@@ -275,10 +262,7 @@ class RetrievalSettings(BaseModel):
             separators=(",", ":"),
             sort_keys=True,
         )
-        return (
-            "sha256:"
-            f"{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
-        )
+        return f"sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
 
 
 class RuntimeSettings(BaseSettings):
@@ -316,15 +300,11 @@ class RuntimeSettings(BaseSettings):
     release_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     pipeline_path: Path
     retrieval_path: Path
-    intent_router_path: Path = Path(
-        "/app/deployment/config/intent-router.json"
-    )
+    intent_router_path: Path = Path("/app/deployment/config/intent-router.json")
     intent_router_calibration_path: Path = Path(
         "/app/deployment/config/intent-router-calibration.json"
     )
-    corpus_policy_path: Path = Path(
-        "/app/deployment/config/corpus-policy.json"
-    )
+    corpus_policy_path: Path = Path("/app/deployment/config/corpus-policy.json")
     frontend_dir: Path
     llm_tokenizer_path: Path
     embedding_tokenizer_path: Path = Path(
@@ -379,10 +359,11 @@ class RuntimeSettings(BaseSettings):
         self.ocr_endpoint_urls()
         insecure_ui_contract = (
             self.run_mode is RunMode.DEMO
-            and self.ui_query_auth_mode
-            is UiQueryAuthMode.SAME_ORIGIN_SESSION
+            and self.ui_query_auth_mode is UiQueryAuthMode.SAME_ORIGIN_SESSION
             and not self.ui_cookie_secure
             and self.ui_allow_insecure_http
+            and self.ui_session_ttl_seconds
+            == _INSECURE_HTTP_UI_SESSION_TTL_SECONDS
         )
         if not self.ui_cookie_secure and not insecure_ui_contract:
             raise ValueError(

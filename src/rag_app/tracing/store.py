@@ -31,6 +31,7 @@ from rag_app.tracing.models import (
 )
 
 __all__ = [
+    "TRACE_SCHEMA_VERSION",
     "ArtifactExpiredError",
     "ArtifactNotFoundError",
     "TraceArtifactLimitError",
@@ -40,7 +41,7 @@ __all__ = [
 ]
 
 _DEFAULT_ARTIFACT_LIMIT = 5 * 1024 * 1024
-_SCHEMA_VERSION = 2
+TRACE_SCHEMA_VERSION = 2
 _MIN_QUESTION_RETENTION_SECONDS = 60
 _MAX_QUESTION_RETENTION_SECONDS = 604_800
 _SCHEMA = """
@@ -739,13 +740,10 @@ class TraceStore:
             级联删除的根 Trace 数量。
 
         """
-        if (
-            question_retention_seconds is not None
-            and not (
-                _MIN_QUESTION_RETENTION_SECONDS
-                <= question_retention_seconds
-                <= _MAX_QUESTION_RETENTION_SECONDS
-            )
+        if question_retention_seconds is not None and not (
+            _MIN_QUESTION_RETENTION_SECONDS
+            <= question_retention_seconds
+            <= _MAX_QUESTION_RETENTION_SECONDS
         ):
             raise ValueError("问题正文保留期必须在 60 秒到 7 天之间。")
         with self._lock:
@@ -880,7 +878,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
     ).fetchone()
     if trace_table is None:
         connection.executescript(_SCHEMA)
-        connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        connection.execute(f"PRAGMA user_version={TRACE_SCHEMA_VERSION}")
         connection.commit()
         return
     connection.executescript(_SCHEMA)
@@ -896,7 +894,7 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
         "question_sha256",
     }:
         raise ValueError("Trace schema 问题字段处于部分迁移状态。")
-    if version not in {0, 1, _SCHEMA_VERSION}:
+    if version not in {0, 1, TRACE_SCHEMA_VERSION}:
         raise ValueError("Trace schema 版本不受支持。")
     if not question_columns:
         connection.execute("BEGIN IMMEDIATE")
@@ -907,13 +905,13 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "ALTER TABLE traces ADD COLUMN question_sha256 TEXT"
             )
-            connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            connection.execute(f"PRAGMA user_version={TRACE_SCHEMA_VERSION}")
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         return
-    connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+    connection.execute(f"PRAGMA user_version={TRACE_SCHEMA_VERSION}")
     connection.commit()
 
 
@@ -978,9 +976,7 @@ def _trace_from_row(row: sqlite3.Row) -> TraceRecord:
         capture_complete=bool(row["capture_complete"]),
         expires_at=_parse_timestamp(row["expires_at"]),
         question_text=(
-            None
-            if row["question_text"] is None
-            else str(row["question_text"])
+            None if row["question_text"] is None else str(row["question_text"])
         ),
         question_sha256=(
             None

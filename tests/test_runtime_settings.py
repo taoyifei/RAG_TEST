@@ -128,6 +128,7 @@ def test_insecure_ui_cookie_requires_explicit_demo_contract(
         {"run_mode": "production"},
         {"ui_query_auth_mode": "browser_bearer"},
         {"ui_allow_insecure_http": False},
+        {"ui_session_ttl_seconds": 1799},
     ):
         invalid = {**values, **overrides}
         with pytest.raises(ValidationError, match="insecure HTTP"):

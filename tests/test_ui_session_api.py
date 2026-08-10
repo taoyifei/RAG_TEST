@@ -88,7 +88,7 @@ class _Context:
         self.readiness.close()
 
 
-def _context(tmp_path: Path) -> _Context:
+def _context(tmp_path: Path, *, cookie_secure: bool = False) -> _Context:
     query_token = "query-" + uuid.uuid4().hex
     admin_token = "admin-" + uuid.uuid4().hex
     state_path = tmp_path / "state.sqlite3"
@@ -119,7 +119,7 @@ def _context(tmp_path: Path) -> _Context:
             pipeline_fingerprint="pipeline-1",
             frontend_dir=Path(__file__).parents[1] / "frontend",
             ui_query_auth_mode=UiQueryAuthMode.SAME_ORIGIN_SESSION,
-        ui_cookie_secure=False,
+            ui_cookie_secure=cookie_secure,
             ui_session_ttl_seconds=300,
         )
     )
@@ -161,6 +161,17 @@ def test_same_origin_frontend_has_no_query_token_control_or_secret(
         assert 'credentials: "same-origin"' in script.text
         assert context.query_token not in page.text
         assert context.query_token not in script.text
+        for response in (page, script):
+            csp = response.headers["content-security-policy"]
+            assert "default-src 'none'" in csp
+            assert "base-uri 'none'" in csp
+            assert "connect-src 'self'" in csp
+            assert "form-action 'self'" in csp
+            assert "frame-ancestors 'none'" in csp
+            assert "object-src 'none'" in csp
+            assert response.headers["referrer-policy"] == "no-referrer"
+            assert response.headers["x-content-type-options"] == "nosniff"
+            assert response.headers["x-frame-options"] == "DENY"
     finally:
         context.close()
 
@@ -176,6 +187,7 @@ def test_ui_session_cookie_and_chat_are_bounded_and_token_free(
         assert "SameSite=strict" in cookie
         assert "Path=/api/ui/" in cookie
         assert "Max-Age=300" in cookie
+        assert "Secure" not in cookie
         assert context.query_token not in cookie
         assert context.query_token not in csrf_token
 
@@ -190,6 +202,21 @@ def test_ui_session_cookie_and_chat_are_bounded_and_token_free(
         assert context.query_token not in response.text
         events = [json.loads(line) for line in response.text.splitlines()]
         assert events[-1]["type"] == "final"
+    finally:
+        context.close()
+
+
+def test_secure_cookie_attribute_is_enabled_when_configured(
+    tmp_path: Path,
+) -> None:
+    context = _context(tmp_path, cookie_secure=True)
+    try:
+        response = context.client.post(
+            "/api/ui/session", headers=_origin()
+        )
+
+        assert response.status_code == 201
+        assert "Secure" in response.headers["set-cookie"]
     finally:
         context.close()
 

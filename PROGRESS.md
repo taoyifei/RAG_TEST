@@ -1,51 +1,61 @@
 # DOCX RAG 交付进度
 
-## CURRENT STATUS：2026-08-10 Industry app-only 本地收敛
+## CURRENT STATUS：2026-08-10 Industry serving update 本地收口
 
-- 当前分支为 `Industry`，本轮继续修改前的本地候选提交为
-  `ff8c9d23130ff651d77a36aa1bbd2f4947e8f421`；`main` 仍为
-  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`。没有修改 main，没有 push，
-  没有访问或操作服务器。
-- 用户已确认 Industry 内网 HTTP demo 的 UI Session 策略：只有
-  `RAG_RUN_MODE=demo`、`RAG_UI_QUERY_AUTH_MODE=same_origin_session`、
-  `RAG_UI_COOKIE_SECURE=false`、`RAG_UI_ALLOW_INSECURE_HTTP=true` 和
-  `RAG_UI_SESSION_TTL_SECONDS=1800` 同时成立时才允许非 Secure Cookie；默认仍为
-  Secure，production 对 `Secure=false` fail closed。Cookie 使用 HMAC-SHA256、
-  HttpOnly、SameSite=Strict、`Path=/api/ui/`，修改型请求校验 CSRF、Origin 和 Host。
-- `/api/chat` 的 Bearer Query Token 合同和 `/api/admin/*` 的独立 Admin Token 合同
-  保持不变；普通页面、响应、浏览器存储和可读 Cookie 均不包含 Query Token。
-- Industry Trace 明文配置固定为 `plaintext` 和 604800 秒独立保留期；实际明文寿命为
-  该值与 Trace TTL 的较小值。到期只清空 `question_text`，保留
-  `question_sha256` 和其余 Trace 元数据；列表预览读取时动态生成，不额外持久化。
-- simple 与 Industry 的 Compose 调用已改为显式项目名、显式 env-file 和隔离环境；
-  updater 使用 Python 标准库严格解析 JSON、校验字段类型和 SHA256，更新与回滚都核对
-  desired/observed image、revision、端口、build-info、live、ready 和 index identity。
-  Industry 状态晋升固定为
-  `candidate -> deployed -> indexed -> verified -> last_good`，受管 OCR 按容器归属、镜像、
-  revision、GPU、健康状态和 PID 映射识别，不再只凭 GPU 有 PID 报冲突。
-- pipeline prompt revision 与实际 prompt 一致，corpus policy 语义摘要一致；index
-  fingerprint 仍为
+- 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry` 为
+  `809fb71f5e50ba4ccd28c8969ab2ffcbb7c339f5`，`main` 为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`；起始工作区 clean。全程只做
+  本地修改与验证，没有访问服务器、部署、重索引、修改 GM corpus、重启
+  worker/OCR/Qdrant 或 push。
+- 已用真实旧版语义建立升级矩阵。旧服务器业务 revision
+  `2c4cf220c7cf7dd2e8744253453e994ee7af3ee1` 没有 `runtime-state`，旧 Compose
+  没有 UI/Trace 新字段，旧外部 config 与目标 prompt revision 不一致。首次红测为
+  `8 failed, 5 passed in 1.12s`，首错正是 updater 在替换新 App 前要求旧 App 执行
+  新 CLI。当前失效制品 `artifacts/industry-app-update/809fb71f5e50` 不得上传、部署
+  或作为验收证据。
+- 新包合同改为 8 个顶层文件，并交付确定性 `serving-runtime.tar.gz`。runtime 内含
+  版本化 Compose、更新/回滚/验收 helper、5 份 serving config 和 2 份脱敏 validation
+  文件；更新前 index identity、Trace 在线备份和旧版兼容均由包内标准库 helper 完成，
+  不依赖旧 App CLI，也不调用旧 release 的 verify/lib。
+- updater 不 source private env，不用 sed/grep/awk 解析 JSON；所有 JSON 通过 Python
+  标准库严格解析并校验字段类型、revision、SHA256 和 exact set。candidate env、runtime
+  目录与 last-good pointer 都以原子 rename 发布，Compose 通过白名单环境展开，只允许
+  `--force-recreate rag-industry-app`；失败路径恢复旧 env、Compose/config、image、Trace
+  策略、last-good pointer 和旧 App 身份。
+- Industry HTTP demo 仅在 `demo`、`same_origin_session`、`cookie_secure=false`、
+  `allow_insecure_http=true`、TTL=1800 五项同时成立时允许非 Secure Cookie；默认仍为
+  Secure，production 下 `Secure=false` 拒绝启动。Cookie 为 HMAC-SHA256、HttpOnly、
+  SameSite=Strict、`Path=/api/ui/`，修改型 UI 请求校验 CSRF、Origin 和 Host。
+  `/api/chat` Bearer Query Token 与 `/api/admin/*` Admin Token 合同保持不变；Query Token
+  不进入前端资产、响应、浏览器存储或浏览器可读 Cookie。
+- Trace 问题采集固定为 `plaintext`，独立保留上限 604800 秒，实际寿命为它与 Trace
+  TTL 的较小值。到期只清空 `question_text`，保留 `question_sha256` 和其余元数据；
+  preview 在读取时动态生成，不额外持久化，也不进入普通日志、Stage NDJSON、Header、
+  ZIP 文件名/manifest、缓存键或 release manifest。
+- 资产语义已先于 SHA 清单确认：实际 prompt revision 与 pipeline 均为
+  `sha256:7a10e80a64034ce92953cd8e7e4b87ba59ce799811cf3e6b7eb5f02575885717`，
+  corpus policy semantic SHA 为
+  `1079f1dae19d0e134f5660234eab9961e68adbb6724ea8d6f0de81db42646c61`；index
+  fingerprint 前后均为
   `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`，
-  没有发生 reindex 语义变化。serving fingerprint 由
+  serving fingerprint 按预期从
   `sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b`
   变为
-  `sha256:07217b1d2e736cfc4bbf0810bb70770003f43d20fb96642d4ea5d2b2b2c63758`，
-  与回答、UI 和 Trace 服务语义变化一致。ASSETS 只在上述核对后更新，源码树
-  asset-selfcheck 已通过 13 个文件。
-- 最终专项回归为 `256 passed, 1 warning in 86.87s`；补充 runtime 构造/preflight
-  回归为 `32 passed, 1 warning in 3.67s`；Node 流协议为 `2 passed`。compileall、
-  Ruff、strict mypy、Google docstring、两套 shell `bash -n`、两套带 profiles Compose
-  config、资产 SHA 和 `git diff --check` 均通过。
-- 额外全量 pytest 实际执行为 `1010 passed, 85 failed, 61 warnings in 696.58s`。
-  其中 runtime 新依赖导致的 12 项 fixture 失败已经修复并由上述 32 项复跑证明；其余
-  失败包含本地 `127.0.0.1:6333` Qdrant 返回 502，以及本任务开始前已存在、当前候选
-  未修改的 model client/OCR schema 错误处理测试与实现合同不一致。不得据此宣称全量
-  pytest 通过；详细边界见 `BLOCKED.md`。
-- 本地 Industry 提交及其 clean-commit app-only 构建、容器内 asset-selfcheck、四文件
-  exact-set 安全扫描和 fresh extraction/package selfcheck 已完成。最终 revision、包路径、
-  目录摘要和逐文件 SHA256 由构建后交付报告记录，不反向写入 identity-bearing commit，
-  避免自引用 SHA。只生成 app-only 包，没有生成 full release、corpus、OCR、Qdrant 或
-  index 包。下一安全动作仅是由用户另行授权的服务器上传/更新验收；本轮不执行。
+  `sha256:07217b1d2e736cfc4bbf0810bb70770003f43d20fb96642d4ea5d2b2b2c63758`。
+  仅在确认这些语义后更新 ASSETS，源码树 13 项 SHA 与 asset-selfcheck 全绿。
+- 本轮最终专项为 `135 passed, 1 warning in 30.39s`；Qdrant 专项使用无业务数据、无卷的
+  固定 `qdrant/qdrant:v1.18.3` 临时实例，结果为
+  `62 passed, 56 warnings in 382.60s`，实例、网络和临时目录已清理。model/OCR
+  failover 合同与新增边界为 `64 passed, 1 warning in 1.37s`。全量 pytest 在仓库完整
+  依赖环境最终为 `1158 passed, 61 warnings in 647.91s`，没有 skip/xfail 掩盖失败。
+- compileall、全量 Ruff、strict mypy（131 source files）、Google docstring、Node 2 项、
+  simple/Industry Shell 语法、两套带 profiles Compose config、源码资产和
+  `git diff --check` 均通过。实际交付包必须在本地提交后从 clean commit 构建；目标
+  revision、逐文件 SHA256、目录 canonical digest、镜像内 asset-selfcheck 与 fresh
+  package selfcheck 只写入构建后交付报告，避免 identity-bearing commit 自引用。
+- 本轮只允许生成 Industry simple serving app update，不生成 full release、corpus、
+  OCR/Qdrant image 或 index 包。服务器上传、更新和 canary 验收仍需用户后续单独授权；
+  不运行 `run-index.sh`，不把本地绿测写成服务器已上线。
 
 ## 2026-08-06 Industry 首次部署任务 0：事实基线
 

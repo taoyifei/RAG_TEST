@@ -14,7 +14,11 @@ from rag_app.tracing.models import (
 )
 from rag_app.tracing.reasons import DecisionCode
 from rag_app.tracing.recorder import TraceRecorder, TraceRecorderConfig
-from rag_app.tracing.store import TraceStore, TraceStoreClosedError
+from rag_app.tracing.store import (
+    TraceNotFoundError,
+    TraceStore,
+    TraceStoreClosedError,
+)
 
 
 def _identity() -> TraceIdentity:
@@ -119,6 +123,46 @@ def test_plaintext_retention_clears_only_question_text(
     assert after.question_sha256 == before.question_sha256
     assert after.status == before.status
     assert after.expires_at == before.expires_at
+    store.close()
+
+
+def test_trace_ttl_shorter_than_question_retention_removes_trace_first(
+    tmp_path: Path,
+) -> None:
+    store = TraceStore(tmp_path / "short-trace.sqlite3")
+    store.initialize()
+    recorder = TraceRecorder(
+        store,
+        config=TraceRecorderConfig(
+            question_capture=TraceQuestionCapture.PLAINTEXT,
+            question_retention_seconds=604_800,
+        ),
+    )
+    created = datetime(2026, 8, 1, tzinfo=UTC)
+    trace_id = "c" * 32
+    session = recorder.begin_query(
+        trace_id,
+        TraceMode.FULL,
+        created,
+        _identity(),
+        question="Trace TTL 只有三天",
+    )
+    session.finish(
+        status=TraceStatus.ANSWERED,
+        reason_code=DecisionCode.ANSWERED,
+    )
+    recorder.flush()
+    recorder.close()
+    store.initialize()
+
+    deleted = store.prune(
+        now=created + timedelta(days=4),
+        question_retention_seconds=604_800,
+    )
+
+    assert deleted == 1
+    with pytest.raises(TraceNotFoundError):
+        store.get_trace(trace_id)
     store.close()
 
 
@@ -230,6 +274,7 @@ def test_v1_database_migrates_to_v2_idempotently(tmp_path: Path) -> None:
     assert trace.question_text is None
     assert trace.question_sha256 is None
     assert {"question_text", "question_sha256"} <= columns
+    assert "question_preview" not in columns
     assert version == 2
 
 

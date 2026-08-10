@@ -23,6 +23,39 @@ corpus，复用目标服务器已经存在且身份完全匹配的 OCR/Qdrant �
 - `preflight.sh`、`install.sh`、`deploy.sh`、`run-index.sh`、`verify.sh`、
   `rollback.sh`：分阶段、fail-closed 的 Industry 操作入口。
 
+## 后续 Serving App Update
+
+已完成首次索引的 Industry 只使用新的 8 文件 serving update 包，不再使用历史四文件
+`industry-app-update`。历史 `artifacts/industry-app-update/809fb71f5e50` 缺少新
+serving config、Compose 和包内 helper，且错误要求旧 App 支持 `runtime-state`，不得
+上传或部署。
+
+新包是 simple serving app update，不是 full release。顶层 exact set 为：
+
+- `UPDATE_MANIFEST.json`；
+- `app-image.tar.gz` 与 `.sha256`；
+- `serving-runtime.tar.gz` 与 `.sha256`；
+- `update-app.sh`；
+- `package_selfcheck.py`；
+- `SERVER_UPDATE_COMMANDS.txt`。
+
+`serving-runtime.tar.gz` 将版本化 Compose、包内 verify/rollback/helper、5 份 config
+和脱敏 validation 作为同一身份交付。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
+secret、真实服务器地址或问题正文。更新前由包内标准库 helper 在旧 App image 的一次性
+容器中只读取得 index identity，并用 SQLite online backup 备份 Trace；不要求旧 App
+提供新 CLI。
+
+服务器执行时从全新 shell 开始，不 source private env，按包内
+`SERVER_UPDATE_COMMANDS.txt` 的占位变量填写绝对路径。安全顺序是 sidecar 与 package
+selfcheck、更新前身份和 Trace 备份、原子安装版本化 runtime/candidate env、加载 App
+image、仅 force-recreate `rag-industry-app`、runtime-state v2、包内
+`verify-app-update.sh`。失败调用包内 `rollback-app-update.sh` 并复验旧身份。
+
+该更新明确禁止运行 `run-index.sh`，不启动或重启 worker/OCR/Qdrant，不修改 alias、
+manifest、collection、point、answer cache 或 GM corpus。index fingerprint 必须保持
+不变，`UPDATE_MANIFEST.json` 的 `reindex_required` 必须为 `false`。当前配置仍是
+demo/canary；本地 package selfcheck 不等于服务器上线或 production acceptance。
+
 ## 目标服务器准备
 
 先确认 `RELEASE_MANIFEST.json` 固定的 OCR/Qdrant tag 在服务器存在，再校验外层上传
@@ -86,6 +119,18 @@ corpus/config 路径，不执行通配容器删除，不调用 training project�
 在 Industry backup 目录保存 active manifest SQLite 快照和 alias 目标；若当前容器 revision
 与回滚描述一致，`rollback.sh` 会在停止 Industry app 后同时恢复旧 alias 与 manifest
 state。索引发布失败会保留旧 Industry alias；失败 release、任务报告和快照保留用于审计。
+
+Serving App Update 不使用上述首次部署 rollback 参数，而使用更新包安装后的版本化脚本：
+
+```bash
+bash /ABSOLUTE/SERVING_RUNTIME/rollback-app-update.sh \
+  /ABSOLUTE/PRIVATE/rag-industry.env \
+  /ABSOLUTE/UPDATE_BACKUP
+```
+
+rollback 只读取经 SHA 和 exact-set 验证的 last-good 原子 pointer；必要时在停止失败的新
+App 后恢复 Trace 在线备份，再使用旧 env/Compose/config/image 重建旧 App。它不得恢复
+未被本次更新修改的 index state，也不得触碰 OCR、Qdrant 或 worker。
 
 培训与工业前端切换时必须创建新的 `conversation_id`。当前没有 `kb_id` 自动路由，也
 不会同时查询两个知识库后再选择分数较高的结果。

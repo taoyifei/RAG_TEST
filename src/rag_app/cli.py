@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import sqlite3
 import time
 from collections.abc import Sequence
 from dataclasses import asdict, dataclass
@@ -16,6 +17,12 @@ from qdrant_client import QdrantClient
 
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.assets import AssetPaths, verify_offline_assets
+from rag_app.generation.semantic_router import (
+    LLM_CLASSIFIER_CONTRACT_REVISION,
+    QUESTION_PROFILE_SCHEMA_REVISION,
+    load_intent_router_config,
+    load_question_profile_calibration,
+)
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
 from rag_app.runtime import (
@@ -23,12 +30,16 @@ from rag_app.runtime import (
     load_pipeline,
     require_release_revision,
 )
-from rag_app.settings import RuntimeSettings
+from rag_app.settings import RetrievalSettings, RunMode, RuntimeSettings
 from rag_app.state import JobKind, JobState
 from rag_app.state.jobs import ReadOnlyJobStore
+from rag_app.tracing.store import TRACE_SCHEMA_VERSION
 from rag_app.worker_runtime import build_worker_runtime
 
 __all__ = ["BuildInfo", "build_info", "main"]
+
+_SHA256_HEX_LENGTH = 64
+_PREFIXED_SHA256_LENGTH = len("sha256:") + _SHA256_HEX_LENGTH
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,9 +176,7 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
 
     """
     if arguments.command == "build-info":
-        build_report = build_info(
-            expected_revision=arguments.expected_revision
-        )
+        build_report = build_info(expected_revision=arguments.expected_revision)
         print(
             json.dumps(
                 asdict(build_report),
@@ -204,13 +213,11 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
 
 
 def _runtime_state() -> dict[str, object]:
-    """只读报告当前活动 alias、manifest 与 point 身份。"""
+    """只读报告索引、构建和 serving 合同的完整身份。"""
     settings = RuntimeSettings()  # type: ignore[call-arg]
     require_release_revision(settings)
     pipeline = load_pipeline(settings.pipeline_path)
-    active = ReadOnlyManifestRepository(
-        settings.manifest_database
-    ).get_active()
+    active = ReadOnlyManifestRepository(settings.manifest_database).get_active()
     if active is None:
         raise ValueError("runtime-state 缺少 active manifest。")
     client = QdrantClient(
@@ -234,14 +241,115 @@ def _runtime_state() -> dict[str, object]:
         client.close()
     if active.manifest.pipeline_fingerprint != pipeline.fingerprint():
         raise ValueError("runtime-state index fingerprint 不一致。")
+    if (
+        not isinstance(point_count, int)
+        or isinstance(point_count, bool)
+        or point_count <= 0
+    ):
+        raise ValueError("runtime-state point count 无效。")
+    if len(active.manifest_sha256) != _SHA256_HEX_LENGTH or any(
+        character not in "0123456789abcdef"
+        for character in active.manifest_sha256
+    ):
+        raise ValueError("runtime-state manifest SHA256 无效。")
+    installed_revision = SOURCE_REVISION
+    serving_fingerprint = build_serving_fingerprint(settings)
+    if (
+        len(serving_fingerprint) != _PREFIXED_SHA256_LENGTH
+        or not serving_fingerprint.startswith("sha256:")
+        or any(
+            character not in "0123456789abcdef"
+            for character in serving_fingerprint[7:]
+        )
+    ):
+        raise ValueError("runtime-state serving fingerprint 无效。")
+    trace_schema_version = _trace_schema_version(settings.trace_database)
     return {
         "active_collection": collection,
         "alias": settings.qdrant_alias,
         "index_fingerprint": pipeline.fingerprint(),
+        "installed_revision": installed_revision,
         "manifest_sha256": active.manifest_sha256,
         "point_count": point_count,
+        "production_ready": settings.run_mode is RunMode.PRODUCTION,
+        "release_matches": installed_revision == settings.release_revision,
         "release_revision": settings.release_revision,
+        "run_mode": settings.run_mode.value,
+        "schema_version": "2",
+        "serving_fingerprint": serving_fingerprint,
+        "trace_question_capture": settings.trace_question_capture.value,
+        "trace_question_retention_seconds": (
+            settings.trace_question_retention_seconds
+        ),
+        "trace_schema_version": trace_schema_version,
+        "ui_cookie_secure": settings.ui_cookie_secure,
+        "ui_query_auth_mode": settings.ui_query_auth_mode.value,
     }
+
+
+def _trace_schema_version(database: Path) -> int:
+    """只读核对实际 Trace SQLite 已完整迁移到当前 schema。
+
+    Args:
+        database: 当前运行时 Trace SQLite 文件。
+
+    Returns:
+        已核验与代码合同一致的 SQLite user_version。
+
+    Raises:
+        ValueError: 数据库缺失、版本不符或问题字段不完整。
+
+    """
+    if not database.is_file() or database.is_symlink():
+        raise ValueError("runtime-state Trace database 无效。")
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(traces)")
+        }
+    finally:
+        connection.close()
+    if version != TRACE_SCHEMA_VERSION or not {
+        "question_text",
+        "question_sha256",
+    }.issubset(columns):
+        raise ValueError("runtime-state Trace schema 不一致。")
+    return version
+
+
+def build_serving_fingerprint(settings: RuntimeSettings) -> str:
+    """从当前外部配置计算查询服务指纹。
+
+    Args:
+        settings: 已完成环境校验的运行设置。
+
+    Returns:
+        绑定 pipeline、retrieval 与语义路由合同的 SHA256 指纹。
+
+    """
+    pipeline = load_pipeline(settings.pipeline_path)
+    retrieval = RetrievalSettings.load(settings.retrieval_path)
+    router = load_intent_router_config(settings.intent_router_path)
+    calibration = load_question_profile_calibration(
+        settings.intent_router_calibration_path
+    )
+    return retrieval.serving_fingerprint(
+        pipeline,
+        question_profile_identity={
+            "intent_router_sha256": router.canonical_sha256,
+            "calibration_sha256": calibration.canonical_sha256,
+            "router_revision": router.router_revision,
+            "active_mode": router.mode.value,
+            "question_profile_schema_revision": (
+                QUESTION_PROFILE_SCHEMA_REVISION
+            ),
+            "llm_classifier_contract_revision": (
+                LLM_CLASSIFIER_CONTRACT_REVISION
+            ),
+        },
+    )
 
 
 def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
@@ -276,9 +384,7 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
     try:
         collector = IndexGarbageCollector(
             client=client,
-            manifests=ReadOnlyManifestRepository(
-                settings.manifest_database
-            ),
+            manifests=ReadOnlyManifestRepository(settings.manifest_database),
             control=ReadOnlyJobStore(settings.state_database),
             config=GarbageCollectorConfig(
                 alias_name=settings.qdrant_alias,
@@ -487,9 +593,7 @@ def _parser() -> argparse.ArgumentParser:
     selfcheck.add_argument(
         "--tokenizer",
         type=Path,
-        default=Path(
-            "/app/deployment/assets/tokenizers/llm/tokenizer.json"
-        ),
+        default=Path("/app/deployment/assets/tokenizers/llm/tokenizer.json"),
     )
     selfcheck.add_argument(
         "--frontend",

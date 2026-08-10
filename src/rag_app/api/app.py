@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import json
 import uuid
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -74,6 +74,18 @@ _SHA256_HEX_LENGTH = 64
 _QUESTION_PREVIEW_CHARACTERS = 120
 _MIN_UI_SESSION_TTL_SECONDS = 60
 _MAX_UI_SESSION_TTL_SECONDS = 3600
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; "
+    "base-uri 'none'; "
+    "connect-src 'self'; "
+    "font-src 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'; "
+    "img-src 'self' data:; "
+    "object-src 'none'; "
+    "script-src 'self'; "
+    "style-src 'self'"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +178,30 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
         openapi_url=None,
     )
     app.state.services = services
+
+    @app.middleware("http")
+    async def add_browser_security_headers(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        """为本地前端与 API 响应增加统一浏览器防护头。
+
+        Args:
+            request: 当前 HTTP 请求。
+            call_next: FastAPI 提供的下游 ASGI 调用器。
+
+        Returns:
+            增加 CSP、referrer、MIME 与 framing 防护的原响应。
+
+        """
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            _CONTENT_SECURITY_POLICY
+        )
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        return response
 
     frontend_dir = services.frontend_dir
     if frontend_dir is not None:

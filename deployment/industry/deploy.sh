@@ -28,11 +28,8 @@ validate_industry_compose "${env_file}" "${compose_file}" \
 ocr_mode="$(exact_env_value "${env_file}" RAG_OCR_MODE)"
 backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
 mkdir -p -- "${backup_path}"
-previous_env=""
-if [[ -f "${backup_path}/last-good.env" \
-  && ! -L "${backup_path}/last-good.env" ]]; then
-  previous_env="${backup_path}/last-good.env"
-fi
+previous_last_good="$(industry_last_good_identity \
+  "${backup_path}" 2>/dev/null || true)"
 write_industry_release_state "${env_file}" candidate \
   || industry_fail "INDUSTRY_CANDIDATE_STATE_FAILED"
 
@@ -70,8 +67,8 @@ if [[ "${deploy_ok}" == true ]]; then
 fi
 
 if [[ "${deploy_ok}" != true ]]; then
-  if [[ -n "${previous_env}" && -f "${previous_env}" ]]; then
-    bash "${release_dir}/rollback.sh" "${previous_env}" \
+  if [[ -n "${previous_last_good}" ]]; then
+    bash "${release_dir}/rollback.sh" "${backup_path}" \
       || industry_fail "部署失败且上一 Industry release 恢复失败。"
     industry_fail "部署失败，已恢复上一 Industry release。"
   fi

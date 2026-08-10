@@ -26,8 +26,6 @@ let selectedTrace = null;
 let artifactPayloads = new Map();
 let pageTraceIds = [];
 const selectedTraceIds = new Set();
-const storedAdminToken = sessionStorage.getItem("ragv1.adminToken");
-if (storedAdminToken) tokenNode.value = storedAdminToken;
 
 function headers() {
   return { Authorization: `Bearer ${tokenNode.value}` };
@@ -50,7 +48,6 @@ async function adminFetch(path, options = {}) {
     cache: "no-store",
   });
   if (!response.ok) throw new Error(`请求失败：${response.status}`);
-  sessionStorage.setItem("ragv1.adminToken", tokenNode.value);
   return response;
 }
 

@@ -146,6 +146,7 @@ def _trace(
     *,
     mode: TraceMode = TraceMode.FULL,
     created_at: datetime | None = None,
+    question_text: str | None = None,
 ) -> TraceRecord:
     created = created_at or datetime.now(UTC)
     ttl = timedelta(hours=72) if mode is TraceMode.FULL else timedelta(days=30)
@@ -168,6 +169,12 @@ def _trace(
         feedback_useful=None,
         capture_complete=True,
         expires_at=created + ttl,
+        question_text=question_text,
+        question_sha256=(
+            None
+            if question_text is None
+            else hashlib.sha256(question_text.encode("utf-8")).hexdigest()
+        ),
     )
 
 
@@ -328,6 +335,43 @@ def test_admin_can_batch_export_selected_traces_as_zip(
             },
         ]
     }
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "<script>alert(1)</script>",
+        "<img src=x onerror=alert(1)>",
+        "第一行\n第二行\r\n第三行",
+        "问题🙂漢字" * 300,
+    ),
+)
+def test_trace_question_api_preserves_text_as_json_for_safe_text_content(
+    trace_api: _ApiContext,
+    question: str,
+) -> None:
+    trace_id = uuid.uuid4().hex
+    trace_api.store.create_trace(_trace(trace_id, question_text=question))
+    headers = _bearer(trace_api.admin_token)
+
+    listed = trace_api.client.get(
+        f"/api/admin/traces?trace_id={trace_id}", headers=headers
+    )
+    detail = trace_api.client.get(
+        f"/api/admin/traces/{trace_id}", headers=headers
+    )
+
+    assert listed.status_code == 200
+    assert detail.status_code == 200
+    assert listed.headers["content-type"].startswith("application/json")
+    assert detail.headers["content-type"].startswith("application/json")
+    assert listed.json()["items"][0]["question_preview"] == question[:120]
+    assert detail.json()["trace"]["question_text"] == question
+    javascript = (Path(__file__).parents[1] / "frontend/debug.js").read_text(
+        encoding="utf-8"
+    )
+    assert "traceQuestionNode.textContent" in javascript
+    assert "innerHTML" not in javascript
 
 
 def test_batch_export_rejects_empty_duplicate_or_missing_trace(

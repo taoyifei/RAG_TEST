@@ -56,8 +56,8 @@ def test_trace_page_opens_prefilled_trace_detail() -> None:
     assert 'get("trace_id")' in javascript
     assert "loadDetail(traceId)" in javascript
     assert "请先填写管理令牌" in javascript
-    assert "sessionStorage.getItem" in javascript
-    assert "sessionStorage.setItem" in javascript
+    assert "sessionStorage" not in javascript
+    assert "localStorage" not in javascript
     assert 'id="select-page"' in html
     assert 'id="export-selected"' in html
     assert "/api/admin/traces/export" in javascript

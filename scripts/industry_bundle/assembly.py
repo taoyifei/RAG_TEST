@@ -58,6 +58,7 @@ _RELEASE_FILES = (
     "package_selfcheck.py",
     "preflight_endpoints.py",
     "runtime_check.py",
+    "last_good.py",
 )
 _EXECUTABLE_FILES = {
     "preflight.sh",
@@ -67,6 +68,7 @@ _EXECUTABLE_FILES = {
     "verify.sh",
     "rollback.sh",
     "generate-secrets.sh",
+    "last_good.py",
 }
 _CONFIG_FILES = (
     "pipeline.json",
@@ -576,6 +578,8 @@ def _copy_release_files(  # noqa: PLR0913
             and release_kind == _REUSE_RELEASE_KIND
             else name
         )
+        if name == "last_good.py":
+            source_name = "serving_last_good.py"
         source = source_root / source_name
         if not source.is_file() or source.is_symlink():
             raise IndustryReleaseError(f"Industry 部署文件缺失：{name}")
