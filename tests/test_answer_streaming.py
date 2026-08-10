@@ -90,6 +90,63 @@ def _bundle(text: str) -> EvidenceBundle:
     ).assemble((hit,))
 
 
+def _multi_anchor_bundle() -> EvidenceBundle:
+    hits: list[RerankedHit] = []
+    for rank, (source, text) in enumerate(
+        (
+            ("GM-07", "技术文件原稿由品质部归档保存。"),
+            ("GM-09", "仓库物品应离地、离墙存放。"),
+        ),
+        start=1,
+    ):
+        locator = {
+            "file_path": f"{source} 管理制度.docx",
+            "heading_path": ["要求"],
+            "paragraph_index": rank,
+            "fragment": text,
+        }
+        hits.append(
+            RerankedHit(
+                rank=rank,
+                rerank_score=1.0,
+                hit=FusedHit(
+                    chunk_id=f"chunk-{rank}",
+                    rrf_score=0.1,
+                    channel_ranks=(("q0:dense", rank),),
+                    payload={
+                        "chunk_id": f"chunk-{rank}",
+                        "source_id": f"source-{rank}",
+                        "neighbor_group_id": f"neighbor-{rank}",
+                        "text": text,
+                        "embedding_text": text,
+                        "locators": [locator],
+                        "source_spans": [
+                            {
+                                "element_id": f"element-{rank}",
+                                "locator": locator,
+                                "start_char": 0,
+                                "end_char": len(text),
+                                "source_start_char": 0,
+                                "source_end_char": len(text),
+                                "is_repeated": False,
+                            }
+                        ],
+                        "contains_ocr": False,
+                        "minimum_ocr_confidence": None,
+                    },
+                ),
+            )
+        )
+    return EvidenceAssembler(
+        Utf8TokenCounter(),
+        EvidenceConfig(
+            max_evidence_tokens=2048,
+            max_items=4,
+            low_ocr_threshold=0.8,
+        ),
+    ).assemble(tuple(hits))
+
+
 def _sse(payload: object) -> bytes:
     return (
         "data: "
@@ -331,3 +388,49 @@ def test_streaming_does_not_emit_unsupported_named_process_claim() -> None:
     )
     assert result.trace.get("extractive_fallback") is None
     assert request_modes == [True, False]
+
+
+def test_multi_anchor_stream_waits_until_all_anchors_are_covered() -> None:
+    evidence = _multi_anchor_bundle()
+    first = json.dumps(
+        {
+            "text": "技术文件原稿由品质部归档保存。",
+            "support_ids": ["E1:S1"],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    second = json.dumps(
+        {
+            "text": "仓库物品应离地、离墙存放。",
+            "support_ids": ["E2:S1"],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    phases: list[str] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return _stream_response(
+            [
+                ("first-anchor", '{"claims":[' + first + ","),
+                ("second-anchor", second + "]}"),
+            ],
+            phases,
+        )
+
+    emitted: list[tuple[str, str]] = []
+    result = _generator(handler).answer_stream(
+        "GM-07 和 GM-09 有什么不同？",
+        evidence,
+        rerank_scores=(1.0, 0.99),
+        on_claim=lambda claim: emitted.append((phases[-1], claim.text)),
+        cancellation=StreamCancellation(),
+    )
+
+    assert emitted == [
+        ("second-anchor", "技术文件原稿由品质部归档保存。"),
+        ("second-anchor", "仓库物品应离地、离墙存放。"),
+    ]
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.answer_mode is AnswerMode.SOURCE_SEPARATED

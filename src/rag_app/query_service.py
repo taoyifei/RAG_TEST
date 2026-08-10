@@ -1246,9 +1246,7 @@ class QueryService:
                 mode,
                 request.now,
                 identity,
-                question_sha256=hashlib.sha256(
-                    request.question.encode("utf-8")
-                ).hexdigest(),
+                question=request.question,
             )
         except Exception:
             if mode is TraceMode.FULL:

@@ -429,6 +429,76 @@ def test_precise_source_id_cannot_be_satisfied_by_overlapping_title() -> None:
     )
 
 
+def test_source_anchor_uses_token_boundary_not_bare_substring() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-gm030",
+            "GM-030 要求仓库物品分类存放。",
+            file_path="GM-030 仓库管理制度.docx",
+            source_id="source-gm030",
+            neighbor_group_id="gm030",
+        )
+    )
+    invalid = {
+        "claims": [
+            {
+                "text": "GM-030 要求仓库物品分类存放。",
+                "support_ids": ["E1:S1"],
+            }
+        ]
+    }
+
+    result = _generator(lambda _: _response(invalid)).answer(
+        "GM-03 有哪些仓库管理要求？",
+        bundle,
+        rerank_scores=(1.0,),
+    )
+
+    assert result.status is AnswerStatus.REFUSED
+    assert result.refusal_code in {
+        RefusalCode.EVIDENCE_INSUFFICIENT,
+        RefusalCode.VALIDATION_FAILED,
+    }
+    assert result.trace["first_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+
+
+def test_source_number_and_quoted_title_must_both_match() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-gm03",
+            "GM-03 规定成品检验要求。",
+            file_path="GM-03 质量管理制度.docx",
+            source_id="source-gm03",
+            neighbor_group_id="gm03",
+        )
+    )
+    invalid = {
+        "claims": [
+            {
+                "text": "GM-03 规定成品检验要求。",
+                "support_ids": ["E1:S1"],
+            }
+        ]
+    }
+
+    result = _generator(lambda _: _response(invalid)).answer(
+        "GM-03《仓库管理制度》有哪些要求？",
+        bundle,
+        rerank_scores=(1.0,),
+    )
+
+    assert result.status is AnswerStatus.REFUSED
+    assert result.refusal_code in {
+        RefusalCode.EVIDENCE_INSUFFICIENT,
+        RefusalCode.VALIDATION_FAILED,
+    }
+    assert result.trace["first_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+
+
 def test_answer_must_cover_every_explicit_source_id() -> None:
     bundle = _bundle(
         _ranked(

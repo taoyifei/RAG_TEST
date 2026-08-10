@@ -197,7 +197,51 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
             )
         )
         return 0
+    if arguments.command == "runtime-state":
+        _print_json(_runtime_state())
+        return 0
     return None
+
+
+def _runtime_state() -> dict[str, object]:
+    """只读报告当前活动 alias、manifest 与 point 身份。"""
+    settings = RuntimeSettings()  # type: ignore[call-arg]
+    require_release_revision(settings)
+    pipeline = load_pipeline(settings.pipeline_path)
+    active = ReadOnlyManifestRepository(
+        settings.manifest_database
+    ).get_active()
+    if active is None:
+        raise ValueError("runtime-state 缺少 active manifest。")
+    client = QdrantClient(
+        url=settings.qdrant_url.rstrip("/"),
+        api_key=settings.qdrant_api_key.get_secret_value(),
+        timeout=30,
+        prefer_grpc=False,
+        check_compatibility=False,
+    )
+    try:
+        targets = {
+            item.collection_name
+            for item in client.get_aliases().aliases
+            if item.alias_name == settings.qdrant_alias
+        }
+        collection = active.manifest.collection_name
+        if targets != {collection}:
+            raise ValueError("runtime-state alias 与 manifest 不一致。")
+        point_count = client.count(collection, exact=True).count
+    finally:
+        client.close()
+    if active.manifest.pipeline_fingerprint != pipeline.fingerprint():
+        raise ValueError("runtime-state index fingerprint 不一致。")
+    return {
+        "active_collection": collection,
+        "alias": settings.qdrant_alias,
+        "index_fingerprint": pipeline.fingerprint(),
+        "manifest_sha256": active.manifest_sha256,
+        "point_count": point_count,
+        "release_revision": settings.release_revision,
+    }
 
 
 def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
@@ -451,6 +495,10 @@ def _parser() -> argparse.ArgumentParser:
         "--frontend",
         type=Path,
         default=Path("/app/frontend"),
+    )
+    subparsers.add_parser(
+        "runtime-state",
+        help="只读报告活动索引与当前 app revision 身份。",
     )
     return parser
 

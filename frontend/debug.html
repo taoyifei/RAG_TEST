@@ -49,7 +49,7 @@
           <table>
             <thead>
               <tr>
-                <th>选择</th><th>Trace ID</th><th>时间</th><th>总耗时</th>
+                <th>选择</th><th>Trace ID</th><th>问题</th><th>时间</th><th>总耗时</th>
                 <th>状态</th><th>拒答/错误</th><th>FULL</th><th>反馈</th>
               </tr>
             </thead>
@@ -72,6 +72,8 @@
           <a id="export-link" href="#">导出 canonical JSON</a>
         </div>
         <div id="diagnostic" class="diagnostic"></div>
+        <h3>完整问题</h3>
+        <pre id="trace-question">旧 Trace 未保存问题正文。</pre>
         <label>
           Expected chunk ID（仅当前浏览器会话）
           <input id="expected-chunk">

@@ -103,7 +103,7 @@ _GENERATION_PARAMETERS: dict[str, JsonValue] = {
 _REWRITE_REQUEST_REVISION = (
     "rewrite-request-v3-discourse-and-verified-claim-references"
 )
-_ANSWER_REQUEST_REVISION = "answer-request-v9-precise-source-anchors"
+_ANSWER_REQUEST_REVISION = "answer-request-v10-boundary-source-anchors"
 _REPAIR_INSTRUCTIONS = {
     "INVALID_JSON": "只输出一个完整 JSON 对象，不得输出 Markdown 或解释。",
     "INVALID_TOP_LEVEL_SCHEMA": "顶层只保留 claims 字段，删除其他字段。",

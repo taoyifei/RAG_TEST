@@ -77,7 +77,7 @@ from rag_app.state.intent_router_cache import (
 from rag_app.state.jobs import JobStore
 from rag_app.strict_json import load_json_file
 from rag_app.tracing.models import TraceIdentity, TraceMode
-from rag_app.tracing.recorder import TraceRecorder
+from rag_app.tracing.recorder import TraceRecorder, TraceRecorderConfig
 from rag_app.tracing.store import TraceStore
 
 __all__ = [
@@ -401,6 +401,9 @@ def _assemble_runtime(  # noqa: PLR0913, PLR0917
             trace_id,
             code.value,
         ),
+        config=TraceRecorderConfig(
+            question_capture=settings.trace_question_capture,
+        ),
     )
     rollback.callback(trace_recorder.close)
     query = _build_query_service(
@@ -483,6 +486,9 @@ def _assemble_runtime(  # noqa: PLR0913, PLR0917
             audit=logger,
             trace_store=trace_store,
             trace_recorder=trace_recorder,
+            ui_query_auth_mode=settings.ui_query_auth_mode,
+            ui_session_cookie_secure=settings.ui_session_cookie_secure,
+            ui_session_ttl_seconds=settings.ui_session_ttl_seconds,
         )
     )
     readiness.start()

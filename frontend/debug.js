@@ -6,6 +6,7 @@ const listNode = document.querySelector("#trace-list");
 const detailSection = document.querySelector("#detail-section");
 const selectedTraceNode = document.querySelector("#selected-trace");
 const diagnosticNode = document.querySelector("#diagnostic");
+const traceQuestionNode = document.querySelector("#trace-question");
 const waterfallNode = document.querySelector("#waterfall");
 const funnelNode = document.querySelector("#funnel");
 const tabsNode = document.querySelector("#artifact-tabs");
@@ -113,6 +114,7 @@ async function loadList() {
     button.addEventListener("click", () => loadDetail(trace.trace_id));
     traceCell.append(button);
     row.append(traceCell);
+    appendCell(row, trace.question_preview);
     appendCell(row, trace.created_at);
     appendCell(row, trace.duration_ms === null ? "—" : `${trace.duration_ms} ms`);
     appendCell(row, trace.status);
@@ -277,6 +279,8 @@ async function loadDetail(traceId) {
   const response = await adminFetch(`/api/admin/traces/${traceId}`);
   selectedTrace = await response.json();
   selectedTraceNode.textContent = traceId;
+  traceQuestionNode.textContent =
+    selectedTrace.trace.question_text || "旧 Trace 未保存问题正文。";
   diagnosticNode.textContent = diagnostic(selectedTrace);
   detailSection.hidden = false;
   exportLink.href = `/api/admin/traces/${traceId}/export`;

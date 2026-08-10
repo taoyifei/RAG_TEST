@@ -1,4 +1,4 @@
-"""Query Trace v1 的公开契约和运行组件。"""
+"""Query Trace v2 的公开契约和运行组件。"""
 
 from rag_app.tracing.exporter import NullTraceExporter, TraceExporter
 from rag_app.tracing.models import (
@@ -15,6 +15,7 @@ from rag_app.tracing.models import (
     TraceListFilter,
     TraceMode,
     TracePage,
+    TraceQuestionCapture,
     TraceRecord,
     TraceStatus,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "TraceMode",
     "TraceNotFoundError",
     "TracePage",
+    "TraceQuestionCapture",
     "TraceRecord",
     "TraceRecorder",
     "TraceRecorderConfig",

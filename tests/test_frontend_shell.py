@@ -63,3 +63,7 @@ def test_trace_page_opens_prefilled_trace_detail() -> None:
     assert "/api/admin/traces/export" in javascript
     assert "downloadResponse" in javascript
     assert "全选当前页" in html
+    assert 'id="trace-question"' in html
+    assert "trace.question_preview" in javascript
+    assert "selectedTrace.trace.question_text" in javascript
+    assert "innerHTML" not in javascript

@@ -40,11 +40,14 @@ __all__ = [
 ]
 
 _DEFAULT_ARTIFACT_LIMIT = 5 * 1024 * 1024
+_SCHEMA_VERSION = 2
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces (
     trace_id TEXT PRIMARY KEY,
     schema_version TEXT NOT NULL,
     mode TEXT NOT NULL,
+    question_text TEXT,
+    question_sha256 TEXT,
     created_at TEXT NOT NULL,
     finished_at TEXT,
     duration_ms INTEGER,
@@ -205,8 +208,11 @@ class TraceStore:
             connection.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
-            connection.executescript(_SCHEMA)
-            connection.commit()
+            try:
+                _initialize_schema(connection)
+            except Exception:
+                connection.close()
+                raise
             self._connection = connection
 
     def healthcheck(self) -> None:
@@ -243,20 +249,23 @@ class TraceStore:
             connection.execute(
                 """
                 INSERT INTO traces (
-                    trace_id, schema_version, mode, created_at,
+                    trace_id, schema_version, mode, question_text,
+                    question_sha256, created_at,
                     finished_at, duration_ms, pipeline_fingerprint,
                     serving_fingerprint, release_revision,
                     active_collection, index_manifest_sha256,
                     payload_schema_version, status, refusal_code,
                     error_code, feedback_useful, capture_complete,
                     expires_at
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?,
                           NULL, NULL, NULL, ?, ?)
                 """,
                 (
                     trace.trace_id,
                     trace.schema_version,
                     trace.mode.value,
+                    trace.question_text,
+                    trace.question_sha256,
                     _timestamp(trace.created_at),
                     trace.pipeline_fingerprint,
                     trace.serving_fingerprint,
@@ -826,6 +835,58 @@ def _canonical_database_path(path: Path) -> Path:
     return canonical_parent / path.name
 
 
+def _initialize_schema(connection: sqlite3.Connection) -> None:
+    """创建 Trace v2 schema 或原子升级完整的 v1 schema。
+
+    Args:
+        connection: 已配置安全 PRAGMA 的独占 Store 连接。
+
+    Raises:
+        ValueError: schema 版本未知或问题字段处于部分迁移状态。
+
+    """
+    trace_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='traces'"
+    ).fetchone()
+    if trace_table is None:
+        connection.executescript(_SCHEMA)
+        connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+        connection.commit()
+        return
+    connection.executescript(_SCHEMA)
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(traces)").fetchall()
+    }
+    question_columns = {"question_text", "question_sha256"} & columns
+    version_row = connection.execute("PRAGMA user_version").fetchone()
+    version = 0 if version_row is None else int(version_row[0])
+    if question_columns and question_columns != {
+        "question_text",
+        "question_sha256",
+    }:
+        raise ValueError("Trace schema 问题字段处于部分迁移状态。")
+    if version not in {0, 1, _SCHEMA_VERSION}:
+        raise ValueError("Trace schema 版本不受支持。")
+    if not question_columns:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            connection.execute(
+                "ALTER TABLE traces ADD COLUMN question_text TEXT"
+            )
+            connection.execute(
+                "ALTER TABLE traces ADD COLUMN question_sha256 TEXT"
+            )
+            connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return
+    connection.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+    connection.commit()
+
+
 def _secure_create_database(path: Path) -> None:
     """以私有权限创建数据库文件或验证现有文件权限。
 
@@ -886,6 +947,16 @@ def _trace_from_row(row: sqlite3.Row) -> TraceRecord:
         feedback_useful=None if feedback is None else bool(feedback),
         capture_complete=bool(row["capture_complete"]),
         expires_at=_parse_timestamp(row["expires_at"]),
+        question_text=(
+            None
+            if row["question_text"] is None
+            else str(row["question_text"])
+        ),
+        question_sha256=(
+            None
+            if row["question_sha256"] is None
+            else str(row["question_sha256"])
+        ),
     )
 
 

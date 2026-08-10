@@ -1,5 +1,8 @@
 "use strict";
 
+// Browser Bearer compatibility entrypoint.
+
+const tokenInput = document.querySelector("#token");
 const questionInput = document.querySelector("#question");
 const askButton = document.querySelector("#ask");
 const clearButton = document.querySelector("#clear");
@@ -13,8 +16,6 @@ const viewTraceLink = document.querySelector("#view-trace");
 const usefulButton = document.querySelector("#feedback-useful");
 const notUsefulButton = document.querySelector("#feedback-not-useful");
 const conversationId = crypto.randomUUID();
-let csrfToken = null;
-let sessionReady = null;
 let currentTraceId = null;
 let activeRequestController = null;
 let streamedClaims = new Map();
@@ -31,52 +32,8 @@ const refusalMessages = {
     "已找到相关资料，但回答引用校验未通过，请稍后重试并查看 Trace。",
 };
 
-function requestError(status) {
-  if (status === 401) return new Error("普通问答会话已过期，请重试。");
-  if (status === 403) return new Error("普通问答会话安全校验失败，请刷新页面。");
-  if (status === 429) return new Error("当前请求较多，请稍后重试。");
-  if (status === 503) return new Error("回答服务暂时未就绪，请稍后重试。");
-  return new Error(`请求失败：${status}`);
-}
-
-async function createUiSession() {
-  const response = await fetch("/api/ui/session", {
-    method: "POST",
-    credentials: "same-origin",
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error("普通问答会话初始化失败，请刷新页面。");
-  const payload = await response.json();
-  if (typeof payload.csrf_token !== "string" || !payload.csrf_token) {
-    throw new Error("普通问答会话初始化失败，请刷新页面。");
-  }
-  csrfToken = payload.csrf_token;
-}
-
-function ensureUiSession() {
-  if (sessionReady === null) sessionReady = createUiSession();
-  return sessionReady;
-}
-
-async function uiFetch(path, options = {}, allowRefresh = true) {
-  await ensureUiSession();
-  const { headers: extraHeaders = {}, ...requestOptions } = options;
-  const response = await fetch(path, {
-    ...requestOptions,
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: {
-      ...extraHeaders,
-      "X-CSRF-Token": csrfToken,
-    },
-  });
-  if (response.status === 401 && allowRefresh) {
-    csrfToken = null;
-    sessionReady = createUiSession();
-    await sessionReady;
-    return uiFetch(path, options, false);
-  }
-  return response;
+function authorization() {
+  return { Authorization: `Bearer ${tokenInput.value}` };
 }
 
 function resetOutput() {
@@ -147,8 +104,8 @@ function renderAnswerProgress(event) {
   renderAnswerState();
 }
 
-function renderInterrupted(message = "回答流中断，已显示内容可能不完整") {
-  streamStatus = message;
+function renderInterrupted() {
+  streamStatus = "回答流中断，已显示内容可能不完整";
   renderAnswerState();
 }
 
@@ -185,23 +142,25 @@ function renderFinal(event) {
 
 async function submitFeedback(useful) {
   if (currentTraceId === null) return;
-  try {
-    const response = await uiFetch("/api/ui/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trace_id: currentTraceId, useful }),
-    });
-    if (!response.ok) throw requestError(response.status);
+  const response = await fetch("/api/feedback", {
+    method: "POST",
+    headers: {
+      ...authorization(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ trace_id: currentTraceId, useful }),
+  });
+  if (response.ok) {
     usefulButton.disabled = true;
     notUsefulButton.disabled = true;
-  } catch (error) {
-    answerNode.textContent = String(error);
+  } else {
+    answerNode.textContent = `反馈失败：${response.status}`;
   }
 }
 
 async function readEvents(response) {
   if (!response.ok || response.body === null) {
-    throw requestError(response.status);
+    throw new Error(`请求失败：${response.status}`);
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -217,7 +176,9 @@ async function readEvents(response) {
       renderFinal(event);
       finalReceived = true;
     }
-    if (event.type === "error") throw new Error("查询执行失败，请稍后重试。");
+    if (event.type === "error") {
+      throw new Error("QUERY_FAILED");
+    }
   }
 
   while (true) {
@@ -232,8 +193,10 @@ async function readEvents(response) {
       handleEvent(JSON.parse(line));
     }
     if (result.done) {
-      if (pending.trim().length > 0) handleEvent(JSON.parse(pending));
-      if (!finalReceived) throw new Error("回答流不完整，请重新提问。");
+      if (pending.trim().length > 0) {
+        handleEvent(JSON.parse(pending));
+      }
+      if (!finalReceived) throw new Error("ANSWER_STREAM_INCOMPLETE");
       return;
     }
   }
@@ -241,28 +204,35 @@ async function readEvents(response) {
 
 askButton.addEventListener("click", async () => {
   const question = questionInput.value.trim();
-  if (!question) return;
-  if (activeRequestController !== null) activeRequestController.abort();
+  if (!question || !tokenInput.value) return;
+  if (activeRequestController !== null) {
+    activeRequestController.abort();
+  }
   const controller = new AbortController();
   activeRequestController = controller;
   resetOutput();
   try {
-    const response = await uiFetch("/api/ui/chat", {
+    const response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: conversationId, question }),
+      headers: {
+        ...authorization(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        question,
+      }),
       signal: controller.signal,
     });
     await readEvents(response);
   } catch (error) {
     if (activeRequestController === controller) {
-      const message = error instanceof DOMException && error.name === "AbortError"
-        ? undefined
-        : String(error);
-      renderInterrupted(message);
+      renderInterrupted();
     }
   } finally {
-    if (activeRequestController === controller) activeRequestController = null;
+    if (activeRequestController === controller) {
+      activeRequestController = null;
+    }
   }
 });
 
@@ -271,12 +241,11 @@ clearButton.addEventListener("click", async () => {
     activeRequestController.abort();
     activeRequestController = null;
   }
-  try {
-    const response = await uiFetch(
-      `/api/ui/conversations/${encodeURIComponent(conversationId)}`,
-      { method: "DELETE" },
-    );
-    if (!response.ok) throw requestError(response.status);
+  const response = await fetch(
+    `/api/conversations/${encodeURIComponent(conversationId)}`,
+    { method: "DELETE", headers: authorization() },
+  );
+  if (response.ok) {
     questionInput.value = "";
     stageList.replaceChildren();
     citationsNode.replaceChildren();
@@ -290,13 +259,15 @@ clearButton.addEventListener("click", async () => {
     notUsefulButton.disabled = true;
     streamedClaims = new Map();
     streamStatus = null;
-  } catch (error) {
-    answerNode.textContent = String(error);
+  } else {
+    answerNode.textContent = `清空失败：${response.status}`;
   }
 });
 
 window.addEventListener("pagehide", () => {
-  if (activeRequestController !== null) activeRequestController.abort();
+  if (activeRequestController !== null) {
+    activeRequestController.abort();
+  }
 });
 
 usefulButton.addEventListener("click", () => submitFeedback(true));
@@ -305,13 +276,4 @@ copyTraceButton.addEventListener("click", async () => {
   if (currentTraceId !== null) {
     await navigator.clipboard.writeText(currentTraceId);
   }
-});
-
-sessionReady = createUiSession();
-sessionReady.then(() => {
-  askButton.disabled = false;
-  clearButton.disabled = false;
-  answerNode.textContent = "尚未提问。";
-}).catch((error) => {
-  answerNode.textContent = String(error);
 });

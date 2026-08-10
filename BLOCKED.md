@@ -1,5 +1,130 @@
 # 阻塞项
 
+## CURRENT STATUS：2026-08-10 本地实现暂停快照
+
+本节是当前唯一的活动状态入口。用户已明确要求本轮停止代码实现，只记录并报告问题，
+等待用户评估方案后再继续。下文既有“已解除”章节是事故历史，不代表本轮新增目标已经
+完成。
+
+### Git 与工作区状态
+
+- 当前分支为 `Industry`，提交基线仍为
+  `cd5e37765b16b6ae9ae46a15f32e669aec652e38`；`main` 仍为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`。任务开始时
+  `origin/Industry` 与该基线一致，Industry 相对 main 为 ahead 4、behind 0。
+- 工作区当前不干净，且没有形成可发布提交：25 个已跟踪文件被修改，9 个文件未跟踪，
+  共 34 个路径。已跟踪 diff 为 `880 insertions, 118 deletions`；新增文件尚未计入该
+  diff 统计。
+- 已跟踪修改涉及 BFF/UI、Trace schema/导出、显式来源锚点、运行时身份命令、两套
+  Compose/env 和对应测试：
+  `deployment/config/pipeline.json`、`deployment/{industry,simple}/.env.example`、
+  `deployment/{industry,simple}/compose.yaml`、`frontend/{app.js,debug.html,debug.js,index.html}`、
+  `src/rag_app/api/app.py`、`src/rag_app/cli.py`、
+  `src/rag_app/generation/{answer.py,evidence.py}`、`src/rag_app/model_contracts.py`、
+  `src/rag_app/query_service.py`、`src/rag_app/runtime.py`、`src/rag_app/settings.py`、
+  `src/rag_app/tracing/{__init__.py,models.py,recorder.py,store.py}`，以及 4 个既有测试文件。
+- 未跟踪文件为 `deployment/industry/update-app.sh`、
+  `scripts/build_industry_app_update.py`、`src/rag_app/api/ui_session.py`、
+  `frontend/{index-bearer.html,app-bearer.js}` 和 4 个新增专项测试文件。它们只是本地候选，
+  不能当成已提交、已构建或已部署能力。
+- 本轮没有修改 main、没有 push、没有访问服务器、没有部署、没有构建镜像或发布包，
+  也没有运行索引、转换 corpus 或重启 worker/OCR/Qdrant。
+
+### 已有但仅限局部的实现与验证证据
+
+- 本地候选已经搭出以下方向：普通页面的 same-origin UI session/CSRF 路由；保留
+  `/api/chat` Bearer 合同和独立 Admin Token；可配置 `hash_only|plaintext` 的 Trace
+  问题采集与 v1→v2 SQLite migration；Trace preview/detail/export；来源编号边界；
+  `rag-app runtime-state`；Industry app-only builder 和 updater 草案。
+- 首次新增红测曾因缺少 `UiQueryAuthMode`、`TraceQuestionCapture` 和
+  `scripts.build_industry_app_update` 在 collection 阶段失败。这是实现前的真实红灯，
+  不是伪造失败。
+- 后续 UI/Trace/anchor 核心小集合曾得到 `14 passed, 1 warning in 1.97s`；Industry
+  builder 单测曾得到 `1 passed in 0.74s`。这些结果只证明对应局部，不覆盖完整任务。
+- 2026-08-10 暂停前重新执行新增 UI session、Trace question、Industry builder、
+  Industry updater 和 asset selfcheck 测试，真实结果为
+  `12 passed, 2 failed, 1 warning in 2.97s`。两个失败均来自
+  `tests/test_industry_app_update_script.py`：
+  `test_update_is_hermetic_force_recreates_only_app_and_preserves_index` 和
+  `test_failed_new_identity_restores_and_reverifies_old_app`。
+- 两个 updater 用例都在更新前以“旧 app index fingerprint 与更新包不一致”退出，
+  尚未进入新 app force-recreate 或回滚验证。直接触发点是 updater 用 `sed` 匹配紧凑
+  JSON，而测试替身输出的合法 JSON 在冒号后含空格，导致 fingerprint 解析为空。即使
+  当前 `rag-app asset-selfcheck` 恰好输出紧凑 JSON，这种字符串解析仍是脆弱接口；后续
+  应决定用 JSON parser 修复脚本，或至少建立明确且受测的输出合同，不能把两条失败改写
+  成 updater 已通过。
+- `bash -n deployment/industry/update-app.sh` 当前通过；6 个新增 Python 文件通过只读
+  AST 解析。`git diff --check` 当前通过。这些只属于语法/空白检查，不证明运行语义。
+- 修改前记录的 index fingerprint 为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`，
+  serving fingerprint 为
+  `sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b`。
+  当前尚未完成最终资产装配和前后 fingerprint 门禁，不能声明修改后 identity 已冻结。
+
+### 当前活动阻塞与风险
+
+1. **Industry updater 仍是红灯。** 成功更新路径、失败回滚路径、旧状态完整复验都没有被
+   当前行为测试真正执行；`deployment/industry/update-app.sh` 的 427 行候选脚本不可用于
+   服务器。
+2. **资产清单已漂移。** 直接运行本地 `rag-app asset-selfcheck` 失败，准确错误为
+   `资源 SHA256 不一致：deployment/config/pipeline.json`。当前不能构建可信 app image；
+   `deployment/ASSETS.sha256` 必须在最终 prompt/pipeline 决定后再更新并复验，不能为让
+   测试通过而提前掩盖中间状态。
+3. **Compose 环境隔离未覆盖完整部署链。** 目前只在新增 updater 草案中尝试 hermetic
+   Compose；`deployment/simple` 与 `deployment/industry` 的 preflight/deploy/index/
+   verify/rollback 入口尚未全部改造和污染环境反测。历史的 `RAG_PORT=8188` 覆盖
+   training 8088 风险仍存在。
+4. **last-good 两阶段晋升未实现。** 现有 Industry deploy/index/verify 脚本没有形成
+   `candidate -> deployed -> indexed -> verified -> last_good` 状态机；deploy 成功但
+   index 或 smoke 失败时仍缺少可靠的不晋升证据，中断恢复和 rollback 恢复上一
+   last-good 也未覆盖。
+5. **OCR ownership-aware preflight 未实现。** `deployment/industry/preflight.sh` 本轮
+   没有修改，空闲 GPU、当前受管 Industry OCR、未知 PID、training OCR、镜像/revision
+   不匹配和 external OCR 六类矩阵均未验证；历史自占用误报仍可能复现。
+6. **desired/observed 终态门禁只有草案。** 新 updater 代码虽尝试检查 env、Compose、
+   image ID、OCI/wheel revision、8188、live/ready、alias/manifest/point、mount 和其他
+   容器 identity，但 updater 红测在前置 fingerprint 阶段就中止，因此这些检查尚无
+   行为证据，也未成为所有部署入口共享的受测能力。
+7. **BFF 安全测试矩阵不完整。** 当前有 token-free 资产、Cookie 属性、CSRF、Origin、
+   伪造 Cookie、Admin 隔离和 `/api/chat` Bearer 兼容的局部测试；仍缺独立的 session
+   expiry、HTTPS Secure Cookie、取消传播、429/503、stream incomplete、响应/日志全局
+   secret 扫描和反向代理 Host/scheme 边界证据。Industry 内网 HTTP 显式关闭 Secure
+   的风险也尚未写入运维文档。
+8. **Trace plaintext 验证矩阵不完整。** 当前有 hash-only、plaintext、v1→v2 幂等迁移
+   和 partial schema fail-closed 的局部测试；仍需完整证明 list preview、detail、单 JSON、
+   ZIP manifest/文件名、XSS `textContent`、prune、普通日志不落正文，以及 SAFE/
+   DIAGNOSTIC/FULL 与 capture 配置组合。明文沿用 Trace TTL 的保留与备份敏感数据策略
+   也尚未进入文档。
+9. **来源锚点只完成局部合同测试。** GM-03/GM-030、多个编号整体覆盖和 multi-anchor
+   commit barrier 的候选测试/修改尚未经过任务要求的完整专项、Industry 20 smoke 合同
+   回归或真实服务器问题验证；不能据此宣称现网回答行为已改善。
+10. **完整门禁均未完成。** 尚未完成 compileall、Ruff、strict mypy、Google docstring、
+    `node tests/frontend_stream_test.mjs`、两套 shell `bash -n`、两套 Compose config、
+    release safety、package selfcheck、既有 app-update/Industry/Trace/Query 合同测试或可行时
+    的全量 pytest。当前只知道新专项仍有 2 个确定失败。
+11. **文档信息架构未完成。** `PROGRESS.md` 尚未增加本目标 CURRENT STATUS，
+    `BLOCKED.md` 仍保留较长历史事故，`INCIDENTS.md` 尚未创建；本节仅先建立不误判的
+    当前入口，未重写历史事实。
+12. **没有提交和制品。** 当前无本地 commit，无
+    `artifacts/industry-app-update/<sha12>/`，无四文件 exact set、各文件 SHA256、fresh
+    extraction/selfcheck 或 clean-build 证据；`reindex_required=false` 也没有最终包级
+    证明。
+
+### 后续继续前是否需要额外信息
+
+- 定位当前两个 updater 红灯不需要服务器信息，也不需要用户提供新日志；本地测试已经
+  把失败收敛到 fingerprint JSON 解析边界。修复方式应在用户重新授权代码修改后决定。
+- 完成本地实现也不需要登录 `.54/.57/.58/.60`。只有后续真实部署验收才需要在全新
+  shell 记录更新前后的 app/OCR/Qdrant 容器 identity、alias、manifest SHA、point count、
+  mount、端口和 live/ready；本轮禁止获取这些数据。
+- 仍需用户最终接受两项明确策略：Industry 为内网 HTTP 时是否接受
+  `Secure=false` 的短期 UI Cookie 风险，或要求先提供 HTTPS/反向代理；以及问题明文是
+  仅沿用现有 Trace TTL，还是增加独立且更短的 plaintext retention。两项选择不会改变
+  `/api/chat` Bearer 与 Admin Token 必须继续独立的边界。
+- 根据用户最近贴出的现场输出，training 8088 与 Industry 8188 当时均为 healthy，
+  Industry 20 smoke 当时为 `smoke_passed=20`。这是用户提供的历史现场证据，本轮未重新
+  访问服务器，可能随外部状态变化；不能作为当前本地候选已部署或已验收的证明。
+
 ## Industry 仍需人工或服务器现场完成
 
 - LibreOffice Writer 阻塞已解除。用户授权后固定 Ubuntu Jammy Writer package 只安装

@@ -30,6 +30,8 @@ __all__ = [
     "decide_answerability",
     "required_question_anchors",
     "strong_question_anchors",
+    "text_covers_question_anchors",
+    "text_supports_question_anchor",
 ]
 
 _UNTRUSTED_DATA_NOTICE = (
@@ -492,7 +494,7 @@ def decide_answerability(
         for unit in evidence.units
         if not unit.low_confidence_ocr
     )
-    covered = sum(anchor.casefold() in searchable for anchor in anchors)
+    covered = sum(_anchor_present(anchor, searchable) for anchor in anchors)
     top_score = rerank_scores[0] if rerank_scores else 0.0
     non_low_ocr = sum(not item.low_confidence_ocr for item in evidence.items)
 
@@ -525,8 +527,41 @@ def strong_question_anchors(question: str) -> tuple[str, ...]:
 
 def required_question_anchors(question: str) -> tuple[str, ...]:
     """返回证据必须覆盖的最精确问题锚点。"""
-    precise = _anchors_for_patterns(question, _PRECISE_ANCHOR_PATTERNS)
-    return precise or strong_question_anchors(question)
+    return strong_question_anchors(question)
+
+
+def text_supports_question_anchor(
+    searchable: str,
+    anchors: tuple[str, ...],
+) -> bool:
+    """判断文本是否以边界语义支持任一问题锚点。
+
+    Args:
+        searchable: 来源标签与证据正文组成的待查文本。
+        anchors: 已从问题提取的显式锚点。
+
+    Returns:
+        至少一个锚点被直接支持时为真。
+
+    """
+    return any(_anchor_present(anchor, searchable) for anchor in anchors)
+
+
+def text_covers_question_anchors(
+    searchable: str,
+    anchors: tuple[str, ...],
+) -> bool:
+    """判断文本是否以边界语义覆盖全部问题锚点。
+
+    Args:
+        searchable: 来源标签与证据正文组成的待查文本。
+        anchors: 已从问题提取的显式锚点。
+
+    Returns:
+        每个锚点都被直接支持时为真。
+
+    """
+    return all(_anchor_present(anchor, searchable) for anchor in anchors)
 
 
 def _anchors_for_patterns(
@@ -541,6 +576,17 @@ def _anchors_for_patterns(
             if anchor not in anchors:
                 anchors.append(anchor)
     return tuple(anchors)
+
+
+def _anchor_present(anchor: str, searchable: str) -> bool:
+    normalized_anchor = anchor.casefold()
+    normalized_searchable = searchable.casefold()
+    if re.fullmatch(r"[a-z0-9-]+", normalized_anchor) is None:
+        return normalized_anchor in normalized_searchable
+    pattern = re.compile(
+        rf"(?<![a-z0-9-]){re.escape(normalized_anchor)}(?![a-z0-9-])"
+    )
+    return pattern.search(normalized_searchable) is not None
 
 
 def _suspected_prompt_injection(text: str) -> bool:

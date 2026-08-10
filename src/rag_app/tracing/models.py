@@ -1,7 +1,8 @@
-"""Query Trace v1 的不可变持久契约。"""
+"""Query Trace v2 的不可变持久契约。"""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,7 @@ __all__ = [
     "TraceListFilter",
     "TraceMode",
     "TracePage",
+    "TraceQuestionCapture",
     "TraceRecord",
     "TraceStatus",
 ]
@@ -38,6 +40,7 @@ _ARTIFACT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _FINGERPRINT_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_TRACE_PAGE_SIZE = 200
+_MAX_QUESTION_CHARACTERS = 4000
 
 
 class TraceMode(StrEnum):
@@ -46,6 +49,13 @@ class TraceMode(StrEnum):
     SAFE = "SAFE"
     DIAGNOSTIC = "DIAGNOSTIC"
     FULL = "FULL"
+
+
+class TraceQuestionCapture(StrEnum):
+    """控制根 Trace 是否保存原始问题正文。"""
+
+    HASH_ONLY = "hash_only"
+    PLAINTEXT = "plaintext"
 
 
 class TraceStatus(StrEnum):
@@ -199,6 +209,8 @@ class TraceRecord:
     feedback_useful: bool | None
     capture_complete: bool
     expires_at: datetime
+    question_text: str | None = None
+    question_sha256: str | None = None
 
     def __post_init__(self) -> None:
         """校验根 Trace 的稳定身份、时间和终态一致性。"""
@@ -230,6 +242,24 @@ class TraceRecord:
             raise ValueError("payload_schema_version 必须为正数。")
         if self.expires_at <= self.created_at:
             raise ValueError("expires_at 必须晚于 created_at。")
+        if self.question_sha256 is not None:
+            _require_pattern(
+                "question_sha256",
+                self.question_sha256,
+                _SHA256_PATTERN,
+            )
+        if self.question_text is not None:
+            if (
+                not self.question_text
+                or len(self.question_text) > _MAX_QUESTION_CHARACTERS
+                or "\x00" in self.question_text
+            ):
+                raise ValueError("question_text 长度或字符无效。")
+            expected_sha256 = hashlib.sha256(
+                self.question_text.encode("utf-8")
+            ).hexdigest()
+            if self.question_sha256 != expected_sha256:
+                raise ValueError("question_text 与 question_sha256 不一致。")
         if self.status is TraceStatus.RUNNING:
             if self.finished_at is not None or self.duration_ms is not None:
                 raise ValueError("RUNNING Trace 不能包含结束时间。")

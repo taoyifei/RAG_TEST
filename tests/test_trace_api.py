@@ -400,6 +400,58 @@ def test_batch_export_records_safe_question_hash_without_question_body(
     ).hexdigest()
 
 
+def test_admin_list_previews_detail_and_export_full_plaintext_question(
+    trace_api: _ApiContext,
+) -> None:
+    trace_id = "d" * 32
+    question = "<script>alert('xss')</script>" + "问题" * 80
+    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()
+    trace_api.store.create_trace(
+        _trace(trace_id).__class__(
+            **{
+                **_trace(trace_id).as_dict(),
+                "schema_version": "2",
+                "question_text": question,
+                "question_sha256": digest,
+            }
+        )
+    )
+    headers = _bearer(trace_api.admin_token)
+
+    listed = trace_api.client.get("/api/admin/traces", headers=headers)
+    detail = trace_api.client.get(
+        f"/api/admin/traces/{trace_id}",
+        headers=headers,
+    )
+    single = trace_api.client.get(
+        f"/api/admin/traces/{trace_id}/export",
+        headers=headers,
+    )
+    batch = trace_api.client.post(
+        "/api/admin/traces/export",
+        headers=headers,
+        json={"trace_ids": [trace_id]},
+    )
+
+    item = listed.json()["items"][0]
+    assert item["question_preview"] == question[:120]
+    assert len(item["question_preview"]) == 120
+    assert item["question_sha256"] == digest
+    assert "question_text" not in item
+    assert detail.json()["trace"]["question_text"] == question
+    assert json.loads(single.content)["trace"]["question_text"] == question
+    with ZipFile(BytesIO(batch.content)) as archive:
+        assert archive.namelist() == [
+            f"{trace_id}.json",
+            "TRACE_EXPORT_MANIFEST.json",
+        ]
+        manifest = json.loads(archive.read("TRACE_EXPORT_MANIFEST.json"))
+        exported = json.loads(archive.read(f"{trace_id}.json"))
+    assert question not in json.dumps(manifest, ensure_ascii=False)
+    assert manifest["traces"][0]["question_sha256"] == digest
+    assert exported["trace"]["question_text"] == question
+
+
 def test_artifact_cannot_cross_trace_and_expired_returns_410(
     trace_api: _ApiContext,
 ) -> None:

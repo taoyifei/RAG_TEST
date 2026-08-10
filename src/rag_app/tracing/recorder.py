@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -25,6 +26,7 @@ from rag_app.tracing.models import (
     TraceFinish,
     TraceIdentity,
     TraceMode,
+    TraceQuestionCapture,
     TraceRecord,
     TraceStatus,
 )
@@ -62,6 +64,7 @@ class TraceRecorderConfig:
     queue_size: int = _DEFAULT_QUEUE_SIZE
     wait_seconds: float = _DEFAULT_WAIT_SECONDS
     prune_interval_seconds: float = _DEFAULT_PRUNE_INTERVAL_SECONDS
+    question_capture: TraceQuestionCapture = TraceQuestionCapture.HASH_ONLY
 
     def __post_init__(self) -> None:
         """校验所有资源边界为正数。
@@ -603,6 +606,7 @@ class TraceRecorder:
         )
         self._wait_seconds = resolved_config.wait_seconds
         self._prune_interval_seconds = resolved_config.prune_interval_seconds
+        self._question_capture = resolved_config.question_capture
         self._state_lock = threading.Lock()
         self._accepting = True
         self._closed = False
@@ -655,6 +659,7 @@ class TraceRecorder:
         created_at: datetime,
         identity: TraceIdentity,
         *,
+        question: str | None = None,
         question_sha256: str | None = None,
     ) -> TraceSession:
         """开始带固定保留期和运行身份的查询 Trace。
@@ -664,7 +669,8 @@ class TraceRecorder:
             mode: SAFE、DIAGNOSTIC 或 FULL 内容边界。
             created_at: 带时区创建时点。
             identity: pipeline、服务和活动索引身份。
-            question_sha256: 可选的原始问题 SHA256；不保存问题正文。
+            question: 可选的已验证原始问题，由捕获策略决定是否保存正文。
+            question_sha256: 兼容旧调用的可选问题 SHA256。
 
         Returns:
             已开始根 span 的查询录制会话。
@@ -673,6 +679,20 @@ class TraceRecorder:
             TraceUnavailableError: FULL 捕获无法在查询前建立。
 
         """
+        resolved_sha256 = question_sha256
+        question_text: str | None = None
+        if question is not None:
+            calculated_sha256 = hashlib.sha256(
+                question.encode("utf-8")
+            ).hexdigest()
+            if (
+                question_sha256 is not None
+                and question_sha256 != calculated_sha256
+            ):
+                raise ValueError("question 与 question_sha256 不一致。")
+            resolved_sha256 = calculated_sha256
+            if self._question_capture is TraceQuestionCapture.PLAINTEXT:
+                question_text = question
         ttl = (
             timedelta(hours=72)
             if mode is TraceMode.FULL
@@ -680,7 +700,7 @@ class TraceRecorder:
         )
         trace = TraceRecord(
             trace_id=trace_id,
-            schema_version="1",
+            schema_version="2",
             mode=mode,
             created_at=created_at,
             finished_at=None,
@@ -697,11 +717,13 @@ class TraceRecorder:
             feedback_useful=None,
             capture_complete=True,
             expires_at=created_at + ttl,
+            question_text=question_text,
+            question_sha256=resolved_sha256,
         )
         root_attributes: dict[str, object] | None = (
             None
-            if question_sha256 is None
-            else {"question_sha256": question_sha256}
+            if resolved_sha256 is None
+            else {"question_sha256": resolved_sha256}
         )
         return TraceSession(self, trace, root_attributes=root_attributes)
 

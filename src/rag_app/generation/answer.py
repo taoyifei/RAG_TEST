@@ -28,6 +28,8 @@ from rag_app.generation.evidence import (
     EvidenceUnit,
     decide_answerability,
     required_question_anchors,
+    text_covers_question_anchors,
+    text_supports_question_anchor,
 )
 from rag_app.generation.question_intent import (
     QuestionIntent,
@@ -169,6 +171,8 @@ class _StreamingClaimState:
         default_factory=IncrementalClaimsParser
     )
     validated_claims: list[AnswerClaim] = field(default_factory=list)
+    selected_units: list[EvidenceUnit] = field(default_factory=list)
+    published_claim_count: int = 0
     dropped_codes: dict[str, int] = field(default_factory=dict)
     parser_error: str | None = None
     first_validated_claim_ms: int | None = None
@@ -209,12 +213,28 @@ class _StreamingClaimState:
                 )
                 continue
             self.validated_claims.append(claim)
+            self.selected_units.extend(
+                _claim_evidence_units(validated_raw, self.units_by_id)
+            )
+            can_publish = (
+                len(self.question_anchors) <= 1
+                or _units_cover_question_anchors(
+                    tuple(self.selected_units),
+                    self.question_anchors,
+                )
+            )
+            if not can_publish:
+                continue
             if self.first_validated_claim_ms is None:
                 self.first_validated_claim_ms = max(
                     0,
                     round((time.monotonic() - self.started) * 1000),
                 )
-            self.on_claim(claim)
+            for pending in self.validated_claims[
+                self.published_claim_count :
+            ]:
+                self.on_claim(pending)
+            self.published_claim_count = len(self.validated_claims)
 
     def finish(self, content: str) -> None:
         """用完整 JSON 契约确认增量结果与最终 claims 一致。
@@ -1085,7 +1105,7 @@ def _units_support_question_anchor(
     searchable = "\n".join(
         f"{unit.source_label}\n{unit.text}".casefold() for unit in units
     )
-    return any(anchor.casefold() in searchable for anchor in question_anchors)
+    return text_supports_question_anchor(searchable, question_anchors)
 
 
 def _units_cover_question_anchors(
@@ -1096,7 +1116,7 @@ def _units_cover_question_anchors(
     searchable = "\n".join(
         f"{unit.source_label}\n{unit.text}".casefold() for unit in units
     )
-    return all(anchor.casefold() in searchable for anchor in question_anchors)
+    return text_covers_question_anchors(searchable, question_anchors)
 
 
 def _refusal(  # noqa: PLR0913

@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Browser Bearer compatibility page. -->
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
@@ -14,11 +15,13 @@
       </header>
       <section aria-labelledby="ask-title">
         <h2 id="ask-title">提问</h2>
+        <label for="token">查询令牌</label>
+        <input id="token" type="password" autocomplete="off">
         <label for="question">问题</label>
         <textarea id="question" rows="5" maxlength="4000"></textarea>
         <div class="actions">
-          <button id="ask" type="button" disabled>提交问题</button>
-          <button id="clear" type="button" class="secondary" disabled>清空会话</button>
+          <button id="ask" type="button">提交问题</button>
+          <button id="clear" type="button" class="secondary">清空会话</button>
         </div>
       </section>
       <section
@@ -29,7 +32,7 @@
         tabindex="-1"
       >
         <h2 id="answer-title">最终回答</h2>
-        <p id="answer" class="answer-text">正在初始化普通问答会话。</p>
+        <p id="answer" class="answer-text">尚未提问。</p>
         <div class="trace-reference">
           <span>Trace ID：</span>
           <code id="trace-id">尚无</code>

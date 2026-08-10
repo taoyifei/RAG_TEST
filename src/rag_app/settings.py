@@ -21,7 +21,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_app.contracts import AuthorityLevel, DocumentStatus, PipelineSpec
 from rag_app.strict_json import load_json_file
-from rag_app.tracing.models import TraceMode
+from rag_app.tracing.models import TraceMode, TraceQuestionCapture
 
 __all__ = [
     "AccessMode",
@@ -30,6 +30,7 @@ __all__ = [
     "RunMode",
     "RuntimeSettings",
     "SoftRouteSettings",
+    "UiQueryAuthMode",
 ]
 
 _MIN_SECRET_LENGTH = 32
@@ -54,6 +55,13 @@ class RunMode(StrEnum):
 
     DEMO = "demo"
     PRODUCTION = "production"
+
+
+class UiQueryAuthMode(StrEnum):
+    """选择浏览器普通问答使用的鉴权边界。"""
+
+    BROWSER_BEARER = "browser_bearer"
+    SAME_ORIGIN_SESSION = "same_origin_session"
 
 
 class SoftRouteSettings(BaseModel):
@@ -293,6 +301,12 @@ class RuntimeSettings(BaseSettings):
     manifest_database: Path
     trace_database: Path = Path("/state/traces.sqlite3")
     trace_mode: TraceMode = TraceMode.SAFE
+    trace_question_capture: TraceQuestionCapture = (
+        TraceQuestionCapture.HASH_ONLY
+    )
+    ui_query_auth_mode: UiQueryAuthMode = UiQueryAuthMode.BROWSER_BEARER
+    ui_session_cookie_secure: bool = True
+    ui_session_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     release_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     pipeline_path: Path
     retrieval_path: Path

@@ -20,6 +20,7 @@ from fastapi import (
     Header,
     HTTPException,
     Query,
+    Request,
     Response,
     status,
 )
@@ -33,11 +34,16 @@ from rag_app.api.schemas import (
     TraceExportRequest,
 )
 from rag_app.api.stream import QueryStreamRequest, stream_query
+from rag_app.api.ui_session import (
+    UI_SESSION_COOKIE_NAME,
+    UiSessionManager,
+    require_same_origin,
+)
 from rag_app.health import ReadinessService
 from rag_app.observability import StructuredAuditLogger
 from rag_app.query_executor import QueryAdmissionError, QueryExecutor
 from rag_app.query_service import QueryService
-from rag_app.settings import RunMode
+from rag_app.settings import RunMode, UiQueryAuthMode
 from rag_app.state.conversations import ConversationStore
 from rag_app.state.feedback import FeedbackStore
 from rag_app.state.jobs import JobStore
@@ -47,6 +53,7 @@ from rag_app.tracing.models import (
     TraceDetail,
     TraceListFilter,
     TraceMode,
+    TraceRecord,
     TraceStatus,
 )
 from rag_app.tracing.recorder import (
@@ -64,6 +71,7 @@ __all__ = ["ApiServices", "create_app"]
 
 ServiceT = TypeVar("ServiceT")
 _SHA256_HEX_LENGTH = 64
+_QUESTION_PREVIEW_CHARACTERS = 120
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +92,9 @@ class ApiServices:
     audit: StructuredAuditLogger | None = None
     trace_store: TraceStore | None = None
     trace_recorder: TraceRecorder | None = None
+    ui_query_auth_mode: UiQueryAuthMode = UiQueryAuthMode.BROWSER_BEARER
+    ui_session_cookie_secure: bool = True
+    ui_session_ttl_seconds: int = 900
 
     def __post_init__(self) -> None:
         """拒绝令牌错误或不完整的业务 API 依赖。"""
@@ -104,11 +115,15 @@ class ApiServices:
         ):
             raise ValueError("业务 API 依赖必须全部配置或全部省略。")
         if self.frontend_dir is not None:
-            required_assets: tuple[str, ...] = (
-                "index.html",
-                "styles.css",
-                "app.js",
-            )
+            required_assets: tuple[str, ...] = ("styles.css",)
+            if self.ui_query_auth_mode is UiQueryAuthMode.SAME_ORIGIN_SESSION:
+                required_assets = (*required_assets, "index.html", "app.js")
+            else:
+                required_assets = (
+                    *required_assets,
+                    "index-bearer.html",
+                    "app-bearer.js",
+                )
             if self.trace_store is not None:
                 required_assets = (
                     *required_assets,
@@ -123,6 +138,8 @@ class ApiServices:
                 raise ValueError("前端目录缺少固定的本地资源。")
         if (self.trace_store is None) != (self.trace_recorder is None):
             raise ValueError("Trace Store 和 recorder 必须同时配置。")
+        if not 60 <= self.ui_session_ttl_seconds <= 3600:
+            raise ValueError("UI session TTL 必须在 60 到 3600 秒之间。")
 
 
 def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
@@ -146,6 +163,16 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
 
     frontend_dir = services.frontend_dir
     if frontend_dir is not None:
+        same_origin_ui = (
+            services.ui_query_auth_mode
+            is UiQueryAuthMode.SAME_ORIGIN_SESSION
+        )
+        frontend_index_name = (
+            "index.html" if same_origin_ui else "index-bearer.html"
+        )
+        frontend_script_name = (
+            "app.js" if same_origin_ui else "app-bearer.js"
+        )
 
         @app.get("/", include_in_schema=False)
         def frontend_index() -> FileResponse:
@@ -158,7 +185,7 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
                 本地 HTML 文件响应。
 
             """
-            return FileResponse(frontend_dir / "index.html")
+            return FileResponse(frontend_dir / frontend_index_name)
 
         @app.get("/assets/styles.css", include_in_schema=False)
         def frontend_styles() -> FileResponse:
@@ -188,7 +215,7 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
 
             """
             return FileResponse(
-                frontend_dir / "app.js",
+                frontend_dir / frontend_script_name,
                 media_type="text/javascript",
             )
 
@@ -304,22 +331,132 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="service not ready",
             )
-        trace_id = uuid.uuid4().hex
-        stream = _admit_query_stream(
-            services=services,
-            request=request,
-            trace_id=trace_id,
+        return _query_stream_response(services=services, request=request)
+
+    if (
+        services.ui_query_auth_mode
+        is UiQueryAuthMode.SAME_ORIGIN_SESSION
+    ):
+        ui_sessions = UiSessionManager(
+            services.query_token,
+            ttl_seconds=services.ui_session_ttl_seconds,
         )
-        return StreamingResponse(
-            stream,
-            media_type="application/x-ndjson",
-            headers={
-                "Cache-Control": "no-store, no-transform",
-                "X-Accel-Buffering": "no",
-                "X-Content-Type-Options": "nosniff",
-                "X-Trace-ID": trace_id,
-            },
+
+        @app.post(
+            "/api/ui/session",
+            status_code=status.HTTP_201_CREATED,
         )
+        def create_ui_session(request: Request) -> JSONResponse:
+            """签发不含 Query Token 的短期同源 UI 会话。
+
+            Args:
+                request: 用于校验 Origin 与 Host 的当前请求。
+
+            Returns:
+                仅含页面内存 CSRF token 和到期时间的响应。
+
+            """
+            require_same_origin(request)
+            grant = ui_sessions.create()
+            response = _no_store_json(
+                {
+                    "csrf_token": grant.csrf_token,
+                    "expires_at": grant.expires_at.isoformat(),
+                }
+            )
+            response.set_cookie(
+                key=UI_SESSION_COOKIE_NAME,
+                value=grant.cookie_value,
+                max_age=services.ui_session_ttl_seconds,
+                expires=grant.expires_at,
+                path="/api/ui/",
+                secure=services.ui_session_cookie_secure,
+                httponly=True,
+                samesite="strict",
+            )
+            response.status_code = status.HTTP_201_CREATED
+            return response
+
+        @app.post("/api/ui/chat")
+        def ui_chat(
+            request_body: ChatRequest,
+            request: Request,
+            csrf_token: Annotated[
+                str | None,
+                Header(alias="X-CSRF-Token"),
+            ] = None,
+        ) -> StreamingResponse:
+            """使用同一 QueryService 执行普通页面流式问答。
+
+            Args:
+                request_body: 已校验的普通聊天请求。
+                request: 提供同源头和 HttpOnly Cookie 的请求。
+                csrf_token: 当前页面内存中的不可预测 CSRF token。
+
+            Returns:
+                与外部 `/api/chat` 完全一致的 NDJSON 流。
+
+            """
+            _require_ui_session(request, csrf_token, ui_sessions)
+            return _query_stream_response(
+                services=services,
+                request=request_body,
+            )
+
+        @app.delete(
+            "/api/ui/conversations/{conversation_id}",
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+        def clear_ui_conversation(
+            conversation_id: str,
+            request: Request,
+            csrf_token: Annotated[
+                str | None,
+                Header(alias="X-CSRF-Token"),
+            ] = None,
+        ) -> Response:
+            """清空一个通过同源 UI 会话授权的普通会话。
+
+            Args:
+                conversation_id: 待清空的稳定会话标识。
+                request: 提供同源头和 HttpOnly Cookie 的请求。
+                csrf_token: 当前页面内存中的 CSRF token。
+
+            Returns:
+                HTTP 204 空响应。
+
+            """
+            _require_ui_session(request, csrf_token, ui_sessions)
+            conversations = _require_service(services.conversations)
+            conversations.clear(conversation_id)
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+        @app.post(
+            "/api/ui/feedback",
+            status_code=status.HTTP_204_NO_CONTENT,
+        )
+        def record_ui_feedback(
+            request_body: FeedbackRequest,
+            request: Request,
+            csrf_token: Annotated[
+                str | None,
+                Header(alias="X-CSRF-Token"),
+            ] = None,
+        ) -> Response:
+            """记录一个通过同源 UI 会话授权的有用性反馈。
+
+            Args:
+                request_body: Trace ID 与有用性布尔值。
+                request: 提供同源头和 HttpOnly Cookie 的请求。
+                csrf_token: 当前页面内存中的 CSRF token。
+
+            Returns:
+                HTTP 204 空响应。
+
+            """
+            _require_ui_session(request, csrf_token, ui_sessions)
+            _record_feedback(services, request_body)
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post("/api/admin/debug/chat")
     def debug_chat(
@@ -467,6 +604,63 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
     return app
 
 
+def _query_stream_response(
+    *,
+    services: ApiServices,
+    request: ChatRequest,
+    trace_mode: TraceMode = TraceMode.SAFE,
+) -> StreamingResponse:
+    """创建所有普通与管理聊天入口共用的 NDJSON 响应。
+
+    Args:
+        services: API 运行依赖。
+        request: 已完成 schema 校验的聊天请求。
+        trace_mode: 当前入口允许的 Trace 模式。
+
+    Returns:
+        带禁止缓存和稳定 Trace ID 的流式响应。
+
+    Raises:
+        HTTPException: 服务未就绪或查询容量不可用。
+
+    """
+    if not services.readiness.check().ready:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="service not ready",
+        )
+    trace_id = uuid.uuid4().hex
+    stream = _admit_query_stream(
+        services=services,
+        request=request,
+        trace_id=trace_id,
+        trace_mode=trace_mode,
+    )
+    return StreamingResponse(
+        stream,
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-store, no-transform",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+            "X-Trace-ID": trace_id,
+        },
+    )
+
+
+def _require_ui_session(
+    request: Request,
+    csrf_token: str | None,
+    manager: UiSessionManager,
+) -> None:
+    """校验同源、HttpOnly 会话 Cookie 和 CSRF token。"""
+    require_same_origin(request)
+    manager.verify(
+        request.cookies.get(UI_SESSION_COOKIE_NAME),
+        csrf_token,
+    )
+
+
 def _admit_query_stream(
     *,
     services: ApiServices,
@@ -589,7 +783,7 @@ def _register_trace_endpoints(
         return _no_store_json(
             {
                 "items": [
-                    jsonable_encoder(asdict(item))
+                    jsonable_encoder(_trace_list_payload(item))
                     for item in result.items
                 ],
                 "page": result.page,
@@ -807,8 +1001,9 @@ def _trace_export_zip(
                     "json_sha256": hashlib.sha256(payload).hexdigest(),
                     "created_at": detail.trace.created_at.isoformat(),
                     "status": detail.trace.status.value,
-                    "question_sha256": _trace_question_sha256(
-                        detail.spans
+                    "question_sha256": (
+                        detail.trace.question_sha256
+                        or _trace_question_sha256(detail.spans)
                     ),
                 }
             )
@@ -833,6 +1028,18 @@ def _trace_question_sha256(spans: tuple[SpanRecord, ...]) -> str | None:
         if isinstance(value, str) and len(value) == _SHA256_HEX_LENGTH:
             return value
     return None
+
+
+def _trace_list_payload(trace: TraceRecord) -> dict[str, object]:
+    """生成不含完整问题正文的 Trace 列表摘要。"""
+    payload = trace.as_dict()
+    question_text = payload.pop("question_text")
+    payload["question_preview"] = (
+        None
+        if question_text is None
+        else str(question_text)[:_QUESTION_PREVIEW_CHARACTERS]
+    )
+    return payload
 
 
 def _register_feedback_endpoint(
@@ -863,19 +1070,27 @@ def _register_feedback_endpoint(
 
         """
         _require_bearer(authorization, services.query_token)
-        feedback = _require_service(services.feedback)
-        feedback.record(
-            request.trace_id,
-            useful=request.useful,
-            now=datetime.now(UTC),
-        )
-        if services.trace_store is not None:
-            with suppress(TraceNotFoundError):
-                services.trace_store.set_feedback(
-                    request.trace_id,
-                    useful=request.useful,
-                )
+        _record_feedback(services, request)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _record_feedback(
+    services: ApiServices,
+    request: FeedbackRequest,
+) -> None:
+    """把一个已鉴权反馈写入状态库并同步关联 Trace。"""
+    feedback = _require_service(services.feedback)
+    feedback.record(
+        request.trace_id,
+        useful=request.useful,
+        now=datetime.now(UTC),
+    )
+    if services.trace_store is not None:
+        with suppress(TraceNotFoundError):
+            services.trace_store.set_feedback(
+                request.trace_id,
+                useful=request.useful,
+            )
 
 
 def _require_bearer(header: str | None, expected: str) -> None:
