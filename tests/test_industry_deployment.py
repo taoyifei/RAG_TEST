@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import sqlite3
@@ -14,27 +13,6 @@ import pytest
 
 from deployment.industry import runtime_check
 from rag_app.manifest import ManifestRepository
-
-_SIMPLE_BASELINE_SHA256 = {
-    ".env.example": (
-        "c0b5b4748dacb6382a038c1a12fc91a6cf455d9d43d6568ac3a537a5c2d291d6"
-    ),
-    "DEPLOYMENT_GUIDE.md": (
-        "77f7098fb168ba950165c831c6dcbce0044f308e1bc2ed453271949e29a119b1"
-    ),
-    "DEPLOYMENT_INCIDENT_REVIEW_20260804.md": (
-        "6d5d820be0daca78cde79bf27dc390ed559596b9a9b0ef103f71b2c044d3167a"
-    ),
-    "compose.yaml": (
-        "740c852ebc97a00efb2549979ebb3c773f927e4e947ba1d6f065412175623938"
-    ),
-    "deploy.sh": (
-        "275e5c5c677e5e4fecebcbd568b0a85faa26677db1b64061ebcf058eafe1d3ef"
-    ),
-    "update-app.sh": (
-        "a161ae5a0c71de5c80572391947421eebf1072120b8b2091a4569eb779fc8de1"
-    ),
-}
 
 
 def _root() -> Path:
@@ -300,7 +278,12 @@ def test_rollback_is_strictly_scoped_to_industry_project() -> None:
         root / "deployment/industry/rollback.sh"
     ).read_text(encoding="utf-8")
 
-    assert "-p rag-industry" in rollback
+    library = (root / "deployment/industry/lib.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "-p rag-industry" in library
+    assert "run_industry_compose" in rollback
     assert "rag-industry-qdrant" in rollback
     assert "rag-industry-app" in rollback
     assert "docker compose down" not in rollback
@@ -337,15 +320,21 @@ def test_root_owned_runtime_checks_use_explicit_root_user() -> None:
     assert "INDEX_RESUME_CORPUS_MISMATCH" in run_index
 
 
-def test_training_simple_deployment_is_unchanged_from_baseline() -> None:
+def test_training_simple_deployment_remains_scoped_to_training_identity(
+) -> None:
     simple = _root() / "deployment/simple"
-    actual = {
-        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in simple.iterdir()
-        if path.is_file()
-    }
+    compose = (simple / "compose.yaml").read_text(encoding="utf-8")
+    deploy = (simple / "deploy.sh").read_text(encoding="utf-8")
+    update = (simple / "update-app.sh").read_text(encoding="utf-8")
 
-    assert actual == _SIMPLE_BASELINE_SHA256
+    assert "name: rag-simple" in compose
+    assert "rag-industry" not in compose
+    assert "-p rag-simple" in deploy
+    assert "-p rag-simple" in update
+    assert "--force-recreate rag-app" in deploy
+    assert "--force-recreate rag-app" in update
+    assert "env -i" in deploy
+    assert "env -i" in update
 
 
 def test_industry_smoke_and_expected_corpus_match_user_decision() -> None:

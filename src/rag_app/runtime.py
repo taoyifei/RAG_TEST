@@ -403,6 +403,9 @@ def _assemble_runtime(  # noqa: PLR0913, PLR0917
         ),
         config=TraceRecorderConfig(
             question_capture=settings.trace_question_capture,
+            question_retention_seconds=(
+                settings.trace_question_retention_seconds
+            ),
         ),
     )
     rollback.callback(trace_recorder.close)
@@ -487,7 +490,7 @@ def _assemble_runtime(  # noqa: PLR0913, PLR0917
             trace_store=trace_store,
             trace_recorder=trace_recorder,
             ui_query_auth_mode=settings.ui_query_auth_mode,
-            ui_session_cookie_secure=settings.ui_session_cookie_secure,
+            ui_cookie_secure=settings.ui_cookie_secure,
             ui_session_ttl_seconds=settings.ui_session_ttl_seconds,
         )
     )

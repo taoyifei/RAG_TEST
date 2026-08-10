@@ -75,7 +75,15 @@ class _QueryStream:
     started: float = field(default_factory=time.monotonic)
 
     def start(self) -> Iterator[bytes]:
-        """提交查询工作并返回当前实例的 NDJSON 迭代器。"""
+        """提交查询工作并返回当前实例的 NDJSON 迭代器。
+
+        Args:
+            无参数；查询状态取自当前流实例。
+
+        Returns:
+            按协议输出字节块的 NDJSON 迭代器。
+
+        """
         self.executor.submit(self._run)
         return self._iterate()
 

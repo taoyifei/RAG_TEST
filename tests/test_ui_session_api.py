@@ -53,7 +53,7 @@ class _Query:
             stage_count=0,
         )
 
-    def ask_stream(
+    def ask_stream(  # noqa: PLR0913
         self,
         *,
         trace_id: str,
@@ -119,7 +119,7 @@ def _context(tmp_path: Path) -> _Context:
             pipeline_fingerprint="pipeline-1",
             frontend_dir=Path(__file__).parents[1] / "frontend",
             ui_query_auth_mode=UiQueryAuthMode.SAME_ORIGIN_SESSION,
-            ui_session_cookie_secure=False,
+        ui_cookie_secure=False,
             ui_session_ttl_seconds=300,
         )
     )

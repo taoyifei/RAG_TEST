@@ -1,8 +1,7 @@
 import hashlib
 import json
-import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,8 +12,8 @@ from rag_app.tracing.models import (
     TraceQuestionCapture,
     TraceStatus,
 )
-from rag_app.tracing.recorder import TraceRecorder, TraceRecorderConfig
 from rag_app.tracing.reasons import DecisionCode
+from rag_app.tracing.recorder import TraceRecorder, TraceRecorderConfig
 from rag_app.tracing.store import TraceStore, TraceStoreClosedError
 
 
@@ -95,6 +94,31 @@ def test_plaintext_keeps_exact_question_and_digest(tmp_path: Path) -> None:
     ).hexdigest()
     assert exported["trace"]["question_text"] == question
     assert exported["trace"]["question_sha256"] == trace.question_sha256
+    store.close()
+
+
+def test_plaintext_retention_clears_only_question_text(
+    tmp_path: Path,
+) -> None:
+    question = "七天后只保留问题摘要"
+    store, trace_id = _record_question(
+        tmp_path,
+        TraceQuestionCapture.PLAINTEXT,
+        question,
+    )
+    before = store.get_trace(trace_id).trace
+
+    deleted = store.prune(
+        now=before.created_at + timedelta(days=7),
+        question_retention_seconds=604_800,
+    )
+    after = store.get_trace(trace_id).trace
+
+    assert deleted == 0
+    assert after.question_text is None
+    assert after.question_sha256 == before.question_sha256
+    assert after.status == before.status
+    assert after.expires_at == before.expires_at
     store.close()
 
 
@@ -182,7 +206,7 @@ def _create_legacy_database(path: Path) -> None:
                 "2026-09-01T00:00:00+00:00",
             ),
         )
-    os.chmod(path, 0o600)
+    path.chmod(0o600)
 
 
 def test_v1_database_migrates_to_v2_idempotently(tmp_path: Path) -> None:

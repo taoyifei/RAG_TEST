@@ -51,13 +51,12 @@ wait_industry_http "${base_url}/live" 30 \
   || industry_fail "Industry /live 不可用。"
 wait_industry_http "${base_url}/ready" 30 \
   || industry_fail "Industry /ready 不可用。"
-compose=(
-  docker compose
-  -p rag-industry
-  --env-file "${env_file}"
-  -f "${compose_file}"
-)
-index_report="$("${compose[@]}" --profile index run --rm --no-deps \
+validate_industry_compose "${env_file}" "${compose_file}" \
+  || industry_fail "INDUSTRY_COMPOSE_CANONICAL_CONFIG_INVALID"
+verify_industry_app_identity "${env_file}" true \
+  || industry_fail "INDUSTRY_APP_IDENTITY_INVALID"
+index_report="$(run_industry_compose "${env_file}" "${compose_file}" \
+  --profile index run --rm --no-deps \
   --user 0:0 \
   --entrypoint python \
   --volume "${release_dir}/runtime_check.py:/runtime_check.py:ro" \
@@ -96,4 +95,8 @@ print(
     )
 )
 PY
+runtime_index="$(industry_runtime_index_identity)" \
+  || industry_fail "INDUSTRY_RUNTIME_INDEX_IDENTITY_INVALID"
+promote_industry_last_good "${env_file}" "${runtime_index}" \
+  || industry_fail "INDUSTRY_LAST_GOOD_PROMOTION_FAILED"
 printf 'RAG_INDUSTRY_VERIFY_OK\n'

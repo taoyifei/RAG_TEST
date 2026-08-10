@@ -28,6 +28,7 @@ __all__ = [
     "EvidenceUnit",
     "InvalidEvidencePayloadError",
     "decide_answerability",
+    "precise_question_anchors",
     "required_question_anchors",
     "strong_question_anchors",
     "text_covers_question_anchors",
@@ -153,7 +154,15 @@ class EvidenceUnit:
     rerank_score: float
 
     def to_prompt_payload(self) -> dict[str, object]:
-        """仅输出模型选择证据所需的安全字段。"""
+        """仅输出模型选择证据所需的安全字段。
+
+        Args:
+            无参数；字段取自当前证据单元。
+
+        Returns:
+            不含精确 rerank 分数的模型证据载荷。
+
+        """
         return {
             "unit_id": self.unit_id,
             "source_group": self.source_group,
@@ -487,7 +496,17 @@ def decide_answerability(
     *,
     rerank_scores: tuple[float, ...],
 ) -> AnswerabilityDecision:
-    """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。"""
+    """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。
+
+    Args:
+        question: 已通过请求 schema 校验的原始问题。
+        evidence: 已完成预算裁剪的证据包。
+        rerank_scores: 与候选顺序对应的 rerank 分数。
+
+    Returns:
+        包含支持状态和锚点覆盖诊断的判定结果。
+
+    """
     anchors = required_question_anchors(question)
     searchable = "\n".join(
         f"{unit.source_label}\n{unit.text}".casefold()
@@ -521,12 +540,41 @@ def decide_answerability(
 
 
 def strong_question_anchors(question: str) -> tuple[str, ...]:
-    """提取必须由证据直接支持的显式名称、缩写、编号或时间。"""
+    """提取必须由证据直接支持的显式名称、缩写、编号或时间。
+
+    Args:
+        question: 已通过请求 schema 校验的原始问题。
+
+    Returns:
+        按规则稳定去重的强锚点；不存在时返回空元组。
+
+    """
     return _anchors_for_patterns(question, _STRONG_ANCHOR_PATTERNS)
 
 
+def precise_question_anchors(question: str) -> tuple[str, ...]:
+    """提取显式编号、缩写、版本或时间等精确锚点。
+
+    Args:
+        question: 已通过请求 schema 校验的原始问题。
+
+    Returns:
+        按问题出现规则稳定去重的精确锚点；不存在时返回空元组。
+
+    """
+    return _anchors_for_patterns(question, _PRECISE_ANCHOR_PATTERNS)
+
+
 def required_question_anchors(question: str) -> tuple[str, ...]:
-    """返回证据必须覆盖的最精确问题锚点。"""
+    """返回证据必须覆盖的最精确问题锚点。
+
+    Args:
+        question: 已通过请求 schema 校验的原始问题。
+
+    Returns:
+        当前回答门禁要求覆盖的强锚点。
+
+    """
     return strong_question_anchors(question)
 
 

@@ -6,7 +6,12 @@ import pytest
 from pydantic import ValidationError
 
 from rag_app.health import FrozenConfigurationProbe
-from rag_app.settings import RetrievalSettings, RuntimeSettings
+from rag_app.settings import (
+    RetrievalSettings,
+    RunMode,
+    RuntimeSettings,
+    UiQueryAuthMode,
+)
 
 
 def _runtime_values(tmp_path: Path) -> dict[str, object]:
@@ -87,6 +92,61 @@ def test_runtime_settings_parse_bounded_endpoint_lists(
     assert settings.max_llm_concurrency == 4
     assert settings.max_ocr_concurrency == 1
     assert not hasattr(settings, "max_model_concurrency")
+
+
+def test_ui_cookie_defaults_to_secure_without_http_override(
+    tmp_path: Path,
+) -> None:
+    settings = RuntimeSettings(**_runtime_values(tmp_path))
+
+    assert settings.ui_cookie_secure is True
+    assert settings.ui_allow_insecure_http is False
+    assert settings.ui_session_ttl_seconds == 900
+
+
+def test_insecure_ui_cookie_requires_explicit_demo_contract(
+    tmp_path: Path,
+) -> None:
+    values = {
+        **_runtime_values(tmp_path),
+        "run_mode": "demo",
+        "ui_query_auth_mode": "same_origin_session",
+        "ui_cookie_secure": False,
+        "ui_allow_insecure_http": True,
+        "ui_session_ttl_seconds": 1800,
+    }
+
+    settings = RuntimeSettings(**values)
+
+    assert settings.run_mode is RunMode.DEMO
+    assert settings.ui_query_auth_mode is UiQueryAuthMode.SAME_ORIGIN_SESSION
+    assert settings.ui_cookie_secure is False
+    assert settings.ui_allow_insecure_http is True
+    assert settings.ui_session_ttl_seconds == 1800
+
+    for overrides in (
+        {"run_mode": "production"},
+        {"ui_query_auth_mode": "browser_bearer"},
+        {"ui_allow_insecure_http": False},
+    ):
+        invalid = {**values, **overrides}
+        with pytest.raises(ValidationError, match="insecure HTTP"):
+            RuntimeSettings(**invalid)
+
+
+def test_insecure_http_override_rejects_secure_cookie(
+    tmp_path: Path,
+) -> None:
+    values = {
+        **_runtime_values(tmp_path),
+        "run_mode": "demo",
+        "ui_query_auth_mode": "same_origin_session",
+        "ui_cookie_secure": True,
+        "ui_allow_insecure_http": True,
+    }
+
+    with pytest.raises(ValidationError, match="insecure HTTP"):
+        RuntimeSettings(**values)
 
 
 def test_runtime_settings_reject_endpoint_with_api_path(

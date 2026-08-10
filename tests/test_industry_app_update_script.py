@@ -72,6 +72,7 @@ def _prepare(tmp_path: Path) -> _Sandbox:
         },
         "revision": _NEW_REVISION,
         "schema_version": "1",
+        "serving_fingerprint": "sha256:" + "5" * 64,
         "target": {
             "alias": "rag-industry-active",
             "project": "rag-industry",
@@ -168,7 +169,13 @@ NEW_REVISION = {_NEW_REVISION!r}
 FINGERPRINT = {_INDEX_FINGERPRINT!r}
 args = sys.argv[1:]
 with LOG.open("a", encoding="utf-8") as output:
-    output.write("docker " + " ".join(args) + " pollution=" + os.environ.get("RAG_PORT", "unset") + "\\n")
+    output.write(
+        "docker "
+        + " ".join(args)
+        + " pollution="
+        + os.environ.get("RAG_PORT", "unset")
+        + "\\n"
+    )
 current = json.loads(STATE.read_text())
 
 def env_value(path, key):
@@ -188,7 +195,9 @@ if args[:1] == ["compose"]:
             "name": "rag-industry",
             "services": {{
                 "rag-industry-app": {{
-                    "environment": {{"RAG_QDRANT_ALIAS": "rag-industry-active"}},
+                    "environment": {{
+                        "RAG_QDRANT_ALIAS": "rag-industry-active"
+                    }},
                     "image": image,
                     "ports": [{{"published": "8188", "target": 8088}}],
                     "volumes": [
@@ -244,14 +253,21 @@ if kind == "container" and args[1] == "inspect":
     elif template == "{{{{.Image}}}}": print(current["image_id"])
     elif "compose.project" in template: print("rag-industry")
     elif "compose.service" in template: print("rag-industry-app")
-    elif ".Config.Env" in template: print("RAG_RELEASE_REVISION=" + current["revision"])
+    elif ".Config.Env" in template:
+        print("RAG_RELEASE_REVISION=" + current["revision"])
     elif ".NetworkSettings.Ports" in template:
-        print(json.dumps({{"8088/tcp": [{{"HostIp": "", "HostPort": "8188"}}]}}))
+        print(json.dumps({{
+            "8088/tcp": [{{"HostIp": "", "HostPort": "8188"}}]
+        }}))
     elif ".Mounts" in template:
         print(json.dumps([{{"Source": "stable", "Destination": "/state"}}]))
     raise SystemExit(0)
 if kind == "exec":
-    if "build-info" in args and current["revision"] == NEW_REVISION and FAIL_NEW.exists():
+    if (
+        "build-info" in args
+        and current["revision"] == NEW_REVISION
+        and FAIL_NEW.exists()
+    ):
         raise SystemExit(1)
     if "runtime-state" in args:
         print(json.dumps({{

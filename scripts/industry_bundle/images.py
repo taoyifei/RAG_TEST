@@ -58,6 +58,9 @@ class ImageArtifact:
     def manifest_dict(self) -> dict[str, object]:
         """转换为 release manifest 的安全镜像身份。
 
+        Args:
+            无参数；字段取自当前镜像归档身份。
+
         Returns:
             不含本机路径的镜像字段。
 
@@ -80,6 +83,9 @@ class ExistingImageIdentity:
 
     def manifest_dict(self) -> dict[str, object]:
         """转换为不含归档字段的 release manifest 身份。
+
+        Args:
+            无参数；字段取自当前服务器既有镜像身份。
 
         Returns:
             目标服务器必须逐项匹配的镜像字段。

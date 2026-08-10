@@ -232,6 +232,9 @@ def _arguments() -> argparse.Namespace:
 def main() -> int:
     """执行 Industry 首次部署包构建。
 
+    Args:
+        无参数；命令行选项由当前进程解析。
+
     Returns:
         成功返回 0；任一 fail-closed 门禁失败返回 1。
 

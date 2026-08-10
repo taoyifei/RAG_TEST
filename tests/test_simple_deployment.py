@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -152,12 +153,58 @@ def test_deploy_script_loads_modules_and_runs_one_off_full_index(
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     log = tmp_path / "docker.log"
+    app_image_id = f"sha256:{'a' * 64}"
+    compose_payload = json.dumps(
+        {
+            "name": "rag-simple",
+            "services": {
+                "rag-app": {
+                    "image": "docx-rag:test",
+                    "ports": [{"target": 8088, "published": "8088"}],
+                },
+                "rag-worker": {"image": "docx-rag:test"},
+                "rag-ocr": {"image": "docx-rag-ocr:fixed"},
+                "rag-qdrant": {"image": "qdrant/qdrant:v1.18.3"},
+            },
+        },
+        separators=(",", ":"),
+    )
     _write_executable(
         fake_bin / "docker",
-        """#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG}"
+        f"""#!/usr/bin/env bash
+log={shlex.quote(str(log))}
+printf '%s\n' "$*" >>"${{log}}"
 if [[ "$1" == "load" ]]; then cat >/dev/null; exit 0; fi
+if [[ "$1" == "run" ]]; then exit 0; fi
 if [[ "$1" == "inspect" ]]; then echo healthy; exit 0; fi
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$3" == "--format" && "$4" == *'.Id'* ]]; then
+    echo {shlex.quote(app_image_id)}
+  elif [[ "$3" == "--format" ]]; then
+    echo {'a' * 40}
+  fi
+  exit 0
+fi
+if [[ "$1 $2" == "container inspect" ]]; then
+  case "$4" in
+    *'.Config.Image'*) echo 'docx-rag:test' ;;
+    *'.Image'*) echo {shlex.quote(app_image_id)} ;;
+    *'compose.project'*) echo 'rag-simple' ;;
+    *'compose.service'*) echo 'rag-app' ;;
+    *'.Config.Env'*) echo 'RAG_RELEASE_REVISION={'a' * 40}' ;;
+    *'NetworkSettings.Ports'*)
+      echo '{{"8088/tcp":[{{"HostIp":"","HostPort":"8088"}}]}}'
+      ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "exec" ]]; then exit 0; fi
+if [[ "$1" == "compose" && "$*" == *'config --format json'* ]]; then
+  [[ -z "${{COMPOSE_PROJECT_NAME+x}}" && -z "${{RAG_PORT+x}}" ]] \
+    || exit 93
+  printf '%s\n' {shlex.quote(compose_payload)}
+  exit 0
+fi
 exit 0
 """,
     )
@@ -176,15 +223,21 @@ fi
         root / "deployment/simple/deploy.sh",
         [str(env_file), str(package)],
         fake_bin=fake_bin,
-        extra_env={"FAKE_DOCKER_LOG": str(log)},
+        extra_env={"COMPOSE_PROJECT_NAME": "polluted", "RAG_PORT": "8188"},
     )
 
     assert completed.returncode == 0, completed.stderr
     assert (docs / "sample.docx").read_bytes() == b"docx"
     calls = log.read_text(encoding="utf-8").splitlines()
-    up_call = next(line for line in calls if " up -d " in f" {line} ")
-    assert "rag-qdrant rag-ocr rag-app" in up_call
-    assert "rag-worker" not in up_call
+    assert any("-p rag-simple" in line for line in calls)
+    assert any(
+        "up -d --no-build --pull never rag-qdrant rag-ocr" in line
+        for line in calls
+    )
+    assert any(
+        "--force-recreate rag-app" in line
+        for line in calls
+    )
     assert any(
         "--profile index run --rm --no-deps rag-worker index full" in line
         for line in calls
@@ -215,23 +268,28 @@ def _prepare_update_case(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     )
 
 
-def _write_update_fakes(fake_bin: Path, *, fail_first_compose: bool) -> None:
-    compose_behavior = """
-if [[ "$1" == "compose" ]]; then
-  count=0
-  [[ -f "${FAKE_COMPOSE_COUNT}" ]] && count="$(cat "${FAKE_COMPOSE_COUNT}")"
-  count=$((count + 1))
-  printf '%s' "${count}" >"${FAKE_COMPOSE_COUNT}"
-  if [[ "${FAIL_FIRST_COMPOSE}" == "true" && "${count}" -eq 1 ]]; then
-    exit 1
-  fi
-  exit 0
-fi
-"""
+def _write_update_fakes(
+    fake_bin: Path,
+    *,
+    log: Path,
+    count_file: Path,
+    state_file: Path,
+    fail_first_app_up: bool,
+) -> None:
+    state_file.write_text(
+        f"docx-rag:old\n{'1' * 40}\n",
+        encoding="ascii",
+    )
+    old_fingerprint = f"sha256:{'a' * 64}"
+    new_fingerprint = f"sha256:{'b' * 64}"
     _write_executable(
         fake_bin / "docker",
         f"""#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${{FAKE_DOCKER_LOG}}"
+log={shlex.quote(str(log))}
+count_file={shlex.quote(str(count_file))}
+state_file={shlex.quote(str(state_file))}
+fail_first_app_up={str(fail_first_app_up).lower()}
+printf '%s\n' "$*" >>"${{log}}"
 if [[ "$1" == "load" ]]; then
   cat >/dev/null
   echo 'Loaded image: docx-rag:new'
@@ -239,25 +297,99 @@ if [[ "$1" == "load" ]]; then
 fi
 if [[ "$1" == "run" ]]; then
   if [[ "$*" == *'docx-rag:old'* ]]; then
-    echo '{{"pipeline_fingerprint":"sha256:old"}}'
+    echo '{{"pipeline_fingerprint":"{old_fingerprint}"}}'
   else
-    echo '{{"pipeline_fingerprint":"sha256:new"}}'
+    echo '{{"pipeline_fingerprint":"{new_fingerprint}"}}'
   fi
   exit 0
 fi
-if [[ "$1" == "image" && "$2" == "inspect" && "$3" == "--format" ]]; then
-  printf '%040d\n' 2
+if [[ "$1 $2" == "image inspect" ]]; then
+  if [[ "$3" != "--format" ]]; then exit 0; fi
+  image="$5"
+  if [[ "$4" == *'.Id'* ]]; then
+    if [[ "${{image}}" == 'docx-rag:old' ]]; then
+      echo 'sha256:{'1' * 64}'
+    else
+      echo 'sha256:{'2' * 64}'
+    fi
+  elif [[ "${{image}}" == 'docx-rag:old' ]]; then
+    echo '{'1' * 40}'
+  else
+    echo '{'2' * 40}'
+  fi
   exit 0
 fi
-{compose_behavior}
+if [[ "$1 $2" == "container inspect" ]]; then
+  current_image="$(sed -n '1p' "${{state_file}}")"
+  current_revision="$(sed -n '2p' "${{state_file}}")"
+  case "$4" in
+    *'.Config.Image'*) echo "${{current_image}}" ;;
+    *'.Image'*)
+      if [[ "${{current_image}}" == 'docx-rag:old' ]]; then
+        echo 'sha256:{'1' * 64}'
+      else
+        echo 'sha256:{'2' * 64}'
+      fi ;;
+    *'compose.project'*) echo 'rag-simple' ;;
+    *'compose.service'*) echo 'rag-app' ;;
+    *'.Config.Env'*) echo "RAG_RELEASE_REVISION=${{current_revision}}" ;;
+    *'NetworkSettings.Ports'*)
+      echo '{{"8088/tcp":[{{"HostIp":"","HostPort":"8088"}}]}}'
+      ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == "exec" ]]; then exit 0; fi
+if [[ "$1" == "compose" ]]; then
+  [[ -z "${{COMPOSE_PROJECT_NAME+x}}" && -z "${{RAG_PORT+x}}" ]] \
+    || exit 93
+  env_file=''
+  previous=''
+  for argument in "$@"; do
+    if [[ "${{previous}}" == '--env-file' ]]; then env_file="${{argument}}"; fi
+    previous="${{argument}}"
+  done
+  image="$(
+    awk -F= \
+      '$1 == "RAG_APP_IMAGE" {{print substr($0, index($0, "=") + 1)}}' \
+      "${{env_file}}"
+  )"
+  revision="$(
+    awk -F= \
+      '$1 == "RAG_RELEASE_REVISION" {{print substr($0, index($0, "=") + 1)}}' \
+      "${{env_file}}"
+  )"
+  if [[ "$*" == *'config --format json'* ]]; then
+    printf '%s' '{{"name":"rag-simple","services":{{"rag-app":'
+    printf '{{"image":"%s",' "${{image}}"
+    printf '%s\n' '"ports":[{{"target":8088,"published":"8088"}}]}}}}}}'
+    exit 0
+  fi
+  if [[ "$*" == *' up '* && "$*" == *'rag-app'* ]]; then
+    count=0
+    [[ -f "${{count_file}}" ]] && count="$(cat "${{count_file}}")"
+    count=$((count + 1))
+    printf '%s' "${{count}}" >"${{count_file}}"
+    if [[ "${{fail_first_app_up}}" == 'true' && "${{count}}" -eq 1 ]]; then
+      exit 1
+    fi
+    printf '%s\n%s\n' "${{image}}" "${{revision}}" >"${{state_file}}"
+  fi
+  exit 0
+fi
 exit 0
 """,
     )
     _write_executable(
         fake_bin / "curl",
-        "#!/usr/bin/env bash\necho '{\"status\":\"live\"}'\n",
+        """#!/usr/bin/env bash
+if [[ "$*" == *'/ready'* ]]; then
+  echo '{"ready":true}'
+else
+  echo '{"status":"live"}'
+fi
+""",
     )
-    os.environ["FAIL_FIRST_COMPOSE"] = str(fail_first_compose).lower()
 
 
 def test_update_app_changes_only_app_env_and_service(tmp_path: Path) -> None:
@@ -265,29 +397,33 @@ def test_update_app_changes_only_app_env_and_service(tmp_path: Path) -> None:
     _, env_file, archive, sidecar = _prepare_update_case(tmp_path)
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    _write_update_fakes(fake_bin, fail_first_compose=False)
     log = tmp_path / "docker.log"
     count = tmp_path / "compose.count"
+    _write_update_fakes(
+        fake_bin,
+        log=log,
+        count_file=count,
+        state_file=tmp_path / "container.state",
+        fail_first_app_up=False,
+    )
 
     completed = _run_script(
         root / "deployment/simple/update-app.sh",
         [str(archive), str(sidecar), str(env_file)],
         fake_bin=fake_bin,
-        extra_env={
-            "FAKE_DOCKER_LOG": str(log),
-            "FAKE_COMPOSE_COUNT": str(count),
-            "FAIL_FIRST_COMPOSE": "false",
-        },
+        extra_env={"COMPOSE_PROJECT_NAME": "polluted", "RAG_PORT": "8188"},
     )
 
     assert completed.returncode == 0, completed.stderr
     updated = env_file.read_text(encoding="utf-8")
     assert "RAG_APP_IMAGE=docx-rag:new\n" in updated
-    assert f"RAG_RELEASE_REVISION={'2'.zfill(40)}\n" in updated
+    assert f"RAG_RELEASE_REVISION={'2' * 40}\n" in updated
     calls = log.read_text(encoding="utf-8")
     assert "rag-ocr" not in calls
     assert "rag-qdrant" not in calls
     assert "rag-app" in calls
+    assert "-p rag-simple" in calls
+    assert "--force-recreate rag-app" in calls
     assert "REINDEX_REQUIRED" in completed.stdout
 
 
@@ -297,22 +433,62 @@ def test_update_app_restores_old_env_when_compose_fails(tmp_path: Path) -> None:
     original = env_file.read_text(encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    _write_update_fakes(fake_bin, fail_first_compose=True)
+    log = tmp_path / "docker.log"
+    _write_update_fakes(
+        fake_bin,
+        log=log,
+        count_file=tmp_path / "compose.count",
+        state_file=tmp_path / "container.state",
+        fail_first_app_up=True,
+    )
 
     completed = _run_script(
         root / "deployment/simple/update-app.sh",
         [str(archive), str(sidecar), str(env_file)],
         fake_bin=fake_bin,
-        extra_env={
-            "FAKE_DOCKER_LOG": str(tmp_path / "docker.log"),
-            "FAKE_COMPOSE_COUNT": str(tmp_path / "compose.count"),
-            "FAIL_FIRST_COMPOSE": "true",
-        },
+        extra_env={},
     )
 
     assert completed.returncode != 0
     assert env_file.read_text(encoding="utf-8") == original
-    assert "已恢复旧 image 和旧 env" in completed.stderr
+    assert "已恢复并验证旧 image 和旧 env" in completed.stderr
+    recreate_count = log.read_text(encoding="utf-8").count(
+        "--force-recreate rag-app"
+    )
+    assert recreate_count == 2
+
+
+def test_update_app_rejects_malformed_asset_fingerprint(tmp_path: Path) -> None:
+    root = _root()
+    _, env_file, archive, sidecar = _prepare_update_case(tmp_path)
+    original = env_file.read_text(encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    _write_update_fakes(
+        fake_bin,
+        log=tmp_path / "docker.log",
+        count_file=tmp_path / "compose.count",
+        state_file=tmp_path / "container.state",
+        fail_first_app_up=False,
+    )
+    source = docker.read_text(encoding="utf-8").replace(
+        f"sha256:{'a' * 64}",
+        "not-a-sha256",
+        1,
+    )
+    _write_executable(docker, source)
+
+    completed = _run_script(
+        root / "deployment/simple/update-app.sh",
+        [str(archive), str(sidecar), str(env_file)],
+        fake_bin=fake_bin,
+        extra_env={},
+    )
+
+    assert completed.returncode != 0
+    assert "PIPELINE_FINGERPRINT_INVALID" in completed.stderr
+    assert env_file.read_text(encoding="utf-8") == original
 
 
 def test_deployment_guide_is_the_single_copyable_demo_path() -> None:

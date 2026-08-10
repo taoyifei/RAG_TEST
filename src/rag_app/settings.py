@@ -304,8 +304,14 @@ class RuntimeSettings(BaseSettings):
     trace_question_capture: TraceQuestionCapture = (
         TraceQuestionCapture.HASH_ONLY
     )
+    trace_question_retention_seconds: int = Field(
+        default=604_800,
+        ge=60,
+        le=604_800,
+    )
     ui_query_auth_mode: UiQueryAuthMode = UiQueryAuthMode.BROWSER_BEARER
-    ui_session_cookie_secure: bool = True
+    ui_cookie_secure: bool = True
+    ui_allow_insecure_http: bool = False
     ui_session_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     release_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     pipeline_path: Path
@@ -371,6 +377,21 @@ class RuntimeSettings(BaseSettings):
         self.reranker_endpoint_urls()
         self.llm_endpoint_urls()
         self.ocr_endpoint_urls()
+        insecure_ui_contract = (
+            self.run_mode is RunMode.DEMO
+            and self.ui_query_auth_mode
+            is UiQueryAuthMode.SAME_ORIGIN_SESSION
+            and not self.ui_cookie_secure
+            and self.ui_allow_insecure_http
+        )
+        if not self.ui_cookie_secure and not insecure_ui_contract:
+            raise ValueError(
+                "insecure HTTP UI Cookie 仅允许显式 demo 同源会话。"
+            )
+        if self.ui_allow_insecure_http and not insecure_ui_contract:
+            raise ValueError(
+                "insecure HTTP 覆盖只能与非 Secure demo 同源会话同时启用。"
+            )
         return self
 
     def embedding_endpoint_urls(self) -> tuple[str, ...]:

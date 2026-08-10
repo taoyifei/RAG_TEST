@@ -8,14 +8,13 @@ source "${script_dir}/lib.sh"
 if [[ "$#" -eq 1 && "$1" == "--package-only" ]]; then
   command -v docker >/dev/null || industry_fail "DOCKER_NOT_FOUND"
   docker info >/dev/null 2>&1 || industry_fail "DOCKER_RUNTIME_UNAVAILABLE"
-  docker compose version >/dev/null 2>&1 \
+  run_docker_compose_clean version >/dev/null 2>&1 \
     || industry_fail "COMPOSE_PLUGIN_UNAVAILABLE"
   command -v python3 >/dev/null || industry_fail "PYTHON3_NOT_FOUND"
   python3 "${script_dir}/package_selfcheck.py" release "${script_dir}" \
     >/dev/null || industry_fail "PACKAGE_SELFCHECK_FAILED"
-  docker compose -p rag-industry \
-    --env-file "${script_dir}/.env.example" \
-    -f "${script_dir}/compose.yaml" \
+  run_industry_compose "${script_dir}/.env.example" \
+    "${script_dir}/compose.yaml" \
     --profile index --profile dedicated-ocr config -q \
     || industry_fail "INDUSTRY_COMPOSE_CONFIG_FAILED"
   printf 'RAG_INDUSTRY_PREFLIGHT_PACKAGE_OK\n'
@@ -35,7 +34,8 @@ compose_file="$(industry_compose_file "${env_file}")"
 [[ "$(uname -m)" == "x86_64" ]] || industry_fail "ARCH_NOT_X86_64"
 command -v docker >/dev/null || industry_fail "DOCKER_NOT_FOUND"
 docker info >/dev/null 2>&1 || industry_fail "DOCKER_RUNTIME_UNAVAILABLE"
-docker compose version >/dev/null 2>&1 || industry_fail "COMPOSE_PLUGIN_UNAVAILABLE"
+run_docker_compose_clean version >/dev/null 2>&1 \
+  || industry_fail "COMPOSE_PLUGIN_UNAVAILABLE"
 command -v python3 >/dev/null || industry_fail "PYTHON3_NOT_FOUND"
 command -v curl >/dev/null || industry_fail "CURL_NOT_FOUND"
 
@@ -152,26 +152,7 @@ done
 
 ocr_mode="$(exact_env_value "${env_file}" RAG_OCR_MODE)" \
   || industry_fail "env 缺少唯一 RAG_OCR_MODE。"
-case "${ocr_mode}" in
-  dedicated)
-    gpu_id="$(exact_env_value "${env_file}" RAG_INDUSTRY_OCR_GPU_DEVICE_ID)" \
-      || industry_fail "独立 OCR 缺少 GPU ID。"
-    [[ "${gpu_id}" =~ ^[0-9]+$ ]] || industry_fail "OCR GPU ID 必须是整数。"
-    command -v nvidia-smi >/dev/null || industry_fail "NVIDIA_RUNTIME_UNAVAILABLE"
-    nvidia-smi -i "${gpu_id}" --query-gpu=index,memory.total \
-      --format=csv,noheader >/dev/null \
-      || industry_fail "OCR_GPU_UNAVAILABLE"
-    active_pids="$(nvidia-smi -i "${gpu_id}" --query-compute-apps=pid \
-      --format=csv,noheader,nounits 2>/dev/null || true)"
-    [[ -z "${active_pids//[[:space:]]/}" ]] \
-      || industry_fail "OCR_GPU_ALREADY_IN_USE"
-    ;;
-  external)
-    ;;
-  *)
-    industry_fail "RAG_OCR_MODE 只能是 dedicated 或 external。"
-    ;;
-esac
+validate_industry_ocr_gpu_ownership "${env_file}" "${release_dir}"
 
 python3 - "${release_dir}/config" <<'PY'
 import json
@@ -209,9 +190,10 @@ export RAG_OCR_API_TOKEN="$(exact_env_value "${env_file}" RAG_OCR_API_TOKEN)"
 python3 "${release_dir}/preflight_endpoints.py" >/dev/null \
   || industry_fail "MODEL_OR_OCR_ENDPOINT_PREFLIGHT_FAILED"
 
-docker compose -p rag-industry --env-file "${env_file}" \
-  -f "${compose_file}" config -q \
+run_industry_compose "${env_file}" "${compose_file}" config -q \
   || industry_fail "INDUSTRY_COMPOSE_CONFIG_FAILED"
+validate_industry_compose "${env_file}" "${compose_file}" \
+  || industry_fail "INDUSTRY_COMPOSE_CANONICAL_CONFIG_INVALID"
 
 for check_path in \
   "${release_dir}" \

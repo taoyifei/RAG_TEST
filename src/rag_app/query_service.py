@@ -928,7 +928,15 @@ class QueryService:
                 streamed_claim_count = 0
 
                 def emit_claim(claim: AnswerClaim) -> None:
-                    """向当前请求回调一条已经完整验证的 claim。"""
+                    """向当前请求回调一条已经完整验证的 claim。
+
+                    Args:
+                        claim: 已通过支持关系与问题锚点校验的声明。
+
+                    Returns:
+                        无返回值；声明通过流回调立即发布。
+
+                    """
                     nonlocal streamed_claim_count
                     if cancellation.is_cancelled():
                         raise StreamCancelledError("LLM_STREAM_CANCELLED")

@@ -75,8 +75,20 @@ image_fingerprint() {
   local report
   report="$(docker run --rm --network none "${image}" asset-selfcheck)" \
     || return 1
-  sed -n 's/.*"pipeline_fingerprint":"\([^"]*\)".*/\1/p' \
-    <<<"${report}"
+  python3 -c '
+import json
+import re
+import sys
+
+value = json.load(sys.stdin)
+fingerprint = value.get("pipeline_fingerprint")
+if (
+    not isinstance(fingerprint, str)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint) is None
+):
+    raise SystemExit("PIPELINE_FINGERPRINT_INVALID")
+print(fingerprint)
+' <<<"${report}"
 }
 
 container_env_value() {
@@ -108,14 +120,38 @@ runtime_state() {
 
 index_identity() {
   python3 -c '
-import json, sys
+import json
+import re
+import sys
+
 value = json.load(sys.stdin)
+active_collection = value.get("active_collection")
+alias = value.get("alias")
+index_fingerprint = value.get("index_fingerprint")
+manifest_sha256 = value.get("manifest_sha256")
+point_count = value.get("point_count")
+if not isinstance(active_collection, str) or not active_collection:
+    raise SystemExit("ACTIVE_COLLECTION_INVALID")
+if alias != "rag-industry-active":
+    raise SystemExit("ACTIVE_ALIAS_INVALID")
+if (
+    not isinstance(index_fingerprint, str)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", index_fingerprint) is None
+):
+    raise SystemExit("INDEX_FINGERPRINT_INVALID")
+if (
+    not isinstance(manifest_sha256, str)
+    or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+):
+    raise SystemExit("MANIFEST_SHA256_INVALID")
+if not isinstance(point_count, int) or isinstance(point_count, bool) or point_count <= 0:
+    raise SystemExit("POINT_COUNT_INVALID")
 print(json.dumps({
-    "active_collection": value["active_collection"],
-    "alias": value["alias"],
-    "index_fingerprint": value["index_fingerprint"],
-    "manifest_sha256": value["manifest_sha256"],
-    "point_count": value["point_count"],
+    "active_collection": active_collection,
+    "alias": alias,
+    "index_fingerprint": index_fingerprint,
+    "manifest_sha256": manifest_sha256,
+    "point_count": point_count,
 }, separators=(",", ":"), sort_keys=True))
 '
 }
@@ -274,6 +310,8 @@ import sys
 path = pathlib.Path(sys.argv[1])
 root = pathlib.Path(sys.argv[2])
 value = json.loads(path.read_bytes())
+if not isinstance(value, dict):
+    raise SystemExit("MANIFEST_TYPE_INVALID")
 if value.get("schema_version") != "1" or value.get("branch") != "Industry":
     raise SystemExit("MANIFEST_IDENTITY_INVALID")
 if value.get("target") != {
@@ -285,16 +323,47 @@ if value.get("target") != {
 image = value.get("image", {})
 revision = value.get("revision")
 fingerprint = value.get("index_fingerprint", {})
+serving_fingerprint = value.get("serving_fingerprint")
 if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
     raise SystemExit("REVISION_INVALID")
-if image.get("revision") != revision or image.get("platform") != "linux/amd64":
+if not isinstance(image, dict):
+    raise SystemExit("IMAGE_TYPE_INVALID")
+if (
+    image.get("revision") != revision
+    or image.get("platform") != "linux/amd64"
+    or image.get("ref") != f"docx-rag:{revision[:12]}"
+    or not isinstance(image.get("id"), str)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", image["id"]) is None
+):
     raise SystemExit("IMAGE_IDENTITY_INVALID")
-if fingerprint.get("reindex_required") is not False:
+if not isinstance(fingerprint, dict):
+    raise SystemExit("INDEX_FINGERPRINT_TYPE_INVALID")
+if (
+    fingerprint.get("reindex_required") is not False
+    or not isinstance(fingerprint.get("target"), str)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint["target"]) is None
+):
     raise SystemExit("REINDEX_REQUIRED")
+if (
+    not isinstance(serving_fingerprint, str)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", serving_fingerprint) is None
+):
+    raise SystemExit("SERVING_FINGERPRINT_INVALID")
 files = value.get("files", {})
+if not isinstance(files, dict) or set(files) != {
+    "app-image.tar.gz",
+    "app-image.tar.gz.sha256",
+    "update-app.sh",
+}:
+    raise SystemExit("FILES_INVALID")
 for name in ("app-image.tar.gz", "app-image.tar.gz.sha256", "update-app.sh"):
     digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
-    if files.get(name) != digest:
+    expected_digest = files.get(name)
+    if (
+        not isinstance(expected_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", expected_digest) is None
+        or expected_digest != digest
+    ):
         raise SystemExit("FILE_SHA256_INVALID")
 print("\t".join((image["ref"], image["id"], revision, fingerprint["target"])))
 PY

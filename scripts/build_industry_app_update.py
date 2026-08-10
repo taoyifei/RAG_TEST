@@ -248,6 +248,9 @@ def _arguments() -> argparse.Namespace:
 def main() -> int:
     """执行 Industry app-only 更新包构建。
 
+    Args:
+        无参数；命令行选项由当前进程解析。
+
     Returns:
         成功返回 0，任一门禁失败返回 1。
 

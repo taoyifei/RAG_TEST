@@ -27,6 +27,7 @@ from rag_app.generation.evidence import (
     EvidenceBundle,
     EvidenceUnit,
     decide_answerability,
+    precise_question_anchors,
     required_question_anchors,
     text_covers_question_anchors,
     text_supports_question_anchor,
@@ -165,6 +166,7 @@ class _StreamingClaimState:
 
     units_by_id: dict[str, EvidenceUnit]
     question_anchors: tuple[str, ...]
+    claim_anchors: tuple[str, ...]
     on_claim: Callable[[AnswerClaim], None]
     started: float
     parser: IncrementalClaimsParser = field(
@@ -200,7 +202,7 @@ class _StreamingClaimState:
                 claim, _ = _validate_claim(
                     validated_raw,
                     self.units_by_id,
-                    question_anchors=self.question_anchors,
+                    question_anchors=self.claim_anchors,
                 )
                 if any(
                     existing.text == claim.text
@@ -806,9 +808,13 @@ def _new_streaming_claim_state(
         return None
     if cancellation is None:
         raise ValueError("流式回答必须提供 cancellation。")
+    question_anchors = required_question_anchors(question)
     return _StreamingClaimState(
         units_by_id={unit.unit_id: unit for unit in evidence.units},
-        question_anchors=required_question_anchors(question),
+        question_anchors=question_anchors,
+        claim_anchors=(
+            precise_question_anchors(question) or question_anchors
+        ),
         on_claim=on_claim,
         started=time.monotonic(),
     )
@@ -913,6 +919,7 @@ def _validate_answer(
         )
     units_by_id = {unit.unit_id: unit for unit in evidence.units}
     question_anchors = required_question_anchors(question)
+    claim_anchors = precise_question_anchors(question) or question_anchors
     claims: list[AnswerClaim] = []
     claim_source_groups: list[frozenset[str]] = []
     selected_units: list[EvidenceUnit] = []
@@ -922,7 +929,7 @@ def _validate_answer(
             claim, source_groups = _validate_claim(
                 raw_claim,
                 units_by_id,
-                question_anchors=question_anchors,
+                question_anchors=claim_anchors,
             )
             if any(existing.text == claim.text for existing in claims):
                 raise _ValidationError("DUPLICATE_CLAIM")
@@ -1230,13 +1237,14 @@ def _matching_fallback_units(
     """按问题关键词和意图对 top evidence units 做确定性窄选。"""
     terms = _question_terms(question)
     question_anchors = required_question_anchors(question)
+    claim_anchors = precise_question_anchors(question) or question_anchors
     ranked: list[tuple[int, int, EvidenceUnit]] = []
     for index, unit in enumerate(evidence.units):
         if unit.low_confidence_ocr:
             continue
-        if question_anchors and not _units_support_question_anchor(
+        if claim_anchors and not _units_support_question_anchor(
             (unit,),
-            question_anchors,
+            claim_anchors,
         ):
             continue
         searchable = (

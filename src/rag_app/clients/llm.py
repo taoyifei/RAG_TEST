@@ -98,7 +98,15 @@ class _SseAccumulator:
     done: bool = False
 
     def consume_line(self, line: str) -> None:
-        """校验并消费一条完整 SSE 行。"""
+        """校验并消费一条完整 SSE 行。
+
+        Args:
+            line: 从模型响应读取的一条完整 SSE 行。
+
+        Returns:
+            无返回值；协议状态写入当前累积器。
+
+        """
         normalized = line.removesuffix("\r")
         if not normalized:
             return
@@ -115,7 +123,15 @@ class _SseAccumulator:
         self._consume_event(event)
 
     def complete(self) -> _ParsedStream:
-        """在 ``[DONE]`` 后构造完整且已校验的流结果。"""
+        """在 ``[DONE]`` 后构造完整且已校验的流结果。
+
+        Args:
+            无参数；内容和用量取自当前累积器。
+
+        Returns:
+            已完成协议校验的模型流结果。
+
+        """
         if not self.done:
             raise ValueError("LLM_STREAM_MISSING_DONE")
         if self.finish_reason != "stop":

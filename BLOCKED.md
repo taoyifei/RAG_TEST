@@ -1,6 +1,44 @@
 # 阻塞项
 
-## CURRENT STATUS：2026-08-10 本地实现暂停快照
+## CURRENT STATUS：2026-08-10 本地候选的剩余边界
+
+本轮两个待决策略已经由用户确认，代码实现和任务规定的专项/静态/Compose/源码资产
+门禁均已转绿。当前没有需要用户补充信息才能继续的实现阻塞；以下项目仍必须如实保留，
+不能被写成 production ready 或全量测试通过。
+
+1. **本地完成不等于服务器验收。** 最终 clean commit、Industry app-only 四文件
+   exact set、构建后容器内 asset-selfcheck、fresh extraction/package selfcheck 和
+   逐文件 SHA256 已完成；构建 identity 与摘要只在构建后交付报告中记录，不反写
+   identity-bearing commit。包仍未上传或部署，不能据此声称服务器已更新。
+2. **全量 pytest 不能声明绿色。** 额外全量运行的真实结果为
+   `1010 passed, 85 failed, 61 warnings in 696.58s`。失败中大量真实 Qdrant 集成用例
+   访问 `http://127.0.0.1:6333` 时收到 502；本轮禁止启动、修改或重建 Qdrant，故没有
+   用跳过、xfail 或临时服务掩盖。另有 10 个本任务开始前已存在的 model client/OCR
+   schema 错误处理合同测试与实现不一致；当前候选未修改相关客户端或测试，不能在本轮
+   越界改变错误分类。与本轮 runtime 新依赖相关的 12 个失败已经补齐 fixture 并单独
+   复跑为 `32 passed`。
+3. **repository 级安全扫描包含历史资料红灯。** `check_release_safety.py repository .`
+   实际报告 13 项：历史 PROGRESS/BLOCKED/部署说明和测试中的内网地址、本地路径及一个
+   合成 secret fixture。最终暂存区扫描实际报告 5 项：PROGRESS/BLOCKED 的 2 个本地
+   路径命中，以及 PROGRESS 和两份部署测试的 3 个内网地址命中；secret 命中为 0。
+   扫描器没有放宽，历史事实也没有删除。最终发布门禁必须针对 app-only
+   delivery/runtime exact set 执行 release/package safety，确保这些内容不进入上传包；
+   repository/staged 模式不能被误报为通过。
+4. **服务器验收仍未执行。** 本轮按约束未访问 `.54/.57/.58/.60`，未部署、未跑
+   Industry 20 smoke、未核对实际容器/OCR/Qdrant/alias/manifest/point。既有现场状态只
+   是用户提供的历史证据；最终本地包通过不等于服务器更新或 production acceptance。
+5. **HTTP demo 是显式接受的风险，不是身份认证。** `Secure=false` 只在五项配置同时
+   满足时启用；任何可访问页面的人都获得普通问答权限，外层仍需内网 ACL、反向代理或
+   企业 SSO。production 已 fail closed，Trace/Admin 继续使用独立 Admin Token。
+6. **Trace 明文属于受控敏感数据。** 独立 7 天上限和 Trace TTL 较小值已经实现，但
+   服务器端备份、访问审计和到期清理仍需部署后现场确认；问题正文不得进入日志、stage
+   NDJSON、Header、ZIP 文件名/manifest、缓存键或 release manifest。
+
+下一安全动作由本任务直接授权：完成文档和最终本地门禁，创建本地 commit，然后只构建
+Industry app-only 包并 fresh verify。不得访问服务器、重新索引、修改 GM corpus、重启
+worker/OCR/Qdrant 或 push。
+
+## ARCHIVE：2026-08-10 本地实现暂停快照
 
 本节是当前唯一的活动状态入口。用户已明确要求本轮停止代码实现，只记录并报告问题，
 等待用户评估方案后再继续。下文既有“已解除”章节是事故历史，不代表本轮新增目标已经

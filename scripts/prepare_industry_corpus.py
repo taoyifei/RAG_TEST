@@ -79,6 +79,9 @@ def _git_head(repository_root: Path) -> str:
 def main() -> int:
     """执行完整工业 corpus 预处理。
 
+    Args:
+        无参数；命令行选项由当前进程解析。
+
     Returns:
         成功返回 0，安全门禁失败返回 1。
 

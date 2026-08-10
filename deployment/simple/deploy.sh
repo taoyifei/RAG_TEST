@@ -24,6 +24,131 @@ exact_env_value() {
   ' "${env_file}"
 }
 
+run_docker_compose_clean() {
+  local variables=(
+    "PATH=${PATH}"
+    "HOME=${HOME:-/}"
+  )
+  local key
+  for key in \
+    DOCKER_HOST \
+    DOCKER_CONFIG \
+    XDG_RUNTIME_DIR \
+    SSL_CERT_FILE \
+    SSL_CERT_DIR; do
+    if [[ -v "${key}" ]]; then
+      variables+=("${key}=${!key}")
+    fi
+  done
+  env -i "${variables[@]}" docker compose "$@"
+}
+
+run_simple_compose() {
+  run_docker_compose_clean \
+    -p rag-simple \
+    --env-file "${env_file}" \
+    -f "${compose_file}" \
+    "$@"
+}
+
+validate_simple_compose() {
+  local expected_image="$1"
+  local expected_port="$2"
+  local report
+  report="$(run_simple_compose --profile index config --format json)" \
+    || return 1
+  env \
+    EXPECTED_IMAGE="${expected_image}" \
+    EXPECTED_PORT="${expected_port}" \
+    python3 -c '
+import json
+import os
+import sys
+
+value = json.load(sys.stdin)
+if not isinstance(value, dict) or value.get("name") != "rag-simple":
+    raise SystemExit("PROJECT_INVALID")
+services = value.get("services")
+if not isinstance(services, dict):
+    raise SystemExit("SERVICES_INVALID")
+if set(services) != {"rag-app", "rag-worker", "rag-ocr", "rag-qdrant"}:
+    raise SystemExit("SERVICE_SET_INVALID")
+app = services["rag-app"]
+worker = services["rag-worker"]
+if not isinstance(app, dict) or not isinstance(worker, dict):
+    raise SystemExit("APP_WORKER_INVALID")
+if app.get("image") != os.environ["EXPECTED_IMAGE"]:
+    raise SystemExit("APP_IMAGE_INVALID")
+if worker.get("image") != os.environ["EXPECTED_IMAGE"]:
+    raise SystemExit("WORKER_IMAGE_INVALID")
+ports = app.get("ports")
+if not isinstance(ports, list) or len(ports) != 1:
+    raise SystemExit("APP_PORT_INVALID")
+binding = ports[0]
+if not isinstance(binding, dict):
+    raise SystemExit("APP_PORT_INVALID")
+if str(binding.get("target")) != "8088":
+    raise SystemExit("APP_PORT_INVALID")
+if str(binding.get("published")) != os.environ["EXPECTED_PORT"]:
+    raise SystemExit("APP_PORT_INVALID")
+' <<<"${report}"
+}
+
+verify_simple_app_identity() {
+  local expected_image="$1"
+  local expected_revision="$2"
+  local expected_port="$3"
+  local expected_image_id
+  local expected_image_revision
+  local configured_image
+  local running_image_id
+  local project
+  local service
+  local container_revision
+  expected_image_id="$(docker image inspect --format '{{.Id}}' \
+    "${expected_image}")" || return 1
+  expected_image_revision="$(docker image inspect --format \
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
+    "${expected_image}")" || return 1
+  configured_image="$(docker container inspect --format '{{.Config.Image}}' \
+    rag-app)" || return 1
+  running_image_id="$(docker container inspect --format '{{.Image}}' \
+    rag-app)" || return 1
+  project="$(docker container inspect --format \
+    '{{index .Config.Labels "com.docker.compose.project"}}' rag-app)" \
+    || return 1
+  service="$(docker container inspect --format \
+    '{{index .Config.Labels "com.docker.compose.service"}}' rag-app)" \
+    || return 1
+  container_revision="$(docker container inspect --format \
+    '{{range .Config.Env}}{{println .}}{{end}}' rag-app \
+    | exact_env_value /dev/stdin RAG_RELEASE_REVISION)" || return 1
+  [[ "${expected_image_revision}" == "${expected_revision}" \
+    && "${configured_image}" == "${expected_image}" \
+    && "${running_image_id}" == "${expected_image_id}" \
+    && "${project}" == "rag-simple" \
+    && "${service}" == "rag-app" \
+    && "${container_revision}" == "${expected_revision}" ]] || return 1
+  docker container inspect --format '{{json .NetworkSettings.Ports}}' rag-app \
+    | env EXPECTED_PORT="${expected_port}" python3 -c '
+import json
+import os
+import sys
+
+ports = json.load(sys.stdin)
+bindings = ports.get("8088/tcp") if isinstance(ports, dict) else None
+if not isinstance(bindings, list) or len(bindings) != 1:
+    raise SystemExit("PORT_INVALID")
+binding = bindings[0]
+if not isinstance(binding, dict):
+    raise SystemExit("PORT_INVALID")
+if binding.get("HostPort") != os.environ["EXPECTED_PORT"]:
+    raise SystemExit("PORT_INVALID")
+' || return 1
+  docker exec rag-app rag-app build-info \
+    --expected-revision "${expected_revision}" >/dev/null || return 1
+}
+
 require_absolute_directory_value() {
   local value="$1"
   local label="$2"
@@ -72,12 +197,20 @@ wait_demo_ready() {
   while ((SECONDS < deadline)); do
     if payload="$(curl --fail --silent --show-error \
         "http://127.0.0.1:${port}/ready" 2>/dev/null)" \
-      && grep -Eq '"ready"[[:space:]]*:[[:space:]]*true' \
-        <<<"${payload}" \
-      && grep -Eq '"run_mode"[[:space:]]*:[[:space:]]*"demo"' \
-        <<<"${payload}" \
-      && grep -Eq '"production_ready"[[:space:]]*:[[:space:]]*false' \
-        <<<"${payload}"; then
+      && python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+if not isinstance(value, dict):
+    raise SystemExit(1)
+if value.get("ready") is not True:
+    raise SystemExit(1)
+if value.get("run_mode") != "demo":
+    raise SystemExit(1)
+if value.get("production_ready") is not False:
+    raise SystemExit(1)
+' <<<"${payload}"; then
       printf '%s\n' "${payload}"
       return 0
     fi
@@ -134,6 +267,16 @@ for image in "${app_image}" "${ocr_image}" "${qdrant_image}"; do
   docker image inspect "${image}" >/dev/null \
     || fail "docker load 后缺少镜像 tag：${image}"
 done
+port="$(exact_env_value "${env_file}" RAG_PORT)" \
+  || fail "env 缺少唯一 RAG_PORT。"
+[[ "${port}" =~ ^[0-9]+$ && "${port}" -ge 1 && "${port}" -le 65535 ]] \
+  || fail "RAG_PORT 必须是有效端口。"
+revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)" \
+  || fail "env 缺少唯一 RAG_RELEASE_REVISION。"
+[[ "${revision}" =~ ^[0-9a-f]{40}$ ]] \
+  || fail "RAG_RELEASE_REVISION 必须是 40 位小写 Git SHA。"
+validate_simple_compose "${app_image}" "${port}" \
+  || fail "simple Compose 展开身份不合法。"
 
 state_path="$(exact_env_value "${env_file}" RAG_STATE_PATH)" \
   || fail "env 缺少唯一 RAG_STATE_PATH。"
@@ -163,29 +306,23 @@ for writable_path in "${state_path}" "${docs_path}" "${logs_path}"; do
     || fail "无法为 app UID 10001 设置目录所有权：${writable_path}"
 done
 
-compose=(
-  docker compose
-  --env-file "${env_file}"
-  -f "${compose_file}"
-)
-"${compose[@]}" up -d --no-build --pull never \
-  rag-qdrant rag-ocr rag-app
+run_simple_compose up -d --no-build --pull never rag-qdrant rag-ocr
 
 wait_healthy rag-qdrant
 wait_healthy rag-ocr
+run_simple_compose up -d --no-deps --no-build --pull never \
+  --force-recreate rag-app
 wait_healthy rag-app
-port="$(exact_env_value "${env_file}" RAG_PORT)" \
-  || fail "env 缺少唯一 RAG_PORT。"
+verify_simple_app_identity "${app_image}" "${revision}" "${port}" \
+  || fail "rag-app 镜像、revision、Compose 身份或端口不匹配。"
 wait_live "${port}"
 
-revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)" \
-  || fail "env 缺少唯一 RAG_RELEASE_REVISION。"
-"${compose[@]}" --profile index run --rm --no-deps rag-worker \
+run_simple_compose --profile index run --rm --no-deps rag-worker \
   index full --idempotency-key "simple-full-${revision}"
 
 ready_payload="$(wait_demo_ready "${port}")"
 printf 'demo_ready=%s\n' "${ready_payload}"
-"${compose[@]}" ps rag-qdrant rag-ocr rag-app
+run_simple_compose ps rag-qdrant rag-ocr rag-app
 printf 'frontend=http://SERVER_IP:%s/\n' "${port}"
 printf 'app_update=bash update-app.sh app-image.tar.gz app-image.tar.gz.sha256 %s\n' \
   "${env_file}"

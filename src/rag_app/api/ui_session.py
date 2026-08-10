@@ -25,6 +25,9 @@ __all__ = [
 UI_SESSION_COOKIE_NAME = "rag_ui_session"
 _DOMAIN = b"rag-ui-session-v1"
 _SESSION_VERSION = 1
+_MIN_SESSION_TTL_SECONDS = 60
+_MAX_SESSION_TTL_SECONDS = 3600
+_SHA256_HEX_LENGTH = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +60,11 @@ class UiSessionManager:
             ValueError: Query Token 为空或 TTL 不在固定边界内。
 
         """
-        if not query_token or not 60 <= ttl_seconds <= 3600:
+        if not query_token or not (
+            _MIN_SESSION_TTL_SECONDS
+            <= ttl_seconds
+            <= _MAX_SESSION_TTL_SECONDS
+        ):
             raise ValueError("UI session token 或 TTL 无效。")
         self._signing_key = hmac.new(
             query_token.encode("utf-8"),
@@ -69,6 +76,9 @@ class UiSessionManager:
 
     def create(self) -> UiSessionGrant:
         """创建一个短期签名会话和仅返回一次的 CSRF token。
+
+        Args:
+            无参数；签名密钥、时钟和期限取自当前管理器。
 
         Returns:
             Cookie 值、页面内存 CSRF token 和到期时间。
@@ -107,6 +117,9 @@ class UiSessionManager:
         Raises:
             HTTPException: Cookie 无效返回 401，CSRF 无效返回 403。
 
+        Returns:
+            无返回值；校验失败时直接拒绝请求。
+
         """
         payload = self._verified_payload(cookie_value)
         if csrf_token is None:
@@ -114,8 +127,11 @@ class UiSessionManager:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="csrf validation failed",
             )
+        expected_csrf_sha256 = payload.get("csrf_sha256")
+        if not isinstance(expected_csrf_sha256, str):
+            _unauthorized_session()
         supplied = hashlib.sha256(csrf_token.encode("utf-8")).hexdigest()
-        if not hmac.compare_digest(supplied, payload["csrf_sha256"]):
+        if not hmac.compare_digest(supplied, expected_csrf_sha256):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="csrf validation failed",
@@ -137,23 +153,29 @@ class UiSessionManager:
             _unauthorized_session()
         if not hmac.compare_digest(decoded_signature, expected_signature):
             _unauthorized_session()
+        if not isinstance(payload, dict) or set(payload) != {
+            "csrf_sha256",
+            "exp",
+            "sid",
+            "v",
+        }:
+            _unauthorized_session()
+        csrf_sha256 = payload.get("csrf_sha256")
+        expires_at = payload.get("exp")
         if (
-            not isinstance(payload, dict)
-            or set(payload) != {"csrf_sha256", "exp", "sid", "v"}
-            or payload.get("v") != _SESSION_VERSION
+            payload.get("v") != _SESSION_VERSION
             or not isinstance(payload.get("sid"), str)
-            or not isinstance(payload.get("csrf_sha256"), str)
-            or not isinstance(payload.get("exp"), int)
+            or not isinstance(csrf_sha256, str)
+            or not isinstance(expires_at, int)
         ):
             _unauthorized_session()
-        csrf_sha256 = payload["csrf_sha256"]
         if (
-            len(csrf_sha256) != 64
+            len(csrf_sha256) != _SHA256_HEX_LENGTH
             or any(
                 character not in "0123456789abcdef"
                 for character in csrf_sha256
             )
-            or payload["exp"] <= int(self._now().timestamp())
+            or expires_at <= int(self._now().timestamp())
         ):
             _unauthorized_session()
         return payload
@@ -173,6 +195,9 @@ def require_same_origin(request: Request) -> None:
 
     Raises:
         HTTPException: Origin 缺失、畸形或与 Host 不一致。
+
+    Returns:
+        无返回值；同源校验失败时直接拒绝请求。
 
     """
     origin = request.headers.get("origin")

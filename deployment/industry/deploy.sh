@@ -23,43 +23,29 @@ done
 python3 "${release_dir}/package_selfcheck.py" release "${release_dir}" \
   >/dev/null || industry_fail "PACKAGE_SELFCHECK_FAILED"
 
-compose=(
-  docker compose
-  -p rag-industry
-  --env-file "${env_file}"
-  -f "${compose_file}"
-)
+validate_industry_compose "${env_file}" "${compose_file}" \
+  || industry_fail "INDUSTRY_COMPOSE_CANONICAL_CONFIG_INVALID"
 ocr_mode="$(exact_env_value "${env_file}" RAG_OCR_MODE)"
 backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
 mkdir -p -- "${backup_path}"
 previous_env=""
-if docker inspect rag-industry-app >/dev/null 2>&1; then
-  state="$(docker inspect --format \
-    '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
-    rag-industry-app)"
-  if [[ "${state}" == "healthy" ]]; then
-    candidate_previous="${backup_path}/last-good.env"
-    if [[ -f "${candidate_previous}" && ! -L "${candidate_previous}" ]]; then
-      previous_env="${backup_path}/previous.env"
-      previous_temp="$(mktemp "${backup_path}/.previous.XXXXXX")"
-      trap 'rm -f -- "${previous_temp}"' EXIT
-      cp -- "${candidate_previous}" "${previous_temp}"
-      chmod 600 "${previous_temp}"
-      mv -f -- "${previous_temp}" "${previous_env}"
-      trap - EXIT
-    fi
-  fi
+if [[ -f "${backup_path}/last-good.env" \
+  && ! -L "${backup_path}/last-good.env" ]]; then
+  previous_env="${backup_path}/last-good.env"
 fi
+write_industry_release_state "${env_file}" candidate \
+  || industry_fail "INDUSTRY_CANDIDATE_STATE_FAILED"
 
 deploy_ok=true
 if [[ "${ocr_mode}" == "dedicated" ]]; then
-  "${compose[@]}" --profile dedicated-ocr up -d \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    --profile dedicated-ocr up -d \
     --no-build --pull never \
-    rag-industry-qdrant rag-industry-ocr rag-industry-app \
+    rag-industry-qdrant rag-industry-ocr \
     || deploy_ok=false
 elif [[ "${ocr_mode}" == "external" ]]; then
-  "${compose[@]}" up -d --no-build --pull never \
-    rag-industry-qdrant rag-industry-app \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    up -d --no-build --pull never rag-industry-qdrant \
     || deploy_ok=false
 else
   industry_fail "RAG_OCR_MODE 只能是 dedicated 或 external。"
@@ -70,10 +56,17 @@ if [[ "${deploy_ok}" == true ]]; then
   if [[ "${ocr_mode}" == "dedicated" ]]; then
     wait_industry_health rag-industry-ocr 300
   fi
+  run_industry_compose "${env_file}" "${compose_file}" up -d \
+    --no-deps --no-build --pull never --force-recreate rag-industry-app \
+    || deploy_ok=false
+fi
+
+if [[ "${deploy_ok}" == true ]]; then
   wait_industry_health rag-industry-app 180
   port="$(exact_env_value "${env_file}" RAG_PORT)"
   wait_industry_http "http://127.0.0.1:${port}/live" 60 \
     || deploy_ok=false
+  verify_industry_app_identity "${env_file}" false || deploy_ok=false
 fi
 
 if [[ "${deploy_ok}" != true ]]; then
@@ -85,10 +78,7 @@ if [[ "${deploy_ok}" != true ]]; then
   industry_fail "首次 Industry 部署失败；未触碰 training 服务。"
 fi
 
-last_good="${backup_path}/last-good.env"
-temporary="$(mktemp "${backup_path}/.last-good.XXXXXX")"
-cp --preserve=mode,ownership,timestamps -- "${env_file}" "${temporary}"
-chmod 600 "${temporary}"
-mv -f -- "${temporary}" "${last_good}"
+write_industry_release_state "${env_file}" deployed \
+  || industry_fail "INDUSTRY_DEPLOYED_STATE_FAILED"
 printf 'RAG_INDUSTRY_DEPLOY_OK\n'
 printf 'next=bash %s/run-index.sh %s\n' "${release_dir}" "${env_file}"

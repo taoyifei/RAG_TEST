@@ -97,6 +97,9 @@ class OoxmlAudit:
     def as_dict(self) -> dict[str, object]:
         """转换为可写入 canonical JSON 的字典。
 
+        Args:
+            无参数；字段取自当前 OOXML 审计结果。
+
         Returns:
             不含正文和 URL 的审计字段。
 

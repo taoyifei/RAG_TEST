@@ -10,7 +10,7 @@ import stat
 import threading
 import uuid
 import zlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rag_app.tracing.models import (
@@ -41,6 +41,8 @@ __all__ = [
 
 _DEFAULT_ARTIFACT_LIMIT = 5 * 1024 * 1024
 _SCHEMA_VERSION = 2
+_MIN_QUESTION_RETENTION_SECONDS = 60
+_MAX_QUESTION_RETENTION_SECONDS = 604_800
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS traces (
     trace_id TEXT PRIMARY KEY,
@@ -720,18 +722,46 @@ class TraceStore:
                 raise TraceNotFoundError(trace_id)
             connection.commit()
 
-    def prune(self, *, now: datetime) -> int:
-        """删除已超过各自 mode 到期时点的 Trace。
+    def prune(
+        self,
+        *,
+        now: datetime,
+        question_retention_seconds: int | None = None,
+    ) -> int:
+        """清空到期问题正文并删除已超过 mode 到期时点的 Trace。
 
         Args:
             now: 带时区的固定清理时点。
+            question_retention_seconds: 问题正文独立保留秒数；为空时
+                只执行既有 Trace 删除。
 
         Returns:
             级联删除的根 Trace 数量。
 
         """
+        if (
+            question_retention_seconds is not None
+            and not (
+                _MIN_QUESTION_RETENTION_SECONDS
+                <= question_retention_seconds
+                <= _MAX_QUESTION_RETENTION_SECONDS
+            )
+        ):
+            raise ValueError("问题正文保留期必须在 60 秒到 7 天之间。")
         with self._lock:
             connection = self._require_connection()
+            if question_retention_seconds is not None:
+                question_cutoff = now - timedelta(
+                    seconds=question_retention_seconds
+                )
+                connection.execute(
+                    """
+                    UPDATE traces
+                    SET question_text=NULL
+                    WHERE question_text IS NOT NULL AND created_at<=?
+                    """,
+                    (_timestamp(question_cutoff),),
+                )
             cursor = connection.execute(
                 "DELETE FROM traces WHERE expires_at<=?",
                 (_timestamp(now),),

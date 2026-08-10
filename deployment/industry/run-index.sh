@@ -40,12 +40,8 @@ PY
 )"
 [[ "${script_corpus_sha}" == "${corpus_sha}" ]] \
   || industry_fail "INDEX_RESUME_CORPUS_MISMATCH"
-compose=(
-  docker compose
-  -p rag-industry
-  --env-file "${env_file}"
-  -f "${compose_file}"
-)
+validate_industry_compose "${env_file}" "${compose_file}" \
+  || industry_fail "INDUSTRY_COMPOSE_CANONICAL_CONFIG_INVALID"
 backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
 mkdir -p -- "${backup_path}"
 export RAG_RUNTIME_CHECK_TOKEN="${admin_token}"
@@ -70,14 +66,16 @@ job_state="$(python3 "${runtime_check}" job-state \
   "${base_url}" "${job_id}")" \
   || industry_fail "INDEX_JOB_STATE_INVALID"
 if [[ -e "${snapshot_path}" ]]; then
-  capture_report="$("${compose[@]}" --profile index run --rm --no-deps \
+  capture_report="$(run_industry_compose "${env_file}" "${compose_file}" \
+    --profile index run --rm --no-deps \
     "${rollback_runtime[@]}" \
     rag-industry-worker \
     /runtime_check.py describe-index-rollback \
     "/backup/${snapshot_name}")" \
     || industry_fail "INDEX_ROLLBACK_SNAPSHOT_INVALID"
 elif [[ "${job_state}" == "pending" ]]; then
-  capture_report="$("${compose[@]}" --profile index run --rm --no-deps \
+  capture_report="$(run_industry_compose "${env_file}" "${compose_file}" \
+    --profile index run --rm --no-deps \
     "${rollback_runtime[@]}" \
     --env "RAG_ROLLBACK_OWNER_UID=$(id -u)" \
     --env "RAG_ROLLBACK_OWNER_GID=$(id -g)" \
@@ -89,7 +87,8 @@ else
 fi
 
 if [[ "${job_state}" == "pending" ]]; then
-  "${compose[@]}" --profile index run --rm --no-deps \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    --profile index run --rm --no-deps \
     rag-industry-worker worker --once \
     || industry_fail "INDUSTRY_WORKER_ONCE_FAILED"
 elif [[ "${job_state}" != "succeeded" ]]; then
@@ -100,7 +99,8 @@ job_report="$(python3 "${runtime_check}" wait-job \
   || industry_fail "FULL_INDEX_JOB_FAILED"
 unset RAG_RUNTIME_CHECK_TOKEN
 
-index_report="$("${compose[@]}" --profile index run --rm --no-deps \
+index_report="$(run_industry_compose "${env_file}" "${compose_file}" \
+  --profile index run --rm --no-deps \
   --user 0:0 \
   --entrypoint python \
   --volume "${runtime_check}:/runtime_check.py:ro" \
@@ -144,4 +144,6 @@ cp -- "${descriptor_path}" "${rollback_temp}"
 chmod 600 "${rollback_temp}"
 mv -f -- "${rollback_temp}" "${last_rollback}"
 trap - EXIT
+write_industry_release_state "${env_file}" indexed "${index_report}" \
+  || industry_fail "INDUSTRY_INDEXED_STATE_FAILED"
 printf 'RAG_INDUSTRY_FULL_INDEX_OK report=%s\n' "${report_path}"

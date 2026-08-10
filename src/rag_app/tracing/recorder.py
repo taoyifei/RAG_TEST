@@ -51,6 +51,8 @@ _STOP: Final = object()
 _DEFAULT_QUEUE_SIZE = 256
 _DEFAULT_WAIT_SECONDS = 5.0
 _DEFAULT_PRUNE_INTERVAL_SECONDS = 300.0
+_MIN_QUESTION_RETENTION_SECONDS = 60
+_MAX_QUESTION_RETENTION_SECONDS = 604_800
 
 
 class TraceUnavailableError(RuntimeError):
@@ -65,6 +67,7 @@ class TraceRecorderConfig:
     wait_seconds: float = _DEFAULT_WAIT_SECONDS
     prune_interval_seconds: float = _DEFAULT_PRUNE_INTERVAL_SECONDS
     question_capture: TraceQuestionCapture = TraceQuestionCapture.HASH_ONLY
+    question_retention_seconds: int = 604_800
 
     def __post_init__(self) -> None:
         """校验所有资源边界为正数。
@@ -77,6 +80,11 @@ class TraceRecorderConfig:
             self.queue_size <= 0
             or self.wait_seconds <= 0
             or self.prune_interval_seconds <= 0
+            or not (
+                _MIN_QUESTION_RETENTION_SECONDS
+                <= self.question_retention_seconds
+                <= _MAX_QUESTION_RETENTION_SECONDS
+            )
         ):
             raise ValueError("Trace writer 边界必须为正数。")
 
@@ -607,6 +615,9 @@ class TraceRecorder:
         self._wait_seconds = resolved_config.wait_seconds
         self._prune_interval_seconds = resolved_config.prune_interval_seconds
         self._question_capture = resolved_config.question_capture
+        self._question_retention_seconds = (
+            resolved_config.question_retention_seconds
+        )
         self._state_lock = threading.Lock()
         self._accepting = True
         self._closed = False
@@ -652,7 +663,7 @@ class TraceRecorder:
         except Exception as error:
             raise TraceUnavailableError("FULL Trace Store 不可用。") from error
 
-    def begin_query(
+    def begin_query(  # noqa: PLR0913
         self,
         trace_id: str,
         mode: TraceMode,
@@ -1104,7 +1115,12 @@ class TraceRecorder:
 
     def _prune(self) -> None:
         try:
-            self._store.prune(now=datetime.now(UTC))
+            self._store.prune(
+                now=datetime.now(UTC),
+                question_retention_seconds=(
+                    self._question_retention_seconds
+                ),
+            )
         except Exception:
             _LOGGER.error(
                 "Trace Store 到期清理失败 code=%s",

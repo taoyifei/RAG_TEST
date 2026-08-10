@@ -13,12 +13,8 @@ compose_file="$(industry_compose_file "${env_file}")"
 [[ "${compose_file}" == */releases/*/compose.yaml ]] \
   || industry_fail "previous env 未绑定 Industry release。"
 
-compose=(
-  docker compose
-  -p rag-industry
-  --env-file "${env_file}"
-  -f "${compose_file}"
-)
+validate_industry_compose "${env_file}" "${compose_file}" \
+  || industry_fail "INDUSTRY_COMPOSE_CANONICAL_CONFIG_INVALID"
 port="$(exact_env_value "${env_file}" RAG_PORT)"
 if ! wait_industry_http "http://127.0.0.1:${port}/live" 10; then
   printf 'RAG_INDUSTRY_ROLLBACK_PRECHECK_UNHEALTHY\n' >&2
@@ -43,9 +39,11 @@ PY
 fi
 if [[ -n "${current_revision}" \
   && "${descriptor_revision}" == "${current_revision}" ]]; then
-  "${compose[@]}" stop rag-industry-app \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    stop rag-industry-app \
     || industry_fail "无法停止当前 Industry app 以恢复索引状态。"
-  "${compose[@]}" --profile index run --rm --no-deps \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    --profile index run --rm --no-deps \
     --user 0:0 \
     --cap-add DAC_OVERRIDE \
     --cap-add CHOWN \
@@ -59,24 +57,32 @@ if [[ -n "${current_revision}" \
 fi
 ocr_mode="$(exact_env_value "${env_file}" RAG_OCR_MODE)"
 if [[ "${ocr_mode}" == "dedicated" ]]; then
-  "${compose[@]}" --profile dedicated-ocr up -d \
+  run_industry_compose "${env_file}" "${compose_file}" \
+    --profile dedicated-ocr up -d \
     --no-build --pull never \
-    rag-industry-qdrant rag-industry-ocr rag-industry-app
+    rag-industry-qdrant rag-industry-ocr
   wait_industry_health rag-industry-ocr 300
 elif [[ "${ocr_mode}" == "external" ]]; then
-  "${compose[@]}" up -d --no-build --pull never \
-    rag-industry-qdrant rag-industry-app
+  run_industry_compose "${env_file}" "${compose_file}" \
+    up -d --no-build --pull never rag-industry-qdrant
 else
   industry_fail "上一 release 的 OCR mode 无效。"
 fi
 wait_industry_health rag-industry-qdrant 180
+run_industry_compose "${env_file}" "${compose_file}" up -d \
+  --no-deps --no-build --pull never --force-recreate rag-industry-app
 wait_industry_health rag-industry-app 180
 wait_industry_http "http://127.0.0.1:${port}/live" 60 \
   || industry_fail "回滚后 Industry /live 未恢复。"
-last_good_temp="$(mktemp "${backup_path}/.last-good.XXXXXX")"
-trap 'rm -f -- "${last_good_temp}"' EXIT
-cp -- "${env_file}" "${last_good_temp}"
-chmod 600 "${last_good_temp}"
-mv -f -- "${last_good_temp}" "${backup_path}/last-good.env"
-trap - EXIT
+verify_industry_app_identity "${env_file}" true \
+  || industry_fail "回滚后 Industry app identity 未完整恢复。"
+if [[ -f "${backup_path}/last-good.json" \
+  && ! -L "${backup_path}/last-good.json" ]]; then
+  state_temp="$(mktemp "${backup_path}/.deployment-state.XXXXXX")"
+  trap 'rm -f -- "${state_temp}"' EXIT
+  cp -- "${backup_path}/last-good.json" "${state_temp}"
+  chmod 600 "${state_temp}"
+  mv -f -- "${state_temp}" "${backup_path}/deployment-state.json"
+  trap - EXIT
+fi
 printf 'RAG_INDUSTRY_ROLLBACK_OK\n'

@@ -72,6 +72,8 @@ __all__ = ["ApiServices", "create_app"]
 ServiceT = TypeVar("ServiceT")
 _SHA256_HEX_LENGTH = 64
 _QUESTION_PREVIEW_CHARACTERS = 120
+_MIN_UI_SESSION_TTL_SECONDS = 60
+_MAX_UI_SESSION_TTL_SECONDS = 3600
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +95,7 @@ class ApiServices:
     trace_store: TraceStore | None = None
     trace_recorder: TraceRecorder | None = None
     ui_query_auth_mode: UiQueryAuthMode = UiQueryAuthMode.BROWSER_BEARER
-    ui_session_cookie_secure: bool = True
+    ui_cookie_secure: bool = True
     ui_session_ttl_seconds: int = 900
 
     def __post_init__(self) -> None:
@@ -138,7 +140,11 @@ class ApiServices:
                 raise ValueError("前端目录缺少固定的本地资源。")
         if (self.trace_store is None) != (self.trace_recorder is None):
             raise ValueError("Trace Store 和 recorder 必须同时配置。")
-        if not 60 <= self.ui_session_ttl_seconds <= 3600:
+        if not (
+            _MIN_UI_SESSION_TTL_SECONDS
+            <= self.ui_session_ttl_seconds
+            <= _MAX_UI_SESSION_TTL_SECONDS
+        ):
             raise ValueError("UI session TTL 必须在 60 到 3600 秒之间。")
 
 
@@ -370,7 +376,7 @@ def create_app(services: ApiServices) -> FastAPI:  # noqa: PLR0915
                 max_age=services.ui_session_ttl_seconds,
                 expires=grant.expires_at,
                 path="/api/ui/",
-                secure=services.ui_session_cookie_secure,
+                secure=services.ui_cookie_secure,
                 httponly=True,
                 samesite="strict",
             )

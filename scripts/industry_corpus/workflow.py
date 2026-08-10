@@ -93,6 +93,9 @@ class _SourceIdentity:
     def public_dict(self) -> dict[str, object]:
         """返回不含本机绝对路径的源身份。
 
+        Args:
+            无参数；字段取自当前源文件身份。
+
         Returns:
             文件名、角色、大小、mtime 和摘要。
 
@@ -124,6 +127,9 @@ class _PreparedDocument:
 
     def manifest_dict(self) -> dict[str, object]:
         """返回 release manifest 可公开的单文档身份。
+
+        Args:
+            无参数；字段取自当前已处理文档。
 
         Returns:
             源身份、目标路径、摘要和结构计数。
