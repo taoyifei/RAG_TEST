@@ -293,6 +293,8 @@ def test_target_verifier_rejects_corrupt_sqlite_state(tmp_path: Path) -> None:
         corrupt_path = tmp_path / "corrupt.sqlite3"
         corrupt_path.write_bytes(b"not-a-sqlite-database")
         corrupt_path.replace(target.state.path)
+        Path(f"{target.state.path}-wal").unlink(missing_ok=True)
+        Path(f"{target.state.path}-shm").unlink(missing_ok=True)
 
         with pytest.raises((sqlite3.DatabaseError, RuntimeError, ValueError)):
             _verifier(target).verify()

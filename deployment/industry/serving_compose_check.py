@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -32,22 +33,28 @@ class ComposeCheckError(RuntimeError):
     """表示旧、新 Compose 存在不允许的语义变化。"""
 
 
-def compare_compose_models(
+def compare_compose_models(  # noqa: PLR0912, PLR0913
     old: dict[str, object],
     new: dict[str, object],
     *,
+    source_config: str,
+    source_image: str,
+    source_revision: str,
     target_config: str,
     target_image: str,
-    source_config: str,
+    target_revision: str,
 ) -> dict[str, object]:
     """比较旧、新 Compose canonical JSON 的安全语义。
 
     Args:
         old: 旧 Compose 的 canonical JSON object。
         new: 目标 Compose 的 canonical JSON object。
+        source_config: 旧只读 config 的绝对宿主路径。
+        source_image: 旧 App image ref。
+        source_revision: 旧 App 完整 Git revision。
         target_config: 目标只读 config 的绝对宿主路径。
         target_image: 目标 App image ref。
-        source_config: 旧只读 config 的绝对宿主路径。
+        target_revision: 目标 App 完整 Git revision。
 
     Returns:
         已规范化的 App 端口与受保护依赖摘要。
@@ -56,6 +63,13 @@ def compare_compose_models(
         ComposeCheckError: 任一非允许语义变化或结构异常。
 
     """
+    if any(
+        re.fullmatch(r"[0-9a-f]{40}", revision) is None
+        for revision in (source_revision, target_revision)
+    ):
+        raise ComposeCheckError("RELEASE_REVISION_INVALID")
+    if source_revision == target_revision:
+        raise ComposeCheckError("RELEASE_REVISION_TRANSITION_INVALID")
     if old.get("name") != "rag-industry" or new.get("name") != "rag-industry":
         raise ComposeCheckError("COMPOSE_PROJECT_CHANGED")
     old_services = _object_field(old, "services")
@@ -67,6 +81,8 @@ def compare_compose_models(
         raise ComposeCheckError("COMPOSE_NETWORKS_CHANGED")
     old_app = _object_field(old_services, "rag-industry-app")
     new_app = _object_field(new_services, "rag-industry-app")
+    if old_app.get("image") != source_image:
+        raise ComposeCheckError("SOURCE_APP_IMAGE_INVALID")
     if new_app.get("image") != target_image:
         raise ComposeCheckError("TARGET_APP_IMAGE_INVALID")
     old_port = _single_app_port(old_app.get("ports"))
@@ -87,19 +103,28 @@ def compare_compose_models(
         source_config=source_config,
         target_config=target_config,
     )
-    _verify_target_environment(old_app, new_app)
+    _verify_target_environment(
+        old_app,
+        new_app,
+        source_revision=source_revision,
+        target_revision=target_revision,
+    )
     old_worker = old_services.get("rag-industry-worker")
     new_worker = new_services.get("rag-industry-worker")
     if old_worker is not None or new_worker is not None:
         if not isinstance(old_worker, dict) or not isinstance(new_worker, dict):
             raise ComposeCheckError("APP_WORKER_SERVICE_CHANGED")
+        if old_worker.get("image") != source_image:
+            raise ComposeCheckError("SOURCE_APP_WORKER_IMAGE_INVALID")
         if new_worker.get("image") != target_image:
-            raise ComposeCheckError("APP_WORKER_IMAGE_INVALID")
+            raise ComposeCheckError("TARGET_APP_WORKER_IMAGE_INVALID")
         _compare_worker_service(
             old_worker,
             new_worker,
             source_config=source_config,
+            source_revision=source_revision,
             target_config=target_config,
+            target_revision=target_revision,
         )
     return {
         "app_port": new_port,
@@ -231,7 +256,11 @@ def _compare_service_volumes(
 
 
 def _verify_target_environment(
-    old: dict[str, object], new: dict[str, object]
+    old: dict[str, object],
+    new: dict[str, object],
+    *,
+    source_revision: str,
+    target_revision: str,
 ) -> None:
     old_environment = _object_field(old, "environment")
     environment = _object_field(new, "environment")
@@ -249,20 +278,26 @@ def _verify_target_environment(
         for key, value in expected.items()
     ):
         raise ComposeCheckError("TARGET_SERVING_ENV_INVALID")
+    if old_environment.get("RAG_RELEASE_REVISION") != source_revision:
+        raise ComposeCheckError("SOURCE_RELEASE_REVISION_INVALID")
+    if environment.get("RAG_RELEASE_REVISION") != target_revision:
+        raise ComposeCheckError("TARGET_RELEASE_REVISION_INVALID")
     for key in set(old_environment) | set(environment):
         if (
-            key not in expected
+            key not in set(expected) | {"RAG_RELEASE_REVISION"}
             and old_environment.get(key) != environment.get(key)
         ):
             raise ComposeCheckError("APP_ENVIRONMENT_CHANGED")
 
 
-def _compare_worker_service(
+def _compare_worker_service(  # noqa: PLR0913
     old: dict[str, object],
     new: dict[str, object],
     *,
     source_config: str,
+    source_revision: str,
     target_config: str,
+    target_revision: str,
 ) -> None:
     mutable = {"environment", "image", "volumes"}
     for key in set(old) | set(new):
@@ -274,16 +309,24 @@ def _compare_worker_service(
         source_config=source_config,
         target_config=target_config,
     )
-    _verify_target_environment(old, new)
+    _verify_target_environment(
+        old,
+        new,
+        source_revision=source_revision,
+        target_revision=target_revision,
+    )
 
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("old", type=Path)
     parser.add_argument("new", type=Path)
+    parser.add_argument("source_config")
+    parser.add_argument("source_image")
+    parser.add_argument("source_revision")
     parser.add_argument("target_config")
     parser.add_argument("target_image")
-    parser.add_argument("source_config")
+    parser.add_argument("target_revision")
     return parser.parse_args()
 
 
@@ -312,9 +355,12 @@ def main() -> int:
         report = compare_compose_models(
             _json_object(arguments.old, "old compose"),
             _json_object(arguments.new, "new compose"),
+            source_config=arguments.source_config,
+            source_image=arguments.source_image,
+            source_revision=arguments.source_revision,
             target_config=arguments.target_config,
             target_image=arguments.target_image,
-            source_config=arguments.source_config,
+            target_revision=arguments.target_revision,
         )
     except ComposeCheckError as error:
         print(f"RAG_INDUSTRY_COMPOSE_CHECK_FAILED: {error}", file=sys.stderr)

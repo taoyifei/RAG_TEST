@@ -29,7 +29,10 @@ def _compose_check() -> ModuleType:
     return module
 
 
-def _render(compose: Path) -> dict[str, object]:
+def _render(
+    compose: Path,
+    env_file: Path | None = None,
+) -> dict[str, object]:
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -40,7 +43,10 @@ def _render(compose: Path) -> dict[str, object]:
             _DOCKER,
             "compose",
             "--env-file",
-            str(_ROOT / "deployment" / "industry" / ".env.example"),
+            str(
+                env_file
+                or _ROOT / "deployment" / "industry" / ".env.example"
+            ),
             "-f",
             str(compose),
             "--profile",
@@ -67,7 +73,10 @@ def _minimal_models() -> tuple[dict[str, object], dict[str, object]]:
         "networks": {"internal": {"internal": True}},
         "services": {
             "rag-industry-app": {
-                "environment": {"RAG_RUN_MODE": "demo"},
+                "environment": {
+                    "RAG_RELEASE_REVISION": _OLD_REVISION,
+                    "RAG_RUN_MODE": "demo",
+                },
                 "image": "old-image",
                 "ports": [{"published": "8188", "target": 8088}],
                 "volumes": [
@@ -95,6 +104,7 @@ def _minimal_models() -> tuple[dict[str, object], dict[str, object]]:
     app["volumes"][0]["source"] = "/new/config"
     app["environment"].update(
         {
+            "RAG_RELEASE_REVISION": "b" * 40,
             "RAG_TRACE_QUESTION_CAPTURE": "plaintext",
             "RAG_TRACE_QUESTION_RETENTION_SECONDS": "604800",
             "RAG_UI_ALLOW_INSECURE_HTTP": "true",
@@ -115,7 +125,10 @@ def test_port_normalization_accepts_real_canonical_default_fields() -> None:
         "networks": {"internal": {"internal": True}},
         "services": {
             "rag-industry-app": {
-                "environment": {"RAG_RUN_MODE": "demo"},
+                "environment": {
+                    "RAG_RELEASE_REVISION": _OLD_REVISION,
+                    "RAG_RUN_MODE": "demo",
+                },
                 "image": "old-image",
                 "ports": [
                     {
@@ -163,6 +176,7 @@ def test_port_normalization_accepts_real_canonical_default_fields() -> None:
     app["volumes"][0]["source"] = "/new/config"
     app["environment"].update(
         {
+            "RAG_RELEASE_REVISION": "b" * 40,
             "RAG_TRACE_QUESTION_CAPTURE": "plaintext",
             "RAG_TRACE_QUESTION_RETENTION_SECONDS": "604800",
             "RAG_UI_ALLOW_INSECURE_HTTP": "true",
@@ -175,8 +189,11 @@ def test_port_normalization_accepts_real_canonical_default_fields() -> None:
     report = compare(
         old,
         new,
+        source_image="old-image",
+        source_revision=_OLD_REVISION,
         target_config="/new/config",
         target_image="new-image",
+        target_revision="b" * 40,
         source_config="/old/config",
     )
 
@@ -208,8 +225,33 @@ def test_real_old_and_new_compose_canonical_json_are_supported(
         cwd=_ROOT,
     ).stdout
     old_compose.write_text(old_source, encoding="utf-8")
-    old = _render(old_compose)
-    new = _render(_ROOT / "deployment" / "industry" / "compose.yaml")
+    example = (
+        _ROOT / "deployment" / "industry" / ".env.example"
+    ).read_text(encoding="utf-8")
+    old_env = tmp_path / "old.env"
+    target_env = tmp_path / "target.env"
+    old_env.write_text(
+        example.replace("REPLACE_APP_IMAGE", "old-image")
+        .replace("REPLACE_FULL_GIT_SHA", _OLD_REVISION)
+        .replace(
+            "/data/tyf/RAG-industry/data/REPLACE_RELEASE_ID/config",
+            "/old/config",
+        ),
+        encoding="utf-8",
+    )
+    target_env.write_text(
+        example.replace("REPLACE_APP_IMAGE", "new-image")
+        .replace("REPLACE_FULL_GIT_SHA", "b" * 40)
+        .replace(
+            "/data/tyf/RAG-industry/data/REPLACE_RELEASE_ID/config",
+            "/new/config",
+        ),
+        encoding="utf-8",
+    )
+    old = _render(old_compose, old_env)
+    new = _render(
+        _ROOT / "deployment" / "industry" / "compose.yaml", target_env
+    )
     old_app = old["services"]["rag-industry-app"]
     new_app = new["services"]["rag-industry-app"]
     old_config = next(
@@ -226,8 +268,11 @@ def test_real_old_and_new_compose_canonical_json_are_supported(
     report = compare(
         old,
         new,
+        source_image=old_app["image"],
+        source_revision=_OLD_REVISION,
         target_config=new_config,
         target_image=new_app["image"],
+        target_revision="b" * 40,
         source_config=old_config,
     )
 
@@ -257,8 +302,11 @@ def test_port_security_changes_fail_closed(mutation: str) -> None:
         module.compare_compose_models(
             old,
             new,
+            source_image="old-image",
+            source_revision=_OLD_REVISION,
             target_config="/new/config",
             target_image="new-image",
+            target_revision="b" * 40,
             source_config="/old/config",
         )
 
@@ -272,7 +320,33 @@ def test_volume_permission_change_fails_closed() -> None:
         module.compare_compose_models(
             old,
             new,
+            source_image="old-image",
+            source_revision=_OLD_REVISION,
             target_config="/new/config",
             target_image="new-image",
+            target_revision="b" * 40,
             source_config="/old/config",
+        )
+
+
+def test_real_update_rejects_equal_source_and_target_revision() -> None:
+    module = _compose_check()
+    old, new = _minimal_models()
+    new["services"]["rag-industry-app"]["environment"][
+        "RAG_RELEASE_REVISION"
+    ] = _OLD_REVISION
+
+    with pytest.raises(
+        module.ComposeCheckError,
+        match="RELEASE_REVISION_TRANSITION_INVALID",
+    ):
+        module.compare_compose_models(
+            old,
+            new,
+            source_config="/old/config",
+            source_image="old-image",
+            source_revision=_OLD_REVISION,
+            target_config="/new/config",
+            target_image="new-image",
+            target_revision=_OLD_REVISION,
         )

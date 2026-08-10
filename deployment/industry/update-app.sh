@@ -63,6 +63,10 @@ target_platform="$(manifest_value image.platform)" \
   || fail "TARGET_PLATFORM_INVALID"
 target_index="$(manifest_value index_fingerprint.target)" \
   || fail "TARGET_INDEX_INVALID"
+source_config_profile="$(manifest_value source_compatibility.config_profile)" \
+  || fail "SOURCE_CONFIG_PROFILE_INVALID"
+target_config_profile="$(manifest_value target_config_profile)" \
+  || fail "TARGET_CONFIG_PROFILE_INVALID"
 update_id="${target_revision:0:12}-${runtime_archive_sha:0:12}"
 runtime_parent="${release_root}/serving-updates"
 runtime_dir="${runtime_parent}/${update_id}"
@@ -163,6 +167,8 @@ source = manifest.get("source_compatibility")
 if not isinstance(source, dict):
     raise SystemExit("SOURCE_COMPATIBILITY_INVALID")
 compatible = source.get("compatible_revisions")
+source_config = source.get("config_files")
+target_config = manifest.get("config_files")
 if (
     re.fullmatch(r"[0-9a-f]{40}", old_revision) is None
     or re.fullmatch(r"[0-9a-f]{40}", target_revision) is None
@@ -175,6 +181,34 @@ if (
     or source.get("old_app_runtime_state_required") is not False
     or source.get("trace_v2_read_compatible") is not True
     or source.get("required_index_fingerprint") != target_index
+    or source.get("config_profile")
+    not in {
+        "first-deploy-private-v1",
+        "serving-runtime-public-config-v1",
+    }
+    or manifest.get("target_config_profile")
+    != "serving-runtime-public-config-v1"
+    or re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        str(source.get("serving_fingerprint")),
+    )
+    is None
+    or not isinstance(source_config, dict)
+    or not isinstance(target_config, dict)
+    or set(source_config) != set(target_config)
+    or set(source_config)
+    != {
+        "corpus-policy.json",
+        "intent-router-calibration.json",
+        "intent-router.json",
+        "pipeline.json",
+        "retrieval.json",
+    }
+    or any(
+        not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        for digest in [*source_config.values(), *target_config.values()]
+    )
 ):
     raise SystemExit("SOURCE_COMPATIBILITY_INVALID")
 if old_revision != target_revision and old_revision not in compatible:
@@ -185,7 +219,7 @@ worker_state="$(docker container inspect --format '{{.State.Running}}' \
 [[ "${worker_state}" != "true" ]] || fail "WORKER_RUNNING"
 
 write_transaction_state() {
-  python3 - "$1" "$2" "${update_id}" <<'PY'
+  python3 - "$1" "$2" "${update_id}" "${3:-}" "${4:-}" <<'PY'
 import json
 import os
 import pathlib
@@ -196,20 +230,34 @@ from datetime import datetime, timezone
 
 path = pathlib.Path(sys.argv[1])
 state = sys.argv[2]
+failure_stage = sys.argv[4] or None
+error_code = sys.argv[5] or None
 allowed = {
     "activated",
+    "precheck_failed",
+    "prechecking",
     "prepared",
     "rollback_failed",
     "rolled_back",
+    "validated",
     "verified",
     "verifying",
 }
 match = re.fullmatch(r"attempt-([0-9]{4})", path.parent.name)
-if state not in allowed or match is None:
+failure_states = {"precheck_failed", "rollback_failed", "rolled_back"}
+if (
+    state not in allowed
+    or match is None
+    or ((failure_stage is None) != (error_code is None))
+    or (state in failure_states and failure_stage is None)
+    or (state not in failure_states and failure_stage is not None)
+):
     raise SystemExit("TRANSACTION_STATE_INVALID")
 value = {
     "attempt": int(match.group(1)),
-    "schema_version": "1",
+    "error_code": error_code,
+    "failure_stage": failure_stage,
+    "schema_version": "2",
     "state": state,
     "update_id": sys.argv[3],
     "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -255,12 +303,15 @@ import stat
 import sys
 
 root = pathlib.Path(sys.argv[1])
-verified = []
+current = []
 allowed_states = {
     "activated",
+    "precheck_failed",
+    "prechecking",
     "prepared",
     "rollback_failed",
     "rolled_back",
+    "validated",
     "verified",
     "verifying",
 }
@@ -280,23 +331,73 @@ for path in root.iterdir():
     value = json.loads(state_path.read_bytes())
     if (
         set(value)
-        != {"attempt", "schema_version", "state", "update_id", "updated_at"}
+        != {
+            "attempt",
+            "error_code",
+            "failure_stage",
+            "schema_version",
+            "state",
+            "update_id",
+            "updated_at",
+        }
         or value.get("attempt") != int(match.group(0).rsplit("-", 1)[1])
-        or value.get("schema_version") != "1"
+        or value.get("schema_version") != "2"
         or value.get("state") not in allowed_states
         or value.get("update_id") != sys.argv[2]
         or not isinstance(value.get("updated_at"), str)
+        or (
+            value.get("state")
+            in {"precheck_failed", "rollback_failed", "rolled_back"}
+            and (
+                not isinstance(value.get("failure_stage"), str)
+                or not isinstance(value.get("error_code"), str)
+            )
+        )
+        or (
+            value.get("state")
+            not in {"precheck_failed", "rollback_failed", "rolled_back"}
+            and (
+                value.get("failure_stage") is not None
+                or value.get("error_code") is not None
+            )
+        )
     ):
         raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
-    if value.get("state") == "verified":
-        verified.append(path)
-if len(verified) != 1:
-    raise SystemExit("VERIFIED_ATTEMPT_INVALID")
-print(verified[0])
+    if value.get("state") in {"validated", "verified"}:
+        current.append(path)
+if len(current) != 1:
+    raise SystemExit("CURRENT_ATTEMPT_INVALID")
+print(current[0])
 PY
   )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
-  bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
-    || fail "IDEMPOTENT_VERIFY_FAILED"
+  current_state="$(python3 - "${transaction}/transaction-state.json" <<'PY'
+import json
+import pathlib
+import sys
+
+print(json.loads(pathlib.Path(sys.argv[1]).read_bytes())["state"])
+PY
+  )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
+  if [[ "${current_state}" == "verified" ]]; then
+    bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
+      || fail "IDEMPOTENT_VERIFY_FAILED"
+  else
+    validate_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
+      || fail "VALIDATED_RECOVERY_COMPOSE_INVALID"
+    verify_industry_app_identity "${env_file}" true \
+      || fail "VALIDATED_RECOVERY_APP_IDENTITY_INVALID"
+    port="$(exact_env_value "${env_file}" RAG_PORT)"
+    wait_industry_http "http://127.0.0.1:${port}/live" 60 \
+      || fail "VALIDATED_RECOVERY_LIVE_FAILED"
+    wait_industry_http "http://127.0.0.1:${port}/ready" 60 \
+      || fail "VALIDATED_RECOVERY_READY_FAILED"
+  fi
+  bash "${runtime_dir}/finalize-app-update.sh" \
+    "${env_file}" "${transaction}" "${target_revision}" reconcile \
+    || fail "IDEMPOTENT_LAST_GOOD_RECONCILIATION_FAILED"
+  write_transaction_state \
+    "${transaction}/transaction-state.json" verified \
+    || fail "IDEMPOTENT_TRANSACTION_STATE_WRITE_FAILED"
   printf 'reindex_required=false\n'
   printf 'RAG_INDUSTRY_SERVING_UPDATE_ALREADY_CURRENT\n'
   exit 0
@@ -312,9 +413,12 @@ root = pathlib.Path(sys.argv[1])
 attempts = []
 allowed_states = {
     "activated",
+    "precheck_failed",
+    "prechecking",
     "prepared",
     "rollback_failed",
     "rolled_back",
+    "validated",
     "verified",
     "verifying",
 }
@@ -333,12 +437,36 @@ for path in root.iterdir():
     attempt_number = int(match.group(1))
     if (
         set(value)
-        != {"attempt", "schema_version", "state", "update_id", "updated_at"}
+        != {
+            "attempt",
+            "error_code",
+            "failure_stage",
+            "schema_version",
+            "state",
+            "update_id",
+            "updated_at",
+        }
         or value.get("attempt") != attempt_number
-        or value.get("schema_version") != "1"
+        or value.get("schema_version") != "2"
         or value.get("state") not in allowed_states
         or value.get("update_id") != sys.argv[2]
         or not isinstance(value.get("updated_at"), str)
+        or (
+            value.get("state")
+            in {"precheck_failed", "rollback_failed", "rolled_back"}
+            and (
+                not isinstance(value.get("failure_stage"), str)
+                or not isinstance(value.get("error_code"), str)
+            )
+        )
+        or (
+            value.get("state")
+            not in {"precheck_failed", "rollback_failed", "rolled_back"}
+            and (
+                value.get("failure_stage") is not None
+                or value.get("error_code") is not None
+            )
+        )
     ):
         raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
     attempts.append((attempt_number, str(value.get("state"))))
@@ -351,7 +479,7 @@ if attempts:
     last_state = attempts[-1][1]
     if last_state == "rollback_failed":
         raise SystemExit("UPDATE_ROLLBACK_FAILED_REQUIRES_INTERVENTION")
-    if last_state != "rolled_back":
+    if last_state not in {"precheck_failed", "rolled_back"}:
         raise SystemExit("UPDATE_ATTEMPT_NOT_RETRYABLE")
 next_attempt = len(attempts) + 1
 print(root / f"attempt-{next_attempt:04d}")
@@ -359,6 +487,59 @@ PY
 )" || fail "UPDATE_TRANSACTION_NOT_RETRYABLE"
 mkdir -m 700 -- "${transaction}"
 write_transaction_state "${transaction}/transaction-state.json" prepared \
+  || fail "TRANSACTION_STATE_WRITE_FAILED"
+activated=false
+validated_checkpoint=false
+transaction_terminal=false
+failure_stage="transaction_prepare"
+failure_code="TRANSACTION_PREPARE_FAILED"
+transaction_exit() {
+  local exit_code="$?"
+  trap - EXIT
+  set +e
+  if [[ "${exit_code}" -ne 0 && "${transaction_terminal}" != "true" ]]; then
+    if [[ "${validated_checkpoint}" == "true" ]]; then
+      printf '%s\n' \
+        'RAG_INDUSTRY_SERVING_UPDATE_VALIDATED_RECOVERY_REQUIRED' >&2
+    elif [[ "${activated}" == "true" ]]; then
+      if ! bash "${runtime_dir}/rollback-app-update.sh" \
+        "${env_file}" "${transaction}"; then
+        if ! write_transaction_state \
+          "${transaction}/transaction-state.json" rollback_failed \
+          rollback ROLLBACK_FAILED; then
+          printf '%s\n' \
+            'RAG_INDUSTRY_SERVING_UPDATE_ROLLBACK_STATE_WRITE_FAILED' >&2
+        fi
+        cleanup
+        exit 70
+      fi
+      if ! write_transaction_state \
+        "${transaction}/transaction-state.json" rolled_back \
+        "${failure_stage}" "${failure_code}"; then
+        printf '%s\n' \
+          'RAG_INDUSTRY_SERVING_UPDATE_ROLLBACK_STATE_WRITE_FAILED' >&2
+        cleanup
+        exit 70
+      fi
+      printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n' >&2
+    else
+      if ! write_transaction_state \
+        "${transaction}/transaction-state.json" precheck_failed \
+        "${failure_stage}" "${failure_code}"; then
+        printf '%s\n' \
+          'RAG_INDUSTRY_SERVING_UPDATE_PRECHECK_STATE_WRITE_FAILED' >&2
+        cleanup
+        exit 70
+      fi
+      printf 'RAG_INDUSTRY_SERVING_UPDATE_PRECHECK_FAILED stage=%s code=%s\n' \
+        "${failure_stage}" "${failure_code}" >&2
+    fi
+  fi
+  cleanup
+  exit "${exit_code}"
+}
+trap transaction_exit EXIT
+write_transaction_state "${transaction}/transaction-state.json" prechecking \
   || fail "TRANSACTION_STATE_WRITE_FAILED"
 cp -- "${env_file}" "${transaction}/old-rag-industry.env"
 chmod 600 "${transaction}/old-rag-industry.env"
@@ -427,14 +608,39 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="last_good_precheck"
+failure_code="LAST_GOOD_PRECHECK_FAILED"
+last_good_pointer="${backup_path}/last-good-pointer.json"
+legacy_last_good_env="${backup_path}/last-good.env"
+legacy_last_good_state="${backup_path}/last-good.json"
+if [[ -e "${last_good_pointer}" || -L "${last_good_pointer}" ]]; then
+  python3 "${runtime_dir}/last_good.py" resolve "${backup_path}" \
+    >"${transaction}/pre-last-good.json" \
+    || fail "LAST_GOOD_POINTER_INVALID"
+elif [[ -e "${legacy_last_good_env}" || -L "${legacy_last_good_env}" \
+  || -e "${legacy_last_good_state}" || -L "${legacy_last_good_state}" ]]; then
+  [[ -f "${legacy_last_good_env}" && ! -L "${legacy_last_good_env}" \
+    && -f "${legacy_last_good_state}" && ! -L "${legacy_last_good_state}" ]] \
+    || fail "LEGACY_LAST_GOOD_PAIR_INVALID"
+  python3 "${runtime_dir}/last_good.py" migrate "${backup_path}" \
+    >"${transaction}/pre-last-good.json" \
+    || fail "LEGACY_LAST_GOOD_MIGRATION_FAILED"
+else
+  printf '{"state":"absent"}\n' >"${transaction}/pre-last-good.json"
+fi
+chmod 600 "${transaction}/pre-last-good.json"
+
+failure_stage="config_filesystem_precheck"
+failure_code="PRE_UPDATE_FILESYSTEM_IDENTITY_FAILED"
 pre_filesystem_json="$(run_industry_compose "${env_file}" "${old_compose}" \
   run --rm --no-deps --entrypoint python \
   --volume "${runtime_dir}/runtime_check.py:/update/runtime_check.py:ro" \
   rag-industry-app /update/runtime_check.py pre-update-filesystem-state \
-  /config /state/traces.sqlite3)" \
+  /config /state/traces.sqlite3 "${source_config_profile}")" \
   || fail "PRE_UPDATE_FILESYSTEM_IDENTITY_FAILED"
 python3 - "${pre_filesystem_json}" \
-  "${transaction}/pre-filesystem.json" <<'PY'
+  "${transaction}/pre-filesystem.json" \
+  "${package_dir}/UPDATE_MANIFEST.json" "${source_config_profile}" <<'PY'
 import json
 import os
 import pathlib
@@ -442,9 +648,12 @@ import re
 import sys
 
 value = json.loads(sys.argv[1])
+manifest = json.loads(pathlib.Path(sys.argv[3]).read_bytes())
 config = value.get("config") if isinstance(value, dict) else None
 files = config.get("files") if isinstance(config, dict) else None
 trace = value.get("trace") if isinstance(value, dict) else None
+source = manifest.get("source_compatibility")
+expected_files = source.get("config_files") if isinstance(source, dict) else None
 expected = {
     "corpus-policy.json",
     "intent-router-calibration.json",
@@ -456,9 +665,26 @@ if (
     not isinstance(files, dict)
     or set(files) != expected
     or any(
-        not isinstance(digest, str)
-        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
-        for digest in files.values()
+        not isinstance(identity, dict)
+        or set(identity) != {"gid", "mode", "sha256", "uid"}
+        or not isinstance(identity.get("uid"), int)
+        or isinstance(identity.get("uid"), bool)
+        or not isinstance(identity.get("gid"), int)
+        or isinstance(identity.get("gid"), bool)
+        or identity.get("mode")
+        != {
+            "first-deploy-private-v1": "0600",
+            "serving-runtime-public-config-v1": "0644",
+        }.get(sys.argv[4])
+        or not isinstance(identity.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", identity["sha256"]) is None
+        for identity in files.values()
+    )
+    or config.get("profile") != sys.argv[4]
+    or not isinstance(expected_files, dict)
+    or any(
+        files[name]["sha256"] != expected_files.get(name)
+        for name in expected
     )
     or not isinstance(trace, dict)
     or set(trace)
@@ -477,6 +703,8 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="source_runtime_identity"
+failure_code="PRE_UPDATE_SOURCE_IDENTITY_FAILED"
 python3 - "${env_file}" "${old_compose}" \
   "${transaction}/pre-filesystem.json" \
   "${transaction}/pre-update-snapshot.json" "${old_image}" \
@@ -659,6 +887,8 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="index_identity_precheck"
+failure_code="PRE_UPDATE_INDEX_IDENTITY_FAILED"
 pre_index_json="$(run_industry_compose "${env_file}" "${old_compose}" \
   run --rm --no-deps --entrypoint python \
   --volume "${runtime_dir}/runtime_check.py:/update/runtime_check.py:ro" \
@@ -704,6 +934,8 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="trace_backup"
+failure_code="TRACE_BACKUP_FAILED"
 trace_backup="${transaction}/traces-before.sqlite3"
 trace_report="$(run_industry_compose "${env_file}" "${old_compose}" \
   run --rm --no-deps --user 0:0 \
@@ -747,6 +979,8 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="candidate_environment"
+failure_code="CANDIDATE_ENV_INVALID"
 candidate_env="${transaction}/candidate-rag-industry.env"
 python3 - "${env_file}" "${candidate_env}" \
   "RAG_APP_IMAGE=${target_image}" \
@@ -833,6 +1067,8 @@ if set(new) != set(old) | (set(expected) - set(old)):
     raise SystemExit("CANDIDATE_ENV_EXACT_KEYS_INVALID")
 PY
 
+failure_stage="compose_contract"
+failure_code="COMPOSE_CONTRACT_CHANGED"
 validate_industry_compose "${candidate_env}" "${runtime_dir}/compose.yaml" \
   || fail "CANDIDATE_COMPOSE_INVALID"
 old_config_json="$(mktemp "${transaction}/.old-compose.XXXXXX")"
@@ -846,7 +1082,8 @@ run_industry_compose "${candidate_env}" "${runtime_dir}/compose.yaml" \
   >"${new_config_json}" || fail "NEW_COMPOSE_RENDER_FAILED"
 python3 "${runtime_dir}/compose_check.py" \
   "${old_config_json}" "${new_config_json}" \
-  "${runtime_dir}/config" "${target_image}" "${old_config}" \
+  "${old_config}" "${old_image}" "${old_revision}" \
+  "${runtime_dir}/config" "${target_image}" "${target_revision}" \
   >"${transaction}/compose-contract.json" \
   || fail "COMPOSE_CONTRACT_CHANGED"
 chmod 600 "${transaction}/compose-contract.json"
@@ -854,8 +1091,12 @@ rm -f -- "${old_config_json}" "${new_config_json}"
 old_config_json=""
 new_config_json=""
 
+failure_stage="image_load"
+failure_code="APP_IMAGE_LOAD_FAILED"
 gzip -dc -- "${package_dir}/app-image.tar.gz" | docker image load >/dev/null \
   || fail "APP_IMAGE_LOAD_FAILED"
+failure_stage="image_identity"
+failure_code="APP_IMAGE_IDENTITY_FAILED"
 actual_image_id="$(docker image inspect --format '{{.Id}}' "${target_image}")"
 actual_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' \
   "${target_image}")"
@@ -884,6 +1125,8 @@ if (
 ):
     raise SystemExit("APP_IMAGE_IDENTITY_MISMATCH")
 PY
+failure_stage="asset_selfcheck"
+failure_code="IMAGE_ASSET_SELFCHECK_FAILED"
 build_report="$(docker run --rm --network none "${target_image}" \
   build-info --expected-revision "${target_revision}")" \
   || fail "IMAGE_BUILD_INFO_FAILED"
@@ -917,26 +1160,8 @@ if (
     raise SystemExit("IMAGE_INDEX_FINGERPRINT_MISMATCH")
 PY
 
-activated=false
-rollback_on_error() {
-  local exit_code="$?"
-  trap - ERR
-  if [[ "${activated}" == "true" ]]; then
-    if ! bash "${runtime_dir}/rollback-app-update.sh" \
-      "${env_file}" "${transaction}"; then
-      write_transaction_state \
-        "${transaction}/transaction-state.json" rollback_failed || true
-      printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLBACK_FAILED\n' >&2
-      exit 70
-    fi
-  fi
-  write_transaction_state \
-    "${transaction}/transaction-state.json" rolled_back || true
-  printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n' >&2
-  exit "${exit_code}"
-}
-trap rollback_on_error ERR
-
+failure_stage="activation"
+failure_code="TARGET_ACTIVATION_FAILED"
 python3 - "${candidate_env}" "${env_file}" <<'PY'
 import os
 import pathlib
@@ -976,10 +1201,20 @@ run_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
   rag-industry-app
 wait_industry_health rag-industry-app 180
 write_transaction_state "${transaction}/transaction-state.json" verifying
+failure_stage="verification"
+failure_code="TARGET_VERIFICATION_FAILED"
 bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}"
-trap - ERR
+write_transaction_state "${transaction}/transaction-state.json" validated \
+  || fail "TRANSACTION_STATE_WRITE_FAILED"
+validated_checkpoint=true
+failure_stage="last_good_promotion"
+failure_code="LAST_GOOD_PROMOTION_FAILED"
+bash "${runtime_dir}/finalize-app-update.sh" \
+  "${env_file}" "${transaction}" "${target_revision}" promote \
+  || fail "LAST_GOOD_PROMOTION_FAILED"
 write_transaction_state "${transaction}/transaction-state.json" verified \
   || fail "TRANSACTION_STATE_WRITE_FAILED"
+transaction_terminal=true
 
 printf 'reindex_required=false\n'
 printf 'RAG_INDUSTRY_SERVING_UPDATE_OK image=%s revision=%s worker_restarted=false\n' \

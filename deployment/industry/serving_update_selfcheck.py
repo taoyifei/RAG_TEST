@@ -42,6 +42,7 @@ _RUNTIME_FILES = {
     "config/intent-router.json",
     "config/pipeline.json",
     "config/retrieval.json",
+    "finalize-app-update.sh",
     "last_good.py",
     "lib.sh",
     "rollback-app-update.sh",
@@ -284,6 +285,7 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
         "serving_fingerprint",
         "source_compatibility",
         "target",
+        "target_config_profile",
         "trace",
         "ui",
     }
@@ -358,13 +360,36 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
     }:
         raise PackageSelfcheckError("CONFIG_EXACT_SET_INVALID")
     source = _object(value, "source_compatibility")
-    if source != {
-        "compatible_revisions": ["2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"],
-        "old_app_runtime_state_required": False,
-        "required_index_fingerprint": index["source"],
-        "trace_v2_read_compatible": True,
-    }:
+    if (
+        set(source)
+        != {
+            "compatible_revisions",
+            "config_files",
+            "config_profile",
+            "old_app_runtime_state_required",
+            "required_index_fingerprint",
+            "serving_fingerprint",
+            "trace_v2_read_compatible",
+        }
+        or source.get("compatible_revisions")
+        != ["2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"]
+        or source.get("config_profile") != "first-deploy-private-v1"
+        or source.get("old_app_runtime_state_required") is not False
+        or source.get("required_index_fingerprint") != index["source"]
+        or source.get("serving_fingerprint") != serving["source"]
+        or source.get("trace_v2_read_compatible") is not True
+    ):
         raise PackageSelfcheckError("SOURCE_COMPATIBILITY_INVALID")
+    source_config_files = _string_mapping(source, "config_files")
+    if set(source_config_files) != set(config_files) or any(
+        _SHA256.fullmatch(digest) is None
+        for digest in source_config_files.values()
+    ):
+        raise PackageSelfcheckError("SOURCE_CONFIG_IDENTITY_INVALID")
+    if value.get("target_config_profile") != (
+        "serving-runtime-public-config-v1"
+    ):
+        raise PackageSelfcheckError("TARGET_CONFIG_PROFILE_INVALID")
     target = _object(value, "target")
     if target != {
         "alias": "rag-industry-active",

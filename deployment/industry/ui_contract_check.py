@@ -11,6 +11,7 @@ import io
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,9 @@ _HTTP_OK = 200
 _HTTP_CREATED = 201
 _HTTP_UNAUTHORIZED = 401
 _HTTP_FORBIDDEN = 403
+_HTTP_NOT_FOUND = 404
+_MIN_POLL_INTERVAL_SECONDS = 0.1
+_MAX_POLL_INTERVAL_SECONDS = 0.25
 _TRACE_ID_LENGTH = 32
 
 
@@ -169,34 +173,10 @@ def verify_ui_contract(base_url: str) -> dict[str, object]:  # noqa: PLR0912, PL
     if session_admin != _HTTP_UNAUTHORIZED:
         raise UiContractError("UI_SESSION_ACCESSED_ADMIN")
     admin_headers = {"Authorization": f"Bearer {admin_token}"}
-    list_status, _, list_body = _request(
-        "GET",
-        f"{origin}/api/admin/traces?trace_id={trace_id}",
-        headers=admin_headers,
-    )
-    if list_status != _HTTP_OK:
-        raise UiContractError("ADMIN_TRACE_LIST_FAILED")
-    trace_list = _json_object(list_body, "trace list")
-    items = trace_list.get("items")
-    if not isinstance(items, list) or len(items) != 1:
-        raise UiContractError("TRACE_LIST_IDENTITY_INVALID")
-    preview = (
-        items[0].get("question_preview") if isinstance(items[0], dict) else None
-    )
-    if not isinstance(preview, str) or not _QUESTION.startswith(preview):
-        raise UiContractError("TRACE_QUESTION_PREVIEW_MISSING")
-    detail_status, _, detail_body = _request(
-        "GET", f"{origin}/api/admin/traces/{trace_id}", headers=admin_headers
-    )
-    if detail_status != _HTTP_OK:
-        raise UiContractError("ADMIN_TRACE_DETAIL_FAILED")
-    detail = _json_object(detail_body, "trace detail")
-    trace = detail.get("trace")
-    if not isinstance(trace, dict) or trace.get("question_text") != _QUESTION:
-        raise UiContractError("TRACE_QUESTION_TEXT_MISMATCH")
     expected_sha = hashlib.sha256(_QUESTION.encode("utf-8")).hexdigest()
-    if trace.get("question_sha256") != expected_sha:
-        raise UiContractError("TRACE_QUESTION_SHA256_MISMATCH")
+    visibility = _wait_for_trace_visibility(
+        origin, trace_id, admin_headers
+    )
     export_status, _, export_body = _request(
         "POST",
         f"{origin}/api/admin/traces/export",
@@ -211,7 +191,119 @@ def verify_ui_contract(base_url: str) -> dict[str, object]:  # noqa: PLR0912, PL
         "question_sha256": expected_sha,
         "trace_id": trace_id,
         "ui_session": "verified",
+        **visibility,
     }
+
+
+def _wait_for_trace_visibility(  # noqa: PLR0912, PLR0915
+    origin: str,
+    trace_id: str,
+    admin_headers: dict[str, str],
+    *,
+    timeout_seconds: float = 15.0,
+    poll_interval_seconds: float = 0.2,
+) -> dict[str, int]:
+    """等待异步 SAFE Trace 变为终态且问题明文可见。
+
+    Args:
+        origin: Industry App 的同源根 URL。
+        trace_id: UI final 返回的唯一 Trace ID。
+        admin_headers: 仅含 Admin Bearer 的请求头。
+        timeout_seconds: 单调时钟总等待上限。
+        poll_interval_seconds: 未可见时的轮询间隔。
+
+    Returns:
+        不含正文或 token 的轮询次数与耗时。
+
+    Raises:
+        UiContractError: 超时、授权失败或已可判定的身份错误。
+
+    """
+    if timeout_seconds <= 0 or not (
+        _MIN_POLL_INTERVAL_SECONDS
+        <= poll_interval_seconds
+        <= _MAX_POLL_INTERVAL_SECONDS
+    ):
+        raise UiContractError("TRACE_VISIBILITY_POLL_CONFIG_INVALID")
+    started = time.monotonic()
+    attempts = 0
+    expected_sha = hashlib.sha256(_QUESTION.encode("utf-8")).hexdigest()
+    terminal_statuses = {"ANSWERED", "PARTIAL", "REFUSED"}
+    while True:
+        attempts += 1
+        list_status, _, list_body = _request(
+            "GET",
+            f"{origin}/api/admin/traces?trace_id={trace_id}",
+            headers=admin_headers,
+        )
+        if list_status != _HTTP_OK:
+            raise UiContractError("ADMIN_TRACE_LIST_FAILED")
+        trace_list = _json_object(list_body, "trace list")
+        items = trace_list.get("items")
+        if not isinstance(items, list):
+            raise UiContractError("TRACE_LIST_IDENTITY_INVALID")
+        retry = not items
+        item: dict[str, object] | None = None
+        if items:
+            if len(items) != 1 or not isinstance(items[0], dict):
+                raise UiContractError("TRACE_LIST_IDENTITY_INVALID")
+            item = items[0]
+            if item.get("trace_id") != trace_id:
+                raise UiContractError("TRACE_LIST_IDENTITY_INVALID")
+            status = item.get("status")
+            if status not in terminal_statuses | {"RUNNING"}:
+                raise UiContractError("TRACE_STATUS_INVALID")
+            retry = status == "RUNNING"
+            detail_status, _, detail_body = _request(
+                "GET",
+                f"{origin}/api/admin/traces/{trace_id}",
+                headers=admin_headers,
+            )
+            if detail_status == _HTTP_NOT_FOUND:
+                retry = True
+            elif detail_status != _HTTP_OK:
+                raise UiContractError("ADMIN_TRACE_DETAIL_FAILED")
+            else:
+                detail = _json_object(detail_body, "trace detail")
+                trace = detail.get("trace")
+                if not isinstance(trace, dict):
+                    raise UiContractError("TRACE_DETAIL_IDENTITY_INVALID")
+                if trace.get("trace_id") not in {None, trace_id}:
+                    raise UiContractError("TRACE_DETAIL_IDENTITY_INVALID")
+                detail_status_value = trace.get("status")
+                if detail_status_value not in terminal_statuses | {"RUNNING"}:
+                    raise UiContractError("TRACE_STATUS_INVALID")
+                question_text = trace.get("question_text")
+                if (
+                    question_text is None
+                    or question_text == ""
+                    or detail_status_value == "RUNNING"
+                ):
+                    retry = True
+                elif question_text != _QUESTION:
+                    raise UiContractError("TRACE_QUESTION_TEXT_MISMATCH")
+                elif trace.get("question_sha256") != expected_sha:
+                    raise UiContractError("TRACE_QUESTION_SHA256_MISMATCH")
+                else:
+                    preview = item.get("question_preview")
+                    if preview is None or preview == "":
+                        retry = True
+                    elif not isinstance(
+                        preview, str
+                    ) or not _QUESTION.startswith(preview):
+                        raise UiContractError("TRACE_QUESTION_PREVIEW_MISMATCH")
+                    elif not retry:
+                        elapsed_ms = int(
+                            (time.monotonic() - started) * 1000
+                        )
+                        return {
+                            "trace_visibility_attempts": attempts,
+                            "trace_visibility_elapsed_ms": elapsed_ms,
+                        }
+        elapsed = time.monotonic() - started
+        if not retry or elapsed >= timeout_seconds:
+            raise UiContractError("TRACE_VISIBILITY_TIMEOUT")
+        time.sleep(min(poll_interval_seconds, timeout_seconds - elapsed))
 
 
 def verify_log(log_path: Path) -> dict[str, object]:

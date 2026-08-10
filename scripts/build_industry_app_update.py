@@ -54,6 +54,8 @@ _INDEX_FINGERPRINT = (
 _SOURCE_SERVING_FINGERPRINT = (
     "sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b"
 )
+_SOURCE_CONFIG_PROFILE = "first-deploy-private-v1"
+_TARGET_CONFIG_PROFILE = "serving-runtime-public-config-v1"
 _PACKAGE_FILES = {
     "SERVER_UPDATE_COMMANDS.txt",
     "UPDATE_MANIFEST.json",
@@ -76,6 +78,9 @@ _CONFIG_SOURCES = {
 _RUNTIME_SOURCES = {
     "compose_check.py": "deployment/industry/serving_compose_check.py",
     "compose.yaml": "deployment/industry/compose.yaml",
+    "finalize-app-update.sh": (
+        "deployment/industry/finalize-app-update.sh"
+    ),
     "last_good.py": "deployment/industry/serving_last_good.py",
     "lib.sh": "deployment/industry/lib.sh",
     "rollback-app-update.sh": ("deployment/industry/rollback-app-update.sh"),
@@ -156,6 +161,7 @@ def build_industry_app_update(
         IndustryImageError,
         OSError,
         SimpleBuildError,
+        subprocess.CalledProcessError,
         ValueError,
     ) as error:
         if isinstance(error, IndustryAppUpdateBuildError):
@@ -175,6 +181,32 @@ def _validate_serving_config(root: Path) -> None:
         raise IndustryAppUpdateBuildError("CORPUS_POLICY_SHA256_MISMATCH")
     if pipeline.fingerprint() != _INDEX_FINGERPRINT:
         raise IndustryAppUpdateBuildError("INDEX_FINGERPRINT_CHANGED")
+
+
+def _source_config_sha256(
+    root: Path,
+    revision: str,
+) -> dict[str, str]:
+    """从兼容提交的真实 Git blob 推导五文件 SHA256。
+
+    Args:
+        root: Git 仓库根目录。
+        revision: 兼容来源的完整 Git SHA。
+
+    Returns:
+        config 文件名到 blob SHA256 的精确映射。
+
+    """
+    identities: dict[str, str] = {}
+    for name, source in sorted(_CONFIG_SOURCES.items()):
+        payload = subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "show", f"{revision}:{source}"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        ).stdout
+        identities[name] = hashlib.sha256(payload).hexdigest()
+    return identities
 
 
 def _build_runtime_archive(
@@ -298,6 +330,7 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
         (
             "# Replace placeholders; start from a fresh shell.\n"
             "# Do not source the private env.\n"
+            "# App-only: do not start or restart worker/OCR/Qdrant.\n"
             "PACKAGE_DIR=/absolute/path/to/industry-serving-update\n"
             "ENV_FILE=/absolute/path/to/rag-industry.env\n"
             'test "${PACKAGE_DIR}" = "$(realpath "${PACKAGE_DIR}")"\n'
@@ -360,6 +393,7 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
             ")\n"
             "PY\n"
             "# Do not run run-index.sh; reindex_required=false.\n"
+            "# Call this an internal canary only after on-server acceptance.\n"
         ),
         encoding="utf-8",
     )
@@ -428,8 +462,11 @@ def _update_manifest(
         },
         "source_compatibility": {
             "compatible_revisions": [_OLD_REVISION],
+            "config_files": _source_config_sha256(root, _OLD_REVISION),
+            "config_profile": _SOURCE_CONFIG_PROFILE,
             "old_app_runtime_state_required": False,
             "required_index_fingerprint": _INDEX_FINGERPRINT,
+            "serving_fingerprint": _SOURCE_SERVING_FINGERPRINT,
             "trace_v2_read_compatible": True,
         },
         "target": {
@@ -437,6 +474,7 @@ def _update_manifest(
             "project": "rag-industry",
             "service": "rag-industry-app",
         },
+        "target_config_profile": _TARGET_CONFIG_PROFILE,
         "trace": {
             "question_capture": "plaintext",
             "question_retention_seconds": 604800,

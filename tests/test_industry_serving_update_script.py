@@ -129,10 +129,19 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
         "pipeline.json",
         "retrieval.json",
     ):
-        (old_config / config_name).write_text(
-            json.dumps({"name": config_name, "revision": "old"}) + "\n",
-            encoding="utf-8",
-        )
+        source = subprocess.run(  # noqa: S603
+            [
+                "/usr/bin/git",
+                "show",
+                f"{_OLD_REVISION}:deployment/config/{config_name}",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=_ROOT,
+        ).stdout
+        target = old_config / config_name
+        target.write_bytes(source)
+        target.chmod(0o600)
     trace_database = state_path / "traces.sqlite3"
     connection = sqlite3.connect(trace_database)
     connection.execute(
@@ -232,7 +241,22 @@ def _write_python_wrapper(path: Path, log: Path) -> None:
         path,
         f"""#!/usr/bin/env bash
 printf 'python3 %s\n' "$*" >> {log!s}
+if [[ "${{1:-}}" == "-" \
+  && "${{3:-}}" == "${{FAKE_TRANSACTION_STATE_WRITE_FAIL:-never}}" ]]; then
+  exit 1
+fi
 case "${{1:-}}" in
+  */last_good.py)
+    if [[ "$*" == *' promote '* \
+      && "${{FAKE_CRASH_AFTER_LAST_GOOD_PROMOTION:-0}}" == "1" \
+      && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+      /usr/bin/python3 "$@" || exit $?
+      touch "${{FAKE_CRASH_MARKER}}"
+      update_pid="$(ps -o ppid= -p "$PPID" | tr -d ' ')"
+      kill -KILL "${{update_pid}}"
+      exit 137
+    fi
+    ;;
   */validation_check.py)
     if [[ "$*" == *' smoke '* ]]; then
       [[ "${{FAKE_SMOKE_FAIL:-0}}" != "1" ]] || exit 1
@@ -290,8 +314,14 @@ if args[:1] == ["compose"]:
     env_path = args[args.index("--env-file") + 1]
     env = env_values(env_path)
     if "config" in args:
+        if (
+            current.get("FAKE_CANDIDATE_COMPOSE_FAIL")
+            and env["RAG_RELEASE_REVISION"] == NEW_REVISION
+        ):
+            raise SystemExit(1)
         app_environment = {{
             "RAG_QDRANT_ALIAS": "rag-industry-active",
+            "RAG_RELEASE_REVISION": env["RAG_RELEASE_REVISION"],
             "RAG_RUN_MODE": "demo",
             "RAG_TRACE_QUESTION_CAPTURE": env.get(
                 "RAG_TRACE_QUESTION_CAPTURE", "hash_only"
@@ -310,6 +340,11 @@ if args[:1] == ["compose"]:
                 "RAG_UI_SESSION_TTL_SECONDS", "900"
             ),
         }}
+        if (
+            current.get("FAKE_COMPOSE_CONTRACT_FAIL")
+            and env["RAG_RELEASE_REVISION"] == NEW_REVISION
+        ):
+            app_environment["RAG_MAX_LLM_CONCURRENCY"] = "99"
         print(json.dumps({{
             "name": "rag-industry",
             "networks": {{
@@ -364,14 +399,25 @@ if args[:1] == ["compose"]:
         raise SystemExit(0)
     if "run" in args:
         if "pre-update-filesystem-state" in args:
+            if current.get("FAKE_PRE_FILESYSTEM_FAIL"):
+                raise SystemExit(1)
+            config_path = pathlib.Path(env["RAG_CONFIG_PATH"])
+            profile = args[-1]
             print(json.dumps({{
-                "config": {{"files": {{
-                    "corpus-policy.json": "6" * 64,
-                    "intent-router-calibration.json": "6" * 64,
-                    "intent-router.json": "6" * 64,
-                    "pipeline.json": "6" * 64,
-                    "retrieval.json": "6" * 64,
-                }}}},
+                "config": {{
+                    "files": {{
+                        item.name: {{
+                            "gid": item.stat().st_gid,
+                            "mode": format(item.stat().st_mode & 0o7777, "04o"),
+                            "sha256": __import__("hashlib").sha256(
+                                item.read_bytes()
+                            ).hexdigest(),
+                            "uid": item.stat().st_uid,
+                        }}
+                        for item in config_path.iterdir()
+                    }},
+                    "profile": profile,
+                }},
                 "trace": {{
                     "filename": "traces.sqlite3",
                     "mode": "0600",
@@ -380,6 +426,8 @@ if args[:1] == ["compose"]:
             }}, separators=(",", ":"), sort_keys=True))
             raise SystemExit(0)
         if "backup-trace-database" in args:
+            if current.get("FAKE_TRACE_BACKUP_FAIL"):
+                raise SystemExit(1)
             transaction_mount = next(
                 item for item in args if item.endswith(":/update-backup")
             )
@@ -416,6 +464,8 @@ if args[:1] == ["compose"]:
             }}, separators=(",", ":"), sort_keys=True))
             raise SystemExit(0)
         if "pre-update-index-state" in args:
+            if current.get("FAKE_PRE_INDEX_FAIL"):
+                raise SystemExit(1)
             print(json.dumps({{
                 "active_collection": "rag-docx-active",
                 "alias": "rag-industry-active",
@@ -509,10 +559,14 @@ if args[:1] == ["inspect"]:
         raise SystemExit(0)
 
 if args[:2] == ["image", "load"]:
+    if os.environ.get("FAKE_IMAGE_LOAD_FAIL") == "1":
+        raise SystemExit(1)
     sys.stdin.buffer.read()
     print("Loaded image: " + NEW_IMAGE)
     raise SystemExit(0)
 if args[:2] == ["image", "inspect"]:
+    if os.environ.get("FAKE_IMAGE_INSPECT_FAIL") == "1":
+        raise SystemExit(1)
     image = args[-1]
     template = args[args.index("--format") + 1]
     if template == "{{{{.Id}}}}":
@@ -532,10 +586,17 @@ if args[:1] == ["run"]:
             "matches": True,
         }}, separators=(",", ":"), sort_keys=True))
     else:
+        if os.environ.get("FAKE_ASSET_SELFCHECK_FAIL") == "1":
+            raise SystemExit(1)
         print(json.dumps({{"pipeline_fingerprint": FINGERPRINT}}))
     raise SystemExit(0)
 if args[:1] == ["exec"]:
     if "build-info" in args:
+        if (
+            os.environ.get("FAKE_OLD_IDENTITY_FAIL") == "1"
+            and current["revision"] == OLD_REVISION
+        ):
+            raise SystemExit(1)
         print(json.dumps({{
             "expected_revision": current["revision"],
             "installed_revision": current["revision"],
@@ -604,12 +665,20 @@ def _run(
         "FAKE_TARGET_SERVING": manifest["serving_fingerprint"]["target"],
         **(extra or {}),
     }
+    state = json.loads(sandbox.docker_state.read_bytes())
+    for flag in (
+        "FAKE_CANDIDATE_COMPOSE_FAIL",
+        "FAKE_COMPOSE_CONTRACT_FAIL",
+        "FAKE_PRE_FILESYSTEM_FAIL",
+        "FAKE_PRE_INDEX_FAIL",
+        "FAKE_TRACE_BACKUP_FAIL",
+    ):
+        state[flag] = bool(extra and extra.get(flag) == "1")
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
     if extra and extra.get("FAKE_APP_START_FAIL") == "1":
-        state = json.loads(sandbox.docker_state.read_bytes())
         state["fail_app_start"] = True
         sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
     if extra and extra.get("FAKE_ROLLBACK_FAIL") == "1":
-        state = json.loads(sandbox.docker_state.read_bytes())
         state["fail_rollback"] = True
         sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
     return subprocess.run(  # noqa: S603
@@ -848,3 +917,126 @@ def test_existing_runtime_with_different_content_is_rejected(
     assert result.returncode != 0
     assert "RUNTIME_REUSE_EXACT_SET_MISMATCH" in result.stderr
     assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "FAKE_PRE_FILESYSTEM_FAIL",
+        "FAKE_OLD_IDENTITY_FAIL",
+        "FAKE_PRE_INDEX_FAIL",
+        "FAKE_TRACE_BACKUP_FAIL",
+        "FAKE_CANDIDATE_COMPOSE_FAIL",
+        "FAKE_COMPOSE_CONTRACT_FAIL",
+        "FAKE_IMAGE_LOAD_FAIL",
+        "FAKE_IMAGE_INSPECT_FAIL",
+        "FAKE_ASSET_SELFCHECK_FAIL",
+    ),
+)
+def test_pre_activation_failure_is_audited_and_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+
+    first = _run(sandbox, extra={failure: "1"})
+
+    assert first.returncode != 0
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    first_attempt = update_root / "attempt-0001"
+    first_state = json.loads(
+        (first_attempt / "transaction-state.json").read_bytes()
+    )
+    assert first_state["state"] == "precheck_failed"
+    assert isinstance(first_state["failure_stage"], str)
+    assert isinstance(first_state["error_code"], str)
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    states = [
+        json.loads((path / "transaction-state.json").read_bytes())["state"]
+        for path in sorted(update_root.glob("attempt-*"))
+    ]
+    assert states == ["precheck_failed", "verified"]
+
+
+def test_validated_attempt_recovers_after_promotion_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "promotion-crash.injected"
+
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_LAST_GOOD_PROMOTION": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+
+    assert first.returncode != 0
+    assert marker.is_file()
+    assert (sandbox.backup_path / "last-good-pointer.json").is_file()
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    attempt = update_root / "attempt-0001"
+    state = json.loads((attempt / "transaction-state.json").read_bytes())
+    assert state["state"] == "validated"
+
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    assert "ALREADY_CURRENT" in second.stdout
+    state = json.loads((attempt / "transaction-state.json").read_bytes())
+    assert state["state"] == "verified"
+    commands = sandbox.log.read_text(encoding="utf-8")
+    assert sum(
+        "--force-recreate rag-industry-app" in line
+        for line in commands.splitlines()
+        if line.startswith("docker ")
+    ) == 1
+
+
+def test_corrupt_last_good_pointer_fails_closed_before_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    pointer = sandbox.backup_path / "last-good-pointer.json"
+    pointer.write_text("{}\n", encoding="utf-8")
+    pointer.chmod(0o600)
+    before = pointer.read_bytes()
+
+    result = _run(sandbox)
+
+    assert result.returncode != 0
+    assert pointer.read_bytes() == before
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    state = json.loads(
+        (update_root / "attempt-0001" / "transaction-state.json").read_bytes()
+    )
+    assert state["state"] == "precheck_failed"
+    assert state["failure_stage"] == "last_good_precheck"
+
+
+def test_rollback_success_is_not_claimed_when_state_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+
+    result = _run(
+        sandbox,
+        extra={
+            "FAKE_SMOKE_FAIL": "1",
+            "FAKE_TRANSACTION_STATE_WRITE_FAIL": "rolled_back",
+        },
+    )
+
+    assert result.returncode == 70
+    assert "ROLLBACK_STATE_WRITE_FAILED" in result.stderr
+    assert "RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n" not in result.stderr

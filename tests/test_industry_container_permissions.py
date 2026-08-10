@@ -132,11 +132,12 @@ def test_uid_10001_helper_reads_private_sources_and_exports_private_backup(
                 f"{helper}:/update/runtime_check.py:ro",
             ],
             "/update/runtime_check.py",
-            "pre-update-filesystem-state",
-            "/config",
-            "/state/traces.sqlite3",
-            user="10001:10001",
-        )
+                "pre-update-filesystem-state",
+                "/config",
+                "/state/traces.sqlite3",
+                "first-deploy-private-v1",
+                user="10001:10001",
+            )
         assert filesystem.returncode == 0, filesystem.stderr
         filesystem_report = json.loads(filesystem.stdout)
         assert set(filesystem_report["config"]["files"]) == _CONFIG_NAMES

@@ -13,7 +13,7 @@ production ready。
    更新。上传和部署必须等待用户后续单独授权。
 2. **当前运行等级仍是 demo/canary。** `RAG_RUN_MODE=demo`、retrieval 为
    `provisional`、intent router 为 `shadow`、calibration 为 `unverified`，所以即使
-   全量 pytest 为 `1178 passed`，也不能宣称 production ready。production 仍需正式
+   全量 pytest 为 `1203 passed`，也不能宣称 production ready。production 仍需正式
    校准、冻结和服务器 acceptance；本轮没有伪造这些状态。
 3. **HTTP demo 是明确接受的内网风险。** 非 Secure UI Cookie 只有五项配置同时满足才
    允许，production 已 fail closed，但 HTTP 本身不提供链路加密；普通问答访问边界仍
@@ -25,14 +25,16 @@ production ready。
 5. **仓库级安全扫描保留历史命中。** `check_release_safety.py repository .` 当前报告
    13 项，来自历史状态文档、部署说明、测试内网地址和一个合成 secret fixture；这不是
    app-only 交付内容，不能删除历史事实来制造绿灯。最终硬门禁必须针对实际暂存候选和
-   8 文件 delivery/17 文件 runtime exact set 执行，交付包不得包含真实 IP、个人路径、
+   8 文件 delivery/18 文件 runtime exact set 执行，交付包不得包含真实 IP、个人路径、
    secret、问题正文或业务 corpus。
 
 identity-bearing commit 不记录自身 SHA 或构建后制品摘要；最终 revision、包路径、
 逐文件 SHA256、canonical digest、镜像内 asset-selfcheck 和 fresh extraction 结果由
 构建后交付报告给出。旧 `artifacts/industry-app-update/809fb71f5e50` 与
-`artifacts/industry-serving-update/d5c03cf9b97e` 始终失效且不得上传。后续服务器更新
-不得运行 `run-index.sh`，不得重建 corpus 或重启 worker/OCR/Qdrant。
+`artifacts/industry-serving-update/d5c03cf9b97e`、
+`artifacts/industry-serving-update/8755bf379c8f` 始终失效且不得上传。后续服务器更新
+必须从 fresh shell 执行，不 source private env，不得运行 `run-index.sh`，不得重建
+corpus 或重启 worker/OCR/Qdrant；只有现场 acceptance 后才能称为内网 canary 上线。
 
 ## ARCHIVE：2026-08-10 本地实现暂停快照
 

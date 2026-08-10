@@ -173,10 +173,14 @@ def test_pre_update_filesystem_state_is_exact_private_and_path_free(
     database_before = (database.read_bytes(), database.stat())
 
     report = serving_runtime_check.pre_update_filesystem_state(
-        config, database
+        config, database, "first-deploy-private-v1"
     )
 
     assert set(report["config"]["files"]) == _CONFIG_NAMES  # type: ignore[index]
+    assert report["config"]["profile"] == "first-deploy-private-v1"  # type: ignore[index]
+    for identity in report["config"]["files"].values():  # type: ignore[union-attr]
+        assert set(identity) == {"gid", "mode", "sha256", "uid"}
+        assert identity["mode"] == "0600"
     assert report["trace"] == {
         "filename": "traces.sqlite3",
         "mode": "0600",
@@ -212,14 +216,110 @@ def test_pre_update_filesystem_state_rejects_extra_and_public_config(
         serving_runtime_check.RuntimeCheckError,
         match="CONFIG_EXACT_SET",
     ):
-        serving_runtime_check.pre_update_filesystem_state(config, database)
+        serving_runtime_check.pre_update_filesystem_state(
+            config, database, "first-deploy-private-v1"
+        )
     extra.unlink()
     (config / "pipeline.json").chmod(0o644)
     with pytest.raises(
         serving_runtime_check.RuntimeCheckError,
         match="CONFIG_FILE_MODE",
     ):
-        serving_runtime_check.pre_update_filesystem_state(config, database)
+        serving_runtime_check.pre_update_filesystem_state(
+            config, database, "first-deploy-private-v1"
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "mode"),
+    (
+        ("first-deploy-private-v1", 0o600),
+        ("serving-runtime-public-config-v1", 0o644),
+    ),
+)
+def test_config_profiles_accept_only_their_exact_read_only_mode(
+    tmp_path: Path,
+    profile: str,
+    mode: int,
+) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in _CONFIG_NAMES:
+        path = config / name
+        path.write_text("{}\n", encoding="utf-8")
+        path.chmod(mode)
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    database.chmod(0o600)
+
+    report = serving_runtime_check.pre_update_filesystem_state(
+        config, database, profile
+    )
+
+    assert report["config"]["profile"] == profile  # type: ignore[index]
+    assert {
+        item["mode"]
+        for item in report["config"]["files"].values()  # type: ignore[union-attr]
+    } == {f"{mode:04o}"}
+
+    (config / "pipeline.json").chmod(0o664)
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="CONFIG_FILE_MODE",
+    ):
+        serving_runtime_check.pre_update_filesystem_state(
+            config, database, profile
+        )
+
+
+def test_config_profile_rejects_sha_drift_and_symlink(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in _CONFIG_NAMES:
+        path = config / name
+        path.write_text(f'{{"name":"{name}"}}\n', encoding="utf-8")
+        path.chmod(0o644)
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    database.chmod(0o600)
+    expected = {
+        name: hashlib.sha256((config / name).read_bytes()).hexdigest()
+        for name in _CONFIG_NAMES
+    }
+
+    serving_runtime_check.pre_update_filesystem_state(
+        config,
+        database,
+        "serving-runtime-public-config-v1",
+        expected_sha256=expected,
+    )
+    (config / "pipeline.json").write_text("{\"drift\":true}\n")
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="CONFIG_FILE_SHA256",
+    ):
+        serving_runtime_check.pre_update_filesystem_state(
+            config,
+            database,
+            "serving-runtime-public-config-v1",
+            expected_sha256=expected,
+        )
+    (config / "pipeline.json").unlink()
+    (config / "pipeline.json").symlink_to(config / "retrieval.json")
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="CONFIG_FILE_TYPE",
+    ):
+        serving_runtime_check.pre_update_filesystem_state(
+            config,
+            database,
+            "serving-runtime-public-config-v1",
+            expected_sha256=expected,
+        )
 
 
 def test_trace_backup_rejects_bad_revision_and_existing_destination(

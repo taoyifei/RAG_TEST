@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 from scripts import build_industry_app_update
@@ -81,3 +83,29 @@ def test_last_good_has_one_atomic_authority() -> None:
     assert "last-good-snapshots" in helper
     assert '"${backup_path}/last-good.env"' not in library
     assert '"${backup_path}/last-good.json"' not in library
+
+
+def test_source_config_identity_is_derived_from_compatible_revision() -> None:
+    expected = {}
+    for name, source in build_industry_app_update._CONFIG_SOURCES.items():
+        payload = subprocess.run(  # noqa: S603
+            [
+                "/usr/bin/git",
+                "show",
+                f"{build_industry_app_update._OLD_REVISION}:{source}",
+            ],
+            check=True,
+            capture_output=True,
+            cwd=_ROOT,
+        ).stdout
+        expected[name] = hashlib.sha256(payload).hexdigest()
+
+    assert build_industry_app_update._source_config_sha256(
+        _ROOT, build_industry_app_update._OLD_REVISION
+    ) == expected
+    assert build_industry_app_update._SOURCE_CONFIG_PROFILE == (
+        "first-deploy-private-v1"
+    )
+    assert build_industry_app_update._TARGET_CONFIG_PROFILE == (
+        "serving-runtime-public-config-v1"
+    )

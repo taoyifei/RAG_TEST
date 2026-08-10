@@ -1,5 +1,84 @@
 # Industry 事故与防复发记录
 
+## 2026-08-10 Compose revision 切换被同 env 夹具假绿掩盖
+
+- **影响：** `8755bf379c8f` 包将真实旧 revision 切换到目标 revision 时，旧、新 App
+  与 worker 的 `RAG_RELEASE_REVISION` 必然不同，但 helper 把它当成未授权环境漂移并在
+  激活前报 `APP_ENVIRONMENT_CHANGED`；服务不会损坏，但候选永远无法上线。
+- **根因：** 旧测试用同一份 `.env.example` 渲染 old/new Compose，fake canonical
+  environment 又缺少 revision 和五个 config path，因而没有复现真实 source/candidate
+  身份差异。
+- **修复：** Compose helper 显式接收 source/target revision、config 与 image，App 和
+  worker 分别核对 40 位 SHA，只允许声明的 revision 迁移及既有七项 UI/Trace 目标变化；
+  其他环境、Qdrant/OCR、network、port 和 volume 仍 fail closed。
+- **防复发证据：** 测试从 Git 读取真实 `2c4cf220...` Compose，用独立 old/candidate
+  env 和 Docker Compose v5.1.2 渲染；合法迁移通过，非法 revision 和额外差异失败。
+
+## 2026-08-10 SAFE Trace 异步落库造成验收瞬时误回滚
+
+- **影响：** 普通 UI 请求返回唯一末尾 `final` 时，SAFE Trace 可能仍在 writer 队列；
+  旧验收立即查询 list/detail，会把短暂的空 list、RUNNING、404 或问题字段未写完误判为
+  App 故障并触发回滚。
+- **根因：** 验收错误地把“写命令已入队”等同于“SQLite 已可通过 Admin API 读取”，且
+  测试只覆盖同步可见结果。
+- **修复：** 不改变生产 TraceRecorder 异步语义；验收改用单调时钟和固定上限轮询，仅对
+  空 list、RUNNING、detail 404、问题字段尚不可见重试。错误/重复 trace ID、鉴权/422/
+  5xx、终态问题或 SHA 不一致立即失败，报告只含次数和耗时。
+- **防复发证据：** 三次查询后可见、永久不可见超时、401/422/500、错误 ID、问题和 SHA
+  不匹配均有专项测试。
+
+## 2026-08-10 precheck 卡死与 rollback 状态伪成功
+
+- **影响：** `8755bf379c8f` 在 filesystem、index、Trace backup、Compose、image load 或
+  asset-selfcheck 任一步激活前失败时，attempt 永久停在 `prepared` 且同包不能重试；
+  rollback 成功后的状态写入又使用 `|| true`，可能打印成功但审计仍是非终态。
+- **根因：** 错误处理安装得过晚，状态机没有区分 precheck 失败与已激活失败，也没有把
+  审计状态持久化本身当作事务门禁。
+- **修复：** 状态扩展为 `prepared/prechecking/precheck_failed/activated/verifying/
+  validated/verified/rolled_back/rollback_failed`；创建 attempt 后立即安装退出处理。
+  激活前失败写稳定 stage/code 的 `precheck_failed`、不回滚并允许新 attempt；状态写入
+  失败返回独立错误，未确认 `rolled_back` 时绝不宣称成功。
+- **防复发证据：** 六类 pre-activation 故障、同包第二 attempt、rollback state write
+  失败、非终态/未知状态拒绝和两份证据保留均由脚本级故障注入覆盖。
+
+## 2026-08-10 verify、last-good 与 transaction 之间存在崩溃窗口
+
+- **影响：** 旧 verify 会先晋升 last-good，再由父 updater 写 `verified`。两步之间崩溃
+  会留下“pointer 已是目标、transaction 仍 verifying”的不可恢复组合；同时
+  `resolve 2>/dev/null || true` 会把损坏 pointer 当作不存在并可能被新晋升覆盖。
+- **根因：** 子 verify 同时承担验收和控制面提交，父事务没有可恢复的 validated
+  checkpoint；pointer 缺失与 pointer 损坏也没有分支分类。
+- **修复：** verify 只生成并 fsync `verified-state.json`；父 updater 先写 `validated`，
+  再由独立 finalize helper promote/reconcile、严格 resolve 并逐字节核对 env/state/
+  revision，最后写 `verified`。validated 重入只做目标轻量身份检查；pointer 已存在但
+  JSON、snapshot、manifest 或 SHA 损坏一律 fail closed。
+- **防复发证据：** 在真实 promote 后、写 verified 前杀进程，再次执行可完成 reconcile；
+  pointer 目标不一致和四类损坏均拒绝覆盖。
+
+## 2026-08-10 source config 未绑定且 0600/0644 升级合同冲突
+
+- **影响：** 旧 updater 只检查五个 config SHA 的格式，没有把服务器实际内容与兼容源
+  revision 绑定；手工漂移仍可能被接受。另一方面首次部署 config 为 0600，而成功的
+  serving runtime config 为 0644，单一 `mode==0600` 会阻塞下一次合法更新。
+- **根因：** manifest 缺少由权威源提交导出的 source exact SHA 和显式 mode profile，
+  filesystem helper 把首次部署权限形态误当成永久唯一形态。
+- **修复：** builder 通过 `git show <source revision>:<path>` 读取真实五文件并计算 SHA；
+  manifest 同时绑定 source revision、serving/index fingerprint 和 profile。helper 支持
+  `first-deploy-private-v1` 的 0600 与 `serving-runtime-public-config-v1` 的 0644，二者
+  都要求普通文件、非 symlink、非 group/other writable、exact SHA 和只读挂载。
+- **防复发证据：** 0600、0644 正向及 0664/0666、symlink、SHA 漂移负向测试全部覆盖。
+
+## 2026-08-10 本地 Qdrant 长复用与 SQLite WAL 测试夹具波动
+
+- **影响：** 同一个无卷临时 Qdrant 长时间复用的第二轮关联测试出现一次 HTTP connect
+  timeout；损坏 SQLite 用例只替换主文件但保留 WAL/SHM 时，SQLite 可从日志恢复，导致
+  “预期损坏”偶发不成立。两者都不是 production StateStore 或索引语义变更。
+- **处置：** 记录两次非绿结果，不删除证据；损坏夹具在替换主库后同时删除该测试库的
+  WAL/SHM，确保输入确实损坏。Qdrant 使用新建、无卷、空 collection 的固定 v1.18.3
+  容器重跑，专项结束再次确认 collection 为空。
+- **最终证据：** 两个复现用例先单独通过，扩大 Qdrant 关联集 `72 passed, 56 warnings
+  in 386.94s`，随后最终全量 `1203 passed, 61 warnings in 713.97s`。
+
 ## 2026-08-10 真实 App 镜像自检重复 ENTRYPOINT
 
 - **影响：** `d5c03cf9b97e` updater 在切换 env/App 前执行

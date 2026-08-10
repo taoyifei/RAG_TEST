@@ -1,6 +1,58 @@
 # DOCX RAG 交付进度
 
-## CURRENT STATUS：2026-08-10 Industry canary 阻塞修复已通过本地门禁
+## CURRENT STATUS：2026-08-10 Industry serving update 最终事务缺口已本地收口
+
+- 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry`/`origin/Industry` 均为
+  `8755bf379c8fff2a1dea2125ccd633b614087b02`，`main` 为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`，起始工作区 clean；没有 amend 旧提交，
+  没有修改 main。`artifacts/industry-serving-update/8755bf379c8f` 经复核永久失效，
+  不得上传、部署或作为验收证据，新包必须从本轮新的 clean commit 构建到独立 SHA 目录。
+- 修改生产实现前的首轮专项为 `44 failed, 12 passed in 18.63s`。红灯真实固定了六类缺口：
+  old/new Compose 共用 env 导致 revision 切换未被测试；SAFE Trace 立即查询；激活前失败
+  停在 prepared；无 validated 崩溃恢复；损坏 last-good 被吞；source config 没有 exact
+  SHA/profile 绑定。没有用 skip/xfail、固定业务答案或放宽生产检验制造绿灯。
+- Compose helper 现在显式核对 source/target revision、config 和 image。真实 Git 旧
+  `2c4cf220...` Compose 与当前 Compose 分别用独立 old/candidate env 经 Docker Compose
+  v5.1.2 渲染；App/worker 只允许声明的 40 位 revision 切换及既有七项 UI/Trace 变化，
+  其余环境、Qdrant/OCR、networks、port 与 volume 仍 fail closed。
+- UI/Trace helper 在唯一末尾 `final` 后以单调时钟有界轮询 SAFE Trace，只重试空 list、
+  RUNNING、detail 404 和问题字段尚不可见；错误/重复 trace ID、鉴权/422/5xx、终态问题
+  或 SHA 不一致立即失败。报告只增加 `trace_visibility_attempts` 和
+  `trace_visibility_elapsed_ms`，没有修改 TraceRecorder 的异步生产语义。
+- update transaction 扩展为
+  `prepared/prechecking/precheck_failed/activated/verifying/validated/verified/rolled_back/
+  rollback_failed`。激活前失败不回滚，写入稳定 stage/code 后允许新 attempt；rollback
+  状态写失败不再吞掉。verify 只 fsync `verified-state.json`，父 updater 写 validated 后
+  再通过独立 finalize helper 严格 promote/reconcile last-good，最后写 verified；validated
+  中断可恢复，pointer 已存在但损坏或目标不一致时 fail closed。
+- builder 从兼容源提交的真实五个 config blob 生成 source exact SHA，不手写摘要；
+  source revision、serving/index fingerprint 与 profile 同时绑定。filesystem helper 同时
+  支持首次部署 `first-deploy-private-v1`（0600）和后续
+  `serving-runtime-public-config-v1`（0644），均拒绝 symlink、特殊文件、group/other
+  writable 和 SHA 漂移。runtime exact set 因新增 finalize helper 从 17 变为 18。
+- 最终事务专项为 `94 passed in 81.07s`；model/OCR 与健康合同扩大集为
+  `160 passed, 1 warning in 11.24s`。固定、无卷、空数据的本地
+  `qdrant/qdrant:v1.18.3` 关联集最终为 `72 passed, 56 warnings in 386.94s`，结束后
+  collection 为空。全量 pytest 最终为
+  `1203 passed, 61 warnings in 713.97s`，0 failed，未新增 skip/xfail。
+- compileall、全仓 Ruff、strict mypy（124 source files）、Google docstring、Node 2 项、
+  simple/Industry 全部 shell 语法、两套 profiles Compose config 和源码 asset-selfcheck
+  均通过。实际 prompt revision 与 pipeline 一致为
+  `sha256:7a10e80a64034ce92953cd8e7e4b87ba59ce799811cf3e6b7eb5f02575885717`，corpus
+  policy semantic SHA 一致为
+  `1079f1dae19d0e134f5660234eab9961e68adbb6724ea8d6f0de81db42646c61`；index
+  fingerprint 保持
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`，serving
+  fingerprint 按预期从
+  `sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b` 变为
+  `sha256:07217b1d2e736cfc4bbf0810bb70770003f43d20fb96642d4ea5d2b2b2c63758`；没有盲刷资产 SHA。
+- 本轮只允许从新 clean commit 构建 8 文件 Industry App-only serving update，不生成 full
+  release、corpus、OCR/Qdrant image 或 index 包。最终 commit、逐文件 SHA、canonical
+  digest、镜像内/fresh selfcheck 写入构建后交付报告，避免 identity-bearing commit
+  自引用。全程未访问服务器、未部署、未重索引、未修改 GM corpus、未重启服务器
+  worker/OCR/Qdrant、未 push；本地绿灯不等于服务器 canary 或 production ready。
+
+## ARCHIVE：2026-08-10 Industry canary 阻塞修复已通过本地门禁
 
 - 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry`/`origin/Industry` 均为
   `d5c03cf9b97e4924aaaf66a7407a2451f33ae0a6`，`main` 为

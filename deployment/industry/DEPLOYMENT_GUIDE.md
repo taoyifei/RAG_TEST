@@ -31,6 +31,10 @@ serving config、Compose 和包内 helper，且错误要求旧 App 支持 `runti
 上传或部署。复核后的
 `artifacts/industry-serving-update/d5c03cf9b97e` 又存在真实镜像 ENTRYPOINT、
 UID 10001 私有文件、canonical Compose 和日志时序四个 P0，同样永久失效且不得上传。
+复核后的 `artifacts/industry-serving-update/8755bf379c8f` 仍会拒绝合法的
+old→target revision 切换，并存在 SAFE Trace 瞬时不可见、precheck 无法重试、
+validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久失效，不得上传、
+部署或作为验收证据。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 
@@ -42,9 +46,9 @@ UID 10001 私有文件、canonical Compose 和日志时序四个 P0，同样永�
 - `SERVER_UPDATE_COMMANDS.txt`。
 
 `serving-runtime.tar.gz` 将版本化 Compose、包内 verify/rollback/helper、5 份 config
-和脱敏 validation 作为同一身份交付。runtime exact set 当前为 17 个文件；新增的
+和脱敏 validation 作为同一身份交付。runtime exact set 当前为 18 个文件；新增的
 `compose_check.py` 只用 Python 标准库规范化真实 Compose canonical JSON，不访问业务
-文件。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
+文件，`finalize-app-update.sh` 在父事务中原子完成 last-good promote/reconcile。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
 secret、真实服务器地址或问题正文。更新前由包内标准库 helper 在旧 App image 的一次性
 容器中只读取得 index identity，并用 SQLite online backup 备份 Trace；不要求旧 App
 提供新 CLI。
@@ -55,9 +59,26 @@ selfcheck、更新前身份和 Trace 备份、原子安装版本化 runtime/cand
 image、仅 force-recreate `rag-industry-app`、runtime-state v2、包内
 `verify-app-update.sh`。失败调用包内 `rollback-app-update.sh` 并复验旧身份。
 每次执行保留独立 `attempt-000N/transaction-state.json`，状态只允许
-`prepared/activated/verifying/verified/rolled_back/rollback_failed`。回滚成功后的同包
-重试创建新 attempt，不删除旧证据；`rollback_failed`、未知状态或中断的非终态均
-fail closed，需要人工复核。last-good 只在完整 verify 成功后晋升。
+`prepared/prechecking/precheck_failed/activated/verifying/validated/verified/rolled_back/
+rollback_failed`。激活前失败写入带稳定 stage/code 的 `precheck_failed`，不执行回滚，
+并允许同包创建新 attempt；回滚成功后的同包重试也保留旧证据并创建新 attempt。
+`rollback_failed`、未知状态及除 `validated` 外的中断非终态均 fail closed。
+`validated` 表示完整 verify 已生成并 fsync `verified-state.json`，但父事务尚未完成
+last-good；再次执行只做必要的目标身份检查和 promote/reconcile，不重建 App。pointer、
+snapshot、manifest 或文件 SHA 已存在但损坏时必须 fail closed，不得用新 pointer 覆盖。
+
+source config 身份由 manifest 中五文件 exact SHA、source revision、source serving/index
+fingerprint 和显式 profile 共同绑定。首次部署来源使用
+`first-deploy-private-v1`（普通文件、0600）；后续 serving runtime 来源使用
+`serving-runtime-public-config-v1`（普通文件、0644）。两者都拒绝 symlink、特殊文件、
+group/other writable 和 SHA 漂移，并保持只读挂载。old/new Compose 必须分别使用独立
+source/candidate env；App 与 worker 只允许 `RAG_RELEASE_REVISION` 按声明的 40 位 SHA
+切换，其他未授权环境差异仍 fail closed。
+
+UI/Trace 现场验收不会把 SAFE Trace 改为同步持久化。收到唯一末尾 `final` 后，helper
+使用单调时钟进行有界轮询，只对空 list、RUNNING、detail 404 和尚未出现的问题字段重试；
+鉴权/校验/服务错误、错误或重复 trace ID、终态问题/SHA 不一致立即失败。脱敏报告只记录
+`trace_visibility_attempts` 与 `trace_visibility_elapsed_ms`。
 
 该更新明确禁止运行 `run-index.sh`，不启动或重启 worker/OCR/Qdrant，不修改 alias、
 manifest、collection、point、answer cache 或 GM corpus。index fingerprint 必须保持
@@ -163,5 +184,8 @@ Serving update 不得引用 `artifacts/industry-upload`。只上传新的
 目标机解包到新目录后，严格按包内 `SERVER_UPDATE_COMMANDS.txt`：校验两个 sidecar、
 执行 package selfcheck、以绝对路径传入私有 env、运行 updater，最后用 Python
 标准库读取 audit root 下各 attempt 的 `transaction-state.json`。不要 source env，
-不要运行 `run-index.sh`，不要手工删除失败 attempt；`verified` 表示本次更新本地终验
-完成，`rolled_back` 表示已恢复旧 App，其他终态一律停止并复核。
+不要运行 `run-index.sh`，不要手工删除失败 attempt，也不要启动或重启 worker、OCR、
+Qdrant；这是 App-only 更新。`verified` 表示本次更新本地终验完成，`rolled_back` 表示
+已恢复旧 App，`precheck_failed` 可由同包新 attempt 重试，`validated` 只能由同包 updater
+执行受控恢复，其他状态一律停止并复核。只有现场 acceptance 全部通过后才能称为内网
+canary 上线，不能称为 production ready。

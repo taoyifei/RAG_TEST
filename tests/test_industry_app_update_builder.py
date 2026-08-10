@@ -100,7 +100,8 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
     assert "transaction-state.json" in command_text
     assert "run-index.sh" in command_text
     manifest = json.loads((output / "UPDATE_MANIFEST.json").read_bytes())
-    assert len(manifest["runtime"]["files"]) == 17
+    assert len(manifest["runtime"]["files"]) == 18
+    assert "finalize-app-update.sh" in manifest["runtime"]["files"]
     assert "compose_check.py" in manifest["runtime"]["files"]
     assert manifest["branch"] == "Industry"
     assert manifest["target"] == {

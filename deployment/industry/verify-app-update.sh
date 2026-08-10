@@ -248,46 +248,12 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     output.write("\n")
     output.flush()
     os.fsync(output.fileno())
+directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
 PY
-backup_path="$(exact_env_value "${env_file}" RAG_BACKUP_PATH)"
-resolved_last_good="$(python3 "${script_dir}/last_good.py" resolve \
-  "${backup_path}" 2>/dev/null || true)"
-if [[ -n "${resolved_last_good}" ]]; then
-  resolved_revision="$(python3 - "${resolved_last_good}" <<'PY'
-import json
-import sys
-
-resolved = json.loads(sys.argv[1])
-revision = resolved.get("revision")
-if not isinstance(revision, str):
-    raise SystemExit("LAST_GOOD_REVISION_INVALID")
-print(revision)
-PY
-  )" || verify_fail "LAST_GOOD_RESOLVE_INVALID"
-else
-  resolved_revision=""
-fi
-if [[ "${resolved_revision}" == "${revision}" ]]; then
-  python3 - "${resolved_last_good}" "${env_file}" \
-    "${verified_state}" <<'PY'
-import json
-import pathlib
-import sys
-
-resolved = json.loads(sys.argv[1])
-for key, expected in (
-    ("env_path", pathlib.Path(sys.argv[2])),
-    ("state_path", pathlib.Path(sys.argv[3])),
-):
-    actual = pathlib.Path(str(resolved.get(key, "")))
-    if actual.read_bytes() != expected.read_bytes():
-        raise SystemExit("LAST_GOOD_CONTENT_MISMATCH")
-PY
-else
-  python3 "${script_dir}/last_good.py" promote \
-    "${backup_path}" "${env_file}" "${verified_state}" "${revision}" \
-    >/dev/null || verify_fail "LAST_GOOD_PROMOTION_FAILED"
-fi
 
 printf '%s\n' "${smoke_report}"
-printf 'RAG_INDUSTRY_APP_UPDATE_VERIFY_OK\n'
+printf 'RAG_INDUSTRY_APP_UPDATE_VALIDATED\n'

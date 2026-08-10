@@ -28,6 +28,10 @@ _CONFIG_NAMES = {
     "pipeline.json",
     "retrieval.json",
 }
+_CONFIG_PROFILE_MODES = {
+    "first-deploy-private-v1": "0600",
+    "serving-runtime-public-config-v1": "0644",
+}
 
 
 class RuntimeCheckError(RuntimeError):
@@ -37,12 +41,17 @@ class RuntimeCheckError(RuntimeError):
 def pre_update_filesystem_state(
     config_directory: Path,
     trace_database: Path,
+    config_profile: str,
+    *,
+    expected_sha256: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """只读取得 container-owned config 与 Trace schema 身份。
 
     Args:
         config_directory: 挂载到旧 App 的五文件 config 目录。
         trace_database: 挂载到旧 App 的 Trace SQLite 文件。
+        config_profile: 明确的来源 config 权限合同。
+        expected_sha256: 可选的五文件精确 SHA256 合同。
 
     Returns:
         不含绝对路径、正文或 secret 的 canonical 身份字段。
@@ -53,22 +62,44 @@ def pre_update_filesystem_state(
     """
     if not config_directory.is_dir() or config_directory.is_symlink():
         raise RuntimeCheckError("CONFIG_DIRECTORY_INVALID")
+    expected_mode = _CONFIG_PROFILE_MODES.get(config_profile)
+    if expected_mode is None:
+        raise RuntimeCheckError("CONFIG_PROFILE_INVALID")
     entries = list(config_directory.iterdir())
-    if (
-        {path.name for path in entries} != _CONFIG_NAMES
-        or any(not path.is_file() or path.is_symlink() for path in entries)
-    ):
+    if {path.name for path in entries} != _CONFIG_NAMES:
         raise RuntimeCheckError("CONFIG_EXACT_SET_INVALID")
+    if any(not path.is_file() or path.is_symlink() for path in entries):
+        raise RuntimeCheckError("CONFIG_FILE_TYPE_INVALID")
     before = {
         path.name: _source_identity(path) for path in sorted(entries)
     }
     files = {
-        path.name: _file_sha256(path) for path in sorted(entries)
+        path.name: {
+            "gid": before[path.name]["gid"],
+            "mode": before[path.name]["mode"],
+            "sha256": _file_sha256(path),
+            "uid": before[path.name]["uid"],
+        }
+        for path in sorted(entries)
     }
     if any(
-        identity["mode"] != "0600" for identity in before.values()
+        identity["mode"] != expected_mode for identity in before.values()
     ):
         raise RuntimeCheckError("CONFIG_FILE_MODE_INVALID")
+    if expected_sha256 is not None:
+        if (
+            set(expected_sha256) != _CONFIG_NAMES
+            or any(
+                re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                for digest in expected_sha256.values()
+            )
+        ):
+            raise RuntimeCheckError("CONFIG_EXPECTED_SHA256_INVALID")
+        if any(
+            files[name]["sha256"] != digest
+            for name, digest in expected_sha256.items()
+        ):
+            raise RuntimeCheckError("CONFIG_FILE_SHA256_MISMATCH")
     _require_regular_private_source(trace_database)
     trace_before = _source_identity(trace_database)
     schema = trace_schema(trace_database)
@@ -78,7 +109,7 @@ def pre_update_filesystem_state(
     if before != after or trace_before != _source_identity(trace_database):
         raise RuntimeCheckError("PRE_UPDATE_SOURCE_MUTATED")
     return {
-        "config": {"files": files},
+        "config": {"files": files, "profile": config_profile},
         "trace": {
             "filename": trace_database.name,
             "mode": trace_before["mode"],
@@ -435,6 +466,7 @@ def _arguments() -> argparse.Namespace:
     filesystem = commands.add_parser("pre-update-filesystem-state")
     filesystem.add_argument("config_directory", type=Path)
     filesystem.add_argument("trace_database", type=Path)
+    filesystem.add_argument("config_profile")
     for command in ("backup-trace-database", "backup-trace"):
         backup = commands.add_parser(command)
         backup.add_argument("source", type=Path)
@@ -460,6 +492,7 @@ def main() -> int:
             result = pre_update_filesystem_state(
                 arguments.config_directory,
                 arguments.trace_database,
+                arguments.config_profile,
             )
         elif arguments.command in {
             "backup-trace-database",
