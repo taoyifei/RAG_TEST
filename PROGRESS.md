@@ -5484,7 +5484,15 @@ bash verify.sh /data/tyf/RAG-industry/rag-industry.env
   simple/Industry Compose、asset-selfcheck 和 `git diff --check` 均通过。index
   fingerprint 仍为
   `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
-- [ ] 待在 `.60` 只更新 Industry release/app/config 并复跑 20 问；禁止运行
-  `run-index.sh`。随后更新 training app，执行任务书固定六问与 app-only 验收，并按
+- [x] `.60` 首次执行 `2c4cf220c7cf` deploy 后运行容器仍为旧 `5ce587010422`；
+  image tag、env 和 Compose 展开值均正确，但 deploy 未重建 app，且仅凭 health 无法
+  发现 revision 不一致。四条 q008 Trace 均为旧 revision 的 cache miss，故排除缓存
+  原因。随后使用 `--no-deps --force-recreate` 只重建 `rag-industry-app`，运行 image
+  ID、OCI revision 与容器内 wheel revision 全部匹配 `2c4cf220c7cf`；OCR、Qdrant、
+  corpus、活动索引均未重建，也未执行 `run-index.sh`。
+- [x] 新 app 下 `/live`、`/ready` 均成功，Industry `verify.sh` 返回
+  `active_source_count=10`、`point_count=139`、`smoke_passed=20` 和
+  `RAG_INDUSTRY_VERIFY_OK`。q008 精确编号修复与 20 问正向/负向隔离现场验收完成。
+- [ ] 待更新 training app，执行任务书固定六问与 app-only 验收，并按
   当前容器、env 与 last-good 回滚指向列出旧 release/data/transfer/image 清理候选，
   只交给用户自行删除。
