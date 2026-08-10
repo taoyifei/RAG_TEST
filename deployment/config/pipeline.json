@@ -51,6 +51,6 @@
       "pending-server-verification"
     ]
   ],
-  "prompt_revision": "sha256:2da3259a7d6d22be5c37e6de509c0301965c36ed4667be19026333092c80d6e8",
+  "prompt_revision": "sha256:6c2583067906997948ac664e18011de9a3f778fe0f5dd07af5e383c5eee6eaaf",
   "llm_tokenizer_sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
 }

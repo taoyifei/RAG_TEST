@@ -383,6 +383,102 @@ def test_named_source_fallback_filters_before_limit() -> None:
     )
 
 
+def test_precise_source_id_cannot_be_satisfied_by_overlapping_title() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-gm04",
+            "质量管理制度应定期考核。",
+            file_path="GM-04 质量管理制度及考核办法.docx",
+            source_id="source-gm04",
+            neighbor_group_id="gm04",
+        ),
+        _ranked(
+            "chunk-gm03",
+            "成品检验人员应按检验规范实施质量检验。",
+            rank=2,
+            score=0.99,
+            file_path="GM-03 质量管理制度.docx",
+            source_id="source-gm03",
+            neighbor_group_id="gm03",
+        ),
+    )
+    invalid = {
+        "claims": [
+            {
+                "text": "质量管理制度应定期考核。",
+                "support_ids": ["E1:S1"],
+            }
+        ]
+    }
+
+    result = _generator(lambda _: _response(invalid)).answer(
+        "GM-03《质量管理制度》有哪些要求？",
+        bundle,
+        rerank_scores=(1.0, 0.99),
+    )
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.model_calls == 2
+    assert len(result.claims) == 1
+    assert result.claims[0].text == (
+        "成品检验人员应按检验规范实施质量检验。"
+    )
+    assert result.claims[0].supports[0].locator.startswith(
+        "GM-03 质量管理制度.docx"
+    )
+
+
+def test_answer_must_cover_every_explicit_source_id() -> None:
+    bundle = _bundle(
+        _ranked(
+            "chunk-gm07",
+            "技术文件原稿由品质部归档保存。",
+            file_path="GM-07 技术文件管理规定.docx",
+            source_id="source-gm07",
+            neighbor_group_id="gm07",
+        ),
+        _ranked(
+            "chunk-gm09",
+            "仓库物品应离地、离墙存放并明确标识。",
+            rank=2,
+            score=0.99,
+            file_path="GM-09 仓库管理制度.docx",
+            source_id="source-gm09",
+            neighbor_group_id="gm09",
+        ),
+    )
+    incomplete = {
+        "claims": [
+            {
+                "text": "技术文件原稿由品质部归档保存。",
+                "support_ids": ["E1:S1"],
+            }
+        ]
+    }
+
+    result = _generator(lambda _: _response(incomplete)).answer(
+        (
+            "GM-07《技术文件管理规定》和 GM-09《仓库管理制度》"
+            "有什么不同？"
+        ),
+        bundle,
+        rerank_scores=(1.0, 0.99),
+    )
+
+    assert result.status is AnswerStatus.ANSWERED
+    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.model_calls == 2
+    assert {
+        support.locator.split(" > ", maxsplit=1)[0]
+        for claim in result.claims
+        for support in claim.supports
+    } == {
+        "GM-07 技术文件管理规定.docx",
+        "GM-09 仓库管理制度.docx",
+    }
+
+
 def test_deliverables_preserve_source_and_actor_relationships() -> None:
     bundle = _bundle(
         _ranked(

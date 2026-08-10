@@ -5464,6 +5464,26 @@ bash verify.sh /data/tyf/RAG-industry/rag-industry.env
   app-only 三文件包；外层 sidecar、package preflight、package verify 与 app image
   sidecar 均通过。最终交付目录按 clean HEAD 的 12 位短 SHA 命名，包内 app revision
   必须与该完整 HEAD 一致；OCR/Qdrant 仍为服务器复用身份，未打入轻量包。
+- [x] 用户已在 `.60` 无重索引部署 `5ce587010422-87860c8b7496`，容器、`/live`、
+  `/ready` 和活动索引均健康；20 问复跑在 008 停止。真实 Trace
+  `38086d37279248f9ab9a2fcf550d3957` 显示 GM-04 占 rerank rank 1～5，GM-03 以
+  rank 6、score 0.9727 进入最终 Evidence，但最终三条 citation 全部选择 GM-04。
+  source ID 已由实际 DOCX 内容 SHA256 与稳定相对路径确定性映射复核，故不是检索、
+  reranker、证据上限或索引缺失。
+- [x] 根因是问题同时包含精确编号 `GM-03` 和重合标题“质量管理制度”时，旧门禁按
+  任一强锚点命中即放行，GM-04 因标题部分重合而被误当作指定来源。新增两个红测先
+  复现 q008 错误放行与多编号比较只覆盖一个来源，随后统一改为精确编号优先：单条
+  claim 必须直接支持某个编号，最终 claims 合计覆盖全部显式编号；fallback 先为每个
+  编号保留一条真实 EvidenceUnit，再沿用既有排序和数量上限。生产代码不包含 GM 文档
+  特判或固定答案，也未修改检索、索引、阈值、缓存结构/TTL 或流式协议。
+- [x] answer request revision 提升为 v9，联合 prompt revision 为
+  `sha256:6c2583067906997948ac664e18011de9a3f778fe0f5dd07af5e383c5eee6eaaf`，
+  pipeline asset SHA256 为
+  `037e2960634c2314df47cc53f6212224035cd4b1e9c48e189a8df5d595bf5570`；专项为
+  `89 passed, 1 warning`，全仓 Ruff、strict mypy（81 source files）、compileall、
+  simple/Industry Compose、asset-selfcheck 和 `git diff --check` 均通过。index
+  fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
 - [ ] 待在 `.60` 只更新 Industry release/app/config 并复跑 20 问；禁止运行
   `run-index.sh`。随后更新 training app，执行任务书固定六问与 app-only 验收，并按
   当前容器、env 与 last-good 回滚指向列出旧 release/data/transfer/image 清理候选，

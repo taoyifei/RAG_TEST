@@ -27,7 +27,7 @@ from rag_app.generation.evidence import (
     EvidenceBundle,
     EvidenceUnit,
     decide_answerability,
-    strong_question_anchors,
+    required_question_anchors,
 )
 from rag_app.generation.question_intent import (
     QuestionIntent,
@@ -788,7 +788,7 @@ def _new_streaming_claim_state(
         raise ValueError("流式回答必须提供 cancellation。")
     return _StreamingClaimState(
         units_by_id={unit.unit_id: unit for unit in evidence.units},
-        question_anchors=strong_question_anchors(question),
+        question_anchors=required_question_anchors(question),
         on_claim=on_claim,
         started=time.monotonic(),
     )
@@ -892,7 +892,7 @@ def _validate_answer(
             calls=calls,
         )
     units_by_id = {unit.unit_id: unit for unit in evidence.units}
-    question_anchors = strong_question_anchors(question)
+    question_anchors = required_question_anchors(question)
     claims: list[AnswerClaim] = []
     claim_source_groups: list[frozenset[str]] = []
     selected_units: list[EvidenceUnit] = []
@@ -915,6 +915,11 @@ def _validate_answer(
             dropped_codes[error.code] = dropped_codes.get(error.code, 0) + 1
     if not claims:
         raise _ValidationError(next(iter(dropped_codes)))
+    if question_anchors and not _units_cover_question_anchors(
+        tuple(selected_units),
+        question_anchors,
+    ):
+        raise _ValidationError("UNSUPPORTED_QUESTION_ANCHOR")
     combined_source_groups: set[str] = set().union(*claim_source_groups)
     if len(combined_source_groups) > 1:
         mode = AnswerMode.SOURCE_SEPARATED
@@ -1083,6 +1088,17 @@ def _units_support_question_anchor(
     return any(anchor.casefold() in searchable for anchor in question_anchors)
 
 
+def _units_cover_question_anchors(
+    units: tuple[EvidenceUnit, ...],
+    question_anchors: tuple[str, ...],
+) -> bool:
+    """检查最终证据是否合计覆盖全部显式主体。"""
+    searchable = "\n".join(
+        f"{unit.source_label}\n{unit.text}".casefold() for unit in units
+    )
+    return all(anchor.casefold() in searchable for anchor in question_anchors)
+
+
 def _refusal(  # noqa: PLR0913
     code: RefusalCode,
     *,
@@ -1138,6 +1154,17 @@ def _fallback_or_refusal(  # noqa: PLR0913
             calls=calls,
             trace=trace,
         )
+    question_anchors = required_question_anchors(question)
+    if question_anchors and not _units_cover_question_anchors(
+        selected,
+        question_anchors,
+    ):
+        return _refusal(
+            code,
+            model_calls=model_calls,
+            calls=calls,
+            trace=trace,
+        )
     claims = tuple(
         AnswerClaim(
             text=unit.text.strip(),
@@ -1182,7 +1209,7 @@ def _matching_fallback_units(
 ) -> tuple[EvidenceUnit, ...]:
     """按问题关键词和意图对 top evidence units 做确定性窄选。"""
     terms = _question_terms(question)
-    question_anchors = strong_question_anchors(question)
+    question_anchors = required_question_anchors(question)
     ranked: list[tuple[int, int, EvidenceUnit]] = []
     for index, unit in enumerate(evidence.units):
         if unit.low_confidence_ocr:
@@ -1218,7 +1245,27 @@ def _matching_fallback_units(
         if score > 0:
             ranked.append((-score, index, unit))
     ranked.sort(key=lambda item: (item[0], item[1]))
-    return tuple(item[2] for item in ranked[:limit])
+    if len(question_anchors) <= 1:
+        return tuple(item[2] for item in ranked[:limit])
+    selected: list[EvidenceUnit] = []
+    for anchor in question_anchors:
+        match = next(
+            (
+                item[2]
+                for item in ranked
+                if item[2] not in selected
+                and _units_support_question_anchor((item[2],), (anchor,))
+            ),
+            None,
+        )
+        if match is not None:
+            selected.append(match)
+    selected.extend(
+        item[2]
+        for item in ranked
+        if item[2] not in selected
+    )
+    return tuple(selected[:limit])
 
 
 def _question_terms(question: str) -> tuple[str, ...]:

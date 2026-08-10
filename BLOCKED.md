@@ -27,9 +27,12 @@
   `UNSUPPORTED_QUESTION_ANCHOR` 门禁。`70faf374acaa` 已由用户在 `.60` 无重索引
   部署且 `/ready=true`，但 005 的真实 Trace 显示模型首次与修复均未引用指定来源，
   旧 fallback 又在显式主体过滤前截断候选，最终为 `VALIDATION_FAILED`。本地已用
-  通用 source-label/正文锚点顺序修复并保持 index fingerprint 不变；本地轻量包已从
-  唯一 clean commit 重建并通过 package selfcheck，仍需由用户在 `.60` 无重索引更新
-  并复跑 20 问。真实问题回归、备份、回滚、SLA 与生产安全验收仍未完成。
+  通用 source-label/正文锚点顺序修复并保持 index fingerprint 不变；随后部署的
+  `5ce587010422` 在 008 暴露第二个真实缺口：GM-03 已以 rerank rank 6、score
+  0.9727 进入 Evidence，但旧门禁允许 GM-04 用重合标题替代精确编号。现已用通用的
+  “精确编号优先、多个编号整体覆盖”规则修复，未硬编码工业制度或固定答案；仍需从
+  唯一 clean commit 重建轻量包，由用户在 `.60` 无重索引更新并复跑 20 问。真实问题
+  回归、备份、回滚、SLA 与生产安全验收仍未完成。
 
 ## 语义路由真实校准与服务器回归
 
