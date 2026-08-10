@@ -1,4 +1,4 @@
-# Industry RAG 首次部署指南
+# Industry RAG 部署与 Serving 更新指南
 
 这是一套与 `rag-simple` 培训实例并行运行的第二套 simple 部署。它复用同一个
 `rag-app` 代码和模型服务合同，但使用独立的 Compose project、容器、端口、Qdrant、
@@ -28,7 +28,9 @@ corpus，复用目标服务器已经存在且身份完全匹配的 OCR/Qdrant �
 已完成首次索引的 Industry 只使用新的 8 文件 serving update 包，不再使用历史四文件
 `industry-app-update`。历史 `artifacts/industry-app-update/809fb71f5e50` 缺少新
 serving config、Compose 和包内 helper，且错误要求旧 App 支持 `runtime-state`，不得
-上传或部署。
+上传或部署。复核后的
+`artifacts/industry-serving-update/d5c03cf9b97e` 又存在真实镜像 ENTRYPOINT、
+UID 10001 私有文件、canonical Compose 和日志时序四个 P0，同样永久失效且不得上传。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 
@@ -40,7 +42,9 @@ serving config、Compose 和包内 helper，且错误要求旧 App 支持 `runti
 - `SERVER_UPDATE_COMMANDS.txt`。
 
 `serving-runtime.tar.gz` 将版本化 Compose、包内 verify/rollback/helper、5 份 config
-和脱敏 validation 作为同一身份交付。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
+和脱敏 validation 作为同一身份交付。runtime exact set 当前为 17 个文件；新增的
+`compose_check.py` 只用 Python 标准库规范化真实 Compose canonical JSON，不访问业务
+文件。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
 secret、真实服务器地址或问题正文。更新前由包内标准库 helper 在旧 App image 的一次性
 容器中只读取得 index identity，并用 SQLite online backup 备份 Trace；不要求旧 App
 提供新 CLI。
@@ -50,6 +54,10 @@ secret、真实服务器地址或问题正文。更新前由包内标准库 help
 selfcheck、更新前身份和 Trace 备份、原子安装版本化 runtime/candidate env、加载 App
 image、仅 force-recreate `rag-industry-app`、runtime-state v2、包内
 `verify-app-update.sh`。失败调用包内 `rollback-app-update.sh` 并复验旧身份。
+每次执行保留独立 `attempt-000N/transaction-state.json`，状态只允许
+`prepared/activated/verifying/verified/rolled_back/rollback_failed`。回滚成功后的同包
+重试创建新 attempt，不删除旧证据；`rollback_failed`、未知状态或中断的非终态均
+fail closed，需要人工复核。last-good 只在完整 verify 成功后晋升。
 
 该更新明确禁止运行 `run-index.sh`，不启动或重启 worker/OCR/Qdrant，不修改 alias、
 manifest、collection、point、answer cache 或 GM corpus。index fingerprint 必须保持
@@ -137,9 +145,23 @@ App 后恢复 Trace 在线备份，再使用旧 env/Compose/config/image 重建�
 
 ## 传输
 
-最终只上传 `artifacts/industry-upload` 下的外层 `.tar.gz` 和同名 `.sha256`。按
-`SERVER_UPLOAD_COMMANDS.txt` 使用 `user4a` 先传到 `10.242.180.54`，校验后再从 .54
-传到 `10.242.180.60`；两台服务器统一使用
-`/data/tyf/RAG/industry-transfer` 作为中转目录，每一跳完成后都要执行
-`sha256sum -c`。不要上传仓库、原始
-`.doc`、私有 env、服务器密码或本地 LibreOffice 转换器镜像。
+### 首次部署传输
+
+首次部署才使用 `artifacts/industry-upload` 下的外层 `.tar.gz` 和同名 `.sha256`，并按
+首次部署包内 `SERVER_UPLOAD_COMMANDS.txt` 操作。每一跳都先传 sidecar，再执行
+`sha256sum -c`；不要上传仓库、原始 `.doc`、私有 env、服务器密码或本地
+LibreOffice 转换器镜像。
+
+### Serving update 传输
+
+Serving update 不得引用 `artifacts/industry-upload`。只上传新的
+`artifacts/industry-serving-update/<new-sha12>/` 八文件 exact set，或者先在该目录外
+生成受控外层归档及同名 SHA256 sidecar。中转和目标机都使用既定的
+`/data/tyf/RAG/industry-transfer`，从 fresh shell 以部署用户逐跳传输并校验；主机名
+使用现场批准的 `<BASTION_HOST>` 与 `<TARGET_HOST>` 占位，不写进交付包。
+
+目标机解包到新目录后，严格按包内 `SERVER_UPDATE_COMMANDS.txt`：校验两个 sidecar、
+执行 package selfcheck、以绝对路径传入私有 env、运行 updater，最后用 Python
+标准库读取 audit root 下各 attempt 的 `transaction-state.json`。不要 source env，
+不要运行 `run-index.sh`，不要手工删除失败 attempt；`verified` 表示本次更新本地终验
+完成，`rolled_back` 表示已恢复旧 App，其他终态一律停止并复核。

@@ -14,6 +14,13 @@ _REVISION = "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"
 _FINGERPRINT = (
     "sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a"
 )
+_CONFIG_NAMES = {
+    "corpus-policy.json",
+    "intent-router-calibration.json",
+    "intent-router.json",
+    "pipeline.json",
+    "retrieval.json",
+}
 
 
 class _Response:
@@ -144,6 +151,75 @@ def test_trace_backup_records_complete_identity_and_uses_private_mode(
         assert connection.execute("SELECT trace_id FROM traces").fetchone() == (
             "trace-1",
         )
+
+
+def test_pre_update_filesystem_state_is_exact_private_and_path_free(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in _CONFIG_NAMES:
+        path = config / name
+        path.write_text(json.dumps({"name": name}) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT PRIMARY KEY)")
+        connection.execute("PRAGMA user_version=1")
+    database.chmod(0o600)
+    before = {
+        path.name: (path.read_bytes(), path.stat()) for path in config.iterdir()
+    }
+    database_before = (database.read_bytes(), database.stat())
+
+    report = serving_runtime_check.pre_update_filesystem_state(
+        config, database
+    )
+
+    assert set(report["config"]["files"]) == _CONFIG_NAMES  # type: ignore[index]
+    assert report["trace"] == {
+        "filename": "traces.sqlite3",
+        "mode": "0600",
+        "sqlite_user_version": 1,
+    }
+    serialized = json.dumps(report, sort_keys=True)
+    assert str(tmp_path) not in serialized
+    assert "question_text" not in serialized
+    assert {
+        path.name: (path.read_bytes(), path.stat()) for path in config.iterdir()
+    } == before
+    assert (database.read_bytes(), database.stat()) == database_before
+
+
+def test_pre_update_filesystem_state_rejects_extra_and_public_config(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in _CONFIG_NAMES:
+        path = config / name
+        path.write_text("{}\n", encoding="utf-8")
+        path.chmod(0o600)
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    database.chmod(0o600)
+    extra = config / "extra.json"
+    extra.write_text("{}\n", encoding="utf-8")
+    extra.chmod(0o600)
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="CONFIG_EXACT_SET",
+    ):
+        serving_runtime_check.pre_update_filesystem_state(config, database)
+    extra.unlink()
+    (config / "pipeline.json").chmod(0o644)
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="CONFIG_FILE_MODE",
+    ):
+        serving_runtime_check.pre_update_filesystem_state(config, database)
 
 
 def test_trace_backup_rejects_bad_revision_and_existing_destination(

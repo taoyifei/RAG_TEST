@@ -141,20 +141,33 @@ if (
     raise SystemExit("INDUSTRY_SMOKE_COUNT_INVALID")
 PY
 
-log_path="${transaction}/target-app.log"
-docker logs rag-industry-app >"${log_path}" 2>&1 \
-  || verify_fail "APP_LOG_CAPTURE_FAILED"
-chmod 600 "${log_path}"
 export RAG_RUNTIME_ADMIN_TOKEN
 RAG_RUNTIME_ADMIN_TOKEN="$(exact_env_value "${env_file}" RAG_ADMIN_TOKEN)"
-python3 "${script_dir}/ui_contract_check.py" \
-  "${base_url}" --log-path "${log_path}" >/dev/null \
+log_since="$(python3 - <<'PY'
+from datetime import datetime, timedelta, timezone
+
+print((datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat())
+PY
+)" || verify_fail "APP_LOG_START_TIME_FAILED"
+ui_report="${transaction}/ui-contract.json"
+python3 "${script_dir}/ui_contract_check.py" verify-ui-trace \
+  "${base_url}" >"${ui_report}" \
   || verify_fail "UI_TRACE_CONTRACT_FAILED"
+chmod 600 "${ui_report}"
+log_path="${transaction}/target-app.log"
+docker logs --since "${log_since}" rag-industry-app >"${log_path}" 2>&1 \
+  || verify_fail "APP_LOG_CAPTURE_FAILED"
+chmod 600 "${log_path}"
+python3 "${script_dir}/ui_contract_check.py" verify-log \
+  --log-path "${log_path}" >/dev/null \
+  || verify_fail "APP_LOG_REDACTION_FAILED"
 unset RAG_RUNTIME_ADMIN_TOKEN RAG_RUNTIME_CHECK_TOKEN
 
-state_path="$(exact_env_value "${env_file}" RAG_STATE_PATH)"
-trace_schema="$(python3 "${script_dir}/runtime_check.py" trace-schema \
-  "${state_path}/traces.sqlite3")" \
+trace_schema="$(run_industry_compose "${env_file}" "${compose_file}" \
+  run --rm --no-deps --entrypoint python \
+  --volume "${script_dir}/runtime_check.py:/update/runtime_check.py:ro" \
+  rag-industry-app /update/runtime_check.py trace-schema \
+  /state/traces.sqlite3)" \
   || verify_fail "TRACE_SCHEMA_CHECK_FAILED"
 python3 - "${trace_schema}" <<'PY'
 import json

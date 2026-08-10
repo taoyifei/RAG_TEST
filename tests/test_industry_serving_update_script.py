@@ -323,18 +323,38 @@ if args[:1] == ["compose"]:
                 "rag-industry-app": {{
                     "environment": app_environment,
                     "image": env["RAG_APP_IMAGE"],
-                    "ports": [{{"published": "8188", "target": 8088}}],
+                    "ports": [{{
+                        "host_ip": "0.0.0.0",
+                        "mode": "ingress",
+                        "protocol": "tcp",
+                        "published": "8188",
+                        "target": 8088,
+                    }}],
                     "volumes": [
                         {{
+                            "read_only": True,
                             "source": env["RAG_DOCS_PATH"],
                             "target": "/data/docs",
+                            "type": "bind",
                         }},
                         {{
+                            "read_only": True,
                             "source": env["RAG_CONFIG_PATH"],
                             "target": "/config",
+                            "type": "bind",
                         }},
-                        {{"source": env["RAG_STATE_PATH"], "target": "/state"}},
-                        {{"source": env["RAG_LOGS_PATH"], "target": "/logs"}},
+                        {{
+                            "read_only": False,
+                            "source": env["RAG_STATE_PATH"],
+                            "target": "/state",
+                            "type": "bind",
+                        }},
+                        {{
+                            "read_only": False,
+                            "source": env["RAG_LOGS_PATH"],
+                            "target": "/logs",
+                            "type": "bind",
+                        }},
                     ],
                 }},
                 "rag-industry-ocr": {{"image": "docx-rag-ocr:fixed"}},
@@ -343,6 +363,58 @@ if args[:1] == ["compose"]:
         }}))
         raise SystemExit(0)
     if "run" in args:
+        if "pre-update-filesystem-state" in args:
+            print(json.dumps({{
+                "config": {{"files": {{
+                    "corpus-policy.json": "6" * 64,
+                    "intent-router-calibration.json": "6" * 64,
+                    "intent-router.json": "6" * 64,
+                    "pipeline.json": "6" * 64,
+                    "retrieval.json": "6" * 64,
+                }}}},
+                "trace": {{
+                    "filename": "traces.sqlite3",
+                    "mode": "0600",
+                    "sqlite_user_version": 1,
+                }},
+            }}, separators=(",", ":"), sort_keys=True))
+            raise SystemExit(0)
+        if "backup-trace-database" in args:
+            transaction_mount = next(
+                item for item in args if item.endswith(":/update-backup")
+            )
+            transaction = pathlib.Path(transaction_mount.rsplit(":", 1)[0])
+            destination = transaction / "traces-before.sqlite3"
+            source = pathlib.Path(env["RAG_STATE_PATH"]) / "traces.sqlite3"
+            with (
+                sqlite3.connect(source) as source_connection,
+                sqlite3.connect(destination) as destination_connection,
+            ):
+                source_connection.backup(destination_connection)
+            destination.chmod(0o600)
+            print(json.dumps({{
+                "backup_filename": destination.name,
+                "bytes": destination.stat().st_size,
+                "created_at": "2026-08-10T00:00:00+00:00",
+                "mode": "0600",
+                "owner": {{"gid": os.getgid(), "uid": os.getuid()}},
+                "page_count": 3,
+                "schema_version": "1",
+                "sha256": "7" * 64,
+                "source_database_identity": {{
+                    "bytes": source.stat().st_size,
+                    "device": source.stat().st_dev,
+                    "gid": source.stat().st_gid,
+                    "inode": source.stat().st_ino,
+                    "mode": "0600",
+                    "mtime_ns": source.stat().st_mtime_ns,
+                    "uid": source.stat().st_uid,
+                }},
+                "source_filename": source.name,
+                "sqlite_user_version": 1,
+                "target_revision": NEW_REVISION,
+            }}, separators=(",", ":"), sort_keys=True))
+            raise SystemExit(0)
         if "pre-update-index-state" in args:
             print(json.dumps({{
                 "active_collection": "rag-docx-active",
@@ -358,7 +430,15 @@ if args[:1] == ["compose"]:
         if "index-state" in args:
             print('{{"active_source_count":10,"point_count":139}}')
             raise SystemExit(0)
+        if "trace-schema" in args:
+            print('{{"has_question_columns":true,"sqlite_user_version":2}}')
+            raise SystemExit(0)
     if "up" in args:
+        if (
+            current.get("fail_rollback")
+            and env["RAG_RELEASE_REVISION"] == OLD_REVISION
+        ):
+            raise SystemExit(1)
         if (
             current.get("fail_app_start")
             and env["RAG_RELEASE_REVISION"] == NEW_REVISION
@@ -378,7 +458,7 @@ if args[:1] == ["compose"]:
                         "ALTER TABLE traces ADD COLUMN question_text TEXT"
                     )
                 connection.execute("PRAGMA user_version=2")
-        STATE.write_text(json.dumps({{
+        next_state = {{
             "image": env["RAG_APP_IMAGE"],
             "image_id": (
                 NEW_ID
@@ -386,7 +466,11 @@ if args[:1] == ["compose"]:
                 else OLD_ID
             ),
             "revision": env["RAG_RELEASE_REVISION"],
-        }}))
+        }}
+        for flag in ("fail_app_start", "fail_rollback"):
+            if current.get(flag):
+                next_state[flag] = True
+        STATE.write_text(json.dumps(next_state))
         raise SystemExit(0)
 
 if args[:2] == ["container", "inspect"]:
@@ -435,11 +519,20 @@ if args[:2] == ["image", "inspect"]:
         print(NEW_ID if image == NEW_IMAGE else OLD_ID)
     elif ".Os" in template:
         print("linux/amd64")
+    elif ".Config.Entrypoint" in template:
+        print('["rag-app"]')
     else:
         print(NEW_REVISION if image == NEW_IMAGE else OLD_REVISION)
     raise SystemExit(0)
 if args[:1] == ["run"]:
-    print(json.dumps({{"pipeline_fingerprint": FINGERPRINT}}))
+    if "build-info" in args:
+        print(json.dumps({{
+            "expected_revision": NEW_REVISION,
+            "installed_revision": NEW_REVISION,
+            "matches": True,
+        }}, separators=(",", ":"), sort_keys=True))
+    else:
+        print(json.dumps({{"pipeline_fingerprint": FINGERPRINT}}))
     raise SystemExit(0)
 if args[:1] == ["exec"]:
     if "build-info" in args:
@@ -515,6 +608,10 @@ def _run(
         state = json.loads(sandbox.docker_state.read_bytes())
         state["fail_app_start"] = True
         sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+    if extra and extra.get("FAKE_ROLLBACK_FAIL") == "1":
+        state = json.loads(sandbox.docker_state.read_bytes())
+        state["fail_rollback"] = True
+        sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
     return subprocess.run(  # noqa: S603
         [
             "/usr/bin/bash",
@@ -570,11 +667,14 @@ def test_upgrade_from_old_app_installs_runtime_and_only_recreates_app(
     first_runtime_state = commands.index("rag-app runtime-state")
     assert pre_run < first_runtime_state
     assert (sandbox.backup_path / "last-good-pointer.json").is_file()
-    transactions = list((sandbox.backup_path / "serving-updates").iterdir())
+    update_roots = list((sandbox.backup_path / "serving-updates").iterdir())
+    assert len(update_roots) == 1
+    transactions = list(update_roots[0].glob("attempt-*"))
     assert len(transactions) == 1
-    assert (transactions[0] / "traces-before.sqlite3").is_file()
+    transaction = transactions[0]
+    assert (transaction / "traces-before.sqlite3").is_file()
     snapshot = json.loads(
-        (transactions[0] / "pre-update-snapshot.json").read_bytes()
+        (transaction / "pre-update-snapshot.json").read_bytes()
     )
     assert snapshot["private_env"]["mode"] == "0600"
     assert snapshot["app"]["image_ref"] == _OLD_IMAGE
@@ -587,11 +687,15 @@ def test_upgrade_from_old_app_installs_runtime_and_only_recreates_app(
         "retrieval.json",
     }
     trace_backup = json.loads(
-        (transactions[0] / "trace-backup.json").read_bytes()
+        (transaction / "trace-backup.json").read_bytes()
     )
     assert trace_backup["target_revision"] == _NEW_REVISION
     assert trace_backup["page_count"] > 0
     assert isinstance(trace_backup["source_database_identity"], dict)
+    transaction_state = json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )
+    assert transaction_state["state"] == "verified"
 
 
 @pytest.mark.parametrize(
@@ -626,6 +730,80 @@ def test_failed_target_contract_restores_old_env_image_and_index(
     commands = sandbox.log.read_text(encoding="utf-8")
     assert commands.count("--force-recreate rag-industry-app") >= 1
     assert "pre-update-index-state" in commands
+
+
+def test_failed_update_keeps_audit_and_allows_a_new_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    first = _run(sandbox, extra={"FAKE_SMOKE_FAIL": "1"})
+    assert first.returncode != 0
+
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    update_roots = list((sandbox.backup_path / "serving-updates").iterdir())
+    assert len(update_roots) == 1
+    attempts = sorted(update_roots[0].glob("attempt-*"))
+    assert [path.name for path in attempts] == [
+        "attempt-0001",
+        "attempt-0002",
+    ]
+    states = [
+        json.loads((path / "transaction-state.json").read_bytes())["state"]
+        for path in attempts
+    ]
+    assert states == ["rolled_back", "verified"]
+    assert all(
+        (path / "pre-update-snapshot.json").is_file() for path in attempts
+    )
+
+
+def test_rollback_failed_blocks_automatic_retry_and_keeps_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    first = _run(
+        sandbox,
+        extra={"FAKE_ROLLBACK_FAIL": "1", "FAKE_SMOKE_FAIL": "1"},
+    )
+    assert first.returncode == 70
+
+    second = _run(sandbox)
+
+    assert second.returncode != 0
+    assert "UPDATE_TRANSACTION_NOT_RETRYABLE" in second.stderr
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    attempts = sorted(update_root.glob("attempt-*"))
+    assert len(attempts) == 1
+    state = json.loads(
+        (attempts[0] / "transaction-state.json").read_bytes()
+    )
+    assert state["state"] == "rollback_failed"
+    assert (attempts[0] / "pre-update-snapshot.json").is_file()
+
+
+def test_unknown_transaction_state_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    first = _run(sandbox, extra={"FAKE_SMOKE_FAIL": "1"})
+    assert first.returncode != 0
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    attempt = next(update_root.glob("attempt-*"))
+    state_path = attempt / "transaction-state.json"
+    state = json.loads(state_path.read_bytes())
+    state["state"] = "unknown"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    second = _run(sandbox)
+
+    assert second.returncode != 0
+    assert "UPDATE_TRANSACTION_NOT_RETRYABLE" in second.stderr
+    assert len(list(update_root.glob("attempt-*"))) == 1
 
 
 def test_successful_update_is_idempotent_without_second_recreate(

@@ -74,6 +74,7 @@ _CONFIG_SOURCES = {
     "retrieval.json": "deployment/config/retrieval.json",
 }
 _RUNTIME_SOURCES = {
+    "compose_check.py": "deployment/industry/serving_compose_check.py",
     "compose.yaml": "deployment/industry/compose.yaml",
     "last_good.py": "deployment/industry/serving_last_good.py",
     "lib.sh": "deployment/industry/lib.sh",
@@ -272,6 +273,7 @@ def _tar_info(name: str, mtime: int, mode: int) -> tarfile.TarInfo:
 
 def _runtime_mode(relative: str) -> int:
     if relative.endswith(".sh") or relative in {
+        "compose_check.py",
         "last_good.py",
         "runtime_check.py",
         "ui_contract_check.py",
@@ -298,11 +300,65 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
             "# Do not source the private env.\n"
             "PACKAGE_DIR=/absolute/path/to/industry-serving-update\n"
             "ENV_FILE=/absolute/path/to/rag-industry.env\n"
+            'test "${PACKAGE_DIR}" = "$(realpath "${PACKAGE_DIR}")"\n'
+            'test "${ENV_FILE}" = "$(realpath "${ENV_FILE}")"\n'
             'cd "${PACKAGE_DIR}"\n'
             "sha256sum -c app-image.tar.gz.sha256\n"
             "sha256sum -c serving-runtime.tar.gz.sha256\n"
             'python3 package_selfcheck.py verify "${PACKAGE_DIR}"\n'
+            'BACKUP_PATH="$(python3 - "${ENV_FILE}" <<\'PY\'\n'
+            "import pathlib\n"
+            "import sys\n"
+            "\n"
+            "values = []\n"
+            "for line in pathlib.Path(sys.argv[1]).read_text(\n"
+            "    encoding=\"utf-8\"\n"
+            ").splitlines():\n"
+            "    if line.startswith(\"RAG_BACKUP_PATH=\"):\n"
+            "        values.append(line.split(\"=\", 1)[1].strip(\"\\\"\'\"))\n"
+            "if len(values) != 1 or not values[0].startswith(\"/\"):\n"
+            "    raise SystemExit(\"RAG_BACKUP_PATH_INVALID\")\n"
+            "print(values[0])\n"
+            "PY\n"
+            ')"\n'
+            'UPDATE_ID="$(python3 - "${PACKAGE_DIR}/UPDATE_MANIFEST.json" '
+            "<<'PY'\n"
+            "import json\n"
+            "import pathlib\n"
+            "import sys\n"
+            "\n"
+            "value = json.loads(pathlib.Path(sys.argv[1]).read_bytes())\n"
+            "revision = value[\"revision\"]\n"
+            "archive = value[\"runtime\"][\"archive_sha256\"]\n"
+            "print(f\"{revision[:12]}-{archive[:12]}\")\n"
+            "PY\n"
+            ')"\n'
+            'AUDIT_ROOT="${BACKUP_PATH}/serving-updates/${UPDATE_ID}"\n'
             'bash update-app.sh "${ENV_FILE}"\n'
+            'python3 - "${AUDIT_ROOT}" <<\'PY\'\n'
+            "import json\n"
+            "import pathlib\n"
+            "import sys\n"
+            "\n"
+            "root = pathlib.Path(sys.argv[1])\n"
+            "attempts = sorted(root.glob(\"attempt-*\"))\n"
+            "if not attempts:\n"
+            "    raise SystemExit(\"UPDATE_ATTEMPT_MISSING\")\n"
+            "states = [\n"
+            "    json.loads((path / \"transaction-state.json\").read_bytes())\n"
+            "    for path in attempts\n"
+            "]\n"
+            "terminal = states[-1].get(\"state\")\n"
+            "if terminal not in {\"verified\", \"rolled_back\"}:\n"
+            "    raise SystemExit(\n"
+            "        f\"UPDATE_TERMINAL_STATE_INVALID:{terminal}\"\n"
+            "    )\n"
+            "print(\n"
+            "    json.dumps(\n"
+            "        states, separators=(\",\", \":\"), sort_keys=True\n"
+            "    )\n"
+            ")\n"
+            "PY\n"
             "# Do not run run-index.sh; reindex_required=false.\n"
         ),
         encoding="utf-8",

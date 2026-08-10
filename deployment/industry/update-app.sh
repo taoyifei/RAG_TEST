@@ -54,8 +54,6 @@ release_root="$(env_value "${env_file}" RAG_RELEASE_ROOT)" \
   || fail "RELEASE_ROOT_INVALID"
 backup_path="$(env_value "${env_file}" RAG_BACKUP_PATH)" \
   || fail "BACKUP_PATH_INVALID"
-state_path="$(env_value "${env_file}" RAG_STATE_PATH)" \
-  || fail "STATE_PATH_INVALID"
 target_revision="$(manifest_value revision)" || fail "TARGET_REVISION_INVALID"
 runtime_archive_sha="$(manifest_value runtime.archive_sha256)" \
   || fail "RUNTIME_SHA_INVALID"
@@ -119,6 +117,7 @@ if actual_files != expected_names or actual_directories != expected_directories:
 for name, digest in expected.items():
     path = root / name
     expected_mode = 0o755 if name.endswith(".sh") or name in {
+        "compose_check.py",
         "last_good.py",
         "runtime_check.py",
         "ui_contract_check.py",
@@ -185,21 +184,182 @@ worker_state="$(docker container inspect --format '{{.State.Running}}' \
   rag-industry-worker 2>/dev/null || true)"
 [[ "${worker_state}" != "true" ]] || fail "WORKER_RUNNING"
 
-transaction="${backup_path}/serving-updates/${update_id}"
-if [[ -d "${transaction}" ]]; then
-  current_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)"
-  current_compose="$(exact_env_value "${env_file}" RAG_INDUSTRY_COMPOSE_FILE)"
-  if [[ "${current_revision}" == "${target_revision}" \
-    && "${current_compose}" == "${runtime_dir}/compose.yaml" ]]; then
-    bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
-      || fail "IDEMPOTENT_VERIFY_FAILED"
-    printf 'reindex_required=false\n'
-    printf 'RAG_INDUSTRY_SERVING_UPDATE_ALREADY_CURRENT\n'
-    exit 0
-  fi
-  fail "UPDATE_TRANSACTION_ALREADY_EXISTS"
+write_transaction_state() {
+  python3 - "$1" "$2" "${update_id}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+path = pathlib.Path(sys.argv[1])
+state = sys.argv[2]
+allowed = {
+    "activated",
+    "prepared",
+    "rollback_failed",
+    "rolled_back",
+    "verified",
+    "verifying",
+}
+match = re.fullmatch(r"attempt-([0-9]{4})", path.parent.name)
+if state not in allowed or match is None:
+    raise SystemExit("TRANSACTION_STATE_INVALID")
+value = {
+    "attempt": int(match.group(1)),
+    "schema_version": "1",
+    "state": state,
+    "update_id": sys.argv[3],
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=".transaction-state.", dir=path.parent
+)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(value, output, separators=(",", ":"), sort_keys=True)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.chmod(temporary_name, 0o600)
+    os.replace(temporary_name, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+}
+
+update_root="${backup_path}/serving-updates/${update_id}"
+if [[ -e "${update_root}" ]]; then
+  [[ -d "${update_root}" && ! -L "${update_root}" ]] \
+    || fail "UPDATE_AUDIT_ROOT_INVALID"
+else
+  mkdir -m 700 -- "${update_root}"
 fi
+current_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)"
+current_compose="$(exact_env_value "${env_file}" RAG_INDUSTRY_COMPOSE_FILE)"
+if [[ "${current_revision}" == "${target_revision}" \
+  && "${current_compose}" == "${runtime_dir}/compose.yaml" ]]; then
+  transaction="$(python3 - "${update_root}" "${update_id}" <<'PY'
+import json
+import pathlib
+import re
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+verified = []
+allowed_states = {
+    "activated",
+    "prepared",
+    "rollback_failed",
+    "rolled_back",
+    "verified",
+    "verifying",
+}
+for path in root.iterdir():
+    match = re.fullmatch(
+        r"attempt-[0-9]{4}", path.name
+    )
+    if not path.is_dir() or path.is_symlink() or match is None:
+        raise SystemExit("UPDATE_ATTEMPT_ENTRY_INVALID")
+    state_path = path / "transaction-state.json"
+    if (
+        not state_path.is_file()
+        or state_path.is_symlink()
+        or stat.S_IMODE(state_path.stat().st_mode) != 0o600
+    ):
+        raise SystemExit("UPDATE_ATTEMPT_STATE_INVALID")
+    value = json.loads(state_path.read_bytes())
+    if (
+        set(value)
+        != {"attempt", "schema_version", "state", "update_id", "updated_at"}
+        or value.get("attempt") != int(match.group(0).rsplit("-", 1)[1])
+        or value.get("schema_version") != "1"
+        or value.get("state") not in allowed_states
+        or value.get("update_id") != sys.argv[2]
+        or not isinstance(value.get("updated_at"), str)
+    ):
+        raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
+    if value.get("state") == "verified":
+        verified.append(path)
+if len(verified) != 1:
+    raise SystemExit("VERIFIED_ATTEMPT_INVALID")
+print(verified[0])
+PY
+  )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
+  bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
+    || fail "IDEMPOTENT_VERIFY_FAILED"
+  printf 'reindex_required=false\n'
+  printf 'RAG_INDUSTRY_SERVING_UPDATE_ALREADY_CURRENT\n'
+  exit 0
+fi
+transaction="$(python3 - "${update_root}" "${update_id}" <<'PY'
+import json
+import pathlib
+import re
+import stat
+import sys
+
+root = pathlib.Path(sys.argv[1])
+attempts = []
+allowed_states = {
+    "activated",
+    "prepared",
+    "rollback_failed",
+    "rolled_back",
+    "verified",
+    "verifying",
+}
+for path in root.iterdir():
+    match = re.fullmatch(r"attempt-([0-9]{4})", path.name)
+    if not path.is_dir() or path.is_symlink() or match is None:
+        raise SystemExit("UPDATE_ATTEMPT_ENTRY_INVALID")
+    state_path = path / "transaction-state.json"
+    if (
+        not state_path.is_file()
+        or state_path.is_symlink()
+        or stat.S_IMODE(state_path.stat().st_mode) != 0o600
+    ):
+        raise SystemExit("UPDATE_ATTEMPT_STATE_MISSING")
+    value = json.loads(state_path.read_bytes())
+    attempt_number = int(match.group(1))
+    if (
+        set(value)
+        != {"attempt", "schema_version", "state", "update_id", "updated_at"}
+        or value.get("attempt") != attempt_number
+        or value.get("schema_version") != "1"
+        or value.get("state") not in allowed_states
+        or value.get("update_id") != sys.argv[2]
+        or not isinstance(value.get("updated_at"), str)
+    ):
+        raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
+    attempts.append((attempt_number, str(value.get("state"))))
+attempts.sort()
+if [number for number, _ in attempts] != list(
+    range(1, len(attempts) + 1)
+):
+    raise SystemExit("UPDATE_ATTEMPT_SEQUENCE_INVALID")
+if attempts:
+    last_state = attempts[-1][1]
+    if last_state == "rollback_failed":
+        raise SystemExit("UPDATE_ROLLBACK_FAILED_REQUIRES_INTERVENTION")
+    if last_state != "rolled_back":
+        raise SystemExit("UPDATE_ATTEMPT_NOT_RETRYABLE")
+next_attempt = len(attempts) + 1
+print(root / f"attempt-{next_attempt:04d}")
+PY
+)" || fail "UPDATE_TRANSACTION_NOT_RETRYABLE"
 mkdir -m 700 -- "${transaction}"
+write_transaction_state "${transaction}/transaction-state.json" prepared \
+  || fail "TRANSACTION_STATE_WRITE_FAILED"
 cp -- "${env_file}" "${transaction}/old-rag-industry.env"
 chmod 600 "${transaction}/old-rag-industry.env"
 cp -- "${package_dir}/UPDATE_MANIFEST.json" \
@@ -267,7 +427,58 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
-python3 - "${env_file}" "${old_compose}" "${old_config}" \
+pre_filesystem_json="$(run_industry_compose "${env_file}" "${old_compose}" \
+  run --rm --no-deps --entrypoint python \
+  --volume "${runtime_dir}/runtime_check.py:/update/runtime_check.py:ro" \
+  rag-industry-app /update/runtime_check.py pre-update-filesystem-state \
+  /config /state/traces.sqlite3)" \
+  || fail "PRE_UPDATE_FILESYSTEM_IDENTITY_FAILED"
+python3 - "${pre_filesystem_json}" \
+  "${transaction}/pre-filesystem.json" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+
+value = json.loads(sys.argv[1])
+config = value.get("config") if isinstance(value, dict) else None
+files = config.get("files") if isinstance(config, dict) else None
+trace = value.get("trace") if isinstance(value, dict) else None
+expected = {
+    "corpus-policy.json",
+    "intent-router-calibration.json",
+    "intent-router.json",
+    "pipeline.json",
+    "retrieval.json",
+}
+if (
+    not isinstance(files, dict)
+    or set(files) != expected
+    or any(
+        not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        for digest in files.values()
+    )
+    or not isinstance(trace, dict)
+    or set(trace)
+    != {"filename", "mode", "sqlite_user_version"}
+    or trace.get("filename") != "traces.sqlite3"
+    or trace.get("mode") != "0600"
+    or trace.get("sqlite_user_version") not in {1, 2}
+):
+    raise SystemExit("PRE_UPDATE_FILESYSTEM_IDENTITY_INVALID")
+path = pathlib.Path(sys.argv[2])
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+    output.flush()
+    os.fsync(output.fileno())
+PY
+
+python3 - "${env_file}" "${old_compose}" \
+  "${transaction}/pre-filesystem.json" \
   "${transaction}/pre-update-snapshot.json" "${old_image}" \
   "${old_revision}" "${backup_path}" <<'PY'
 import hashlib
@@ -281,12 +492,11 @@ import sys
 
 env_path = pathlib.Path(sys.argv[1])
 compose_path = pathlib.Path(sys.argv[2])
-config_path = pathlib.Path(sys.argv[3])
+filesystem_path = pathlib.Path(sys.argv[3])
 output_path = pathlib.Path(sys.argv[4])
 old_image = sys.argv[5]
 old_revision = sys.argv[6]
 backup_path = pathlib.Path(sys.argv[7])
-sha_pattern = re.compile(r"[0-9a-f]{64}")
 revision_pattern = re.compile(r"[0-9a-f]{40}")
 
 
@@ -326,28 +536,12 @@ if (
     or stat.S_IMODE(env_path.stat().st_mode) != 0o600
     or not compose_path.is_file()
     or compose_path.is_symlink()
-    or not config_path.is_dir()
-    or config_path.is_symlink()
+    or not filesystem_path.is_file()
+    or filesystem_path.is_symlink()
     or revision_pattern.fullmatch(old_revision) is None
 ):
     raise SystemExit("PRE_UPDATE_FILE_IDENTITY_INVALID")
-config_names = {
-    "corpus-policy.json",
-    "intent-router-calibration.json",
-    "intent-router.json",
-    "pipeline.json",
-    "retrieval.json",
-}
-actual_config = {
-    path.name
-    for path in config_path.iterdir()
-    if path.is_file() and not path.is_symlink()
-}
-if actual_config != config_names:
-    raise SystemExit("PRE_UPDATE_CONFIG_EXACT_SET_INVALID")
-config_files = {
-    name: sha256(config_path / name) for name in sorted(config_names)
-}
+filesystem = json.loads(filesystem_path.read_bytes())
 image_id = run("docker", "image", "inspect", "--format", "{{.Id}}", old_image)
 image_revision = run(
     "docker",
@@ -429,7 +623,7 @@ payload = {
         ),
     },
     "compose": {"path": str(compose_path), "sha256": sha256(compose_path)},
-    "config": {"files": config_files, "path": str(config_path)},
+    "config": filesystem["config"],
     "last_good": last_good,
     "private_env": {
         "mode": "0600",
@@ -453,9 +647,8 @@ payload = {
         ),
         "ui_session_ttl_seconds": env.get("RAG_UI_SESSION_TTL_SECONDS"),
     },
+    "trace": filesystem["trace"],
 }
-if any(sha_pattern.fullmatch(value) is None for value in config_files.values()):
-    raise SystemExit("PRE_UPDATE_CONFIG_SHA_INVALID")
 descriptor = os.open(
     output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
 )
@@ -512,9 +705,16 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
 PY
 
 trace_backup="${transaction}/traces-before.sqlite3"
-trace_report="$(python3 "${runtime_dir}/runtime_check.py" \
-  backup-trace-database "${state_path}/traces.sqlite3" \
-  "${trace_backup}" "${target_revision}")" \
+trace_report="$(run_industry_compose "${env_file}" "${old_compose}" \
+  run --rm --no-deps --user 0:0 \
+  --cap-add DAC_OVERRIDE --cap-add CHOWN --entrypoint python \
+  --volume "${runtime_dir}/runtime_check.py:/update/runtime_check.py:ro" \
+  --volume "${transaction}:/update-backup" \
+  --env "RAG_UPDATE_OWNER_UID=$(id -u)" \
+  --env "RAG_UPDATE_OWNER_GID=$(id -g)" \
+  rag-industry-app /update/runtime_check.py backup-trace-database \
+  /state/traces.sqlite3 /update-backup/traces-before.sqlite3 \
+  "${target_revision}")" \
   || fail "TRACE_BACKUP_FAILED"
 python3 - "${trace_report}" "${transaction}/trace-backup.json" \
   "${target_revision}" <<'PY'
@@ -529,6 +729,8 @@ if (
     not isinstance(value, dict)
     or value.get("mode") != "0600"
     or value.get("target_revision") != sys.argv[3]
+    or value.get("owner")
+    != {"uid": os.getuid(), "gid": os.getgid()}
     or not isinstance(value.get("page_count"), int)
     or isinstance(value.get("page_count"), bool)
     or value["page_count"] <= 0
@@ -642,85 +844,12 @@ run_industry_compose "${env_file}" "${old_compose}" \
 run_industry_compose "${candidate_env}" "${runtime_dir}/compose.yaml" \
   --profile index --profile dedicated-ocr config --format json \
   >"${new_config_json}" || fail "NEW_COMPOSE_RENDER_FAILED"
-python3 - "${old_config_json}" "${new_config_json}" \
-  "${runtime_dir}/config" "${target_image}" "${old_config}" <<'PY'
-import json
-import pathlib
-import sys
-
-old = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
-new = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
-if old.get("name") != "rag-industry" or new.get("name") != "rag-industry":
-    raise SystemExit("COMPOSE_PROJECT_CHANGED")
-for service in ("rag-industry-qdrant", "rag-industry-ocr"):
-    if old.get("services", {}).get(service) != new.get("services", {}).get(service):
-        raise SystemExit("DEPENDENCY_SERVICE_CHANGED")
-if old.get("networks") != new.get("networks"):
-    raise SystemExit("COMPOSE_NETWORKS_CHANGED")
-app = new.get("services", {}).get("rag-industry-app", {})
-old_app = old.get("services", {}).get("rag-industry-app", {})
-if not isinstance(app, dict) or not isinstance(old_app, dict):
-    raise SystemExit("APP_SERVICE_INVALID")
-if app.get("image") != sys.argv[4]:
-    raise SystemExit("TARGET_APP_IMAGE_INVALID")
-if app.get("ports") != old_app.get("ports") or app.get("ports") != [
-    {"published": "8188", "target": 8088}
-]:
-    raise SystemExit("APP_PORT_CHANGED")
-mounts = {
-    item.get("target"): item.get("source")
-    for item in app.get("volumes", [])
-    if isinstance(item, dict)
-}
-old_mounts = {
-    item.get("target"): item.get("source")
-    for item in old_app.get("volumes", [])
-    if isinstance(item, dict)
-}
-if mounts.get("/config") != sys.argv[3]:
-    raise SystemExit("TARGET_CONFIG_MOUNT_INVALID")
-if old_mounts.get("/config") != sys.argv[5]:
-    raise SystemExit("SOURCE_CONFIG_MOUNT_INVALID")
-for target in ("/data/docs", "/state", "/logs"):
-    if mounts.get(target) != old_mounts.get(target) or mounts.get(target) is None:
-        raise SystemExit("APP_VOLUME_CHANGED")
-environment = app.get("environment", {})
-expected = {
-    "RAG_RUN_MODE": "demo",
-    "RAG_TRACE_QUESTION_CAPTURE": "plaintext",
-    "RAG_TRACE_QUESTION_RETENTION_SECONDS": "604800",
-    "RAG_UI_QUERY_AUTH_MODE": "same_origin_session",
-    "RAG_UI_COOKIE_SECURE": "false",
-    "RAG_UI_ALLOW_INSECURE_HTTP": "true",
-    "RAG_UI_SESSION_TTL_SECONDS": "1800",
-}
-if any(str(environment.get(key)).lower() != value for key, value in expected.items()):
-    raise SystemExit("TARGET_SERVING_ENV_INVALID")
-allowed_environment_changes = set(expected)
-old_environment = old_app.get("environment", {})
-if not isinstance(old_environment, dict) or not isinstance(environment, dict):
-    raise SystemExit("APP_ENVIRONMENT_INVALID")
-for key in set(old_environment) | set(environment):
-    if (
-        key not in allowed_environment_changes
-        and old_environment.get(key) != environment.get(key)
-    ):
-        raise SystemExit("APP_ENVIRONMENT_CHANGED")
-for service_name in ("rag-industry-app", "rag-industry-worker"):
-    old_service = old.get("services", {}).get(service_name)
-    new_service = new.get("services", {}).get(service_name)
-    if old_service is None and new_service is None:
-        continue
-    if not isinstance(old_service, dict) or not isinstance(new_service, dict):
-        raise SystemExit("APP_WORKER_SERVICE_CHANGED")
-    for key in set(old_service) | set(new_service):
-        if key not in {"environment", "image", "volumes"} and (
-            old_service.get(key) != new_service.get(key)
-        ):
-            raise SystemExit("APP_WORKER_STRUCTURE_CHANGED")
-    if new_service.get("image") != sys.argv[4]:
-        raise SystemExit("APP_WORKER_IMAGE_INVALID")
-PY
+python3 "${runtime_dir}/compose_check.py" \
+  "${old_config_json}" "${new_config_json}" \
+  "${runtime_dir}/config" "${target_image}" "${old_config}" \
+  >"${transaction}/compose-contract.json" \
+  || fail "COMPOSE_CONTRACT_CHANGED"
+chmod 600 "${transaction}/compose-contract.json"
 rm -f -- "${old_config_json}" "${new_config_json}"
 old_config_json=""
 new_config_json=""
@@ -733,12 +862,46 @@ actual_platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' \
 actual_revision="$(docker image inspect --format \
   '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
   "${target_image}")"
-[[ "${actual_image_id}" == "${target_image_id}" \
-  && "${actual_platform}" == "${target_platform}" \
-  && "${actual_revision}" == "${target_revision}" ]] \
-  || fail "APP_IMAGE_IDENTITY_MISMATCH"
+actual_entrypoint="$(docker image inspect --format \
+  '{{json .Config.Entrypoint}}' "${target_image}")"
+python3 - "${actual_image_id}" "${actual_platform}" \
+  "${actual_revision}" "${actual_entrypoint}" "${target_image_id}" \
+  "${target_platform}" "${target_revision}" <<'PY'
+import json
+import re
+import sys
+
+actual_id, actual_platform, actual_revision = sys.argv[1:4]
+entrypoint = json.loads(sys.argv[4])
+expected_id, expected_platform, expected_revision = sys.argv[5:8]
+if (
+    actual_id != expected_id
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", actual_id) is None
+    or actual_platform != expected_platform
+    or actual_platform != "linux/amd64"
+    or actual_revision != expected_revision
+    or entrypoint != ["rag-app"]
+):
+    raise SystemExit("APP_IMAGE_IDENTITY_MISMATCH")
+PY
+build_report="$(docker run --rm --network none "${target_image}" \
+  build-info --expected-revision "${target_revision}")" \
+  || fail "IMAGE_BUILD_INFO_FAILED"
+python3 - "${build_report}" "${target_revision}" <<'PY'
+import json
+import sys
+
+value = json.loads(sys.argv[1])
+expected = {
+    "expected_revision": sys.argv[2],
+    "installed_revision": sys.argv[2],
+    "matches": True,
+}
+if value != expected:
+    raise SystemExit("IMAGE_BUILD_INFO_INVALID")
+PY
 asset_report="$(docker run --rm --network none "${target_image}" \
-  rag-app asset-selfcheck)" || fail "IMAGE_ASSET_SELFCHECK_FAILED"
+  asset-selfcheck)" || fail "IMAGE_ASSET_SELFCHECK_FAILED"
 python3 - "${asset_report}" "${target_index}" <<'PY'
 import json
 import re
@@ -753,6 +916,26 @@ if (
 ):
     raise SystemExit("IMAGE_INDEX_FINGERPRINT_MISMATCH")
 PY
+
+activated=false
+rollback_on_error() {
+  local exit_code="$?"
+  trap - ERR
+  if [[ "${activated}" == "true" ]]; then
+    if ! bash "${runtime_dir}/rollback-app-update.sh" \
+      "${env_file}" "${transaction}"; then
+      write_transaction_state \
+        "${transaction}/transaction-state.json" rollback_failed || true
+      printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLBACK_FAILED\n' >&2
+      exit 70
+    fi
+  fi
+  write_transaction_state \
+    "${transaction}/transaction-state.json" rolled_back || true
+  printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n' >&2
+  exit "${exit_code}"
+}
+trap rollback_on_error ERR
 
 python3 - "${candidate_env}" "${env_file}" <<'PY'
 import os
@@ -786,27 +969,17 @@ finally:
 PY
 
 activated=true
-rollback_on_error() {
-  local exit_code="$?"
-  trap - ERR
-  if [[ "${activated}" == "true" ]]; then
-    if ! bash "${runtime_dir}/rollback-app-update.sh" \
-      "${env_file}" "${transaction}"; then
-      printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLBACK_FAILED\n' >&2
-      exit 70
-    fi
-  fi
-  printf 'RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n' >&2
-  exit "${exit_code}"
-}
-trap rollback_on_error ERR
+write_transaction_state "${transaction}/transaction-state.json" activated
 
 run_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
   up -d --no-deps --no-build --pull never --force-recreate \
   rag-industry-app
 wait_industry_health rag-industry-app 180
+write_transaction_state "${transaction}/transaction-state.json" verifying
 bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}"
 trap - ERR
+write_transaction_state "${transaction}/transaction-state.json" verified \
+  || fail "TRANSACTION_STATE_WRITE_FAILED"
 
 printf 'reindex_required=false\n'
 printf 'RAG_INDUSTRY_SERVING_UPDATE_OK image=%s revision=%s worker_restarted=false\n' \

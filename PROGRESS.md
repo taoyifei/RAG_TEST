@@ -1,6 +1,44 @@
 # DOCX RAG 交付进度
 
-## CURRENT STATUS：2026-08-10 Industry serving update 本地收口
+## CURRENT STATUS：2026-08-10 Industry canary 阻塞修复已通过本地门禁
+
+- 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry`/`origin/Industry` 均为
+  `d5c03cf9b97e4924aaaf66a7407a2451f33ae0a6`，`main` 为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`，起始工作区 clean。旧
+  `artifacts/industry-serving-update/d5c03cf9b97e` 已永久失效，不得上传或部署；
+  本轮没有 amend 该提交。
+- 真实镜像命令已按 `ENTRYPOINT=["rag-app"]` 修正为
+  `docker run IMAGE asset-selfcheck`，并同时核对 image ID、linux/amd64、OCI revision、
+  ENTRYPOINT 和 build-info。正确命令在真实旧候选镜像成功，重复
+  `IMAGE rag-app asset-selfcheck` 被真实 CLI 拒绝。
+- 旧 config 与 Trace SQLite 不再由宿主部署用户直接读取。文件身份、Trace schema 和
+  SQLite online backup 均在一次性 App service container 内执行；源目录/文件保持
+  10001:10001/0600，备份最终归当前宿主 UID/GID、mode 0600，未给长期 App 增加权限。
+- Compose 比较已提取为独立标准库 helper，规范化真实 canonical port/volume 字段；
+  使用 Git 中旧 `2c4cf220` Compose、当前 Compose 与 Docker Compose `v5.1.2` 实测，
+  默认字段可通过，第二端口、UDP、host IP、未知字段与读写权限变化继续 fail closed。
+- UI/Trace 验收顺序已固定为记录时间边界、发送 Bearer/UI/Trace 请求、捕获该请求后的
+  日志增量、再检查问题和 Query/Admin Token。NDJSON 必须只有一个 `final`，该事件必须
+  位于末尾且所有事件 trace_id 一致；incomplete、缺失/重复 final 均失败。
+- 更新审计目录改为版本化 `attempt-000N`。状态文件以 0600、canonical JSON、原子
+  rename 写入 `prepared/activated/verifying/verified/rolled_back/rollback_failed`；
+  回滚成功后的同包重试保留旧证据并创建新 attempt，rollback_failed、未知或非终态
+  fail closed，成功目标重复执行只做幂等验收。
+- 本轮直接专项为 `55 passed in 41.79s`；固定无挂载临时
+  `qdrant/qdrant:v1.18.3` 的扩大关联集为
+  `159 passed, 59 warnings in 396.06s`；model/OCR 合同扩大集为
+  `140 passed, 1 warning in 3.91s`。全量 pytest 单次结果为
+  `1178 passed, 61 warnings in 630.09s`，0 failed，未新增 skip/xfail。
+- compileall、全仓 Ruff、strict mypy（124 source files）、Google docstring、Node 2 项、
+  simple/Industry Shell 语法、两套 profiles Compose、源码 asset-selfcheck 和
+  `git diff --check` 均通过。源码 asset-selfcheck 验证 13 项，index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+- 临时 Qdrant 测试前后 collection 均为空，最终确认 `mounts=[]`、只绑定
+  `127.0.0.1:6333` 后删除唯一测试容器和网络。本轮仍未访问服务器、部署、重索引、
+  修改 GM corpus、重启 worker/OCR/Qdrant 或 push。新 8 文件 app-only 包只能在新的
+  clean commit 后构建，构建后身份与 fresh selfcheck 由交付报告给出。
+
+## ARCHIVE：2026-08-10 Industry serving update 首轮本地收口
 
 - 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry` 为
   `809fb71f5e50ba4ccd28c8969ab2ffcbb7c339f5`，`main` 为
@@ -56,6 +94,28 @@
 - 本轮只允许生成 Industry simple serving app update，不生成 full release、corpus、
   OCR/Qdrant image 或 index 包。服务器上传、更新和 canary 验收仍需用户后续单独授权；
   不运行 `run-index.sh`，不把本地绿测写成服务器已上线。
+
+## 2026-08-10 真实 canary 阻塞修复：首轮红测
+
+- 起始分支为 `Industry`，起始 `HEAD`/`Industry`/`origin/Industry` 均为
+  `d5c03cf9b97e4924aaaf66a7407a2451f33ae0a6`，`main` 为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`，起始工作区 clean。旧
+  `artifacts/industry-serving-update/d5c03cf9b97e` 自本轮起永久视为复核后失效，
+  不得上传或部署。
+- 在修改生产实现前新增真实镜像 ENTRYPOINT、UID 10001/0600、canonical Compose、
+  UI NDJSON/log 时序和失败事务重试测试。首轮结果为
+  `9 failed, 14 passed in 31.58s`：失败分别固定重复
+  `rag-app asset-selfcheck`、宿主读取旧 config/Trace、缺少容器 filesystem helper、
+  缺少 Compose 规范化、NDJSON 不要求唯一 final、缺少独立日志反查、请求前日志快照和
+  `UPDATE_TRANSACTION_ALREADY_EXISTS`。
+- UID 10001 fixture 首轮还发现目录本身未 chown 的测试夹具错误；修正为目录、文件均由
+  10001:10001 持有后，宿主普通 UID 1000 对 config 目录和 0600 Trace DB 均真实得到
+  `PermissionError`。修正夹具后的权限红测为 `2 failed in 2.41s`，失败准确落在 updater
+  宿主直读和 helper 尚无 `pre-update-filesystem-state` 命令，不以 chmod 0644 绕过。
+- 本机真实测试层为 Docker Engine `29.4.0`、Docker Desktop `4.70.0`、Compose
+  `v5.1.2`、`linux/amd64`；真实 `docx-rag:d5c03cf9b97e` 镜像确认 ENTRYPOINT 为
+  `rag-app`，正确 `IMAGE asset-selfcheck` 成功，错误
+  `IMAGE rag-app asset-selfcheck` 被真实 CLI 拒绝。
 
 ## 2026-08-06 Industry 首次部署任务 0：事实基线
 

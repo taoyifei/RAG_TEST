@@ -31,15 +31,11 @@ class UiContractError(RuntimeError):
     """表示浏览器授权、Trace 明文或静态资产合同失败。"""
 
 
-def verify_ui_contract(  # noqa: PLR0912, PLR0915
-    base_url: str, log_path: Path | None
-) -> dict[str, object]:
+def verify_ui_contract(base_url: str) -> dict[str, object]:  # noqa: PLR0912, PLR0915
     """对真实 App 执行 UI、Admin、Trace 与安全头验收。
 
     Args:
         base_url: Industry App 本机 HTTP origin。
-        log_path: 可选的当前 App 日志快照，用于正文泄漏反查。
-
     Returns:
         不含 token 或问题正文的验收摘要。
 
@@ -210,16 +206,39 @@ def verify_ui_contract(  # noqa: PLR0912, PLR0915
     if export_status != _HTTP_OK:
         raise UiContractError("TRACE_EXPORT_FAILED")
     _verify_export(export_body, trace_id, expected_sha)
-    if log_path is not None and _QUESTION in log_path.read_text(
-        encoding="utf-8", errors="replace"
-    ):
-        raise UiContractError("QUESTION_TEXT_FOUND_IN_LOG")
     return {
         "admin_boundary": "verified",
         "question_sha256": expected_sha,
         "trace_id": trace_id,
         "ui_session": "verified",
     }
+
+
+def verify_log(log_path: Path) -> dict[str, object]:
+    """反查本轮请求后的日志增量是否包含问题或 token。
+
+    Args:
+        log_path: UI/Trace 请求完成后捕获的 App 日志增量。
+
+    Returns:
+        不含问题正文或 token 的日志验收摘要。
+
+    Raises:
+        UiContractError: 日志不存在、不是普通文件或包含敏感值。
+
+    """
+    if not log_path.is_file() or log_path.is_symlink():
+        raise UiContractError("APP_LOG_PATH_INVALID")
+    query_token = _required_environment("RAG_RUNTIME_CHECK_TOKEN")
+    admin_token = _required_environment("RAG_RUNTIME_ADMIN_TOKEN")
+    content = log_path.read_text(encoding="utf-8", errors="replace")
+    if _QUESTION in content:
+        raise UiContractError("QUESTION_TEXT_FOUND_IN_LOG")
+    if query_token in content:
+        raise UiContractError("QUERY_TOKEN_FOUND_IN_LOG")
+    if admin_token in content:
+        raise UiContractError("ADMIN_TOKEN_FOUND_IN_LOG")
+    return {"log_redaction": "verified"}
 
 
 def _verify_security_headers(headers: dict[str, str]) -> None:
@@ -241,16 +260,27 @@ def _verify_security_headers(headers: dict[str, str]) -> None:
 
 def _trace_id(payload: bytes) -> str:
     trace_ids: set[str] = set()
+    final_trace_ids: list[str] = []
+    event_types: list[object] = []
     for line in payload.decode("utf-8").splitlines():
         if not line:
             continue
         value = _json_object(line.encode("utf-8"), "NDJSON event")
+        event_types.append(value.get("type"))
         trace_id = value.get("trace_id")
         if isinstance(trace_id, str):
             trace_ids.add(trace_id)
+        if value.get("type") == "final":
+            if not isinstance(trace_id, str):
+                raise UiContractError("UI_CHAT_FINAL_EVENT_INVALID")
+            final_trace_ids.append(trace_id)
     if len(trace_ids) != 1:
         raise UiContractError("UI_CHAT_TRACE_ID_INVALID")
+    if len(final_trace_ids) != 1 or event_types[-1:] != ["final"]:
+        raise UiContractError("UI_CHAT_FINAL_EVENT_INVALID")
     trace_id = trace_ids.pop()
+    if final_trace_ids[0] != trace_id:
+        raise UiContractError("UI_CHAT_FINAL_EVENT_INVALID")
     if len(trace_id) != _TRACE_ID_LENGTH or any(
         char not in "0123456789abcdef" for char in trace_id
     ):
@@ -382,8 +412,11 @@ def _required_environment(key: str) -> str:
 
 def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("base_url")
-    parser.add_argument("--log-path", type=Path)
+    commands = parser.add_subparsers(dest="command", required=True)
+    ui = commands.add_parser("verify-ui-trace")
+    ui.add_argument("base_url")
+    log = commands.add_parser("verify-log")
+    log.add_argument("--log-path", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -396,7 +429,10 @@ def main() -> int:
     """
     arguments = _arguments()
     try:
-        report = verify_ui_contract(arguments.base_url, arguments.log_path)
+        if arguments.command == "verify-ui-trace":
+            report = verify_ui_contract(arguments.base_url)
+        else:
+            report = verify_log(arguments.log_path)
     except (OSError, UiContractError) as error:
         print(f"RAG_INDUSTRY_UI_CONTRACT_FAILED: {error}", file=sys.stderr)
         return 1

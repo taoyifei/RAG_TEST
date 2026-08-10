@@ -35,6 +35,7 @@ _REVISION = re.compile(r"[0-9a-f]{40}")
 _RUNTIME_ROOT = re.compile(r"serving-runtime/[0-9a-f]{12}")
 _RUNTIME_FILES = {
     "RUNTIME_MANIFEST.json",
+    "compose_check.py",
     "compose.yaml",
     "config/corpus-policy.json",
     "config/intent-router-calibration.json",
@@ -486,6 +487,7 @@ def _parent_directories(paths: set[str], root_name: str) -> set[str]:
 
 def _runtime_file_mode(relative: str) -> int:
     if relative.endswith(".sh") or relative in {
+        "compose_check.py",
         "runtime_check.py",
         "ui_contract_check.py",
         "validation_check.py",

@@ -21,10 +21,70 @@ from pathlib import Path
 _SHA256 = re.compile(r"(?:sha256:)?[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _HTTP_OK = 200
+_CONFIG_NAMES = {
+    "corpus-policy.json",
+    "intent-router-calibration.json",
+    "intent-router.json",
+    "pipeline.json",
+    "retrieval.json",
+}
 
 
 class RuntimeCheckError(RuntimeError):
     """表示 serving update 身份或备份合同不成立。"""
+
+
+def pre_update_filesystem_state(
+    config_directory: Path,
+    trace_database: Path,
+) -> dict[str, object]:
+    """只读取得 container-owned config 与 Trace schema 身份。
+
+    Args:
+        config_directory: 挂载到旧 App 的五文件 config 目录。
+        trace_database: 挂载到旧 App 的 Trace SQLite 文件。
+
+    Returns:
+        不含绝对路径、正文或 secret 的 canonical 身份字段。
+
+    Raises:
+        RuntimeCheckError: exact set、私有权限或 SQLite 合同不成立。
+
+    """
+    if not config_directory.is_dir() or config_directory.is_symlink():
+        raise RuntimeCheckError("CONFIG_DIRECTORY_INVALID")
+    entries = list(config_directory.iterdir())
+    if (
+        {path.name for path in entries} != _CONFIG_NAMES
+        or any(not path.is_file() or path.is_symlink() for path in entries)
+    ):
+        raise RuntimeCheckError("CONFIG_EXACT_SET_INVALID")
+    before = {
+        path.name: _source_identity(path) for path in sorted(entries)
+    }
+    files = {
+        path.name: _file_sha256(path) for path in sorted(entries)
+    }
+    if any(
+        identity["mode"] != "0600" for identity in before.values()
+    ):
+        raise RuntimeCheckError("CONFIG_FILE_MODE_INVALID")
+    _require_regular_private_source(trace_database)
+    trace_before = _source_identity(trace_database)
+    schema = trace_schema(trace_database)
+    after = {
+        path.name: _source_identity(path) for path in sorted(entries)
+    }
+    if before != after or trace_before != _source_identity(trace_database):
+        raise RuntimeCheckError("PRE_UPDATE_SOURCE_MUTATED")
+    return {
+        "config": {"files": files},
+        "trace": {
+            "filename": trace_database.name,
+            "mode": trace_before["mode"],
+            "sqlite_user_version": schema["sqlite_user_version"],
+        },
+    }
 
 
 def pre_update_index_state() -> dict[str, object]:
@@ -102,6 +162,9 @@ def backup_trace_database(
     source: Path,
     destination: Path,
     target_revision: str,
+    *,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
 ) -> dict[str, object]:
     """使用 SQLite 在线备份 API 创建 mode 0600 的更新前快照。
 
@@ -109,6 +172,8 @@ def backup_trace_database(
         source: 活动 Trace SQLite 文件。
         destination: 不得预先存在的备份文件。
         target_revision: 此备份对应的目标 App 完整 Git revision。
+        owner_uid: 最终快照 UID；省略时使用当前进程 UID。
+        owner_gid: 最终快照 GID；省略时使用当前进程 GID。
 
     Returns:
         不含问题正文和绝对路径的备份身份。
@@ -120,7 +185,13 @@ def backup_trace_database(
     _require_regular_private_source(source)
     if _REVISION.fullmatch(target_revision) is None:
         raise RuntimeCheckError("TRACE_BACKUP_TARGET_REVISION_INVALID")
-    source_stat = source.stat()
+    if owner_uid is None:
+        owner_uid = os.getuid()
+    if owner_gid is None:
+        owner_gid = os.getgid()
+    if owner_uid < 0 or owner_gid < 0:
+        raise RuntimeCheckError("TRACE_BACKUP_OWNER_INVALID")
+    source_identity = _source_identity(source)
     if destination.exists() or destination.is_symlink():
         raise RuntimeCheckError("TRACE_BACKUP_DESTINATION_EXISTS")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -156,6 +227,7 @@ def backup_trace_database(
             source_connection.close()
         if integrity is None or integrity[0] != "ok":
             raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED")
+        os.chown(temporary, owner_uid, owner_gid)
         temporary.chmod(0o600)
         with temporary.open("rb") as stream:
             os.fsync(stream.fileno())
@@ -166,21 +238,19 @@ def backup_trace_database(
         if isinstance(error, RuntimeCheckError):
             raise
         raise RuntimeCheckError("TRACE_BACKUP_FAILED") from error
+    if source_identity != _source_identity(source):
+        destination.unlink(missing_ok=True)
+        raise RuntimeCheckError("TRACE_BACKUP_SOURCE_MUTATED")
     return {
         "backup_filename": destination.name,
         "bytes": destination.stat().st_size,
         "created_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
         "mode": "0600",
+        "owner": {"gid": owner_gid, "uid": owner_uid},
         "page_count": page_count,
         "schema_version": "1",
         "sha256": _file_sha256(destination),
-        "source_database_identity": {
-            "bytes": source_stat.st_size,
-            "device": source_stat.st_dev,
-            "inode": source_stat.st_ino,
-            "mode": f"{stat.S_IMODE(source_stat.st_mode):04o}",
-            "mtime_ns": source_stat.st_mtime_ns,
-        },
+        "source_database_identity": source_identity,
         "source_filename": source.name,
         "sqlite_user_version": user_version,
         "target_revision": target_revision,
@@ -197,17 +267,22 @@ def trace_schema(database: Path) -> dict[str, object]:
         schema 版本和是否同时具有两个问题字段。
 
     """
-    connection = sqlite3.connect(
-        f"file:{urllib.parse.quote(str(database))}?mode=ro", uri=True
-    )
     try:
-        version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        columns = {
-            str(row[1])
-            for row in connection.execute("PRAGMA table_info(traces)")
-        }
-    finally:
-        connection.close()
+        connection = sqlite3.connect(
+            f"file:{urllib.parse.quote(str(database))}?mode=ro", uri=True
+        )
+        try:
+            version = int(
+                connection.execute("PRAGMA user_version").fetchone()[0]
+            )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(traces)")
+            }
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise RuntimeCheckError("TRACE_SCHEMA_READ_FAILED") from error
     return {
         "has_question_columns": {
             "question_text",
@@ -279,6 +354,16 @@ def _required_environment(key: str) -> str:
     return value
 
 
+def _required_owner(key: str) -> int:
+    value = _required_environment(key)
+    if not value.isdigit():
+        raise RuntimeCheckError(f"{key}_INVALID")
+    owner = int(value)
+    if owner < 0:
+        raise RuntimeCheckError(f"{key}_INVALID")
+    return owner
+
+
 def _required_string(value: dict[str, object], key: str) -> str:
     item = value.get(key)
     if not isinstance(item, str) or not item:
@@ -322,6 +407,19 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_identity(path: Path) -> dict[str, object]:
+    value = path.stat()
+    return {
+        "bytes": value.st_size,
+        "device": value.st_dev,
+        "gid": value.st_gid,
+        "inode": value.st_ino,
+        "mode": f"{stat.S_IMODE(value.st_mode):04o}",
+        "mtime_ns": value.st_mtime_ns,
+        "uid": value.st_uid,
+    }
+
+
 def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -334,6 +432,9 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("pre-update-index-state")
+    filesystem = commands.add_parser("pre-update-filesystem-state")
+    filesystem.add_argument("config_directory", type=Path)
+    filesystem.add_argument("trace_database", type=Path)
     for command in ("backup-trace-database", "backup-trace"):
         backup = commands.add_parser(command)
         backup.add_argument("source", type=Path)
@@ -355,6 +456,11 @@ def main() -> int:
     try:
         if arguments.command == "pre-update-index-state":
             result = pre_update_index_state()
+        elif arguments.command == "pre-update-filesystem-state":
+            result = pre_update_filesystem_state(
+                arguments.config_directory,
+                arguments.trace_database,
+            )
         elif arguments.command in {
             "backup-trace-database",
             "backup-trace",
@@ -363,11 +469,19 @@ def main() -> int:
                 arguments.source,
                 arguments.destination,
                 arguments.target_revision,
+                owner_uid=_required_owner("RAG_UPDATE_OWNER_UID"),
+                owner_gid=_required_owner("RAG_UPDATE_OWNER_GID"),
             )
         else:
             result = trace_schema(arguments.database)
     except RuntimeCheckError as error:
         print(f"RAG_INDUSTRY_RUNTIME_CHECK_FAILED: {error}", file=sys.stderr)
+        return 1
+    except (OSError, sqlite3.Error, ValueError):
+        print(
+            "RAG_INDUSTRY_RUNTIME_CHECK_FAILED: RUNTIME_IO_INVALID",
+            file=sys.stderr,
+        )
         return 1
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return 0
