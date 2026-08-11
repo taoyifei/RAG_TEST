@@ -44,6 +44,195 @@ require_industry_env() {
     || industry_fail "RAG_QDRANT_ALIAS 必须是 rag-industry-active。"
 }
 
+acquire_industry_serving_update_lock() {
+  local backup_path="$1"
+  local descriptor_name="$2"
+  local lock_path
+  local descriptor
+  local lock_descriptor
+  INDUSTRY_SERVING_LOCK_ERROR=""
+  if [[ ! "${descriptor_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_LOCK_FD_NAME_INVALID"
+    return 1
+  fi
+  if [[ ! -d "${backup_path}" || -L "${backup_path}" ]]; then
+    INDUSTRY_SERVING_LOCK_ERROR="BACKUP_PATH_INVALID"
+    return 1
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    INDUSTRY_SERVING_LOCK_ERROR="FLOCK_NOT_FOUND"
+    return 1
+  fi
+  lock_path="${backup_path}/serving-update.lock"
+  if [[ ! -e "${lock_path}" && ! -L "${lock_path}" ]]; then
+    (
+      set -o noclobber
+      umask 077
+      : >"${lock_path}"
+    ) 2>/dev/null || true
+  fi
+  if [[ ! -f "${lock_path}" || -L "${lock_path}" ]]; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_LOCK_INVALID"
+    return 1
+  fi
+  if ! exec {descriptor}<>"${lock_path}"; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_LOCK_OPEN_FAILED"
+    return 1
+  fi
+  lock_descriptor="/proc/${BASHPID}/fd/${descriptor}"
+  if ! chmod 600 "${lock_descriptor}"; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_LOCK_MODE_FAILED"
+    exec {descriptor}>&-
+    return 1
+  fi
+  if [[ -L "${lock_path}" || ! "${lock_path}" -ef "${lock_descriptor}" ]]; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_LOCK_REPLACED"
+    exec {descriptor}>&-
+    return 1
+  fi
+  if ! flock -n "${descriptor}"; then
+    INDUSTRY_SERVING_LOCK_ERROR="SERVING_UPDATE_ALREADY_RUNNING"
+    exec {descriptor}>&-
+    return 1
+  fi
+  printf -v "${descriptor_name}" '%s' "${descriptor}"
+}
+
+write_industry_serving_transaction_state() {
+  python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
+from datetime import datetime, timezone
+
+path = pathlib.Path(sys.argv[1])
+state = sys.argv[2]
+update_id = sys.argv[3]
+failure_stage = sys.argv[4] or None
+error_code = sys.argv[5] or None
+allowed = {
+    "activated",
+    "activating",
+    "precheck_failed",
+    "prechecking",
+    "prepared",
+    "rollback_failed",
+    "rolled_back",
+    "rolling_back",
+    "validated",
+    "verified",
+    "verifying",
+}
+match = re.fullmatch(r"attempt-([0-9]{4})", path.parent.name)
+failure_states = {"precheck_failed", "rollback_failed", "rolled_back"}
+if (
+    state not in allowed
+    or match is None
+    or re.fullmatch(r"[0-9a-f]{12}-[0-9a-f]{12}", update_id) is None
+    or ((failure_stage is None) != (error_code is None))
+    or (state in failure_states and failure_stage is None)
+    or (state not in failure_states and failure_stage is not None)
+):
+    raise SystemExit("TRANSACTION_STATE_INVALID")
+value = {
+    "attempt": int(match.group(1)),
+    "error_code": error_code,
+    "failure_stage": failure_stage,
+    "schema_version": "2",
+    "state": state,
+    "update_id": update_id,
+    "updated_at": datetime.now(timezone.utc).isoformat(),
+}
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=".transaction-state.", dir=path.parent
+)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        json.dump(value, output, separators=(",", ":"), sort_keys=True)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.chmod(temporary_name, 0o600)
+    os.replace(temporary_name, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+}
+
+replace_industry_private_env() {
+  python3 - "$1" "$2" <<'PY'
+import os
+import pathlib
+import shutil
+import sys
+import tempfile
+
+source = pathlib.Path(sys.argv[1])
+target = pathlib.Path(sys.argv[2])
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=f".{target.name}.replace.", dir=target.parent
+)
+try:
+    with source.open("rb") as input_stream, os.fdopen(
+        descriptor, "wb"
+    ) as output_stream:
+        shutil.copyfileobj(input_stream, output_stream)
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+    os.chmod(temporary_name, 0o600)
+    os.replace(temporary_name, target)
+    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+finally:
+    if os.path.exists(temporary_name):
+        os.unlink(temporary_name)
+PY
+}
+
+classify_industry_app_identity() {
+  local source_env="$1"
+  local target_env="$2"
+  local source_static=false
+  local target_static=false
+  if verify_industry_app_static_identity \
+    "${source_env}" >/dev/null 2>&1; then
+    source_static=true
+  fi
+  if verify_industry_app_static_identity \
+    "${target_env}" >/dev/null 2>&1; then
+    target_static=true
+  fi
+  if [[ "${source_static}" == "true" && "${target_static}" == "false" ]]; then
+    if (verify_industry_app_identity \
+      "${source_env}" true >/dev/null 2>&1); then
+      printf 'source\n'
+    else
+      printf 'source_unhealthy\n'
+    fi
+  elif [[ "${source_static}" == "false" && "${target_static}" == "true" ]]; then
+    if (verify_industry_app_identity \
+      "${target_env}" true >/dev/null 2>&1); then
+      printf 'target\n'
+    else
+      printf 'target_unhealthy\n'
+    fi
+  else
+    printf 'unknown\n'
+  fi
+}
+
 require_release_directory() {
   local release_dir="$1"
   [[ "${release_dir}" == /* && -d "${release_dir}" && ! -L "${release_dir}" ]] \
@@ -138,9 +327,8 @@ if any(mounts.get(target) != source for target, source in expected.items()):
 '
 }
 
-verify_industry_app_identity() {
+verify_industry_app_static_identity() {
   local env_file="$1"
-  local require_ready="${2:-true}"
   local expected_image
   local expected_revision
   local expected_image_id
@@ -192,6 +380,18 @@ if not isinstance(bindings, list) or len(bindings) != 1:
 if bindings[0].get("HostPort") != "8188":
     raise SystemExit("PORT_INVALID")
 ' || return 1
+}
+
+verify_industry_app_identity() {
+  local env_file="$1"
+  local require_ready="${2:-true}"
+  local expected_revision
+  local port
+  verify_industry_app_static_identity "${env_file}" || return 1
+  (wait_industry_health rag-industry-app 60) >/dev/null 2>&1 || return 1
+  expected_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)" \
+    || return 1
+  port="$(exact_env_value "${env_file}" RAG_PORT)" || return 1
   docker exec rag-industry-app rag-app build-info \
     --expected-revision "${expected_revision}" >/dev/null || return 1
   wait_industry_http "http://127.0.0.1:${port}/live" 60 || return 1

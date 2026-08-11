@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import gzip
 import hashlib
 import json
@@ -260,6 +261,32 @@ printf 'python3 %s\n' "$*" >> {log!s}
 if [[ "${{1:-}}" == "-" \
   && "${{3:-}}" == "${{FAKE_TRANSACTION_STATE_WRITE_FAIL:-never}}" ]]; then
   exit 1
+fi
+if [[ "${{1:-}}" == "-" \
+  && "${{2:-}}" == */attempt-[0-9][0-9][0-9][0-9] \
+  && "${{FAKE_CRASH_BEFORE_ACTIVATION_INTENT:-0}}" == "1" \
+  && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+  touch "${{FAKE_CRASH_MARKER}}"
+  kill -KILL "$PPID"
+  exit 137
+fi
+if [[ "${{1:-}}" == "-" \
+  && "${{2:-}}" == */candidate-rag-industry.env \
+  && "${{FAKE_CRASH_AFTER_ENV_SWAP:-0}}" == "1" \
+  && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+  /usr/bin/python3 "$@" || exit $?
+  touch "${{FAKE_CRASH_MARKER}}"
+  kill -KILL "$PPID"
+  exit 137
+fi
+if [[ "${{1:-}}" == "-" \
+  && "${{3:-}}" == "activated" \
+  && "${{FAKE_CRASH_AFTER_ACTIVATED_STATE:-0}}" == "1" \
+  && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+  /usr/bin/python3 "$@" || exit $?
+  touch "${{FAKE_CRASH_MARKER}}"
+  kill -KILL "$PPID"
+  exit 137
 fi
 if [[ "${{1:-}}" == "-" \
   && "${{3:-}}" == "validated" \
@@ -528,6 +555,18 @@ if args[:1] == ["compose"]:
         if "pre-update-index-state" in args:
             if current.get("FAKE_PRE_INDEX_FAIL"):
                 raise SystemExit(1)
+            hold_rollback = current.get("FAKE_HOLD_ROLLBACK_MARKER")
+            release_rollback = current.get("FAKE_RELEASE_ROLLBACK_MARKER")
+            if hold_rollback and release_rollback:
+                pathlib.Path(hold_rollback).write_text("held\\n")
+                deadline = time.monotonic() + 20
+                while (
+                    not pathlib.Path(release_rollback).exists()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.02)
+                if not pathlib.Path(release_rollback).exists():
+                    raise SystemExit(1)
             print(json.dumps({{
                 "active_collection": "rag-docx-active",
                 "alias": "rag-industry-active",
@@ -629,6 +668,18 @@ if args[:1] == ["compose"]:
             if current.get(flag):
                 next_state[flag] = current[flag]
         STATE.write_text(json.dumps(next_state))
+        if (
+            current.get("FAKE_CRASH_AFTER_TARGET_COMPOSE")
+            and env["RAG_RELEASE_REVISION"] == NEW_REVISION
+            and not pathlib.Path(
+                current.get("FAKE_CRASH_MARKER", "/nonexistent")
+            ).exists()
+        ):
+            pathlib.Path(current["FAKE_CRASH_MARKER"]).write_text(
+                "injected\\n"
+            )
+            os.kill(os.getppid(), 9)
+            time.sleep(1)
         raise SystemExit(0)
 
 if args[:2] == ["container", "inspect"]:
@@ -636,8 +687,14 @@ if args[:2] == ["container", "inspect"]:
     template = args[args.index("--format") + 1] if "--format" in args else ""
     if ".State.Running" in template:
         print("false" if name == "rag-industry-worker" else "true")
-    elif ".Id}}|{{.State.StartedAt" in template:
-        print("id-" + name + "|2026-08-07T00:00:00Z")
+    elif ".Id}}}}|{{{{.State.StartedAt" in template:
+        if (
+            current.get("FAKE_DEPENDENCY_DRIFT")
+            and name == "rag-industry-qdrant"
+        ):
+            print("drifted-qdrant|2026-08-07T00:00:01Z")
+        else:
+            print("id-" + name + "|2026-08-07T00:00:00Z")
     elif template == "{{{{.Id}}}}":
         print("id-" + name)
     elif template == "{{{{.State.StartedAt}}}}":
@@ -663,7 +720,7 @@ if args[:2] == ["container", "inspect"]:
 if args[:1] == ["inspect"]:
     template = args[args.index("--format") + 1]
     if ".State.Health" in template:
-        print("healthy")
+        print("unhealthy" if current.get("FAKE_APP_UNHEALTHY") else "healthy")
         raise SystemExit(0)
 
 if args[:2] == ["image", "load"]:
@@ -777,6 +834,7 @@ def _run(
     for flag in (
         "FAKE_CANDIDATE_COMPOSE_FAIL",
         "FAKE_COMPOSE_CONTRACT_FAIL",
+        "FAKE_APP_UNHEALTHY",
         "FAKE_PRE_FILESYSTEM_FAIL",
         "FAKE_PRE_INDEX_FAIL",
         "FAKE_TRACE_BACKUP_FAIL",
@@ -785,6 +843,8 @@ def _run(
     for key in (
         "FAKE_HOLD_UPDATE_MARKER",
         "FAKE_RELEASE_UPDATE_MARKER",
+        "FAKE_CRASH_AFTER_TARGET_COMPOSE",
+        "FAKE_CRASH_MARKER",
     ):
         if extra and key in extra:
             state[key] = extra[key]
@@ -861,6 +921,88 @@ def _start(
         stderr=subprocess.PIPE,
         text=True,
         env=environment,
+    )
+
+
+def _run_manual_rollback(
+    sandbox: _Sandbox,
+    transaction: Path,
+    *,
+    extra: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    rollback_env = (
+        transaction / "candidate-rag-industry.env"
+        if (transaction / "candidate-rag-industry.env").is_file()
+        else sandbox.env_file
+    )
+    compose = next(
+        line.split("=", 1)[1]
+        for line in rollback_env.read_text(encoding="utf-8").splitlines()
+        if line.startswith("RAG_INDUSTRY_COMPOSE_FILE=")
+    )
+    runtime_dir = Path(compose).parent
+    return subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/bash",
+            str(runtime_dir / "rollback-app-update.sh"),
+            str(sandbox.env_file),
+            str(transaction),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
+            **(extra or {}),
+        },
+        timeout=60,
+    )
+
+
+def _start_manual_rollback(
+    sandbox: _Sandbox,
+    transaction: Path,
+    *,
+    hold_marker: Path,
+    release_marker: Path,
+) -> subprocess.Popen[str]:
+    state = json.loads(sandbox.docker_state.read_bytes())
+    state["FAKE_HOLD_ROLLBACK_MARKER"] = str(hold_marker)
+    state["FAKE_RELEASE_ROLLBACK_MARKER"] = str(release_marker)
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+    compose = next(
+        line.split("=", 1)[1]
+        for line in sandbox.env_file.read_text(encoding="utf-8").splitlines()
+        if line.startswith("RAG_INDUSTRY_COMPOSE_FILE=")
+    )
+    return subprocess.Popen(  # noqa: S603
+        [
+            "/usr/bin/bash",
+            str(Path(compose).parent / "rollback-app-update.sh"),
+            str(sandbox.env_file),
+            str(transaction),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={
+            **os.environ,
+            "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
+        },
+    )
+
+
+def _transaction(sandbox: _Sandbox, attempt: int = 1) -> Path:
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    return update_root / f"attempt-{attempt:04d}"
+
+
+def _force_recreate_count(sandbox: _Sandbox) -> int:
+    return sum(
+        "--force-recreate rag-industry-app" in line
+        for line in sandbox.log.read_text(encoding="utf-8").splitlines()
+        if line.startswith("docker ")
     )
 
 
@@ -1012,7 +1154,7 @@ def test_rollback_failed_blocks_automatic_retry_and_keeps_evidence(
     second = _run(sandbox)
 
     assert second.returncode != 0
-    assert "UPDATE_TRANSACTION_NOT_RETRYABLE" in second.stderr
+    assert "RECOVERY_REQUIRES_MANUAL_INTERVENTION" in second.stderr
     update_root = next((sandbox.backup_path / "serving-updates").iterdir())
     attempts = sorted(update_root.glob("attempt-*"))
     assert len(attempts) == 1
@@ -1040,7 +1182,7 @@ def test_unknown_transaction_state_fails_closed(
     second = _run(sandbox)
 
     assert second.returncode != 0
-    assert "UPDATE_TRANSACTION_NOT_RETRYABLE" in second.stderr
+    assert "RECOVERY_TRANSACTION_INVALID" in second.stderr
     assert len(list(update_root.glob("attempt-*"))) == 1
 
 
@@ -1560,3 +1702,463 @@ def test_backup_symlink_and_missing_flock_fail_before_transaction(
     assert missing_flock.returncode != 0
     assert "FLOCK_NOT_FOUND" in missing_flock.stderr
     assert not list(sandbox.backup_path.glob("serving-updates/*/attempt-*"))
+
+
+def test_post_verified_manual_rollback_restores_source_pointer_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    checkpoint = json.loads(
+        (transaction / "source-checkpoint.json").read_bytes()
+    )
+    source_snapshot_id = checkpoint["source_snapshot"]["snapshot_id"]
+    target = resolve_last_good(sandbox.backup_path)
+    target_snapshot = (
+        sandbox.backup_path
+        / "last-good-snapshots"
+        / str(target["snapshot_id"])
+    )
+    assert target["revision"] == _NEW_REVISION
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+    rolled_back = _run_manual_rollback(sandbox, transaction)
+
+    assert rolled_back.returncode == 0, rolled_back.stderr
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        _OLD_REVISION
+    )
+    source = resolve_last_good(sandbox.backup_path)
+    assert source["revision"] == _OLD_REVISION
+    assert source["snapshot_id"] == source_snapshot_id
+    assert target_snapshot.is_dir()
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rolled_back"
+    repeated = _run_manual_rollback(sandbox, transaction)
+    assert repeated.returncode != 0
+    assert "MANUAL_ROLLBACK_REQUIRES_VERIFIED" in repeated.stderr
+    assert resolve_last_good(sandbox.backup_path)["revision"] == _OLD_REVISION
+
+    retried = _run(sandbox)
+
+    assert retried.returncode == 0, retried.stderr
+    assert _transaction(sandbox, attempt=2).is_dir()
+
+
+def test_manual_rollback_obeys_global_update_lock_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_env = sandbox.env_file.read_bytes()
+    before_app = json.loads(sandbox.docker_state.read_bytes())
+    before_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+    before_state = (transaction / "transaction-state.json").read_bytes()
+    lock_path = sandbox.backup_path / "serving-update.lock"
+
+    with lock_path.open("r+b") as lock_stream:
+        fcntl.flock(lock_stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        rejected = _run_manual_rollback(sandbox, transaction)
+
+    assert rejected.returncode != 0
+    assert "SERVING_UPDATE_ALREADY_RUNNING" in rejected.stderr
+    assert sandbox.env_file.read_bytes() == before_env
+    after_app = json.loads(sandbox.docker_state.read_bytes())
+    assert after_app["image"] == before_app["image"]
+    assert after_app["image_id"] == before_app["image_id"]
+    assert after_app["revision"] == before_app["revision"]
+    assert (sandbox.backup_path / "last-good-pointer.json").read_bytes() == (
+        before_pointer
+    )
+    assert (transaction / "transaction-state.json").read_bytes() == before_state
+
+
+def test_manual_rollback_holds_global_lock_against_update(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    held = tmp_path / "rollback-held"
+    release = tmp_path / "rollback-release"
+    rollback = _start_manual_rollback(
+        sandbox,
+        transaction,
+        hold_marker=held,
+        release_marker=release,
+    )
+    try:
+        for _ in range(500):
+            if held.exists() or rollback.poll() is not None:
+                break
+            time.sleep(0.01)
+        assert held.is_file()
+
+        rejected = _run(sandbox)
+
+        assert rejected.returncode != 0
+        assert "SERVING_UPDATE_ALREADY_RUNNING" in rejected.stderr
+    finally:
+        release.write_text("release\n", encoding="utf-8")
+        rollback_stdout, rollback_stderr = rollback.communicate(timeout=30)
+    assert rollback.returncode == 0, rollback_stderr or rollback_stdout
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rolled_back"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ("target-pointer", "source-snapshot", "index", "dependency"),
+)
+def test_manual_rollback_fails_closed_on_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_env = sandbox.env_file.read_bytes()
+    before_app_revision = json.loads(sandbox.docker_state.read_bytes())[
+        "revision"
+    ]
+    if failure == "target-pointer":
+        pointer = sandbox.backup_path / "last-good-pointer.json"
+        pointer.write_text("{}\n", encoding="utf-8")
+        pointer.chmod(0o600)
+    elif failure == "source-snapshot":
+        checkpoint = json.loads(
+            (transaction / "source-checkpoint.json").read_bytes()
+        )
+        source_env = (
+            sandbox.backup_path
+            / "last-good-snapshots"
+            / checkpoint["source_snapshot"]["snapshot_id"]
+            / "rag-industry.env"
+        )
+        source_env.write_text("tampered\n", encoding="utf-8")
+        source_env.chmod(0o600)
+    else:
+        state = json.loads(sandbox.docker_state.read_bytes())
+        state[
+            "FAKE_PRE_INDEX_FAIL"
+            if failure == "index"
+            else "FAKE_DEPENDENCY_DRIFT"
+        ] = True
+        sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+
+    rejected = _run_manual_rollback(sandbox, transaction)
+
+    assert rejected.returncode != 0
+    assert "RAG_INDUSTRY_APP_ROLLBACK_OK" not in rejected.stdout
+    assert sandbox.env_file.read_bytes() == before_env
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        before_app_revision
+    )
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rollback_failed"
+
+
+def test_manual_rollback_state_write_failure_never_claims_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+
+    rejected = _run_manual_rollback(
+        sandbox,
+        transaction,
+        extra={"FAKE_TRANSACTION_STATE_WRITE_FAIL": "rolled_back"},
+    )
+
+    assert rejected.returncode == 70
+    assert "RAG_INDUSTRY_APP_ROLLBACK_OK" not in rejected.stdout
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rollback_failed"
+
+
+@pytest.mark.parametrize(
+    ("failure_flag", "expected_state", "expected_app_revision"),
+    (
+        ("FAKE_CRASH_AFTER_ENV_SWAP", "activating", _OLD_REVISION),
+        ("FAKE_CRASH_AFTER_ACTIVATED_STATE", "activated", _OLD_REVISION),
+        ("FAKE_CRASH_AFTER_TARGET_COMPOSE", "activated", _NEW_REVISION),
+    ),
+)
+def test_activation_hard_crash_recovers_same_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_flag: str,
+    expected_state: str,
+    expected_app_revision: str,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / f"{failure_flag}.injected"
+
+    interrupted = _run(
+        sandbox,
+        extra={
+            failure_flag: "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+
+    assert interrupted.returncode != 0
+    assert marker.is_file()
+    transaction = _transaction(sandbox)
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == expected_state
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        expected_app_revision
+    )
+
+    recovered = _run(sandbox)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+    assert not _transaction(sandbox, attempt=2).exists()
+
+
+def test_healthy_target_activated_reentry_does_not_force_recreate_twice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "target-compose.inflight"
+    interrupted = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_TARGET_COMPOSE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert interrupted.returncode != 0
+    assert marker.is_file()
+    assert _force_recreate_count(sandbox) == 1
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        _NEW_REVISION
+    )
+
+    recovered = _run(sandbox)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert _force_recreate_count(sandbox) == 1
+    assert json.loads(
+        (_transaction(sandbox) / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+
+def test_unhealthy_target_activated_reentry_recreates_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "target-unhealthy.inflight"
+    interrupted = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_TARGET_COMPOSE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert interrupted.returncode != 0
+    assert _force_recreate_count(sandbox) == 1
+
+    recovered = _run(sandbox, extra={"FAKE_APP_UNHEALTHY": "1"})
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert _force_recreate_count(sandbox) == 2
+    repeated = _run(sandbox)
+    assert repeated.returncode == 0, repeated.stderr
+    assert _force_recreate_count(sandbox) == 2
+
+
+def test_prechecking_crash_before_activation_intent_becomes_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "before-activation-intent.injected"
+    interrupted = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_BEFORE_ACTIVATION_INTENT": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert interrupted.returncode != 0
+    assert marker.is_file()
+    first_attempt = _transaction(sandbox)
+    assert not (first_attempt / "activation-intent.json").exists()
+    assert json.loads(
+        (first_attempt / "transaction-state.json").read_bytes()
+    )["state"] == "prechecking"
+
+    recovered = _run(sandbox)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert json.loads(
+        (first_attempt / "transaction-state.json").read_bytes()
+    )["state"] == "precheck_failed"
+    second_state = _transaction(sandbox, attempt=2) / "transaction-state.json"
+    assert json.loads(
+        second_state.read_bytes()
+    )["state"] == "verified"
+
+
+def test_activation_recovery_survives_a_second_hard_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    first_marker = tmp_path / "first-env-swap.injected"
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_ENV_SWAP": "1",
+            "FAKE_CRASH_MARKER": str(first_marker),
+        },
+    )
+    assert first.returncode != 0
+    assert first_marker.is_file()
+    second_marker = tmp_path / "second-compose.injected"
+
+    second = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_TARGET_COMPOSE": "1",
+            "FAKE_CRASH_MARKER": str(second_marker),
+        },
+    )
+
+    assert second.returncode != 0
+    assert second_marker.is_file()
+    assert json.loads(
+        (_transaction(sandbox) / "transaction-state.json").read_bytes()
+    )["state"] == "activated"
+    third = _run(sandbox)
+    assert third.returncode == 0, third.stderr
+    assert not _transaction(sandbox, attempt=2).exists()
+    assert _force_recreate_count(sandbox) == 1
+
+
+def test_activation_mixed_source_env_target_app_rolls_back_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "mixed-identity.injected"
+    interrupted = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_TARGET_COMPOSE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert interrupted.returncode != 0
+    sandbox.env_file.write_text(sandbox.old_env, encoding="utf-8")
+    sandbox.env_file.chmod(0o600)
+
+    rejected = _run(sandbox)
+
+    assert rejected.returncode != 0
+    assert "ACTIVATION_MIXED_IDENTITY_ROLLED_BACK" in rejected.stderr
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        _OLD_REVISION
+    )
+    assert json.loads(
+        (_transaction(sandbox) / "transaction-state.json").read_bytes()
+    )["state"] == "rolled_back"
+
+
+def test_activation_unknown_env_sha_fails_closed_without_app_or_pointer_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "unknown-env.injected"
+    interrupted = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_ENV_SWAP": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert interrupted.returncode != 0
+    sandbox.env_file.write_text(
+        sandbox.env_file.read_text(encoding="utf-8") + "UNKNOWN_DRIFT=1\n",
+        encoding="utf-8",
+    )
+    sandbox.env_file.chmod(0o600)
+    before_app = json.loads(sandbox.docker_state.read_bytes())
+
+    rejected = _run(sandbox)
+
+    assert rejected.returncode != 0
+    assert "ACTIVATION_IDENTITY_UNKNOWN" in rejected.stderr
+    after_app = json.loads(sandbox.docker_state.read_bytes())
+    assert after_app["image"] == before_app["image"]
+    assert after_app["image_id"] == before_app["image_id"]
+    assert after_app["revision"] == before_app["revision"]
+    assert not (sandbox.backup_path / "last-good-pointer.json").exists()
+    assert json.loads(
+        (_transaction(sandbox) / "transaction-state.json").read_bytes()
+    )["state"] == "rollback_failed"
+
+
+def test_activation_intent_is_private_complete_and_contains_no_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    intent_path = _transaction(sandbox) / "activation-intent.json"
+    raw = intent_path.read_bytes()
+    intent = json.loads(raw)
+
+    assert stat.S_IMODE(intent_path.stat().st_mode) == 0o600
+    assert set(intent) == {
+        "attempt",
+        "candidate_env_sha256",
+        "created_at",
+        "schema_version",
+        "source_checkpoint",
+        "source_compose_sha256",
+        "source_config",
+        "source_env_sha256",
+        "source_image",
+        "source_revision",
+        "target_compose_sha256",
+        "target_config",
+        "target_image",
+        "target_revision",
+        "update_id",
+    }
+    assert b"q" * 32 not in raw
+    assert b"a" * 32 not in raw
+    assert b"embedding:8091" not in raw

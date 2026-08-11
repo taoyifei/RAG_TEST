@@ -70,25 +70,6 @@ target_config_profile="$(manifest_value target_config_profile)" \
 [[ -d "${backup_path}" && ! -L "${backup_path}" ]] \
   || fail "BACKUP_PATH_INVALID"
 command -v flock >/dev/null 2>&1 || fail "FLOCK_NOT_FOUND"
-lock_path="${backup_path}/serving-update.lock"
-if [[ ! -e "${lock_path}" && ! -L "${lock_path}" ]]; then
-  (
-    set -o noclobber
-    umask 077
-    : >"${lock_path}"
-  ) 2>/dev/null || true
-fi
-[[ -f "${lock_path}" && ! -L "${lock_path}" ]] \
-  || fail "SERVING_UPDATE_LOCK_INVALID"
-exec {update_lock_fd}<>"${lock_path}" \
-  || fail "SERVING_UPDATE_LOCK_OPEN_FAILED"
-lock_descriptor="/proc/${BASHPID}/fd/${update_lock_fd}"
-chmod 600 "${lock_descriptor}" \
-  || fail "SERVING_UPDATE_LOCK_MODE_FAILED"
-[[ ! -L "${lock_path}" && "${lock_path}" -ef "${lock_descriptor}" ]] \
-  || fail "SERVING_UPDATE_LOCK_REPLACED"
-flock -n "${update_lock_fd}" \
-  || fail "SERVING_UPDATE_ALREADY_RUNNING"
 update_id="${target_revision:0:12}-${runtime_archive_sha:0:12}"
 runtime_parent="${release_root}/serving-updates"
 runtime_dir="${runtime_parent}/${update_id}"
@@ -171,6 +152,9 @@ fi
 
 # shellcheck source=lib.sh
 source "${runtime_dir}/lib.sh"
+update_lock_fd=""
+acquire_industry_serving_update_lock "${backup_path}" update_lock_fd \
+  || fail "${INDUSTRY_SERVING_LOCK_ERROR:-SERVING_UPDATE_LOCK_FAILED}"
 require_industry_env "${env_file}"
 old_compose="$(industry_compose_file "${env_file}")"
 old_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)"
@@ -252,69 +236,8 @@ worker_state="$(docker container inspect --format '{{.State.Running}}' \
 [[ "${worker_state}" != "true" ]] || fail "WORKER_RUNNING"
 
 write_transaction_state() {
-  python3 - "$1" "$2" "${update_id}" "${3:-}" "${4:-}" <<'PY'
-import json
-import os
-import pathlib
-import re
-import sys
-import tempfile
-from datetime import datetime, timezone
-
-path = pathlib.Path(sys.argv[1])
-state = sys.argv[2]
-failure_stage = sys.argv[4] or None
-error_code = sys.argv[5] or None
-allowed = {
-    "activated",
-    "precheck_failed",
-    "prechecking",
-    "prepared",
-    "rollback_failed",
-    "rolled_back",
-    "validated",
-    "verified",
-    "verifying",
-}
-match = re.fullmatch(r"attempt-([0-9]{4})", path.parent.name)
-failure_states = {"precheck_failed", "rollback_failed", "rolled_back"}
-if (
-    state not in allowed
-    or match is None
-    or ((failure_stage is None) != (error_code is None))
-    or (state in failure_states and failure_stage is None)
-    or (state not in failure_states and failure_stage is not None)
-):
-    raise SystemExit("TRANSACTION_STATE_INVALID")
-value = {
-    "attempt": int(match.group(1)),
-    "error_code": error_code,
-    "failure_stage": failure_stage,
-    "schema_version": "2",
-    "state": state,
-    "update_id": sys.argv[3],
-    "updated_at": datetime.now(timezone.utc).isoformat(),
-}
-descriptor, temporary_name = tempfile.mkstemp(
-    prefix=".transaction-state.", dir=path.parent
-)
-try:
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, separators=(",", ":"), sort_keys=True)
-        output.write("\n")
-        output.flush()
-        os.fsync(output.fileno())
-    os.chmod(temporary_name, 0o600)
-    os.replace(temporary_name, path)
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-finally:
-    if os.path.exists(temporary_name):
-        os.unlink(temporary_name)
-PY
+  write_industry_serving_transaction_state \
+    "$1" "$2" "${update_id}" "${3:-}" "${4:-}"
 }
 
 validate_target_runtime_checkpoint() {
@@ -345,6 +268,267 @@ validate_target_runtime_checkpoint() {
   chmod 600 "${published}" || return 1
 }
 
+validate_activation_intent() {
+  local transaction_path="$1"
+  python3 - "${transaction_path}/activation-intent.json" \
+    "${transaction_path}" "${update_id}" "${target_revision}" \
+    "${runtime_dir}/compose.yaml" <<'PY'
+import hashlib
+import json
+import pathlib
+import re
+import stat
+import sys
+
+intent_path = pathlib.Path(sys.argv[1])
+transaction = pathlib.Path(sys.argv[2])
+update_id = sys.argv[3]
+target_revision = sys.argv[4]
+target_compose = pathlib.Path(sys.argv[5])
+if (
+    not intent_path.is_file()
+    or intent_path.is_symlink()
+    or stat.S_IMODE(intent_path.stat().st_mode) != 0o600
+):
+    raise SystemExit("ACTIVATION_INTENT_FILE_INVALID")
+value = json.loads(intent_path.read_bytes())
+expected_fields = {
+    "attempt",
+    "candidate_env_sha256",
+    "created_at",
+    "schema_version",
+    "source_checkpoint",
+    "source_compose_sha256",
+    "source_config",
+    "source_env_sha256",
+    "source_image",
+    "source_revision",
+    "target_compose_sha256",
+    "target_config",
+    "target_image",
+    "target_revision",
+    "update_id",
+}
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+state = json.loads((transaction / "transaction-state.json").read_bytes())
+manifest = json.loads((transaction / "UPDATE_MANIFEST.json").read_bytes())
+snapshot = json.loads((transaction / "pre-update-snapshot.json").read_bytes())
+filesystem = json.loads((transaction / "pre-filesystem.json").read_bytes())
+checkpoint = json.loads((transaction / "source-checkpoint.json").read_bytes())
+source_image = snapshot.get("app")
+source_compose = snapshot.get("compose")
+manifest_image = manifest.get("image")
+expected_source_image = {
+    "id": source_image.get("image_id") if isinstance(source_image, dict) else None,
+    "ref": source_image.get("image_ref") if isinstance(source_image, dict) else None,
+    "revision": (
+        source_image.get("oci_revision") if isinstance(source_image, dict) else None
+    ),
+}
+expected_target_image = {
+    "id": manifest_image.get("id") if isinstance(manifest_image, dict) else None,
+    "ref": manifest_image.get("ref") if isinstance(manifest_image, dict) else None,
+    "revision": target_revision,
+}
+source_compose_path = (
+    pathlib.Path(str(source_compose.get("path", "")))
+    if isinstance(source_compose, dict)
+    else pathlib.Path("")
+)
+if (
+    set(value) != expected_fields
+    or value.get("schema_version") != "1"
+    or value.get("update_id") != update_id
+    or value.get("attempt") != state.get("attempt")
+    or value.get("source_revision") != checkpoint.get("revision")
+    or value.get("target_revision") != target_revision
+    or value.get("source_env_sha256")
+    != digest(transaction / "old-rag-industry.env")
+    or value.get("candidate_env_sha256")
+    != digest(transaction / "candidate-rag-industry.env")
+    or value.get("source_compose_sha256") != digest(source_compose_path)
+    or value.get("target_compose_sha256") != digest(target_compose)
+    or value.get("source_image") != expected_source_image
+    or value.get("target_image") != expected_target_image
+    or value.get("source_config") != filesystem.get("config")
+    or value.get("target_config")
+    != {
+        "files": manifest.get("config_files"),
+        "profile": manifest.get("target_config_profile"),
+    }
+    or value.get("source_checkpoint") != checkpoint.get("source_snapshot")
+    or not isinstance(value.get("created_at"), str)
+    or any(
+        re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+        for field in (
+            "candidate_env_sha256",
+            "source_compose_sha256",
+            "source_env_sha256",
+            "target_compose_sha256",
+        )
+    )
+):
+    raise SystemExit("ACTIVATION_INTENT_INVALID")
+PY
+}
+
+write_activation_intent() {
+  local transaction_path="$1"
+  python3 - "${transaction_path}" "${update_id}" "${target_revision}" \
+    "${runtime_dir}/compose.yaml" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+transaction = pathlib.Path(sys.argv[1])
+update_id = sys.argv[2]
+target_revision = sys.argv[3]
+target_compose = pathlib.Path(sys.argv[4])
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+state = json.loads((transaction / "transaction-state.json").read_bytes())
+manifest = json.loads((transaction / "UPDATE_MANIFEST.json").read_bytes())
+snapshot = json.loads((transaction / "pre-update-snapshot.json").read_bytes())
+filesystem = json.loads((transaction / "pre-filesystem.json").read_bytes())
+checkpoint = json.loads((transaction / "source-checkpoint.json").read_bytes())
+source_image = snapshot["app"]
+source_compose = pathlib.Path(snapshot["compose"]["path"])
+value = {
+    "attempt": state["attempt"],
+    "candidate_env_sha256": digest(
+        transaction / "candidate-rag-industry.env"
+    ),
+    "created_at": datetime.now(timezone.utc).isoformat(),
+    "schema_version": "1",
+    "source_checkpoint": checkpoint["source_snapshot"],
+    "source_compose_sha256": digest(source_compose),
+    "source_config": filesystem["config"],
+    "source_env_sha256": digest(transaction / "old-rag-industry.env"),
+    "source_image": {
+        "id": source_image["image_id"],
+        "ref": source_image["image_ref"],
+        "revision": source_image["oci_revision"],
+    },
+    "source_revision": checkpoint["revision"],
+    "target_compose_sha256": digest(target_compose),
+    "target_config": {
+        "files": manifest["config_files"],
+        "profile": manifest["target_config_profile"],
+    },
+    "target_image": {
+        "id": manifest["image"]["id"],
+        "ref": manifest["image"]["ref"],
+        "revision": target_revision,
+    },
+    "target_revision": target_revision,
+    "update_id": update_id,
+}
+path = transaction / "activation-intent.json"
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+    output.flush()
+    os.fsync(output.fileno())
+directory = os.open(transaction, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+  validate_activation_intent "${transaction_path}"
+}
+
+activation_env_identity() {
+  python3 - "$1/activation-intent.json" "${env_file}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+intent = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+actual = hashlib.sha256(pathlib.Path(sys.argv[2]).read_bytes()).hexdigest()
+if actual == intent.get("source_env_sha256"):
+    print("source")
+elif actual == intent.get("candidate_env_sha256"):
+    print("target")
+else:
+    print("unknown")
+PY
+}
+
+write_recovery_failure() {
+  local transaction_path="$1"
+  local code="$2"
+  write_transaction_state \
+    "${transaction_path}/transaction-state.json" rollback_failed \
+    activation_recovery "${code}" \
+    || fail "RECOVERY_FAILURE_STATE_WRITE_FAILED"
+  fail "${code}"
+}
+
+rollback_recovery_attempt() {
+  local transaction_path="$1"
+  local code="$2"
+  if ! bash "${runtime_dir}/rollback-app-update-core.sh" \
+    --automatic-failure "${env_file}" "${transaction_path}"; then
+    write_recovery_failure "${transaction_path}" \
+      "ACTIVATION_RECOVERY_ROLLBACK_FAILED"
+  fi
+  fail "${code}"
+}
+
+complete_recovered_target() {
+  local transaction_path="$1"
+  local state="$2"
+  if [[ "${state}" == "verified" ]]; then
+    bash "${runtime_dir}/verify-app-update.sh" \
+      "${env_file}" "${transaction_path}" \
+      || fail "IDEMPOTENT_VERIFY_FAILED"
+  elif [[ "${state}" == "verifying" ]]; then
+    if [[ -f "${transaction_path}/verified-state.json" \
+      && ! -L "${transaction_path}/verified-state.json" ]]; then
+      validate_target_runtime_checkpoint "${transaction_path}" \
+        || rollback_recovery_attempt \
+          "${transaction_path}" "VERIFYING_RECOVERY_RUNTIME_MISMATCH"
+    else
+      bash "${runtime_dir}/verify-app-update.sh" \
+        "${env_file}" "${transaction_path}" \
+        || rollback_recovery_attempt \
+          "${transaction_path}" "VERIFYING_RECOVERY_VERIFY_FAILED"
+    fi
+    write_transaction_state \
+      "${transaction_path}/transaction-state.json" validated \
+      || write_recovery_failure \
+        "${transaction_path}" "VERIFYING_RECOVERY_STATE_WRITE_FAILED"
+    state=validated
+  fi
+  validate_target_runtime_checkpoint "${transaction_path}" \
+    || fail "RECOVERY_RUNTIME_STATE_MISMATCH"
+  bash "${runtime_dir}/finalize-app-update.sh" \
+    "${env_file}" "${transaction_path}" "${target_revision}" reconcile \
+    || fail "IDEMPOTENT_LAST_GOOD_RECONCILIATION_FAILED"
+  write_transaction_state \
+    "${transaction_path}/transaction-state.json" verified \
+    || write_recovery_failure \
+      "${transaction_path}" "IDEMPOTENT_TRANSACTION_STATE_WRITE_FAILED"
+  printf 'reindex_required=false\n'
+  printf 'RAG_INDUSTRY_SERVING_UPDATE_ALREADY_CURRENT\n'
+  exit 0
+}
+
 update_root="${backup_path}/serving-updates/${update_id}"
 if [[ -e "${update_root}" ]]; then
   [[ -d "${update_root}" && ! -L "${update_root}" ]] \
@@ -354,9 +538,7 @@ else
 fi
 current_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)"
 current_compose="$(exact_env_value "${env_file}" RAG_INDUSTRY_COMPOSE_FILE)"
-if [[ "${current_revision}" == "${target_revision}" \
-  && "${current_compose}" == "${runtime_dir}/compose.yaml" ]]; then
-  transaction="$(python3 - "${update_root}" "${update_id}" <<'PY'
+recovery="$(python3 - "${update_root}" "${update_id}" <<'PY'
 import json
 import pathlib
 import re
@@ -364,22 +546,32 @@ import stat
 import sys
 
 root = pathlib.Path(sys.argv[1])
-current = []
 allowed_states = {
     "activated",
+    "activating",
     "precheck_failed",
     "prechecking",
     "prepared",
     "rollback_failed",
     "rolled_back",
+    "rolling_back",
     "validated",
     "verified",
     "verifying",
 }
+recoverable_states = {
+    "activated",
+    "activating",
+    "prechecking",
+    "rollback_failed",
+    "rolling_back",
+    "validated",
+    "verified",
+    "verifying",
+}
+attempts = []
 for path in root.iterdir():
-    match = re.fullmatch(
-        r"attempt-[0-9]{4}", path.name
-    )
+    match = re.fullmatch(r"attempt-([0-9]{4})", path.name)
     if not path.is_dir() or path.is_symlink() or match is None:
         raise SystemExit("UPDATE_ATTEMPT_ENTRY_INVALID")
     state_path = path / "transaction-state.json"
@@ -401,7 +593,7 @@ for path in root.iterdir():
             "update_id",
             "updated_at",
         }
-        or value.get("attempt") != int(match.group(0).rsplit("-", 1)[1])
+        or value.get("attempt") != int(match.group(1))
         or value.get("schema_version") != "2"
         or value.get("state") not in allowed_states
         or value.get("update_id") != sys.argv[2]
@@ -424,58 +616,146 @@ for path in root.iterdir():
         )
     ):
         raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
-    if value.get("state") in {"validated", "verified", "verifying"}:
-        current.append(path)
-if len(current) != 1:
+    attempts.append((int(match.group(1)), path, str(value.get("state"))))
+attempts.sort()
+if [number for number, _, _ in attempts] != list(range(1, len(attempts) + 1)):
+    raise SystemExit("UPDATE_ATTEMPT_SEQUENCE_INVALID")
+current = [item for item in attempts if item[2] in recoverable_states]
+if len(current) > 1 or (current and current[0] != attempts[-1]):
     raise SystemExit("CURRENT_ATTEMPT_INVALID")
-print(current[0])
+value = (
+    {"path": str(current[0][1]), "state": current[0][2]}
+    if current
+    else {}
+)
+print(json.dumps(value, separators=(",", ":"), sort_keys=True))
 PY
-  )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
-  current_state="$(python3 - "${transaction}/transaction-state.json" <<'PY'
+)" || fail "RECOVERY_TRANSACTION_INVALID"
+recovery_state="$(python3 - "${recovery}" <<'PY'
 import json
-import pathlib
 import sys
 
-print(json.loads(pathlib.Path(sys.argv[1]).read_bytes())["state"])
+value = json.loads(sys.argv[1])
+print(value.get("state", ""))
 PY
-  )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
-  validate_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
-    || fail "RECOVERY_COMPOSE_INVALID"
-  verify_industry_app_identity "${env_file}" true \
-    || fail "RECOVERY_APP_IDENTITY_INVALID"
-  port="$(exact_env_value "${env_file}" RAG_PORT)"
-  wait_industry_http "http://127.0.0.1:${port}/live" 60 \
-    || fail "RECOVERY_LIVE_FAILED"
-  wait_industry_http "http://127.0.0.1:${port}/ready" 60 \
-    || fail "RECOVERY_READY_FAILED"
-  if [[ "${current_state}" == "verified" ]]; then
-    bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
-      || fail "IDEMPOTENT_VERIFY_FAILED"
-  elif [[ "${current_state}" == "verifying" ]]; then
-    verified_state="${transaction}/verified-state.json"
-    if [[ -f "${verified_state}" && ! -L "${verified_state}" ]]; then
-      validate_target_runtime_checkpoint "${transaction}" \
-        || fail "VERIFYING_RECOVERY_RUNTIME_MISMATCH"
-    else
-      bash "${runtime_dir}/verify-app-update.sh" \
-        "${env_file}" "${transaction}" \
-        || fail "VERIFYING_RECOVERY_VERIFY_FAILED"
+)" || fail "RECOVERY_TRANSACTION_INVALID"
+if [[ -n "${recovery_state}" ]]; then
+  transaction="$(python3 - "${recovery}" <<'PY'
+import json
+import sys
+
+print(json.loads(sys.argv[1])["path"])
+PY
+)" || fail "RECOVERY_TRANSACTION_INVALID"
+  if [[ "${recovery_state}" == "rollback_failed" \
+    || "${recovery_state}" == "rolling_back" ]]; then
+    fail "RECOVERY_REQUIRES_MANUAL_INTERVENTION"
+  fi
+  if [[ "${recovery_state}" == "prechecking" \
+    && ! -e "${transaction}/activation-intent.json" \
+    && ! -L "${transaction}/activation-intent.json" ]]; then
+    if [[ "${current_revision}" != "${old_revision}" \
+      || ! -f "${transaction}/old-rag-industry.env" ]] \
+      || ! cmp -s -- "${transaction}/old-rag-industry.env" "${env_file}" \
+      || ! verify_industry_app_identity "${env_file}" true; then
+      write_recovery_failure "${transaction}" \
+        "PRECHECKING_SOURCE_IDENTITY_UNKNOWN"
     fi
     write_transaction_state \
-      "${transaction}/transaction-state.json" validated \
-      || fail "VERIFYING_RECOVERY_STATE_WRITE_FAILED"
+      "${transaction}/transaction-state.json" precheck_failed \
+      activation_recovery PRECHECKING_INTERRUPTED_BEFORE_ACTIVATION \
+      || fail "PRECHECKING_RECOVERY_STATE_WRITE_FAILED"
+    recovery_state=""
+  elif [[ "${recovery_state}" =~ ^(prechecking|activating|activated)$ ]]; then
+    validate_activation_intent "${transaction}" \
+      || write_recovery_failure "${transaction}" "ACTIVATION_INTENT_INVALID"
+    if [[ "${recovery_state}" == "prechecking" ]]; then
+      write_transaction_state \
+        "${transaction}/transaction-state.json" activating \
+        || write_recovery_failure \
+          "${transaction}" "ACTIVATING_RECOVERY_STATE_WRITE_FAILED"
+      recovery_state=activating
+    fi
+    env_identity="$(activation_env_identity "${transaction}")" \
+      || write_recovery_failure \
+        "${transaction}" "ACTIVATION_ENV_IDENTITY_INVALID"
+    app_identity="$(classify_industry_app_identity \
+      "${transaction}/old-rag-industry.env" \
+      "${transaction}/candidate-rag-industry.env")"
+    needs_recreate=false
+    if [[ "${env_identity}" == "source" \
+      && "${app_identity}" == "source" ]]; then
+      write_transaction_state \
+        "${transaction}/transaction-state.json" activating \
+        || write_recovery_failure \
+          "${transaction}" "ACTIVATING_RECOVERY_STATE_WRITE_FAILED"
+      replace_industry_private_env \
+        "${transaction}/candidate-rag-industry.env" "${env_file}" \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATING_ENV_SWAP_FAILED"
+      [[ "$(activation_env_identity "${transaction}")" == "target" ]] \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATING_ENV_VERIFY_FAILED"
+      write_transaction_state \
+        "${transaction}/transaction-state.json" activated \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATED_RECOVERY_STATE_WRITE_FAILED"
+      needs_recreate=true
+    elif [[ "${env_identity}" == "target" \
+      && "${app_identity}" == "source" ]]; then
+      write_transaction_state \
+        "${transaction}/transaction-state.json" activated \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATED_RECOVERY_STATE_WRITE_FAILED"
+      needs_recreate=true
+    elif [[ "${env_identity}" == "target" \
+      && "${app_identity}" == "target" ]]; then
+      needs_recreate=false
+    elif [[ "${env_identity}" == "target" \
+      && "${app_identity}" == "target_unhealthy" ]]; then
+      write_transaction_state \
+        "${transaction}/transaction-state.json" activated \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATED_RECOVERY_STATE_WRITE_FAILED"
+      needs_recreate=true
+    elif [[ "${env_identity}" == "source" \
+      && "${app_identity}" == "target" ]]; then
+      rollback_recovery_attempt \
+        "${transaction}" "ACTIVATION_MIXED_IDENTITY_ROLLED_BACK"
+    else
+      write_recovery_failure "${transaction}" \
+        "ACTIVATION_IDENTITY_UNKNOWN"
+    fi
+    if [[ "${needs_recreate}" == "true" ]]; then
+      run_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
+        up -d --no-deps --no-build --pull never --force-recreate \
+        rag-industry-app \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATION_RECOVERY_RECREATE_FAILED"
+      wait_industry_health rag-industry-app 180 \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATION_RECOVERY_APP_UNHEALTHY"
+      verify_industry_app_identity "${env_file}" true \
+        || rollback_recovery_attempt \
+          "${transaction}" "ACTIVATION_RECOVERY_APP_IDENTITY_INVALID"
+    fi
+    write_transaction_state \
+      "${transaction}/transaction-state.json" verifying \
+      || rollback_recovery_attempt \
+        "${transaction}" "VERIFYING_RECOVERY_STATE_WRITE_FAILED"
+    complete_recovered_target "${transaction}" verifying
+  else
+    [[ "${current_revision}" == "${target_revision}" \
+      && "${current_compose}" == "${runtime_dir}/compose.yaml" ]] \
+      || write_recovery_failure \
+        "${transaction}" "RECOVERY_ENV_IDENTITY_INVALID"
+    validate_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
+      || write_recovery_failure "${transaction}" "RECOVERY_COMPOSE_INVALID"
+    verify_industry_app_identity "${env_file}" true \
+      || write_recovery_failure \
+        "${transaction}" "RECOVERY_APP_IDENTITY_INVALID"
+    complete_recovered_target "${transaction}" "${recovery_state}"
   fi
-  validate_target_runtime_checkpoint "${transaction}" \
-    || fail "RECOVERY_RUNTIME_STATE_MISMATCH"
-  bash "${runtime_dir}/finalize-app-update.sh" \
-    "${env_file}" "${transaction}" "${target_revision}" reconcile \
-    || fail "IDEMPOTENT_LAST_GOOD_RECONCILIATION_FAILED"
-  write_transaction_state \
-    "${transaction}/transaction-state.json" verified \
-    || fail "IDEMPOTENT_TRANSACTION_STATE_WRITE_FAILED"
-  printf 'reindex_required=false\n'
-  printf 'RAG_INDUSTRY_SERVING_UPDATE_ALREADY_CURRENT\n'
-  exit 0
 fi
 transaction="$(python3 - "${update_root}" "${update_id}" <<'PY'
 import json
@@ -488,11 +768,13 @@ root = pathlib.Path(sys.argv[1])
 attempts = []
 allowed_states = {
     "activated",
+    "activating",
     "precheck_failed",
     "prechecking",
     "prepared",
     "rollback_failed",
     "rolled_back",
+    "rolling_back",
     "validated",
     "verified",
     "verifying",
@@ -577,8 +859,8 @@ transaction_exit() {
       printf '%s\n' \
         'RAG_INDUSTRY_SERVING_UPDATE_VALIDATED_RECOVERY_REQUIRED' >&2
     elif [[ "${activated}" == "true" ]]; then
-      if ! bash "${runtime_dir}/rollback-app-update.sh" \
-        "${env_file}" "${transaction}"; then
+      if ! bash "${runtime_dir}/rollback-app-update-core.sh" \
+        --automatic-failure "${env_file}" "${transaction}"; then
         if ! write_transaction_state \
           "${transaction}/transaction-state.json" rollback_failed \
           rollback ROLLBACK_FAILED; then
@@ -1347,38 +1629,15 @@ PY
 
 failure_stage="activation"
 failure_code="TARGET_ACTIVATION_FAILED"
-python3 - "${candidate_env}" "${env_file}" <<'PY'
-import os
-import pathlib
-import shutil
-import sys
-import tempfile
-
-source = pathlib.Path(sys.argv[1])
-target = pathlib.Path(sys.argv[2])
-descriptor, temporary_name = tempfile.mkstemp(
-    prefix=f".{target.name}.candidate.", dir=target.parent
-)
-try:
-    with source.open("rb") as input_stream, os.fdopen(
-        descriptor, "wb"
-    ) as output_stream:
-        shutil.copyfileobj(input_stream, output_stream)
-        output_stream.flush()
-        os.fsync(output_stream.fileno())
-    os.chmod(temporary_name, 0o600)
-    os.replace(temporary_name, target)
-    directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(directory)
-    finally:
-        os.close(directory)
-finally:
-    if os.path.exists(temporary_name):
-        os.unlink(temporary_name)
-PY
-
+write_activation_intent "${transaction}" \
+  || fail "ACTIVATION_INTENT_WRITE_FAILED"
 activated=true
+write_transaction_state "${transaction}/transaction-state.json" activating \
+  || fail "TRANSACTION_STATE_WRITE_FAILED"
+replace_industry_private_env "${candidate_env}" "${env_file}" \
+  || fail "TARGET_ENV_ACTIVATION_FAILED"
+[[ "$(activation_env_identity "${transaction}")" == "target" ]] \
+  || fail "TARGET_ENV_ACTIVATION_IDENTITY_FAILED"
 write_transaction_state "${transaction}/transaction-state.json" activated
 
 run_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \

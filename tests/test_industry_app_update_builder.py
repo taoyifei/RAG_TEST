@@ -102,9 +102,10 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
     assert "transaction-state.json" in command_text
     assert "run-index.sh" in command_text
     manifest = json.loads((output / "UPDATE_MANIFEST.json").read_bytes())
-    assert len(manifest["runtime"]["files"]) == 18
+    assert len(manifest["runtime"]["files"]) == 19
     assert "finalize-app-update.sh" in manifest["runtime"]["files"]
     assert "compose_check.py" in manifest["runtime"]["files"]
+    assert "rollback-app-update-core.sh" in manifest["runtime"]["files"]
     assert manifest["branch"] == "Industry"
     assert manifest["target"] == {
         "alias": "rag-industry-active",
@@ -164,11 +165,16 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         "rag-industry-app"
     )
     normalized_script = " ".join(script.replace("\\\n", " ").split())
-    assert normalized_script.count(update_command) == 1
+    assert normalized_script.count(update_command) == 2
     assert "up -d --force-recreate rag-industry-worker" not in script
     assert "up -d --force-recreate rag-industry-ocr" not in script
     assert "up -d --force-recreate rag-industry-qdrant" not in script
     assert "worker --once" not in script
+    assert "manual withdrawal is valid only for a verified attempt" in (
+        command_text
+    )
+    assert "${RUNTIME_DIR}/rollback-app-update.sh" in command_text
+    assert '"${ENV_FILE}" "${VERIFIED_ATTEMPT}"' in command_text
 
     extracted = tmp_path / "fresh-extraction"
     runtime_root = serving_update_selfcheck.safe_extract_runtime(

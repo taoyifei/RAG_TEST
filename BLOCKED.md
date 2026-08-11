@@ -1,12 +1,16 @@
 # 阻塞项
 
-## CURRENT STATUS：2026-08-11 本地最终缺口已收口，现场验收仍待单独授权
+## CURRENT STATUS：2026-08-11 e584 二次复核缺口与本地代码门禁已收口
 
 旧 `2c4cf220...` 的 env-only last-good、source/target/absent pointer 恢复、
-`verifying/validated/verified` 崩溃窗口、Trace WAL 并发写入与跨 update ID 全局锁均已有
-生产实现和故障注入证据。专项为 `195 passed, 1 warning`，显式绕过本机代理后的单次
-全量 pytest 为 `1239 passed, 61 warnings`；当前没有需要用户补充服务器信息才能完成
-本地 commit 与 app-only 构建的实现阻塞。以下边界仍是上线阻塞，不得写成现网已更新。
+`verifying/validated/verified` 崩溃窗口、Trace WAL 并发写入与跨 update ID 全局锁均保留。
+本轮又补齐 post-verified 人工撤回的 source pointer/共享锁，以及
+`prechecking/activating/activated` 在 env rename、状态落盘和 App recreate 之间的硬中断
+恢复。updater 脚本专项为 `58 passed in 195.07s`，非 Qdrant 扩大矩阵为
+`247 passed, 1 warning`，固定 Qdrant 关联集为 `174 passed, 59 warnings`，model/OCR
+合同为 `158 passed, 1 warning`，单次全量为 `1261 passed, 61 warnings`，均 0 failed。
+静态、Compose 和源码 asset 也已通过；当前仅剩从本地 clean commit 构建并 fresh 验证
+最终 8 文件包，不需要服务器信息。
 
 1. **服务器验收尚未执行。** 本轮没有访问任何实际服务器，没有部署，也没有现场运行
    Industry 20 smoke、UI/Trace 验收或核对容器、alias、manifest、point/source count。
@@ -14,7 +18,7 @@
    更新。上传、执行 updater 和现场验收必须等待用户后续单独授权。
 2. **当前运行等级仍是 demo/canary。** `RAG_RUN_MODE=demo`、retrieval 为
    `provisional`、intent router 为 `shadow`、calibration 为 `unverified`。即使本地
-   `1239 passed`，也不能宣称 production ready；production 仍需正式校准、冻结和服务
+   `1261 passed`，也不能宣称 production ready；production 仍需正式校准、冻结和服务
    器 acceptance。
 3. **HTTP demo 是明确接受的内网风险。** 非 Secure UI Cookie 仅在五项显式配置同时
    满足时允许，production 已 fail closed，但 HTTP 本身不提供链路加密；普通问答访问
@@ -24,12 +28,13 @@
    缓存键和 release manifest；服务器上的备份权限、访问审计、到期清空和日志反查仍需
    canary 现场验收。
 5. **遗留制品全部禁止使用。** `artifacts/industry-app-update/809fb71f5e50` 与
-   `artifacts/industry-serving-update/d5c03cf9b97e`、`8755bf379c8f`、`195f9aca2c63`
+   `artifacts/industry-serving-update/d5c03cf9b97e`、`8755bf379c8f`、`195f9aca2c63`、
+   `e5844e531c45`
    均永久失效，不得上传、部署或作为验收证据。最终包必须由本轮新的 clean commit 构建
-   到独立 SHA12 目录，顶层仍为 8 文件、runtime 仍为 18 文件，且
+   到独立 SHA12 目录，顶层仍为 8 文件、runtime 为 19 文件，且
    `reindex_required=false`、index fingerprint 不变。
 6. **仓库历史命中不等于交付泄漏。** 历史状态文档、测试内网地址和合成 secret fixture
-   不能靠删除历史事实制造绿灯。硬门禁针对实际 8 文件 delivery、18 文件 runtime 与
+   不能靠删除历史事实制造绿灯。硬门禁针对实际 8 文件 delivery、19 文件 runtime 与
    fresh extraction；交付物不得包含真实 IP、个人路径、secret、问题正文或业务 corpus。
 
 identity-bearing commit 不记录自身 SHA 或构建后制品摘要；最终 revision、包路径、逐文件

@@ -1,5 +1,43 @@
 # DOCX RAG 交付进度
 
+## CURRENT STATUS：2026-08-11 e584 Industry activation/人工撤回二次复核
+
+- 本轮从 clean `Industry@e5844e531c45eb3c95ff69b5d7de8059d855d428`
+  开始，`main` 仍为 `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`。本地
+  `artifacts/industry-serving-update/e5844e531c45` 已按任务书判为失效候选，不得上传或
+  部署；此前四个失效目录的结论不变。
+- 在修改生产脚本前新增了真实脚本级故障注入。首次有效红灯命令覆盖 post-verified 人工
+  rollback、独立 rollback 锁、candidate env rename 后 SIGKILL、`activated` 后
+  SIGKILL、Compose 已切到 target 后中断和健康 target 重入，共得到
+  `6 failed in 16.47s`。首个业务失败证明 App/env 已恢复 source，但
+  `last-good-pointer.json` 仍指 target；并发用例证明 rollback 在全局锁已被持有时仍返回
+  成功；两个 env/state 中断用例均在重入时报 `CURRENT_ATTEMPT_INVALID`。这些红灯没有用
+  skip/xfail、伪造成功或放宽身份校验处理。
+- 已把 `serving-update.lock` 提取为 updater 与公共 rollback 共用的实例级非阻塞锁，并将
+  rollback 拆为 public wrapper 与受控 core。post-verified 撤回会先验证 target，再恢复
+  source env/App，最后把 last-good pointer 原子指回原事务密封的 source snapshot；target
+  snapshot 与全部审计证据保留，只有 `rolled_back` 状态落盘成功后才报告成功。
+- 激活前现在先 fsync 不含 secret 的 `activation-intent.json`，再依次写 `activating`、
+  原子替换 env、验证 env SHA、写 `activated` 和只重建 App。重入按 env SHA、source/target
+  App 身份及 Docker 健康态继续同一 attempt：健康 target 不重复 recreate，不健康 target
+  只补做一次，混合态回滚 source，未知态写 `rollback_failed` 并 fail closed。
+- last-good 专项为 `20 passed in 0.79s`，builder 专项为 `17 passed in 0.96s`，完整
+  updater 脚本专项为 `58 passed in 195.07s`，覆盖本轮变更的非 Qdrant 扩大矩阵为
+  `247 passed, 1 warning in 293.26s`。model/OCR/健康合同为
+  `158 passed, 1 warning in 11.20s`。
+- 固定、无卷、空数据、仅绑定 `127.0.0.1:6333` 的
+  `qdrant/qdrant:v1.18.3` 扩大关联集为
+  `174 passed, 59 warnings in 412.02s`；结束前 collection 为空、`Mounts=[]`，随后删除
+  临时容器。相同环境下单次全量为
+  `1261 passed, 61 warnings in 822.83s`，0 failed，未新增 skip/xfail；结束时再次确认
+  collection 为空和无 mounts，并清理容器。
+- compileall、全仓 Ruff、strict mypy（124 source files）、Google docstring、Node 2 项、
+  simple/Industry 全部 shell 语法、两套 profiles Compose config 和 `git diff --check` 均
+  通过。源码 asset-selfcheck 验证 13 个文件，index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`；没有刷新
+  `ASSETS.sha256`。当前只剩 clean commit、真实目标 image asset-selfcheck、fresh 8 文件
+  package/selfcheck/safety 门禁；完成前不上传或部署候选包。
+
 ## CURRENT STATUS：2026-08-11 Industry serving update 最后四项事务缺口已本地收口
 
 - 本轮实际从 `Industry` 的 clean commit

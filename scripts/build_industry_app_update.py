@@ -84,6 +84,9 @@ _RUNTIME_SOURCES = {
     ),
     "last_good.py": "deployment/industry/serving_last_good.py",
     "lib.sh": "deployment/industry/lib.sh",
+    "rollback-app-update-core.sh": (
+        "deployment/industry/rollback-app-update-core.sh"
+    ),
     "rollback-app-update.sh": ("deployment/industry/rollback-app-update.sh"),
     "runtime_check.py": "deployment/industry/serving_runtime_check.py",
     "ui_contract_check.py": "deployment/industry/ui_contract_check.py",
@@ -398,6 +401,15 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
             "PY\n"
             "# Do not run run-index.sh; reindex_required=false.\n"
             "# Call this an internal canary only after on-server acceptance.\n"
+            "# Optional manual withdrawal is valid only for "
+            "a verified attempt.\n"
+            "# It takes the same global lock and restores "
+            "source App/env/pointer.\n"
+            "# RUNTIME_DIR=/absolute/RAG_RELEASE_ROOT/serving-updates/"
+            "${UPDATE_ID}\n"
+            "# VERIFIED_ATTEMPT=${AUDIT_ROOT}/attempt-000N\n"
+            "# bash \"${RUNTIME_DIR}/rollback-app-update.sh\" \\\n"
+            "#   \"${ENV_FILE}\" \"${VERIFIED_ATTEMPT}\"\n"
         ),
         encoding="utf-8",
     )

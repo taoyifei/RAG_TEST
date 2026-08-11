@@ -39,6 +39,9 @@ validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久
 `last-good.json`、不能从 source pointer 恢复 validated、把 Trace 合法 WAL 写入当成
 源文件篡改，且不同 update ID 没有共享互斥，因此同样永久失效，不得上传、部署或作为
 验收证据。
+复核后的 `artifacts/industry-serving-update/e5844e531c45` 仍缺少 post-verified 人工撤回
+的 source pointer 恢复与共享锁，并且在 private env 原子切换到 transaction state 落盘
+之间没有可恢复的 activation journal；它也永久失效，不得上传、部署或作为验收证据。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 
@@ -50,7 +53,7 @@ validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久
 - `SERVER_UPDATE_COMMANDS.txt`。
 
 `serving-runtime.tar.gz` 将版本化 Compose、包内 verify/rollback/helper、5 份 config
-和脱敏 validation 作为同一身份交付。runtime exact set 当前为 18 个文件；新增的
+和脱敏 validation 作为同一身份交付。runtime exact set 当前为 19 个文件；新增的
 `compose_check.py` 只用 Python 标准库规范化真实 Compose canonical JSON，不访问业务
 文件，`finalize-app-update.sh` 在父事务中原子完成 last-good promote/reconcile。它不包含 corpus、DOC/DOCX、OCR/Qdrant image、
 secret、真实服务器地址或问题正文。更新前由包内标准库 helper 在旧 App image 的一次性
@@ -61,14 +64,16 @@ secret、真实服务器地址或问题正文。更新前由包内标准库 help
 `SERVER_UPDATE_COMMANDS.txt` 的占位变量填写绝对路径。安全顺序是 sidecar 与 package
 selfcheck、更新前身份和 Trace 备份、原子安装版本化 runtime/candidate env、加载 App
 image、仅 force-recreate `rag-industry-app`、runtime-state v2、包内
-`verify-app-update.sh`。失败调用包内 `rollback-app-update.sh` 并复验旧身份。
+`verify-app-update.sh`。激活后的失败由 updater 调用包内 rollback core 并复验旧身份；
+公共 `rollback-app-update.sh` 仅用于 verified 后的人工撤回。
 updater 在读取或创建任何 update audit root/attempt 前，先对共同 backup root 下的固定
 `serving-update.lock` 取得非阻塞全局 `flock`，并持有到整个进程退出。backup root 与锁
 文件都不得为 symlink，锁必须是 0600 普通文件且打开 descriptor 与路径 inode 一致；
 缺少 `flock` 或已有任意 update ID 正在执行时立即停止，不得并发运行第二个更新。
 每次执行保留独立 `attempt-000N/transaction-state.json`，状态只允许
-`prepared/prechecking/precheck_failed/activated/verifying/validated/verified/rolled_back/
-rollback_failed`。激活前失败写入带稳定 stage/code 的 `precheck_failed`，不执行回滚，
+`prepared/prechecking/precheck_failed/activating/activated/verifying/validated/verified/
+rolling_back/rolled_back/rollback_failed`。激活前失败写入带稳定 stage/code 的
+`precheck_failed`，不执行回滚，
 并允许同包创建新 attempt；回滚成功后的同包重试也保留旧证据并创建新 attempt。
 `rollback_failed` 与未知状态 fail closed。`verifying` 若已有完整 `verified-state.json`，
 必须先重新验证当前目标 runtime 再继续；缺少该文件时重新运行完整 verify 或停止。
@@ -78,6 +83,14 @@ runtime-state，并交叉核对 pre-index、target contract、verified-state、U
 活动 alias/collection/manifest/point、index/serving fingerprint、UI Cookie、Trace 保留
 策略与 schema；恢复不再次重建 App。pointer、snapshot、manifest 或文件 SHA 已存在但
 损坏时必须 fail closed，不得用新 pointer 覆盖。
+
+激活前先 fsync 只含 source/target revision、image、config、Compose SHA、env SHA 和 source
+checkpoint 身份的 `activation-intent.json`，再写 `activating`、原子替换 private env、写
+`activated` 并只重建 App。进程在任一步被 SIGKILL 或主机掉电后，同一 attempt 会组合
+env SHA、App 静态身份与 Docker 健康态进行恢复：source/source 继续切换，target/source
+补建 target，健康 target/target 不重复重建，不健康 target/target 只补建一次；混合或未知
+身份自动恢复 source 或 fail closed。恢复不会新建第二个 attempt，也不会触碰 index、
+worker、OCR 或 Qdrant。
 
 source config 身份由 manifest 中五文件 exact SHA、source revision、source serving/index
 fingerprint 和显式 profile 共同绑定。首次部署来源使用
@@ -181,12 +194,16 @@ Serving App Update 不使用上述首次部署 rollback 参数，而使用更新
 ```bash
 bash /ABSOLUTE/SERVING_RUNTIME/rollback-app-update.sh \
   /ABSOLUTE/PRIVATE/rag-industry.env \
-  /ABSOLUTE/UPDATE_BACKUP
+  /ABSOLUTE/UPDATE_AUDIT/attempt-000N
 ```
 
-rollback 只读取经 SHA 和 exact-set 验证的 last-good 原子 pointer；必要时在停止失败的新
-App 后恢复 Trace 在线备份，再使用旧 env/Compose/config/image 重建旧 App。它不得恢复
-未被本次更新修改的 index state，也不得触碰 OCR、Qdrant 或 worker。
+该入口只接受状态为 `verified` 的 attempt，并与 updater 争用同一个全局锁；更新正在运行
+或另一个撤回正在执行时立即停止。撤回先复核 target App/env/runtime/index、依赖容器和
+target pointer，再原子恢复 source env、只重建并复验 source App，最后把 pointer 原子指回
+事务已密封的 source snapshot，并写 `rolled_back`。target snapshot 和全部 attempt 证据
+继续保留，同包可创建下一 attempt。该操作不回写 Trace 数据库，也不恢复 index state，
+不得触碰 OCR、Qdrant 或 worker；任一 pointer、snapshot、SHA、身份或状态落盘失败均写
+`rollback_failed` 或非零退出，不能宣称撤回成功。
 
 培训与工业前端切换时必须创建新的 `conversation_id`。当前没有 `kb_id` 自动路由，也
 不会同时查询两个知识库后再选择分数较高的结果。
@@ -214,5 +231,7 @@ Serving update 不得引用 `artifacts/industry-upload`。只上传新的
 不要运行 `run-index.sh`，不要手工删除失败 attempt，也不要启动或重启 worker、OCR、
 Qdrant；这是 App-only 更新。`verified` 表示本次更新本地终验完成，`rolled_back` 表示
 已恢复旧 App，`precheck_failed` 可由同包新 attempt 重试，`validated` 只能由同包 updater
-执行受控恢复，其他状态一律停止并复核。只有现场 acceptance 全部通过后才能称为内网
-canary 上线，不能称为 production ready。
+执行受控恢复，`activating/activated` 也只能由同包 updater 根据 activation journal 受控
+恢复，其他状态一律停止并复核。人工撤回必须使用该 attempt 对应 runtime 中的
+`rollback-app-update.sh`，并把已验证 attempt 目录作为第二个参数。只有现场 acceptance
+全部通过后才能称为内网 canary 上线，不能称为 production ready。

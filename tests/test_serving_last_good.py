@@ -13,6 +13,7 @@ from deployment.industry.serving_last_good import (
     migrate_legacy_last_good,
     promote_last_good,
     resolve_last_good,
+    restore_source_pointer,
 )
 
 _FIRST_REVISION = "1" * 40
@@ -65,13 +66,56 @@ def _update_manifest(
     return _write_private_json(
         tmp_path / "UPDATE_MANIFEST.json",
         {
+            "revision": _SECOND_REVISION,
             "source_compatibility": {
+                "compatible_revisions": [source_revision],
                 "trusted_last_good_revisions": [
                     source_revision,
                     *older_revisions,
                 ]
             }
         },
+    )
+
+
+def _source_checkpoint_and_target_pointer(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, Path, Path, Path, Path, str]:
+    backup = tmp_path / "backups"
+    source_env, source_state = _private_inputs(
+        tmp_path, _FIRST_REVISION, stem="source"
+    )
+    target_env, target_state = _private_inputs(
+        tmp_path, _SECOND_REVISION, stem="target"
+    )
+    source_pointer = promote_last_good(
+        backup, source_env, source_state, _FIRST_REVISION
+    )
+    inspection = _write_private_json(
+        tmp_path / "pre-last-good.json", inspect_last_good(backup)
+    )
+    manifest = _update_manifest(tmp_path, _FIRST_REVISION)
+    checkpoint = checkpoint_source_last_good(
+        backup,
+        source_env,
+        source_state,
+        _FIRST_REVISION,
+        inspection,
+        manifest,
+    )
+    checkpoint_path = _write_private_json(
+        tmp_path / "source-checkpoint.json", checkpoint
+    )
+    promote_last_good(backup, target_env, target_state, _SECOND_REVISION)
+    return (
+        backup,
+        checkpoint_path,
+        source_state,
+        source_env,
+        manifest,
+        target_env,
+        target_state,
+        str(source_pointer["snapshot_id"]),
     )
 
 
@@ -132,6 +176,90 @@ def test_corrupt_pointer_and_snapshot_sha_fail_closed(tmp_path: Path) -> None:
     snapshot_env.chmod(0o600)
     with pytest.raises(LastGoodError, match="FILE_IDENTITY"):
         resolve_last_good(backup)
+
+
+def test_restore_source_pointer_preserves_target_snapshot_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    (
+        backup,
+        checkpoint,
+        source_state,
+        source_env,
+        manifest,
+        target_env,
+        verified_state,
+        source_snapshot_id,
+    ) = _source_checkpoint_and_target_pointer(tmp_path)
+    target_snapshot_id = str(resolve_last_good(backup)["snapshot_id"])
+
+    restored = restore_source_pointer(
+        backup,
+        checkpoint,
+        source_state,
+        source_env,
+        manifest,
+        target_env,
+        verified_state,
+    )
+    repeated = restore_source_pointer(
+        backup,
+        checkpoint,
+        source_state,
+        source_env,
+        manifest,
+        target_env,
+        verified_state,
+    )
+
+    assert restored["revision"] == _FIRST_REVISION
+    assert restored["snapshot_id"] == source_snapshot_id
+    assert repeated["snapshot_id"] == source_snapshot_id
+    assert (backup / "last-good-snapshots" / target_snapshot_id).is_dir()
+
+
+@pytest.mark.parametrize("failure", ("third", "missing", "source-drift"))
+def test_restore_source_pointer_rejects_untrusted_or_damaged_evidence(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    (
+        backup,
+        checkpoint,
+        source_state,
+        source_env,
+        manifest,
+        target_env,
+        verified_state,
+        source_snapshot_id,
+    ) = _source_checkpoint_and_target_pointer(tmp_path)
+    if failure == "third":
+        third_env, third_state = _private_inputs(
+            tmp_path, _THIRD_REVISION, stem="third"
+        )
+        promote_last_good(backup, third_env, third_state, _THIRD_REVISION)
+    elif failure == "missing":
+        (backup / "last-good-pointer.json").unlink()
+    else:
+        snapshot_env = (
+            backup
+            / "last-good-snapshots"
+            / source_snapshot_id
+            / "rag-industry.env"
+        )
+        snapshot_env.write_text("tampered\n", encoding="utf-8")
+        snapshot_env.chmod(0o600)
+
+    with pytest.raises(LastGoodError):
+        restore_source_pointer(
+            backup,
+            checkpoint,
+            source_state,
+            source_env,
+            manifest,
+            target_env,
+            verified_state,
+        )
 
 
 def test_legacy_pair_is_migrated_once_then_ceases_to_be_authoritative(

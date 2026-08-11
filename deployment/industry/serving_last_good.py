@@ -512,6 +512,149 @@ def finalize_target_last_good(  # noqa: PLR0913, PLR0917
     )
 
 
+def restore_source_pointer(  # noqa: PLR0913, PLR0917
+    backup_path: Path,
+    source_checkpoint_path: Path,
+    source_state_path: Path,
+    source_env_path: Path,
+    update_manifest_path: Path,
+    target_env_path: Path,
+    verified_state_path: Path,
+    *,
+    validate_only: bool = False,
+) -> dict[str, object]:
+    """将已验证 target pointer 原子恢复到事务密封的 source snapshot。
+
+    Args:
+        backup_path: Industry 私有备份目录。
+        source_checkpoint_path: 事务创建的 source checkpoint。
+        source_state_path: 更新前 source canonical 状态。
+        source_env_path: 更新前 private env 副本。
+        update_manifest_path: 本次更新的 UPDATE_MANIFEST。
+        target_env_path: 本次事务的 candidate target env。
+        verified_state_path: 已验证 target runtime 状态。
+        validate_only: 只验证 target 到 source 的切换合同，不发布 pointer。
+
+    Returns:
+        已完整解析的 source last-good 身份。
+
+    Raises:
+        LastGoodError: source、target、snapshot 或 pointer 身份不可信。
+
+    """
+    for path, label in (
+        (source_checkpoint_path, "source checkpoint"),
+        (source_state_path, "source state"),
+        (source_env_path, "source env"),
+        (update_manifest_path, "update manifest"),
+        (target_env_path, "target env"),
+        (verified_state_path, "verified state"),
+    ):
+        _require_private_file(path, label)
+    checkpoint = _load_object(source_checkpoint_path, "source checkpoint")
+    manifest = _load_object(update_manifest_path, "update manifest")
+    source_state = _load_object(source_state_path, "source state")
+    verified_state = _load_object(verified_state_path, "verified state")
+    source_revision = _state_revision(source_state)
+    target_revision = manifest.get("revision")
+    compatibility = manifest.get("source_compatibility")
+    source_snapshot = checkpoint.get("source_snapshot")
+    compatible_revisions = (
+        compatibility.get("compatible_revisions")
+        if isinstance(compatibility, dict)
+        else None
+    )
+    if (
+        not isinstance(source_revision, str)
+        or _REVISION.fullmatch(source_revision) is None
+        or not isinstance(target_revision, str)
+        or _REVISION.fullmatch(target_revision) is None
+        or source_revision == target_revision
+        or not isinstance(compatibility, dict)
+        or not isinstance(compatible_revisions, list)
+        or source_revision not in compatible_revisions
+        or checkpoint.get("revision") != source_revision
+        or not isinstance(source_snapshot, dict)
+    ):
+        raise LastGoodError("SOURCE_POINTER_RESTORE_CONTRACT_INVALID")
+    if (
+        _exact_env_value(source_env_path, "RAG_RELEASE_REVISION")
+        != source_revision
+        or _exact_env_value(target_env_path, "RAG_RELEASE_REVISION")
+        != target_revision
+        or _state_revision(verified_state) != target_revision
+    ):
+        raise LastGoodError("SOURCE_POINTER_RESTORE_REVISION_MISMATCH")
+    snapshot_id = source_snapshot.get("snapshot_id")
+    manifest_sha256 = source_snapshot.get("manifest_sha256")
+    if (
+        set(source_snapshot)
+        != {
+            "env_sha256",
+            "manifest_sha256",
+            "snapshot_id",
+            "state_sha256",
+        }
+        or not isinstance(snapshot_id, str)
+        or _SNAPSHOT.fullmatch(snapshot_id) is None
+        or not isinstance(manifest_sha256, str)
+        or _SHA256.fullmatch(manifest_sha256) is None
+    ):
+        raise LastGoodError("SOURCE_POINTER_RESTORE_SNAPSHOT_INVALID")
+    resolved_source = _resolve_snapshot(
+        backup_path,
+        snapshot_id,
+        source_revision,
+        manifest_sha256,
+    )
+    if (
+        source_snapshot.get("env_sha256") != _sha256(source_env_path)
+        or source_snapshot.get("state_sha256") != _sha256(source_state_path)
+        or _sha256(Path(str(resolved_source["env_path"])))
+        != source_snapshot.get("env_sha256")
+        or _sha256(Path(str(resolved_source["state_path"])))
+        != source_snapshot.get("state_sha256")
+    ):
+        raise LastGoodError("SOURCE_POINTER_RESTORE_SNAPSHOT_MISMATCH")
+    current = resolve_last_good(backup_path)
+    if current.get("revision") == source_revision:
+        if (
+            current.get("snapshot_id") != snapshot_id
+            or _sha256(Path(str(current["env_path"])))
+            != source_snapshot.get("env_sha256")
+            or _sha256(Path(str(current["state_path"])))
+            != source_snapshot.get("state_sha256")
+        ):
+            raise LastGoodError("SOURCE_POINTER_RESTORE_SOURCE_MISMATCH")
+        return current
+    if current.get("revision") != target_revision:
+        raise LastGoodError("SOURCE_POINTER_RESTORE_CURRENT_REVISION_INVALID")
+    if (
+        _sha256(Path(str(current["env_path"]))) != _sha256(target_env_path)
+        or _sha256(Path(str(current["state_path"])))
+        != _sha256(verified_state_path)
+    ):
+        raise LastGoodError("SOURCE_POINTER_RESTORE_TARGET_MISMATCH")
+    if validate_only:
+        return {
+            **resolved_source,
+            "revision": source_revision,
+            "snapshot_id": snapshot_id,
+        }
+    pointer = {
+        "created_at": datetime.now(timezone.utc).isoformat(),  # noqa: UP017
+        "manifest_sha256": manifest_sha256,
+        "revision": source_revision,
+        "snapshot_id": snapshot_id,
+    }
+    _write_private_json_atomic(backup_path / "last-good-pointer.json", pointer)
+    _fsync_directory(backup_path)
+    resolved = resolve_last_good(backup_path)
+    if resolved.get("revision") != source_revision:
+        raise LastGoodError("SOURCE_POINTER_RESTORE_PUBLISH_MISMATCH")
+    return resolved
+
+
 def _require_target_pointer_content(
     backup_path: Path,
     target_env_path: Path,
@@ -764,11 +907,23 @@ def _arguments() -> argparse.Namespace:
     finalize.add_argument("inspection_path", type=Path)
     finalize.add_argument("source_state_path", type=Path)
     finalize.add_argument("source_checkpoint_path", type=Path)
+    restore = commands.add_parser("restore-source-pointer")
+    restore.add_argument("backup_path", type=Path)
+    restore.add_argument("source_checkpoint_path", type=Path)
+    restore.add_argument("source_state_path", type=Path)
+    restore.add_argument("source_env_path", type=Path)
+    restore.add_argument("update_manifest_path", type=Path)
+    restore.add_argument("target_env_path", type=Path)
+    restore.add_argument("verified_state_path", type=Path)
+    restore.add_argument("--validate-only", action="store_true")
     return parser.parse_args()
 
 
 def main() -> int:
     """执行 last-good 检查、封存、晋升、解析或旧格式迁移。
+
+    Args:
+        无参数；命令行选项从当前进程读取。
 
     Returns:
         合同成立返回 0；失败返回 1 和稳定错误码。
@@ -799,7 +954,7 @@ def main() -> int:
                 arguments.inspection_path,
                 arguments.update_manifest_path,
             )
-        else:
+        elif arguments.command == "finalize-target":
             value = finalize_target_last_good(
                 arguments.backup_path,
                 arguments.target_env_path,
@@ -808,6 +963,17 @@ def main() -> int:
                 arguments.inspection_path,
                 arguments.source_state_path,
                 arguments.source_checkpoint_path,
+            )
+        else:
+            value = restore_source_pointer(
+                arguments.backup_path,
+                arguments.source_checkpoint_path,
+                arguments.source_state_path,
+                arguments.source_env_path,
+                arguments.update_manifest_path,
+                arguments.target_env_path,
+                arguments.verified_state_path,
+                validate_only=arguments.validate_only,
             )
     except LastGoodError as error:
         print(f"RAG_INDUSTRY_LAST_GOOD_FAILED: {error}", file=sys.stderr)

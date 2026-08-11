@@ -45,6 +45,7 @@ _RUNTIME_FILES = {
     "finalize-app-update.sh",
     "last_good.py",
     "lib.sh",
+    "rollback-app-update-core.sh",
     "rollback-app-update.sh",
     "runtime_check.py",
     "ui_contract_check.py",
@@ -641,6 +642,9 @@ def _arguments() -> argparse.Namespace:
 
 def main() -> int:
     """执行无网络 package selfcheck 或 safe extraction。
+
+    Args:
+        无参数；命令行选项从当前进程读取。
 
     Returns:
         成功返回 0；合同失败返回 1 与稳定错误码。

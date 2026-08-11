@@ -14,7 +14,7 @@ def test_updater_uses_private_env_and_bundled_runtime() -> None:
     assert '"${package_dir}/package_selfcheck.py"' in updater
     assert 'source "${runtime_dir}/lib.sh"' in updater
     assert 'bash "${runtime_dir}/verify-app-update.sh"' in updater
-    assert 'bash "${runtime_dir}/rollback-app-update.sh"' in updater
+    assert 'bash "${runtime_dir}/rollback-app-update-core.sh"' in updater
     assert (
         "rag-app runtime-state"
         not in updater.split("run_industry_compose", maxsplit=1)[0]
@@ -39,16 +39,20 @@ def test_updater_parses_json_with_python_and_never_sources_private_env() -> (
 def test_update_and_rollback_force_recreate_only_industry_app() -> None:
     updater = _script("update-app.sh")
     rollback = _script("rollback-app-update.sh")
+    rollback_core = _script("rollback-app-update-core.sh")
     command = (
         "up -d --no-deps --no-build --pull never --force-recreate "
         "rag-industry-app"
     )
 
     normalized_updater = " ".join(updater.replace("\\\n", " ").split())
-    normalized_rollback = " ".join(rollback.replace("\\\n", " ").split())
+    normalized_rollback_core = " ".join(
+        rollback_core.replace("\\\n", " ").split()
+    )
     assert command in normalized_updater
-    assert command in normalized_rollback
-    for script in (updater, rollback):
+    assert command in normalized_rollback_core
+    assert 'bash "${script_dir}/rollback-app-update-core.sh"' in rollback
+    for script in (updater, rollback, rollback_core):
         assert "--force-recreate rag-industry-worker" not in script
         assert "--force-recreate rag-industry-ocr" not in script
         assert "--force-recreate rag-industry-qdrant" not in script

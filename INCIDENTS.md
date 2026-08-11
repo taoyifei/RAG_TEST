@@ -1,5 +1,38 @@
 # Industry 事故与防复发记录
 
+## 2026-08-11 post-verified 人工撤回遗留 target pointer 且绕过全局锁
+
+- **影响：** 已验证 target 被人工撤回时，旧入口只恢复 source env/App，不把
+  `last-good-pointer.json` 指回 source snapshot；运行身份与回滚权威点相互矛盾。同一入口
+  也没有取得 updater 的共享锁，因此可与更新并发修改同一 env 和 App。
+- **根因：** 自动失败回滚与验收后的运维撤回共用一段不理解 verified target pointer 的
+  脚本，且全局锁只写在 updater 内部，没有形成可复用的实例级合同。
+- **修复：** 公共 rollback 先取得同一 `serving-update.lock`，再调用只允许
+  `--manual-verified` 或 updater 内部 `--automatic-failure` 的 core。人工撤回严格验证
+  target runtime/index/dependency/pointer，原子恢复 source env、只重建并复验 source App，
+  最后把 pointer 原子发布为原事务密封的 source snapshot；target snapshot 保留，事务只有
+  在 `rolled_back` 成功落盘后才报告成功。
+- **防复发证据：** 脚本级测试覆盖 target→source pointer、target snapshot 保留、重复撤回
+  拒绝、同包新 attempt、pointer/source snapshot/index/dependency 漂移、状态落盘失败以及
+  update/rollback 双向锁竞争。
+
+## 2026-08-11 App 激活缺少持久化意图，硬中断后无法判定 env/App 组合
+
+- **影响：** private env 已原子切到 target、`activated` 尚未落盘，或状态已落盘但 App
+  recreate 尚未完成时发生 SIGKILL/掉电，旧 updater 会留下 `prechecking/activated` 与实际
+  env/App 不一致；重入只报 `CURRENT_ATTEMPT_INVALID`，无法安全继续或回滚。
+- **根因：** 原子 env rename、transaction state 和 Docker recreate 是三个独立持久化域，
+  激活前没有 fsync 的 write-ahead intent，也没有按 env SHA、App identity 和健康态定义
+  确定性恢复矩阵。
+- **修复：** 激活前写入并 fsync 不含 secret 的 `activation-intent.json`，状态机增加
+  `activating`，env rename 后验证 SHA 再写 `activated`。重入使用 source/target env SHA、
+  App image/ref/revision、Compose/config 身份和 Docker health 分类；健康 target 不重复
+  recreate，不健康 target 只补做一次，混合状态自动回滚 source，未知状态写
+  `rollback_failed` 并 fail closed。
+- **防复发证据：** 故障注入覆盖 intent 前中断、env rename 后中断、activated 后中断、
+  Compose 已切换后中断、恢复过程再次中断、健康/不健康 target 重入、混合身份和未知 env
+  SHA；完整 updater 脚本专项为 `58 passed in 195.07s`。
+
 ## 2026-08-11 真实旧版只有 last-good.env，升级器误要求 JSON pair
 
 - **影响：** 真实 `2c4cf220...` 部署只写 `last-good.env`；`195f9aca2c63` 升级器把这种
