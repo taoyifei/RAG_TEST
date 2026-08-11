@@ -173,6 +173,11 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
     assert "manual withdrawal is valid only for a verified attempt" in (
         command_text
     )
+    assert "target may be healthy, unhealthy, stopped, or missing" in (
+        command_text
+    )
+    assert "precheck failure leaves the attempt verified" in command_text
+    assert "Only a failure after rolling_back" in command_text
     assert "${RUNTIME_DIR}/rollback-app-update.sh" in command_text
     assert '"${ENV_FILE}" "${VERIFIED_ATTEMPT}"' in command_text
 

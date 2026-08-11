@@ -217,9 +217,14 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
     docker_state.write_text(
         json.dumps(
             {
+                "container_exists": True,
+                "container_health": "healthy",
+                "container_running": True,
                 "image": _OLD_IMAGE,
                 "image_id": _OLD_IMAGE_ID,
+                "project": "rag-industry",
                 "revision": _OLD_REVISION,
+                "service": "rag-industry-app",
                 "target_serving": json.loads(
                     (package / "UPDATE_MANIFEST.json").read_bytes()
                 )["serving_fingerprint"]["target"],
@@ -231,9 +236,19 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
     binaries = tmp_path / "bin"
     binaries.mkdir()
     _write_fake_docker(binaries / "docker", docker_state, log)
+    docker_state_literal = json.dumps(str(docker_state))
     _write_executable(
         binaries / "curl",
-        f"#!/usr/bin/env bash\nprintf 'curl %s\\n' \"$*\" >> {log!s}\nexit 0\n",
+        f"""#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >> {log!s}
+if [[ "${{FAKE_READY_FAIL:-0}}" == "1" && "$*" == *'/ready'* ]]; then
+  revision="$(/usr/bin/python3 -c 'import json, pathlib
+path = pathlib.Path({docker_state_literal})
+print(json.loads(path.read_text())["revision"])')"
+  [[ "${{revision}}" != {_NEW_REVISION!r} ]] || exit 22
+fi
+exit 0
+""",
     )
     _write_python_wrapper(binaries / "python3", log)
     return _Sandbox(
@@ -585,6 +600,8 @@ if args[:1] == ["compose"]:
             print('{{"has_question_columns":true,"sqlite_user_version":2}}')
             raise SystemExit(0)
     if "exec" in args and "runtime-state" in args:
+        if current.get("runtime_state_unavailable"):
+            raise SystemExit(1)
         if current["revision"] == OLD_REVISION:
             print("unknown command: runtime-state", file=sys.stderr)
             raise SystemExit(2)
@@ -685,8 +702,17 @@ if args[:1] == ["compose"]:
 if args[:2] == ["container", "inspect"]:
     name = args[-1]
     template = args[args.index("--format") + 1] if "--format" in args else ""
+    if name == "rag-industry-app" and not current.get(
+        "container_exists", True
+    ):
+        raise SystemExit(1)
     if ".State.Running" in template:
-        print("false" if name == "rag-industry-worker" else "true")
+        if name == "rag-industry-worker":
+            print("false")
+        elif name == "rag-industry-app":
+            print(str(current.get("container_running", True)).lower())
+        else:
+            print("true")
     elif ".Id}}}}|{{{{.State.StartedAt" in template:
         if (
             current.get("FAKE_DEPENDENCY_DRIFT")
@@ -700,27 +726,42 @@ if args[:2] == ["container", "inspect"]:
     elif template == "{{{{.State.StartedAt}}}}":
         print("2026-08-07T00:00:00Z")
     elif ".State.Health.Status" in template:
-        print("healthy")
+        print(current.get("container_health", "healthy"))
     elif template == "{{{{.Config.Image}}}}":
-        print(current["image"])
+        print(current.get("container_image", current["image"]))
     elif template == "{{{{.Image}}}}":
-        print(current["image_id"])
+        print(current.get("container_image_id", current["image_id"]))
     elif "compose.project" in template:
-        print("rag-industry")
+        print(current.get("project", "rag-industry"))
     elif "compose.service" in template:
-        print("rag-industry-app")
+        print(current.get("service", "rag-industry-app"))
     elif ".Config.Env" in template:
-        print("RAG_RELEASE_REVISION=" + current["revision"])
+        print(
+            "RAG_RELEASE_REVISION="
+            + current.get("container_revision", current["revision"])
+        )
     elif ".NetworkSettings.Ports" in template:
         print('{{"8088/tcp":[{{"HostIp":"","HostPort":"8188"}}]}}')
     elif ".Mounts" in template:
         print('[{{"Source":"stable","Destination":"/state"}}]')
     raise SystemExit(0)
 
+if args[:2] == ["container", "ls"]:
+    if current.get("container_exists", True):
+        print("rag-industry-app")
+    raise SystemExit(0)
+
 if args[:1] == ["inspect"]:
     template = args[args.index("--format") + 1]
     if ".State.Health" in template:
-        print("unhealthy" if current.get("FAKE_APP_UNHEALTHY") else "healthy")
+        if not current.get("container_exists", True):
+            raise SystemExit(1)
+        if not current.get("container_running", True):
+            print("exited")
+        elif current.get("FAKE_APP_UNHEALTHY"):
+            print("unhealthy")
+        else:
+            print(current.get("container_health", "healthy"))
         raise SystemExit(0)
 
 if args[:2] == ["image", "load"]:
@@ -735,13 +776,15 @@ if args[:2] == ["image", "inspect"]:
     image = args[-1]
     template = args[args.index("--format") + 1]
     if template == "{{{{.Id}}}}":
-        print(NEW_ID if image == NEW_IMAGE else OLD_ID)
+        expected = NEW_ID if image == NEW_IMAGE else OLD_ID
+        print(current.get("target_image_id", expected))
     elif ".Os" in template:
-        print("linux/amd64")
+        print(current.get("target_platform", "linux/amd64"))
     elif ".Config.Entrypoint" in template:
-        print('["rag-app"]')
+        print(current.get("target_entrypoint", '["rag-app"]'))
     else:
-        print(NEW_REVISION if image == NEW_IMAGE else OLD_REVISION)
+        expected = NEW_REVISION if image == NEW_IMAGE else OLD_REVISION
+        print(current.get("target_oci_revision", expected))
     raise SystemExit(0)
 if args[:1] == ["run"]:
     if "build-info" in args:
@@ -756,6 +799,11 @@ if args[:1] == ["run"]:
         print(json.dumps({{"pipeline_fingerprint": FINGERPRINT}}))
     raise SystemExit(0)
 if args[:1] == ["exec"]:
+    if (
+        not current.get("container_exists", True)
+        or not current.get("container_running", True)
+    ):
+        raise SystemExit(1)
     if "build-info" in args:
         if (
             os.environ.get("FAKE_OLD_IDENTITY_FAIL") == "1"
@@ -769,6 +817,8 @@ if args[:1] == ["exec"]:
         }}, separators=(",", ":"), sort_keys=True))
         raise SystemExit(0)
     if "runtime-state" in args:
+        if current.get("runtime_state_unavailable"):
+            raise SystemExit(1)
         if current["revision"] == OLD_REVISION:
             print("unknown command: runtime-state", file=sys.stderr)
             raise SystemExit(2)
@@ -929,6 +979,7 @@ def _run_manual_rollback(
     transaction: Path,
     *,
     extra: dict[str, str] | None = None,
+    timeout: float = 60,
 ) -> subprocess.CompletedProcess[str]:
     rollback_env = (
         transaction / "candidate-rag-industry.env"
@@ -956,7 +1007,7 @@ def _run_manual_rollback(
             "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
             **(extra or {}),
         },
-        timeout=60,
+        timeout=timeout,
     )
 
 
@@ -1004,6 +1055,15 @@ def _force_recreate_count(sandbox: _Sandbox) -> int:
         for line in sandbox.log.read_text(encoding="utf-8").splitlines()
         if line.startswith("docker ")
     )
+
+
+def _configure_target_container(
+    sandbox: _Sandbox,
+    **updates: object,
+) -> None:
+    state = json.loads(sandbox.docker_state.read_bytes())
+    state.update(updates)
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
 
 
 def test_upgrade_from_old_app_installs_runtime_and_only_recreates_app(
@@ -1741,6 +1801,30 @@ def test_post_verified_manual_rollback_restores_source_pointer_and_retry(
     assert json.loads(
         (transaction / "transaction-state.json").read_bytes()
     )["state"] == "rolled_back"
+    precheck = json.loads(
+        (transaction / "manual-rollback-precheck.json").read_bytes()
+    )
+    assert precheck == {
+        "created_at": precheck["created_at"],
+        "dependency_identity_checked": True,
+        "index_identity_checked": True,
+        "schema_version": "1",
+        "target_container_state": "healthy",
+        "target_pointer_checked": True,
+        "target_revision": _NEW_REVISION,
+        "target_runtime_state_checked": True,
+        "target_static_identity_checked": True,
+        "transaction_state": "verified",
+    }
+    assert stat.S_IMODE(
+        (transaction / "manual-rollback-precheck.json").stat().st_mode
+    ) == 0o600
+    precheck_bytes = (
+        transaction / "manual-rollback-precheck.json"
+    ).read_bytes()
+    assert b"http://" not in precheck_bytes
+    assert ("q" * 32).encode() not in precheck_bytes
+    assert ("a" * 32).encode() not in precheck_bytes
     repeated = _run_manual_rollback(sandbox, transaction)
     assert repeated.returncode != 0
     assert "MANUAL_ROLLBACK_REQUIRES_VERIFIED" in repeated.stderr
@@ -1750,6 +1834,269 @@ def test_post_verified_manual_rollback_restores_source_pointer_and_retry(
 
     assert retried.returncode == 0, retried.stderr
     assert _transaction(sandbox, attempt=2).is_dir()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    (
+        (
+            "unhealthy",
+            {
+                "container_health": "unhealthy",
+                "runtime_state_unavailable": True,
+            },
+            {},
+            "unhealthy",
+        ),
+        (
+            "ready-503",
+            {},
+            {"FAKE_READY_FAIL": "1"},
+            "unhealthy",
+        ),
+        (
+            "stopped",
+            {"container_running": False},
+            {},
+            "stopped",
+        ),
+        (
+            "missing",
+            {"container_exists": False},
+            {},
+            "missing",
+        ),
+        (
+            "runtime-state-unavailable",
+            {"runtime_state_unavailable": True},
+            {},
+            "healthy",
+        ),
+    ),
+)
+def test_manual_rollback_restores_source_when_target_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: tuple[str, dict[str, object], dict[str, str], str],
+) -> None:
+    case, updates, environment, expected_state = scenario
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    target_snapshot = resolve_last_good(sandbox.backup_path)
+    _configure_target_container(sandbox, **updates)
+
+    rolled_back = _run_manual_rollback(
+        sandbox,
+        transaction,
+        extra=environment,
+        timeout=5 if case == "ready-503" else 60,
+    )
+
+    assert rolled_back.returncode == 0, rolled_back.stderr
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
+        _OLD_REVISION
+    )
+    assert resolve_last_good(sandbox.backup_path)["revision"] == _OLD_REVISION
+    assert (
+        sandbox.backup_path
+        / "last-good-snapshots"
+        / str(target_snapshot["snapshot_id"])
+    ).is_dir()
+    precheck = json.loads(
+        (transaction / "manual-rollback-precheck.json").read_bytes()
+    )
+    assert precheck["target_container_state"] == expected_state
+    assert precheck["target_runtime_state_checked"] is (
+        case not in {
+            "unhealthy",
+            "ready-503",
+            "stopped",
+            "missing",
+            "runtime-state-unavailable",
+        }
+    )
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rolled_back"
+    assert _force_recreate_count(sandbox) == 2
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"container_image": "docx-rag:wrong-target"},
+        {"container_image_id": "sha256:" + "8" * 64},
+        {"container_revision": "c" * 40},
+        {"project": "wrong-project"},
+        {"service": "wrong-service"},
+        {"target_image_id": "sha256:" + "7" * 64},
+        {"target_oci_revision": "d" * 40},
+    ),
+)
+def test_manual_rollback_wrong_target_identity_fails_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    updates: dict[str, object],
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_env = sandbox.env_file.read_bytes()
+    before_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+    _configure_target_container(sandbox, **updates)
+    before_app = sandbox.docker_state.read_bytes()
+
+    rejected = _run_manual_rollback(sandbox, transaction)
+
+    assert rejected.returncode != 0
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in rejected.stderr
+    assert sandbox.env_file.read_bytes() == before_env
+    assert sandbox.docker_state.read_bytes() == before_app
+    assert (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes() == before_pointer
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+
+def test_manual_rollback_current_env_drift_fails_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_app = sandbox.docker_state.read_bytes()
+    before_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+    sandbox.env_file.write_text(
+        sandbox.env_file.read_text(encoding="utf-8")
+        + "RAG_UNEXPECTED_DRIFT=1\n",
+        encoding="utf-8",
+    )
+    sandbox.env_file.chmod(0o600)
+    drifted_env = sandbox.env_file.read_bytes()
+
+    rejected = _run_manual_rollback(sandbox, transaction)
+
+    assert rejected.returncode != 0
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in rejected.stderr
+    assert sandbox.env_file.read_bytes() == drifted_env
+    assert sandbox.docker_state.read_bytes() == before_app
+    assert (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes() == before_pointer
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+
+def test_manual_rollback_transient_precheck_failure_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_env = sandbox.env_file.read_bytes()
+    before_app = sandbox.docker_state.read_bytes()
+    before_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+    _configure_target_container(sandbox, FAKE_PRE_INDEX_FAIL=True)
+
+    first = _run_manual_rollback(sandbox, transaction)
+
+    assert first.returncode != 0
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in first.stderr
+    assert sandbox.env_file.read_bytes() == before_env
+    first_app = json.loads(sandbox.docker_state.read_bytes())
+    original_app = json.loads(before_app)
+    assert first_app["revision"] == original_app["revision"]
+    assert (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes() == before_pointer
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+    _configure_target_container(sandbox, FAKE_PRE_INDEX_FAIL=False)
+    second = _run_manual_rollback(sandbox, transaction)
+
+    assert second.returncode == 0, second.stderr
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "rolled_back"
+
+
+def test_manual_rollback_rolling_back_state_write_failure_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    before_env = sandbox.env_file.read_bytes()
+    before_app = sandbox.docker_state.read_bytes()
+    before_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+
+    rejected = _run_manual_rollback(
+        sandbox,
+        transaction,
+        extra={"FAKE_TRANSACTION_STATE_WRITE_FAIL": "rolling_back"},
+    )
+
+    assert rejected.returncode != 0
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in rejected.stderr
+    assert sandbox.env_file.read_bytes() == before_env
+    assert sandbox.docker_state.read_bytes() == before_app
+    assert (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes() == before_pointer
+    assert json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+
+
+def test_manual_rollback_failure_after_env_restore_is_rollback_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    installed = _run(sandbox)
+    assert installed.returncode == 0, installed.stderr
+    transaction = _transaction(sandbox)
+    target_pointer = (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes()
+    _configure_target_container(sandbox, fail_rollback=True)
+
+    rejected = _run_manual_rollback(sandbox, transaction)
+
+    assert rejected.returncode != 0
+    assert "OLD_APP_RECREATE_FAILED" in rejected.stderr
+    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert (
+        sandbox.backup_path / "last-good-pointer.json"
+    ).read_bytes() == target_pointer
+    state = json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )
+    assert state["state"] == "rollback_failed"
+    assert state["error_code"] == "OLD_APP_RECREATE_FAILED"
 
 
 def test_manual_rollback_obeys_global_update_lock_before_mutation(
@@ -1873,7 +2220,8 @@ def test_manual_rollback_fails_closed_on_identity_drift(
     )
     assert json.loads(
         (transaction / "transaction-state.json").read_bytes()
-    )["state"] == "rollback_failed"
+    )["state"] == "verified"
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in rejected.stderr
 
 
 def test_manual_rollback_state_write_failure_never_claims_success(

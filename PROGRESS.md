@@ -1,5 +1,52 @@
 # DOCX RAG 交付进度
 
+## CURRENT STATUS：2026-08-11 a50d post-verified 人工回滚红灯
+
+- 本轮实际从 clean `Industry@a50d5d5f8f71593df48c6addb12b97b7890d006f`
+  开始，`origin/Industry` 与本地一致，`main` 仍为
+  `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`；工作区起始无改动。既有
+  `artifacts/industry-serving-update/a50d5d5f8f71` 已按新任务书判为失效候选，
+  不得上传或部署。
+- 修改生产脚本前先扩展真实脚本级 rollback 故障注入：每例先完整构建 serving update、
+  更新到 `verified`，再经公共 `rollback-app-update.sh` 模拟 healthy、unhealthy、
+  ready=503、stopped、missing、runtime-state 不可用、错误 image/revision/project/
+  service、env/pointer/index/dependency 漂移、瞬时 precheck 失败及状态落盘失败。
+- 首轮红灯为 `20 failed, 3 passed, 50 deselected in 78.77s`。首错测试
+  `test_post_verified_manual_rollback_restores_source_pointer_and_retry` 在健康 target
+  已成功回滚后找不到 `manual-rollback-precheck.json`。unhealthy、stopped、missing
+  均返回 `MANUAL_ROLLBACK_TARGET_PRECHECK_FAILED`；ready=503 在旧 60 秒 ready 轮询中
+  被测试的 5 秒上限终止；纯 env/pointer/index/dependency precheck 失败后事务从
+  `verified` 被错误写成 `rollback_failed`，无法安全重试。这些失败未使用 skip/xfail、
+  固定答案或放宽 target/index/dependency 身份校验处理。
+- updater 现在在目标 App 激活成功时密封一份 0600、canonical JSON、原子落盘并 fsync 的
+  `target-image-identity.json`。人工撤回把不可变控制面身份与 target 的运行可用性分层：
+  image tag/ID/platform/OCI revision/ENTRYPOINT/build-info、Compose project/service/env
+  revision、candidate env、source snapshot、pointer、index、dependency 和 worker 身份仍须
+  全部精确匹配；target healthy、unhealthy、ready=503、stopped、missing 或
+  runtime-state 命令暂不可用均不再阻止恢复 source。不存在 target 容器时不会为 precheck
+  启动或重建 target；错误不可变身份继续在任何 mutation 前 fail closed。
+- 纯 precheck 失败使用稳定前缀
+  `RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED`，事务保持 `verified`，瞬时故障消失后可
+  重试。成功 precheck 会先写 0600 脱敏 `manual-rollback-precheck.json`，再原子进入
+  `rolling_back`；只有该状态已成功落盘后的 source 恢复失败才会进入
+  `rollback_failed`。成功路径仍只原子恢复 source env、force-recreate App、复核 source
+  live/ready/静态身份/build-info/mount/port/index/dependency、恢复原 source pointer 并保留
+  target snapshot；没有调用 index restore、worker/OCR/Qdrant 或 corpus 操作。
+- 最终 manual rollback 矩阵为 `23 passed, 50 deselected in 81.48s`，完整 serving
+  脚本为 `74 passed in 249.09s`；覆盖本轮变更的非 Qdrant 扩大矩阵为
+  `181 passed in 260.97s`，model/OCR/health 合同为
+  `142 passed, 1 warning in 5.34s`。固定 `qdrant/qdrant:v1.18.3`、无卷、空数据、仅绑定
+  `127.0.0.1:6333` 的关联集为 `96 passed, 57 warnings in 402.92s`；最终单次全量为
+  `1278 passed, 61 warnings in 867.72s`，0 failed，未新增 skip/xfail。全量结束后再次
+  确认 Qdrant collections 为空、`Mounts=[]`、仅本机绑定，随后删除精确测试容器并确认
+  6333 已释放。
+- compileall、全仓 Ruff、strict mypy（124 source files）、Google docstring、Node 2 项、
+  simple/Industry 全部 shell 语法、两套 profiles Compose config 与 `git diff --check`
+  均通过。源码 asset-selfcheck 验证 13 个文件，index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`；没有刷新
+  `ASSETS.sha256`。当前只剩从本轮新 clean commit 构建独立 8 文件 app-only package，
+  再执行目标 image/package/fresh extraction/safety 门禁；完成前没有可上传候选。
+
 ## CURRENT STATUS：2026-08-11 e584 Industry activation/人工撤回二次复核
 
 - 本轮从 clean `Industry@e5844e531c45eb3c95ff69b5d7de8059d855d428`

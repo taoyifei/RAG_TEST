@@ -42,6 +42,10 @@ validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久
 复核后的 `artifacts/industry-serving-update/e5844e531c45` 仍缺少 post-verified 人工撤回
 的 source pointer 恢复与共享锁，并且在 private env 原子切换到 transaction state 落盘
 之间没有可恢复的 activation journal；它也永久失效，不得上传、部署或作为验收证据。
+复核后的 `artifacts/industry-serving-update/a50d5d5f8f71` 虽已补齐上述事务能力，但
+post-verified 人工撤回错误地要求 target App 必须健康、ready 且可执行 runtime-state；
+target unhealthy、stopped 或 missing 时反而无法撤回，纯 precheck 失败还会把
+`verified` 污染为 `rollback_failed`。该包同样永久失效，不得上传、部署或作为验收证据。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 
@@ -198,12 +202,25 @@ bash /ABSOLUTE/SERVING_RUNTIME/rollback-app-update.sh \
 ```
 
 该入口只接受状态为 `verified` 的 attempt，并与 updater 争用同一个全局锁；更新正在运行
-或另一个撤回正在执行时立即停止。撤回先复核 target App/env/runtime/index、依赖容器和
-target pointer，再原子恢复 source env、只重建并复验 source App，最后把 pointer 原子指回
-事务已密封的 source snapshot，并写 `rolled_back`。target snapshot 和全部 attempt 证据
-继续保留，同包可创建下一 attempt。该操作不回写 Trace 数据库，也不恢复 index state，
-不得触碰 OCR、Qdrant 或 worker；任一 pointer、snapshot、SHA、身份或状态落盘失败均写
-`rollback_failed` 或非零退出，不能宣称撤回成功。
+或另一个撤回正在执行时立即停止。撤回先完成纯 precheck：当前 private env 必须与
+candidate env 逐字节一致，manifest/update ID、目标 image ID/OCI revision/platform/
+ENTRYPOINT/已验证 build-info、target pointer、source snapshot、index 和依赖容器身份均须
+精确匹配。target 容器存在时还必须匹配 configured/running image、Compose project/service
+和容器 revision；任一静态身份错误都在 mutation 前 fail closed。
+
+target App 可以是 healthy、unhealthy、stopped 或 missing。健康且 ready 的 target 若可
+执行 runtime-state，仍运行完整 runtime 合同校验；health/readiness 失败、容器停止、容器
+缺失或 runtime-state 暂时不可执行本身不阻止撤回，也不会为缺失 target 创建或启动目标
+App。成功 precheck 以 0600、原子 fsync 的 `manual-rollback-precheck.json` 记录脱敏分类和
+检查结果，然后才把 transaction 写成 `rolling_back` 并进入 mutation。
+
+纯 precheck 或 `rolling_back` 落盘前失败时，private env、App、pointer 和 transaction
+state 均保持不变，attempt 继续为 `verified`，可再次执行人工撤回；只有
+`rolling_back` 已持久化后的 source 恢复失败才写 `rollback_failed`。mutation 仍原子恢复
+source env、只 force-recreate 并复验 source App，最后把 pointer 指回事务密封的 source
+snapshot 并写 `rolled_back`。target snapshot 和全部 attempt 证据继续保留，同包可创建
+下一 attempt。该操作不回写 Trace 数据库，不恢复 index state，不运行 `run-index.sh`，也
+不得触碰 OCR、Qdrant 或 worker。
 
 培训与工业前端切换时必须创建新的 `conversation_id`。当前没有 `kb_id` 自动路由，也
 不会同时查询两个知识库后再选择分数较高的结果。

@@ -1,5 +1,24 @@
 # 阻塞项
 
+## CURRENT STATUS：2026-08-11 a50d 人工撤回阻塞已在本地修复
+
+`a50d5d5f8f71` 把 target health/ready/runtime-state 当作 post-verified 人工撤回的硬前置，
+并在纯 precheck 失败时把 `verified` 写成 `rollback_failed`，因此该包永久失效。当前本地
+候选已经把不可变控制面身份与运行可用性分层：target healthy、unhealthy、stopped、
+missing 或 runtime-state 暂不可用时均可在严格身份可信的前提下恢复 source；错误 target
+image/revision/project/service、env、pointer、index、dependency 或 source snapshot 仍在
+mutation 前 fail closed。成功 precheck 会写 0600 脱敏报告，失败保持 `verified` 并允许
+重试；只有 `rolling_back` 已落盘后的失败才写 `rollback_failed`。
+
+本轮真实红灯为 `20 failed, 3 passed, 50 deselected in 78.77s`，修复后的 manual rollback
+矩阵为 `23 passed, 50 deselected in 81.48s`；完整 serving 脚本首轮只暴露一项测试夹具
+未同时兼容旧 `FAKE_APP_UNHEALTHY` 标志，该单例修正后为 `1 passed in 6.86s`。最终完整
+serving 脚本为 `74 passed`，非 Qdrant 扩大矩阵为 `181 passed`，固定 Qdrant 关联集为
+`96 passed, 57 warnings`，model/OCR/health 合同为 `142 passed, 1 warning`，单次全量为
+`1278 passed, 61 warnings`，均 0 failed；静态、Compose 和源码 asset 门禁也已通过。
+Qdrant 测试结束时 collections 为空、无 mounts，精确测试容器已删除且 6333 已释放。
+当前只剩从本轮新 clean commit 构建并 fresh 验证独立 8 文件包；完成前没有可上传候选。
+
 ## CURRENT STATUS：2026-08-11 e584 二次复核缺口与本地代码门禁已收口
 
 旧 `2c4cf220...` 的 env-only last-good、source/target/absent pointer 恢复、
@@ -29,7 +48,7 @@
    canary 现场验收。
 5. **遗留制品全部禁止使用。** `artifacts/industry-app-update/809fb71f5e50` 与
    `artifacts/industry-serving-update/d5c03cf9b97e`、`8755bf379c8f`、`195f9aca2c63`、
-   `e5844e531c45`
+   `e5844e531c45`、`a50d5d5f8f71`
    均永久失效，不得上传、部署或作为验收证据。最终包必须由本轮新的 clean commit 构建
    到独立 SHA12 目录，顶层仍为 8 文件、runtime 为 19 文件，且
    `reindex_required=false`、index fingerprint 不变。

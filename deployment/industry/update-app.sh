@@ -1597,8 +1597,13 @@ failure_code="IMAGE_ASSET_SELFCHECK_FAILED"
 build_report="$(docker run --rm --network none "${target_image}" \
   build-info --expected-revision "${target_revision}")" \
   || fail "IMAGE_BUILD_INFO_FAILED"
-python3 - "${build_report}" "${target_revision}" <<'PY'
+python3 - "${build_report}" "${target_revision}" \
+  "${transaction}/target-image-identity.json" "${target_image}" \
+  "${actual_image_id}" "${actual_platform}" "${actual_revision}" \
+  "${actual_entrypoint}" <<'PY'
 import json
+import os
+import pathlib
 import sys
 
 value = json.loads(sys.argv[1])
@@ -1609,6 +1614,31 @@ expected = {
 }
 if value != expected:
     raise SystemExit("IMAGE_BUILD_INFO_INVALID")
+entrypoint = json.loads(sys.argv[8])
+if entrypoint != ["rag-app"]:
+    raise SystemExit("IMAGE_ENTRYPOINT_INVALID")
+identity = {
+    "build_info": value,
+    "entrypoint": entrypoint,
+    "image_id": sys.argv[5],
+    "image_ref": sys.argv[4],
+    "oci_revision": sys.argv[7],
+    "platform": sys.argv[6],
+    "revision": sys.argv[2],
+    "schema_version": "1",
+}
+path = pathlib.Path(sys.argv[3])
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(identity, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+    output.flush()
+    os.fsync(output.fileno())
+directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
 PY
 asset_report="$(docker run --rm --network none "${target_image}" \
   asset-selfcheck)" || fail "IMAGE_ASSET_SELFCHECK_FAILED"

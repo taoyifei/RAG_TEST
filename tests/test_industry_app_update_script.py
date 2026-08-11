@@ -58,3 +58,17 @@ def test_update_and_rollback_force_recreate_only_industry_app() -> None:
         assert "--force-recreate rag-industry-qdrant" not in script
         assert " index full" not in script
         assert " index incremental" not in script
+
+
+def test_manual_rollback_separates_precheck_from_mutation() -> None:
+    rollback_core = _script("rollback-app-update-core.sh")
+
+    assert 'verify_industry_app_identity "${candidate_env}" true' not in (
+        rollback_core
+    )
+    assert "RAG_INDUSTRY_MANUAL_ROLLBACK_PRECHECK_FAILED" in rollback_core
+    assert "manual-rollback-precheck.json" in rollback_core
+    assert '"${transaction_state}" rolling_back' in rollback_core
+    assert rollback_core.index("validate_manual_target") < rollback_core.index(
+        '"${transaction_state}" rolling_back'
+    )

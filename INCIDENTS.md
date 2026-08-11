@@ -1,5 +1,26 @@
 # Industry 事故与防复发记录
 
+## 2026-08-11 人工撤回把 target 故障当成拒绝回滚条件
+
+- **影响：** `a50d5d5f8f71` 的 post-verified 人工撤回在任何 mutation 前要求 target
+  health/ready、容器内 build-info 和 runtime-state 全部成功。target unhealthy、
+  ready=503、stopped、missing 或 runtime-state 暂时不可执行时均无法恢复 source；更严重
+  的是失败路径调用 `rollback_abort()`，把仍在线且未修改的 `verified` transaction 写成
+  `rollback_failed`，瞬时故障也会永久阻止安全重试。
+- **根因：** target 的不可变控制面身份与可用性证据没有分层；同一个失败处理器同时处理
+  mutation 前的只读检查和 `rolling_back` 后的恢复故障，导致审计状态早于实际事务边界。
+- **修复：** manual rollback 先严格核对 candidate env、manifest/update ID、目标 image
+  ID/OCI/platform/ENTRYPOINT/已验证 build-info、verified-state、target-contract、pointer、
+  source snapshot、index 和依赖身份。存在的 target 容器仍校验 configured/running image、
+  project/service 和 env revision；身份错误 fail closed。health/readiness/runtime-state 只作
+  可用性分类和增强证据，target unhealthy/stopped/missing 时直接进入 source 恢复，不重建
+  target。成功 precheck 先 fsync 0600 的 `manual-rollback-precheck.json`，随后才写
+  `rolling_back`；此前失败保持 `verified`，只有 mutation 阶段失败写 `rollback_failed`。
+- **防复发证据：** 脚本级测试从完整 `verified` 更新注入 healthy、unhealthy、ready=503、
+  stopped、missing、runtime-state 不可用、错误 image/revision/project/service、env/pointer/
+  index/dependency 漂移、瞬时失败重试与 env 恢复后失败。首次红灯为
+  `20 failed, 3 passed, 50 deselected in 78.77s`，没有用 skip/xfail 或放宽身份门禁消除。
+
 ## 2026-08-11 post-verified 人工撤回遗留 target pointer 且绕过全局锁
 
 - **影响：** 已验证 target 被人工撤回时，旧入口只恢复 source env/App，不把
