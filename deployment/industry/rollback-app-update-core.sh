@@ -83,7 +83,12 @@ if (
     is None
     or value.get("update_id") != expected_update_id
     or not isinstance(source, dict)
-    or source.get("trace_v2_read_compatible") is not True
+    or source.get("trace_compatibility")
+    != {
+        "accepted_user_versions": [0, 1, 2],
+        "legacy_v0_profile": "industry-trace-2c4-v0",
+        "target_schema_version": 2,
+    }
 ):
     raise SystemExit("ROLLBACK_TRANSACTION_STATE_INVALID")
 print(f'{value["state"]}|{value["update_id"]}')
@@ -281,9 +286,9 @@ image = manifest.get("image")
 target = manifest.get("target")
 revision = manifest.get("revision")
 if (
-    manifest.get("schema_version") != "2"
+    manifest.get("schema_version") != "3"
     or manifest.get("package_contract_revision")
-    != "industry-serving-update-v2"
+    != "industry-serving-update-v3"
     or not isinstance(image, dict)
     or not isinstance(target, dict)
     or not isinstance(revision, str)

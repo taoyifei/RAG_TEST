@@ -8,17 +8,20 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPOSITORY_ROOT))
 
+from deployment.industry.package_selfcheck import verify_release  # noqa: E402
 from rag_app.corpus_policy import CorpusPolicy  # noqa: E402
 from rag_app.generation.semantic_router import (  # noqa: E402
     LLM_CLASSIFIER_CONTRACT_REVISION,
@@ -48,13 +51,34 @@ from scripts.industry_bundle.images import (  # noqa: E402
 __all__ = ["IndustryAppUpdateBuildError", "build_industry_app_update"]
 
 _OLD_REVISION = "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"
+_SOURCE_RELEASE_ID = "2c4cf220c7cf-87860c8b7496"
+_SOURCE_RELEASE_MANIFEST_SHA256 = (
+    "2db506689d7ed39ac960c63ba7f833b9076901072f3202bd466b8eb60f2d9af5"
+)
 _REVISION_LENGTH = 40
 _INDEX_FINGERPRINT = (
-    "sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a"
+    "sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58"
 )
 _SOURCE_SERVING_FINGERPRINT = (
-    "sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b"
+    "sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e"
 )
+_SOURCE_CONFIG_SHA256 = {
+    "corpus-policy.json": (
+        "1c2e9fb0fd167a3318d31d2b897672ad5efef4d6774680a2442bc32be2365aab"
+    ),
+    "intent-router-calibration.json": (
+        "ef01744b4d7d11934cb8871bf7cc2933e2fb56541d3308e7e9c32597158266e1"
+    ),
+    "intent-router.json": (
+        "c502fb150ed79ab4c55cfc62b6fa09eb17e107d346f7299c28f7eb7cb26aa9ce"
+    ),
+    "pipeline.json": (
+        "481affd2fd5dde97a981099256c343c71d392cc0e59ce2ea3f60dd6a1ca3d144"
+    ),
+    "retrieval.json": (
+        "1df7d3bd309bcf919098390c71d15e7e45cb40f20b787d83168813fcd0bf4ea6"
+    ),
+}
 _SOURCE_CONFIG_PROFILE = "first-deploy-private-v1"
 _TARGET_CONFIG_PROFILE = "serving-runtime-public-config-v1"
 _PACKAGE_FILES = {
@@ -76,6 +100,9 @@ _CONFIG_SOURCES = {
     "pipeline.json": "deployment/config/pipeline.json",
     "retrieval.json": "deployment/config/retrieval.json",
 }
+_SOURCE_RELEASE_PATH = Path(
+    "artifacts/industry-deploy/2c4cf220c7cf-87860c8b7496"
+)
 _RUNTIME_SOURCES = {
     "compose_check.py": "deployment/industry/serving_compose_check.py",
     "compose.yaml": "deployment/industry/compose.yaml",
@@ -103,16 +130,43 @@ class IndustryAppUpdateBuildError(RuntimeError):
     """表示 Industry serving app update 无法安全生成。"""
 
 
+@dataclass(frozen=True, slots=True)
+class _SourceRelease:
+    """已通过真实首部署包合同核验的 Industry source 身份。"""
+
+    root: Path
+    release_id: str
+    revision: str
+    manifest_sha256: str
+    config_sha256: dict[str, str]
+    index_fingerprint: str
+    serving_fingerprint: str
+    package_contract_revision: str
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetConfig:
+    """仅应用 serving 变化后的目标 Industry 配置身份。"""
+
+    root: Path
+    assets_manifest: Path
+    config_sha256: dict[str, str]
+    index_fingerprint: str
+    serving_fingerprint: str
+
+
 def build_industry_app_update(
     *,
     repository_root: Path,
     output_parent: Path | None = None,
+    source_release_root: Path | None = None,
 ) -> Path:
     """构建并发布八文件 Industry serving app update。
 
     Args:
         repository_root: clean Industry Git 根目录。
         output_parent: 可选测试输出父目录。
+        source_release_root: 已通过校验的真实 2c4 Industry 首部署目录。
 
     Returns:
         `industry-serving-update/<SHA前12位>` 发布目录。
@@ -124,7 +178,9 @@ def build_industry_app_update(
     root = repository_root.resolve(strict=True)
     try:
         identity = require_industry_source(root)
-        _validate_serving_config(root)
+        source_release = _load_source_release(
+            source_release_root or root / _SOURCE_RELEASE_PATH
+        )
         prepare_project_wheel(root, identity.git_sha)
         parent = output_parent or root / "artifacts/industry-serving-update"
         parent.mkdir(parents=True, exist_ok=True)
@@ -138,22 +194,40 @@ def build_industry_app_update(
             prefix=f".{identity.git_sha[:12]}.",
         ) as temporary_name:
             stage = Path(temporary_name)
-            image = build_app_image_archive(
-                repository_root=root,
-                revision=identity.git_sha,
-                output_dir=stage,
-            )
-            write_sha256_sidecar(stage / "app-image.tar.gz")
-            runtime = _build_runtime_archive(root, stage, identity)
-            write_sha256_sidecar(stage / "serving-runtime.tar.gz")
-            _copy_package_programs(root, stage)
-            manifest = _update_manifest(
-                root,
-                identity.git_sha,
-                image,
-                runtime,
-                stage,
-            )
+            with tempfile.TemporaryDirectory(
+                dir=stage,
+                prefix=".target-config.",
+            ) as config_name:
+                target_config = _build_target_config(
+                    root,
+                    source_release,
+                    Path(config_name),
+                )
+                image = build_app_image_archive(
+                    repository_root=root,
+                    revision=identity.git_sha,
+                    output_dir=stage,
+                    config_directory=target_config.root,
+                    assets_manifest_path=target_config.assets_manifest,
+                )
+                write_sha256_sidecar(stage / "app-image.tar.gz")
+                runtime = _build_runtime_archive(
+                    root,
+                    stage,
+                    identity,
+                    target_config,
+                )
+                write_sha256_sidecar(stage / "serving-runtime.tar.gz")
+                _copy_package_programs(root, stage)
+                manifest = _update_manifest(
+                    root,
+                    identity.git_sha,
+                    image,
+                    runtime,
+                    stage,
+                    source_release,
+                    target_config,
+                )
             _write_json(stage / "UPDATE_MANIFEST.json", manifest)
             _verify_stage(stage)
             _run_package_selfcheck(stage)
@@ -176,55 +250,225 @@ def build_industry_app_update(
     return final
 
 
-def _validate_serving_config(root: Path) -> None:
-    pipeline = load_pipeline(root / "deployment/config/pipeline.json")
-    if pipeline.prompt_revision != actual_prompt_revision():
-        raise IndustryAppUpdateBuildError("PROMPT_REVISION_MISMATCH")
-    policy = CorpusPolicy.load(root / "deployment/config/corpus-policy.json")
-    if pipeline.corpus_policy_sha256 != policy.semantic_sha256():
-        raise IndustryAppUpdateBuildError("CORPUS_POLICY_SHA256_MISMATCH")
-    if pipeline.fingerprint() != _INDEX_FINGERPRINT:
-        raise IndustryAppUpdateBuildError("INDEX_FINGERPRINT_CHANGED")
-
-
-def _source_config_sha256(
-    root: Path,
-    revision: str,
-) -> dict[str, str]:
-    """从兼容提交的真实 Git blob 推导五文件 SHA256。
+def _load_source_release(source_root: Path) -> _SourceRelease:
+    """验证并载入真实 2c4 Industry 首部署 source 身份。
 
     Args:
-        root: Git 仓库根目录。
-        revision: 兼容来源的完整 Git SHA。
+        source_root: 首部署 release 根目录。
 
     Returns:
-        config 文件名到 blob SHA256 的精确映射。
+        与服务器实际配置、索引及 serving 身份绑定的 source release。
+
+    Raises:
+        IndustryAppUpdateBuildError: release 合同或任一固定身份不匹配。
 
     """
-    identities: dict[str, str] = {}
-    for name, source in sorted(_CONFIG_SOURCES.items()):
-        payload = subprocess.run(  # noqa: S603
-            ["/usr/bin/git", "show", f"{revision}:{source}"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        ).stdout
-        identities[name] = hashlib.sha256(payload).hexdigest()
-    return identities
+    try:
+        root = source_root.resolve(strict=True)
+    except OSError as error:
+        raise IndustryAppUpdateBuildError(
+            "SOURCE_RELEASE_ROOT_INVALID"
+        ) from error
+    if root.is_symlink() or not root.is_dir():
+        raise IndustryAppUpdateBuildError("SOURCE_RELEASE_ROOT_INVALID")
+    try:
+        verify_release(root)
+    except (OSError, ValueError) as error:
+        raise IndustryAppUpdateBuildError(
+            "SOURCE_RELEASE_PACKAGE_SELFCHECK_FAILED"
+        ) from error
+    manifest_path = _required_regular_file(root / "RELEASE_MANIFEST.json")
+    if _sha256(manifest_path) != _SOURCE_RELEASE_MANIFEST_SHA256:
+        raise IndustryAppUpdateBuildError("SOURCE_RELEASE_MANIFEST_MISMATCH")
+    manifest = _load_json_object(manifest_path, "source release manifest")
+    config_sha256 = manifest.get("config_sha256")
+    if (
+        manifest.get("release_id") != _SOURCE_RELEASE_ID
+        or manifest.get("git_sha") != _OLD_REVISION
+        or manifest.get("source_revision") != _OLD_REVISION
+        or manifest.get("pipeline_fingerprint") != _INDEX_FINGERPRINT
+        or manifest.get("serving_fingerprint")
+        != _SOURCE_SERVING_FINGERPRINT
+        or manifest.get("package_contract_revision")
+        != "industry-package-reuse-images-v1"
+        or config_sha256 != _SOURCE_CONFIG_SHA256
+    ):
+        raise IndustryAppUpdateBuildError("SOURCE_RELEASE_IDENTITY_MISMATCH")
+    config_root = root / "config"
+    entries = list(config_root.iterdir())
+    if (
+        {path.name for path in entries} != set(_CONFIG_SOURCES)
+        or any(not path.is_file() or path.is_symlink() for path in entries)
+        or any(
+            _sha256(config_root / name) != digest
+            for name, digest in _SOURCE_CONFIG_SHA256.items()
+        )
+    ):
+        raise IndustryAppUpdateBuildError("SOURCE_CONFIG_IDENTITY_MISMATCH")
+    source_pipeline = load_pipeline(config_root / "pipeline.json")
+    source_policy = CorpusPolicy.load(config_root / "corpus-policy.json")
+    source_retrieval = RetrievalSettings.load(config_root / "retrieval.json")
+    if (
+        source_pipeline.corpus_policy_sha256
+        != source_policy.semantic_sha256()
+        or source_pipeline.fingerprint() != _INDEX_FINGERPRINT
+        or source_retrieval.serving_fingerprint(source_pipeline)
+        != _SOURCE_SERVING_FINGERPRINT
+    ):
+        raise IndustryAppUpdateBuildError("SOURCE_CONFIG_SEMANTICS_MISMATCH")
+    return _SourceRelease(
+        root=root,
+        release_id=_SOURCE_RELEASE_ID,
+        revision=_OLD_REVISION,
+        manifest_sha256=_SOURCE_RELEASE_MANIFEST_SHA256,
+        config_sha256=dict(_SOURCE_CONFIG_SHA256),
+        index_fingerprint=_INDEX_FINGERPRINT,
+        serving_fingerprint=_SOURCE_SERVING_FINGERPRINT,
+        package_contract_revision="industry-package-reuse-images-v1",
+    )
+
+
+def _build_target_config(
+    repository_root: Path,
+    source_release: _SourceRelease,
+    work_root: Path,
+) -> _TargetConfig:
+    """继承 Industry source 配置并只应用 serving-only 变化。
+
+    Args:
+        repository_root: 当前 clean Industry 仓库根目录。
+        source_release: 已认证的真实 2c4 source release。
+        work_root: 临时构建输入根目录。
+
+    Returns:
+        目标五文件、资产清单和双 fingerprint 身份。
+
+    Raises:
+        IndustryAppUpdateBuildError: 配置继承、prompt 或 fingerprint 漂移。
+
+    """
+    config_root = work_root / "config"
+    config_root.mkdir(parents=True)
+    for name in sorted(_CONFIG_SOURCES):
+        shutil.copyfile(
+            source_release.root / "config" / name,
+            config_root / name,
+        )
+    pipeline_path = config_root / "pipeline.json"
+    pipeline_payload = _load_json_object(pipeline_path, "target pipeline")
+    pipeline_payload["prompt_revision"] = actual_prompt_revision()
+    _write_json(pipeline_path, pipeline_payload)
+    pipeline = load_pipeline(pipeline_path)
+    policy = CorpusPolicy.load(config_root / "corpus-policy.json")
+    retrieval = RetrievalSettings.load(config_root / "retrieval.json")
+    router = load_intent_router_config(config_root / "intent-router.json")
+    calibration = load_question_profile_calibration(
+        config_root / "intent-router-calibration.json"
+    )
+    if (
+        pipeline.prompt_revision != actual_prompt_revision()
+        or pipeline.corpus_policy_sha256 != policy.semantic_sha256()
+        or pipeline.fingerprint() != source_release.index_fingerprint
+    ):
+        raise IndustryAppUpdateBuildError("TARGET_INDEX_CONFIG_DRIFT")
+    serving_fingerprint = retrieval.serving_fingerprint(
+        pipeline,
+        question_profile_identity={
+            "intent_router_sha256": router.canonical_sha256,
+            "calibration_sha256": calibration.canonical_sha256,
+            "router_revision": router.router_revision,
+            "active_mode": router.mode.value,
+            "question_profile_schema_revision": (
+                QUESTION_PROFILE_SCHEMA_REVISION
+            ),
+            "llm_classifier_contract_revision": (
+                LLM_CLASSIFIER_CONTRACT_REVISION
+            ),
+        },
+    )
+    if serving_fingerprint == source_release.serving_fingerprint:
+        raise IndustryAppUpdateBuildError(
+            "TARGET_SERVING_FINGERPRINT_UNCHANGED"
+        )
+    config_sha256 = {
+        name: _sha256(config_root / name) for name in sorted(_CONFIG_SOURCES)
+    }
+    changed = {
+        name
+        for name, digest in config_sha256.items()
+        if digest != source_release.config_sha256[name]
+    }
+    if changed != {"pipeline.json"}:
+        raise IndustryAppUpdateBuildError("TARGET_CONFIG_CHANGESET_INVALID")
+    assets_manifest = work_root / "ASSETS.sha256"
+    _write_target_assets_manifest(
+        repository_root,
+        config_sha256,
+        assets_manifest,
+    )
+    return _TargetConfig(
+        root=config_root,
+        assets_manifest=assets_manifest,
+        config_sha256=config_sha256,
+        index_fingerprint=pipeline.fingerprint(),
+        serving_fingerprint=serving_fingerprint,
+    )
+
+
+def _write_target_assets_manifest(
+    repository_root: Path,
+    config_sha256: dict[str, str],
+    destination: Path,
+) -> None:
+    """从已验证源码资产清单生成目标 Industry 镜像资产清单。"""
+    source = repository_root / "deployment/ASSETS.sha256"
+    lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in source.read_text(encoding="ascii").splitlines():
+        digest, separator, relative = raw_line.partition("  ")
+        if not separator:
+            raise IndustryAppUpdateBuildError("ASSETS_MANIFEST_INVALID")
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or relative in seen
+        ):
+            raise IndustryAppUpdateBuildError("ASSETS_MANIFEST_INVALID")
+        seen.add(relative)
+        prefix = "deployment/config/"
+        if relative.startswith(prefix):
+            name = relative.removeprefix(prefix)
+            target_digest = config_sha256.get(name)
+            if target_digest is None:
+                raise IndustryAppUpdateBuildError(
+                    "ASSETS_CONFIG_EXACT_SET_INVALID"
+                )
+            digest = target_digest
+        elif _sha256(repository_root / relative) != digest:
+            raise IndustryAppUpdateBuildError("ASSETS_SOURCE_SHA256_MISMATCH")
+        lines.append(f"{digest}  {relative}")
+    expected_config_paths = {
+        f"deployment/config/{name}" for name in config_sha256
+    }
+    if expected_config_paths != {
+        path for path in seen if path.startswith("deployment/config/")
+    }:
+        raise IndustryAppUpdateBuildError("ASSETS_CONFIG_EXACT_SET_INVALID")
+    destination.write_text("\n".join(lines) + "\n", encoding="ascii")
 
 
 def _build_runtime_archive(
     root: Path,
     stage: Path,
     identity: IndustrySourceIdentity,
+    target_config: _TargetConfig,
 ) -> dict[str, object]:
     runtime_root = f"serving-runtime/{identity.git_sha[:12]}"
     payloads: dict[str, bytes] = {}
     for target, source in _RUNTIME_SOURCES.items():
         payloads[target] = _required_regular_file(root / source).read_bytes()
-    for target, source in _CONFIG_SOURCES.items():
+    for target in _CONFIG_SOURCES:
         payloads[f"config/{target}"] = _required_regular_file(
-            root / source
+            target_config.root / target
         ).read_bytes()
     runtime_manifest = {
         "files": {
@@ -423,45 +667,18 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
     )
 
 
-def _update_manifest(
+def _update_manifest(  # noqa: PLR0913, PLR0917
     root: Path,
     revision: str,
     image: ImageArtifact,
     runtime: dict[str, object],
     stage: Path,
+    source_release: _SourceRelease,
+    target_config: _TargetConfig,
 ) -> dict[str, object]:
-    pipeline = load_pipeline(root / "deployment/config/pipeline.json")
-    retrieval = RetrievalSettings.load(
-        root / "deployment/config/retrieval.json"
-    )
-    router = load_intent_router_config(
-        root / "deployment/config/intent-router.json"
-    )
-    calibration = load_question_profile_calibration(
-        root / "deployment/config/intent-router-calibration.json"
-    )
-    serving = retrieval.serving_fingerprint(
-        pipeline,
-        question_profile_identity={
-            "intent_router_sha256": router.canonical_sha256,
-            "calibration_sha256": calibration.canonical_sha256,
-            "router_revision": router.router_revision,
-            "active_mode": router.mode.value,
-            "question_profile_schema_revision": (
-                QUESTION_PROFILE_SCHEMA_REVISION
-            ),
-            "llm_classifier_contract_revision": (
-                LLM_CLASSIFIER_CONTRACT_REVISION
-            ),
-        },
-    )
-    config_files = {
-        name: _sha256(root / source)
-        for name, source in sorted(_CONFIG_SOURCES.items())
-    }
     manifest: dict[str, object] = {
         "branch": "Industry",
-        "config_files": config_files,
+        "config_files": target_config.config_sha256,
         "image": {
             "archive_sha256": image.archive_sha256,
             "config_digest": image.config_digest,
@@ -473,25 +690,37 @@ def _update_manifest(
         },
         "index_fingerprint": {
             "reindex_required": False,
-            "source": _INDEX_FINGERPRINT,
-            "target": pipeline.fingerprint(),
+            "source": source_release.index_fingerprint,
+            "target": target_config.index_fingerprint,
         },
-        "package_contract_revision": "industry-serving-update-v2",
+        "package_contract_revision": "industry-serving-update-v3",
         "revision": revision,
         "runtime": runtime,
-        "schema_version": "2",
+        "schema_version": "3",
         "serving_fingerprint": {
-            "source": _SOURCE_SERVING_FINGERPRINT,
-            "target": serving,
+            "source": source_release.serving_fingerprint,
+            "target": target_config.serving_fingerprint,
         },
         "source_compatibility": {
             "compatible_revisions": [_OLD_REVISION],
-            "config_files": _source_config_sha256(root, _OLD_REVISION),
+            "config_files": source_release.config_sha256,
             "config_profile": _SOURCE_CONFIG_PROFILE,
             "old_app_runtime_state_required": False,
-            "required_index_fingerprint": _INDEX_FINGERPRINT,
-            "serving_fingerprint": _SOURCE_SERVING_FINGERPRINT,
-            "trace_v2_read_compatible": True,
+            "required_index_fingerprint": source_release.index_fingerprint,
+            "serving_fingerprint": source_release.serving_fingerprint,
+            "source_release": {
+                "manifest_sha256": source_release.manifest_sha256,
+                "package_contract_revision": (
+                    source_release.package_contract_revision
+                ),
+                "release_id": source_release.release_id,
+                "revision": source_release.revision,
+            },
+            "trace_compatibility": {
+                "accepted_user_versions": [0, 1, 2],
+                "legacy_v0_profile": "industry-trace-2c4-v0",
+                "target_schema_version": 2,
+            },
             "trusted_last_good_revisions": _source_ancestor_revisions(
                 root, _OLD_REVISION
             ),
@@ -593,6 +822,16 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
     path.write_bytes(_canonical_json(value))
 
 
+def _load_json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IndustryAppUpdateBuildError(f"{label} JSON invalid") from error
+    if not isinstance(value, dict):
+        raise IndustryAppUpdateBuildError(f"{label} must be object")
+    return value
+
+
 def _canonical_json(value: object) -> bytes:
     return (
         json.dumps(
@@ -637,6 +876,7 @@ def _arguments() -> argparse.Namespace:
         default=_REPOSITORY_ROOT,
     )
     parser.add_argument("--output-parent", type=Path)
+    parser.add_argument("--source-release-root", type=Path)
     return parser.parse_args()
 
 
@@ -655,6 +895,7 @@ def main() -> int:
         output = build_industry_app_update(
             repository_root=arguments.repository_root,
             output_parent=arguments.output_parent,
+            source_release_root=arguments.source_release_root,
         )
     except IndustryAppUpdateBuildError as error:
         print(

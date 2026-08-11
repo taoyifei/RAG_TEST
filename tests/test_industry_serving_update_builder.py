@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
 from scripts import build_industry_app_update
@@ -85,24 +84,24 @@ def test_last_good_has_one_atomic_authority() -> None:
     assert '"${backup_path}/last-good.json"' not in library
 
 
-def test_source_config_identity_is_derived_from_compatible_revision() -> None:
-    expected = {}
-    for name, source in build_industry_app_update._CONFIG_SOURCES.items():
-        payload = subprocess.run(  # noqa: S603
-            [
-                "/usr/bin/git",
-                "show",
-                f"{build_industry_app_update._OLD_REVISION}:{source}",
-            ],
-            check=True,
-            capture_output=True,
-            cwd=_ROOT,
-        ).stdout
-        expected[name] = hashlib.sha256(payload).hexdigest()
+def test_source_config_identity_comes_from_real_first_deploy_release() -> None:
+    release = _ROOT / build_industry_app_update._SOURCE_RELEASE_PATH
+    source = build_industry_app_update._load_source_release(release)
+    expected = {
+        name: hashlib.sha256(
+            (release / "config" / name).read_bytes()
+        ).hexdigest()
+        for name in build_industry_app_update._CONFIG_SOURCES
+    }
 
-    assert build_industry_app_update._source_config_sha256(
-        _ROOT, build_industry_app_update._OLD_REVISION
-    ) == expected
+    assert source.config_sha256 == expected
+    assert expected == build_industry_app_update._SOURCE_CONFIG_SHA256
+    assert source.index_fingerprint == (
+        build_industry_app_update._INDEX_FINGERPRINT
+    )
+    assert source.serving_fingerprint == (
+        build_industry_app_update._SOURCE_SERVING_FINGERPRINT
+    )
     assert build_industry_app_update._SOURCE_CONFIG_PROFILE == (
         "first-deploy-private-v1"
     )

@@ -106,6 +106,8 @@ def build_app_image_archive(
     repository_root: Path,
     revision: str,
     output_dir: Path,
+    config_directory: Path | None = None,
+    assets_manifest_path: Path | None = None,
 ) -> ImageArtifact:
     """构建并验证不含 corpus 的 app 镜像归档。
 
@@ -113,6 +115,8 @@ def build_app_image_archive(
         repository_root: clean Industry Git 根目录。
         revision: app wheel 与 OCI label 的完整 Git SHA。
         output_dir: release staging 根目录。
+        config_directory: 可选的镜像内 Industry config 精确覆盖目录。
+        assets_manifest_path: 与配置覆盖匹配的可选资产清单。
 
     Returns:
         已验证的 app 镜像及归档身份。
@@ -128,6 +132,8 @@ def build_app_image_archive(
         repository_root=repository_root,
         revision=revision,
         destination=app_archive,
+        config_directory=config_directory,
+        assets_manifest_path=assets_manifest_path,
     )
     _require_app_has_no_corpus(app_ref, repository_root)
     return _inspect_artifact(

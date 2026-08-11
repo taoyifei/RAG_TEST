@@ -1,5 +1,27 @@
 # Industry 事故与防复发记录
 
+## 2026-08-11 serving update 使用仓库通用配置冒充真实 Industry source
+
+- **影响：** `e5c98cead384` 包把 Git 中通用 config SHA 和
+  `sha256:dd16e57...` index fingerprint 写为 source 合同。服务器实际挂载的是首部署
+  builder 根据 GM-01～GM-10 生成并已被 release manifest 绑定的 Industry 专用 config，
+  index fingerprint 为 `sha256:d2497bc...`。updater 因五文件 SHA 不同在
+  `config_filesystem_precheck` 停止；没有 mutation，也没有破坏现有服务，但该包无法合法
+  升级真实实例。
+- **根因：** serving-update builder 根据旧 Git revision 的通用 config blob 推导 source，
+  没有读取和自检服务器实际来源的首部署 release。测试夹具也复制 Git blob，重复了同一
+  假设。Trace 预检另只允许 v1/v2；真实 2c4 源码从未设置 `PRAGMA user_version`，因此
+  服务器 93 条、四表结构完整且 `quick_check=ok` 的 v0 被错误拒绝。
+- **修复：** builder 必须先通过首部署 package selfcheck，再精确绑定 release ID、revision、
+  manifest SHA、五份 config SHA、package contract、index 和 serving fingerprint。target
+  从该 Industry config 复制，只更新实际 prompt revision；目标 config 和对应临时资产清单
+  同时进入 app image 与 runtime archive。v0 预检比较完整的 2c4 表/列/索引/外键结构，
+  在线备份记录 Trace 条数，目标 v2 迁移后再次验证 schema、quick-check 和条数不减少。
+- **防复发证据：** 独立红测证明旧 helper 会接受任意 v0 且没有备份条数。builder 测试固定
+  真实 source manifest/config/index/serving 身份并断言 target 仅 `pipeline.json` 改变；
+  updater 脚本沙箱使用真实 Industry config 和 93 条精确 v0，正常路径迁移为 v2 后仍为
+  93 条，完整 74 个更新/回滚/中断场景通过。`e5c98cead384` 与 `a50d5d5f8f71` 永久失效。
+
 ## 2026-08-11 人工撤回把 target 故障当成拒绝回滚条件
 
 - **影响：** `a50d5d5f8f71` 的 post-verified 人工撤回在任何 mutation 前要求 target

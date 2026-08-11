@@ -1,5 +1,27 @@
 # 阻塞项
 
+## CURRENT STATUS：2026-08-11 e5c source baseline 阻塞已定位并本地修正
+
+服务器不是未知漂移状态。服务器 config 的五个 raw SHA 与真实
+`2c4cf220c7cf-87860c8b7496` 首部署 release manifest 全部一致，活动 Industry index
+fingerprint 为 `sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58`；
+Trace SQLite 为合法 2c4 legacy v0、`quick_check=ok`、93 条。`e5c98cead384` 包使用仓库
+通用 config/`dd16e57...` 作为 source，并只接受 Trace v1/v2，因而在 mutation 前正确停止。
+
+当前本地候选已把真实 source release exact identity 写入 builder/package 合同，target 只
+应用 prompt、UI Session 与 Trace serving-only 变化，source/target index 均保持
+`d2497bc...`；v0 只有精确匹配 2c4 四表/列/索引/外键结构时才允许在线备份和 v2 迁移。
+当前没有需要服务器补充的信息，也没有授权或必要在服务器临时绕过。
+
+本地完整测试已为 `1282 passed, 61 warnings`、0 failed；compileall、Ruff、strict mypy、
+Google docstring、Shell、Compose、Node、源码 asset-selfcheck 和 diff 门禁均通过。临时
+Qdrant 结束时为空且无 mounts，已精确删除。
+
+在新 clean commit 和全部门禁完成前，唯一交付阻塞是“尚无新的已验证 8 文件包”。
+`e5c98cead384` 与 `a50d5d5f8f71` 永久失效；旧 attempt 必须保留。禁止重跑旧 updater、
+覆盖 config、修改 `PRAGMA user_version` 或执行 `run-index.sh`。新包构建完成后仍需用户另行
+上传并执行现场 canary，且只能重建 `rag-industry-app`，不能动 worker/OCR/Qdrant/corpus。
+
 ## CURRENT STATUS：2026-08-11 a50d 人工撤回阻塞已在本地修复
 
 `a50d5d5f8f71` 把 target health/ready/runtime-state 当作 post-verified 人工撤回的硬前置，
@@ -48,7 +70,7 @@ Qdrant 测试结束时 collections 为空、无 mounts，精确测试容器已�
    canary 现场验收。
 5. **遗留制品全部禁止使用。** `artifacts/industry-app-update/809fb71f5e50` 与
    `artifacts/industry-serving-update/d5c03cf9b97e`、`8755bf379c8f`、`195f9aca2c63`、
-   `e5844e531c45`、`a50d5d5f8f71`
+   `e5844e531c45`、`a50d5d5f8f71`、`e5c98cead384`
    均永久失效，不得上传、部署或作为验收证据。最终包必须由本轮新的 clean commit 构建
    到独立 SHA12 目录，顶层仍为 8 文件、runtime 为 19 文件，且
    `reindex_required=false`、index fingerprint 不变。

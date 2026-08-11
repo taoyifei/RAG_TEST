@@ -45,9 +45,21 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         repository_root: Path,
         revision: str,
         output_dir: Path,
+        config_directory: Path | None = None,
+        assets_manifest_path: Path | None = None,
     ) -> ImageArtifact:
         assert repository_root == root.resolve()
         assert revision == _REVISION
+        assert config_directory is not None
+        assert assets_manifest_path is not None
+        assert hashlib.sha256(
+            (config_directory / "pipeline.json").read_bytes()
+        ).hexdigest() == (
+            "9f139e0995c60998e1e15098700a78580d7ff279dc148b0b593671687a8c1cdc"
+        )
+        assert "deployment/config/pipeline.json" in (
+            assets_manifest_path.read_text(encoding="ascii")
+        )
         archive = output_dir / "app-image.tar.gz"
         archive.write_bytes(archive_bytes)
         return ImageArtifact(
@@ -121,21 +133,46 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         manifest["index_fingerprint"]["source"]
         == (manifest["index_fingerprint"]["target"])
     )
+    assert manifest["index_fingerprint"]["source"] == (
+        "sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58"
+    )
     assert manifest["serving_fingerprint"]["source"] == (
-        "sha256:41dc694db23d1895b08a703e058fc5ea6d7511da9484e42268c6bb3258c81c9b"
+        "sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e"
     )
     assert (
         manifest["serving_fingerprint"]["target"]
         != (manifest["serving_fingerprint"]["source"])
     )
-    assert manifest["source_compatibility"]["trace_v2_read_compatible"] is True
+    assert manifest["serving_fingerprint"]["target"] == (
+        "sha256:06b6a71f16098632a8f586e4f366e9dc925ad89835025e7bfe33730296106dc6"
+    )
+    source_config = manifest["source_compatibility"]["config_files"]
+    assert source_config == build_industry_app_update._SOURCE_CONFIG_SHA256
+    assert {
+        name
+        for name, digest in manifest["config_files"].items()
+        if digest != source_config[name]
+    } == {"pipeline.json"}
+    assert manifest["source_compatibility"]["trace_compatibility"] == {
+        "accepted_user_versions": [0, 1, 2],
+        "legacy_v0_profile": "industry-trace-2c4-v0",
+        "target_schema_version": 2,
+    }
+    assert manifest["source_compatibility"]["source_release"] == {
+        "manifest_sha256": (
+            "2db506689d7ed39ac960c63ba7f833b9076901072f3202bd466b8eb60f2d9af5"
+        ),
+        "package_contract_revision": "industry-package-reuse-images-v1",
+        "release_id": "2c4cf220c7cf-87860c8b7496",
+        "revision": build_industry_app_update._OLD_REVISION,
+    }
     assert manifest["source_compatibility"][
         "trusted_last_good_revisions"
     ][0] == build_industry_app_update._OLD_REVISION
     assert manifest["revision"] == _REVISION
-    assert manifest["schema_version"] == "2"
+    assert manifest["schema_version"] == "3"
     assert manifest["package_contract_revision"] == (
-        "industry-serving-update-v2"
+        "industry-serving-update-v3"
     )
     assert manifest["runtime"]["root"] == (f"serving-runtime/{_REVISION[:12]}")
     assert manifest["ui"] == {
@@ -212,7 +249,7 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         (
             "bad-source",
             lambda value: value["source_compatibility"].pop(
-                "trace_v2_read_compatible"
+                "trace_compatibility"
             ),
         ),
         (
@@ -337,11 +374,21 @@ def test_runtime_archive_is_deterministic(
     first.mkdir()
     second.mkdir()
 
+    source = build_industry_app_update._load_source_release(
+        root
+        / "artifacts/industry-deploy/2c4cf220c7cf-87860c8b7496"
+    )
+    first_target = build_industry_app_update._build_target_config(
+        root, source, tmp_path / "first-config"
+    )
+    second_target = build_industry_app_update._build_target_config(
+        root, source, tmp_path / "second-config"
+    )
     first_identity = build_industry_app_update._build_runtime_archive(
-        root, first, identity
+        root, first, identity, first_target
     )
     second_identity = build_industry_app_update._build_runtime_archive(
-        root, second, identity
+        root, second, identity, second_target
     )
 
     assert first_identity == second_identity

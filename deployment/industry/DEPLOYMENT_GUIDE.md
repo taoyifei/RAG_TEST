@@ -46,6 +46,20 @@ validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久
 post-verified 人工撤回错误地要求 target App 必须健康、ready 且可执行 runtime-state；
 target unhealthy、stopped 或 missing 时反而无法撤回，纯 precheck 失败还会把
 `verified` 污染为 `rollback_failed`。该包同样永久失效，不得上传、部署或作为验收证据。
+复核后的 `artifacts/industry-serving-update/e5c98cead384` 又错误地把仓库通用 config
+及 `sha256:dd16e57...` index fingerprint 当成真实 Industry source；服务器合法的首部署
+config 与 index 分别绑定在 `2c4cf220c7cf-87860c8b7496` release 和
+`sha256:d2497bc...`。该包在 mutation 前已安全失败，也永久失效；不得重跑 updater、覆盖
+config、修改 Trace `user_version` 或运行 `run-index.sh`，失败 attempt 必须保留。
+
+新的 serving update builder 只接受自检通过且 exact identity 匹配的真实
+`2c4cf220c7cf-87860c8b7496` source release。target 继承其全部索引相关 config，只更新
+实际 prompt revision；source/target index fingerprint 必须同时为
+`sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58`。
+目标五文件和匹配的资产清单同时写入 app image 与 runtime archive，不能用仓库通用
+`ASSETS.sha256` 替代。真实 2c4 Trace v0 只有在 `quick_check=ok`、0600 普通文件且四表、
+列、索引、外键精确匹配时放行；更新前在线备份记录 Trace 条数，目标 App 迁移到 v2 后
+必须验证问题双列、quick-check 和条数不减少。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 

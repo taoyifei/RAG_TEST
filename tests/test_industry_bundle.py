@@ -532,8 +532,15 @@ def test_image_builder_rejects_ocr_without_full_revision(
         repository_root: Path,
         revision: str,
         destination: Path,
+        config_directory: Path | None = None,
+        assets_manifest_path: Path | None = None,
     ) -> str:
-        del repository_root, revision
+        del (
+            repository_root,
+            revision,
+            config_directory,
+            assets_manifest_path,
+        )
         destination.write_bytes(b"app")
         return "rag-industry-app:test"
 

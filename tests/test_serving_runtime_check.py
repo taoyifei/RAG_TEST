@@ -23,6 +23,149 @@ _CONFIG_NAMES = {
     "retrieval.json",
 }
 
+_LEGACY_2C4_TRACE_SCHEMA = """
+CREATE TABLE traces (
+    trace_id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    pipeline_fingerprint TEXT NOT NULL,
+    serving_fingerprint TEXT NOT NULL,
+    release_revision TEXT NOT NULL,
+    active_collection TEXT NOT NULL,
+    index_manifest_sha256 TEXT NOT NULL,
+    payload_schema_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    refusal_code TEXT,
+    error_code TEXT,
+    feedback_useful INTEGER,
+    capture_complete INTEGER NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX traces_created_idx
+ON traces(created_at DESC, trace_id DESC);
+CREATE INDEX traces_expires_idx ON traces(expires_at);
+
+CREATE TABLE artifacts (
+    trace_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    original_bytes INTEGER NOT NULL,
+    compressed_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    compressed_payload BLOB NOT NULL,
+    PRIMARY KEY (trace_id, artifact_id),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
+);
+
+CREATE TABLE spans (
+    trace_id TEXT NOT NULL,
+    span_id TEXT NOT NULL,
+    parent_span_id TEXT,
+    sequence INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    status TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    attributes_json TEXT NOT NULL,
+    input_artifact_id TEXT,
+    output_artifact_id TEXT,
+    PRIMARY KEY (trace_id, span_id),
+    UNIQUE (trace_id, sequence),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (trace_id, parent_span_id)
+        REFERENCES spans(trace_id, span_id),
+    FOREIGN KEY (trace_id, input_artifact_id)
+        REFERENCES artifacts(trace_id, artifact_id),
+    FOREIGN KEY (trace_id, output_artifact_id)
+        REFERENCES artifacts(trace_id, artifact_id)
+);
+
+CREATE TABLE candidate_decisions (
+    trace_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    selected INTEGER NOT NULL,
+    reason_code TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    PRIMARY KEY (trace_id, sequence),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
+);
+"""
+
+
+def _legacy_2c4_trace_database(path: Path, *, trace_count: int = 93) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(_LEGACY_2C4_TRACE_SCHEMA)
+        connection.executemany(
+            """
+            INSERT INTO traces (
+                trace_id, schema_version, mode, created_at,
+                pipeline_fingerprint, serving_fingerprint,
+                release_revision, active_collection,
+                index_manifest_sha256, payload_schema_version,
+                status, capture_complete, expires_at
+            ) VALUES (?, '2', 'SAFE', '2026-08-07T00:00:00+00:00',
+                      ?, ?, ?, 'rag-docx-active', ?, 1,
+                      'ANSWERED', 1, '2026-08-14T00:00:00+00:00')
+            """,
+            (
+                (
+                    f"trace-{index:03d}",
+                    _FINGERPRINT,
+                    "sha256:" + "a" * 64,
+                    _REVISION,
+                    "b" * 64,
+                )
+                for index in range(trace_count)
+            ),
+        )
+
+
+def test_trace_schema_accepts_only_exact_2c4_legacy_v0(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "traces.sqlite3"
+    _legacy_2c4_trace_database(database)
+
+    assert serving_runtime_check.trace_schema(database) == {
+        "has_question_columns": False,
+        "quick_check": "ok",
+        "schema_profile": "industry-trace-2c4-v0",
+        "sqlite_user_version": 0,
+        "trace_count": 93,
+    }
+
+    with sqlite3.connect(database) as connection:
+        connection.execute("ALTER TABLE traces ADD COLUMN unexpected TEXT")
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="TRACE_LEGACY_V0_SCHEMA_MISMATCH",
+    ):
+        serving_runtime_check.trace_schema(database)
+
+
+def test_trace_schema_rejects_unknown_v0_instead_of_version_only_allowlist(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT PRIMARY KEY)")
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="TRACE_LEGACY_V0_SCHEMA_MISMATCH",
+    ):
+        serving_runtime_check.trace_schema(database)
+
 
 class _Response:
     def __init__(self, payload: dict[str, object]) -> None:
@@ -138,6 +281,7 @@ def test_trace_backup_records_complete_identity_and_uses_private_mode(
 
     assert report["target_revision"] == _REVISION
     assert report["sqlite_user_version"] == 1
+    assert report["trace_count"] == 1
     assert isinstance(report["page_count"], int)
     assert report["page_count"] > 0
     assert report["mode"] == "0600"
@@ -188,8 +332,12 @@ def test_pre_update_filesystem_state_is_exact_private_and_path_free(
         assert identity["mode"] == "0600"
     assert report["trace"] == {
         "filename": "traces.sqlite3",
+        "has_question_columns": False,
         "mode": "0600",
+        "quick_check": "ok",
+        "schema_profile": "trace-v1",
         "sqlite_user_version": 1,
+        "trace_count": 0,
     }
     serialized = json.dumps(report, sort_keys=True)
     assert str(tmp_path) not in serialized
@@ -212,6 +360,7 @@ def test_pre_update_filesystem_state_rejects_extra_and_public_config(
     database = tmp_path / "traces.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE traces (trace_id TEXT)")
+        connection.execute("PRAGMA user_version=1")
     database.chmod(0o600)
     extra = config / "extra.json"
     extra.write_text("{}\n", encoding="utf-8")
@@ -256,6 +405,7 @@ def test_config_profiles_accept_only_their_exact_read_only_mode(
     database = tmp_path / "traces.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE traces (trace_id TEXT)")
+        connection.execute("PRAGMA user_version=1")
     database.chmod(0o600)
 
     report = serving_runtime_check.pre_update_filesystem_state(
@@ -290,6 +440,7 @@ def test_config_profile_rejects_sha_drift_and_symlink(
     database = tmp_path / "traces.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE traces (trace_id TEXT)")
+        connection.execute("PRAGMA user_version=1")
     database.chmod(0o600)
     expected = {
         name: hashlib.sha256((config / name).read_bytes()).hexdigest()
@@ -468,6 +619,7 @@ def test_pre_update_trace_schema_allows_legal_database_growth(
     database = tmp_path / "traces.sqlite3"
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE traces (trace_id TEXT)")
+        connection.execute("PRAGMA user_version=1")
     database.chmod(0o600)
     original = serving_runtime_check.trace_schema
 
@@ -485,7 +637,7 @@ def test_pre_update_trace_schema_allows_legal_database_growth(
         config, database, "first-deploy-private-v1"
     )
 
-    assert report["trace"]["sqlite_user_version"] == 0  # type: ignore[index]
+    assert report["trace"]["sqlite_user_version"] == 1  # type: ignore[index]
 
 
 @pytest.mark.parametrize("mutation", ("replace", "mode"))

@@ -115,12 +115,33 @@ trace_schema="$(run_industry_compose "${env_file}" "${compose_file}" \
   rag-industry-app /update/runtime_check.py trace-schema \
   /state/traces.sqlite3)" \
   || verify_fail "TRACE_SCHEMA_CHECK_FAILED"
-python3 - "${trace_schema}" <<'PY'
+python3 - "${trace_schema}" "${transaction}/trace-backup.json" <<'PY'
 import json
+import pathlib
 import sys
 
 value = json.loads(sys.argv[1])
-if value != {"has_question_columns": True, "sqlite_user_version": 2}:
+backup = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
+expected_fields = {
+    "has_question_columns",
+    "quick_check",
+    "schema_profile",
+    "sqlite_user_version",
+    "trace_count",
+}
+if (
+    not isinstance(value, dict)
+    or set(value) != expected_fields
+    or value.get("has_question_columns") is not True
+    or value.get("quick_check") != "ok"
+    or value.get("schema_profile") != "trace-v2"
+    or value.get("sqlite_user_version") != 2
+    or not isinstance(value.get("trace_count"), int)
+    or isinstance(value.get("trace_count"), bool)
+    or not isinstance(backup.get("trace_count"), int)
+    or isinstance(backup.get("trace_count"), bool)
+    or value["trace_count"] < backup["trace_count"]
+):
     raise SystemExit("TRACE_SCHEMA_NOT_V2")
 PY
 

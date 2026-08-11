@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from deployment.industry import serving_runtime_check
 from deployment.industry.serving_last_good import (
     promote_last_good,
     resolve_last_good,
@@ -30,7 +31,7 @@ _NEW_IMAGE = f"docx-rag:{_NEW_REVISION[:12]}"
 _OLD_IMAGE_ID = "sha256:" + "1" * 64
 _NEW_IMAGE_ID = "sha256:" + "2" * 64
 _INDEX_FINGERPRINT = (
-    "sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a"
+    "sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58"
 )
 
 
@@ -44,6 +45,34 @@ class _Sandbox:
     docker_state: Path
     log: Path
     binaries: Path
+
+
+def _create_legacy_trace_database(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript(serving_runtime_check._LEGACY_2C4_SCHEMA)
+        connection.executemany(
+            """
+            INSERT INTO traces (
+                trace_id, schema_version, mode, created_at,
+                pipeline_fingerprint, serving_fingerprint,
+                release_revision, active_collection,
+                index_manifest_sha256, payload_schema_version,
+                status, capture_complete, expires_at
+            ) VALUES (?, '2', 'SAFE', '2026-08-07T00:00:00+00:00',
+                      ?, ?, ?, 'rag-docx-active', ?, 1,
+                      'ANSWERED', 1, '2026-08-14T00:00:00+00:00')
+            """,
+            (
+                (
+                    f"trace-{index:03d}",
+                    _INDEX_FINGERPRINT,
+                    "sha256:" + "a" * 64,
+                    _OLD_REVISION,
+                    "b" * 64,
+                )
+                for index in range(93)
+            ),
+        )
 
 
 def _build_package(
@@ -76,9 +105,13 @@ def _build_package(
         repository_root: Path,
         revision: str,
         output_dir: Path,
+        config_directory: Path | None = None,
+        assets_manifest_path: Path | None = None,
     ) -> ImageArtifact:
         assert repository_root == _ROOT.resolve()
         assert revision == target_revision
+        assert config_directory is not None
+        assert assets_manifest_path is not None
         archive = output_dir / "app-image.tar.gz"
         with (
             archive.open("wb") as raw_output,
@@ -143,29 +176,16 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
         "pipeline.json",
         "retrieval.json",
     ):
-        source = subprocess.run(  # noqa: S603
-            [
-                "/usr/bin/git",
-                "show",
-                f"{_OLD_REVISION}:deployment/config/{config_name}",
-            ],
-            check=True,
-            capture_output=True,
-            cwd=_ROOT,
-        ).stdout
+        source = (
+            _ROOT
+            / "artifacts/industry-deploy/2c4cf220c7cf-87860c8b7496/config"
+            / config_name
+        ).read_bytes()
         target = old_config / config_name
         target.write_bytes(source)
         target.chmod(0o600)
     trace_database = state_path / "traces.sqlite3"
-    connection = sqlite3.connect(trace_database)
-    connection.execute(
-        "CREATE TABLE traces ("
-        "trace_id TEXT PRIMARY KEY, schema_version TEXT NOT NULL, "
-        "question_sha256 TEXT NOT NULL)"
-    )
-    connection.execute("PRAGMA user_version=1")
-    connection.commit()
-    connection.close()
+    _create_legacy_trace_database(trace_database)
     trace_database.chmod(0o600)
 
     env_file = tmp_path / "rag-industry.env"
@@ -512,8 +532,12 @@ if args[:1] == ["compose"]:
                 }},
                 "trace": {{
                     "filename": "traces.sqlite3",
+                    "has_question_columns": False,
                     "mode": "0600",
-                    "sqlite_user_version": 1,
+                    "quick_check": "ok",
+                    "schema_profile": "industry-trace-2c4-v0",
+                    "sqlite_user_version": 0,
+                    "trace_count": 93,
                 }},
             }}, separators=(",", ":"), sort_keys=True))
             raise SystemExit(0)
@@ -563,8 +587,9 @@ if args[:1] == ["compose"]:
                     }},
                 }},
                 "source_filename": source.name,
-                "sqlite_user_version": 1,
+                "sqlite_user_version": 0,
                 "target_revision": NEW_REVISION,
+                "trace_count": 93,
             }}, separators=(",", ":"), sort_keys=True))
             raise SystemExit(0)
         if "pre-update-index-state" in args:
@@ -597,7 +622,9 @@ if args[:1] == ["compose"]:
             print('{{"active_source_count":10,"point_count":139}}')
             raise SystemExit(0)
         if "trace-schema" in args:
-            print('{{"has_question_columns":true,"sqlite_user_version":2}}')
+            print('{{"has_question_columns":true,"quick_check":"ok",'
+                  '"schema_profile":"trace-v2","sqlite_user_version":2,'
+                  '"trace_count":93}}')
             raise SystemExit(0)
     if "exec" in args and "runtime-state" in args:
         if current.get("runtime_state_unavailable"):
@@ -659,6 +686,10 @@ if args[:1] == ["compose"]:
                 if "question_text" not in columns:
                     connection.execute(
                         "ALTER TABLE traces ADD COLUMN question_text TEXT"
+                    )
+                if "question_sha256" not in columns:
+                    connection.execute(
+                        "ALTER TABLE traces ADD COLUMN question_sha256 TEXT"
                     )
                 connection.execute("PRAGMA user_version=2")
         next_state = {{
@@ -1131,7 +1162,16 @@ def test_upgrade_from_old_app_installs_runtime_and_only_recreates_app(
     )
     assert trace_backup["target_revision"] == _NEW_REVISION
     assert trace_backup["page_count"] > 0
+    assert trace_backup["sqlite_user_version"] == 0
+    assert trace_backup["trace_count"] == 93
     assert isinstance(trace_backup["source_database_identity"], dict)
+    with sqlite3.connect(
+        sandbox.env_file.parent / "state/traces.sqlite3"
+    ) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone() == (2,)
+        assert connection.execute("SELECT COUNT(*) FROM traces").fetchone() == (
+            93,
+        )
     transaction_state = json.loads(
         (transaction / "transaction-state.json").read_bytes()
     )

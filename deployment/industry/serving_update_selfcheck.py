@@ -30,6 +30,29 @@ _DIRECTORY_MODE = 0o755
 _UI_SESSION_TTL_SECONDS = 1800
 _TRACE_QUESTION_RETENTION_SECONDS = 604800
 _TRACE_SCHEMA_VERSION = 2
+_SOURCE_INDEX_FINGERPRINT = (
+    "sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58"
+)
+_SOURCE_SERVING_FINGERPRINT = (
+    "sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e"
+)
+_SOURCE_CONFIG_SHA256 = {
+    "corpus-policy.json": (
+        "1c2e9fb0fd167a3318d31d2b897672ad5efef4d6774680a2442bc32be2365aab"
+    ),
+    "intent-router-calibration.json": (
+        "ef01744b4d7d11934cb8871bf7cc2933e2fb56541d3308e7e9c32597158266e1"
+    ),
+    "intent-router.json": (
+        "c502fb150ed79ab4c55cfc62b6fa09eb17e107d346f7299c28f7eb7cb26aa9ce"
+    ),
+    "pipeline.json": (
+        "481affd2fd5dde97a981099256c343c71d392cc0e59ce2ea3f60dd6a1ca3d144"
+    ),
+    "retrieval.json": (
+        "1df7d3bd309bcf919098390c71d15e7e45cb40f20b787d83168813fcd0bf4ea6"
+    ),
+}
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _RUNTIME_ROOT = re.compile(r"serving-runtime/[0-9a-f]{12}")
@@ -293,9 +316,9 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
     if set(value) != required:
         raise PackageSelfcheckError("UPDATE_MANIFEST_FIELDS_INVALID")
     if (
-        value.get("schema_version") != "2"
+        value.get("schema_version") != "3"
         or value.get("package_contract_revision")
-        != "industry-serving-update-v2"
+        != "industry-serving-update-v3"
         or value.get("branch") != "Industry"
     ):
         raise PackageSelfcheckError("UPDATE_MANIFEST_CONTRACT_INVALID")
@@ -307,14 +330,20 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
         raise PackageSelfcheckError("REINDEX_REQUIRED_INVALID")
     _required_prefixed_sha256(index, "source")
     _required_prefixed_sha256(index, "target")
-    if index["source"] != index["target"]:
+    if (
+        index["source"] != _SOURCE_INDEX_FINGERPRINT
+        or index["source"] != index["target"]
+    ):
         raise PackageSelfcheckError("INDEX_FINGERPRINT_CHANGED")
     serving = _object(value, "serving_fingerprint")
     if set(serving) != {"source", "target"}:
         raise PackageSelfcheckError("SERVING_FINGERPRINT_FIELDS_INVALID")
     _required_prefixed_sha256(serving, "source")
     _required_prefixed_sha256(serving, "target")
-    if serving["source"] == serving["target"]:
+    if (
+        serving["source"] != _SOURCE_SERVING_FINGERPRINT
+        or serving["source"] == serving["target"]
+    ):
         raise PackageSelfcheckError("SERVING_FINGERPRINT_UNCHANGED")
     ui = _object(value, "ui")
     if (
@@ -370,7 +399,8 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
             "old_app_runtime_state_required",
             "required_index_fingerprint",
             "serving_fingerprint",
-            "trace_v2_read_compatible",
+            "source_release",
+            "trace_compatibility",
             "trusted_last_good_revisions",
         }
         or source.get("compatible_revisions")
@@ -379,9 +409,25 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
         or source.get("old_app_runtime_state_required") is not False
         or source.get("required_index_fingerprint") != index["source"]
         or source.get("serving_fingerprint") != serving["source"]
-        or source.get("trace_v2_read_compatible") is not True
     ):
         raise PackageSelfcheckError("SOURCE_COMPATIBILITY_INVALID")
+    source_release = _object(source, "source_release")
+    if source_release != {
+        "manifest_sha256": (
+            "2db506689d7ed39ac960c63ba7f833b9076901072f3202bd466b8eb60f2d9af5"
+        ),
+        "package_contract_revision": "industry-package-reuse-images-v1",
+        "release_id": "2c4cf220c7cf-87860c8b7496",
+        "revision": "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1",
+    }:
+        raise PackageSelfcheckError("SOURCE_RELEASE_IDENTITY_INVALID")
+    trace_compatibility = _object(source, "trace_compatibility")
+    if trace_compatibility != {
+        "accepted_user_versions": [0, 1, 2],
+        "legacy_v0_profile": "industry-trace-2c4-v0",
+        "target_schema_version": 2,
+    }:
+        raise PackageSelfcheckError("TRACE_COMPATIBILITY_INVALID")
     trusted_last_good = source.get("trusted_last_good_revisions")
     if (
         not isinstance(trusted_last_good, list)
@@ -396,11 +442,14 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
     ):
         raise PackageSelfcheckError("TRUSTED_LAST_GOOD_REVISIONS_INVALID")
     source_config_files = _string_mapping(source, "config_files")
-    if set(source_config_files) != set(config_files) or any(
-        _SHA256.fullmatch(digest) is None
-        for digest in source_config_files.values()
-    ):
+    if source_config_files != _SOURCE_CONFIG_SHA256:
         raise PackageSelfcheckError("SOURCE_CONFIG_IDENTITY_INVALID")
+    if any(
+        config_files[name] != digest
+        for name, digest in source_config_files.items()
+        if name != "pipeline.json"
+    ) or config_files["pipeline.json"] == source_config_files["pipeline.json"]:
+        raise PackageSelfcheckError("TARGET_CONFIG_CHANGESET_INVALID")
     if value.get("target_config_profile") != (
         "serving-runtime-public-config-v1"
     ):

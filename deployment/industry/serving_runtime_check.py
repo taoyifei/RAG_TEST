@@ -22,6 +22,7 @@ _SHA256 = re.compile(r"(?:sha256:)?[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _HTTP_OK = 200
 _PRIVATE_MODE = 0o600
+_TRACE_SCHEMA_TARGET_VERSION = 2
 _CONFIG_NAMES = {
     "corpus-policy.json",
     "intent-router-calibration.json",
@@ -33,6 +34,84 @@ _CONFIG_PROFILE_MODES = {
     "first-deploy-private-v1": "0600",
     "serving-runtime-public-config-v1": "0644",
 }
+_LEGACY_2C4_SCHEMA_PROFILE = "industry-trace-2c4-v0"
+_LEGACY_2C4_SCHEMA = """
+CREATE TABLE traces (
+    trace_id TEXT PRIMARY KEY,
+    schema_version TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    pipeline_fingerprint TEXT NOT NULL,
+    serving_fingerprint TEXT NOT NULL,
+    release_revision TEXT NOT NULL,
+    active_collection TEXT NOT NULL,
+    index_manifest_sha256 TEXT NOT NULL,
+    payload_schema_version INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    refusal_code TEXT,
+    error_code TEXT,
+    feedback_useful INTEGER,
+    capture_complete INTEGER NOT NULL,
+    expires_at TEXT NOT NULL
+);
+CREATE INDEX traces_created_idx
+ON traces(created_at DESC, trace_id DESC);
+CREATE INDEX traces_expires_idx ON traces(expires_at);
+
+CREATE TABLE artifacts (
+    trace_id TEXT NOT NULL,
+    artifact_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    original_bytes INTEGER NOT NULL,
+    compressed_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    compressed_payload BLOB NOT NULL,
+    PRIMARY KEY (trace_id, artifact_id),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
+);
+
+CREATE TABLE spans (
+    trace_id TEXT NOT NULL,
+    span_id TEXT NOT NULL,
+    parent_span_id TEXT,
+    sequence INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    duration_ms INTEGER,
+    status TEXT NOT NULL,
+    reason_code TEXT NOT NULL,
+    attributes_json TEXT NOT NULL,
+    input_artifact_id TEXT,
+    output_artifact_id TEXT,
+    PRIMARY KEY (trace_id, span_id),
+    UNIQUE (trace_id, sequence),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (trace_id, parent_span_id)
+        REFERENCES spans(trace_id, span_id),
+    FOREIGN KEY (trace_id, input_artifact_id)
+        REFERENCES artifacts(trace_id, artifact_id),
+    FOREIGN KEY (trace_id, output_artifact_id)
+        REFERENCES artifacts(trace_id, artifact_id)
+);
+
+CREATE TABLE candidate_decisions (
+    trace_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    stage TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    selected INTEGER NOT NULL,
+    reason_code TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    PRIMARY KEY (trace_id, sequence),
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
+);
+"""
 
 
 class RuntimeCheckError(RuntimeError):
@@ -119,14 +198,21 @@ def pre_update_filesystem_state(
         "config": {"files": files, "profile": config_profile},
         "trace": {
             "filename": trace_database.name,
+            "has_question_columns": schema["has_question_columns"],
             "mode": trace_before["mode"],
+            "quick_check": schema["quick_check"],
+            "schema_profile": schema["schema_profile"],
             "sqlite_user_version": schema["sqlite_user_version"],
+            "trace_count": schema["trace_count"],
         },
     }
 
 
 def pre_update_index_state() -> dict[str, object]:
     """从旧镜像现有依赖读取活动索引身份且不修改运行状态。
+
+    Args:
+        无参数；所有输入来自受控环境变量。
 
     Returns:
         经过 manifest、alias 和 point count 交叉校验的 canonical 字段。
@@ -248,7 +334,7 @@ def backup_trace_database(  # noqa: PLR0912, PLR0915
         try:
             source_connection.backup(destination_connection)
             destination_connection.commit()
-            integrity, page_count, user_version = _sqlite_identity(
+            integrity, page_count, user_version, trace_count = _sqlite_identity(
                 destination_connection
             )
         finally:
@@ -284,7 +370,7 @@ def backup_trace_database(  # noqa: PLR0912, PLR0915
     except sqlite3.Error as error:
         destination.unlink(missing_ok=True)
         raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED") from error
-    if published != (integrity, page_count, user_version):
+    if published != (integrity, page_count, user_version, trace_count):
         destination.unlink(missing_ok=True)
         raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED")
     source_changed = source_before != source_after
@@ -306,6 +392,7 @@ def backup_trace_database(  # noqa: PLR0912, PLR0915
         "source_filename": source.name,
         "sqlite_user_version": user_version,
         "target_revision": target_revision,
+        "trace_count": trace_count,
     }
 
 
@@ -324,6 +411,9 @@ def trace_schema(database: Path) -> dict[str, object]:
             f"file:{urllib.parse.quote(str(database))}?mode=ro", uri=True
         )
         try:
+            quick_check = str(
+                connection.execute("PRAGMA quick_check").fetchone()[0]
+            )
             version = int(
                 connection.execute("PRAGMA user_version").fetchone()[0]
             )
@@ -331,16 +421,120 @@ def trace_schema(database: Path) -> dict[str, object]:
                 str(row[1])
                 for row in connection.execute("PRAGMA table_info(traces)")
             }
+            trace_count = int(
+                connection.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+            )
+            if quick_check != "ok":
+                raise RuntimeCheckError("TRACE_QUICK_CHECK_FAILED")
+            question_columns = {
+                "question_text",
+                "question_sha256",
+            } & columns
+            if question_columns and question_columns != {
+                "question_text",
+                "question_sha256",
+            }:
+                raise RuntimeCheckError("TRACE_QUESTION_COLUMNS_PARTIAL")
+            if version == 0:
+                if _sqlite_schema_identity(connection) != (
+                    _legacy_2c4_schema_identity()
+                ):
+                    raise RuntimeCheckError(
+                        "TRACE_LEGACY_V0_SCHEMA_MISMATCH"
+                    )
+                schema_profile = _LEGACY_2C4_SCHEMA_PROFILE
+            elif version == 1:
+                schema_profile = "trace-v1"
+            elif (
+                version == _TRACE_SCHEMA_TARGET_VERSION
+                and question_columns
+                == {
+                    "question_text",
+                    "question_sha256",
+                }
+            ):
+                schema_profile = "trace-v2"
+            elif version == _TRACE_SCHEMA_TARGET_VERSION:
+                raise RuntimeCheckError("TRACE_SCHEMA_VERSION_MISMATCH")
+            else:
+                raise RuntimeCheckError("TRACE_SCHEMA_VERSION_UNSUPPORTED")
         finally:
             connection.close()
+    except RuntimeCheckError:
+        raise
     except sqlite3.Error as error:
         raise RuntimeCheckError("TRACE_SCHEMA_READ_FAILED") from error
     return {
-        "has_question_columns": {
-            "question_text",
-            "question_sha256",
-        }.issubset(columns),
+        "has_question_columns": bool(question_columns),
+        "quick_check": quick_check,
+        "schema_profile": schema_profile,
         "sqlite_user_version": version,
+        "trace_count": trace_count,
+    }
+
+
+def _legacy_2c4_schema_identity() -> dict[str, object]:
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.executescript(_LEGACY_2C4_SCHEMA)
+        return _sqlite_schema_identity(connection)
+    finally:
+        connection.close()
+
+
+def _sqlite_schema_identity(
+    connection: sqlite3.Connection,
+) -> dict[str, object]:
+    """返回不含数据的 SQLite 表、列、索引和外键结构身份。"""
+    tables = tuple(
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY name"
+        )
+    )
+    auxiliary = tuple(
+        (str(row[0]), str(row[1]))
+        for row in connection.execute(
+            "SELECT type, name FROM sqlite_master "
+            "WHERE type IN ('trigger', 'view') ORDER BY type, name"
+        )
+    )
+    table_identities: dict[str, object] = {}
+    for table in tables:
+        escaped = table.replace('"', '""')
+        columns = tuple(
+            tuple(row)
+            for row in connection.execute(
+                f'PRAGMA table_info("{escaped}")'
+            )
+        )
+        foreign_keys = tuple(
+            tuple(row)
+            for row in connection.execute(
+                f'PRAGMA foreign_key_list("{escaped}")'
+            )
+        )
+        indexes = []
+        for row in connection.execute(f'PRAGMA index_list("{escaped}")'):
+            index_name = str(row[1])
+            escaped_index = index_name.replace('"', '""')
+            index_columns = tuple(
+                tuple(item)
+                for item in connection.execute(
+                    f'PRAGMA index_xinfo("{escaped_index}")'
+                )
+            )
+            indexes.append((tuple(row), index_columns))
+        table_identities[table] = {
+            "columns": columns,
+            "foreign_keys": foreign_keys,
+            "indexes": tuple(indexes),
+        }
+    return {
+        "auxiliary": auxiliary,
+        "tables": table_identities,
     }
 
 
@@ -730,14 +924,14 @@ def _volatile_source_observation(path: Path) -> dict[str, int | None]:
 
 def _sqlite_identity(
     connection: sqlite3.Connection,
-) -> tuple[str, int, int]:
-    """读取 SQLite 完整性、页数和 user_version。
+) -> tuple[str, int, int, int]:
+    """读取 SQLite 完整性、页数、版本和 Trace 条数。
 
     Args:
         connection: 已打开的 SQLite 连接。
 
     Returns:
-        integrity_check、page_count 与 user_version。
+        integrity_check、page_count、user_version 与 Trace 条数。
 
     """
     integrity_row = connection.execute("PRAGMA integrity_check").fetchone()
@@ -746,7 +940,10 @@ def _sqlite_identity(
     user_version = int(
         connection.execute("PRAGMA user_version").fetchone()[0]
     )
-    return integrity, page_count, user_version
+    trace_count = int(
+        connection.execute("SELECT COUNT(*) FROM traces").fetchone()[0]
+    )
+    return integrity, page_count, user_version, trace_count
 
 
 def _fsync_directory(path: Path) -> None:
@@ -783,6 +980,9 @@ def _arguments() -> argparse.Namespace:
 
 def main() -> int:
     """执行只读身份、在线 Trace 备份或 schema 报告命令。
+
+    Args:
+        无参数；命令行参数由 argparse 解析。
 
     Returns:
         合同成立返回 0，否则返回 1 且只输出稳定错误码。

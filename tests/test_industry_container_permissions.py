@@ -108,10 +108,7 @@ def test_uid_10001_helper_reads_private_sources_and_exports_private_backup(
         path.chmod(0o600)
     database = state / "traces.sqlite3"
     with sqlite3.connect(database) as connection:
-        connection.execute(
-            "CREATE TABLE traces (trace_id TEXT PRIMARY KEY, "
-            "question_sha256 TEXT NOT NULL)"
-        )
+        connection.execute("CREATE TABLE traces (trace_id TEXT PRIMARY KEY)")
         connection.execute("PRAGMA user_version=1")
     database.chmod(0o600)
     helper = _ROOT / "deployment" / "industry" / "serving_runtime_check.py"
@@ -143,8 +140,12 @@ def test_uid_10001_helper_reads_private_sources_and_exports_private_backup(
         assert set(filesystem_report["config"]["files"]) == _CONFIG_NAMES
         assert filesystem_report["trace"] == {
             "filename": "traces.sqlite3",
+            "has_question_columns": False,
             "mode": "0600",
+            "quick_check": "ok",
+            "schema_profile": "trace-v1",
             "sqlite_user_version": 1,
+            "trace_count": 0,
         }
 
         trace_backup = backup / "traces-before.sqlite3"
@@ -169,6 +170,7 @@ def test_uid_10001_helper_reads_private_sources_and_exports_private_backup(
         assert backup_result.returncode == 0, backup_result.stderr
         report = json.loads(backup_result.stdout)
         assert report["owner"] == {"gid": os.getgid(), "uid": os.getuid()}
+        assert report["trace_count"] == 0
         assert trace_backup.read_bytes()
         assert stat.S_IMODE(trace_backup.stat().st_mode) == 0o600
         assert trace_backup.stat().st_uid == os.getuid()

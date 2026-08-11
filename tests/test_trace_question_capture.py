@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from deployment.industry import serving_runtime_check
 from rag_app.tracing.models import (
     TraceIdentity,
     TraceMode,
@@ -276,6 +277,53 @@ def test_v1_database_migrates_to_v2_idempotently(tmp_path: Path) -> None:
     assert {"question_text", "question_sha256"} <= columns
     assert "question_preview" not in columns
     assert version == 2
+
+
+def test_exact_2c4_v0_database_migrates_93_rows_to_v2(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "legacy-2c4.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.executescript(serving_runtime_check._LEGACY_2C4_SCHEMA)
+        connection.executemany(
+            """
+            INSERT INTO traces (
+                trace_id, schema_version, mode, created_at,
+                pipeline_fingerprint, serving_fingerprint,
+                release_revision, active_collection,
+                index_manifest_sha256, payload_schema_version,
+                status, capture_complete, expires_at
+            ) VALUES (?, '2', 'SAFE', '2026-08-07T00:00:00+00:00',
+                      ?, ?, 'release-2c4', 'rag-industry-active', ?, 1,
+                      'ANSWERED', 1, '2026-08-14T00:00:00+00:00')
+            """,
+            (
+                (
+                    f"{index:032x}",
+                    "sha256:" + "1" * 64,
+                    "sha256:" + "2" * 64,
+                    "3" * 64,
+                )
+                for index in range(93)
+            ),
+        )
+    path.chmod(0o600)
+
+    store = TraceStore(path)
+    store.initialize()
+    store.close()
+
+    with sqlite3.connect(path) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(traces)")
+        }
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        trace_count = connection.execute(
+            "SELECT COUNT(*) FROM traces"
+        ).fetchone()[0]
+    assert version == 2
+    assert trace_count == 93
+    assert {"question_text", "question_sha256"} <= columns
 
 
 def test_partial_schema_migration_fails_closed(tmp_path: Path) -> None:

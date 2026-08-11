@@ -159,6 +159,8 @@ def build_app_archive(
     repository_root: Path,
     revision: str,
     destination: Path,
+    config_directory: Path | None = None,
+    assets_manifest_path: Path | None = None,
 ) -> str:
     """构建、自检并保存 linux/amd64 app 镜像。
 
@@ -166,6 +168,8 @@ def build_app_archive(
         repository_root: Docker build context。
         revision: 绑定 wheel 与 OCI label 的完整 Git SHA。
         destination: `app-image.tar.gz` 输出路径。
+        config_directory: 可选的镜像内 `deployment/config` 精确覆盖目录。
+        assets_manifest_path: 与配置覆盖匹配的可选资产清单。
 
     Returns:
         已保存进归档的 app image tag。
@@ -186,7 +190,12 @@ def build_app_archive(
         prefix=".app-context-",
     ) as temporary_name:
         context = Path(temporary_name)
-        _prepare_app_build_context(repository_root, context)
+        _prepare_app_build_context(
+            repository_root,
+            context,
+            config_directory=config_directory,
+            assets_manifest_path=assets_manifest_path,
+        )
         _run_checked(
             (
                 "/usr/bin/env",
@@ -337,7 +346,13 @@ def _select_local_ocr_image(root: Path) -> str:
     return candidates[0]
 
 
-def _prepare_app_build_context(root: Path, destination: Path) -> None:
+def _prepare_app_build_context(
+    root: Path,
+    destination: Path,
+    *,
+    config_directory: Path | None = None,
+    assets_manifest_path: Path | None = None,
+) -> None:
     files = (
         "Dockerfile",
         "requirements.runtime.lock",
@@ -364,6 +379,37 @@ def _prepare_app_build_context(root: Path, destination: Path) -> None:
             raise SimpleBuildError(f"app build 目录缺失：{relative}")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, target)
+    if (config_directory is None) != (assets_manifest_path is None):
+        raise SimpleBuildError(
+            "app config 覆盖与资产清单必须同时提供。"
+        )
+    if config_directory is None or assets_manifest_path is None:
+        return
+    if (
+        not config_directory.is_dir()
+        or config_directory.is_symlink()
+        or not assets_manifest_path.is_file()
+        or assets_manifest_path.is_symlink()
+    ):
+        raise SimpleBuildError("app config 覆盖输入无效。")
+    config_target = destination / "deployment/config"
+    source_entries = list(config_directory.iterdir())
+    target_entries = list(config_target.iterdir())
+    if (
+        {path.name for path in source_entries}
+        != {path.name for path in target_entries}
+        or any(
+            not path.is_file() or path.is_symlink()
+            for path in source_entries
+        )
+    ):
+        raise SimpleBuildError("app config 覆盖 exact set 无效。")
+    for source in source_entries:
+        shutil.copyfile(source, config_target / source.name)
+    shutil.copyfile(
+        assets_manifest_path,
+        destination / "deployment/ASSETS.sha256",
+    )
 
 
 def _build_local_project_wheel(source: Path, destination: Path) -> None:

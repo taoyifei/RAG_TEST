@@ -175,6 +175,7 @@ if not isinstance(source, dict):
 compatible = source.get("compatible_revisions")
 source_config = source.get("config_files")
 trusted_last_good = source.get("trusted_last_good_revisions")
+trace_compatibility = source.get("trace_compatibility")
 target_config = manifest.get("config_files")
 if (
     re.fullmatch(r"[0-9a-f]{40}", old_revision) is None
@@ -186,7 +187,12 @@ if (
         for item in compatible
     )
     or source.get("old_app_runtime_state_required") is not False
-    or source.get("trace_v2_read_compatible") is not True
+    or trace_compatibility
+    != {
+        "accepted_user_versions": [0, 1, 2],
+        "legacy_v0_profile": "industry-trace-2c4-v0",
+        "target_schema_version": 2,
+    }
     or source.get("required_index_fingerprint") != target_index
     or not isinstance(trusted_last_good, list)
     or not trusted_last_good
@@ -996,6 +1002,9 @@ files = config.get("files") if isinstance(config, dict) else None
 trace = value.get("trace") if isinstance(value, dict) else None
 source = manifest.get("source_compatibility")
 expected_files = source.get("config_files") if isinstance(source, dict) else None
+trace_compatibility = (
+    source.get("trace_compatibility") if isinstance(source, dict) else None
+)
 expected = {
     "corpus-policy.json",
     "intent-router-calibration.json",
@@ -1030,10 +1039,43 @@ if (
     )
     or not isinstance(trace, dict)
     or set(trace)
-    != {"filename", "mode", "sqlite_user_version"}
+    != {
+        "filename",
+        "has_question_columns",
+        "mode",
+        "quick_check",
+        "schema_profile",
+        "sqlite_user_version",
+        "trace_count",
+    }
     or trace.get("filename") != "traces.sqlite3"
     or trace.get("mode") != "0600"
-    or trace.get("sqlite_user_version") not in {1, 2}
+    or trace.get("quick_check") != "ok"
+    or not isinstance(trace.get("trace_count"), int)
+    or isinstance(trace.get("trace_count"), bool)
+    or trace["trace_count"] < 0
+    or not isinstance(trace_compatibility, dict)
+    or trace.get("sqlite_user_version")
+    not in trace_compatibility.get("accepted_user_versions", [])
+    or (
+        trace.get("sqlite_user_version") == 0
+        and (
+            trace.get("schema_profile")
+            != trace_compatibility.get("legacy_v0_profile")
+            or trace.get("has_question_columns") is not False
+        )
+    )
+    or (
+        trace.get("sqlite_user_version") == 1
+        and trace.get("schema_profile") != "trace-v1"
+    )
+    or (
+        trace.get("sqlite_user_version") == 2
+        and (
+            trace.get("schema_profile") != "trace-v2"
+            or trace.get("has_question_columns") is not True
+        )
+    )
 ):
     raise SystemExit("PRE_UPDATE_FILESYSTEM_IDENTITY_INVALID")
 path = pathlib.Path(sys.argv[2])
@@ -1360,7 +1402,7 @@ trace_report="$(run_industry_compose "${env_file}" "${old_compose}" \
   "${target_revision}")" \
   || fail "TRACE_BACKUP_FAILED"
 python3 - "${trace_report}" "${transaction}/trace-backup.json" \
-  "${target_revision}" <<'PY'
+  "${target_revision}" "${transaction}/pre-filesystem.json" <<'PY'
 import json
 import os
 import pathlib
@@ -1368,6 +1410,8 @@ import re
 import sys
 
 value = json.loads(sys.argv[1])
+pre_filesystem = json.loads(pathlib.Path(sys.argv[4]).read_bytes())
+pre_trace = pre_filesystem.get("trace")
 expected_fields = {
     "backup_filename",
     "bytes",
@@ -1383,6 +1427,7 @@ expected_fields = {
     "source_filename",
     "sqlite_user_version",
     "target_revision",
+    "trace_count",
 }
 stable = value.get("source_database_identity")
 observation = value.get("source_database_observation")
@@ -1404,7 +1449,14 @@ if (
     or not isinstance(value.get("bytes"), int)
     or isinstance(value.get("bytes"), bool)
     or value["bytes"] <= 0
-    or value.get("sqlite_user_version") not in {1, 2}
+    or value.get("sqlite_user_version") not in {0, 1, 2}
+    or not isinstance(value.get("trace_count"), int)
+    or isinstance(value.get("trace_count"), bool)
+    or value["trace_count"] < 0
+    or not isinstance(pre_trace, dict)
+    or not isinstance(pre_trace.get("trace_count"), int)
+    or isinstance(pre_trace.get("trace_count"), bool)
+    or value["trace_count"] < pre_trace["trace_count"]
     or not isinstance(value.get("source_changed_during_backup"), bool)
     or not isinstance(stable, dict)
     or set(stable)

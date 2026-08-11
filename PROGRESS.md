@@ -1,5 +1,52 @@
 # DOCX RAG 交付进度
 
+## CURRENT STATUS：2026-08-11 e5c 真实 Industry baseline 修正
+
+- 服务器执行 `e5c98cead384` 更新包时在
+  `config_filesystem_precheck/PRE_UPDATE_FILESYSTEM_IDENTITY_FAILED` 停止，事务为
+  `precheck_failed`，发生在 mutation 前；App、private env、活动索引、worker、OCR、
+  Qdrant 和 corpus 均未改变。该 attempt 及证据必须保留，旧 updater 不得重跑。
+- 服务器五份 config 的 raw SHA 与本地真实首部署制品
+  `artifacts/industry-deploy/2c4cf220c7cf-87860c8b7496/RELEASE_MANIFEST.json`
+  完全一致。该 release 已用自身 `package_selfcheck.py release` 复核为
+  `file_count=29/payload_count=27`；manifest SHA 为
+  `2db506689d7ed39ac960c63ba7f833b9076901072f3202bd466b8eb60f2d9af5`。
+  服务器没有 config 漂移，错误是 `e5c98ce` builder 把仓库通用 config 当成 source。
+- builder 现在固定认证真实 source release ID、revision、manifest SHA、五文件 SHA、
+  `industry-package-reuse-images-v1` 合同、source index
+  `sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58`
+  和 source serving
+  `sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e`。
+  target 复制该 Industry config，只把 `pipeline.prompt_revision` 更新为实际代码的
+  `sha256:7a10e80a64034ce92953cd8e7e4b87ba59ce799811cf3e6b7eb5f02575885717`；
+  五文件中只有 `pipeline.json` raw SHA 改变，source/target index fingerprint 均保持
+  `d2497bc...`，不重新索引。
+- 目标 Industry config 与按实际文件生成的临时 `ASSETS.sha256` 同时注入 app 镜像构建
+  context；runtime archive 交付同一份 target config。源码树仍使用并已通过仓库通用
+  config 的 13 文件 asset-selfcheck，不靠刷新通用 SHA 掩盖 Industry 语义差异。
+- Trace v0 不再仅凭 `PRAGMA user_version=0` 放行。包内 helper 要求 `quick_check=ok`、
+  0600 普通文件，并把四张表、全部列、索引和外键与 2c4 schema 精确比较；任意额外列或
+  简化 v0 均报 `TRACE_LEGACY_V0_SCHEMA_MISMATCH`。合法 v0 会在 mutation 前使用 SQLite
+  online backup，报告并保存 93 条；目标 App 启动后原子迁移为 v2，再要求问题双列存在、
+  `quick_check=ok` 且 Trace 条数不小于备份。
+- 真实红测为 `3 failed, 21 deselected`：旧 helper 不输出 quick-check/profile/count、
+  不拒绝未知 v0、备份不记录条数。修复后 runtime helper 为 `24 passed`；目标 App 的
+  精确 2c4 v0→v2/93 条迁移专项已通过；完整 serving update 状态机为
+  `74 passed in 262.94s`，其中正常更新验证 v0 备份 93 条及迁移后 v2 仍为 93 条，失败
+  验证、自动回滚、人工撤回和硬中断恢复均保持原合同。
+- `artifacts/industry-serving-update/e5c98cead384` 与
+  `artifacts/industry-serving-update/a50d5d5f8f71` 均永久失效，不得上传、重跑、部署或
+  作为验收证据。不得手改三份 config、不得手改 `user_version`、不得执行
+  `run-index.sh`。新的 8 文件 app-only 包只能从本轮新 clean commit 构建并 fresh 验证。
+- 最终单次全量为 `1282 passed, 61 warnings in 830.29s`，0 failed。首轮全量的
+  `1280 passed, 2 failed` 仅暴露两个旧测试仍要求旧 fake 签名/Git blob source；改为验证
+  目标 config 参数和真实首部署 release 后从头全绿。Qdrant 使用固定
+  `qdrant/qdrant:v1.18.3`、无 volume、仅绑定 `127.0.0.1:6333` 的临时容器；结束时
+  `collections=[]`、`Mounts=[]`，精确容器已删除且端口释放。compileall、全仓 Ruff、
+  strict mypy（132 source files）、Google docstring、15 个 Shell、simple/Industry 两个
+  Compose profile、Node 语法/2 项流式测试、源码 13 文件 asset-selfcheck 和
+  `git diff --check` 均退出 0。
+
 ## CURRENT STATUS：2026-08-11 a50d post-verified 人工回滚红灯
 
 - 本轮实际从 clean `Industry@a50d5d5f8f71593df48c6addb12b97b7890d006f`

@@ -43,7 +43,7 @@ def test_build_app_archive_runs_build_selfcheck_and_save(
     monkeypatch.setattr(
         simple,
         "_prepare_app_build_context",
-        lambda *_: None,
+        lambda *_args, **_kwargs: None,
     )
     destination = tmp_path / "app-image.tar.gz"
 
@@ -75,6 +75,52 @@ def test_build_app_archive_runs_build_selfcheck_and_save(
     assert saved == [image]
     with gzip.open(destination, "rb") as stream:
         assert stream.read() == b"docker archive"
+
+
+def test_app_build_context_applies_config_and_manifest_together(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    destination = tmp_path / "context"
+    override = tmp_path / "override"
+    for relative in (
+        "deployment/assets",
+        "deployment/config",
+        "deployment/runtime/wheelhouse",
+        "frontend",
+    ):
+        (root / relative).mkdir(parents=True)
+    for relative in (
+        "Dockerfile",
+        "requirements.runtime.lock",
+        "deployment/ASSETS.sha256",
+        "deployment/runtime/WHEELS.sha256",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"source:{relative}\n", encoding="utf-8")
+    for name in ("pipeline.json", "retrieval.json"):
+        (root / "deployment/config" / name).write_text(
+            f"source:{name}\n", encoding="utf-8"
+        )
+        override.mkdir(exist_ok=True)
+        (override / name).write_text(f"target:{name}\n", encoding="utf-8")
+    target_manifest = tmp_path / "target-ASSETS.sha256"
+    target_manifest.write_text("target manifest\n", encoding="ascii")
+
+    simple._prepare_app_build_context(
+        root,
+        destination,
+        config_directory=override,
+        assets_manifest_path=target_manifest,
+    )
+
+    assert (
+        destination / "deployment/config/pipeline.json"
+    ).read_text(encoding="utf-8") == "target:pipeline.json\n"
+    assert (
+        destination / "deployment/ASSETS.sha256"
+    ).read_text(encoding="ascii") == "target manifest\n"
 
 
 def test_simple_bundle_has_four_independent_archives(
