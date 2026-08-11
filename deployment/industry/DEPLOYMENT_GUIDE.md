@@ -35,6 +35,10 @@ UID 10001 私有文件、canonical Compose 和日志时序四个 P0，同样永�
 old→target revision 切换，并存在 SAFE Trace 瞬时不可见、precheck 无法重试、
 validated/last-good 崩溃窗口及 source config 未绑定等缺口，也永久失效，不得上传、
 部署或作为验收证据。
+复核后的 `artifacts/industry-serving-update/195f9aca2c63` 又错误要求真实旧版必须已有
+`last-good.json`、不能从 source pointer 恢复 validated、把 Trace 合法 WAL 写入当成
+源文件篡改，且不同 update ID 没有共享互斥，因此同样永久失效，不得上传、部署或作为
+验收证据。
 
 新包是 simple serving app update，不是 full release。顶层 exact set 为：
 
@@ -58,14 +62,22 @@ secret、真实服务器地址或问题正文。更新前由包内标准库 help
 selfcheck、更新前身份和 Trace 备份、原子安装版本化 runtime/candidate env、加载 App
 image、仅 force-recreate `rag-industry-app`、runtime-state v2、包内
 `verify-app-update.sh`。失败调用包内 `rollback-app-update.sh` 并复验旧身份。
+updater 在读取或创建任何 update audit root/attempt 前，先对共同 backup root 下的固定
+`serving-update.lock` 取得非阻塞全局 `flock`，并持有到整个进程退出。backup root 与锁
+文件都不得为 symlink，锁必须是 0600 普通文件且打开 descriptor 与路径 inode 一致；
+缺少 `flock` 或已有任意 update ID 正在执行时立即停止，不得并发运行第二个更新。
 每次执行保留独立 `attempt-000N/transaction-state.json`，状态只允许
 `prepared/prechecking/precheck_failed/activated/verifying/validated/verified/rolled_back/
 rollback_failed`。激活前失败写入带稳定 stage/code 的 `precheck_failed`，不执行回滚，
 并允许同包创建新 attempt；回滚成功后的同包重试也保留旧证据并创建新 attempt。
-`rollback_failed`、未知状态及除 `validated` 外的中断非终态均 fail closed。
-`validated` 表示完整 verify 已生成并 fsync `verified-state.json`，但父事务尚未完成
-last-good；再次执行只做必要的目标身份检查和 promote/reconcile，不重建 App。pointer、
-snapshot、manifest 或文件 SHA 已存在但损坏时必须 fail closed，不得用新 pointer 覆盖。
+`rollback_failed` 与未知状态 fail closed。`verifying` 若已有完整 `verified-state.json`，
+必须先重新验证当前目标 runtime 再继续；缺少该文件时重新运行完整 verify 或停止。
+`validated` 表示完整 verify 已生成并 fsync 该文件，但父事务尚未完成 last-good；
+`verified` 重入也要重新执行幂等 verify。三种恢复路径都会重新从当前目标容器导出
+runtime-state，并交叉核对 pre-index、target contract、verified-state、UPDATE_MANIFEST、
+活动 alias/collection/manifest/point、index/serving fingerprint、UI Cookie、Trace 保留
+策略与 schema；恢复不再次重建 App。pointer、snapshot、manifest 或文件 SHA 已存在但
+损坏时必须 fail closed，不得用新 pointer 覆盖。
 
 source config 身份由 manifest 中五文件 exact SHA、source revision、source serving/index
 fingerprint 和显式 profile 共同绑定。首次部署来源使用
@@ -75,10 +87,25 @@ group/other writable 和 SHA 漂移，并保持只读挂载。old/new Compose �
 source/candidate env；App 与 worker 只允许 `RAG_RELEASE_REVISION` 按声明的 40 位 SHA
 切换，其他未授权环境差异仍 fail closed。
 
+真实旧版 `2c4cf220...` 只生成 `last-good.env`，没有 JSON state 或 pointer。env-only
+遗留状态仅在文件 mode 为 0600、非 symlink，且字节 SHA 与当前 source private env 精确
+一致时接受；更新器保留原始字节，不补造历史 state。更新前会把经旧镜像、Compose、
+config、live/ready、index 与 worker 身份验证的 source 写成 canonical checkpoint 和密封
+snapshot。已有 legacy pair、可信更早 pointer、当前 source pointer 或 pointer absent 都
+有独立分支；state-only、未知 revision、重复键、权限、snapshot/manifest/SHA 漂移一律
+拒绝。最终晋升只接受事务记录的 source、已精确晋升的 target，或记录为 absent 且仍
+absent 三种前态。
+
 UI/Trace 现场验收不会把 SAFE Trace 改为同步持久化。收到唯一末尾 `final` 后，helper
 使用单调时钟进行有界轮询，只对空 list、RUNNING、detail 404 和尚未出现的问题字段重试；
 鉴权/校验/服务错误、错误或重复 trace ID、终态问题/SHA 不一致立即失败。脱敏报告只记录
 `trace_visibility_attempts` 与 `trace_visibility_elapsed_ms`。
+
+更新前 Trace 备份继续使用 SQLite online backup，不要求停止正常 writer。报告 schema v2
+把 device/inode/UID/GID/file type/mode 视为不可变身份，把主库 bytes/mtime 与 WAL bytes
+视为合法易变观测；前者任何漂移都停止，后者变化会被记录但不会误判。目标备份会重新
+只读打开，并复核 SHA、页数、`user_version` 和 integrity。备份及审计报告仍是 0600，
+不得进入交付包、普通日志或问题正文导出路径。
 
 该更新明确禁止运行 `run-index.sh`，不启动或重启 worker/OCR/Qdrant，不修改 alias、
 manifest、collection、point、answer cache 或 GM corpus。index fingerprint 必须保持

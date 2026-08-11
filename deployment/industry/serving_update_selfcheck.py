@@ -370,6 +370,7 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
             "required_index_fingerprint",
             "serving_fingerprint",
             "trace_v2_read_compatible",
+            "trusted_last_good_revisions",
         }
         or source.get("compatible_revisions")
         != ["2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"]
@@ -380,6 +381,19 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
         or source.get("trace_v2_read_compatible") is not True
     ):
         raise PackageSelfcheckError("SOURCE_COMPATIBILITY_INVALID")
+    trusted_last_good = source.get("trusted_last_good_revisions")
+    if (
+        not isinstance(trusted_last_good, list)
+        or not trusted_last_good
+        or trusted_last_good[0]
+        != "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"
+        or len(set(trusted_last_good)) != len(trusted_last_good)
+        or any(
+            not isinstance(item, str) or _REVISION.fullmatch(item) is None
+            for item in trusted_last_good
+        )
+    ):
+        raise PackageSelfcheckError("TRUSTED_LAST_GOOD_REVISIONS_INVALID")
     source_config_files = _string_mapping(source, "config_files")
     if set(source_config_files) != set(config_files) or any(
         _SHA256.fullmatch(digest) is None

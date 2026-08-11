@@ -97,6 +97,8 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
     )
     assert syntax.returncode == 0, syntax.stderr
     command_text = commands.read_text(encoding="utf-8")
+    assert command_text.splitlines()[0] == "set -euo pipefail"
+    assert "command -v flock" in command_text
     assert "transaction-state.json" in command_text
     assert "run-index.sh" in command_text
     manifest = json.loads((output / "UPDATE_MANIFEST.json").read_bytes())
@@ -126,6 +128,9 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         != (manifest["serving_fingerprint"]["source"])
     )
     assert manifest["source_compatibility"]["trace_v2_read_compatible"] is True
+    assert manifest["source_compatibility"][
+        "trusted_last_good_revisions"
+    ][0] == build_industry_app_update._OLD_REVISION
     assert manifest["revision"] == _REVISION
     assert manifest["schema_version"] == "2"
     assert manifest["package_contract_revision"] == (

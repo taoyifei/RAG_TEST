@@ -48,6 +48,7 @@ from scripts.industry_bundle.images import (  # noqa: E402
 __all__ = ["IndustryAppUpdateBuildError", "build_industry_app_update"]
 
 _OLD_REVISION = "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"
+_REVISION_LENGTH = 40
 _INDEX_FINGERPRINT = (
     "sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a"
 )
@@ -328,9 +329,12 @@ def _copy_package_programs(root: Path, stage: Path) -> None:
         destination.chmod(0o755)
     (stage / "SERVER_UPDATE_COMMANDS.txt").write_text(
         (
+            "set -euo pipefail\n"
             "# Replace placeholders; start from a fresh shell.\n"
             "# Do not source the private env.\n"
             "# App-only: do not start or restart worker/OCR/Qdrant.\n"
+            "command -v flock >/dev/null 2>&1 || { "
+            "printf 'FLOCK_NOT_FOUND\\n' >&2; exit 1; }\n"
             "PACKAGE_DIR=/absolute/path/to/industry-serving-update\n"
             "ENV_FILE=/absolute/path/to/rag-industry.env\n"
             'test "${PACKAGE_DIR}" = "$(realpath "${PACKAGE_DIR}")"\n'
@@ -468,6 +472,9 @@ def _update_manifest(
             "required_index_fingerprint": _INDEX_FINGERPRINT,
             "serving_fingerprint": _SOURCE_SERVING_FINGERPRINT,
             "trace_v2_read_compatible": True,
+            "trusted_last_good_revisions": _source_ancestor_revisions(
+                root, _OLD_REVISION
+            ),
         },
         "target": {
             "alias": "rag-industry-active",
@@ -492,6 +499,38 @@ def _update_manifest(
         for name in sorted(_PACKAGE_FILES - {"UPDATE_MANIFEST.json"})
     }
     return manifest
+
+
+def _source_ancestor_revisions(root: Path, revision: str) -> list[str]:
+    """导出服务器无需 Git 即可核验的 source 一方祖先集合。
+
+    Args:
+        root: clean Industry 仓库根目录。
+        revision: 当前支持升级的 source revision。
+
+    Returns:
+        以 source 开头的 first-parent 完整 SHA 列表。
+
+    Raises:
+        IndustryAppUpdateBuildError: Git 输出不是可信祖先序列。
+
+    """
+    output = _git_output(root, "rev-list", "--first-parent", revision)
+    values = output.splitlines() if output else [revision]
+    if (
+        not values
+        or values[0] != revision
+        or len(set(values)) != len(values)
+        or any(
+            len(value) != _REVISION_LENGTH
+            or any(character not in "0123456789abcdef" for character in value)
+            for value in values
+        )
+    ):
+        raise IndustryAppUpdateBuildError(
+            "SOURCE_ANCESTOR_REVISIONS_INVALID"
+        )
+    return values
 
 
 def _verify_stage(stage: Path) -> None:

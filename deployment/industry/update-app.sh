@@ -67,6 +67,28 @@ source_config_profile="$(manifest_value source_compatibility.config_profile)" \
   || fail "SOURCE_CONFIG_PROFILE_INVALID"
 target_config_profile="$(manifest_value target_config_profile)" \
   || fail "TARGET_CONFIG_PROFILE_INVALID"
+[[ -d "${backup_path}" && ! -L "${backup_path}" ]] \
+  || fail "BACKUP_PATH_INVALID"
+command -v flock >/dev/null 2>&1 || fail "FLOCK_NOT_FOUND"
+lock_path="${backup_path}/serving-update.lock"
+if [[ ! -e "${lock_path}" && ! -L "${lock_path}" ]]; then
+  (
+    set -o noclobber
+    umask 077
+    : >"${lock_path}"
+  ) 2>/dev/null || true
+fi
+[[ -f "${lock_path}" && ! -L "${lock_path}" ]] \
+  || fail "SERVING_UPDATE_LOCK_INVALID"
+exec {update_lock_fd}<>"${lock_path}" \
+  || fail "SERVING_UPDATE_LOCK_OPEN_FAILED"
+lock_descriptor="/proc/${BASHPID}/fd/${update_lock_fd}"
+chmod 600 "${lock_descriptor}" \
+  || fail "SERVING_UPDATE_LOCK_MODE_FAILED"
+[[ ! -L "${lock_path}" && "${lock_path}" -ef "${lock_descriptor}" ]] \
+  || fail "SERVING_UPDATE_LOCK_REPLACED"
+flock -n "${update_lock_fd}" \
+  || fail "SERVING_UPDATE_ALREADY_RUNNING"
 update_id="${target_revision:0:12}-${runtime_archive_sha:0:12}"
 runtime_parent="${release_root}/serving-updates"
 runtime_dir="${runtime_parent}/${update_id}"
@@ -168,6 +190,7 @@ if not isinstance(source, dict):
     raise SystemExit("SOURCE_COMPATIBILITY_INVALID")
 compatible = source.get("compatible_revisions")
 source_config = source.get("config_files")
+trusted_last_good = source.get("trusted_last_good_revisions")
 target_config = manifest.get("config_files")
 if (
     re.fullmatch(r"[0-9a-f]{40}", old_revision) is None
@@ -181,6 +204,16 @@ if (
     or source.get("old_app_runtime_state_required") is not False
     or source.get("trace_v2_read_compatible") is not True
     or source.get("required_index_fingerprint") != target_index
+    or not isinstance(trusted_last_good, list)
+    or not trusted_last_good
+    or not compatible
+    or trusted_last_good[0] != compatible[0]
+    or len(set(trusted_last_good)) != len(trusted_last_good)
+    or any(
+        not isinstance(item, str)
+        or re.fullmatch(r"[0-9a-f]{40}", item) is None
+        for item in trusted_last_good
+    )
     or source.get("config_profile")
     not in {
         "first-deploy-private-v1",
@@ -284,6 +317,34 @@ finally:
 PY
 }
 
+validate_target_runtime_checkpoint() {
+  local transaction_path="$1"
+  local candidate
+  local published="${transaction_path}/runtime-state-before-finalize.json"
+  candidate="$(mktemp \
+    "${transaction_path}/.runtime-state-before-finalize.XXXXXX")" \
+    || return 1
+  chmod 600 "${candidate}" || return 1
+  if ! run_industry_compose \
+    "${env_file}" "${runtime_dir}/compose.yaml" \
+    exec -T rag-industry-app rag-app runtime-state >"${candidate}"; then
+    rm -f -- "${candidate}"
+    return 1
+  fi
+  if ! python3 "${runtime_dir}/runtime_check.py" \
+    validate-runtime-state \
+    "${transaction_path}/pre-index.json" \
+    "${transaction_path}/target-contract.json" \
+    "${transaction_path}/verified-state.json" \
+    "${transaction_path}/UPDATE_MANIFEST.json" "${candidate}" \
+    >/dev/null; then
+    rm -f -- "${candidate}"
+    return 1
+  fi
+  mv -f -- "${candidate}" "${published}" || return 1
+  chmod 600 "${published}" || return 1
+}
+
 update_root="${backup_path}/serving-updates/${update_id}"
 if [[ -e "${update_root}" ]]; then
   [[ -d "${update_root}" && ! -L "${update_root}" ]] \
@@ -363,7 +424,7 @@ for path in root.iterdir():
         )
     ):
         raise SystemExit("UPDATE_ATTEMPT_ID_INVALID")
-    if value.get("state") in {"validated", "verified"}:
+    if value.get("state") in {"validated", "verified", "verifying"}:
         current.append(path)
 if len(current) != 1:
     raise SystemExit("CURRENT_ATTEMPT_INVALID")
@@ -378,20 +439,34 @@ import sys
 print(json.loads(pathlib.Path(sys.argv[1]).read_bytes())["state"])
 PY
   )" || fail "IDEMPOTENT_TRANSACTION_INVALID"
+  validate_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
+    || fail "RECOVERY_COMPOSE_INVALID"
+  verify_industry_app_identity "${env_file}" true \
+    || fail "RECOVERY_APP_IDENTITY_INVALID"
+  port="$(exact_env_value "${env_file}" RAG_PORT)"
+  wait_industry_http "http://127.0.0.1:${port}/live" 60 \
+    || fail "RECOVERY_LIVE_FAILED"
+  wait_industry_http "http://127.0.0.1:${port}/ready" 60 \
+    || fail "RECOVERY_READY_FAILED"
   if [[ "${current_state}" == "verified" ]]; then
     bash "${runtime_dir}/verify-app-update.sh" "${env_file}" "${transaction}" \
       || fail "IDEMPOTENT_VERIFY_FAILED"
-  else
-    validate_industry_compose "${env_file}" "${runtime_dir}/compose.yaml" \
-      || fail "VALIDATED_RECOVERY_COMPOSE_INVALID"
-    verify_industry_app_identity "${env_file}" true \
-      || fail "VALIDATED_RECOVERY_APP_IDENTITY_INVALID"
-    port="$(exact_env_value "${env_file}" RAG_PORT)"
-    wait_industry_http "http://127.0.0.1:${port}/live" 60 \
-      || fail "VALIDATED_RECOVERY_LIVE_FAILED"
-    wait_industry_http "http://127.0.0.1:${port}/ready" 60 \
-      || fail "VALIDATED_RECOVERY_READY_FAILED"
+  elif [[ "${current_state}" == "verifying" ]]; then
+    verified_state="${transaction}/verified-state.json"
+    if [[ -f "${verified_state}" && ! -L "${verified_state}" ]]; then
+      validate_target_runtime_checkpoint "${transaction}" \
+        || fail "VERIFYING_RECOVERY_RUNTIME_MISMATCH"
+    else
+      bash "${runtime_dir}/verify-app-update.sh" \
+        "${env_file}" "${transaction}" \
+        || fail "VERIFYING_RECOVERY_VERIFY_FAILED"
+    fi
+    write_transaction_state \
+      "${transaction}/transaction-state.json" validated \
+      || fail "VERIFYING_RECOVERY_STATE_WRITE_FAILED"
   fi
+  validate_target_runtime_checkpoint "${transaction}" \
+    || fail "RECOVERY_RUNTIME_STATE_MISMATCH"
   bash "${runtime_dir}/finalize-app-update.sh" \
     "${env_file}" "${transaction}" "${target_revision}" reconcile \
     || fail "IDEMPOTENT_LAST_GOOD_RECONCILIATION_FAILED"
@@ -610,24 +685,9 @@ PY
 
 failure_stage="last_good_precheck"
 failure_code="LAST_GOOD_PRECHECK_FAILED"
-last_good_pointer="${backup_path}/last-good-pointer.json"
-legacy_last_good_env="${backup_path}/last-good.env"
-legacy_last_good_state="${backup_path}/last-good.json"
-if [[ -e "${last_good_pointer}" || -L "${last_good_pointer}" ]]; then
-  python3 "${runtime_dir}/last_good.py" resolve "${backup_path}" \
-    >"${transaction}/pre-last-good.json" \
-    || fail "LAST_GOOD_POINTER_INVALID"
-elif [[ -e "${legacy_last_good_env}" || -L "${legacy_last_good_env}" \
-  || -e "${legacy_last_good_state}" || -L "${legacy_last_good_state}" ]]; then
-  [[ -f "${legacy_last_good_env}" && ! -L "${legacy_last_good_env}" \
-    && -f "${legacy_last_good_state}" && ! -L "${legacy_last_good_state}" ]] \
-    || fail "LEGACY_LAST_GOOD_PAIR_INVALID"
-  python3 "${runtime_dir}/last_good.py" migrate "${backup_path}" \
-    >"${transaction}/pre-last-good.json" \
-    || fail "LEGACY_LAST_GOOD_MIGRATION_FAILED"
-else
-  printf '{"state":"absent"}\n' >"${transaction}/pre-last-good.json"
-fi
+python3 "${runtime_dir}/last_good.py" inspect "${backup_path}" \
+  >"${transaction}/pre-last-good.json" \
+  || fail "LAST_GOOD_INSPECTION_FAILED"
 chmod 600 "${transaction}/pre-last-good.json"
 
 failure_stage="config_filesystem_precheck"
@@ -934,6 +994,75 @@ with os.fdopen(descriptor, "w", encoding="utf-8") as output:
     os.fsync(output.fileno())
 PY
 
+failure_stage="source_checkpoint"
+failure_code="SOURCE_CHECKPOINT_FAILED"
+validate_industry_compose "${env_file}" "${old_compose}" \
+  || fail "SOURCE_COMPOSE_CANONICAL_INVALID"
+verify_industry_app_identity "${env_file}" true \
+  || fail "SOURCE_APP_IDENTITY_INVALID"
+source_port="$(exact_env_value "${env_file}" RAG_PORT)"
+wait_industry_http "http://127.0.0.1:${source_port}/live" 60 \
+  || fail "SOURCE_LIVE_FAILED"
+wait_industry_http "http://127.0.0.1:${source_port}/ready" 60 \
+  || fail "SOURCE_READY_FAILED"
+python3 - "${transaction}/pre-update-snapshot.json" \
+  "${transaction}/pre-index.json" \
+  "${transaction}/pre-update-source-state.json" "${old_revision}" <<'PY'
+import json
+import os
+import pathlib
+import sys
+
+snapshot = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+index = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
+app = snapshot.get("app") if isinstance(snapshot, dict) else None
+config = snapshot.get("config") if isinstance(snapshot, dict) else None
+private_env = (
+    snapshot.get("private_env") if isinstance(snapshot, dict) else None
+)
+compose = snapshot.get("compose") if isinstance(snapshot, dict) else None
+if not all(
+    isinstance(value, dict)
+    for value in (app, config, private_env, compose, index)
+):
+    raise SystemExit("SOURCE_CHECKPOINT_INPUT_INVALID")
+created_at = app.get("started_at")
+if not isinstance(created_at, str) or not created_at:
+    raise SystemExit("SOURCE_CHECKPOINT_CREATED_AT_INVALID")
+value = {
+    "app": app,
+    "compose": compose,
+    "config": config,
+    "created_at": created_at,
+    "index": index,
+    "private_env": private_env,
+    "revision": sys.argv[4],
+    "schema_version": "1",
+    "stage": "last_good",
+    "update_kind": "pre_update_source_checkpoint",
+}
+path = pathlib.Path(sys.argv[3])
+descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+    output.flush()
+    os.fsync(output.fileno())
+directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+try:
+    os.fsync(directory)
+finally:
+    os.close(directory)
+PY
+python3 "${runtime_dir}/last_good.py" checkpoint-source \
+  "${backup_path}" "${env_file}" \
+  "${transaction}/pre-update-source-state.json" "${old_revision}" \
+  "${transaction}/pre-last-good.json" \
+  "${transaction}/UPDATE_MANIFEST.json" \
+  >"${transaction}/source-checkpoint.json" \
+  || fail "SOURCE_CHECKPOINT_FAILED"
+chmod 600 "${transaction}/source-checkpoint.json"
+
 failure_stage="trace_backup"
 failure_code="TRACE_BACKUP_FAILED"
 trace_backup="${transaction}/traces-before.sqlite3"
@@ -957,8 +1086,32 @@ import re
 import sys
 
 value = json.loads(sys.argv[1])
+expected_fields = {
+    "backup_filename",
+    "bytes",
+    "created_at",
+    "mode",
+    "owner",
+    "page_count",
+    "schema_version",
+    "sha256",
+    "source_changed_during_backup",
+    "source_database_identity",
+    "source_database_observation",
+    "source_filename",
+    "sqlite_user_version",
+    "target_revision",
+}
+stable = value.get("source_database_identity")
+observation = value.get("source_database_observation")
+before = observation.get("before") if isinstance(observation, dict) else None
+after = observation.get("after") if isinstance(observation, dict) else None
 if (
     not isinstance(value, dict)
+    or set(value) != expected_fields
+    or value.get("schema_version") != "2"
+    or value.get("backup_filename") != "traces-before.sqlite3"
+    or value.get("source_filename") != "traces.sqlite3"
     or value.get("mode") != "0600"
     or value.get("target_revision") != sys.argv[3]
     or value.get("owner")
@@ -966,7 +1119,39 @@ if (
     or not isinstance(value.get("page_count"), int)
     or isinstance(value.get("page_count"), bool)
     or value["page_count"] <= 0
-    or not isinstance(value.get("source_database_identity"), dict)
+    or not isinstance(value.get("bytes"), int)
+    or isinstance(value.get("bytes"), bool)
+    or value["bytes"] <= 0
+    or value.get("sqlite_user_version") not in {1, 2}
+    or not isinstance(value.get("source_changed_during_backup"), bool)
+    or not isinstance(stable, dict)
+    or set(stable)
+    != {"device", "file_type", "gid", "inode", "mode", "uid"}
+    or stable.get("file_type") != "regular"
+    or stable.get("mode") != "0600"
+    or any(
+        not isinstance(stable.get(key), int)
+        or isinstance(stable.get(key), bool)
+        for key in ("device", "gid", "inode", "uid")
+    )
+    or not isinstance(observation, dict)
+    or set(observation) != {"after", "before"}
+    or any(
+        not isinstance(item, dict)
+        or set(item) != {"bytes", "mtime_ns", "wal_bytes"}
+        or not isinstance(item.get("bytes"), int)
+        or isinstance(item.get("bytes"), bool)
+        or not isinstance(item.get("mtime_ns"), int)
+        or isinstance(item.get("mtime_ns"), bool)
+        or (
+            item.get("wal_bytes") is not None
+            and (
+                not isinstance(item.get("wal_bytes"), int)
+                or isinstance(item.get("wal_bytes"), bool)
+            )
+        )
+        for item in (before, after)
+    )
     or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
 ):
     raise SystemExit("TRACE_BACKUP_IDENTITY_INVALID")
@@ -1209,6 +1394,8 @@ write_transaction_state "${transaction}/transaction-state.json" validated \
 validated_checkpoint=true
 failure_stage="last_good_promotion"
 failure_code="LAST_GOOD_PROMOTION_FAILED"
+validate_target_runtime_checkpoint "${transaction}" \
+  || fail "PRE_PROMOTION_RUNTIME_STATE_MISMATCH"
 bash "${runtime_dir}/finalize-app-update.sh" \
   "${env_file}" "${transaction}" "${target_revision}" promote \
   || fail "LAST_GOOD_PROMOTION_FAILED"

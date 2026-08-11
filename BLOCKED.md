@@ -1,40 +1,42 @@
 # 阻塞项
 
-## CURRENT STATUS：2026-08-10 本地实现无阻塞，现场验收待授权
+## CURRENT STATUS：2026-08-11 本地最终缺口已收口，现场验收仍待单独授权
 
-两个待决策略已经确定，升级、回滚、UI、Trace、Qdrant、model/OCR、全量 pytest、静态、
-Compose 和源码资产门禁均已转绿；当前没有需要用户补充信息才能完成本地 commit 与
-app-only 构建的实现阻塞。以下是仍必须保留的上线边界，不得被写成服务器已更新或
-production ready。
+旧 `2c4cf220...` 的 env-only last-good、source/target/absent pointer 恢复、
+`verifying/validated/verified` 崩溃窗口、Trace WAL 并发写入与跨 update ID 全局锁均已有
+生产实现和故障注入证据。专项为 `195 passed, 1 warning`，显式绕过本机代理后的单次
+全量 pytest 为 `1239 passed, 61 warnings`；当前没有需要用户补充服务器信息才能完成
+本地 commit 与 app-only 构建的实现阻塞。以下边界仍是上线阻塞，不得写成现网已更新。
 
 1. **服务器验收尚未执行。** 本轮没有访问任何实际服务器，没有部署，也没有现场运行
    Industry 20 smoke、UI/Trace 验收或核对容器、alias、manifest、point/source count。
    本地 clean-commit 构建和 fresh selfcheck 只能支持后续内网 canary，不能证明现网已
-   更新。上传和部署必须等待用户后续单独授权。
+   更新。上传、执行 updater 和现场验收必须等待用户后续单独授权。
 2. **当前运行等级仍是 demo/canary。** `RAG_RUN_MODE=demo`、retrieval 为
-   `provisional`、intent router 为 `shadow`、calibration 为 `unverified`，所以即使
-   全量 pytest 为 `1203 passed`，也不能宣称 production ready。production 仍需正式
-   校准、冻结和服务器 acceptance；本轮没有伪造这些状态。
-3. **HTTP demo 是明确接受的内网风险。** 非 Secure UI Cookie 只有五项配置同时满足才
-   允许，production 已 fail closed，但 HTTP 本身不提供链路加密；普通问答访问边界仍
-   依赖内网 ACL、反向代理或企业 SSO。Trace/Admin 继续只接受独立 Admin Token。
-4. **Trace 明文属于受控敏感数据。** 代码已实现 7 天独立上限与 Trace TTL 取较小值，
-   并禁止正文进入普通日志、Stage NDJSON、Header、ZIP 文件名/manifest、缓存键和
-   release manifest；服务器上的备份权限、访问审计、到期清空和日志反查仍需 canary
-   现场验收。
-5. **仓库级安全扫描保留历史命中。** `check_release_safety.py repository .` 当前报告
-   13 项，来自历史状态文档、部署说明、测试内网地址和一个合成 secret fixture；这不是
-   app-only 交付内容，不能删除历史事实来制造绿灯。最终硬门禁必须针对实际暂存候选和
-   8 文件 delivery/18 文件 runtime exact set 执行，交付包不得包含真实 IP、个人路径、
-   secret、问题正文或业务 corpus。
+   `provisional`、intent router 为 `shadow`、calibration 为 `unverified`。即使本地
+   `1239 passed`，也不能宣称 production ready；production 仍需正式校准、冻结和服务
+   器 acceptance。
+3. **HTTP demo 是明确接受的内网风险。** 非 Secure UI Cookie 仅在五项显式配置同时
+   满足时允许，production 已 fail closed，但 HTTP 本身不提供链路加密；普通问答访问
+   边界仍依赖内网 ACL、反向代理或企业 SSO。Trace/Admin 继续只接受独立 Admin Token。
+4. **Trace 明文属于受控敏感数据。** 7 天独立上限与 Trace TTL 取较小值，到期只清空
+   `question_text`。正文禁止进入普通日志、Stage NDJSON、Header、ZIP 文件名/manifest、
+   缓存键和 release manifest；服务器上的备份权限、访问审计、到期清空和日志反查仍需
+   canary 现场验收。
+5. **遗留制品全部禁止使用。** `artifacts/industry-app-update/809fb71f5e50` 与
+   `artifacts/industry-serving-update/d5c03cf9b97e`、`8755bf379c8f`、`195f9aca2c63`
+   均永久失效，不得上传、部署或作为验收证据。最终包必须由本轮新的 clean commit 构建
+   到独立 SHA12 目录，顶层仍为 8 文件、runtime 仍为 18 文件，且
+   `reindex_required=false`、index fingerprint 不变。
+6. **仓库历史命中不等于交付泄漏。** 历史状态文档、测试内网地址和合成 secret fixture
+   不能靠删除历史事实制造绿灯。硬门禁针对实际 8 文件 delivery、18 文件 runtime 与
+   fresh extraction；交付物不得包含真实 IP、个人路径、secret、问题正文或业务 corpus。
 
-identity-bearing commit 不记录自身 SHA 或构建后制品摘要；最终 revision、包路径、
-逐文件 SHA256、canonical digest、镜像内 asset-selfcheck 和 fresh extraction 结果由
-构建后交付报告给出。旧 `artifacts/industry-app-update/809fb71f5e50` 与
-`artifacts/industry-serving-update/d5c03cf9b97e`、
-`artifacts/industry-serving-update/8755bf379c8f` 始终失效且不得上传。后续服务器更新
-必须从 fresh shell 执行，不 source private env，不得运行 `run-index.sh`，不得重建
-corpus 或重启 worker/OCR/Qdrant；只有现场 acceptance 后才能称为内网 canary 上线。
+identity-bearing commit 不记录自身 SHA 或构建后制品摘要；最终 revision、包路径、逐文件
+SHA256、canonical digest、镜像内 asset-selfcheck 和 fresh extraction 结果由构建后交付
+报告给出。后续服务器更新必须从 fresh shell 执行，不 source private env，不运行
+`run-index.sh`，不重建 corpus，不重启 worker/OCR/Qdrant；只有现场 acceptance 后才能称
+为内网 canary 上线。
 
 ## ARCHIVE：2026-08-10 本地实现暂停快照
 

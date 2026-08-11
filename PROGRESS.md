@@ -1,6 +1,59 @@
 # DOCX RAG 交付进度
 
-## CURRENT STATUS：2026-08-10 Industry serving update 最终事务缺口已本地收口
+## CURRENT STATUS：2026-08-11 Industry serving update 最后四项事务缺口已本地收口
+
+- 本轮实际从 `Industry` 的 clean commit
+  `195f9aca2c63e4b2a2b275dd7e74d2d306e1a9f0` 开始；没有修改 `main`，也没有 amend
+  旧提交。`artifacts/industry-serving-update/195f9aca2c63` 与此前 `809fb71f5e50`、
+  `d5c03cf9b97e`、`8755bf379c8f` 一样永久失效，不得上传、部署或作为验收证据。
+  最终 8 文件 app-only 包只能在本轮新建的 clean commit 后输出到新的 SHA12 目录。
+- 已直接检查 Git 中真实 `2c4cf220c7cf7dd2e8744253453e994ee7af3ee1` 部署脚本：它只写
+  `last-good.env`，没有 `last-good.json`。生产实现修改前的四项真红灯为
+  `4 failed in 6.71s`：合法 env-only 遗留状态报 `LEGACY_LAST_GOOD_PAIR_INVALID`；
+  `validated` 且 pointer 仍指 source 报 `LAST_GOOD_POINTER_MISMATCH`；Trace WAL 并发写入报
+  `TRACE_BACKUP_SOURCE_MUTATED`；两个不同 update ID 可以并发进入，失败为
+  `UPDATE_ATTEMPT_NOT_RETRYABLE`。这些失败没有通过 skip/xfail、固定答案或放宽校验消除。
+- 更新前现在先只读核验旧镜像、Compose、外部 config、live/ready、索引和 worker 身份，
+  再生成 canonical `pre-update-source-state.json` 与密封 source snapshot。合法 env-only
+  遗留状态仅在其字节 SHA 与当前 source env 精确一致时接受；原始 env 字节保持不变，
+  不伪造旧 JSON pointer。已有 legacy pair、可信更早 pointer、当前 source pointer、
+  pointer 缺失均有明确分支；symlink、权限错误、重复键、state-only、未知 revision、
+  snapshot/manifest/SHA 漂移全部 fail closed。
+- last-good finalize 现在只接受事务记录的 source、已精确晋升的 target 或记录为 absent
+  且仍 absent 三种状态。`verifying`、`validated`、`verified` 中断均可受控恢复：恢复前重新
+  从当前目标容器导出 `runtime-state`，严格交叉核对 pre-index、target contract、
+  `verified-state.json`、`UPDATE_MANIFEST.json`、活动 alias/collection/manifest/point、
+  index/serving fingerprint、UI Cookie/Trace 策略与 schema；任何运行时漂移都拒绝晋升，
+  恢复过程不会第二次重建 App。
+- Trace 在线备份仍使用 SQLite `Connection.backup()`，但把身份拆成稳定项与易变观测项。
+  稳定项包括 device/inode/UID/GID/file type/mode，必须前后一致；主库 bytes/mtime 与 WAL
+  bytes 可因合法并发提交变化并写入 schema v2 报告。备份会重新打开并校验 SHA、页数、
+  `user_version` 与完整性；文件替换、symlink、类型/owner/mode 漂移仍立即拒绝。
+- updater 在任何 update audit root 和 attempt 创建前，对 backup root 下固定
+  `serving-update.lock` 取得非阻塞全局 `flock`，并保持到整个进程退出。锁文件必须为
+  非 symlink 普通文件、0600，且 descriptor/inode 复核一致；缺少 `flock`、锁或 backup
+  目录为 symlink、同包或不同包并发均 fail closed。不同 update ID 的真实并发测试证明
+  只能有一个进入更新事务。
+- 最终 22 文件专项矩阵为 `195 passed, 1 warning in 203.40s`。使用固定、无卷、空数据、
+  仅绑定 `127.0.0.1:6333` 的 `qdrant/qdrant:v1.18.3` 运行完整依赖测试；一次未设置
+  `NO_PROXY` 的两项连接被本机 HTTP proxy 超时后，精确重跑为
+  `2 passed, 2 warnings in 13.87s`。最终在显式
+  `NO_PROXY=127.0.0.1,localhost` 下单次全量为
+  `1239 passed, 61 warnings in 735.27s`，0 failed。临时实例结束时 collection 为空、
+  `mounts=[]`，随后只移除了该测试容器。
+- compileall、全仓 Ruff、strict mypy（124 source files）、Google docstring、Node 2 项、
+  simple/Industry 全部 shell 语法、两套 profiles Compose config、`git diff --check` 与
+  源码 asset-selfcheck 均已通过。源码自检核对 13 个文件，index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`；没有盲刷
+  `ASSETS.sha256`。提交前会再次复跑受文档影响的静态门禁。
+- 本轮只允许创建一个新的本地 `Industry` commit 并从该 clean commit 构建 8 文件
+  app-only serving update；不生成 full release、corpus、OCR/Qdrant image 或 index 包。
+  commit、逐文件 SHA256、canonical digest、镜像内 asset-selfcheck 与 fresh extraction
+  结果在构建后交付报告给出，避免 identity-bearing commit 自引用。全程未访问服务器、
+  未部署、未重索引、未修改 GM corpus、未重启服务器 worker/OCR/Qdrant、未 push；本地
+  绿灯不等于服务器 canary 或 production ready。
+
+## ARCHIVE：2026-08-10 Industry serving update 最终事务缺口已本地收口
 
 - 本轮实际起始分支为 `Industry`，起始 `HEAD`/`Industry`/`origin/Industry` 均为
   `8755bf379c8fff2a1dea2125ccd633b614087b02`，`main` 为

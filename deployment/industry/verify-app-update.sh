@@ -16,7 +16,9 @@ transaction="$2"
 require_industry_env "${env_file}"
 [[ "${transaction}" == /* && -d "${transaction}" && ! -L "${transaction}" ]] \
   || verify_fail "TRANSACTION_PATH_INVALID"
-for name in pre-index.json target-contract.json container-identity.json; do
+for name in \
+  pre-index.json target-contract.json container-identity.json \
+  UPDATE_MANIFEST.json; do
   [[ -f "${transaction}/${name}" && ! -L "${transaction}/${name}" ]] \
     || verify_fail "TRANSACTION_EVIDENCE_MISSING"
 done
@@ -41,67 +43,11 @@ runtime_state="${transaction}/runtime-state.json"
 docker exec rag-industry-app rag-app runtime-state >"${runtime_state}" \
   || verify_fail "RUNTIME_STATE_COMMAND_FAILED"
 chmod 600 "${runtime_state}"
-python3 - "${transaction}/pre-index.json" \
-  "${transaction}/target-contract.json" "${runtime_state}" <<'PY'
-import json
-import pathlib
-import re
-import sys
-
-pre = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
-target = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
-actual = json.loads(pathlib.Path(sys.argv[3]).read_bytes())
-expected_fields = {
-    "active_collection",
-    "alias",
-    "index_fingerprint",
-    "installed_revision",
-    "manifest_sha256",
-    "point_count",
-    "production_ready",
-    "release_matches",
-    "release_revision",
-    "run_mode",
-    "schema_version",
-    "serving_fingerprint",
-    "trace_question_capture",
-    "trace_question_retention_seconds",
-    "trace_schema_version",
-    "ui_cookie_secure",
-    "ui_query_auth_mode",
-}
-if not isinstance(actual, dict) or set(actual) != expected_fields:
-    raise SystemExit("RUNTIME_STATE_FIELDS_INVALID")
-for key in (
-    "active_collection",
-    "alias",
-    "index_fingerprint",
-    "manifest_sha256",
-    "point_count",
-):
-    if actual.get(key) != pre.get(key):
-        raise SystemExit("INDEX_IDENTITY_DRIFT")
-if (
-    actual.get("schema_version") != "2"
-    or actual.get("release_revision") != target.get("revision")
-    or actual.get("installed_revision") != target.get("revision")
-    or actual.get("release_matches") is not True
-    or actual.get("serving_fingerprint") != target.get("serving_fingerprint")
-    or actual.get("ui_query_auth_mode") != "same_origin_session"
-    or actual.get("ui_cookie_secure") is not False
-    or actual.get("trace_question_capture") != "plaintext"
-    or actual.get("trace_question_retention_seconds") != 604800
-    or actual.get("trace_schema_version") != 2
-    or actual.get("run_mode") != "demo"
-    or actual.get("production_ready") is not False
-):
-    raise SystemExit("RUNTIME_SERVING_CONTRACT_MISMATCH")
-fingerprint = actual.get("serving_fingerprint")
-if not isinstance(fingerprint, str) or re.fullmatch(
-    r"sha256:[0-9a-f]{64}", fingerprint
-) is None:
-    raise SystemExit("SERVING_FINGERPRINT_INVALID")
-PY
+python3 "${script_dir}/runtime_check.py" validate-runtime-state \
+  "${transaction}/pre-index.json" \
+  "${transaction}/target-contract.json" - \
+  "${transaction}/UPDATE_MANIFEST.json" "${runtime_state}" >/dev/null \
+  || verify_fail "RUNTIME_STATE_CONTRACT_MISMATCH"
 
 index_report="$(run_industry_compose "${env_file}" "${compose_file}" \
   run --rm --no-deps --entrypoint python \
@@ -254,6 +200,12 @@ try:
 finally:
     os.close(directory)
 PY
+
+python3 "${script_dir}/runtime_check.py" validate-runtime-state \
+  "${transaction}/pre-index.json" \
+  "${transaction}/target-contract.json" "${verified_state}" \
+  "${transaction}/UPDATE_MANIFEST.json" "${runtime_state}" >/dev/null \
+  || verify_fail "VERIFIED_RUNTIME_STATE_MISMATCH"
 
 printf '%s\n' "${smoke_report}"
 printf 'RAG_INDUSTRY_APP_UPDATE_VALIDATED\n'

@@ -5,12 +5,18 @@ import hashlib
 import json
 import os
 import sqlite3
+import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from deployment.industry.serving_last_good import (
+    promote_last_good,
+    resolve_last_good,
+)
 from scripts import build_industry_app_update
 from scripts.build_industry_bundle import IndustrySourceIdentity
 from scripts.industry_bundle.images import ImageArtifact
@@ -39,14 +45,21 @@ class _Sandbox:
     binaries: Path
 
 
-def _build_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    archive_payload = b"fake-image-archive"
+def _build_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    target_revision: str = _NEW_REVISION,
+    target_image_id: str = _NEW_IMAGE_ID,
+    archive_payload: bytes = b"fake-image-archive",
+) -> Path:
+    target_image = f"docx-rag:{target_revision[:12]}"
 
     monkeypatch.setattr(
         build_industry_app_update,
         "require_industry_source",
         lambda _root: IndustrySourceIdentity(
-            git_sha=_NEW_REVISION,
+            git_sha=target_revision,
             main_sha="a" * 40,
             source_date_epoch=1_786_000_000,
         ),
@@ -64,7 +77,7 @@ def _build_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         output_dir: Path,
     ) -> ImageArtifact:
         assert repository_root == _ROOT.resolve()
-        assert revision == _NEW_REVISION
+        assert revision == target_revision
         archive = output_dir / "app-image.tar.gz"
         with (
             archive.open("wb") as raw_output,
@@ -75,10 +88,10 @@ def _build_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             output.write(archive_payload)
         return ImageArtifact(
             name="app",
-            ref=_NEW_IMAGE,
-            image_id=_NEW_IMAGE_ID,
+            ref=target_image,
+            image_id=target_image_id,
             platform="linux/amd64",
-            revision=_NEW_REVISION,
+            revision=target_revision,
             archive_name=archive.name,
             archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
             manifest_digest="sha256:" + "3" * 64,
@@ -206,6 +219,9 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
                 "image": _OLD_IMAGE,
                 "image_id": _OLD_IMAGE_ID,
                 "revision": _OLD_REVISION,
+                "target_serving": json.loads(
+                    (package / "UPDATE_MANIFEST.json").read_bytes()
+                )["serving_fingerprint"]["target"],
             }
         ),
         encoding="utf-8",
@@ -245,10 +261,31 @@ if [[ "${{1:-}}" == "-" \
   && "${{3:-}}" == "${{FAKE_TRANSACTION_STATE_WRITE_FAIL:-never}}" ]]; then
   exit 1
 fi
+if [[ "${{1:-}}" == "-" \
+  && "${{3:-}}" == "validated" \
+  && "${{FAKE_CRASH_AFTER_VALIDATED_STATE:-0}}" == "1" \
+  && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+  /usr/bin/python3 "$@" || exit $?
+  touch "${{FAKE_CRASH_MARKER}}"
+  kill -KILL "$PPID"
+  exit 137
+fi
 case "${{1:-}}" in
   */last_good.py)
-    if [[ "$*" == *' promote '* \
+    if [[ "$*" == *' finalize-target '* \
       && "${{FAKE_CRASH_AFTER_LAST_GOOD_PROMOTION:-0}}" == "1" \
+      && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
+      /usr/bin/python3 "$@" || exit $?
+      touch "${{FAKE_CRASH_MARKER}}"
+      update_pid="$(ps -o ppid= -p "$PPID" | tr -d ' ')"
+      kill -KILL "${{update_pid}}"
+      exit 137
+    fi
+    ;;
+  */runtime_check.py)
+    if [[ "$*" == *' validate-runtime-state '* \
+      && "$*" == *'/verified-state.json '* \
+      && "${{FAKE_CRASH_AFTER_VERIFIED_STATE:-0}}" == "1" \
       && ! -e "${{FAKE_CRASH_MARKER:-/nonexistent}}" ]]; then
       /usr/bin/python3 "$@" || exit $?
       touch "${{FAKE_CRASH_MARKER}}"
@@ -284,6 +321,7 @@ import os
 import pathlib
 import sqlite3
 import sys
+import time
 
 STATE = pathlib.Path({str(state)!r})
 LOG = pathlib.Path({str(log)!r})
@@ -401,6 +439,18 @@ if args[:1] == ["compose"]:
         if "pre-update-filesystem-state" in args:
             if current.get("FAKE_PRE_FILESYSTEM_FAIL"):
                 raise SystemExit(1)
+            hold_marker = current.get("FAKE_HOLD_UPDATE_MARKER")
+            release_marker = current.get("FAKE_RELEASE_UPDATE_MARKER")
+            if hold_marker and release_marker:
+                pathlib.Path(hold_marker).write_text("held\\n")
+                deadline = time.monotonic() + 20
+                while (
+                    not pathlib.Path(release_marker).exists()
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.02)
+                if not pathlib.Path(release_marker).exists():
+                    raise SystemExit(1)
             config_path = pathlib.Path(env["RAG_CONFIG_PATH"])
             profile = args[-1]
             print(json.dumps({{
@@ -447,16 +497,28 @@ if args[:1] == ["compose"]:
                 "mode": "0600",
                 "owner": {{"gid": os.getgid(), "uid": os.getuid()}},
                 "page_count": 3,
-                "schema_version": "1",
+                "schema_version": "2",
                 "sha256": "7" * 64,
+                "source_changed_during_backup": False,
                 "source_database_identity": {{
-                    "bytes": source.stat().st_size,
                     "device": source.stat().st_dev,
+                    "file_type": "regular",
                     "gid": source.stat().st_gid,
                     "inode": source.stat().st_ino,
                     "mode": "0600",
-                    "mtime_ns": source.stat().st_mtime_ns,
                     "uid": source.stat().st_uid,
+                }},
+                "source_database_observation": {{
+                    "after": {{
+                        "bytes": source.stat().st_size,
+                        "mtime_ns": source.stat().st_mtime_ns,
+                        "wal_bytes": None,
+                    }},
+                    "before": {{
+                        "bytes": source.stat().st_size,
+                        "mtime_ns": source.stat().st_mtime_ns,
+                        "wal_bytes": None,
+                    }},
                 }},
                 "source_filename": source.name,
                 "sqlite_user_version": 1,
@@ -483,6 +545,41 @@ if args[:1] == ["compose"]:
         if "trace-schema" in args:
             print('{{"has_question_columns":true,"sqlite_user_version":2}}')
             raise SystemExit(0)
+    if "exec" in args and "runtime-state" in args:
+        if current["revision"] == OLD_REVISION:
+            print("unknown command: runtime-state", file=sys.stderr)
+            raise SystemExit(2)
+        serving = "sha256:" + "9" * 64
+        print(json.dumps({{
+            "active_collection": "rag-docx-active",
+            "alias": current.get(
+                "FAKE_RUNTIME_ALIAS", "rag-industry-active"
+            ),
+            "index_fingerprint": FINGERPRINT,
+            "installed_revision": NEW_REVISION,
+            "manifest_sha256": "5" * 64,
+            "point_count": int(current.get("FAKE_RUNTIME_POINTS", "139")),
+            "production_ready": False,
+            "release_matches": True,
+            "release_revision": current.get(
+                "FAKE_RUNTIME_REVISION", NEW_REVISION
+            ),
+            "run_mode": "demo",
+            "schema_version": current.get("FAKE_RUNTIME_SCHEMA", "2"),
+            "serving_fingerprint": current.get(
+                "FAKE_TARGET_SERVING", current["target_serving"]
+            ),
+            "trace_question_capture": current.get(
+                "FAKE_RUNTIME_TRACE_CAPTURE", "plaintext"
+            ),
+            "trace_question_retention_seconds": 604800,
+            "trace_schema_version": 2,
+            "ui_cookie_secure": False,
+            "ui_query_auth_mode": current.get(
+                "FAKE_RUNTIME_UI_MODE", "same_origin_session"
+            ),
+        }}, separators=(",", ":"), sort_keys=True))
+        raise SystemExit(0)
     if "up" in args:
         if (
             current.get("fail_rollback")
@@ -517,9 +614,20 @@ if args[:1] == ["compose"]:
             ),
             "revision": env["RAG_RELEASE_REVISION"],
         }}
-        for flag in ("fail_app_start", "fail_rollback"):
+        for flag in (
+            "fail_app_start",
+            "fail_rollback",
+            "target_serving",
+            "FAKE_RUNTIME_ALIAS",
+            "FAKE_RUNTIME_POINTS",
+            "FAKE_RUNTIME_REVISION",
+            "FAKE_RUNTIME_SCHEMA",
+            "FAKE_RUNTIME_TRACE_CAPTURE",
+            "FAKE_RUNTIME_UI_MODE",
+            "FAKE_TARGET_SERVING",
+        ):
             if current.get(flag):
-                next_state[flag] = True
+                next_state[flag] = current[flag]
         STATE.write_text(json.dumps(next_state))
         raise SystemExit(0)
 
@@ -610,30 +718,30 @@ if args[:1] == ["exec"]:
         serving = "sha256:" + "9" * 64
         print(json.dumps({{
             "active_collection": "rag-docx-active",
-            "alias": os.environ.get(
+            "alias": current.get(
                 "FAKE_RUNTIME_ALIAS", "rag-industry-active"
             ),
             "index_fingerprint": FINGERPRINT,
             "installed_revision": NEW_REVISION,
             "manifest_sha256": "5" * 64,
-            "point_count": int(os.environ.get("FAKE_RUNTIME_POINTS", "139")),
+            "point_count": int(current.get("FAKE_RUNTIME_POINTS", "139")),
             "production_ready": False,
             "release_matches": True,
-            "release_revision": os.environ.get(
+            "release_revision": current.get(
                 "FAKE_RUNTIME_REVISION", NEW_REVISION
             ),
             "run_mode": "demo",
-            "schema_version": os.environ.get("FAKE_RUNTIME_SCHEMA", "2"),
-            "serving_fingerprint": os.environ.get(
-                "FAKE_TARGET_SERVING", serving
+            "schema_version": current.get("FAKE_RUNTIME_SCHEMA", "2"),
+            "serving_fingerprint": current.get(
+                "FAKE_TARGET_SERVING", current["target_serving"]
             ),
-            "trace_question_capture": os.environ.get(
+            "trace_question_capture": current.get(
                 "FAKE_RUNTIME_TRACE_CAPTURE", "plaintext"
             ),
             "trace_question_retention_seconds": 604800,
             "trace_schema_version": 2,
             "ui_cookie_secure": False,
-            "ui_query_auth_mode": os.environ.get(
+            "ui_query_auth_mode": current.get(
                 "FAKE_RUNTIME_UI_MODE", "same_origin_session"
             ),
         }}, separators=(",", ":"), sort_keys=True))
@@ -674,6 +782,27 @@ def _run(
         "FAKE_TRACE_BACKUP_FAIL",
     ):
         state[flag] = bool(extra and extra.get(flag) == "1")
+    for key in (
+        "FAKE_HOLD_UPDATE_MARKER",
+        "FAKE_RELEASE_UPDATE_MARKER",
+    ):
+        if extra and key in extra:
+            state[key] = extra[key]
+        else:
+            state.pop(key, None)
+    for key in (
+        "FAKE_RUNTIME_ALIAS",
+        "FAKE_RUNTIME_POINTS",
+        "FAKE_RUNTIME_REVISION",
+        "FAKE_RUNTIME_SCHEMA",
+        "FAKE_RUNTIME_TRACE_CAPTURE",
+        "FAKE_RUNTIME_UI_MODE",
+        "FAKE_TARGET_SERVING",
+    ):
+        if extra and key in extra:
+            state[key] = extra[key]
+        else:
+            state.pop(key, None)
     sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
     if extra and extra.get("FAKE_APP_START_FAIL") == "1":
         state["fail_app_start"] = True
@@ -692,6 +821,46 @@ def _run(
         text=True,
         env=environment,
         timeout=60,
+    )
+
+
+def _start(
+    sandbox: _Sandbox,
+    *,
+    extra: dict[str, str] | None = None,
+) -> subprocess.Popen[str]:
+    manifest = json.loads(
+        (sandbox.package / "UPDATE_MANIFEST.json").read_bytes()
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
+        "RAG_PORT": "9999",
+        "RAG_APP_IMAGE": "polluted:image",
+        "RAG_QDRANT_ALIAS": "polluted-alias",
+        "RAG_CONFIG_PATH": "/polluted",
+        "RAG_INDUSTRY_COMPOSE_FILE": "/polluted/compose.yaml",
+        "FAKE_TARGET_SERVING": manifest["serving_fingerprint"]["target"],
+        **(extra or {}),
+    }
+    state = json.loads(sandbox.docker_state.read_bytes())
+    for key in (
+        "FAKE_HOLD_UPDATE_MARKER",
+        "FAKE_RELEASE_UPDATE_MARKER",
+    ):
+        if extra and key in extra:
+            state[key] = extra[key]
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+    return subprocess.Popen(  # noqa: S603
+        [
+            "/usr/bin/bash",
+            str(sandbox.package / "update-app.sh"),
+            str(sandbox.env_file),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
     )
 
 
@@ -1040,3 +1209,354 @@ def test_rollback_success_is_not_claimed_when_state_write_fails(
     assert result.returncode == 70
     assert "ROLLBACK_STATE_WRITE_FAILED" in result.stderr
     assert "RAG_INDUSTRY_SERVING_UPDATE_ROLLED_BACK\n" not in result.stderr
+
+
+def test_real_2c4_env_only_last_good_is_checkpointed_without_rewriting_legacy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    historical = subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/git",
+            "show",
+            f"{_OLD_REVISION}:deployment/industry/deploy.sh",
+        ],
+        check=True,
+        capture_output=True,
+        cwd=_ROOT,
+        text=True,
+    ).stdout
+    assert 'last_good="${backup_path}/last-good.env"' in historical
+    assert "last-good.json" not in historical
+    sandbox = _prepare(tmp_path, monkeypatch)
+    legacy = sandbox.backup_path / "last-good.env"
+    legacy.write_text(sandbox.old_env, encoding="utf-8")
+    legacy.chmod(0o600)
+    before = legacy.read_bytes()
+
+    result = _run(sandbox)
+
+    assert result.returncode == 0, result.stderr
+    assert legacy.read_bytes() == before
+    assert not (sandbox.backup_path / "last-good.json").exists()
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    transaction = update_root / "attempt-0001"
+    source_state = json.loads(
+        (transaction / "pre-update-source-state.json").read_bytes()
+    )
+    assert source_state["revision"] == _OLD_REVISION
+    assert source_state["update_kind"] == "pre_update_source_checkpoint"
+
+
+def test_validated_attempt_promotes_target_when_pointer_still_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    source_state = tmp_path / "source-state.json"
+    source_state.write_text(
+        json.dumps(
+            {
+                "revision": _OLD_REVISION,
+                "schema_version": "1",
+                "stage": "last_good",
+                "update_kind": "historical_source",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    source_state.chmod(0o600)
+    promote_last_good(
+        sandbox.backup_path,
+        sandbox.env_file,
+        source_state,
+        _OLD_REVISION,
+    )
+    marker = tmp_path / "validated-before-promote.injected"
+
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_VALIDATED_STATE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+
+    assert first.returncode != 0
+    assert marker.is_file()
+    assert resolve_last_good(sandbox.backup_path)["revision"] == _OLD_REVISION
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    attempt = update_root / "attempt-0001"
+    state = json.loads((attempt / "transaction-state.json").read_bytes())
+    assert state["state"] == "validated"
+
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    assert resolve_last_good(sandbox.backup_path)["revision"] == _NEW_REVISION
+    state = json.loads((attempt / "transaction-state.json").read_bytes())
+    assert state["state"] == "verified"
+
+
+def test_global_update_lock_rejects_second_process_before_transaction_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    held = tmp_path / "update-held"
+    release = tmp_path / "update-release"
+    first = _start(
+        sandbox,
+        extra={
+            "FAKE_HOLD_UPDATE_MARKER": str(held),
+            "FAKE_RELEASE_UPDATE_MARKER": str(release),
+        },
+    )
+    try:
+        for _ in range(500):
+            if held.exists():
+                break
+            if first.poll() is not None:
+                break
+            time.sleep(0.01)
+        assert held.is_file()
+        attempts_before = list(
+            sandbox.backup_path.glob("serving-updates/*/attempt-*")
+        )
+        alternate_package = _build_package(
+            tmp_path,
+            monkeypatch,
+            target_revision="c" * 40,
+            target_image_id="sha256:" + "c" * 64,
+            archive_payload=b"alternate-image-archive",
+        )
+        assert alternate_package != sandbox.package
+
+        second = subprocess.run(  # noqa: S603
+            [
+                "/usr/bin/bash",
+                str(alternate_package / "update-app.sh"),
+                str(sandbox.env_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={
+                **os.environ,
+                "PATH": f"{sandbox.binaries}:/usr/bin:/bin",
+            },
+            timeout=10,
+        )
+
+        assert second.returncode != 0
+        assert "SERVING_UPDATE_ALREADY_RUNNING" in second.stderr
+        assert list(
+            sandbox.backup_path.glob("serving-updates/*/attempt-*")
+        ) == attempts_before
+    finally:
+        release.write_text("release\n", encoding="utf-8")
+        first_stdout, first_stderr = first.communicate(timeout=30)
+    assert first.returncode == 0, first_stderr or first_stdout
+
+    third = _run(sandbox)
+
+    assert third.returncode == 0, third.stderr
+
+
+def test_verifying_with_complete_verified_state_recovers_same_attempt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "verified-state-window.injected"
+
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_VERIFIED_STATE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+
+    assert first.returncode != 0
+    assert marker.is_file()
+    update_root = next((sandbox.backup_path / "serving-updates").iterdir())
+    attempt = update_root / "attempt-0001"
+    assert (attempt / "verified-state.json").is_file()
+    assert json.loads(
+        (attempt / "transaction-state.json").read_bytes()
+    )["state"] == "verifying"
+
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    assert json.loads(
+        (attempt / "transaction-state.json").read_bytes()
+    )["state"] == "verified"
+    assert not (update_root / "attempt-0002").exists()
+    commands = sandbox.log.read_text(encoding="utf-8")
+    assert sum(
+        "--force-recreate rag-industry-app" in line
+        for line in commands.splitlines()
+        if line.startswith("docker ")
+    ) == 1
+
+
+def test_validated_absent_pointer_recovers_only_from_recorded_absence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "validated-absent.injected"
+
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_VALIDATED_STATE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+
+    assert first.returncode != 0
+    assert not (sandbox.backup_path / "last-good-pointer.json").exists()
+    second = _run(sandbox)
+
+    assert second.returncode == 0, second.stderr
+    assert resolve_last_good(sandbox.backup_path)["revision"] == _NEW_REVISION
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("FAKE_RUNTIME_ALIAS", "third-alias"),
+        ("FAKE_RUNTIME_POINTS", "138"),
+        ("FAKE_RUNTIME_UI_MODE", "browser_bearer"),
+        ("FAKE_RUNTIME_TRACE_CAPTURE", "hash_only"),
+    ),
+)
+def test_validated_recovery_rejects_runtime_drift_before_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    marker = tmp_path / "validated-runtime-drift.injected"
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_VALIDATED_STATE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert first.returncode != 0
+
+    second = _run(sandbox, extra={field: value})
+
+    assert second.returncode != 0
+    assert "RECOVERY_RUNTIME_STATE_MISMATCH" in second.stderr
+    assert not (sandbox.backup_path / "last-good-pointer.json").exists()
+
+
+def test_validated_recovery_rejects_corrupt_or_third_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    source_state = tmp_path / "source-state.json"
+    source_state.write_text(
+        json.dumps({"revision": _OLD_REVISION}) + "\n",
+        encoding="utf-8",
+    )
+    source_state.chmod(0o600)
+    promote_last_good(
+        sandbox.backup_path,
+        sandbox.env_file,
+        source_state,
+        _OLD_REVISION,
+    )
+    marker = tmp_path / "validated-pointer-drift.injected"
+    first = _run(
+        sandbox,
+        extra={
+            "FAKE_CRASH_AFTER_VALIDATED_STATE": "1",
+            "FAKE_CRASH_MARKER": str(marker),
+        },
+    )
+    assert first.returncode != 0
+    pointer = sandbox.backup_path / "last-good-pointer.json"
+    pointer.write_text("{}\n", encoding="utf-8")
+    pointer.chmod(0o600)
+
+    second = _run(sandbox)
+
+    assert second.returncode != 0
+    assert "LAST_GOOD_TARGET_FINALIZE_FAILED" in second.stderr
+
+
+def test_update_lock_path_is_private_empty_and_rejects_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    lock_path = sandbox.backup_path / "serving-update.lock"
+    target = tmp_path / "lock-target"
+    target.write_text("do-not-touch\n", encoding="utf-8")
+    lock_path.symlink_to(target)
+
+    rejected = _run(sandbox)
+
+    assert rejected.returncode != 0
+    assert "SERVING_UPDATE_LOCK_INVALID" in rejected.stderr
+    assert not list(sandbox.backup_path.glob("serving-updates/*/attempt-*"))
+    lock_path.unlink()
+    successful = _run(sandbox)
+    assert successful.returncode == 0, successful.stderr
+    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o600
+    assert lock_path.read_bytes() == b""
+
+
+def test_backup_symlink_and_missing_flock_fail_before_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    real_backup = tmp_path / "real-backup"
+    sandbox.backup_path.rename(real_backup)
+    sandbox.backup_path.symlink_to(real_backup, target_is_directory=True)
+
+    symlink_result = _run(sandbox)
+
+    assert symlink_result.returncode != 0
+    assert "BACKUP_PATH_INVALID" in symlink_result.stderr
+    sandbox.backup_path.unlink()
+    real_backup.rename(sandbox.backup_path)
+    no_flock = tmp_path / "no-flock-bin"
+    no_flock.mkdir()
+    for name in ("bash", "dirname", "realpath"):
+        (no_flock / name).symlink_to(Path("/usr/bin") / name)
+    environment = {
+        **os.environ,
+        "PATH": f"{sandbox.binaries}:{no_flock}",
+        "FAKE_TARGET_SERVING": json.loads(
+            (sandbox.package / "UPDATE_MANIFEST.json").read_bytes()
+        )["serving_fingerprint"]["target"],
+    }
+
+    missing_flock = subprocess.run(  # noqa: S603
+        [
+            "/usr/bin/bash",
+            str(sandbox.package / "update-app.sh"),
+            str(sandbox.env_file),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=10,
+    )
+
+    assert missing_flock.returncode != 0
+    assert "FLOCK_NOT_FOUND" in missing_flock.stderr
+    assert not list(sandbox.backup_path.glob("serving-updates/*/attempt-*"))

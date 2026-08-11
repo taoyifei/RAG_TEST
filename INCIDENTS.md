@@ -1,5 +1,62 @@
 # Industry 事故与防复发记录
 
+## 2026-08-11 真实旧版只有 last-good.env，升级器误要求 JSON pair
+
+- **影响：** 真实 `2c4cf220...` 部署只写 `last-good.env`；`195f9aca2c63` 升级器把这种
+  合法历史状态当成损坏 pair，更新在激活前报 `LEGACY_LAST_GOOD_PAIR_INVALID`，无法从
+  服务器真实基线升级。
+- **根因：** 新实现根据当前理想状态推断历史合同，没有先检查旧 Git 部署脚本，测试也只
+  造了 pointer/pair，没有注入旧版实际产生的 env-only 目录。
+- **修复：** 更新前先严格读取当前 source env、旧镜像、Compose、外部 config、index 和
+  worker 身份，生成 canonical source state 与密封 snapshot。env-only 仅在文件为 0600
+  普通文件且字节 SHA 与当前 source env 完全一致时接受；保留原始 env 字节，不补写伪造
+  的旧 state/pointer。legacy pair、可信旧 pointer、当前 source pointer 与 pointer 缺失
+  分别处理，state-only、symlink、重复键、权限或 SHA 漂移全部拒绝。
+- **防复发证据：** 测试直接读取 `2c4cf220...` 的 `deploy.sh` 证明只写 env；env-only 正向
+  与内容不符、0644、symlink、pair/state-only、未知 revision 等负向均受测。
+
+## 2026-08-11 validated 恢复错误地只接受已晋升 target pointer
+
+- **影响：** 完整 verify 已落盘并写到 `validated`，但进程在 last-good promote 前中断时，
+  pointer 合法地仍指 source；`195f9aca2c63` 重入却报 `LAST_GOOD_POINTER_MISMATCH`，形成
+  无法自动完成、也不应盲目覆盖的崩溃窗口。
+- **根因：** reconcile 只建模“target 已完成”一种重入状态，没有把更新前 source pointer
+  或 pointer absent 写入事务证据，也没有在恢复晋升前重新确认当前运行时仍是已验目标。
+- **修复：** source checkpoint 固定 source pointer/absent、source snapshot 与完整文件
+  identity；finalize 只接受精确记录的 source、精确 target 或记录为 absent 且仍 absent。
+  `verifying`、`validated`、`verified` 恢复前均重新从目标 App 导出 runtime-state，并与
+  pre-index、target contract、verified-state、UPDATE_MANIFEST、活动 index 及 UI/Trace
+  合同严格交叉核对；恢复不再次 force-recreate App。
+- **防复发证据：** source→target、target 幂等、absent→target、第三方 pointer、损坏 source
+  snapshot、verifying 有/无 verified-state、validated 与 verified 重入均有故障注入测试。
+
+## 2026-08-11 Trace 在线备份把合法 WAL 写入误判为源文件篡改
+
+- **影响：** SAFE Trace 在 SQLite WAL 模式下合法并发提交会改变主库 size/mtime 或 WAL
+  bytes；旧备份用完整 `stat` 前后相等作为门禁，因而报 `TRACE_BACKUP_SOURCE_MUTATED`
+  并中止本来安全的 app-only 更新。
+- **根因：** 文件身份与数据库活动观测混成一个不可变对象，忽略 SQLite online backup
+  允许源数据库在备份期间继续提交的合同。
+- **修复：** 稳定身份只包含 device、inode、UID、GID、file type 和 mode，前后必须一致；
+  主库 bytes/mtime 与可选 WAL bytes 作为易变观测写入 schema v2 报告。仍使用
+  `sqlite3.Connection.backup()`，完成后重新只读打开目标，验证 SHA、页数、
+  `user_version` 与 integrity；文件替换、symlink、类型、owner 或 mode 漂移 fail closed。
+- **防复发证据：** 正常在线备份、真实 WAL 并发提交、源文件替换、symlink、权限与 owner
+  漂移均有专项测试；并发用例不暂停 Trace writer，也不降级为离线复制。
+
+## 2026-08-11 不同 update ID 缺少共享锁而可并发修改同一服务
+
+- **影响：** attempt 锁只位于各自 update ID 目录；两个不同候选包可以同时通过预检并
+  修改同一 env、App、Trace 备份和 last-good，事务证据彼此独立却争用同一运行时。
+- **根因：** 将 update ID 误当成资源隔离边界，没有在所有更新共享的 backup root 建立
+  全局互斥；审计目录又在取得互斥前创建，失败竞争也会留下误导性 attempt。
+- **修复：** updater 在创建 update audit root/attempt 前，对 backup root 下固定
+  `serving-update.lock` 取得非阻塞 `flock` 并持有到进程退出。backup root 和锁文件拒绝
+  symlink，锁必须为 0600 普通文件，打开 descriptor 与路径 inode 再核对；缺少 `flock`
+  或竞争失败立即退出，不创建新的更新事务。
+- **防复发证据：** 两个不同且各自有效的目标包真实并发时只有一个进入事务；同包并发、
+  锁/backup symlink、锁权限错误、缺少 flock 和释放后重试也全部覆盖。
+
 ## 2026-08-10 Compose revision 切换被同 env 夹具假绿掩盖
 
 - **影响：** `8755bf379c8f` 包将真实旧 revision 切换到目标 revision 时，旧、新 App

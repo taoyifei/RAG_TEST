@@ -176,8 +176,13 @@ def test_uid_10001_helper_reads_private_sources_and_exports_private_backup(
         assert source_identity["uid"] == 10001
         assert source_identity["gid"] == 10001
         assert source_identity["mode"] == "0600"
-        assert source_identity["bytes"] == original_stat.st_size
-        assert source_identity["mtime_ns"] == original_stat.st_mtime_ns
+        source_observation = report["source_database_observation"]
+        assert source_observation["before"]["bytes"] == (
+            original_stat.st_size
+        )
+        assert source_observation["before"]["mtime_ns"] == (
+            original_stat.st_mtime_ns
+        )
     finally:
         _restore_fixture_owner(config)
         _restore_fixture_owner(state)

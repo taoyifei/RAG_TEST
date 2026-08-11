@@ -21,6 +21,7 @@ from pathlib import Path
 _SHA256 = re.compile(r"(?:sha256:)?[0-9a-f]{64}")
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _HTTP_OK = 200
+_PRIVATE_MODE = 0o600
 _CONFIG_NAMES = {
     "corpus-policy.json",
     "intent-router-calibration.json",
@@ -101,12 +102,18 @@ def pre_update_filesystem_state(
         ):
             raise RuntimeCheckError("CONFIG_FILE_SHA256_MISMATCH")
     _require_regular_private_source(trace_database)
-    trace_before = _source_identity(trace_database)
+    trace_before = _stable_source_identity(trace_database)
     schema = trace_schema(trace_database)
     after = {
         path.name: _source_identity(path) for path in sorted(entries)
     }
-    if before != after or trace_before != _source_identity(trace_database):
+    if before != after:
+        raise RuntimeCheckError("PRE_UPDATE_SOURCE_MUTATED")
+    try:
+        trace_after = _stable_source_identity(trace_database)
+    except (OSError, RuntimeCheckError) as error:
+        raise RuntimeCheckError("PRE_UPDATE_SOURCE_MUTATED") from error
+    if trace_before != trace_after:
         raise RuntimeCheckError("PRE_UPDATE_SOURCE_MUTATED")
     return {
         "config": {"files": files, "profile": config_profile},
@@ -189,7 +196,7 @@ def pre_update_index_state() -> dict[str, object]:
     }
 
 
-def backup_trace_database(
+def backup_trace_database(  # noqa: PLR0912, PLR0915
     source: Path,
     destination: Path,
     target_revision: str,
@@ -222,7 +229,8 @@ def backup_trace_database(
         owner_gid = os.getgid()
     if owner_uid < 0 or owner_gid < 0:
         raise RuntimeCheckError("TRACE_BACKUP_OWNER_INVALID")
-    source_identity = _source_identity(source)
+    source_identity = _stable_source_identity(source)
+    source_before = _volatile_source_observation(source)
     if destination.exists() or destination.is_symlink():
         raise RuntimeCheckError("TRACE_BACKUP_DESTINATION_EXISTS")
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -240,23 +248,13 @@ def backup_trace_database(
         try:
             source_connection.backup(destination_connection)
             destination_connection.commit()
-            integrity = destination_connection.execute(
-                "PRAGMA integrity_check"
-            ).fetchone()
-            user_version = int(
-                destination_connection.execute(
-                    "PRAGMA user_version"
-                ).fetchone()[0]
-            )
-            page_count = int(
-                destination_connection.execute("PRAGMA page_count").fetchone()[
-                    0
-                ]
+            integrity, page_count, user_version = _sqlite_identity(
+                destination_connection
             )
         finally:
             destination_connection.close()
             source_connection.close()
-        if integrity is None or integrity[0] != "ok":
+        if integrity != "ok":
             raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED")
         os.chown(temporary, owner_uid, owner_gid)
         temporary.chmod(0o600)
@@ -269,9 +267,27 @@ def backup_trace_database(
         if isinstance(error, RuntimeCheckError):
             raise
         raise RuntimeCheckError("TRACE_BACKUP_FAILED") from error
-    if source_identity != _source_identity(source):
+    try:
+        source_after_identity = _stable_source_identity(source)
+        source_after = _volatile_source_observation(source)
+    except (OSError, RuntimeCheckError) as error:
+        destination.unlink(missing_ok=True)
+        raise RuntimeCheckError("TRACE_BACKUP_SOURCE_MUTATED") from error
+    if source_identity != source_after_identity:
         destination.unlink(missing_ok=True)
         raise RuntimeCheckError("TRACE_BACKUP_SOURCE_MUTATED")
+    try:
+        with sqlite3.connect(
+            f"file:{urllib.parse.quote(str(destination))}?mode=ro", uri=True
+        ) as published_connection:
+            published = _sqlite_identity(published_connection)
+    except sqlite3.Error as error:
+        destination.unlink(missing_ok=True)
+        raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED") from error
+    if published != (integrity, page_count, user_version):
+        destination.unlink(missing_ok=True)
+        raise RuntimeCheckError("TRACE_BACKUP_INTEGRITY_FAILED")
+    source_changed = source_before != source_after
     return {
         "backup_filename": destination.name,
         "bytes": destination.stat().st_size,
@@ -279,9 +295,14 @@ def backup_trace_database(
         "mode": "0600",
         "owner": {"gid": owner_gid, "uid": owner_uid},
         "page_count": page_count,
-        "schema_version": "1",
+        "schema_version": "2",
         "sha256": _file_sha256(destination),
+        "source_changed_during_backup": source_changed,
         "source_database_identity": source_identity,
+        "source_database_observation": {
+            "after": source_after,
+            "before": source_before,
+        },
         "source_filename": source.name,
         "sqlite_user_version": user_version,
         "target_revision": target_revision,
@@ -321,6 +342,209 @@ def trace_schema(database: Path) -> dict[str, object]:
         }.issubset(columns),
         "sqlite_user_version": version,
     }
+
+
+def validate_runtime_state(
+    pre_index_path: Path,
+    target_contract_path: Path,
+    verified_state_path: Path | None,
+    update_manifest_path: Path,
+    runtime_state_path: Path,
+) -> dict[str, object]:
+    """交叉验证 target 运行态、索引不变量和更新合同。
+
+    Args:
+        pre_index_path: 激活前保存的索引身份。
+        target_contract_path: 从更新 manifest 派生的 target 合同。
+        verified_state_path: 已完成 verify 的状态；首次 verify 可省略。
+        update_manifest_path: 当前事务冻结的 UPDATE_MANIFEST。
+        runtime_state_path: 当前 App 实时导出的 runtime-state v2。
+
+    Returns:
+        可审计但不含 secret 的 canonical 验证摘要。
+
+    Raises:
+        RuntimeCheckError: 任一字段、类型或跨文件关系不成立。
+
+    """
+    pre = _private_json_object(pre_index_path, "pre index")
+    target = _private_json_object(target_contract_path, "target contract")
+    manifest = _private_json_object(update_manifest_path, "update manifest")
+    actual = _private_json_object(runtime_state_path, "runtime state")
+    verified = (
+        _private_json_object(verified_state_path, "verified state")
+        if verified_state_path is not None
+        else None
+    )
+    _validate_runtime_contract_inputs(pre, target, manifest)
+    expected_fields = {
+        "active_collection",
+        "alias",
+        "index_fingerprint",
+        "installed_revision",
+        "manifest_sha256",
+        "point_count",
+        "production_ready",
+        "release_matches",
+        "release_revision",
+        "run_mode",
+        "schema_version",
+        "serving_fingerprint",
+        "trace_question_capture",
+        "trace_question_retention_seconds",
+        "trace_schema_version",
+        "ui_cookie_secure",
+        "ui_query_auth_mode",
+    }
+    if set(actual) != expected_fields:
+        raise RuntimeCheckError("RUNTIME_STATE_FIELDS_INVALID")
+    index_fields = {
+        "active_collection",
+        "alias",
+        "index_fingerprint",
+        "manifest_sha256",
+        "point_count",
+    }
+    if any(actual.get(key) != pre.get(key) for key in index_fields):
+        raise RuntimeCheckError("RUNTIME_INDEX_IDENTITY_DRIFT")
+    trace = target["trace"]
+    ui = target["ui"]
+    revision = target["revision"]
+    if not isinstance(trace, dict) or not isinstance(ui, dict):
+        raise RuntimeCheckError("TARGET_CONTRACT_INVALID")
+    if (
+        actual.get("schema_version") != "2"
+        or actual.get("release_revision") != revision
+        or actual.get("installed_revision") != revision
+        or actual.get("release_matches") is not True
+        or actual.get("serving_fingerprint")
+        != target.get("serving_fingerprint")
+        or actual.get("ui_query_auth_mode") != ui["query_auth_mode"]
+        or actual.get("ui_cookie_secure") != ui["cookie_secure"]
+        or actual.get("trace_question_capture")
+        != trace["question_capture"]
+        or actual.get("trace_question_retention_seconds")
+        != trace["question_retention_seconds"]
+        or actual.get("trace_schema_version") != trace["schema_version"]
+        or actual.get("run_mode") != "demo"
+        or actual.get("production_ready") is not False
+    ):
+        raise RuntimeCheckError("RUNTIME_SERVING_CONTRACT_MISMATCH")
+    fingerprint = actual.get("serving_fingerprint")
+    if (
+        not isinstance(fingerprint, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", fingerprint) is None
+    ):
+        raise RuntimeCheckError("SERVING_FINGERPRINT_INVALID")
+    if verified is not None:
+        expected_verified = {
+            "index": {key: actual[key] for key in sorted(index_fields)},
+            "revision": revision,
+            "schema_version": "2",
+            "stage": "last_good",
+            "update_kind": "serving_app_update",
+        }
+        if verified != expected_verified:
+            raise RuntimeCheckError("VERIFIED_STATE_MISMATCH")
+    return {
+        "index_fingerprint": actual["index_fingerprint"],
+        "revision": revision,
+        "schema_version": "1",
+        "serving_fingerprint": fingerprint,
+        "verified_state_checked": verified is not None,
+    }
+
+
+def _validate_runtime_contract_inputs(
+    pre: dict[str, object],
+    target: dict[str, object],
+    manifest: dict[str, object],
+) -> None:
+    """验证运行态比较所依赖的三个静态合同。"""
+    pre_fields = {
+        "active_collection",
+        "alias",
+        "index_fingerprint",
+        "manifest_sha256",
+        "payload_schema",
+        "point_count",
+        "release_revision",
+        "source_count",
+    }
+    if set(pre) != pre_fields:
+        raise RuntimeCheckError("PRE_INDEX_FIELDS_INVALID")
+    point_count = pre.get("point_count")
+    if (
+        not isinstance(point_count, int)
+        or isinstance(point_count, bool)
+        or point_count <= 0
+        or _SHA256.fullmatch(str(pre.get("index_fingerprint"))) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(pre.get("manifest_sha256")))
+        is None
+    ):
+        raise RuntimeCheckError("PRE_INDEX_IDENTITY_INVALID")
+    if set(target) != {
+        "index_fingerprint",
+        "revision",
+        "serving_fingerprint",
+        "trace",
+        "ui",
+    }:
+        raise RuntimeCheckError("TARGET_CONTRACT_FIELDS_INVALID")
+    trace = target.get("trace")
+    ui = target.get("ui")
+    if (
+        not isinstance(trace, dict)
+        or trace
+        != {
+            "question_capture": "plaintext",
+            "question_retention_seconds": 604800,
+            "schema_version": 2,
+        }
+        or not isinstance(ui, dict)
+        or ui
+        != {
+            "allow_insecure_http": True,
+            "cookie_secure": False,
+            "query_auth_mode": "same_origin_session",
+            "session_ttl_seconds": 1800,
+        }
+        or not isinstance(target.get("revision"), str)
+        or _REVISION.fullmatch(str(target["revision"])) is None
+        or _SHA256.fullmatch(str(target.get("index_fingerprint"))) is None
+        or _SHA256.fullmatch(str(target.get("serving_fingerprint"))) is None
+    ):
+        raise RuntimeCheckError("TARGET_CONTRACT_INVALID")
+    index = manifest.get("index_fingerprint")
+    serving = manifest.get("serving_fingerprint")
+    if (
+        manifest.get("revision") != target["revision"]
+        or not isinstance(index, dict)
+        or index.get("target") != target["index_fingerprint"]
+        or index.get("reindex_required") is not False
+        or not isinstance(serving, dict)
+        or serving.get("target") != target["serving_fingerprint"]
+        or manifest.get("trace") != trace
+        or manifest.get("ui") != ui
+    ):
+        raise RuntimeCheckError("UPDATE_MANIFEST_CONTRACT_MISMATCH")
+    if pre.get("index_fingerprint") != target["index_fingerprint"]:
+        raise RuntimeCheckError("INDEX_FINGERPRINT_CHANGED")
+
+
+def _private_json_object(path: Path, label: str) -> dict[str, object]:
+    """读取 mode 0600 的普通 JSON object 文件。"""
+    try:
+        value = path.lstat()
+    except OSError as error:
+        raise RuntimeCheckError(f"{label.upper()}_FILE_INVALID") from error
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(value.st_mode)
+        or stat.S_IMODE(value.st_mode) != _PRIVATE_MODE
+    ):
+        raise RuntimeCheckError(f"{label.upper()}_FILE_INVALID")
+    return _json_object(path.read_bytes(), label)
 
 
 def _active_manifest(database: Path) -> dict[str, object]:
@@ -423,10 +647,14 @@ def _json_object(payload: bytes, label: str) -> dict[str, object]:
 
 
 def _require_regular_private_source(path: Path) -> None:
-    if not path.is_file() or path.is_symlink():
+    try:
+        value = path.lstat()
+    except OSError as error:
+        raise RuntimeCheckError("TRACE_DATABASE_INVALID") from error
+    if path.is_symlink() or not stat.S_ISREG(value.st_mode):
         raise RuntimeCheckError("TRACE_DATABASE_INVALID")
-    mode = stat.S_IMODE(path.stat().st_mode)
-    if mode & 0o077:
+    mode = stat.S_IMODE(value.st_mode)
+    if mode != _PRIVATE_MODE:
         raise RuntimeCheckError("TRACE_DATABASE_NOT_PRIVATE")
 
 
@@ -449,6 +677,76 @@ def _source_identity(path: Path) -> dict[str, object]:
         "mtime_ns": value.st_mtime_ns,
         "uid": value.st_uid,
     }
+
+
+def _stable_source_identity(path: Path) -> dict[str, object]:
+    """返回活动 SQLite 文件不可在备份期间漂移的身份。
+
+    Args:
+        path: 待检查的活动 SQLite 文件。
+
+    Returns:
+        不含 size 和 mtime 的稳定文件身份。
+
+    Raises:
+        RuntimeCheckError: 路径不是 mode 0600 的普通非符号链接文件。
+
+    """
+    _require_regular_private_source(path)
+    value = path.lstat()
+    return {
+        "device": value.st_dev,
+        "file_type": "regular",
+        "gid": value.st_gid,
+        "inode": value.st_ino,
+        "mode": f"{stat.S_IMODE(value.st_mode):04o}",
+        "uid": value.st_uid,
+    }
+
+
+def _volatile_source_observation(path: Path) -> dict[str, int | None]:
+    """记录活动 SQLite 的可变大小和时间观测值。
+
+    Args:
+        path: 活动 SQLite 主文件。
+
+    Returns:
+        主文件大小、mtime 及可选 WAL 大小。
+
+    """
+    value = path.stat()
+    wal_path = Path(f"{path}-wal")
+    wal_bytes = None
+    if wal_path.exists() and not wal_path.is_symlink():
+        wal_value = wal_path.stat()
+        if stat.S_ISREG(wal_value.st_mode):
+            wal_bytes = wal_value.st_size
+    return {
+        "bytes": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "wal_bytes": wal_bytes,
+    }
+
+
+def _sqlite_identity(
+    connection: sqlite3.Connection,
+) -> tuple[str, int, int]:
+    """读取 SQLite 完整性、页数和 user_version。
+
+    Args:
+        connection: 已打开的 SQLite 连接。
+
+    Returns:
+        integrity_check、page_count 与 user_version。
+
+    """
+    integrity_row = connection.execute("PRAGMA integrity_check").fetchone()
+    integrity = str(integrity_row[0]) if integrity_row is not None else ""
+    page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
+    user_version = int(
+        connection.execute("PRAGMA user_version").fetchone()[0]
+    )
+    return integrity, page_count, user_version
 
 
 def _fsync_directory(path: Path) -> None:
@@ -474,6 +772,12 @@ def _arguments() -> argparse.Namespace:
         backup.add_argument("target_revision")
     schema = commands.add_parser("trace-schema")
     schema.add_argument("database", type=Path)
+    runtime = commands.add_parser("validate-runtime-state")
+    runtime.add_argument("pre_index", type=Path)
+    runtime.add_argument("target_contract", type=Path)
+    runtime.add_argument("verified_state")
+    runtime.add_argument("update_manifest", type=Path)
+    runtime.add_argument("runtime_state", type=Path)
     return parser.parse_args()
 
 
@@ -505,8 +809,21 @@ def main() -> int:
                 owner_uid=_required_owner("RAG_UPDATE_OWNER_UID"),
                 owner_gid=_required_owner("RAG_UPDATE_OWNER_GID"),
             )
-        else:
+        elif arguments.command == "trace-schema":
             result = trace_schema(arguments.database)
+        else:
+            verified_state = (
+                None
+                if arguments.verified_state == "-"
+                else Path(arguments.verified_state)
+            )
+            result = validate_runtime_state(
+                arguments.pre_index,
+                arguments.target_contract,
+                verified_state,
+                arguments.update_manifest,
+                arguments.runtime_state,
+            )
     except RuntimeCheckError as error:
         print(f"RAG_INDUSTRY_RUNTIME_CHECK_FAILED: {error}", file=sys.stderr)
         return 1

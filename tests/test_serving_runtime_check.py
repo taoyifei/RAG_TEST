@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -141,7 +142,11 @@ def test_trace_backup_records_complete_identity_and_uses_private_mode(
     assert report["page_count"] > 0
     assert report["mode"] == "0600"
     assert report["source_filename"] == "traces.sqlite3"
-    assert report["source_database_identity"]["bytes"] == len(source_bytes)  # type: ignore[index]
+    assert report["source_database_identity"]["file_type"] == "regular"  # type: ignore[index]
+    assert report["source_database_observation"]["before"]["bytes"] == (  # type: ignore[index]
+        len(source_bytes)
+    )
+    assert report["source_changed_during_backup"] is False
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
     assert source.read_bytes() == source_bytes
     with sqlite3.connect(destination) as connection:
@@ -344,3 +349,434 @@ def test_trace_backup_rejects_bad_revision_and_existing_destination(
         serving_runtime_check.backup_trace_database(
             source, destination, _REVISION
         )
+
+
+def test_trace_backup_allows_concurrent_wal_writes_and_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "traces.sqlite3"
+    keeper = sqlite3.connect(source, timeout=10)
+    keeper.execute("PRAGMA journal_mode=WAL")
+    keeper.execute("PRAGMA wal_autocheckpoint=0")
+    keeper.execute(
+        "CREATE TABLE traces (trace_id TEXT PRIMARY KEY, payload TEXT)"
+    )
+    keeper.executemany(
+        "INSERT INTO traces VALUES (?, ?)",
+        ((f"trace-{index}", "x" * 4096) for index in range(512)),
+    )
+    keeper.commit()
+    source.chmod(0o600)
+    destination = tmp_path / "backup" / "traces-before.sqlite3"
+    original_connect = sqlite3.connect
+    backup_started = threading.Event()
+    writer_finished = threading.Event()
+
+    class _ConnectionProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def backup(self, target: sqlite3.Connection) -> None:
+            signaled = False
+
+            def progress(_status: int, _remaining: int, _total: int) -> None:
+                nonlocal signaled
+                if not signaled:
+                    signaled = True
+                    backup_started.set()
+                    assert writer_finished.wait(timeout=10)
+
+            self._connection.backup(
+                target,
+                pages=1,
+                progress=progress,
+                sleep=0.001,
+            )
+
+        def close(self) -> None:
+            self._connection.close()
+
+    def connect(
+        database: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> sqlite3.Connection | _ConnectionProxy:
+        connection = original_connect(database, *args, **kwargs)
+        if (
+            isinstance(database, str)
+            and "mode=ro" in database
+            and str(source) in database
+        ):
+            return _ConnectionProxy(connection)
+        return connection
+
+    monkeypatch.setattr(serving_runtime_check.sqlite3, "connect", connect)
+
+    def write_during_backup() -> None:
+        assert backup_started.wait(timeout=10)
+        with original_connect(source, timeout=10) as writer:
+            writer.execute(
+                "INSERT INTO traces VALUES (?, ?)",
+                ("trace-concurrent", "y" * 8192),
+            )
+            writer.commit()
+            writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+        writer_finished.set()
+
+    writer = threading.Thread(target=write_during_backup)
+    writer.start()
+    try:
+        report = serving_runtime_check.backup_trace_database(
+            source,
+            destination,
+            _REVISION,
+        )
+    finally:
+        writer.join(timeout=10)
+        keeper.close()
+
+    assert not writer.is_alive()
+    assert report["source_changed_during_backup"] is True
+    assert set(report["source_database_identity"]) == {
+        "device",
+        "file_type",
+        "gid",
+        "inode",
+        "mode",
+        "uid",
+    }
+    with sqlite3.connect(destination) as connection:
+        assert connection.execute("PRAGMA integrity_check").fetchone() == (
+            "ok",
+        )
+        assert connection.execute("SELECT COUNT(*) FROM traces").fetchone()[
+            0
+        ] >= 512
+
+
+def test_pre_update_trace_schema_allows_legal_database_growth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "config"
+    config.mkdir()
+    for name in _CONFIG_NAMES:
+        path = config / name
+        path.write_text("{}\n", encoding="utf-8")
+        path.chmod(0o600)
+    database = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    database.chmod(0o600)
+    original = serving_runtime_check.trace_schema
+
+    def trace_schema_with_write(path: Path) -> dict[str, object]:
+        value = original(path)
+        with sqlite3.connect(path) as connection:
+            connection.execute("INSERT INTO traces VALUES ('concurrent')")
+        return value
+
+    monkeypatch.setattr(
+        serving_runtime_check, "trace_schema", trace_schema_with_write
+    )
+
+    report = serving_runtime_check.pre_update_filesystem_state(
+        config, database, "first-deploy-private-v1"
+    )
+
+    assert report["trace"]["sqlite_user_version"] == 0  # type: ignore[index]
+
+
+@pytest.mark.parametrize("mutation", ("replace", "mode"))
+def test_trace_backup_rejects_stable_source_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    source = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+        connection.execute("INSERT INTO traces VALUES ('before')")
+    source.chmod(0o600)
+    destination = tmp_path / "backup" / "traces.sqlite3"
+    original_connect = sqlite3.connect
+
+    class _ConnectionProxy:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def backup(self, target: sqlite3.Connection) -> None:
+            self._connection.backup(target)
+            if mutation == "mode":
+                source.chmod(0o644)
+            else:
+                replacement = tmp_path / "replacement.sqlite3"
+                replacement.write_bytes(source.read_bytes())
+                replacement.chmod(0o600)
+                replacement.replace(source)
+
+        def close(self) -> None:
+            self._connection.close()
+
+    def connect(
+        database: str | Path,
+        *args: object,
+        **kwargs: object,
+    ) -> sqlite3.Connection | _ConnectionProxy:
+        connection = original_connect(database, *args, **kwargs)
+        if (
+            isinstance(database, str)
+            and "mode=ro" in database
+            and str(source) in database
+        ):
+            return _ConnectionProxy(connection)
+        return connection
+
+    monkeypatch.setattr(serving_runtime_check.sqlite3, "connect", connect)
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="SOURCE_MUTATED",
+    ):
+        serving_runtime_check.backup_trace_database(
+            source, destination, _REVISION
+        )
+    assert not destination.exists()
+
+
+def test_trace_backup_rejects_owner_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    source.chmod(0o600)
+    destination = tmp_path / "backup.sqlite3"
+    original = serving_runtime_check._stable_source_identity
+    calls = 0
+
+    def drifting_identity(path: Path) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        value = original(path)
+        if calls > 1:
+            value["gid"] = int(value["gid"]) + 1
+        return value
+
+    monkeypatch.setattr(
+        serving_runtime_check,
+        "_stable_source_identity",
+        drifting_identity,
+    )
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="SOURCE_MUTATED",
+    ):
+        serving_runtime_check.backup_trace_database(
+            source, destination, _REVISION
+        )
+
+
+@pytest.mark.parametrize("source_kind", ("symlink", "directory"))
+def test_trace_backup_rejects_symlink_and_non_regular_source(
+    tmp_path: Path,
+    source_kind: str,
+) -> None:
+    real = tmp_path / "real.sqlite3"
+    with sqlite3.connect(real) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    real.chmod(0o600)
+    source = tmp_path / "traces.sqlite3"
+    if source_kind == "symlink":
+        source.symlink_to(real)
+    else:
+        source.mkdir(mode=0o600)
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="TRACE_DATABASE_INVALID",
+    ):
+        serving_runtime_check.backup_trace_database(
+            source, tmp_path / "backup.sqlite3", _REVISION
+        )
+
+
+def test_trace_backup_rejects_published_backup_identity_corruption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "traces.sqlite3"
+    with sqlite3.connect(source) as connection:
+        connection.execute("CREATE TABLE traces (trace_id TEXT)")
+    source.chmod(0o600)
+    destination = tmp_path / "backup.sqlite3"
+    original = serving_runtime_check._sqlite_identity
+    calls = 0
+
+    def corrupt_second_read(
+        connection: sqlite3.Connection,
+    ) -> tuple[str, int, int]:
+        nonlocal calls
+        calls += 1
+        value = original(connection)
+        if calls == 2:
+            return value[0], value[1] + 1, value[2]
+        return value
+
+    monkeypatch.setattr(
+        serving_runtime_check, "_sqlite_identity", corrupt_second_read
+    )
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match="INTEGRITY_FAILED",
+    ):
+        serving_runtime_check.backup_trace_database(
+            source, destination, _REVISION
+        )
+    assert not destination.exists()
+
+
+def _write_private_json(path: Path, value: object) -> Path:
+    path.write_text(
+        json.dumps(value, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
+
+
+def _runtime_contract_files(tmp_path: Path) -> tuple[Path, ...]:
+    serving = "sha256:" + "9" * 64
+    pre = {
+        "active_collection": "rag-docx-active",
+        "alias": "rag-industry-active",
+        "index_fingerprint": _FINGERPRINT,
+        "manifest_sha256": "5" * 64,
+        "payload_schema": "industry-pre-update-index-state-v1",
+        "point_count": 139,
+        "release_revision": _REVISION,
+        "source_count": 10,
+    }
+    trace = {
+        "question_capture": "plaintext",
+        "question_retention_seconds": 604800,
+        "schema_version": 2,
+    }
+    ui = {
+        "allow_insecure_http": True,
+        "cookie_secure": False,
+        "query_auth_mode": "same_origin_session",
+        "session_ttl_seconds": 1800,
+    }
+    target = {
+        "index_fingerprint": _FINGERPRINT,
+        "revision": _REVISION,
+        "serving_fingerprint": serving,
+        "trace": trace,
+        "ui": ui,
+    }
+    manifest = {
+        "index_fingerprint": {
+            "reindex_required": False,
+            "source": _FINGERPRINT,
+            "target": _FINGERPRINT,
+        },
+        "revision": _REVISION,
+        "serving_fingerprint": {"source": serving, "target": serving},
+        "trace": trace,
+        "ui": ui,
+    }
+    runtime = {
+        "active_collection": "rag-docx-active",
+        "alias": "rag-industry-active",
+        "index_fingerprint": _FINGERPRINT,
+        "installed_revision": _REVISION,
+        "manifest_sha256": "5" * 64,
+        "point_count": 139,
+        "production_ready": False,
+        "release_matches": True,
+        "release_revision": _REVISION,
+        "run_mode": "demo",
+        "schema_version": "2",
+        "serving_fingerprint": serving,
+        "trace_question_capture": "plaintext",
+        "trace_question_retention_seconds": 604800,
+        "trace_schema_version": 2,
+        "ui_cookie_secure": False,
+        "ui_query_auth_mode": "same_origin_session",
+    }
+    verified = {
+        "index": {
+            key: runtime[key]
+            for key in (
+                "active_collection",
+                "alias",
+                "index_fingerprint",
+                "manifest_sha256",
+                "point_count",
+            )
+        },
+        "revision": _REVISION,
+        "schema_version": "2",
+        "stage": "last_good",
+        "update_kind": "serving_app_update",
+    }
+    return tuple(
+        _write_private_json(tmp_path / name, value)
+        for name, value in (
+            ("pre-index.json", pre),
+            ("target-contract.json", target),
+            ("verified-state.json", verified),
+            ("UPDATE_MANIFEST.json", manifest),
+            ("runtime-state.json", runtime),
+        )
+    )
+
+
+def test_runtime_state_validation_cross_checks_all_frozen_evidence(
+    tmp_path: Path,
+) -> None:
+    paths = _runtime_contract_files(tmp_path)
+
+    report = serving_runtime_check.validate_runtime_state(*paths)
+
+    assert report == {
+        "index_fingerprint": _FINGERPRINT,
+        "revision": _REVISION,
+        "schema_version": "1",
+        "serving_fingerprint": "sha256:" + "9" * 64,
+        "verified_state_checked": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        ("release_revision", "3" * 40, "SERVING_CONTRACT"),
+        ("alias", "other-alias", "INDEX_IDENTITY_DRIFT"),
+        ("point_count", 138, "INDEX_IDENTITY_DRIFT"),
+        ("ui_query_auth_mode", "browser_bearer", "SERVING_CONTRACT"),
+        ("trace_question_capture", "hash_only", "SERVING_CONTRACT"),
+    ),
+)
+def test_runtime_state_validation_rejects_target_drift(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    error: str,
+) -> None:
+    paths = _runtime_contract_files(tmp_path)
+    runtime_path = paths[-1]
+    runtime = json.loads(runtime_path.read_bytes())
+    runtime[field] = value
+    _write_private_json(runtime_path, runtime)
+
+    with pytest.raises(
+        serving_runtime_check.RuntimeCheckError,
+        match=error,
+    ):
+        serving_runtime_check.validate_runtime_state(*paths)
