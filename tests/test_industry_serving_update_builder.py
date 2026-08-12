@@ -102,6 +102,24 @@ def test_source_config_identity_comes_from_real_first_deploy_release() -> None:
     assert source.serving_fingerprint == (
         build_industry_app_update._SOURCE_SERVING_FINGERPRINT
     )
+    assert source.app_image == {
+        "config_digest": (
+            "sha256:"
+            "4bb2a5ec200612e057f3ae95bfdc7d5025fb9e07486c22f9d93c4b7ee5a225ef"
+        ),
+        "entrypoint": ["rag-app"],
+        "id": (
+            "sha256:"
+            "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+        ),
+        "manifest_digest": (
+            "sha256:"
+            "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+        ),
+        "platform": "linux/amd64",
+        "ref": "docx-rag:2c4cf220c7cf",
+        "revision": "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1",
+    }
     assert build_industry_app_update._SOURCE_CONFIG_PROFILE == (
         "first-deploy-private-v1"
     )

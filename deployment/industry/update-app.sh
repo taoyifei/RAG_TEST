@@ -160,6 +160,7 @@ old_compose="$(industry_compose_file "${env_file}")"
 old_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)"
 old_image="$(exact_env_value "${env_file}" RAG_APP_IMAGE)"
 old_config="$(exact_env_value "${env_file}" RAG_CONFIG_PATH)"
+source_recovery_ref="docx-rag:industry-recovery-${old_revision:0:12}-${update_id}"
 python3 - "${package_dir}/UPDATE_MANIFEST.json" \
   "${old_revision}" "${target_revision}" "${target_index}" <<'PY'
 import json
@@ -174,6 +175,7 @@ if not isinstance(source, dict):
     raise SystemExit("SOURCE_COMPATIBILITY_INVALID")
 compatible = source.get("compatible_revisions")
 source_config = source.get("config_files")
+source_app_image = source.get("app_image")
 trusted_last_good = source.get("trusted_last_good_revisions")
 trace_compatibility = source.get("trace_compatibility")
 target_config = manifest.get("config_files")
@@ -187,6 +189,31 @@ if (
         for item in compatible
     )
     or source.get("old_app_runtime_state_required") is not False
+    or not isinstance(source_app_image, dict)
+    or set(source_app_image)
+    != {
+        "config_digest",
+        "entrypoint",
+        "id",
+        "manifest_digest",
+        "platform",
+        "ref",
+        "revision",
+    }
+    or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", str(source_app_image.get("id"))
+    )
+    is None
+    or re.fullmatch(
+        r"sha256:[0-9a-f]{64}",
+        str(source_app_image.get("config_digest")),
+    )
+    is None
+    or source_app_image.get("manifest_digest") != source_app_image.get("id")
+    or source_app_image.get("platform") != "linux/amd64"
+    or source_app_image.get("entrypoint") != ["rag-app"]
+    or source_app_image.get("revision") != compatible[0]
+    or source_app_image.get("ref") != f"docx-rag:{compatible[0][:12]}"
     or trace_compatibility
     != {
         "accepted_user_versions": [0, 1, 2],
@@ -308,6 +335,8 @@ expected_fields = {
     "source_config",
     "source_env_sha256",
     "source_image",
+    "source_recovery_env_sha256",
+    "source_recovery_image",
     "source_revision",
     "target_compose_sha256",
     "target_config",
@@ -326,6 +355,9 @@ manifest = json.loads((transaction / "UPDATE_MANIFEST.json").read_bytes())
 snapshot = json.loads((transaction / "pre-update-snapshot.json").read_bytes())
 filesystem = json.loads((transaction / "pre-filesystem.json").read_bytes())
 checkpoint = json.loads((transaction / "source-checkpoint.json").read_bytes())
+recovery_image = json.loads(
+    (transaction / "source-recovery-image.json").read_bytes()
+)
 source_image = snapshot.get("app")
 source_compose = snapshot.get("compose")
 manifest_image = manifest.get("image")
@@ -355,11 +387,14 @@ if (
     or value.get("target_revision") != target_revision
     or value.get("source_env_sha256")
     != digest(transaction / "old-rag-industry.env")
+    or value.get("source_recovery_env_sha256")
+    != digest(transaction / "source-recovery.env")
     or value.get("candidate_env_sha256")
     != digest(transaction / "candidate-rag-industry.env")
     or value.get("source_compose_sha256") != digest(source_compose_path)
     or value.get("target_compose_sha256") != digest(target_compose)
     or value.get("source_image") != expected_source_image
+    or value.get("source_recovery_image") != recovery_image
     or value.get("target_image") != expected_target_image
     or value.get("source_config") != filesystem.get("config")
     or value.get("target_config")
@@ -375,6 +410,7 @@ if (
             "candidate_env_sha256",
             "source_compose_sha256",
             "source_env_sha256",
+            "source_recovery_env_sha256",
             "target_compose_sha256",
         )
     )
@@ -409,6 +445,9 @@ manifest = json.loads((transaction / "UPDATE_MANIFEST.json").read_bytes())
 snapshot = json.loads((transaction / "pre-update-snapshot.json").read_bytes())
 filesystem = json.loads((transaction / "pre-filesystem.json").read_bytes())
 checkpoint = json.loads((transaction / "source-checkpoint.json").read_bytes())
+recovery_image = json.loads(
+    (transaction / "source-recovery-image.json").read_bytes()
+)
 source_image = snapshot["app"]
 source_compose = pathlib.Path(snapshot["compose"]["path"])
 value = {
@@ -427,6 +466,10 @@ value = {
         "ref": source_image["image_ref"],
         "revision": source_image["oci_revision"],
     },
+    "source_recovery_env_sha256": digest(
+        transaction / "source-recovery.env"
+    ),
+    "source_recovery_image": recovery_image,
     "source_revision": checkpoint["revision"],
     "target_compose_sha256": digest(target_compose),
     "target_config": {
@@ -472,6 +515,94 @@ elif actual == intent.get("candidate_env_sha256"):
     print("target")
 else:
     print("unknown")
+PY
+}
+
+classify_activation_app_identity() {
+  python3 - "$1/activation-intent.json" <<'PY'
+import json
+import pathlib
+import subprocess
+import sys
+
+intent = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+source = intent.get("source_image")
+recovery = intent.get("source_recovery_image")
+target = intent.get("target_image")
+if not all(isinstance(item, dict) for item in (source, recovery, target)):
+    raise SystemExit("ACTIVATION_IMAGE_EVIDENCE_INVALID")
+
+
+def run(*arguments, check=True):
+    return subprocess.run(
+        arguments,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+def inspect(template):
+    return run(
+        "docker", "container", "inspect", "--format", template,
+        "rag-industry-app",
+    ).stdout.strip()
+
+
+try:
+    configured_ref = inspect("{{.Config.Image}}")
+    running_id = inspect("{{.Image}}")
+    project = inspect(
+        '{{index .Config.Labels "com.docker.compose.project"}}'
+    )
+    service = inspect(
+        '{{index .Config.Labels "com.docker.compose.service"}}'
+    )
+    running = inspect("{{.State.Running}}")
+    health = run(
+        "docker", "inspect", "--format",
+        "{{if .State.Health}}{{.State.Health.Status}}"
+        "{{else}}{{.State.Status}}{{end}}",
+        "rag-industry-app",
+    ).stdout.strip()
+    raw_env = inspect("{{range .Config.Env}}{{println .}}{{end}}")
+except subprocess.CalledProcessError:
+    print("unknown")
+    raise SystemExit(0)
+revisions = [
+    item.split("=", 1)[1]
+    for item in raw_env.splitlines()
+    if item.startswith("RAG_RELEASE_REVISION=")
+]
+kind = "unknown"
+expected_revision = None
+if (
+    running_id == source.get("id")
+    and configured_ref
+    in {source.get("ref"), recovery.get("recovery_ref")}
+    and revisions == [source.get("revision")]
+):
+    kind = "source"
+    expected_revision = source.get("revision")
+elif (
+    running_id == target.get("id")
+    and configured_ref == target.get("ref")
+    and revisions == [target.get("revision")]
+):
+    kind = "target"
+    expected_revision = target.get("revision")
+if kind == "unknown" or project != "rag-industry" or service != "rag-industry-app":
+    print("unknown")
+    raise SystemExit(0)
+build = run(
+    "docker", "exec", "rag-industry-app", "rag-app", "build-info",
+    "--expected-revision", str(expected_revision),
+    check=False,
+)
+if running != "true" or health != "healthy" or build.returncode != 0:
+    print(f"{kind}_unhealthy")
+else:
+    print(kind)
 PY
 }
 
@@ -663,7 +794,10 @@ PY
     if [[ "${current_revision}" != "${old_revision}" \
       || ! -f "${transaction}/old-rag-industry.env" ]] \
       || ! cmp -s -- "${transaction}/old-rag-industry.env" "${env_file}" \
-      || ! verify_industry_app_identity "${env_file}" true; then
+      || ! verify_industry_source_app_identity "${env_file}" \
+        "${transaction}/UPDATE_MANIFEST.json" \
+        "${transaction}/pre-update-snapshot.json" \
+        "${source_recovery_ref}" true; then
       write_recovery_failure "${transaction}" \
         "PRECHECKING_SOURCE_IDENTITY_UNKNOWN"
     fi
@@ -685,9 +819,7 @@ PY
     env_identity="$(activation_env_identity "${transaction}")" \
       || write_recovery_failure \
         "${transaction}" "ACTIVATION_ENV_IDENTITY_INVALID"
-    app_identity="$(classify_industry_app_identity \
-      "${transaction}/old-rag-industry.env" \
-      "${transaction}/candidate-rag-industry.env")"
+    app_identity="$(classify_activation_app_identity "${transaction}")"
     needs_recreate=false
     if [[ "${env_identity}" == "source" \
       && "${app_identity}" == "source" ]]; then
@@ -1092,7 +1224,8 @@ failure_code="PRE_UPDATE_SOURCE_IDENTITY_FAILED"
 python3 - "${env_file}" "${old_compose}" \
   "${transaction}/pre-filesystem.json" \
   "${transaction}/pre-update-snapshot.json" "${old_image}" \
-  "${old_revision}" "${backup_path}" <<'PY'
+  "${old_revision}" "${backup_path}" \
+  "${package_dir}/UPDATE_MANIFEST.json" "${source_recovery_ref}" <<'PY'
 import hashlib
 import json
 import os
@@ -1109,6 +1242,8 @@ output_path = pathlib.Path(sys.argv[4])
 old_image = sys.argv[5]
 old_revision = sys.argv[6]
 backup_path = pathlib.Path(sys.argv[7])
+manifest = json.loads(pathlib.Path(sys.argv[8]).read_bytes())
+recovery_ref = sys.argv[9]
 revision_pattern = re.compile(r"[0-9a-f]{40}")
 
 
@@ -1154,18 +1289,65 @@ if (
 ):
     raise SystemExit("PRE_UPDATE_FILE_IDENTITY_INVALID")
 filesystem = json.loads(filesystem_path.read_bytes())
-image_id = run("docker", "image", "inspect", "--format", "{{.Id}}", old_image)
+source = manifest.get("source_compatibility")
+source_image = source.get("app_image") if isinstance(source, dict) else None
+configured_image = run(
+    "docker", "container", "inspect", "--format", "{{.Config.Image}}",
+    "rag-industry-app",
+)
+image_id = run(
+    "docker", "container", "inspect", "--format", "{{.Image}}",
+    "rag-industry-app",
+)
+configured_tag_image_id = run(
+    "docker", "image", "inspect", "--format", "{{.Id}}", old_image
+)
+inspected_image_id = run(
+    "docker", "image", "inspect", "--format", "{{.Id}}", image_id
+)
+image_platform = run(
+    "docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}",
+    image_id,
+)
 image_revision = run(
     "docker",
     "image",
     "inspect",
     "--format",
     '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-    old_image,
+    image_id,
+)
+image_entrypoint = json.loads(
+    run(
+        "docker", "image", "inspect", "--format",
+        "{{json .Config.Entrypoint}}", image_id,
+    )
+)
+configured_is_recovery = (
+    isinstance(source_image, dict)
+    and isinstance(source_image.get("revision"), str)
+    and re.fullmatch(
+        rf"docx-rag:industry-recovery-"
+        rf"{re.escape(source_image['revision'][:12])}-"
+        r"[0-9a-f]{12}-[0-9a-f]{12}",
+        configured_image,
+    )
+    is not None
 )
 if (
-    re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
+    not isinstance(source_image, dict)
+    or re.fullmatch(r"sha256:[0-9a-f]{64}", image_id) is None
+    or (
+        configured_image not in {source_image.get("ref"), recovery_ref}
+        and not configured_is_recovery
+    )
+    or configured_image != old_image
+    or inspected_image_id != image_id
+    or image_id != source_image.get("id")
+    or image_platform != source_image.get("platform")
     or image_revision != old_revision
+    or image_revision != source_image.get("revision")
+    or image_entrypoint != source_image.get("entrypoint")
 ):
     raise SystemExit("PRE_UPDATE_IMAGE_IDENTITY_INVALID")
 build_info = json.loads(
@@ -1224,10 +1406,14 @@ payload = {
             "docker", "container", "inspect", "--format", "{{.Id}}",
             "rag-industry-app",
         ),
+        "configured_tag_image_id": configured_tag_image_id,
+        "configured_tag_matches_running": configured_tag_image_id == image_id,
+        "entrypoint": image_entrypoint,
         "image_id": image_id,
         "image_ref": old_image,
         "mounts": mounts,
         "oci_revision": image_revision,
+        "platform": image_platform,
         "ports": ports,
         "started_at": run(
             "docker", "container", "inspect", "--format",
@@ -1322,16 +1508,45 @@ failure_stage="source_checkpoint"
 failure_code="SOURCE_CHECKPOINT_FAILED"
 validate_industry_compose "${env_file}" "${old_compose}" \
   || fail "SOURCE_COMPOSE_CANONICAL_INVALID"
-verify_industry_app_identity "${env_file}" true \
+verify_industry_source_app_identity "${env_file}" \
+  "${package_dir}/UPDATE_MANIFEST.json" \
+  "${transaction}/pre-update-snapshot.json" "${source_recovery_ref}" true \
   || fail "SOURCE_APP_IDENTITY_INVALID"
-source_port="$(exact_env_value "${env_file}" RAG_PORT)"
-wait_industry_http "http://127.0.0.1:${source_port}/live" 60 \
-  || fail "SOURCE_LIVE_FAILED"
-wait_industry_http "http://127.0.0.1:${source_port}/ready" 60 \
-  || fail "SOURCE_READY_FAILED"
+source_recovery_env="${transaction}/source-recovery.env"
+python3 - "${env_file}" "${source_recovery_env}" \
+  "${source_recovery_ref}" <<'PY'
+import os
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+recovery_ref = sys.argv[3]
+lines = source.read_text(encoding="utf-8").splitlines()
+matches = [
+    index
+    for index, line in enumerate(lines)
+    if line.startswith("RAG_APP_IMAGE=")
+]
+if (
+    len(matches) != 1
+    or not recovery_ref.startswith("docx-rag:industry-recovery-")
+    or "\n" in recovery_ref
+):
+    raise SystemExit("SOURCE_RECOVERY_ENV_INPUT_INVALID")
+lines[matches[0]] = f"RAG_APP_IMAGE={recovery_ref}"
+descriptor = os.open(
+    destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    output.write("\n".join(lines) + "\n")
+    output.flush()
+    os.fsync(output.fileno())
+PY
 python3 - "${transaction}/pre-update-snapshot.json" \
   "${transaction}/pre-index.json" \
-  "${transaction}/pre-update-source-state.json" "${old_revision}" <<'PY'
+  "${transaction}/pre-update-source-state.json" "${old_revision}" \
+  "${source_recovery_ref}" <<'PY'
 import json
 import os
 import pathlib
@@ -1339,6 +1554,7 @@ import sys
 
 snapshot = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
 index = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
+recovery_ref = sys.argv[5]
 app = snapshot.get("app") if isinstance(snapshot, dict) else None
 config = snapshot.get("config") if isinstance(snapshot, dict) else None
 private_env = (
@@ -1354,7 +1570,7 @@ created_at = app.get("started_at")
 if not isinstance(created_at, str) or not created_at:
     raise SystemExit("SOURCE_CHECKPOINT_CREATED_AT_INVALID")
 value = {
-    "app": app,
+    "app": {**app, "image_ref": recovery_ref},
     "compose": compose,
     "config": config,
     "created_at": created_at,
@@ -1378,14 +1594,6 @@ try:
 finally:
     os.close(directory)
 PY
-python3 "${runtime_dir}/last_good.py" checkpoint-source \
-  "${backup_path}" "${env_file}" \
-  "${transaction}/pre-update-source-state.json" "${old_revision}" \
-  "${transaction}/pre-last-good.json" \
-  "${transaction}/UPDATE_MANIFEST.json" \
-  >"${transaction}/source-checkpoint.json" \
-  || fail "SOURCE_CHECKPOINT_FAILED"
-chmod 600 "${transaction}/source-checkpoint.json"
 
 failure_stage="trace_backup"
 failure_code="TRACE_BACKUP_FAILED"
@@ -1708,6 +1916,111 @@ if (
 ):
     raise SystemExit("IMAGE_INDEX_FINGERPRINT_MISMATCH")
 PY
+
+failure_stage="source_recovery_image"
+failure_code="SOURCE_RECOVERY_IMAGE_FAILED"
+python3 - "${transaction}/pre-update-snapshot.json" \
+  "${transaction}/source-recovery-image.json" \
+  "${source_recovery_ref}" <<'PY'
+import json
+import os
+import pathlib
+import re
+import subprocess
+import sys
+
+snapshot = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+output_path = pathlib.Path(sys.argv[2])
+recovery_ref = sys.argv[3]
+app = snapshot.get("app") if isinstance(snapshot, dict) else None
+if (
+    not isinstance(app, dict)
+    or re.fullmatch(
+        r"docx-rag:industry-recovery-[0-9a-f]{12}-"
+        r"[0-9a-f]{12}-[0-9a-f]{12}",
+        recovery_ref,
+    )
+    is None
+):
+    raise SystemExit("SOURCE_RECOVERY_INPUT_INVALID")
+
+
+def run(*arguments, check=True):
+    return subprocess.run(
+        arguments,
+        check=check,
+        capture_output=True,
+        text=True,
+    )
+
+
+source_id = app.get("image_id")
+existing = run(
+    "docker", "image", "inspect", "--format", "{{.Id}}", recovery_ref,
+    check=False,
+)
+created = existing.returncode != 0
+if not created and existing.stdout.strip() != source_id:
+    raise SystemExit("SOURCE_RECOVERY_TAG_COLLISION")
+if created:
+    run("docker", "image", "tag", str(source_id), recovery_ref)
+actual_id = run(
+    "docker", "image", "inspect", "--format", "{{.Id}}", recovery_ref
+).stdout.strip()
+platform = run(
+    "docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}",
+    recovery_ref,
+).stdout.strip()
+revision = run(
+    "docker", "image", "inspect", "--format",
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+    recovery_ref,
+).stdout.strip()
+entrypoint = json.loads(
+    run(
+        "docker", "image", "inspect", "--format",
+        "{{json .Config.Entrypoint}}", recovery_ref,
+    ).stdout
+)
+if (
+    actual_id != source_id
+    or platform != app.get("platform")
+    or revision != app.get("oci_revision")
+    or entrypoint != app.get("entrypoint")
+):
+    raise SystemExit("SOURCE_RECOVERY_IMAGE_IDENTITY_INVALID")
+value = {
+    "configured_ref": app.get("image_ref"),
+    "configured_tag_image_id": app.get("configured_tag_image_id"),
+    "created": created,
+    "entrypoint": entrypoint,
+    "id": actual_id,
+    "oci_revision": revision,
+    "platform": platform,
+    "recovery_ref": recovery_ref,
+    "schema_version": "1",
+}
+descriptor = os.open(
+    output_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+    json.dump(value, output, separators=(",", ":"), sort_keys=True)
+    output.write("\n")
+    output.flush()
+    os.fsync(output.fileno())
+PY
+
+failure_stage="source_checkpoint"
+failure_code="SOURCE_CHECKPOINT_FAILED"
+python3 "${runtime_dir}/last_good.py" checkpoint-source \
+  "${backup_path}" "${source_recovery_env}" \
+  "${transaction}/old-rag-industry.env" \
+  "${transaction}/pre-update-source-state.json" "${old_revision}" \
+  "${transaction}/pre-last-good.json" \
+  "${transaction}/UPDATE_MANIFEST.json" \
+  >"${transaction}/source-checkpoint.json" \
+  || fail "SOURCE_CHECKPOINT_FAILED"
+chmod 600 "${transaction}/source-checkpoint.json"
 
 failure_stage="activation"
 failure_code="TARGET_ACTIVATION_FAILED"

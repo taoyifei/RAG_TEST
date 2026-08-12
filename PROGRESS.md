@@ -1,5 +1,48 @@
 # DOCX RAG 交付进度
 
+## CURRENT STATUS：2026-08-12 共享 app tag 漂移兼容已本地收口
+
+- `.60` 的只读全量审计已经证明当前 Industry source 合法且健康：运行容器的不可变
+  image ID 为
+  `sha256:430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9`，
+  与真实 `2c4cf220c7cf-87860c8b7496` release manifest 完全一致；App build-info、五份
+  config、`d2497bc...` index、10 source/139 point、Trace v0/93 条、OCR、Qdrant、
+  `/live`、`/ready` 和四个模型 endpoint 均正常。
+- `82e953765cf1` 包在 `source_checkpoint/SOURCE_CHECKPOINT_FAILED` 停止的根因不是
+  Industry 漂移，而是 Training 与 Industry 共用可变 tag `docx-rag:2c4cf220c7cf`。
+  Industry 容器仍运行 manifest 记录的 430 image，当前全局 tag 已指向 Training 的
+  `sha256:32914e...`；旧 updater 错误地把 tag 当前指向当作 source identity。现场同时
+  存在合法的 `0.0.0.0:8188` 与 `:::8188` 双绑定，旧脚本只允许一个 binding。
+- 新 package contract v4 把真实首部署 app 的 ID、config digest、platform、revision、
+  ref 和 entrypoint 写入 source compatibility。source precheck、snapshot、激活中断恢复
+  都以运行容器 `.Image` 的不可变 ID 为准；共享 tag 当前指向仅作为审计字段记录，不再
+  决定 Industry source 身份。8188 允许单 IPv4 或同端口 IPv4+IPv6 双绑定，其他端口、
+  重复 IP 或 IPv6-only 仍 fail closed。
+- updater 在激活前为 430 image 创建 update-ID 作用域的
+  `docx-rag:industry-recovery-*` tag，并密封 `source-recovery.env` 与
+  `source-recovery-image.json`。自动回滚、人工回滚及后续合法重试都使用该不可变恢复
+  tag，不重写 Training 共享 tag；recovery tag 碰撞、漂移、platform/revision/entrypoint
+  不一致均在恢复前拒绝。legacy env-only last-good 仍以更新前真实 env 做身份比较，
+  snapshot 则保存 recovery env，兼容既有 Python 调用和 CLI 合同。
+- 实现前新增的三个红测分别复现 source manifest 缺少 app identity、共享 tag 漂移导致
+  正常更新失败、共享 tag 漂移导致回滚失败。修复后完整 updater 事务矩阵为
+  `76 passed`，builder/updater/2c4 upgrade 扩大矩阵为 `100 passed`。首轮全量为
+  `1273 passed, 11 failed, 61 warnings`，11 项都准确暴露
+  `checkpoint_source_last_good()` 位置参数破坏；改为末尾可选参数并让 CLI 显式传值后，
+  相关 21 项通过，从头全量为 `1284 passed, 61 warnings in 987.33s`、0 failed。
+- 全量使用固定 `qdrant/qdrant:v1.18.3`、无 volume、仅绑定
+  `127.0.0.1:6333` 的临时容器；结束时 `collections=[]`、`Mounts=[]`，随后已精确删除
+  该容器并确认 6333 不再提供 Qdrant。compileall、全仓 Ruff、strict mypy（124 source
+  files）、Google docstring、Shell、simple/Industry Compose、源码 13 文件
+  asset-selfcheck 与 `git diff --check` 均通过；源码 index fingerprint 仍为
+  `sha256:dd16e57d6b39e95af18ea5317d66682c71f4044e927a09bc6cc0599a8f7f192a`。
+- `artifacts/industry-serving-update/82e953765cf1` 与此前 `e5c98cead384`、
+  `a50d5d5f8f71` 等旧包均永久失效，不得上传、重跑或部署。该失败发生在 mutation 前，
+  服务器 App/env/index/Trace/OCR/Qdrant 未改变；attempt 证据必须保留。当前不需要更多
+  服务器信息，服务器端不得重跑旧 updater、不得执行 `run-index.sh`、不得手改 tag、
+  config、Trace schema 或 last-good。下一步只从本轮新 clean commit 构建和 fresh 验证
+  新 8 文件 app-only 包。
+
 ## CURRENT STATUS：2026-08-11 e5c 真实 Industry baseline 修正
 
 - 服务器执行 `e5c98cead384` 更新包时在

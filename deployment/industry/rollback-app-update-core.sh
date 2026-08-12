@@ -23,6 +23,8 @@ require_industry_env "${env_file}"
   && ! -L "${transaction}" ]] \
   || rollback_fail "ROLLBACK_PATH_INVALID"
 old_env="${transaction}/old-rag-industry.env"
+source_recovery_env="${transaction}/source-recovery.env"
+source_recovery_image="${transaction}/source-recovery-image.json"
 pre_index="${transaction}/pre-index.json"
 container_identity="${transaction}/container-identity.json"
 pre_snapshot="${transaction}/pre-update-snapshot.json"
@@ -37,6 +39,7 @@ manual_precheck="${transaction}/manual-rollback-precheck.json"
 transaction_state="${transaction}/transaction-state.json"
 for path in "${old_env}" "${pre_index}" "${container_identity}" \
   "${pre_snapshot}" "${source_checkpoint}" "${source_state}" \
+  "${source_recovery_env}" "${source_recovery_image}" \
   "${update_manifest}" "${transaction_state}"; do
   [[ -f "${path}" && ! -L "${path}" ]] \
     || rollback_fail "ROLLBACK_EVIDENCE_MISSING"
@@ -122,6 +125,7 @@ verify_dependency_identity() {
   python3 - "${container_identity}" <<'PY'
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -221,6 +225,96 @@ if (
 PY
 }
 
+verify_source_recovery_image() {
+  python3 - "${source_recovery_image}" "${source_recovery_env}" \
+    "${update_manifest}" <<'PY'
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+evidence = json.loads(pathlib.Path(sys.argv[1]).read_bytes())
+env_path = pathlib.Path(sys.argv[2])
+manifest = json.loads(pathlib.Path(sys.argv[3]).read_bytes())
+source = manifest.get("source_compatibility")
+expected = source.get("app_image") if isinstance(source, dict) else None
+if not isinstance(expected, dict):
+    raise SystemExit("SOURCE_RECOVERY_MANIFEST_INVALID")
+values = {}
+for line in env_path.read_text(encoding="utf-8").splitlines():
+    if "=" not in line or line.startswith("#"):
+        continue
+    key, value = line.split("=", 1)
+    if key in values:
+        raise SystemExit("SOURCE_RECOVERY_ENV_DUPLICATE_KEY")
+    values[key] = value.strip("\"'")
+required = {
+    "configured_ref",
+    "configured_tag_image_id",
+    "created",
+    "entrypoint",
+    "id",
+    "oci_revision",
+    "platform",
+    "recovery_ref",
+    "schema_version",
+}
+configured_ref = evidence.get("configured_ref")
+configured_is_recovery = (
+    isinstance(expected.get("revision"), str)
+    and isinstance(configured_ref, str)
+    and re.fullmatch(
+        rf"docx-rag:industry-recovery-"
+        rf"{re.escape(expected['revision'][:12])}-"
+        r"[0-9a-f]{12}-[0-9a-f]{12}",
+        configured_ref,
+    )
+    is not None
+)
+if (
+    set(evidence) != required
+    or evidence.get("schema_version") != "1"
+    or evidence.get("id") != expected.get("id")
+    or (
+        configured_ref != expected.get("ref")
+        and not configured_is_recovery
+    )
+    or evidence.get("oci_revision") != expected.get("revision")
+    or evidence.get("platform") != expected.get("platform")
+    or evidence.get("entrypoint") != expected.get("entrypoint")
+    or values.get("RAG_APP_IMAGE") != evidence.get("recovery_ref")
+    or values.get("RAG_RELEASE_REVISION") != expected.get("revision")
+):
+    raise SystemExit("SOURCE_RECOVERY_EVIDENCE_INVALID")
+
+
+def inspect(template):
+    return subprocess.run(
+        [
+            "docker", "image", "inspect", "--format", template,
+            evidence["recovery_ref"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+if (
+    inspect("{{.Id}}") != evidence.get("id")
+    or inspect("{{.Os}}/{{.Architecture}}") != evidence.get("platform")
+    or inspect(
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+    )
+    != evidence.get("oci_revision")
+    or json.loads(inspect("{{json .Config.Entrypoint}}"))
+    != evidence.get("entrypoint")
+):
+    raise SystemExit("SOURCE_RECOVERY_TAG_DRIFT")
+PY
+}
+
 verify_target_control_plane() {
   local expected_contract
   local expected_image_ref
@@ -286,9 +380,9 @@ image = manifest.get("image")
 target = manifest.get("target")
 revision = manifest.get("revision")
 if (
-    manifest.get("schema_version") != "3"
+    manifest.get("schema_version") != "4"
     or manifest.get("package_contract_revision")
-    != "industry-serving-update-v3"
+    != "industry-serving-update-v4"
     or not isinstance(image, dict)
     or not isinstance(target, dict)
     or not isinstance(revision, str)
@@ -523,7 +617,7 @@ validate_manual_target() {
     || manual_precheck_fail "TARGET_COMPOSE_INVALID"
   python3 "${script_dir}/last_good.py" restore-source-pointer \
     "$(exact_env_value "${env_file}" RAG_BACKUP_PATH)" \
-    "${source_checkpoint}" "${source_state}" "${old_env}" \
+    "${source_checkpoint}" "${source_state}" "${source_recovery_env}" \
     "${update_manifest}" "${candidate_env}" "${verified_state}" \
     --validate-only >/dev/null \
     || manual_precheck_fail "TARGET_POINTER_OR_SOURCE_SNAPSHOT_INVALID"
@@ -577,6 +671,12 @@ PY
 if [[ "${mode}" == "--manual-verified" ]]; then
   validate_manual_target
 fi
+if ! verify_source_recovery_image; then
+  if [[ "${mode}" == "--manual-verified" ]]; then
+    manual_precheck_fail "SOURCE_RECOVERY_IMAGE_INVALID"
+  fi
+  rollback_abort "SOURCE_RECOVERY_IMAGE_INVALID"
+fi
 if ! write_industry_serving_transaction_state \
   "${transaction_state}" rolling_back "${update_id}"; then
   if [[ "${mode}" == "--manual-verified" ]]; then
@@ -584,8 +684,8 @@ if ! write_industry_serving_transaction_state \
   fi
   rollback_abort "ROLLBACK_STATE_WRITE_FAILED"
 fi
-replace_industry_private_env "${old_env}" "${env_file}" \
-  || rollback_abort "OLD_ENV_RESTORE_FAILED"
+replace_industry_private_env "${source_recovery_env}" "${env_file}" \
+  || rollback_abort "SOURCE_RECOVERY_ENV_RESTORE_FAILED"
 old_compose="$(industry_compose_file "${env_file}")" \
   || rollback_abort "OLD_COMPOSE_INVALID"
 validate_industry_compose "${env_file}" "${old_compose}" \
@@ -608,7 +708,7 @@ verify_dependency_identity \
 if [[ "${mode}" == "--manual-verified" ]]; then
   python3 "${script_dir}/last_good.py" restore-source-pointer \
     "$(exact_env_value "${env_file}" RAG_BACKUP_PATH)" \
-    "${source_checkpoint}" "${source_state}" "${old_env}" \
+    "${source_checkpoint}" "${source_state}" "${source_recovery_env}" \
     "${update_manifest}" "${candidate_env}" "${verified_state}" \
     >/dev/null || rollback_abort "SOURCE_POINTER_RESTORE_FAILED"
   failure_stage="post_verified_manual_rollback"

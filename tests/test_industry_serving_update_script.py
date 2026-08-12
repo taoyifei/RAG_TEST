@@ -28,7 +28,11 @@ _OLD_REVISION = "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1"
 _NEW_REVISION = "b" * 40
 _OLD_IMAGE = f"docx-rag:{_OLD_REVISION[:12]}"
 _NEW_IMAGE = f"docx-rag:{_NEW_REVISION[:12]}"
-_OLD_IMAGE_ID = "sha256:" + "1" * 64
+_OLD_IMAGE_ID = (
+    "sha256:"
+    "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+)
+_DRIFTED_SOURCE_TAG_IMAGE_ID = "sha256:" + "6" * 64
 _NEW_IMAGE_ID = "sha256:" + "2" * 64
 _INDEX_FINGERPRINT = (
     "sha256:d2497bc2813f9281d3cb5bf5f6ac9c9ed36e7aec5b96f1333039a220018b6b58"
@@ -242,6 +246,7 @@ def _prepare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Sandbox:
                 "container_running": True,
                 "image": _OLD_IMAGE,
                 "image_id": _OLD_IMAGE_ID,
+                "image_tags": {_OLD_IMAGE: _OLD_IMAGE_ID},
                 "project": "rag-industry",
                 "revision": _OLD_REVISION,
                 "service": "rag-industry-app",
@@ -401,6 +406,7 @@ with LOG.open("a", encoding="utf-8") as output:
         + " pollution=" + os.environ.get("RAG_PORT", "unset") + "\\n"
     )
 current = json.loads(STATE.read_text())
+image_tags = current.setdefault("image_tags", {{OLD_IMAGE: OLD_ID}})
 
 def env_values(path):
     result = {{}}
@@ -692,13 +698,15 @@ if args[:1] == ["compose"]:
                         "ALTER TABLE traces ADD COLUMN question_sha256 TEXT"
                     )
                 connection.execute("PRAGMA user_version=2")
+        source_id = image_tags.get(env["RAG_APP_IMAGE"])
         next_state = {{
             "image": env["RAG_APP_IMAGE"],
             "image_id": (
                 NEW_ID
                 if env["RAG_RELEASE_REVISION"] == NEW_REVISION
-                else OLD_ID
+                else source_id or OLD_ID
             ),
+            "image_tags": image_tags,
             "revision": env["RAG_RELEASE_REVISION"],
         }}
         for flag in (
@@ -712,6 +720,7 @@ if args[:1] == ["compose"]:
             "FAKE_RUNTIME_TRACE_CAPTURE",
             "FAKE_RUNTIME_UI_MODE",
             "FAKE_TARGET_SERVING",
+            "source_tag_image_id",
         ):
             if current.get(flag):
                 next_state[flag] = current[flag]
@@ -772,7 +781,11 @@ if args[:2] == ["container", "inspect"]:
             + current.get("container_revision", current["revision"])
         )
     elif ".NetworkSettings.Ports" in template:
-        print('{{"8088/tcp":[{{"HostIp":"","HostPort":"8188"}}]}}')
+        print(
+            '{{"8088/tcp":['
+            '{{"HostIp":"0.0.0.0","HostPort":"8188"}},'
+            '{{"HostIp":"::","HostPort":"8188"}}]}}'
+        )
     elif ".Mounts" in template:
         print('[{{"Source":"stable","Destination":"/state"}}]')
     raise SystemExit(0)
@@ -799,23 +812,61 @@ if args[:2] == ["image", "load"]:
     if os.environ.get("FAKE_IMAGE_LOAD_FAIL") == "1":
         raise SystemExit(1)
     sys.stdin.buffer.read()
+    image_tags[NEW_IMAGE] = NEW_ID
+    current["image_tags"] = image_tags
+    STATE.write_text(json.dumps(current))
     print("Loaded image: " + NEW_IMAGE)
+    raise SystemExit(0)
+if args[:2] == ["image", "tag"]:
+    source, target = args[-2:]
+    source_id = image_tags.get(source, source if source == OLD_ID else None)
+    if source_id is None:
+        raise SystemExit(1)
+    image_tags[target] = source_id
+    current["image_tags"] = image_tags
+    STATE.write_text(json.dumps(current))
     raise SystemExit(0)
 if args[:2] == ["image", "inspect"]:
     if os.environ.get("FAKE_IMAGE_INSPECT_FAIL") == "1":
         raise SystemExit(1)
     image = args[-1]
+    if image == OLD_IMAGE:
+        inspected_id = current.get("source_tag_image_id", OLD_ID)
+    elif image == OLD_ID:
+        inspected_id = OLD_ID
+    elif image == NEW_IMAGE:
+        inspected_id = NEW_ID
+    else:
+        inspected_id = image_tags.get(image)
+    if inspected_id is None:
+        raise SystemExit(1)
     template = args[args.index("--format") + 1]
     if template == "{{{{.Id}}}}":
-        expected = NEW_ID if image == NEW_IMAGE else OLD_ID
-        print(current.get("target_image_id", expected))
+        expected = (
+            current.get("target_image_id", inspected_id)
+            if image == NEW_IMAGE
+            else inspected_id
+        )
+        print(expected)
     elif ".Os" in template:
-        print(current.get("target_platform", "linux/amd64"))
+        print(
+            current.get("target_platform", "linux/amd64")
+            if image == NEW_IMAGE
+            else "linux/amd64"
+        )
     elif ".Config.Entrypoint" in template:
-        print(current.get("target_entrypoint", '["rag-app"]'))
+        print(
+            current.get("target_entrypoint", '["rag-app"]')
+            if image == NEW_IMAGE
+            else '["rag-app"]'
+        )
     else:
         expected = NEW_REVISION if image == NEW_IMAGE else OLD_REVISION
-        print(current.get("target_oci_revision", expected))
+        print(
+            current.get("target_oci_revision", expected)
+            if image == NEW_IMAGE
+            else expected
+        )
     raise SystemExit(0)
 if args[:1] == ["run"]:
     if "build-info" in args:
@@ -1080,6 +1131,10 @@ def _transaction(sandbox: _Sandbox, attempt: int = 1) -> Path:
     return update_root / f"attempt-{attempt:04d}"
 
 
+def _source_recovery_env(transaction: Path) -> str:
+    return (transaction / "source-recovery.env").read_text(encoding="utf-8")
+
+
 def _force_recreate_count(sandbox: _Sandbox) -> int:
     return sum(
         "--force-recreate rag-industry-app" in line
@@ -1178,6 +1233,67 @@ def test_upgrade_from_old_app_installs_runtime_and_only_recreates_app(
     assert transaction_state["state"] == "verified"
 
 
+def test_shared_source_tag_drift_uses_running_release_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    state = json.loads(sandbox.docker_state.read_bytes())
+    state["container_image_id"] = _OLD_IMAGE_ID
+    state["source_tag_image_id"] = _DRIFTED_SOURCE_TAG_IMAGE_ID
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+
+    result = _run(sandbox)
+
+    assert result.returncode == 0, result.stderr
+    transaction = _transaction(sandbox)
+    snapshot = json.loads(
+        (transaction / "pre-update-snapshot.json").read_bytes()
+    )
+    assert snapshot["app"]["image_id"] == _OLD_IMAGE_ID
+    assert snapshot["app"]["configured_tag_image_id"] == (
+        _DRIFTED_SOURCE_TAG_IMAGE_ID
+    )
+    recovery = json.loads(
+        (transaction / "source-recovery-image.json").read_bytes()
+    )
+    assert recovery["id"] == _OLD_IMAGE_ID
+    assert recovery["configured_ref"] == _OLD_IMAGE
+    assert recovery["configured_tag_image_id"] == (
+        _DRIFTED_SOURCE_TAG_IMAGE_ID
+    )
+
+
+def test_shared_source_tag_drift_rolls_back_without_retagging_training(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sandbox = _prepare(tmp_path, monkeypatch)
+    state = json.loads(sandbox.docker_state.read_bytes())
+    state["container_image_id"] = _OLD_IMAGE_ID
+    state["source_tag_image_id"] = _DRIFTED_SOURCE_TAG_IMAGE_ID
+    sandbox.docker_state.write_text(json.dumps(state), encoding="utf-8")
+
+    result = _run(sandbox, extra={"FAKE_SMOKE_FAIL": "1"})
+
+    assert result.returncode != 0
+    transaction = _transaction(sandbox)
+    transaction_state = json.loads(
+        (transaction / "transaction-state.json").read_bytes()
+    )
+    assert transaction_state["state"] == "rolled_back", result.stderr
+    recovery = json.loads(
+        (transaction / "source-recovery-image.json").read_bytes()
+    )
+    env = sandbox.env_file.read_text(encoding="utf-8")
+    assert f"RAG_APP_IMAGE={recovery['recovery_ref']}" in env
+    final_state = json.loads(sandbox.docker_state.read_bytes())
+    assert final_state["image_id"] == _OLD_IMAGE_ID
+    assert final_state["source_tag_image_id"] == (
+        _DRIFTED_SOURCE_TAG_IMAGE_ID
+    )
+
+
 @pytest.mark.parametrize(
     "failure",
     [
@@ -1203,7 +1319,9 @@ def test_failed_target_contract_restores_old_env_image_and_index(
     result = _run(sandbox, extra=failure)
 
     assert result.returncode != 0
-    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert sandbox.env_file.read_text(encoding="utf-8") == (
+        _source_recovery_env(_transaction(sandbox))
+    )
     state = json.loads(sandbox.docker_state.read_text())
     assert state["revision"] == _OLD_REVISION
     assert not (sandbox.backup_path / "last-good-pointer.json").exists()
@@ -1830,7 +1948,9 @@ def test_post_verified_manual_rollback_restores_source_pointer_and_retry(
     rolled_back = _run_manual_rollback(sandbox, transaction)
 
     assert rolled_back.returncode == 0, rolled_back.stderr
-    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert sandbox.env_file.read_text(encoding="utf-8") == (
+        _source_recovery_env(transaction)
+    )
     assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
         _OLD_REVISION
     )
@@ -1935,7 +2055,9 @@ def test_manual_rollback_restores_source_when_target_is_unavailable(
     )
 
     assert rolled_back.returncode == 0, rolled_back.stderr
-    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert sandbox.env_file.read_text(encoding="utf-8") == (
+        _source_recovery_env(transaction)
+    )
     assert json.loads(sandbox.docker_state.read_bytes())["revision"] == (
         _OLD_REVISION
     )
@@ -2128,7 +2250,9 @@ def test_manual_rollback_failure_after_env_restore_is_rollback_failed(
 
     assert rejected.returncode != 0
     assert "OLD_APP_RECREATE_FAILED" in rejected.stderr
-    assert sandbox.env_file.read_text(encoding="utf-8") == sandbox.old_env
+    assert sandbox.env_file.read_text(encoding="utf-8") == (
+        _source_recovery_env(transaction)
+    )
     assert (
         sandbox.backup_path / "last-good-pointer.json"
     ).read_bytes() == target_pointer
@@ -2540,6 +2664,8 @@ def test_activation_intent_is_private_complete_and_contains_no_secrets(
         "source_config",
         "source_env_sha256",
         "source_image",
+        "source_recovery_env_sha256",
+        "source_recovery_image",
         "source_revision",
         "target_compose_sha256",
         "target_config",

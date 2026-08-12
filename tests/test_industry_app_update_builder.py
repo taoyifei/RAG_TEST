@@ -166,13 +166,16 @@ def test_industry_app_update_builds_exact_serving_bundle_contract(  # noqa: PLR0
         "release_id": "2c4cf220c7cf-87860c8b7496",
         "revision": build_industry_app_update._OLD_REVISION,
     }
+    assert manifest["source_compatibility"]["app_image"] == (
+        build_industry_app_update._SOURCE_APP_IMAGE
+    )
     assert manifest["source_compatibility"][
         "trusted_last_good_revisions"
     ][0] == build_industry_app_update._OLD_REVISION
     assert manifest["revision"] == _REVISION
-    assert manifest["schema_version"] == "3"
+    assert manifest["schema_version"] == "4"
     assert manifest["package_contract_revision"] == (
-        "industry-serving-update-v3"
+        "industry-serving-update-v4"
     )
     assert manifest["runtime"]["root"] == (f"serving-runtime/{_REVISION[:12]}")
     assert manifest["ui"] == {

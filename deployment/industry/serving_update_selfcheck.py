@@ -36,6 +36,24 @@ _SOURCE_INDEX_FINGERPRINT = (
 _SOURCE_SERVING_FINGERPRINT = (
     "sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e"
 )
+_SOURCE_APP_IMAGE = {
+    "config_digest": (
+        "sha256:"
+        "4bb2a5ec200612e057f3ae95bfdc7d5025fb9e07486c22f9d93c4b7ee5a225ef"
+    ),
+    "entrypoint": ["rag-app"],
+    "id": (
+        "sha256:"
+        "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+    ),
+    "manifest_digest": (
+        "sha256:"
+        "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+    ),
+    "platform": "linux/amd64",
+    "ref": "docx-rag:2c4cf220c7cf",
+    "revision": "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1",
+}
 _SOURCE_CONFIG_SHA256 = {
     "corpus-policy.json": (
         "1c2e9fb0fd167a3318d31d2b897672ad5efef4d6774680a2442bc32be2365aab"
@@ -316,9 +334,9 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
     if set(value) != required:
         raise PackageSelfcheckError("UPDATE_MANIFEST_FIELDS_INVALID")
     if (
-        value.get("schema_version") != "3"
+        value.get("schema_version") != "4"
         or value.get("package_contract_revision")
-        != "industry-serving-update-v3"
+        != "industry-serving-update-v4"
         or value.get("branch") != "Industry"
     ):
         raise PackageSelfcheckError("UPDATE_MANIFEST_CONTRACT_INVALID")
@@ -393,6 +411,7 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
     if (
         set(source)
         != {
+            "app_image",
             "compatible_revisions",
             "config_files",
             "config_profile",
@@ -421,6 +440,8 @@ def _validate_update_manifest(  # noqa: PLR0912, PLR0915
         "revision": "2c4cf220c7cf7dd2e8744253453e994ee7af3ee1",
     }:
         raise PackageSelfcheckError("SOURCE_RELEASE_IDENTITY_INVALID")
+    if _object(source, "app_image") != _SOURCE_APP_IMAGE:
+        raise PackageSelfcheckError("SOURCE_APP_IMAGE_IDENTITY_INVALID")
     trace_compatibility = _object(source, "trace_compatibility")
     if trace_compatibility != {
         "accepted_user_versions": [0, 1, 2],

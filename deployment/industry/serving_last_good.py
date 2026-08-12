@@ -308,6 +308,7 @@ def checkpoint_source_last_good(  # noqa: PLR0913, PLR0917
     revision: str,
     inspection_path: Path,
     update_manifest_path: Path,
+    source_identity_env_path: Path | None = None,
 ) -> dict[str, object]:
     """在 source 全验证后封存可审计的更新前快照。
 
@@ -318,6 +319,8 @@ def checkpoint_source_last_good(  # noqa: PLR0913, PLR0917
         revision: 当前 source 完整 Git SHA。
         inspection_path: source 验证前保存的只读 last-good 分类。
         update_manifest_path: 声明可信历史 revision 的更新 manifest。
+        source_identity_env_path: source 检查点创建前的实际 private env；
+            未提供时与 env_path 相同。
 
     Returns:
         source snapshot、前后 pointer 与 legacy 证据。
@@ -328,7 +331,9 @@ def checkpoint_source_last_good(  # noqa: PLR0913, PLR0917
     """
     if _REVISION.fullmatch(revision) is None:
         raise LastGoodError("SOURCE_CHECKPOINT_REVISION_INVALID")
+    identity_env_path = source_identity_env_path or env_path
     _require_private_file(env_path, "source env")
+    _require_private_file(identity_env_path, "source identity env")
     _require_private_file(state_path, "source state")
     if _state_revision(_load_object(state_path, "source state")) != revision:
         raise LastGoodError("SOURCE_CHECKPOINT_STATE_REVISION_MISMATCH")
@@ -342,7 +347,8 @@ def checkpoint_source_last_good(  # noqa: PLR0913, PLR0917
         if (
             before.get("revision") != revision
             or not isinstance(env_identity, dict)
-            or env_identity.get("sha256") != _sha256(env_path)
+            or env_identity.get("sha256")
+            != _sha256(identity_env_path)
         ):
             raise LastGoodError("LEGACY_LAST_GOOD_SOURCE_MISMATCH")
     elif state == "pointer":
@@ -895,6 +901,7 @@ def _arguments() -> argparse.Namespace:
     checkpoint = commands.add_parser("checkpoint-source")
     checkpoint.add_argument("backup_path", type=Path)
     checkpoint.add_argument("env_path", type=Path)
+    checkpoint.add_argument("source_identity_env_path", type=Path)
     checkpoint.add_argument("state_path", type=Path)
     checkpoint.add_argument("revision")
     checkpoint.add_argument("inspection_path", type=Path)
@@ -953,6 +960,7 @@ def main() -> int:
                 arguments.revision,
                 arguments.inspection_path,
                 arguments.update_manifest_path,
+                arguments.source_identity_env_path,
             )
         elif arguments.command == "finalize-target":
             value = finalize_target_last_good(

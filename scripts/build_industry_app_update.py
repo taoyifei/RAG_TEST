@@ -62,6 +62,24 @@ _INDEX_FINGERPRINT = (
 _SOURCE_SERVING_FINGERPRINT = (
     "sha256:cd69c286315b9adc41a9d6e092efbf54f1905150d556a6e31437780508b47b8e"
 )
+_SOURCE_APP_IMAGE: dict[str, object] = {
+    "config_digest": (
+        "sha256:"
+        "4bb2a5ec200612e057f3ae95bfdc7d5025fb9e07486c22f9d93c4b7ee5a225ef"
+    ),
+    "entrypoint": ["rag-app"],
+    "id": (
+        "sha256:"
+        "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+    ),
+    "manifest_digest": (
+        "sha256:"
+        "430e9df36c64a6596d43b1f463b5542b36623dc1adeb1d7d0d26357ed3f725a9"
+    ),
+    "platform": "linux/amd64",
+    "ref": "docx-rag:2c4cf220c7cf",
+    "revision": _OLD_REVISION,
+}
 _SOURCE_CONFIG_SHA256 = {
     "corpus-policy.json": (
         "1c2e9fb0fd167a3318d31d2b897672ad5efef4d6774680a2442bc32be2365aab"
@@ -142,6 +160,7 @@ class _SourceRelease:
     index_fingerprint: str
     serving_fingerprint: str
     package_contract_revision: str
+    app_image: dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +301,8 @@ def _load_source_release(source_root: Path) -> _SourceRelease:
         raise IndustryAppUpdateBuildError("SOURCE_RELEASE_MANIFEST_MISMATCH")
     manifest = _load_json_object(manifest_path, "source release manifest")
     config_sha256 = manifest.get("config_sha256")
+    images = manifest.get("images")
+    release_app = images.get("app") if isinstance(images, dict) else None
     if (
         manifest.get("release_id") != _SOURCE_RELEASE_ID
         or manifest.get("git_sha") != _OLD_REVISION
@@ -292,6 +313,23 @@ def _load_source_release(source_root: Path) -> _SourceRelease:
         or manifest.get("package_contract_revision")
         != "industry-package-reuse-images-v1"
         or config_sha256 != _SOURCE_CONFIG_SHA256
+        or not isinstance(release_app, dict)
+        or release_app
+        != {
+            "archive_name": "app-image.tar.gz",
+            "archive_sha256": (
+                "00e0e24e8b0189442a5467325a99a3033"
+                "cceda36a8cbe8fb5b63637007dab082"
+            ),
+            "config_digest": _SOURCE_APP_IMAGE["config_digest"],
+            "delivery": "archive",
+            "id": _SOURCE_APP_IMAGE["id"],
+            "manifest_digest": _SOURCE_APP_IMAGE["manifest_digest"],
+            "name": "app",
+            "platform": _SOURCE_APP_IMAGE["platform"],
+            "ref": _SOURCE_APP_IMAGE["ref"],
+            "revision": _SOURCE_APP_IMAGE["revision"],
+        }
     ):
         raise IndustryAppUpdateBuildError("SOURCE_RELEASE_IDENTITY_MISMATCH")
     config_root = root / "config"
@@ -325,6 +363,7 @@ def _load_source_release(source_root: Path) -> _SourceRelease:
         index_fingerprint=_INDEX_FINGERPRINT,
         serving_fingerprint=_SOURCE_SERVING_FINGERPRINT,
         package_contract_revision="industry-package-reuse-images-v1",
+        app_image=dict(_SOURCE_APP_IMAGE),
     )
 
 
@@ -693,15 +732,16 @@ def _update_manifest(  # noqa: PLR0913, PLR0917
             "source": source_release.index_fingerprint,
             "target": target_config.index_fingerprint,
         },
-        "package_contract_revision": "industry-serving-update-v3",
+        "package_contract_revision": "industry-serving-update-v4",
         "revision": revision,
         "runtime": runtime,
-        "schema_version": "3",
+        "schema_version": "4",
         "serving_fingerprint": {
             "source": source_release.serving_fingerprint,
             "target": target_config.serving_fingerprint,
         },
         "source_compatibility": {
+            "app_image": source_release.app_image,
             "compatible_revisions": [_OLD_REVISION],
             "config_files": source_release.config_sha256,
             "config_profile": _SOURCE_CONFIG_PROFILE,

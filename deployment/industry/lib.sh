@@ -375,11 +375,178 @@ import sys
 
 ports = json.load(sys.stdin)
 bindings = ports.get("8088/tcp")
-if not isinstance(bindings, list) or len(bindings) != 1:
+if not isinstance(bindings, list) or not bindings or len(bindings) > 2:
     raise SystemExit("PORT_INVALID")
-if bindings[0].get("HostPort") != "8188":
+host_ips = [item.get("HostIp") for item in bindings]
+if (
+    any(item.get("HostPort") != "8188" for item in bindings)
+    or any(item not in {"", "0.0.0.0", "::"} for item in host_ips)
+    or len(set(host_ips)) != len(host_ips)
+    or not any(item in {"", "0.0.0.0"} for item in host_ips)
+):
     raise SystemExit("PORT_INVALID")
 ' || return 1
+}
+
+verify_industry_source_app_identity() {
+  local env_file="$1"
+  local update_manifest="$2"
+  local snapshot="$3"
+  local recovery_ref="$4"
+  local require_ready="${5:-true}"
+  local expected_revision
+  local port
+  python3 - "${env_file}" "${update_manifest}" "${snapshot}" \
+    "${recovery_ref}" <<'PY' || return 1
+import json
+import pathlib
+import re
+import subprocess
+import sys
+
+env_path = pathlib.Path(sys.argv[1])
+manifest = json.loads(pathlib.Path(sys.argv[2]).read_bytes())
+snapshot_path = pathlib.Path(sys.argv[3])
+recovery_ref = sys.argv[4]
+
+
+def run(*arguments):
+    return subprocess.run(
+        arguments,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def env_values():
+    values = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        if "=" not in line or line.startswith("#"):
+            continue
+        key, value = line.split("=", 1)
+        if key in values:
+            raise SystemExit("SOURCE_ENV_DUPLICATE_KEY")
+        values[key] = value.strip("\"'")
+    return values
+
+
+source = manifest.get("source_compatibility")
+image = source.get("app_image") if isinstance(source, dict) else None
+if not isinstance(image, dict):
+    raise SystemExit("SOURCE_IMAGE_CONTRACT_INVALID")
+env = env_values()
+configured_ref = run(
+    "docker", "container", "inspect", "--format", "{{.Config.Image}}",
+    "rag-industry-app",
+)
+running_id = run(
+    "docker", "container", "inspect", "--format", "{{.Image}}",
+    "rag-industry-app",
+)
+project = run(
+    "docker", "container", "inspect", "--format",
+    '{{index .Config.Labels "com.docker.compose.project"}}',
+    "rag-industry-app",
+)
+service = run(
+    "docker", "container", "inspect", "--format",
+    '{{index .Config.Labels "com.docker.compose.service"}}',
+    "rag-industry-app",
+)
+container_revision = run(
+    "docker", "container", "inspect", "--format",
+    "{{range .Config.Env}}{{println .}}{{end}}", "rag-industry-app",
+)
+container_revisions = [
+    item.split("=", 1)[1]
+    for item in container_revision.splitlines()
+    if item.startswith("RAG_RELEASE_REVISION=")
+]
+ports = json.loads(
+    run(
+        "docker", "container", "inspect", "--format",
+        "{{json .NetworkSettings.Ports}}", "rag-industry-app",
+    )
+)
+bindings = ports.get("8088/tcp")
+host_ips = (
+    [item.get("HostIp") for item in bindings]
+    if isinstance(bindings, list)
+    else []
+)
+platform = run(
+    "docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}",
+    running_id,
+)
+revision = run(
+    "docker", "image", "inspect", "--format",
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+    running_id,
+)
+entrypoint = json.loads(
+    run(
+        "docker", "image", "inspect", "--format",
+        "{{json .Config.Entrypoint}}", running_id,
+    )
+)
+configured_is_recovery = (
+    isinstance(image.get("revision"), str)
+    and re.fullmatch(
+        rf"docx-rag:industry-recovery-"
+        rf"{re.escape(image['revision'][:12])}-"
+        r"[0-9a-f]{12}-[0-9a-f]{12}",
+        configured_ref,
+    )
+    is not None
+)
+if (
+    (
+        env.get("RAG_APP_IMAGE") not in {image.get("ref"), recovery_ref}
+        and not configured_is_recovery
+    )
+    or configured_ref != env.get("RAG_APP_IMAGE")
+    or env.get("RAG_RELEASE_REVISION") != image.get("revision")
+    or env.get("RAG_PORT") != "8188"
+    or running_id != image.get("id")
+    or platform != image.get("platform")
+    or revision != image.get("revision")
+    or entrypoint != image.get("entrypoint")
+    or project != "rag-industry"
+    or service != "rag-industry-app"
+    or container_revisions != [image.get("revision")]
+    or not isinstance(bindings, list)
+    or not bindings
+    or len(bindings) > 2
+    or any(item.get("HostPort") != "8188" for item in bindings)
+    or any(item not in {"", "0.0.0.0", "::"} for item in host_ips)
+    or len(set(host_ips)) != len(host_ips)
+    or not any(item in {"", "0.0.0.0"} for item in host_ips)
+):
+    raise SystemExit("SOURCE_APP_IDENTITY_INVALID")
+if snapshot_path.is_file() and not snapshot_path.is_symlink():
+    snapshot = json.loads(snapshot_path.read_bytes())
+    app = snapshot.get("app") if isinstance(snapshot, dict) else None
+    if (
+        not isinstance(app, dict)
+        or app.get("image_id") != running_id
+        or app.get("image_ref") != configured_ref
+        or app.get("oci_revision") != revision
+        or app.get("platform") != platform
+        or app.get("entrypoint") != entrypoint
+    ):
+        raise SystemExit("SOURCE_APP_SNAPSHOT_MISMATCH")
+PY
+  (wait_industry_health rag-industry-app 60) >/dev/null 2>&1 || return 1
+  expected_revision="$(exact_env_value "${env_file}" RAG_RELEASE_REVISION)" \
+    || return 1
+  port="$(exact_env_value "${env_file}" RAG_PORT)" || return 1
+  docker exec rag-industry-app rag-app build-info \
+    --expected-revision "${expected_revision}" >/dev/null || return 1
+  wait_industry_http "http://127.0.0.1:${port}/live" 60 || return 1
+  if [[ "${require_ready}" == "true" ]]; then
+    wait_industry_http "http://127.0.0.1:${port}/ready" 60 || return 1
+  fi
 }
 
 verify_industry_app_identity() {

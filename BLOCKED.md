@@ -1,5 +1,24 @@
 # 阻塞项
 
+## CURRENT STATUS：2026-08-12 82e source app identity 阻塞已定位并本地修正
+
+服务器证据已经完整，不需要继续采集。当前 `rag-industry-app` 的运行 image ID 430 与
+2c4 首部署 manifest 一致，所有 config/index/Trace/dependency/live/ready 身份均正常；
+失败只来自 `82e953765cf1` updater 把已经被 Training 占用的共享 tag 当前指向 329 错当成
+Industry source image，并错误拒绝 Docker 的合法 IPv4+IPv6 8188 双绑定。事务在
+`source_checkpoint` 的 mutation 前停止，服务器运行状态未改变。
+
+本地候选已经使用 manifest 绑定的不可变 source ID，并为 rollback 创建 update-ID 作用域
+的 recovery tag/env/evidence；不会重新 tag 或覆盖 Training 的共享 tag。自动回滚、人工
+撤回、硬中断恢复、重复执行、legacy env-only last-good 和 recovery tag 漂移均有脚本级
+回归。完整 updater 为 76 passed，扩大矩阵为 100 passed，最终单次全量为
+`1284 passed, 61 warnings`、0 failed；静态、Compose 和源码 asset 门禁也已通过。
+
+当前唯一交付阻塞是“尚未从本轮 clean commit 生成并 fresh 验证新的 8 文件包”。
+`82e953765cf1` 永久失效，服务器必须保留其 attempt 证据，且不得重跑旧 updater、执行
+`run-index.sh`、手改共享 tag/config/Trace/last-good。新包产生前没有可部署候选；新包
+产生后仍需用户上传并执行现场 canary，本地绿灯不能替代服务器验收。
+
 ## CURRENT STATUS：2026-08-11 e5c source baseline 阻塞已定位并本地修正
 
 服务器不是未知漂移状态。服务器 config 的五个 raw SHA 与真实
