@@ -29,6 +29,8 @@ from rag_app.contracts import (
 from rag_app.index.qdrant import IndexedChunk, QdrantIndex
 from rag_app.manifest import ManifestRepository, StoredManifest
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 _DIMENSION = 4
 _SOURCE_ID = "src_" + ("9" * 32)

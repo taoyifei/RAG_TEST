@@ -19,11 +19,24 @@ def _is_loopback(host: object) -> bool:
         return False
 
 
+def _render_network_host(host: object) -> str:
+    if not isinstance(host, str):
+        return f"<{type(host).__name__}>"
+    if len(host) > 255:
+        host = f"{host[:252]}..."
+    return repr(host)
+
+
+def _blocked_network_error(host: object) -> OSError:
+    rendered_host = _render_network_host(host)
+    return OSError(f"TEST_NETWORK_DISABLED host={rendered_host}")
+
+
 @pytest.fixture(autouse=True)
 def _block_non_loopback_network(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[None, None, None]:
-    if os.environ.get("RAG_TEST_NETWORK") != "offline":
+    if os.environ.get("RAG_TEST_NETWORK", "offline") == "live":
         yield
         return
 
@@ -34,11 +47,12 @@ def _block_non_loopback_network(
         instance: socket.socket,
         address: object,
     ) -> object:
-        if isinstance(address, tuple) and _is_loopback(address[0]):
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(address, tuple) and _is_loopback(host):
             return original_connect(instance, address)
         if isinstance(address, str) and instance.family == socket.AF_UNIX:
             return original_connect(instance, address)
-        raise OSError("TEST_NETWORK_DISABLED")
+        raise _blocked_network_error(host)
 
     def guarded_getaddrinfo(
         host: object,
@@ -46,7 +60,7 @@ def _block_non_loopback_network(
         **keywords: object,
     ) -> list[tuple[object, ...]]:
         if not _is_loopback(host):
-            raise OSError("TEST_NETWORK_DISABLED")
+            raise _blocked_network_error(host)
         return original_getaddrinfo(host, *arguments, **keywords)
 
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)

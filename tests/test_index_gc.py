@@ -26,6 +26,8 @@ from rag_app.state import JobKind, JobState, StateStore
 from rag_app.state.jobs import ReadOnlyJobStore
 from rag_app.state.models import CollectionStateIdentity
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 _SNAPSHOT_NAME_DEADLINE_SECONDS = 5.0
 _SNAPSHOT_NAME_WINDOW_SECONDS = 1.05

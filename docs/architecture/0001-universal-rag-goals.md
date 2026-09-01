@@ -17,10 +17,14 @@ Industry 分支还包含特定语料、镜像、服务器和恢复流程，不�
 3. 通用核心不得依赖 FastAPI、Qdrant Client、具体厂商 HTTP schema或 DOCX OOXML。
 4. 保留现有安全解析、来源定位、混合召回、RRF、重排、证据引用和可观测性；通过
    adapter 逐步解耦，不推倒重写。
-5. `main` 和 `Industry` 在本轮都不是阶段合并目标。阶段只合入
+5. 继续使用 Python 包 `rag_app`。领域模型和端口后续进入 `rag_app.core`，用例编排
+   进入 `rag_app.application`；不得另建平行顶级包 `universal_rag`。
+6. `main` 和 `Industry` 在本轮都不是阶段合并目标。阶段只合入
    `feature/universal-rag`。
-6. HyDE、RAPTOR、Late Chunking、LLM Contextual Retrieval 仅能作为关闭的实验开关；
-   没有真实评测证据不得改变默认值或宣称效果提升。
+7. HyDE、Query2doc、RAPTOR、Late Chunking、LLM Contextual Retrieval、GraphRAG
+   和迭代式 Agent Retrieval 仅能作为关闭的实验开关；没有冻结数据集、真实 Provider
+   和可复现实验，不得改变默认值或宣称效果提升。
+8. `feature/universal-rag` 不自动合入 `main`；如需合入必须单独触发决策门。
 
 ## 本阶段不代表
 

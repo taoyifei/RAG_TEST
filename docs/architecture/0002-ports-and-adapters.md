@@ -30,7 +30,17 @@ API / CLI / host application
 ```
 
 `rag_app.core` 不得 import `rag_app.api`、FastAPI、Qdrant Client、`rag_app.clients` 或
-OCR/具体 Provider。阶段 0 的静态边界测试会在 core 包出现后自动扫描这些反向依赖。
+OCR/具体 Provider。`rag_app.application` 只依赖 core models/ports，同样不得依赖 API、
+HTTP 客户端、Qdrant、Parser 实现或具体 adapter。阶段 0 的静态边界测试会在这些包
+出现后自动扫描反向依赖。
+
+## 同步应用语义
+
+- V1 的 RagEngine/Application Service 和所有端口保持同步接口。
+- HTTP Provider adapter 复用有连接池的同步 `httpx.Client`，不在每次请求创建客户端。
+- FastAPI 外壳使用普通 `def` 路由或受控线程池调用同步用例。
+- 禁止在同步实现中调用 `asyncio.run()`、隐式创建事件循环或另建重复 async 核心；若
+  后续真实吞吐证据要求异步端口，必须先新增 ADR。
 
 ## 插件选择
 
@@ -41,7 +51,32 @@ OCR/具体 Provider。阶段 0 的静态边界测试会在 core 包出现后自�
   Python 路径执行。
 - 外部实现若需扩展，先由维护者安装并显式注册；动态发现不是默认能力。
 
+## 索引 revision 与两类指纹
+
+Parser、ParsingPolicy、Document IR 规范化、Chunker、Token Budget、Embedding、词法
+schema、向量 schema 或 source span/chunk ID 规则发生变化时，必须创建新的
+`IndexRevision`，完整构建后原子激活。不得让新维度或新语义的查询向量读取旧
+collection。
+
+`index_fingerprint` 至少覆盖 parser 与 parsing policy、IR schema、enricher、chunker
+及参数、token counter 的 exact/estimated 身份、Embedding 模型/修订/维度/instruction/
+normalization、词法 tokenizer/schema、向量 distance/schema 和 chunk payload schema。
+
+`serving_fingerprint` 至少覆盖 query analyzer/planner、query expansion、检索通道、融合
+方法/权重/k、reranker、邻块/父块扩展、证据预算与多样性、置信/拒答策略以及 generator/
+prompt/citation protocol。查询时替换 Reranker、Generator、Planner、Fusion、Evidence
+Packer 或 Trace Sink 通常只改变 serving fingerprint，不复用错误的 serving cache。
+
+两类指纹都使用字段排序后的规范化 JSON 和 SHA-256；禁止把绝对路径、字典偶然顺序或
+secret 纳入指纹。稳定逻辑 ID 与显示名分离，文件重命名不得改变 `document_id`，内容
+变化必须创建新的 `document_version_id`。
+
 ## 迁移方式
 
 现有 FastAPI、Qdrant、DOCX 和模型客户端继续工作。后续阶段从 composition root 向内
 逐个提取端口，并为每次兼容迁移保留当前行为回归；不进行一次性目录重写。
+
+下一步目录只在现有 `rag_app` 下建立：`core/models`、`core/ports`、`core/errors.py`、
+`core/fingerprints.py`、`core/policies.py`，以及 `composition/registry.py`、
+`composition/profiles.py`、`composition/factory.py`。旧实现通过 legacy adapter 绞杀式
+迁移，本阶段及下一阶段均不改旧公共 API 或已有索引。

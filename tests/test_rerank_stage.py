@@ -69,6 +69,53 @@ def test_rerank_stage_sorts_by_model_then_rrf() -> None:
     assert len(result.hits) == 3
 
 
+def test_rerank_stage_fails_over_after_unavailable_endpoint() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host or ""
+        calls.append(host)
+        if host == "unavailable":
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"index": 0, "score": 0.2},
+                    {"index": 1, "score": 0.8},
+                ]
+            },
+        )
+
+    client = RerankerClient(
+        ResilientHttpPool(
+            ("http://unavailable", "http://healthy"),
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+            policy=ResiliencePolicy(
+                max_attempts=2,
+                failure_threshold=1,
+                cooldown_seconds=30,
+                max_concurrency=1,
+            ),
+        ),
+        api_token=None,
+    )
+
+    result = RerankStage(
+        client,
+        RerankConfig(candidate_limit=24, final_limit=2, max_final_limit=8),
+    ).rerank("问题", (_hit("chunk-a", 0.2), _hit("chunk-b", 0.1)))
+
+    assert [item.hit.chunk_id for item in result.hits] == [
+        "chunk-b",
+        "chunk-a",
+    ]
+    assert result.call is not None
+    assert result.call.endpoint == "http://healthy"
+    assert result.call.retry_count == 1
+    assert calls == ["unavailable", "healthy"]
+
+
 def test_rerank_stage_rejects_missing_embedding_text() -> None:
     invalid = _hit("chunk-a", 0.1)
     invalid.payload.pop("embedding_text")

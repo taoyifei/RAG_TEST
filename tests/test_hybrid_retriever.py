@@ -2,6 +2,7 @@ import uuid
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 from qdrant_client import QdrantClient
 
 from rag_app.clients.model_services import (
@@ -26,6 +27,8 @@ from rag_app.retrieval.hybrid import (
 )
 from rag_app.retrieval.rewrite import QueryVariants
 from rag_app.retrieval.routing import SoftRouteDecision
+
+pytestmark = pytest.mark.local_integration
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64

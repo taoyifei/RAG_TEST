@@ -20,6 +20,8 @@ from rag_app.index import (
 )
 from rag_app.state import JobKind, SourceVersion, StateStore, VersionState
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 _DIMENSION = 1024
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64
