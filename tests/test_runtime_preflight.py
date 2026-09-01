@@ -269,6 +269,7 @@ def _write_configuration(tmp_path: Path) -> dict[str, Path]:
 
 
 def _settings(tmp_path: Path, paths: dict[str, Path]) -> RuntimeSettings:
+    root = Path(__file__).resolve().parents[1]
     return RuntimeSettings(
         access_mode=AccessMode.SHARED_CORPUS,
         query_token=uuid.uuid4().hex,
@@ -282,6 +283,12 @@ def _settings(tmp_path: Path, paths: dict[str, Path]) -> RuntimeSettings:
         pipeline_path=paths["pipeline"],
         retrieval_path=paths["retrieval"],
         corpus_policy_path=paths["corpus_policy"],
+        intent_router_path=(
+            root / "deployment/config/intent-router.json"
+        ),
+        intent_router_calibration_path=(
+            root / "deployment/config/intent-router-calibration.json"
+        ),
         frontend_dir=tmp_path / "frontend",
         llm_tokenizer_path=paths["llm_tokenizer"],
         embedding_tokenizer_path=paths["embedding_tokenizer"],
