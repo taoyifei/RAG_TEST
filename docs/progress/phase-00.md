@@ -135,6 +135,12 @@ pytest: 931 passed, 4 warnings in 181.15s
 - Integration base：`06b6325c2b915b83628017dd8e486c0815db793f`。
 - Feature branch：`codex/p00-hardening`。
 - Validation code commit：`c0f6bf4`。
+- Hardening feature commit：`552ba45925ebc1846394615242a6a9a9c277f281`。
+- Hardening implementation merge：
+  `578585ff7cc9cf8ba8b17376104e488526e90774`。
+- Remote push：首次 hardening 合并后 `origin/feature/universal-rag@578585f`、
+  `origin/codex/p00-hardening@552ba45`；`main@af30f81` 和 `Industry@5cc5d7b`
+  未变化。
 - Schema/API compatibility：没有公共 HTTP/SDK schema、配置键、持久化 schema 或索引
   迁移。
 - Migration：12 个真实 Qdrant 模块添加 `local_integration` marker；默认 check 改用
@@ -164,9 +170,7 @@ pytest: 936 passed, 75 deselected, 4 warnings in 182.76s
 .venv/bin/python -m pytest -q -m local_integration
 75 passed, 936 deselected, 58 warnings in 410.31s
 
-.venv/bin/python -m pytest -q tests/test_dev_cli.py \
-  tests/test_network_guard.py tests/test_architecture_boundaries.py \
-  tests/test_rerank_stage.py
+.venv/bin/python -m pytest -q tests/test_dev_cli.py tests/test_network_guard.py tests/test_architecture_boundaries.py tests/test_rerank_stage.py
 11 passed in 1.08s
 ```
 
@@ -176,20 +180,25 @@ pytest: 936 passed, 75 deselected, 4 warnings in 182.76s
 原有停止容器和镜像未修改。第一次无服务运行已在取得可用本地镜像线索后中断，没有
 最终统计，不作为验收证据。
 
+首次 hardening 合并后的集成分支再次执行：`doctor` 全部 OK；`check` 为
+`936 passed, 75 deselected, 4 warnings in 177.83s`；`smoke` 为
+`54 passed, 1 warning in 1.50s`。该复验期间没有启动 Qdrant 容器。
+
 补充验收没有触发新决策门。剩余风险仅包括现有 Starlette/httpx 弃用警告和本地 HTTP
 Qdrant 测试的 insecure-connection 警告；测试只使用 loopback 与合成凭据。
 
 ## 已知限制
 
-- 12 个真实 Qdrant 测试文件仍需可用的本机 Qdrant Server；当前环境返回 502，未重建
-  服务、未修改索引、未宣称这些集成测试通过。
+- 12 个真实 Qdrant 测试文件仍需显式可用的本机 Qdrant Server；无服务起始运行返回
+  502。补充验收使用无挂载临时 v1.18.3 容器后，75 项全部通过；它们仍不进入默认离线
+  门禁，也不代表 Qdrant Remote 或生产环境已经验证。
 - `project_import` 当前为 source-tree 模式，不是已安装分发包。
 - Node 仅记录为后续可选检查；旧 shell/Docker 部署脚本仍存在但不在默认验证链。
 - pytest 有 Starlette/httpx 弃用警告；部分构造测试会创建 Qdrant client 并被离线网络
   守卫阻止版本探测，但不影响测试结论。
 - Qdrant Local + SQLite FTS5 是后续最小运行栈决策，本阶段未实现 Store/索引迁移。
 - UI same-origin session 与 Trace 问题捕获涉及公共 HTTP/持久化兼容，已标记
-  `REIMPLEMENT`，本阶段未移植。
+  `REIMPLEMENT_LATER`，本阶段未移植。
 
 ## 下一阶段接口
 
