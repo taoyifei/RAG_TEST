@@ -148,6 +148,7 @@ class TeiEmbeddingClient:
                     expected_count=len(batch),
                     dimension=self._dimension,
                 ),
+                failover_on_invalid_response=True,
             )
             vectors.extend(
                 _parse_embedding_payload(
@@ -220,6 +221,7 @@ class RerankerClient:
                 _validate_rerank_payload,
                 expected_count=len(documents),
             ),
+            failover_on_invalid_response=True,
         )
         return RerankResult(
             items=_parse_rerank_payload(
