@@ -97,5 +97,6 @@ class OcrClient:
             payload=request.model_dump(mode="json"),
             headers=self._headers,
             validator=_validate_response,
+            failover_on_invalid_response=True,
         )
         return OcrResponse.model_validate(response.payload)

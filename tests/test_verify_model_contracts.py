@@ -446,6 +446,17 @@ def test_llm_contract_uses_maximum_initial_and_repair_requests() -> None:
         1024,
         1024,
     ]
+    initial_payload = json.loads(answer_requests[0]["messages"][1]["content"])
+    repair_payload = json.loads(answer_requests[1]["messages"][1]["content"])
+    expected_profile = {
+        "primary_operation": "LIST",
+        "secondary_operations": [],
+        "requested_slots": [],
+    }
+    assert initial_payload["question_profile"] == expected_profile
+    assert repair_payload["original_request"]["question_profile"] == (
+        expected_profile
+    )
 
 
 def _write_manifest(

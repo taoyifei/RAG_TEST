@@ -130,6 +130,58 @@ def test_schema_validator_error_does_not_switch_endpoint() -> None:
     assert calls == ["bad"]
 
 
+@pytest.mark.parametrize(
+    "failure_kind",
+    ("malformed_json", "wrong_content_type", "schema_mismatch"),
+)
+def test_non_generative_invalid_response_can_fail_over(
+    failure_kind: str,
+) -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host or ""
+        calls.append(host)
+        if host == "good":
+            return httpx.Response(200, json={"ok": True})
+        if failure_kind == "malformed_json":
+            return httpx.Response(
+                200,
+                content=b"{",
+                headers={"Content-Type": "application/json"},
+            )
+        if failure_kind == "wrong_content_type":
+            return httpx.Response(
+                200,
+                content=b'{"ok":true}',
+                headers={"Content-Type": "text/plain"},
+            )
+        return httpx.Response(200, json={"ok": False})
+
+    def validate(payload: object) -> object:
+        if not isinstance(payload, dict) or payload.get("ok") is not True:
+            raise ValueError("test-only schema mismatch")
+        return payload
+
+    pool = ResilientHttpPool(
+        ("http://bad", "http://good"),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        policy=ResiliencePolicy(2, 1, 30.0, 1),
+    )
+
+    result = pool.request_json(
+        "POST",
+        "/work",
+        payload={"private": "must-not-leak"},
+        validator=validate,
+        failover_on_invalid_response=True,
+    )
+
+    assert result.endpoint == "http://good"
+    assert result.retry_count == 1
+    assert calls == ["bad", "good"]
+
+
 def test_four_concurrent_requests_use_multiple_healthy_endpoints() -> None:
     barrier = threading.Barrier(4)
     calls: list[str] = []

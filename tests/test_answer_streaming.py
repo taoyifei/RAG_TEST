@@ -289,3 +289,45 @@ def test_streaming_answer_with_no_valid_claim_uses_one_buffered_repair(
     assert result.model_calls == 2
     assert result.trace["repair_triggered"] is True
     assert request_modes == [True, False]
+
+
+def test_streaming_does_not_emit_unsupported_named_process_claim() -> None:
+    evidence = _bundle("来料急需时，经批准后可以例外放行。")
+    invalid = json.dumps(
+        {
+            "claims": [
+                {
+                    "text": "《需求快验流程》允许部分环节灵活处理。",
+                    "support_ids": ["E1:S1"],
+                }
+            ]
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    request_modes: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        request_modes.append(payload["stream"])
+        if payload["stream"] is True:
+            return _stream_response([("invalid", invalid)], [])
+        return _buffered_response({"claims": []})
+
+    emitted: list[AnswerClaim] = []
+    result = _generator(handler).answer_stream(
+        "《需求快验流程》中哪些环节可以灵活处理？",
+        evidence,
+        rerank_scores=(1.0,),
+        on_claim=emitted.append,
+        cancellation=StreamCancellation(),
+    )
+
+    assert emitted == []
+    assert result.status is AnswerStatus.REFUSED
+    assert result.model_calls == 2
+    assert result.trace["first_validation_code"] == (
+        "UNSUPPORTED_QUESTION_ANCHOR"
+    )
+    assert result.trace.get("extractive_fallback") is None
+    assert request_modes == [True, False]

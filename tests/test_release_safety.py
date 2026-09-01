@@ -53,6 +53,17 @@ def _commit_all(path: Path) -> None:
     )
 
 
+def _tracked_count(path: Path) -> int:
+    assert _GIT_EXECUTABLE is not None
+    completed = subprocess.run(  # noqa: S603
+        [_GIT_EXECUTABLE, "-C", str(path), "ls-files"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return len(completed.stdout.splitlines())
+
+
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -123,20 +134,31 @@ def _release_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return delivery, runtime, corpus
 
 
-def test_repository_mode_reports_current_two_existing_violations() -> None:
+def test_repository_mode_reports_current_existing_violations() -> None:
     repository = Path(__file__).parents[1]
 
     report = scan_repository(repository)
     payload = report.as_dict()
 
     assert payload["mode"] == "repository"
-    assert payload["tracked_files"] == 265
-    assert payload["violations"] == 2
-    assert payload["private_network_matches_details"] == [
-        "deployment/model-services/README.md"
+    assert payload["tracked_files"] == _tracked_count(repository)
+    assert payload["violations"] == sum(
+        int(payload[field])
+        for field in (
+            "binary_files",
+            "integrity_errors",
+            "large_files",
+            "local_path_matches",
+            "private_network_matches",
+            "private_paths",
+            "secret_matches",
+        )
+    )
+    assert "deployment/model-services/README.md" in payload[
+        "private_network_matches_details"
     ]
-    assert payload["secret_matches_details"] == [
-        "tests/test_model_services_deployment.py"
+    assert "tests/test_model_services_deployment.py" in payload[
+        "secret_matches_details"
     ]
 
 

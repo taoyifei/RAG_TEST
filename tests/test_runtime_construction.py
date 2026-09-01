@@ -93,6 +93,12 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         pipeline_path=root / "deployment/config/pipeline.json",
         retrieval_path=root / "deployment/config/retrieval.json",
         corpus_policy_path=root / "deployment/config/corpus-policy.json",
+        intent_router_path=(
+            root / "deployment/config/intent-router.json"
+        ),
+        intent_router_calibration_path=(
+            root / "deployment/config/intent-router-calibration.json"
+        ),
         frontend_dir=root / "frontend",
         llm_tokenizer_path=(
             root / "deployment/assets/tokenizers/llm/tokenizer.json"
