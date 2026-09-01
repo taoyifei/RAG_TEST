@@ -58,7 +58,23 @@ class AnswerCacheKey:
         access_mode: str,
         answer_revision: str,
     ) -> Self:
-        """规范化问题并绑定索引、服务和协议版本。"""
+        """规范化问题并绑定索引、服务和协议版本。
+
+        Args:
+            resolved_query: 已完成会话改写的独立问题。
+            conversation_context_digest: 有限会话上下文的稳定摘要。
+            index_manifest_sha256: 当前活动索引 manifest 摘要。
+            serving_fingerprint: 当前模型与检索服务指纹。
+            access_mode: 本次请求使用的访问模式。
+            answer_revision: 当前回答协议修订标识。
+
+        Returns:
+            由全部失效维度生成的精确缓存键。
+
+        Raises:
+            ValueError: 规范化后的问题为空时抛出。
+
+        """
         normalized_query = " ".join(resolved_query.split()).casefold()
         if not normalized_query:
             raise ValueError("resolved_query 不能为空。")
@@ -104,7 +120,15 @@ class AnswerCache:
         self._flights: dict[str, _FlightState] = {}
 
     def initialize(self) -> None:
-        """创建缓存父目录和幂等表结构。"""
+        """创建缓存父目录和幂等表结构。
+
+        Args:
+            无参数；使用构造时配置的数据库路径。
+
+        Returns:
+            无返回值；表结构存在后正常结束。
+
+        """
         self._database_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as connection:
             connection.execute(
@@ -123,7 +147,16 @@ class AnswerCache:
         *,
         now: datetime | None = None,
     ) -> AnswerResult | None:
-        """返回未过期精确命中，并把外部调用计数清零。"""
+        """返回未过期精确命中，并把外部调用计数清零。
+
+        Args:
+            key: 当前请求的完整精确缓存键。
+            now: 可选的当前时间，主要用于确定性测试。
+
+        Returns:
+            已解码的有效缓存结果；未命中或已过期时返回 ``None``。
+
+        """
         current = _utc(now)
         with self._connect() as connection:
             row = connection.execute(
@@ -151,7 +184,17 @@ class AnswerCache:
         *,
         now: datetime | None = None,
     ) -> CacheStoreStatus:
-        """只缓存已发布回答和明确未找到，跳过临时失败。"""
+        """只缓存已发布回答和明确未找到，跳过临时失败。
+
+        Args:
+            key: 当前请求的完整精确缓存键。
+            result: 已完成回答门禁的最终结果。
+            now: 可选的当前时间，主要用于确定性测试。
+
+        Returns:
+            表明结果已写入或因策略被跳过的稳定状态。
+
+        """
         ttl = _cache_ttl(result)
         if ttl is None:
             return CacheStoreStatus.SKIPPED
@@ -178,7 +221,15 @@ class AnswerCache:
         self,
         key: AnswerCacheKey,
     ) -> AbstractContextManager[SingleflightResult]:
-        """合并当前进程中正在执行的相同缓存键请求。"""
+        """合并当前进程中正在执行的相同缓存键请求。
+
+        Args:
+            key: 当前请求的完整精确缓存键。
+
+        Returns:
+            进入后给出领导者、等待状态和共享结果的上下文管理器。
+
+        """
         return _SingleflightContext(self, key.digest)
 
     def publish_singleflight(

@@ -98,7 +98,18 @@ class _SseAccumulator:
     done: bool = False
 
     def consume_line(self, line: str) -> None:
-        """校验并消费一条完整 SSE 行。"""
+        """校验并消费一条完整 SSE 行。
+
+        Args:
+            line: 已按 UTF-8 解码且不含换行符的 SSE 行。
+
+        Returns:
+            无返回值；解析状态累积在当前实例中。
+
+        Raises:
+            ValueError: SSE 行、JSON 或事件顺序不满足协议时抛出。
+
+        """
         normalized = line.removesuffix("\r")
         if not normalized:
             return
@@ -115,7 +126,18 @@ class _SseAccumulator:
         self._consume_event(event)
 
     def complete(self) -> _ParsedStream:
-        """在 ``[DONE]`` 后构造完整且已校验的流结果。"""
+        """在 ``[DONE]`` 后构造完整且已校验的流结果。
+
+        Args:
+            无参数；读取当前实例累积的 SSE 状态。
+
+        Returns:
+            包含完整正文、用量和流指标的内部结果。
+
+        Raises:
+            ValueError: 流未正常结束、结果为空或缺少必要字段时抛出。
+
+        """
         if not self.done:
             raise ValueError("LLM_STREAM_MISSING_DONE")
         if self.finish_reason != "stop":

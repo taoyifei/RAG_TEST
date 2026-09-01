@@ -140,7 +140,15 @@ class EvidenceUnit:
     rerank_score: float
 
     def to_prompt_payload(self) -> dict[str, object]:
-        """仅输出模型选择证据所需的安全字段。"""
+        """仅输出模型选择证据所需的安全字段。
+
+        Args:
+            无参数；序列化当前不可变证据单元。
+
+        Returns:
+            不含内部定位细节的模型提示词对象。
+
+        """
         return {
             "unit_id": self.unit_id,
             "source_group": self.source_group,
@@ -474,7 +482,17 @@ def decide_answerability(
     *,
     rerank_scores: tuple[float, ...],
 ) -> AnswerabilityDecision:
-    """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。"""
+    """在调用 LLM 前拦截明显缺少问题强锚点的低分命中。
+
+    Args:
+        question: 当前用户问题，用于提取强锚点。
+        evidence: 已完成隔离与预算控制的证据集合。
+        rerank_scores: 与当前候选对应且按顺序排列的重排分数。
+
+    Returns:
+        包含稳定状态、最高分和锚点覆盖计数的可回答性决策。
+
+    """
     anchors = _strong_anchors(question)
     searchable = "\n".join(
         unit.text.casefold()
