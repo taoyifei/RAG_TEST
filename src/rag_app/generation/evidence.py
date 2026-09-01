@@ -43,11 +43,20 @@ _PROMPT_INJECTION_PATTERNS = (
 _NOT_FOUND_SCORE_MAX = 0.45
 _SUPPORTED_SCORE_MIN = 0.90
 _SAFE_UNIT_BOUNDARY = re.compile(r"[^。；;\n]*(?:[。；;\n]|$)")
-_STRONG_ANCHOR_PATTERNS = (
+_PRECISE_ANCHOR_PATTERNS = (
     re.compile(r"[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+"),
+    re.compile(
+        r"(?<![A-Za-z0-9-])[A-Z][A-Z0-9]{1,9}(?![A-Za-z0-9-])"
+    ),
     re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)"),
-    re.compile(r"《[^》]{2,40}》"),
+)
+_QUOTED_ANCHOR_PATTERNS = (
+    re.compile(r"《([^》]{2,40})》"),
     re.compile(r"[“\"]([^”\"]{2,40})[”\"]"),
+)
+_STRONG_ANCHOR_PATTERNS = (
+    *_PRECISE_ANCHOR_PATTERNS,
+    *_QUOTED_ANCHOR_PATTERNS,
 )
 
 
@@ -493,9 +502,9 @@ def decide_answerability(
         包含稳定状态、最高分和锚点覆盖计数的可回答性决策。
 
     """
-    anchors = _strong_anchors(question)
+    anchors = required_question_anchors(question)
     searchable = "\n".join(
-        unit.text.casefold()
+        f"{unit.source_label}\n{unit.text}".casefold()
         for unit in evidence.units
         if not unit.low_confidence_ocr
     )
@@ -525,9 +534,27 @@ def decide_answerability(
     )
 
 
-def _strong_anchors(question: str) -> tuple[str, ...]:
+def required_question_anchors(question: str) -> tuple[str, ...]:
+    """返回证据必须覆盖的最精确问题锚点。
+
+    Args:
+        question: 当前用户问题。
+
+    Returns:
+        优先使用编号、缩写和时间的去重锚点；没有时回退到引号主体。
+
+    """
+    precise = _anchors_for_patterns(question, _PRECISE_ANCHOR_PATTERNS)
+    return precise or _anchors_for_patterns(question, _STRONG_ANCHOR_PATTERNS)
+
+
+def _anchors_for_patterns(
+    question: str,
+    patterns: tuple[re.Pattern[str], ...],
+) -> tuple[str, ...]:
+    """按模式顺序提取去重后的问题锚点。"""
     anchors: list[str] = []
-    for pattern in _STRONG_ANCHOR_PATTERNS:
+    for pattern in patterns:
         for match in pattern.finditer(question):
             anchor = match.group(1) if match.lastindex else match.group(0)
             if anchor not in anchors:
