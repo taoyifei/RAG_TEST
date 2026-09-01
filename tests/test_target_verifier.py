@@ -25,6 +25,8 @@ from rag_app.index.verifier import TargetIndexVerifier
 from rag_app.state import JobKind, StateStore
 from rag_app.state.models import CollectionStateIdentity
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 
 

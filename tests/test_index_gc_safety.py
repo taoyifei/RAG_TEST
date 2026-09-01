@@ -38,6 +38,8 @@ from tests.test_index_gc import (
     _target_name,
 )
 
+pytestmark = pytest.mark.local_integration
+
 
 @dataclass(frozen=True, slots=True)
 class _SafetyScenario:

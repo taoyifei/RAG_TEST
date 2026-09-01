@@ -21,6 +21,8 @@ from rag_app.retrieval.neighbors import NeighborExpander
 from rag_app.retrieval.rerank import RerankedHit
 from rag_app.tracing.reasons import DecisionCode
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE = f"sha256:{'a' * 64}"
 _SOURCE = f"src_{'b' * 32}"

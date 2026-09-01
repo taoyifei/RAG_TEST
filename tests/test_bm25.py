@@ -1,5 +1,6 @@
 import uuid
 
+import pytest
 from qdrant_client import QdrantClient
 
 from rag_app.contracts import (
@@ -11,6 +12,8 @@ from rag_app.contracts import (
 )
 from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.retrieval.bm25 import QdrantBm25Encoder
+
+pytestmark = pytest.mark.local_integration
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64

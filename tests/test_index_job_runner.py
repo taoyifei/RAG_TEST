@@ -34,6 +34,8 @@ from rag_app.manifest import ManifestRepository
 from rag_app.retrieval.routing import KeywordRouteRule, KeywordSoftRouter
 from rag_app.state import JobKind, JobState, SourceVersion, StateStore
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 
 

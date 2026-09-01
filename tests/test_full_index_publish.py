@@ -10,6 +10,8 @@ from rag_app.index import FullIndexPublisher, PublishState, QdrantIndex
 from rag_app.manifest import ManifestRepository, ManifestState
 from rag_app.state.lease import LeaseLostError
 
+pytestmark = pytest.mark.local_integration
+
 _API_KEY = "test-only-qdrant-key"
 _FINGERPRINT_SUFFIX = "f" * 64
 

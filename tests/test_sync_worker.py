@@ -2,6 +2,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -21,6 +22,8 @@ from rag_app.index.planner import (
 from rag_app.index.worker import SyncChunkBuilder, SyncWorker
 from rag_app.state import JobKind, JobState, SourceVersion, StateStore
 from rag_app.state.plans import SyncPlanStore
+
+pytestmark = pytest.mark.local_integration
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64

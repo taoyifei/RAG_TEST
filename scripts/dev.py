@@ -17,20 +17,7 @@ from pathlib import Path
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
-_REAL_QDRANT_TESTS = (
-    "tests/test_active_evidence_export.py",
-    "tests/test_bm25.py",
-    "tests/test_full_index_publish.py",
-    "tests/test_hybrid_retriever.py",
-    "tests/test_index_gc.py",
-    "tests/test_index_gc_safety.py",
-    "tests/test_index_job_runner.py",
-    "tests/test_metadata_filter.py",
-    "tests/test_neighbor_expansion.py",
-    "tests/test_qdrant_index.py",
-    "tests/test_sync_worker.py",
-    "tests/test_target_verifier.py",
-)
+_OFFLINE_MARK_EXPRESSION = "not local_integration and not live_provider"
 _SMOKE_TESTS = (
     "tests/test_health_api.py",
     "tests/test_docx_parser.py",
@@ -128,10 +115,6 @@ def _run_doctor() -> int:
 
 def _check_commands() -> tuple[tuple[str, ...], ...]:
     python = sys.executable
-    pytest_command = [python, "-m", "pytest", "-q"]
-    pytest_command.extend(
-        f"--ignore={path}" for path in _REAL_QDRANT_TESTS
-    )
     return (
         (
             python,
@@ -154,7 +137,14 @@ def _check_commands() -> tuple[tuple[str, ...], ...]:
             "scripts",
         ),
         (python, "scripts/check_google_docstrings.py"),
-        tuple(pytest_command),
+        (
+            python,
+            "-m",
+            "pytest",
+            "-q",
+            "-m",
+            _OFFLINE_MARK_EXPRESSION,
+        ),
     )
 
 

@@ -1,6 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -13,6 +14,8 @@ from rag_app.contracts import (
 )
 from rag_app.index import IndexedChunk, QdrantIndex
 from rag_app.retrieval.filters import MetadataPolicy
+
+pytestmark = pytest.mark.local_integration
 
 _API_KEY = "test-only-qdrant-key"
 _PIPELINE_FINGERPRINT = "sha256:" + "f" * 64

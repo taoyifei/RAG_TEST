@@ -31,6 +31,10 @@ where = ["src"]
 addopts = "-ra --strict-config --strict-markers"
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "local_integration: requires an explicitly started loopback service such as Qdrant Server",
+  "live_provider: requires explicit outbound-data authorization and real provider credentials",
+]
 
 [tool.ruff]
 line-length = 80

@@ -16,7 +16,8 @@ def test_check_uses_existing_offline_quality_tools() -> None:
     pytest_command = next(
         command for command in rendered if " -m pytest -q" in command
     )
-    assert "--ignore=tests/test_qdrant_index.py" in pytest_command
+    assert "-m not local_integration and not live_provider" in pytest_command
+    assert "--ignore=" not in pytest_command
 
 
 def test_command_runner_returns_first_failure(
