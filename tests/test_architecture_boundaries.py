@@ -65,6 +65,7 @@ _SECRET_PATTERNS = (
     ),
 )
 _MAX_SECRET_SCAN_BYTES = 2 * 1024 * 1024
+_NEW_PACKAGE_NAMES = ("adapters", "application", "composition", "core")
 
 
 def _inner_layer_files() -> tuple[Path, ...]:
@@ -175,3 +176,83 @@ def test_tracked_text_excludes_obvious_live_secrets() -> None:
                 violations.append(f"{path.as_posix()}:{line_number}:{label}")
 
     assert violations == []
+
+
+def _new_architecture_files() -> tuple[Path, ...]:
+    files: list[Path] = []
+    for package_name in _NEW_PACKAGE_NAMES:
+        package = _ROOT / "src/rag_app" / package_name
+        if package.is_dir():
+            files.extend(package.rglob("*.py"))
+    return tuple(sorted(files))
+
+
+def test_adapters_do_not_import_api_routes() -> None:
+    adapters = _ROOT / "src/rag_app/adapters"
+    violations = {
+        str(path.relative_to(_ROOT)): name
+        for path in adapters.rglob("*.py")
+        for name in _import_names(path)
+        if name == "rag_app.api" or name.startswith("rag_app.api.")
+    }
+    assert violations == {}
+
+
+def test_user_configuration_cannot_trigger_dynamic_import_or_eval() -> None:
+    forbidden_calls: list[str] = []
+    for path in _new_architecture_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Name) and node.func.id in {
+                "__import__",
+                "eval",
+            }:
+                forbidden_calls.append(str(path.relative_to(_ROOT)))
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "importlib"
+                and node.func.attr == "import_module"
+            ):
+                forbidden_calls.append(str(path.relative_to(_ROOT)))
+    assert forbidden_calls == []
+
+
+def test_core_model_annotations_do_not_leak_any() -> None:
+    violations: list[str] = []
+    core_models = _ROOT / "src/rag_app/core/models"
+    for path in core_models.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(
+            isinstance(node, ast.Name) and node.id == "Any"
+            for node in ast.walk(tree)
+        ):
+            violations.append(str(path.relative_to(_ROOT)))
+    assert violations == []
+
+
+def test_new_architecture_packages_have_no_absolute_import_cycle() -> None:
+    files = _new_architecture_files()
+    module_by_path = {
+        path: ".".join(path.relative_to(_ROOT / "src").with_suffix("").parts)
+        for path in files
+    }
+    known_modules = set(module_by_path.values())
+    graph = {
+        module: {
+            imported
+            for imported in _import_names(path)
+            if imported in known_modules
+        }
+        for path, module in module_by_path.items()
+    }
+
+    def visit(module: str, active: tuple[str, ...]) -> None:
+        assert module not in active, " -> ".join((*active, module))
+        for dependency in graph[module]:
+            visit(dependency, (*active, module))
+
+    for module_name in graph:
+        visit(module_name, ())
