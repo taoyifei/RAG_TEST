@@ -62,6 +62,9 @@ class AliyunQwen37EmbeddingConfig(BaseModel):
     model: str = _MODEL
     dimension: StrictInt = Field(default=1024, gt=0)
     request_policy_identity: str
+    document_request_policy_identity: str | None = None
+    query_request_policy_identity: str | None = None
+    adapter_revision: str = "1"
     api_key_env: str = "DASHSCOPE_API_KEY"
     workspace_id_env: str = "ALIYUN_MODEL_STUDIO_WORKSPACE_ID"
     region_env: str = "ALIYUN_MODEL_STUDIO_REGION"
@@ -69,7 +72,12 @@ class AliyunQwen37EmbeddingConfig(BaseModel):
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
     max_input_tokens: StrictInt = Field(default=128000, gt=0)
+    transport: str = "dashscope-native"
+    document_text_type: str = "document"
+    query_text_type: str = "query"
     query_instruct: str = _QUERY_INSTRUCTION
+    output_type: str = "dense"
+    normalization: str = "l2-v1"
 
 
 class AliyunQwen37EmbeddingAdapter:
@@ -95,6 +103,14 @@ class AliyunQwen37EmbeddingAdapter:
             raise ValueError("Qwen3.7 adapter 只接受固定模型和 1024 维。")
         if config.region != _REGION:
             raise ValueError("Qwen3.7 V1 只允许 cn-beijing。")
+        if (
+            config.transport != "dashscope-native"
+            or config.document_text_type != "document"
+            or config.query_text_type != "query"
+            or config.output_type != "dense"
+            or config.normalization != "l2-v1"
+        ):
+            raise ValueError("Qwen3.7 adapter 配置偏离已支持请求合同。")
         self._config = config
         self._http = http_client
         self._closed = False
@@ -110,6 +126,19 @@ class AliyunQwen37EmbeddingAdapter:
                 roles=("document", "query"),
             ),
         )
+
+    @property
+    def config(self) -> AliyunQwen37EmbeddingConfig:
+        """返回不含凭据值的已解析配置。
+
+        Args:
+            无参数；读取构造时已验证的配置。
+
+        Returns:
+            仅含公开字段和环境变量名的 Qwen3.7 配置。
+
+        """
+        return self._config
 
     @property
     def capabilities(self) -> ComponentCapabilities:
@@ -160,9 +189,13 @@ class AliyunQwen37EmbeddingAdapter:
         calls: list[ProviderCall] = []
         for batch in batches:
             parameters: dict[str, object] = {
-                "text_type": request.role.value,
+                "text_type": (
+                    self._config.document_text_type
+                    if request.role is EmbeddingRequestRole.DOCUMENT
+                    else self._config.query_text_type
+                ),
                 "dimension": self._config.dimension,
-                "output_type": "dense",
+                "output_type": self._config.output_type,
             }
             if request.role is EmbeddingRequestRole.QUERY:
                 parameters["instruct"] = self._config.query_instruct
@@ -224,7 +257,7 @@ class AliyunQwen37EmbeddingAdapter:
             role=request.role,
             vectors=tuple(vectors),
             observed_dimension=self._config.dimension,
-            request_policy_identity=self._config.request_policy_identity,
+            request_policy_identity=self._request_policy_identity(request.role),
             calls=tuple(calls),
         )
 
@@ -282,6 +315,20 @@ class AliyunQwen37EmbeddingAdapter:
                 stage="provider.aliyun.egress",
                 details={"role": role.value},
             )
+
+    def _request_policy_identity(
+        self,
+        role: EmbeddingRequestRole,
+    ) -> str:
+        if role is EmbeddingRequestRole.DOCUMENT:
+            return (
+                self._config.document_request_policy_identity
+                or self._config.request_policy_identity
+            )
+        return (
+            self._config.query_request_policy_identity
+            or self._config.request_policy_identity
+        )
 
     def _client(self) -> ProviderHttpClient:
         if self._closed:

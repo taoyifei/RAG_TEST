@@ -8,7 +8,9 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol, cast, runtime_checkable
 
+from rag_app.application.embedding_router import QueryEmbeddingRouter
 from rag_app.composition.profiles import (
+    EmbeddingSlotProfile,
     EmbeddingTopologyProfile,
     RagProfile,
     RerankerProfile,
@@ -25,6 +27,7 @@ from rag_app.core.fingerprints import (
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    ChunkingPolicy,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
@@ -35,12 +38,12 @@ from rag_app.core.ports import (
     BlobStorePort,
     ChunkerPort,
     EmbeddingPort,
-    EmbeddingRouterPort,
     GeneratorPort,
     LexicalStorePort,
     MetadataStorePort,
     ParserPort,
     RerankerPort,
+    SlotEligibilityPort,
     TracePort,
     VectorStorePort,
 )
@@ -88,7 +91,8 @@ class RagComponents:
     chunker: ChunkerPort
     embedding_primary: EmbeddingPort
     embedding_standby: EmbeddingPort | None
-    embedding_router: EmbeddingRouterPort
+    slot_eligibility: SlotEligibilityPort
+    query_embedding_router: QueryEmbeddingRouter | None
     reranker: RerankerPort
     vector_store: VectorStorePort
     lexical_store: LexicalStorePort
@@ -97,10 +101,25 @@ class RagComponents:
     generator: GeneratorPort
     trace_sink: TracePort
     embedding_topology: EmbeddingTopology
+    parsing_policy: ParsingPolicy
+    chunking_policy: ChunkingPolicy
     index_fingerprint: str
     serving_fingerprint: str
     descriptors: tuple[ComponentDescriptor, ...]
     _closed: bool = field(default=False, init=False, repr=False)
+
+    @property
+    def embedding_router(self) -> SlotEligibilityPort:
+        """返回 P01-P05 兼容的静态 slot eligibility 对象。
+
+        Args:
+            无参数；读取当前装配结果。
+
+        Returns:
+            不执行 Provider 调用的静态 eligibility 端口。
+
+        """
+        return self.slot_eligibility
 
     def component_info(self) -> tuple[ComponentDescriptor, ...]:
         """返回不含 secret 的组件清单。
@@ -199,6 +218,11 @@ def build_components(
         )
     _validate_egress_policy(resolved_profile)
     topology = _resolve_topology(resolved_profile)
+    parsing_policy = resolved_profile.parsing
+    chunking_policy = _resolve_chunking_policy(
+        resolved_profile.chunking,
+        topology,
+    )
     created: list[object] = []
     try:
         vector_store = cast(
@@ -259,6 +283,12 @@ def build_components(
                 registry.get_chunker,
                 resolved_overrides,
                 created,
+                config=(
+                    chunking_policy
+                    if resolved_profile.components.chunker
+                    == "docx-structural-v3"
+                    else None
+                ),
             ),
         )
         embedding_primary = cast(
@@ -285,8 +315,8 @@ def build_components(
                     created,
                 ),
             )
-        embedding_router = cast(
-            EmbeddingRouterPort,
+        slot_eligibility = cast(
+            SlotEligibilityPort,
             _create(
                 "embedding_router",
                 resolved_profile.components.embedding_router,
@@ -294,6 +324,11 @@ def build_components(
                 resolved_overrides,
                 created,
             ),
+        )
+        query_embedding_router = (
+            QueryEmbeddingRouter(embedding_primary, embedding_standby)
+            if embedding_standby is not None
+            else None
         )
         reranker_name, reranker_config, reranker_model = _reranker_config(
             resolved_profile
@@ -337,7 +372,8 @@ def build_components(
                 chunker,
                 embedding_primary,
                 embedding_standby,
-                embedding_router,
+                slot_eligibility,
+                query_embedding_router,
                 reranker,
                 vector_store,
                 lexical_store,
@@ -350,6 +386,8 @@ def build_components(
         )
         index_input = _index_fingerprint_input(
             topology,
+            parsing_policy=parsing_policy,
+            chunking_policy=chunking_policy,
             parser=_descriptor(parser),
             chunker=chunker,
             vector_store=_descriptor(vector_store),
@@ -357,7 +395,11 @@ def build_components(
         )
         serving_input = _serving_fingerprint_input(
             topology,
-            router=_descriptor(embedding_router),
+            router=(
+                _descriptor(query_embedding_router)
+                if query_embedding_router is not None
+                else _descriptor(slot_eligibility)
+            ),
             reranker=_descriptor(reranker),
             reranker_model=reranker_model,
             generator=_descriptor(generator),
@@ -368,7 +410,8 @@ def build_components(
             chunker=chunker,
             embedding_primary=embedding_primary,
             embedding_standby=embedding_standby,
-            embedding_router=embedding_router,
+            slot_eligibility=slot_eligibility,
+            query_embedding_router=query_embedding_router,
             reranker=reranker,
             vector_store=vector_store,
             lexical_store=lexical_store,
@@ -377,6 +420,8 @@ def build_components(
             generator=generator,
             trace_sink=trace_sink,
             embedding_topology=topology,
+            parsing_policy=parsing_policy,
+            chunking_policy=chunking_policy,
             index_fingerprint=compute_index_fingerprint(index_input),
             serving_fingerprint=compute_serving_fingerprint(serving_input),
             descriptors=descriptors,
@@ -437,6 +482,12 @@ def _embedding_component(  # noqa: PLR0913, PLR0917
                 "query": slot.query_request_policy,
             }
         ),
+        "document_request_policy_identity": canonical_sha256(
+            slot.document_request_policy
+        ),
+        "query_request_policy_identity": canonical_sha256(
+            slot.query_request_policy
+        ),
         "document_egress_allowed": _embedding_egress_allowed(
             profile, slot, document=True
         ),
@@ -444,6 +495,34 @@ def _embedding_component(  # noqa: PLR0913, PLR0917
             profile, slot, document=False
         ),
     }
+    slot_profile = _embedding_slot_profile(profile, slot.slot_id)
+    if slot_profile is not None:
+        config.update(
+            {
+                "adapter_revision": slot.adapter_revision,
+                "normalization": slot.normalization,
+                "max_input_tokens": slot.max_input_tokens,
+            }
+        )
+        if slot_profile.api_key_env is not None:
+            config["api_key_env"] = slot_profile.api_key_env
+        optional_fields = (
+            "document_task",
+            "query_task",
+            "embedding_type",
+            "transport",
+            "document_text_type",
+            "query_text_type",
+            "query_instruct",
+            "output_type",
+            "workspace_id_env",
+            "region",
+            "region_env",
+        )
+        for name in optional_fields:
+            value = getattr(slot_profile, name)
+            if value is not None:
+                config[name] = value
     return _create(
         field_name,
         slot.provider_id,
@@ -475,11 +554,13 @@ def _resolve_topology(profile: RagProfile) -> EmbeddingTopology:
                 model="deterministic-sha256-v1",
                 vector_name="dense_primary",
                 dimension=8,
+                max_input_tokens=32768,
                 document_request_policy=freeze_json_object(
                     {"role": "document"}
                 ),
                 query_request_policy=freeze_json_object({"role": "query"}),
                 normalization="l2",
+                adapter_revision="deterministic-v1",
             ),
         ),
     )
@@ -494,6 +575,10 @@ def _reranker_config(
             configured.provider,
             {
                 "model": configured.model,
+                "api_key_env": configured.api_key_env,
+                "max_total_tokens": configured.max_total_tokens,
+                "max_candidates": configured.max_candidates,
+                "request_policy_revision": configured.request_policy_revision,
                 "egress_allowed": (
                     profile.security.remote_reranking
                     and profile.security.remote_reranking_jina
@@ -573,31 +658,29 @@ def _descriptor(component: object) -> ComponentDescriptor:
     return descriptor
 
 
-def _index_fingerprint_input(
+def _index_fingerprint_input(  # noqa: PLR0913
     topology: EmbeddingTopology,
     *,
+    parsing_policy: ParsingPolicy,
+    chunking_policy: ChunkingPolicy,
     parser: ComponentDescriptor,
     chunker: object,
     vector_store: ComponentDescriptor,
     lexical_store: ComponentDescriptor,
 ) -> IndexFingerprintInput:
     chunker_descriptor = _descriptor(chunker)
-    policy = getattr(chunker, "policy", None)
     counter = getattr(chunker, "token_counter", None)
     counter_probe = counter.count("") if counter is not None else None
-    chunker_parameters = (
-        policy.model_dump(mode="json", exclude_none=False)
-        if policy is not None
-        else {"strategy": "profile"}
-    )
     return IndexFingerprintInput(
         parser=parser,
         parsing_policy=freeze_json_object(
-            ParsingPolicy().model_dump(mode="json", exclude_none=False)
+            parsing_policy.model_dump(mode="json", exclude_none=False)
         ),
         ir_schema_version="1",
         chunker=chunker_descriptor,
-        chunker_parameters=freeze_json_object(chunker_parameters),
+        chunker_parameters=freeze_json_object(
+            chunking_policy.model_dump(mode="json", exclude_none=False)
+        ),
         token_counter_identity=(
             counter_probe.tokenizer_id
             if counter_probe is not None
@@ -633,6 +716,44 @@ def _index_fingerprint_input(
                 )
             }
         ),
+    )
+
+
+def _embedding_slot_profile(
+    profile: RagProfile,
+    slot_id: str,
+) -> EmbeddingSlotProfile | None:
+    configured = profile.components.embedding_topology
+    if not isinstance(configured, EmbeddingTopologyProfile):
+        return None
+    candidates = (configured.primary, configured.standby)
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate is not None and candidate.slot_id == slot_id
+        ),
+        None,
+    )
+
+
+def _resolve_chunking_policy(
+    configured: ChunkingPolicy,
+    topology: EmbeddingTopology,
+) -> ChunkingPolicy:
+    required_slots = tuple(slot.slot_id for slot in topology.slots)
+    limits = tuple(
+        (slot.slot_id, slot.max_input_tokens) for slot in topology.slots
+    )
+    return configured.model_copy(
+        update={
+            "required_embedding_slots": required_slots,
+            "max_embedding_tokens_by_slot": limits,
+            "profile_hard_cap": min(
+                configured.profile_hard_cap,
+                *(limit for _, limit in limits),
+            ),
+        }
     )
 
 

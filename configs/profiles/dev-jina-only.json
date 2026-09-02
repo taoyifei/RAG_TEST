@@ -10,6 +10,7 @@
         "provider": "jina-embedding",
         "model": "jina-embeddings-v5-text-small",
         "dimension": 1024,
+        "max_input_tokens": 32768,
         "vector_name": "dense_primary",
         "document_task": "retrieval.passage",
         "query_task": "retrieval.query",
