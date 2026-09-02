@@ -29,6 +29,7 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
         "docx-ooxml-v4",
         "legacy-docx",
         "legacy-docx-ir",
+        "docx-structural-v3",
         "jina-embedding",
         "aliyun-qwen37-embedding",
         "jina-reranker",
@@ -48,8 +49,7 @@ def test_docx_v4_parser_is_explicitly_registered() -> None:
     assert parser.parser_capabilities.supports_revisions is True
 
 
-def test_legacy_parser_registration_is_a_trusted_compatibility_alias(
-) -> None:
+def test_legacy_parser_registration_is_a_trusted_compatibility_alias() -> None:
     registry = ComponentRegistry()
     register_builtin_components(registry)
 
