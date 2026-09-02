@@ -35,8 +35,8 @@ Stage-branch validation on 2026-09-02:
 | `ruff check .` | PASS |
 | mypy, no incremental | PASS, 209 source files |
 | `pytest -q tests/midterm_hardening` | PASS, 3 passed |
-| Core/Composition/Application/Adapters | PASS, 250 passed |
-| `scripts/dev.py check` | PASS, 1205 passed, 75 deselected, 4 warnings |
+| Core/Composition/Application/Adapters | PASS, 251 passed |
+| `scripts/dev.py check` | PASS, 1206 passed, 75 deselected, 4 warnings |
 | `scripts/dev.py smoke` | PASS, 62 passed, 1 warning |
 | `git diff --check` | PASS |
 
