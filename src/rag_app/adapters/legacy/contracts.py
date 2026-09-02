@@ -202,6 +202,14 @@ def legacy_chunk_to_core(
 class LegacyDocxParserAdapter(LegacyDocxIrParser):
     """保留 P01 类名并委托 P03 正式 Parser adapter。"""
 
+    descriptor = ComponentDescriptor(
+        kind=ComponentKind.PARSER,
+        name="legacy-docx",
+        version=LegacyDocxIrParser.descriptor.version,
+        mode=ProviderMode.LEGACY,
+        capabilities=LegacyDocxIrParser.descriptor.capabilities,
+    )
+
 
 class LegacySectionChunkerAdapter:
     """在 P01 保留来源跨度的一节点一 chunk 兼容边界。"""

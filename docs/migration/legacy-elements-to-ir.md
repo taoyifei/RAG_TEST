@@ -5,6 +5,10 @@
 `LegacyDocxIrParser` 包装现有 `DocxParser.parse_with_audit()`，保留原安全限制，并使用
 下列映射：
 
+显式 Registry 主名称是 `legacy-docx-ir`；P01 的 `legacy-docx` 作为受信任兼容别名保留，
+两者构造同一实现且不会触发动态 import。新 Profile 应使用主名称，旧 Profile 无需立即
+修改。
+
 | 旧 Element | IR |
 | --- | --- |
 | HEADING | Heading root |
