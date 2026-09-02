@@ -14,6 +14,7 @@ from rag_app.core.models import (
     DocumentVersionRef,
     NodeKind,
     ParseReport,
+    ParseResult,
     SourceAnchor,
     StoryKind,
     canonical_document_ir_json,
@@ -152,3 +153,36 @@ def test_parse_report_rejects_impossible_coverage() -> None:
             visible_text_nodes=1,
             represented_visible_text_nodes=2,
         )
+
+
+def test_p01_constructor_shape_migrates_with_read_compatibility() -> None:
+    old_node = DocumentNode(
+        node_id=f"node_{'a' * 32}",
+        node_type="paragraph",
+        structural_path=("body", "p:1"),
+        text="abc",
+        content_sha256=text_payload("abc").semantic_sha256,
+    )
+    old_ir = DocumentIR(
+        document=DocumentRef(
+            project_id=f"prj_{'4' * 32}",
+            knowledge_base_id=f"kb_{'5' * 32}",
+            document_id=_DOCUMENT_ID,
+            display_name="legacy.docx",
+        ),
+        version=DocumentVersionRef(
+            document_id=_DOCUMENT_ID,
+            document_version_id=_VERSION_ID,
+            content_sha256=_CONTENT_HASH,
+        ),
+        nodes=(old_node,),
+    )
+    report = ParseReport(node_count=1, warnings=("LEGACY_WARNING",))
+    result = ParseResult(document_ir=old_ir, report=report)
+
+    assert old_node.kind is NodeKind.PARAGRAPH
+    assert old_node.node_type == "paragraph"
+    assert old_node.text == "abc"
+    assert old_ir.root_node_ids == (old_node.node_id,)
+    assert old_ir.source.blob_ref == f"legacy-source:{_CONTENT_HASH}"
+    assert result.document_ir.parse_report == report

@@ -9,6 +9,11 @@
 两者构造同一实现且不会触发动态 import。新 Profile 应使用主名称，旧 Profile 无需立即
 修改。
 
+P01 provisional Python 构造形状也可继续读入：旧 `DocumentNode` 的
+`node_type/structural_path/text/content_sha256` 和旧 `DocumentIR` 的
+`document/version/nodes` 会先经过显式 validator 迁移，再以完整 V1 schema 序列化。该
+兼容入口不产生第二种 IR 输出格式。
+
 | 旧 Element | IR |
 | --- | --- |
 | HEADING | Heading root |
