@@ -6,6 +6,7 @@
 - Feature branch：`codex/p03-document-ir`。
 - 实现提交：`081e77e`；测试提交：`7f813b0`；文档提交：`a554efc`。
 - 兼容修复提交：`add7d35`，保留 P01 `legacy-docx` 受信任注册别名。
+- Schema 输入兼容提交：`3a234f0`，将 P01 provisional 构造形状迁移为 V1。
 - Integration implementation merge commit：
   `901d7a58fe6f8c5a84826a8c683ae375ff140e12`（`--no-ff`）。
 - 远程实现状态：`origin/codex/p03-document-ir@a554efc` 和
@@ -103,6 +104,19 @@ compileall / Ruff / mypy / Google docstrings passed
 .venv/bin/python scripts/dev.py check
 compileall / Ruff / mypy / Google docstrings passed
 1090 passed, 75 deselected, 4 warnings in 181.58s
+```
+
+最终 Schema 审计增加旧 `DocumentNode`、`DocumentIR` 和 `ParseResult` 构造回归后：
+
+```text
+.venv/bin/python -m pytest -q tests/core/test_document_ir.py \
+  tests/adapters/parsers tests/adapters/legacy/test_document_ir.py \
+  tests/composition/test_registry.py tests/composition/test_profiles.py
+33 passed in 0.23s
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1091 passed, 75 deselected, 4 warnings in 184.36s
 ```
 
 开发期测试真实暴露并修正了兼容 profile 期望（`69 passed, 1 failed`）、IR JSON/Locator
