@@ -94,6 +94,8 @@ class EmbeddingSlotIdentity(FrozenModel):
     model: str = Field(min_length=1)
     vector_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     dimension: StrictInt = Field(gt=0)
+    max_input_tokens: StrictInt = Field(default=32768, gt=0)
+    adapter_revision: str = Field(default="1", min_length=1, max_length=80)
     document_request_policy: JsonObject = ()
     query_request_policy: JsonObject = ()
     normalization: str = Field(min_length=1)
@@ -124,6 +126,7 @@ class EmbeddingSlotIdentity(FrozenModel):
                 self.model,
                 str(self.dimension),
                 self.normalization,
+                self.adapter_revision,
             )
         )
 
