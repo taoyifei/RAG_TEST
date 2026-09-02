@@ -596,7 +596,6 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
 
     """
     from rag_app.adapters.legacy.contracts import (  # noqa: PLC0415
-        LegacyDocxParserAdapter,
         LegacySectionChunkerAdapter,
     )
     from rag_app.adapters.legacy.providers import (  # noqa: PLC0415
@@ -614,14 +613,15 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         SqliteMetadataStore,
         SqliteTraceSink,
     )
+    from rag_app.adapters.parsers import LegacyDocxIrParser  # noqa: PLC0415
     from rag_app.composition.builtin_providers import (  # noqa: PLC0415
         register_builtin_provider_components,
     )
 
     registry.register_parser(
-        "legacy-docx",
-        LegacyDocxParserAdapter,
-        descriptor=LegacyDocxParserAdapter.descriptor,
+        "legacy-docx-ir",
+        lambda: LegacyDocxIrParser(),  # noqa: PLW0108
+        descriptor=LegacyDocxIrParser.descriptor,
     )
     registry.register_chunker(
         "legacy-section-pack",

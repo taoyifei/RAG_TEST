@@ -1,10 +1,125 @@
-"""默认拒绝的数据出网和 Provider 路由策略。"""
+"""格式解析、数据出网和 Provider 路由策略。"""
 
 from __future__ import annotations
 
-from pydantic import Field, StrictInt
+from enum import StrEnum
 
-from rag_app.core.models.common import FrozenModel
+from pydantic import Field, StrictFloat, StrictInt, field_validator
+
+from rag_app.core._base import FrozenModel, JsonObject, freeze_json_object
+from rag_app.core.identifiers import canonical_json
+
+
+class ParsingMode(StrEnum):
+    """解析错误处理模式。"""
+
+    STRICT = "strict"
+    BEST_EFFORT = "best_effort"
+
+
+class TrackedChangesPolicy(StrEnum):
+    """修订内容处理策略。"""
+
+    FINAL_VIEW = "final_view"
+    ALL_WITH_MARKERS = "all_with_markers"
+    REJECT = "reject"
+
+
+class CommentsPolicy(StrEnum):
+    """批注处理策略。"""
+
+    METADATA_ONLY = "metadata_only"
+    INCLUDE = "include"
+    REJECT = "reject"
+
+
+class HiddenTextPolicy(StrEnum):
+    """隐藏文字处理策略。"""
+
+    EXCLUDE = "exclude"
+    INCLUDE = "include"
+    REJECT = "reject"
+
+
+class StoryPolicy(StrEnum):
+    """页眉页脚、脚注和尾注处理策略。"""
+
+    PARSE = "parse"
+    METADATA_ONLY = "metadata_only"
+    EXCLUDE = "exclude"
+
+
+class ImagesPolicy(StrEnum):
+    """图片处理策略。"""
+
+    METADATA = "metadata"
+    EXTRACT = "extract"
+    REJECT = "reject"
+
+
+class ExternalRelationshipsPolicy(StrEnum):
+    """外部关系处理策略。"""
+
+    METADATA_ONLY = "metadata_only"
+    REJECT = "reject"
+
+
+class UnknownIndexableContentPolicy(StrEnum):
+    """未知可索引内容处理策略。"""
+
+    REJECT = "reject"
+    ISSUE = "issue"
+
+
+class ParsingPolicy(FrozenModel):
+    """不允许 best-effort 放宽资源上限的严格解析策略。"""
+
+    schema_version: str = Field(default="1", pattern=r"^1$")
+    policy_id: str = Field(default="docx-safe-v1", min_length=1)
+    metadata: JsonObject = ()
+    mode: ParsingMode = ParsingMode.STRICT
+    tracked_changes: TrackedChangesPolicy = TrackedChangesPolicy.FINAL_VIEW
+    comments: CommentsPolicy = CommentsPolicy.METADATA_ONLY
+    hidden_text: HiddenTextPolicy = HiddenTextPolicy.EXCLUDE
+    headers_footers: StoryPolicy = StoryPolicy.METADATA_ONLY
+    footnotes_endnotes: StoryPolicy = StoryPolicy.METADATA_ONLY
+    images: ImagesPolicy = ImagesPolicy.METADATA
+    external_relationships: ExternalRelationshipsPolicy = (
+        ExternalRelationshipsPolicy.METADATA_ONLY
+    )
+    unknown_indexable_content: UnknownIndexableContentPolicy = (
+        UnknownIndexableContentPolicy.REJECT
+    )
+    max_file_bytes: StrictInt = Field(default=128 * 1024 * 1024, gt=0)
+    max_uncompressed_bytes: StrictInt = Field(
+        default=512 * 1024 * 1024,
+        gt=0,
+    )
+    max_entry_bytes: StrictInt = Field(default=64 * 1024 * 1024, gt=0)
+    max_entries: StrictInt = Field(default=10_000, gt=0)
+    max_compression_ratio: StrictFloat = Field(default=200.0, gt=1.0)
+    parse_timeout_seconds: StrictFloat = Field(default=30.0, gt=0.0)
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def _freeze_metadata(cls, value: object) -> JsonObject:
+        return freeze_json_object(value)
+
+    def canonical_json(self) -> str:
+        """返回可进入 index fingerprint 的规范化策略。
+
+        Args:
+            无参数；读取当前冻结策略。
+
+        Returns:
+            不含绝对路径或 secret 的规范化 JSON。
+
+        """
+        return canonical_json(self.model_dump(mode="json", exclude_none=False))
+
+
+# P01 公共名称继续指向 P03 的正式策略，避免旧宿主立即迁移。
+ParsePolicy = ParsingPolicy
 
 
 class EgressPolicy(FrozenModel):

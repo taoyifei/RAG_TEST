@@ -112,17 +112,27 @@ class DocxParser:
 
     version = "docx-parser-v3"
 
-    def __init__(self, limits: DocxParserLimits | None = None) -> None:
+    def __init__(
+        self,
+        limits: DocxParserLimits | None = None,
+        *,
+        allow_unsupported_indexable_content: bool = False,
+    ) -> None:
         """初始化解析器。
 
         Args:
             limits: 可选的文件、解压量和耗时边界。
+            allow_unsupported_indexable_content: 是否只记录并跳过未知证据；
+                默认保持旧版 fail-closed 行为。
 
         Returns:
             无返回值。
 
         """
         self._limits = limits or DocxParserLimits()
+        self._allow_unsupported_indexable_content = (
+            allow_unsupported_indexable_content
+        )
 
     def parse(self, path: Path, *, display_path: str) -> list[Element]:
         """安全解析一个 DOCX 文件。
@@ -260,7 +270,13 @@ class DocxParser:
         table_index = 0
         image_index = 0
         audit = _AuditAccumulator()
-        for child in _iter_blocks(body, audit):
+        for child in _iter_blocks(
+            body,
+            audit,
+            allow_unsupported_indexable_content=(
+                self._allow_unsupported_indexable_content
+            ),
+        ):
             self._check_timeout(started_at)
             local_name = etree.QName(child).localname
             if local_name == "p":
@@ -356,6 +372,8 @@ class DocxParser:
 def _iter_blocks(
     container: etree._Element,
     audit: _AuditAccumulator,
+    *,
+    allow_unsupported_indexable_content: bool,
 ) -> Iterator[etree._Element]:
     """递归展开受支持的正文块并记录结构边界决策。
 
@@ -365,6 +383,7 @@ def _iter_blocks(
     Args:
         container: 待遍历的正文或内容控件容器。
         audit: 本次解析共享的可变审计累加器。
+        allow_unsupported_indexable_content: 是否只记录未知可索引内容。
 
     Returns:
         按文档顺序产生段落和表格的迭代器。
@@ -378,18 +397,38 @@ def _iter_blocks(
         if local_name in {"p", "tbl"}:
             yield child
             continue
+        if local_name == "sectPr":
+            continue
         if local_name == "sdt":
             if _is_toc_control(child):
                 audit.toc_controls_skipped += 1
                 continue
             content = child.find(f"./{{{_WORD_NAMESPACE}}}sdtContent")
             if content is None:
-                _skip_or_reject_unknown(child, audit)
+                _skip_or_reject_unknown(
+                    child,
+                    audit,
+                    allow_unsupported_indexable_content=(
+                        allow_unsupported_indexable_content
+                    ),
+                )
                 continue
             audit.ordinary_controls_parsed += 1
-            yield from _iter_blocks(content, audit)
+            yield from _iter_blocks(
+                content,
+                audit,
+                allow_unsupported_indexable_content=(
+                    allow_unsupported_indexable_content
+                ),
+            )
             continue
-        _skip_or_reject_unknown(child, audit)
+        _skip_or_reject_unknown(
+            child,
+            audit,
+            allow_unsupported_indexable_content=(
+                allow_unsupported_indexable_content
+            ),
+        )
 
 
 def _is_toc_control(control: etree._Element) -> bool:
@@ -405,9 +444,13 @@ def _is_toc_control(control: etree._Element) -> bool:
 def _skip_or_reject_unknown(
     node: etree._Element,
     audit: _AuditAccumulator,
+    *,
+    allow_unsupported_indexable_content: bool,
 ) -> None:
     if _contains_indexable_evidence(node):
         audit.unsupported_content_with_evidence += 1
+        if allow_unsupported_indexable_content:
+            return
         raise UnsafeDocxError("不支持的 DOCX 正文结构包含可索引证据。")
     audit.unsupported_nodes += 1
 

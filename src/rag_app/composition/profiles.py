@@ -186,7 +186,7 @@ class RerankerProfile(_ProfileModel):
 class ComponentsProfile(_ProfileModel):
     """全部可替换组件的显式注册名。"""
 
-    parser: str = "legacy-docx"
+    parser: str = "legacy-docx-ir"
     chunker: str = "legacy-section-pack"
     embedding_topology: str | EmbeddingTopologyProfile = "deterministic-single"
     embedding_primary: str | None = "deterministic"

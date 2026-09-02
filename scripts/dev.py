@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -31,6 +32,7 @@ from rag_app.composition import (
     ComponentRegistry,
     build_components,
     default_hot_standby_profile,
+    default_offline_profile,
     load_profile,
     register_builtin_components,
 )
@@ -47,16 +49,19 @@ from rag_app.core.errors import (
     ProviderRateLimited,
     ProviderUnavailable,
 )
+from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     EmbeddingCoverage,
     EmbeddingRequest,
     EmbeddingRequestRole,
     EmbeddingResult,
     EmbeddingSlotIdentity,
+    ParseSource,
     ProviderHealth,
     ProviderHealthStatus,
+    canonical_document_ir_json,
 )
-from rag_app.core.policies import EgressPolicy
+from rag_app.core.policies import EgressPolicy, ParsingPolicy
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
@@ -247,9 +252,13 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             "provider-check",
             "provider-smoke",
             "failover-smoke",
+            "inspect-document",
         ),
     )
+    parser.add_argument("document_path", nargs="?", type=Path)
     parser.add_argument("--profile", type=Path)
+    parser.add_argument("--output-json", type=Path)
+    parser.add_argument("--include-content", action="store_true")
     parser.add_argument(
         "--provider", choices=("jina", "aliyun-qwen37")
     )
@@ -261,7 +270,88 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         parser.error("provider-smoke 必须提供 --provider。")
     if parsed.command == "failover-smoke" and parsed.scenario is None:
         parser.error("failover-smoke 必须提供 --scenario。")
+    if parsed.command == "inspect-document" and parsed.document_path is None:
+        parser.error("inspect-document 必须提供文档路径。")
     return parsed
+
+
+def _inspect_document(
+    path: Path,
+    *,
+    profile_path: Path | None,
+    output_json: Path | None,
+    include_content: bool,
+) -> int:
+    """离线解析一个受控本地文档并输出非敏感摘要。
+
+    Args:
+        path: 用户显式指定的本地 DOCX。
+        profile_path: 可选严格 Profile；缺失时使用离线 Profile。
+        output_json: 可选且必须显式指定的 IR JSON 输出路径。
+        include_content: 是否在显式 JSON 输出或标准输出中包含正文。
+
+    Returns:
+        解析和可选写出成功时返回 0。
+
+    Raises:
+        FileNotFoundError: 输入不是现有普通文件。
+
+    """
+    if path.is_symlink() or not path.is_file():
+        raise FileNotFoundError(
+            "inspect-document 输入必须是现有非 symlink 文件。"
+        )
+    content = path.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
+    profile = (
+        load_profile(profile_path)
+        if profile_path is not None
+        else default_offline_profile()
+    )
+    registry = ComponentRegistry()
+    register_builtin_components(registry)
+    policy = ParsingPolicy(
+        metadata=(
+            ("project_id", deterministic_id("prj", "inspect-document")),
+            ("knowledge_base_id", deterministic_id("kb", "inspect-document")),
+            ("document_id", deterministic_id("doc", digest)),
+        )
+    )
+    with build_components(profile, registry) as components:
+        result = components.parser.parse(
+            ParseSource(
+                media_type=(
+                    "application/vnd.openxmlformats-officedocument."
+                    "wordprocessingml.document"
+                ),
+                display_name=path.name,
+                extension=path.suffix or ".docx",
+                content=content,
+            ),
+            policy,
+        )
+        report = result.report
+        print(f"document_hash_prefix={digest[:12]}")
+        print(
+            f"parser={report.parser_id}@{report.parser_version} "
+            f"nodes={report.node_count} issues={len(report.issues)}"
+        )
+        print(
+            f"stories={dict(report.story_counts)} "
+            f"coverage={report.coverage:.6f} "
+            f"elapsed_seconds={report.elapsed_seconds:.6f}"
+        )
+        rendered = canonical_document_ir_json(
+            result.document_ir,
+            include_content=include_content,
+        )
+        if output_json is not None:
+            output_json.parent.mkdir(parents=True, exist_ok=True)
+            output_json.write_text(f"{rendered}\n", encoding="utf-8")
+            print(f"output_json={output_json}")
+        elif include_content:
+            print(rendered)
+    return 0
 
 
 def _provider_list() -> int:
@@ -509,6 +599,13 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
         return _run_commands(_smoke_commands())
     if command == "provider-list":
         return _provider_list()
+    if command == "inspect-document":
+        return _inspect_document(
+            parsed.document_path,
+            profile_path=parsed.profile,
+            output_json=parsed.output_json,
+            include_content=parsed.include_content,
+        )
     if command == "provider-check":
         return _provider_check(parsed.profile)
     if command == "provider-smoke":

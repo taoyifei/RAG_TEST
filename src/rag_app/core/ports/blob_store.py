@@ -68,6 +68,18 @@ class BlobStorePort(Protocol):
         """
         ...
 
+    def delete(self, blob_id: str) -> None:
+        """幂等删除一个本阶段尚未提交引用的 blob。
+
+        Args:
+            blob_id: 受控 blob 身份。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
     def close(self) -> None:
         """幂等释放 Store 资源。
 

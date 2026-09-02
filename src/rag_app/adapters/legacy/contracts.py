@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import tempfile
-from pathlib import Path
-
+from rag_app.adapters.parsers.legacy_docx_ir import LegacyDocxIrParser
 from rag_app.contracts import Chunk as LegacyChunk
 from rag_app.contracts import ChunkSourceSpan as LegacySourceSpan
 from rag_app.contracts import Element as LegacyElement
 from rag_app.core.capabilities import (
-    ComponentCapabilities,
     ComponentDescriptor,
     ComponentKind,
     ProviderMode,
 )
-from rag_app.core.errors import ConfigurationError, InvalidDocument
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     Chunk,
@@ -24,15 +19,15 @@ from rag_app.core.models import (
     ChunkingResult,
     DocumentIR,
     DocumentNode,
-    DocumentRef,
     DocumentVersionRef,
-    ParsePolicy,
-    ParseReport,
-    ParseResult,
-    ParseSource,
+    ImageAttributes,
+    ListAttributes,
+    NodeKind,
+    SourceAnchor,
     SourceSpan,
+    StoryKind,
+    text_payload,
 )
-from rag_app.parsers.docx import DocxParser, UnsafeDocxError
 
 
 def legacy_element_to_core(
@@ -49,10 +44,7 @@ def legacy_element_to_core(
         新节点和所有显式丢失字段 warning。
 
     """
-    structural_path = (
-        *element.locator.heading_path,
-        element.locator.logical_key(),
-    )
+    structural_path = ("legacy", element.element_id)
     generated_node_id = deterministic_id(
         "node",
         document_version_id,
@@ -63,12 +55,46 @@ def legacy_element_to_core(
     warnings: list[str] = ["LEGACY_FILE_PATH_OMITTED"]
     if element.binary_data is not None:
         warnings.append("LEGACY_BINARY_DATA_OMITTED")
+    kind = {
+        "heading": NodeKind.HEADING,
+        "paragraph": (
+            NodeKind.LIST_ITEM
+            if element.list_level is not None
+            else NodeKind.PARAGRAPH
+        ),
+        "table": NodeKind.TABLE_REPRESENTATION,
+        "image": NodeKind.IMAGE,
+    }[element.kind.value]
     node = DocumentNode(
         node_id=generated_node_id,
-        node_type=element.kind.value,
-        structural_path=structural_path,
-        text=element.text,
-        content_sha256=element.content_sha256,
+        kind=kind,
+        order=0,
+        anchor=SourceAnchor(
+            part_uri="/word/document.xml",
+            story_kind=StoryKind.BODY,
+            structural_path=structural_path,
+            ordinal=0,
+        ),
+        text_payload=(
+            text_payload(element.text)
+            if element.kind.value != "image"
+            else None
+        ),
+        list_attributes=(
+            ListAttributes(level=element.list_level)
+            if element.list_level is not None
+            else None
+        ),
+        image_attributes=(
+            ImageAttributes(
+                blob_ref=f"legacy-unpersisted:{element.content_sha256}",
+                media_type=element.media_type or "application/octet-stream",
+                content_sha256=element.content_sha256,
+                display_name=element.media_name,
+            )
+            if element.kind.value == "image"
+            else None
+        ),
         metadata=(
             ("legacy_element_id", element.element_id),
             ("media_type", element.media_type),
@@ -173,104 +199,8 @@ def legacy_chunk_to_core(
     )
 
 
-class LegacyDocxParserAdapter:
-    """用受控临时文件调用现有安全 DOCX parser。"""
-
-    descriptor = ComponentDescriptor(
-        kind=ComponentKind.PARSER,
-        name="legacy-docx",
-        version=DocxParser.version,
-        mode=ProviderMode.LEGACY,
-        capabilities=ComponentCapabilities(
-            formats=(
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-        ),
-    )
-
-    def __init__(self) -> None:
-        """创建现有 DOCX parser 实例。
-
-        Args:
-            无参数；使用现有安全默认限制。
-
-        Returns:
-            无返回值。
-
-        """
-        self._parser = DocxParser()
-
-    def parse(self, source: ParseSource, policy: ParsePolicy) -> ParseResult:
-        """解析受控 DOCX 字节并转换为 Core IR。
-
-        Args:
-            source: DOCX 字节和展示名。
-            policy: metadata 中必须提供 project/kb/document 逻辑 ID。
-
-        Returns:
-            格式中立 IR 和显式转换 warning。
-
-        Raises:
-            ConfigurationError: 逻辑身份未显式提供。
-            InvalidDocument: 旧 parser 拒绝输入。
-
-        """
-        identity = dict(policy.metadata)
-        required = ("project_id", "knowledge_base_id", "document_id")
-        if any(not isinstance(identity.get(key), str) for key in required):
-            raise ConfigurationError(
-                "ParsePolicy 必须显式提供 project/kb/document 逻辑 ID。",
-                stage="legacy.parser",
-            )
-        content_sha256 = hashlib.sha256(source.content).hexdigest()
-        version = DocumentVersionRef(
-            document_id=str(identity["document_id"]),
-            document_version_id=deterministic_id("dver", content_sha256),
-            content_sha256=content_sha256,
-        )
-        document = DocumentRef(
-            project_id=str(identity["project_id"]),
-            knowledge_base_id=str(identity["knowledge_base_id"]),
-            document_id=str(identity["document_id"]),
-            display_name=source.display_name,
-        )
-        try:
-            with tempfile.TemporaryDirectory(
-                prefix="rag-p01-docx-"
-            ) as directory:
-                path = Path(directory) / "input.docx"
-                path.write_bytes(source.content)
-                elements = self._parser.parse(
-                    path, display_path=source.display_name
-                )
-        except UnsafeDocxError as error:
-            raise InvalidDocument(
-                "DOCX 未通过现有安全解析边界。",
-                stage="legacy.parser",
-                details={"error_type": type(error).__name__},
-            ) from None
-        converted = tuple(
-            legacy_element_to_core(element, version.document_version_id)
-            for element in elements
-        )
-        nodes = tuple(item[0] for item in converted)
-        warnings = tuple(
-            sorted(
-                {
-                    warning
-                    for _, item_warnings in converted
-                    for warning in item_warnings
-                }
-            )
-        )
-        return ParseResult(
-            document_ir=DocumentIR(
-                document=document,
-                version=version,
-                nodes=nodes,
-            ),
-            report=ParseReport(node_count=len(nodes), warnings=warnings),
-        )
+class LegacyDocxParserAdapter(LegacyDocxIrParser):
+    """保留 P01 类名并委托 P03 正式 Parser adapter。"""
 
 
 class LegacySectionChunkerAdapter:

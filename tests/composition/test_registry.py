@@ -26,6 +26,7 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
     register_builtin_components(registry)
     names = {item.name for item in registry.list_components()}
     assert {
+        "legacy-docx-ir",
         "jina-embedding",
         "aliyun-qwen37-embedding",
         "jina-reranker",
