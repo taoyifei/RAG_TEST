@@ -9,7 +9,7 @@ import pytest
 from rag_app.adapters.parsers.docx import DocxOoxmlV4Parser
 from rag_app.core.errors import InvalidDocument
 from rag_app.core.models import ParseSource
-from tests.adapters.parsers.docx.fixtures import build_package, policy
+from tests.adapters.parsers.docx.fixtures import build_package, context, policy
 
 
 def _source(content: bytes, extension: str = ".docx") -> ParseSource:
@@ -26,7 +26,7 @@ def test_valid_minimal_package_is_parsed() -> None:
         "<w:p><w:r><w:t>安全正文</w:t></w:r></w:p>"
     )
 
-    result = DocxOoxmlV4Parser().parse(_source(content), policy())
+    result = DocxOoxmlV4Parser().parse(_source(content), policy(), context())
 
     assert result.report.parser_id == "docx-ooxml-v4"
     assert result.document_ir.nodes[0].text == "安全正文"
@@ -38,6 +38,7 @@ def test_non_docx_extensions_are_rejected(extension: str) -> None:
         DocxOoxmlV4Parser().parse(
             _source(build_package(""), extension),
             policy(),
+            context(),
         )
 
 
@@ -53,7 +54,9 @@ def test_unsafe_archive_path_is_rejected_before_body_read() -> None:
         archive.writestr("../escape.xml", "<root/>")
 
     with pytest.raises(InvalidDocument, match="归档路径"):
-        DocxOoxmlV4Parser().parse(_source(output.getvalue()), policy())
+        DocxOoxmlV4Parser().parse(
+            _source(output.getvalue()), policy(), context()
+        )
 
 
 def test_injected_resource_limit_remains_fatal_in_best_effort() -> None:
@@ -65,6 +68,7 @@ def test_injected_resource_limit_remains_fatal_in_best_effort() -> None:
         DocxOoxmlV4Parser().parse(
             _source(content),
             policy(mode="best_effort", max_file_bytes=1),
+            context(),
         )
 
 
@@ -77,7 +81,9 @@ def test_duplicate_zip_entry_is_rejected() -> None:
         archive.writestr("word/document.xml", "<duplicate/>")
 
     with pytest.raises(InvalidDocument, match="重复条目"):
-        DocxOoxmlV4Parser().parse(_source(output.getvalue()), policy())
+        DocxOoxmlV4Parser().parse(
+            _source(output.getvalue()), policy(), context()
+        )
 
 
 def test_macro_content_type_is_always_fatal() -> None:
@@ -93,6 +99,7 @@ def test_macro_content_type_is_always_fatal() -> None:
         DocxOoxmlV4Parser().parse(
             _source(build_package("", content_types=content_types)),
             policy(mode="best_effort"),
+            context(),
         )
 
 
@@ -105,11 +112,54 @@ def test_xml_depth_and_entry_count_limits_are_injected_without_large_files() -> 
         DocxOoxmlV4Parser().parse(
             _source(content),
             policy(max_entries=2),
+            context(),
         )
     with pytest.raises(InvalidDocument, match="XML 深度"):
         DocxOoxmlV4Parser().parse(
             _source(content),
             policy(max_xml_depth=2),
+            context(),
+        )
+
+
+def test_deep_shallow_and_many_part_attacks_are_bounded() -> None:
+    deep = "<w:sdt><w:sdtContent>" * 12
+    deep += "<w:p><w:r><w:t>深层私密正文</w:t></w:r></w:p>"
+    deep += "</w:sdtContent></w:sdt>" * 12
+    with pytest.raises(InvalidDocument, match="XML 深度") as deep_error:
+        DocxOoxmlV4Parser().parse(
+            _source(build_package(deep)),
+            policy(max_xml_depth=12),
+            context(),
+        )
+    assert "深层私密正文" not in str(deep_error.value)
+
+    shallow = "".join(
+        f"<w:p><w:r><w:t>节点{index}</w:t></w:r></w:p>"
+        for index in range(80)
+    )
+    with pytest.raises(InvalidDocument, match="XML 节点数"):
+        DocxOoxmlV4Parser().parse(
+            _source(build_package(shallow)),
+            policy(max_xml_nodes=100),
+            context(),
+        )
+
+    extras = {
+        f"custom/part-{index}.bin": str(index).encode()
+        for index in range(32)
+    }
+    many_parts = build_package(
+        "<w:p><w:r><w:t>正常</w:t></w:r></w:p>",
+        extra_entries=extras,
+    )
+    parsed = DocxOoxmlV4Parser().parse(
+        _source(many_parts), policy(max_entries=64), context()
+    )
+    assert parsed.document_ir.nodes[0].text == "正常"
+    with pytest.raises(InvalidDocument, match="条目数"):
+        DocxOoxmlV4Parser().parse(
+            _source(many_parts), policy(max_entries=16), context()
         )
 
 
@@ -120,6 +170,7 @@ def test_monotonic_timeout_is_fatal() -> None:
         DocxOoxmlV4Parser(clock=lambda: next(ticks)).parse(
             _source(build_package("")),
             policy(parse_timeout_seconds=30.0),
+            context(),
         )
 
 
@@ -142,4 +193,5 @@ def test_external_relationship_reject_policy_never_downgrades() -> None:
                 mode="best_effort",
                 external_relationships="reject",
             ),
+            context(),
         )

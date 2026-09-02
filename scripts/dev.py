@@ -53,19 +53,21 @@ from rag_app.core.errors import (
     ProviderRateLimited,
     ProviderUnavailable,
 )
-from rag_app.core.identifiers import deterministic_id
+from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
+    DocumentRef,
     EmbeddingCoverage,
     EmbeddingRequest,
     EmbeddingRequestRole,
     EmbeddingResult,
     EmbeddingSlotIdentity,
+    ParseContext,
     ParseSource,
     ProviderHealth,
     ProviderHealthStatus,
     canonical_document_ir_json,
 )
-from rag_app.core.policies import EgressPolicy, ParsingPolicy
+from rag_app.core.policies import EgressPolicy
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
@@ -330,11 +332,12 @@ def _inspect_document(
     )
     registry = ComponentRegistry()
     register_builtin_components(registry)
-    policy = ParsingPolicy(
-        metadata=(
-            ("project_id", deterministic_id("prj", "inspect-document")),
-            ("knowledge_base_id", deterministic_id("kb", "inspect-document")),
-            ("document_id", deterministic_id("doc", digest)),
+    context = ParseContext(
+        document=DocumentRef(
+            project_id=deterministic_id("prj", "inspect-document"),
+            knowledge_base_id=deterministic_id("kb", "inspect-document"),
+            document_id=deterministic_id("doc", digest),
+            display_name=path.name,
         )
     )
     with build_components(profile, registry) as components:
@@ -348,7 +351,8 @@ def _inspect_document(
                 extension=path.suffix or ".docx",
                 content=content,
             ),
-            policy,
+            components.parsing_policy,
+            context,
         )
         report = result.report
         print(f"document_hash_prefix={digest[:12]}")
@@ -500,7 +504,9 @@ class _FailoverSmokeProvider:
             role=request.role,
             vectors=(vector,),
             observed_dimension=self._slot.dimension,
-            request_policy_identity="failover-smoke-v1",
+            request_policy_identity=canonical_sha256(
+                self._slot.query_request_policy
+            ),
         )
 
     def health(self, *, network: bool = False) -> ProviderHealth:

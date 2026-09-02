@@ -30,8 +30,8 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_f528bfe412d89a618edae9e3134b1afc",
-        "node_5a0f37a80b2e253398619e532ecdf15a"
+        "node_e20f3f54c01b0b4f179e45681822b560",
+        "node_e9d49d0020339791874d5bf507fb0848"
       ],
       "image_attributes": null,
       "kind": "table",
@@ -40,7 +40,7 @@
         "grid_columns": 3,
         "nested_depth": 0
       },
-      "node_id": "node_8c59982903e2d15479a80312917d21c3",
+      "node_id": "node_9940b0b690d62e6d9782f4d01cfba3ab",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -68,8 +68,8 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_c6a1281d2a587696c56a0997916ec951",
-        "node_a01926e16cc76df0bd03604491709035"
+        "node_a867dfcb4f329648597d628cdc5f9388",
+        "node_1617b7b8b2159ae76846acf3e3fcf0c1"
       ],
       "image_attributes": null,
       "kind": "table_row",
@@ -79,9 +79,9 @@
         "grid_before": 0,
         "repeated_header": false
       },
-      "node_id": "node_f528bfe412d89a618edae9e3134b1afc",
+      "node_id": "node_e20f3f54c01b0b4f179e45681822b560",
       "order": 0,
-      "parent_node_id": "node_8c59982903e2d15479a80312917d21c3",
+      "parent_node_id": "node_9940b0b690d62e6d9782f4d01cfba3ab",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -113,7 +113,7 @@
         "row_span": 2
       },
       "child_ids": [
-        "node_40455d31a41736c54531eb6b1cfc0d02"
+        "node_1caee4c91f43a7266b62333321889fd2"
       ],
       "image_attributes": null,
       "kind": "table_cell",
@@ -122,9 +122,9 @@
         "physical_cell_index": 0,
         "vertical_merge": "restart"
       },
-      "node_id": "node_c6a1281d2a587696c56a0997916ec951",
+      "node_id": "node_a867dfcb4f329648597d628cdc5f9388",
       "order": 0,
-      "parent_node_id": "node_f528bfe412d89a618edae9e3134b1afc",
+      "parent_node_id": "node_e20f3f54c01b0b4f179e45681822b560",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -156,9 +156,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_40455d31a41736c54531eb6b1cfc0d02",
+      "node_id": "node_1caee4c91f43a7266b62333321889fd2",
       "order": 0,
-      "parent_node_id": "node_c6a1281d2a587696c56a0997916ec951",
+      "parent_node_id": "node_a867dfcb4f329648597d628cdc5f9388",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -195,7 +195,7 @@
         "row_span": 1
       },
       "child_ids": [
-        "node_47063c7a694405f013afcf4f3c43084e"
+        "node_13bf74380bf8700c7e90503bb367dcc4"
       ],
       "image_attributes": null,
       "kind": "table_cell",
@@ -204,9 +204,9 @@
         "physical_cell_index": 1,
         "vertical_merge": null
       },
-      "node_id": "node_a01926e16cc76df0bd03604491709035",
+      "node_id": "node_1617b7b8b2159ae76846acf3e3fcf0c1",
       "order": 1,
-      "parent_node_id": "node_f528bfe412d89a618edae9e3134b1afc",
+      "parent_node_id": "node_e20f3f54c01b0b4f179e45681822b560",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -238,9 +238,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_47063c7a694405f013afcf4f3c43084e",
+      "node_id": "node_13bf74380bf8700c7e90503bb367dcc4",
       "order": 0,
-      "parent_node_id": "node_a01926e16cc76df0bd03604491709035",
+      "parent_node_id": "node_1617b7b8b2159ae76846acf3e3fcf0c1",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -271,8 +271,8 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_76752a6873005cbbb6538a00e91cf609",
-        "node_d0a920386f2821e29126330854a45dfa"
+        "node_f4ca0421a01de344d5ed374a374ae7b6",
+        "node_f1837bdac635b60a1b048593af8dfc95"
       ],
       "image_attributes": null,
       "kind": "table_row",
@@ -282,9 +282,9 @@
         "grid_before": 0,
         "repeated_header": false
       },
-      "node_id": "node_5a0f37a80b2e253398619e532ecdf15a",
+      "node_id": "node_e9d49d0020339791874d5bf507fb0848",
       "order": 1,
-      "parent_node_id": "node_8c59982903e2d15479a80312917d21c3",
+      "parent_node_id": "node_9940b0b690d62e6d9782f4d01cfba3ab",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -316,7 +316,7 @@
         "row_span": 1
       },
       "child_ids": [
-        "node_f2faa788f4ba1749209d505becb0f34d"
+        "node_aa2480ad5ff5860cc8b21f9ea22a9953"
       ],
       "image_attributes": null,
       "kind": "table_cell",
@@ -324,11 +324,11 @@
       "metadata": {
         "physical_cell_index": 0,
         "vertical_merge": "continue",
-        "vmerge_anchor_node_id": "node_c6a1281d2a587696c56a0997916ec951"
+        "vmerge_anchor_node_id": "node_a867dfcb4f329648597d628cdc5f9388"
       },
-      "node_id": "node_76752a6873005cbbb6538a00e91cf609",
+      "node_id": "node_f4ca0421a01de344d5ed374a374ae7b6",
       "order": 0,
-      "parent_node_id": "node_5a0f37a80b2e253398619e532ecdf15a",
+      "parent_node_id": "node_e9d49d0020339791874d5bf507fb0848",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -360,9 +360,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_f2faa788f4ba1749209d505becb0f34d",
+      "node_id": "node_aa2480ad5ff5860cc8b21f9ea22a9953",
       "order": 0,
-      "parent_node_id": "node_76752a6873005cbbb6538a00e91cf609",
+      "parent_node_id": "node_f4ca0421a01de344d5ed374a374ae7b6",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -399,7 +399,7 @@
         "row_span": 1
       },
       "child_ids": [
-        "node_30a7b3eb658df638e87cf4b0bdf8f120"
+        "node_26d3c7f5e7132e4a203d60f682eef71a"
       ],
       "image_attributes": null,
       "kind": "table_cell",
@@ -408,9 +408,9 @@
         "physical_cell_index": 1,
         "vertical_merge": null
       },
-      "node_id": "node_d0a920386f2821e29126330854a45dfa",
+      "node_id": "node_f1837bdac635b60a1b048593af8dfc95",
       "order": 1,
-      "parent_node_id": "node_5a0f37a80b2e253398619e532ecdf15a",
+      "parent_node_id": "node_e9d49d0020339791874d5bf507fb0848",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -442,9 +442,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_30a7b3eb658df638e87cf4b0bdf8f120",
+      "node_id": "node_26d3c7f5e7132e4a203d60f682eef71a",
       "order": 0,
-      "parent_node_id": "node_d0a920386f2821e29126330854a45dfa",
+      "parent_node_id": "node_f1837bdac635b60a1b048593af8dfc95",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -490,7 +490,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_6d7c3b5bb1105f80fb7b9ad498ddd7ad",
+      "node_id": "node_0035352716a0379f3beba94a95b714db",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -519,16 +519,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_8c59982903e2d15479a80312917d21c3",
-    "node_6d7c3b5bb1105f80fb7b9ad498ddd7ad"
+    "node_9940b0b690d62e6d9782f4d01cfba3ab",
+    "node_0035352716a0379f3beba94a95b714db"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_01f6018c816246c33abfca81102b8f5a",
+    "blob_ref": "sha256:8fac56369a5f875f1ee687183134300c2e33b5c70d9d53512a16d94591a6dcb4",
     "content_sha256": "8fac56369a5f875f1ee687183134300c2e33b5c70d9d53512a16d94591a6dcb4",
     "display_name": "07-table-gridspan-vmerge.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_01f6018c816246c33abfca81102b8f5a",
+    "document_version_id": "dver_85f58f1b024b55d61882b97d57dba842",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -537,6 +537,6 @@
   "version": {
     "content_sha256": "8fac56369a5f875f1ee687183134300c2e33b5c70d9d53512a16d94591a6dcb4",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_01f6018c816246c33abfca81102b8f5a"
+    "document_version_id": "dver_85f58f1b024b55d61882b97d57dba842"
   }
 }

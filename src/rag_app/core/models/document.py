@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, StrictInt, field_validator, model_validator
 
@@ -14,6 +15,24 @@ from rag_app.core.models.common import FrozenModel, MetadataModel
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_DISPLAY_EXTENSION_LENGTH = 16
+_SAFE_NODE_METADATA_KEYS = frozenset(
+    {
+        "break_type",
+        "column_span",
+        "external_hyperlink_schemes",
+        "grid_after",
+        "grid_before",
+        "heading_level",
+        "legacy_flattened_table",
+        "num_id",
+        "repeated_header",
+        "row_span",
+        "style_hidden",
+        "style_quick_format",
+        "style_unhide_when_used",
+        "vmerge_anchor_node_id",
+    }
+)
 
 
 class ProjectScope(FrozenModel):
@@ -36,6 +55,35 @@ class DocumentRef(FrozenModel):
     knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")
     document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
     display_name: str = Field(min_length=1, max_length=512)
+
+
+class ParseContext(FrozenModel):
+    """不进入解析策略指纹的运行时文档身份。"""
+
+    document: DocumentRef
+
+
+def validate_document_ref_uniqueness(
+    documents: Sequence[DocumentRef],
+) -> None:
+    """确认 document_id 在项目和知识库边界之间全局唯一。
+
+    Args:
+        documents: 待创建或导入的逻辑文档引用。
+
+    Returns:
+        无返回值；全部引用通过全局唯一性检查。
+
+    Raises:
+        ValueError: 同一 document_id 被绑定到不同 project/KB。
+
+    """
+    scopes: dict[str, tuple[str, str]] = {}
+    for document in documents:
+        scope = (document.project_id, document.knowledge_base_id)
+        existing = scopes.setdefault(document.document_id, scope)
+        if existing != scope:
+            raise ValueError("document_id 必须跨 project/KB 全局唯一。")
 
 
 class DocumentVersionRef(FrozenModel):
@@ -544,11 +592,31 @@ class ParseSource(FrozenModel):
         return value
 
 
+class ParsedArtifact(FrozenModel):
+    """Parser 返回且尚未写入持久化 Store 的内容制品。"""
+
+    artifact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+    media_type: str = Field(min_length=1, max_length=255)
+    content: bytes = Field(repr=False)
+    role: Literal["source_document", "embedded_media"]
+
+    @model_validator(mode="after")
+    def _validate_content(self) -> Self:
+        observed = hashlib.sha256(self.content).hexdigest()
+        if observed != self.content_sha256:
+            raise ValueError("ParsedArtifact 内容摘要不一致。")
+        if self.artifact_id != f"sha256:{self.content_sha256}":
+            raise ValueError("ParsedArtifact identity 必须绑定内容 SHA-256。")
+        return self
+
+
 class ParseResult(FrozenModel):
     """ParserPort 的 IR 与报告结果。"""
 
     document_ir: DocumentIR
     report: ParseReport
+    artifacts: tuple[ParsedArtifact, ...] = ()
 
     @model_validator(mode="before")
     @classmethod
@@ -684,6 +752,19 @@ def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
     }
     if observed_roots != root_ids:
         raise ValueError("root 必须且只能包含 parent=None 的节点。")
+    ordered_roots = tuple(
+        node.node_id
+        for node in sorted(
+            (
+                node
+                for node in document_ir.nodes
+                if node.parent_node_id is None
+            ),
+            key=lambda node: (node.order, node.anchor.ordinal, node.node_id),
+        )
+    )
+    if document_ir.root_node_ids != ordered_roots:
+        raise ValueError("root_node_ids 必须匹配 root 的 order/anchor 顺序。")
 
     children_by_parent: dict[str | None, list[DocumentNode]] = defaultdict(list)
     for node in document_ir.nodes:
@@ -698,6 +779,13 @@ def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
             if child is None or child.parent_node_id != node.node_id:
                 raise ValueError("parent.child_ids 与 child.parent 必须对称。")
         children_by_parent[node.parent_node_id].append(node)
+        if node.text_payload is not None:
+            start = node.anchor.source_start_char
+            end = node.anchor.source_end_char
+            if start is None or end is None:
+                raise ValueError("文本节点 SourceAnchor 必须提供字符范围。")
+            if end > len(node.text_payload.exact_text):
+                raise ValueError("节点 SourceAnchor 字符范围超出 exact_text。")
 
     for siblings in children_by_parent.values():
         orders = sorted(node.order for node in siblings)
@@ -717,12 +805,20 @@ def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
         for visited_id in trail:
             colors[visited_id] = 2
 
+    relationship_keys: set[tuple[str, str]] = set()
     for relationship in document_ir.relationships:
         if (
             relationship.source_node_id not in nodes_by_id
             or relationship.target_node_id not in nodes_by_id
         ):
             raise ValueError("relationship source/target 节点必须存在。")
+        relationship_key = (
+            relationship.source_node_id,
+            relationship.relationship_id,
+        )
+        if relationship_key in relationship_keys:
+            raise ValueError("同一 source 的 relationship ID 必须唯一。")
+        relationship_keys.add(relationship_key)
     if document_ir.source.document_id != document_ir.document.document_id:
         raise ValueError("DocumentSource 与 DocumentRef 身份不一致。")
     if (
@@ -732,6 +828,8 @@ def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
         raise ValueError("DocumentSource 与 DocumentVersionRef 身份不一致。")
     if document_ir.source.content_sha256 != document_ir.version.content_sha256:
         raise ValueError("DocumentSource 与 DocumentVersionRef 摘要不一致。")
+    if document_ir.version.document_id != document_ir.document.document_id:
+        raise ValueError("DocumentVersionRef 与 DocumentRef 身份不一致。")
     if document_ir.parse_report.node_count != len(document_ir.nodes):
         raise ValueError("ParseReport node_count 必须等于节点数量。")
 
@@ -768,16 +866,38 @@ def canonical_document_ir_json(
             if isinstance(image, dict):
                 image["display_name"] = None
                 image["alt_text"] = None
-            metadata = node.get("metadata")
-            if isinstance(metadata, dict):
-                for key in (
-                    "alias",
-                    "author",
-                    "field_targets",
-                    "hyperlink_anchors",
-                    "style_name",
-                    "tag",
-                    "timestamp",
-                ):
-                    metadata.pop(key, None)
+            metadata = _metadata_mapping(node.get("metadata"))
+            if metadata is not None:
+                node["metadata"] = {
+                    key: value
+                    for key, value in metadata.items()
+                    if key in _SAFE_NODE_METADATA_KEYS
+                }
+        document_metadata = _metadata_mapping(payload.get("metadata")) or {}
+        payload["metadata"] = {
+            key: value
+            for key, value in document_metadata.items()
+            if key in {"part_catalog_identity", "parsing_policy_id"}
+        }
+        payload["source"]["metadata"] = {}
+        for relationship in payload.get("relationships", []):
+            relationship["metadata"] = {}
+        for issue in payload.get("parse_report", {}).get("issues", []):
+            issue_metadata = _metadata_mapping(issue.get("metadata")) or {}
+            issue["metadata"] = {
+                key: value
+                for key, value in issue_metadata.items()
+                if key == "schemes"
+            }
     return canonical_json(payload)
+
+
+def _metadata_mapping(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        try:
+            return {str(key): item for key, item in value}
+        except (TypeError, ValueError):
+            return None
+    return None

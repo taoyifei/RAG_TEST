@@ -34,6 +34,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": {
+        "external_hyperlink_schemes": [
+          "https"
+        ],
         "hyperlink_kinds": [
           "external_or_relationship"
         ],
@@ -41,7 +44,7 @@
           "rIdExternal"
         ]
       },
-      "node_id": "node_56cf98b8be7940b0d5c5c6d04a25fcdd",
+      "node_id": "node_bf24cc76faaa216f8f2e415225ec74a6",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -89,7 +92,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_7934c1c29cc1269d499f75d922a78fd2",
+      "node_id": "node_90a42b4bcf2ec8ba72ca2e7487a77385",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -134,16 +137,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_56cf98b8be7940b0d5c5c6d04a25fcdd",
-    "node_7934c1c29cc1269d499f75d922a78fd2"
+    "node_bf24cc76faaa216f8f2e415225ec74a6",
+    "node_90a42b4bcf2ec8ba72ca2e7487a77385"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_4ea2ee7aff901d3779575277735629b4",
+    "blob_ref": "sha256:b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
     "content_sha256": "b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
     "display_name": "18-external-relations.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_4ea2ee7aff901d3779575277735629b4",
+    "document_version_id": "dver_019153eb8dd14f8d86e69207f5441d45",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -152,6 +155,6 @@
   "version": {
     "content_sha256": "b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_4ea2ee7aff901d3779575277735629b4"
+    "document_version_id": "dver_019153eb8dd14f8d86e69207f5441d45"
   }
 }

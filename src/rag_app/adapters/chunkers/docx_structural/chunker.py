@@ -9,7 +9,10 @@ from collections.abc import Sequence
 from pydantic import JsonValue
 
 from rag_app.adapters.chunkers.docx_structural.atoms import AtomicUnit
-from rag_app.adapters.chunkers.docx_structural.context import embedding_text
+from rag_app.adapters.chunkers.docx_structural.context import (
+    embedding_text,
+    pack_structural_context,
+)
 from rag_app.adapters.chunkers.docx_structural.lexical import lexical_view
 from rag_app.adapters.chunkers.docx_structural.packing import pack_run
 from rag_app.adapters.chunkers.docx_structural.rendering import render_atoms
@@ -148,7 +151,12 @@ class DocxStructuralChunker:
     ) -> Chunk:
         rendered = render_atoms(atoms)
         first = atoms[0]
-        embedded = embedding_text(document_title, first, rendered.text)
+        embedded = embedding_text(
+            document_title,
+            first,
+            rendered.text,
+            structural_context=pack_structural_context(atoms),
+        )
         lexical, identifiers = lexical_view(embedded)
         citation_count = self.token_counter.count(rendered.text)
         embedding_count = self.token_counter.count(embedded)
@@ -246,12 +254,17 @@ def _link_neighbors(chunks: Sequence[Chunk]) -> list[Chunk]:
             chunk.neighbor_group_id,
         )
         grouped.setdefault(key, []).append(chunk)
+    positions = {
+        chunk.chunk_id: index
+        for group in grouped.values()
+        for index, chunk in enumerate(group)
+    }
     linked: list[Chunk] = []
     for chunk in chunks:
         group = grouped[
             (chunk.version.document_version_id, chunk.neighbor_group_id)
         ]
-        index = group.index(chunk)
+        index = positions[chunk.chunk_id]
         linked.append(
             chunk.model_copy(
                 update={

@@ -34,7 +34,12 @@ def test_invalid_prefixes_are_rejected(prefix: str) -> None:
 
 def test_document_version_and_chunk_ids_bind_content() -> None:
     content_hash = "a" * 64
-    version = document_version_id(content_hash)
+    document_id = deterministic_id("doc", "logical-document")
+    version = document_version_id(document_id, content_hash)
+    assert version != document_version_id(
+        deterministic_id("doc", "other-document"),
+        content_hash,
+    )
     first = chunk_id(
         version,
         f"sha256:{'b' * 64}",

@@ -1,25 +1,32 @@
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
-from rag_app.adapters.legacy.stores import InMemoryBlobStore
 from rag_app.adapters.parsers.legacy_docx_ir import LegacyDocxIrParser
+from rag_app.application.artifacts import persist_artifacts_transactionally
 from rag_app.composition.registry import (
     ComponentRegistry,
     register_builtin_components,
 )
 from rag_app.core.capabilities import ComponentDescriptor
 from rag_app.core.errors import InvalidDocument
-from rag_app.core.models import NodeKind, ParseSource
+from rag_app.core.models import (
+    DocumentRef,
+    NodeKind,
+    ParseContext,
+    ParseSource,
+)
 from rag_app.core.policies import (
     ExternalRelationshipsPolicy,
     ParsingMode,
     ParsingPolicy,
     UnknownIndexableContentPolicy,
 )
-from rag_app.core.ports.blob_store import BlobReadResult, BlobWriteRequest
+from rag_app.core.ports.blob_store import (
+    BlobPutResult,
+    BlobReadResult,
+    BlobWriteRequest,
+)
 from tests.adapters.parsers.docx_fixtures import (
     CONTENT_CONTROL,
     HEADING,
@@ -37,15 +44,18 @@ _DOCX_MEDIA_TYPE = (
 
 
 def _policy(**updates: object) -> ParsingPolicy:
-    values = {
-        "metadata": (
-            ("project_id", f"prj_{'1' * 32}"),
-            ("knowledge_base_id", f"kb_{'2' * 32}"),
-            ("document_id", f"doc_{'3' * 32}"),
+    return ParsingPolicy.model_validate(updates)
+
+
+def _context(document_id: str | None = None) -> ParseContext:
+    return ParseContext(
+        document=DocumentRef(
+            project_id=f"prj_{'1' * 32}",
+            knowledge_base_id=f"kb_{'2' * 32}",
+            document_id=document_id or f"doc_{'3' * 32}",
+            display_name="sample.docx",
         )
-    }
-    values.update(updates)
-    return ParsingPolicy.model_validate(values)
+    )
 
 
 def _source(content: bytes, name: str = "sample.docx") -> ParseSource:
@@ -61,8 +71,12 @@ def test_heading_paragraph_list_content_control_and_rename_are_stable() -> None:
     content = build_docx(HEADING + PARAGRAPH + LIST + CONTENT_CONTROL)
     parser = LegacyDocxIrParser()
 
-    first = parser.parse(_source(content, "first-name.bin"), _policy())
-    renamed = parser.parse(_source(content, "renamed.docx"), _policy())
+    first = parser.parse(
+        _source(content, "first-name.bin"), _policy(), _context()
+    )
+    renamed = parser.parse(
+        _source(content, "renamed.docx"), _policy(), _context()
+    )
 
     assert [node.kind for node in first.document_ir.nodes] == [
         NodeKind.HEADING,
@@ -82,10 +96,13 @@ def test_heading_paragraph_list_content_control_and_rename_are_stable() -> None:
 
 def test_content_change_changes_version_and_nodes() -> None:
     parser = LegacyDocxIrParser()
-    first = parser.parse(_source(build_docx(PARAGRAPH)), _policy())
+    first = parser.parse(
+        _source(build_docx(PARAGRAPH)), _policy(), _context()
+    )
     changed = parser.parse(
         _source(build_docx(PARAGRAPH.replace("第一步", "第二步"))),
         _policy(),
+        _context(),
     )
 
     assert first.document_ir.version != changed.document_ir.version
@@ -96,7 +113,9 @@ def test_content_change_changes_version_and_nodes() -> None:
 
 
 def test_table_has_explicit_parent_representation_and_loss_issue() -> None:
-    result = LegacyDocxIrParser().parse(_source(build_docx(TABLE)), _policy())
+    result = LegacyDocxIrParser().parse(
+        _source(build_docx(TABLE)), _policy(), _context()
+    )
     table, representation = result.document_ir.nodes
 
     assert table.kind is NodeKind.TABLE
@@ -114,8 +133,7 @@ def test_image_binary_is_replaced_by_blob_ref() -> None:
         'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
         'relationships/image" Target="media/pixel.png"/>'
     )
-    store = InMemoryBlobStore()
-    result = LegacyDocxIrParser(store).parse(
+    result = LegacyDocxIrParser().parse(
         _source(
             build_docx(
                 IMAGE,
@@ -124,12 +142,16 @@ def test_image_binary_is_replaced_by_blob_ref() -> None:
             )
         ),
         _policy(),
+        _context(),
     )
     node = result.document_ir.nodes[0]
 
     assert node.kind is NodeKind.IMAGE
     assert node.image_attributes is not None
-    assert store.get(node.image_attributes.blob_ref) is not None
+    assert any(
+        artifact.artifact_id == node.image_attributes.blob_ref
+        for artifact in result.artifacts
+    )
     rendered = result.document_ir.model_dump_json()
     assert "synthetic-png" not in rendered
     assert "binary_data" not in rendered
@@ -144,7 +166,9 @@ def test_external_relationship_is_reported_or_rejected_without_access() -> None:
     )
     content = build_docx(PARAGRAPH, relationships=relationship)
 
-    result = LegacyDocxIrParser().parse(_source(content), _policy())
+    result = LegacyDocxIrParser().parse(
+        _source(content), _policy(), _context()
+    )
     assert "DOCX_EXTERNAL_RELATIONSHIP_SKIPPED" in result.report.warnings
 
     with pytest.raises(InvalidDocument):
@@ -153,6 +177,7 @@ def test_external_relationship_is_reported_or_rejected_without_access() -> None:
             _policy(
                 external_relationships=ExternalRelationshipsPolicy.REJECT
             ),
+            _context(),
         )
 
 
@@ -161,6 +186,7 @@ def test_unsafe_archive_path_is_rejected() -> None:
         LegacyDocxIrParser().parse(
             _source(build_docx(PARAGRAPH, unsafe_entry=True)),
             _policy(),
+            _context(),
         )
 
 
@@ -176,6 +202,7 @@ def test_best_effort_records_unknown_text_without_relaxing_size_limit() -> None:
             mode=ParsingMode.BEST_EFFORT,
             unknown_indexable_content=UnknownIndexableContentPolicy.ISSUE,
         ),
+        _context(),
     )
 
     assert result.document_ir.nodes == ()
@@ -195,6 +222,7 @@ def test_best_effort_records_unknown_text_without_relaxing_size_limit() -> None:
                 ),
                 max_file_bytes=1,
             ),
+            _context(),
         )
 
 
@@ -213,6 +241,7 @@ def test_unsupported_image_media_is_counted_without_binary_leakage() -> None:
             )
         ),
         _policy(),
+        _context(),
     )
 
     assert result.report.unsupported_with_media == 1
@@ -239,18 +268,22 @@ class _FailingBlobStore:
         mode="deterministic",
     )
 
-    def __init__(self) -> None:
-        self.items: dict[str, BlobWriteRequest] = {}
+    def __init__(self, existing: BlobWriteRequest) -> None:
+        self.items = {
+            existing.blob_id: BlobReadResult(**existing.model_dump())
+        }
         self.deleted: list[str] = []
 
-    def put(self, request: BlobWriteRequest) -> None:
-        if self.items:
-            raise OSError("injected")
-        self.items[request.blob_id] = request
+    def put_if_absent(self, request: BlobWriteRequest) -> BlobPutResult:
+        if request.blob_id in self.items:
+            return BlobPutResult.EXISTING
+        raise OSError("injected")
 
-    def get(self, blob_id: str) -> BlobReadResult | None:
-        del blob_id
-        return None
+    def read(self, blob_id: str) -> BlobReadResult | None:
+        return self.items.get(blob_id)
+
+    def exists(self, blob_id: str) -> bool:
+        return blob_id in self.items
 
     def delete(self, blob_id: str) -> None:
         self.deleted.append(blob_id)
@@ -260,23 +293,32 @@ class _FailingBlobStore:
         return None
 
 
-def test_blob_failure_cleans_already_written_document() -> None:
+def test_blob_failure_preserves_preexisting_shared_artifact() -> None:
     relationship = (
         '<Relationship Id="rIdImage" '
         'Type="http://schemas.openxmlformats.org/officeDocument/2006/'
         'relationships/image" Target="media/pixel.png"/>'
     )
-    store = _FailingBlobStore()
     content = build_docx(
         IMAGE,
         relationships=relationship,
         extra_entries={"word/media/pixel.png": b"synthetic-png"},
     )
 
-    with pytest.raises(InvalidDocument):
-        LegacyDocxIrParser(store).parse(_source(content), _policy())
+    result = LegacyDocxIrParser().parse(
+        _source(content), _policy(), _context()
+    )
+    source_artifact = result.artifacts[0]
+    existing = BlobWriteRequest(
+        blob_id=source_artifact.artifact_id,
+        content_sha256=source_artifact.content_sha256,
+        media_type=source_artifact.media_type,
+        content=source_artifact.content,
+    )
+    store = _FailingBlobStore(existing)
 
-    expected_version = hashlib.sha256(content).hexdigest()
-    assert store.items == {}
-    assert len(store.deleted) == 1
-    assert expected_version not in repr(store)
+    with pytest.raises(OSError, match="injected"):
+        persist_artifacts_transactionally(result.artifacts, store)
+
+    assert store.exists(source_artifact.artifact_id)
+    assert store.deleted == []

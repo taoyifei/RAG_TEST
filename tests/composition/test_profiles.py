@@ -91,3 +91,39 @@ def test_required_hot_standby_json_fragment_passes_schema() -> None:
         }
     )
     assert profile.components.embedding_router == "embedding-router-hot-standby"
+
+
+@pytest.mark.parametrize(
+    ("provider", "updates"),
+    (
+        ("jina-embedding", {"query_task": "unsupported.task"}),
+        ("jina-embedding", {"normalization": "none"}),
+        ("aliyun-qwen37-embedding", {"transport": "openai-compatible"}),
+        ("aliyun-qwen37-embedding", {"output_type": "sparse"}),
+    ),
+)
+def test_profile_rejects_provider_deviations_during_loading(
+    provider: str,
+    updates: dict[str, object],
+) -> None:
+    payload = default_hot_standby_profile().model_dump(mode="json")
+    topology = payload["components"]["embedding_topology"]
+    assert isinstance(topology, dict)
+    key = "primary" if provider == "jina-embedding" else "standby"
+    slot = topology[key]
+    assert isinstance(slot, dict)
+    slot.update(updates)
+
+    with pytest.raises(ConfigurationError):
+        profile_from_mapping(payload)
+
+
+def test_profile_loads_explicit_parsing_and_chunking_policies() -> None:
+    payload = default_offline_profile().model_dump(mode="json")
+    payload["parsing"]["hidden_text"] = "include"
+    payload["chunking"]["target_tokens"] = 300
+
+    profile = profile_from_mapping(payload)
+
+    assert profile.parsing.hidden_text == "include"
+    assert profile.chunking.target_tokens == 300

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from rag_app.core.capabilities import ComponentDescriptor, ParserCapabilities
-from rag_app.core.models import ParseResult, ParseSource
+from rag_app.core.models import ParseContext, ParseResult, ParseSource
 from rag_app.core.policies import ParsingPolicy
 
 
@@ -38,12 +38,18 @@ class ParserPort(Protocol):
         """
         ...
 
-    def parse(self, source: ParseSource, policy: ParsingPolicy) -> ParseResult:
+    def parse(
+        self,
+        source: ParseSource,
+        policy: ParsingPolicy,
+        context: ParseContext,
+    ) -> ParseResult:
         """解析一个受控字节源。
 
         Args:
             source: 字节内容和格式元数据。
             policy: 冻结且格式中立的解析策略。
+            context: 不进入策略指纹的逻辑文档身份。
 
         Returns:
             Document IR 与解析报告。

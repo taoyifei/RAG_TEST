@@ -20,6 +20,8 @@ from rag_app.core.models import (
     ChunkingContext,
     ChunkingPolicy,
     DocumentIR,
+    DocumentRef,
+    ParseContext,
     ParseSource,
 )
 from rag_app.core.policies import (
@@ -213,15 +215,16 @@ def chunk_ablation_command(
 def _parse_document(path: Path, parser: ParserPort) -> DocumentIR:
     content = path.read_bytes()
     digest = hashlib.sha256(content).hexdigest()
+    document = DocumentRef(
+        project_id=deterministic_id("prj", "chunk-cli"),
+        knowledge_base_id=deterministic_id("kb", "chunk-cli"),
+        document_id=deterministic_id("doc", digest),
+        display_name=path.name,
+    )
     policy = ParsingPolicy(
         comments=CommentsPolicy.INCLUDE,
         headers_footers=StoryPolicy.PARSE,
         footnotes_endnotes=StoryPolicy.PARSE,
-        metadata=(
-            ("project_id", deterministic_id("prj", "chunk-cli")),
-            ("knowledge_base_id", deterministic_id("kb", "chunk-cli")),
-            ("document_id", deterministic_id("doc", digest)),
-        ),
     )
     result = parser.parse(
         ParseSource(
@@ -231,6 +234,7 @@ def _parse_document(path: Path, parser: ParserPort) -> DocumentIR:
             content=content,
         ),
         policy,
+        ParseContext(document=document),
     )
     return result.document_ir
 

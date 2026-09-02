@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from rag_app.core.errors import ProviderInputTooLarge
+from rag_app.core.tokenization import estimate_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,19 +17,6 @@ class BatchLimits:
     max_total_estimated_tokens: int = 8192
     max_total_chars: int = 131072
     max_input_tokens: int = 32768
-
-
-def estimate_tokens(text: str) -> int:
-    """以 Unicode 字符数给出保守 Token 上界。
-
-    Args:
-        text: 待估算文本。
-
-    Returns:
-        至少为 1 的保守 Token 数。
-
-    """
-    return max(1, len(text))
 
 
 def batch_texts(
@@ -95,3 +83,6 @@ def batch_texts(
     if current:
         batches.append(tuple(current))
     return tuple(batches)
+
+
+__all__ = ["BatchLimits", "batch_texts", "estimate_tokens"]

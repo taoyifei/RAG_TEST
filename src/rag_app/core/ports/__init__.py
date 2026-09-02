@@ -1,6 +1,7 @@
 """导出同步、窄职责 Core Ports。"""
 
 from rag_app.core.ports.blob_store import (
+    BlobPutResult,
     BlobReadResult,
     BlobStorePort,
     BlobWriteRequest,
@@ -10,6 +11,7 @@ from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
     EmbeddingRouterPort,
+    SlotEligibilityPort,
 )
 from rag_app.core.ports.generator import GenerationRequest, GeneratorPort
 from rag_app.core.ports.lexical_store import LexicalStorePort
@@ -21,6 +23,7 @@ from rag_app.core.ports.trace import TracePort
 from rag_app.core.ports.vector_store import VectorStorePort
 
 __all__ = [
+    "BlobPutResult",
     "BlobReadResult",
     "BlobStorePort",
     "BlobWriteRequest",
@@ -35,6 +38,7 @@ __all__ = [
     "MetadataStorePort",
     "ParserPort",
     "RerankerPort",
+    "SlotEligibilityPort",
     "TokenCounterPort",
     "TracePort",
     "VectorStorePort",

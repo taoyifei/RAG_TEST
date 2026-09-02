@@ -129,6 +129,47 @@ def test_embedding_maps_role_and_restores_shuffled_indices(
     assert result.calls[0].endpoint == "api.jina.ai/v1/embeddings"
 
 
+def test_embedding_uses_configured_environment_and_request_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("JINA_API_KEY", raising=False)
+    monkeypatch.setenv("CUSTOM_JINA_KEY", "custom-key")
+    observed: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        assert request.headers["Authorization"] == "Bearer custom-key"
+        return httpx.Response(
+            200,
+            json={
+                "model": "jina-embeddings-v5-text-small",
+                "data": [{"index": 0, "embedding": _unit()}],
+            },
+        )
+
+    adapter = JinaV5TextEmbeddingAdapter(
+        _embedding_config(
+            api_key_env="CUSTOM_JINA_KEY",
+            query_task="retrieval.query",
+            embedding_type="float",
+            normalization="l2-v1",
+        ),
+        http_client=_http(handler),
+    )
+    adapter.embed(
+        EmbeddingRequest(
+            slot_id="primary",
+            role=EmbeddingRequestRole.QUERY,
+            texts=("query",),
+        )
+    )
+    adapter.close()
+
+    assert observed["task"] == "retrieval.query"
+    assert observed["embedding_type"] == "float"
+    assert observed["normalized"] is True
+
+
 @pytest.mark.parametrize(
     "data",
     (
@@ -393,7 +434,44 @@ def test_reranker_requests_complete_top_n_and_restores_scores(
     adapter.close()
     assert observed["model"] == "jina-reranker-v3.5"
     assert observed["top_n"] == 2
-    assert tuple(item.candidate_id for item in result.items) == ("b", "a")
+    assert tuple(item.candidate_id for item in result.items) == ("b",)
+
+
+def test_reranker_limit_and_ties_preserve_input_rrf_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
+    results = [
+        {"index": 4, "relevance_score": 0.1},
+        {"index": 2, "relevance_score": 0.8},
+        {"index": 0, "relevance_score": 0.8},
+        {"index": 1, "relevance_score": 0.9},
+        {"index": 3, "relevance_score": 0.7},
+    ]
+    adapter = JinaRerankerV35Adapter(
+        JinaRerankerConfig(egress_allowed=True),
+        http_client=_http(
+            lambda _: _json_response({"results": results})
+        ),
+    )
+
+    result = adapter.rerank(
+        RerankRequest(
+            query="query",
+            candidates=tuple(
+                (candidate_id, f"document-{candidate_id}")
+                for candidate_id in ("a", "b", "c", "d", "e")
+            ),
+            limit=3,
+        )
+    )
+    adapter.close()
+
+    assert tuple(item.candidate_id for item in result.items) == (
+        "b",
+        "a",
+        "c",
+    )
 
 
 @pytest.mark.parametrize(
@@ -403,6 +481,14 @@ def test_reranker_requests_complete_top_n_and_restores_scores(
         [
             {"index": 0, "relevance_score": float("nan")},
             {"index": 1, "relevance_score": 0.2},
+        ],
+        [
+            {"index": 0, "relevance_score": 0.5},
+            {"index": 0, "relevance_score": 0.4},
+        ],
+        [
+            {"index": 0, "relevance_score": 0.5},
+            {"index": 2, "relevance_score": 0.4},
         ],
     ),
 )

@@ -624,6 +624,7 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
     from rag_app.composition.builtin_providers import (  # noqa: PLC0415
         register_builtin_provider_components,
     )
+    from rag_app.core.models import ChunkingPolicy  # noqa: PLC0415
 
     registry.register_parser(
         "docx-ooxml-v4",
@@ -642,8 +643,11 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
     )
     registry.register_chunker(
         "docx-structural-v3",
-        lambda: DocxStructuralChunker(),  # noqa: PLW0108
+        lambda config: DocxStructuralChunker(
+            policy=ChunkingPolicy.model_validate(dict(config))
+        ),
         descriptor=DocxStructuralChunker.descriptor,
+        config_model=ChunkingPolicy,
     )
     registry.register_chunker(
         "legacy-section-pack",
@@ -669,6 +673,12 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
             model=str(dict(config)["model"]),
             request_policy_identity=str(
                 dict(config)["request_policy_identity"]
+            ),
+            document_request_policy_identity=str(
+                dict(config)["document_request_policy_identity"]
+            ),
+            query_request_policy_identity=str(
+                dict(config)["query_request_policy_identity"]
             ),
         ),
         descriptor=deterministic_descriptor,

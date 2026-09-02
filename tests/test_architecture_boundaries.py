@@ -255,6 +255,58 @@ def test_core_model_annotations_do_not_leak_any() -> None:
     assert violations == []
 
 
+def test_document_version_ids_use_the_single_core_helper() -> None:
+    """阻止业务代码重新只按内容摘要生成 dver。"""
+    violations: list[str] = []
+    identifiers = _ROOT / "src/rag_app/core/identifiers.py"
+    for path in (_ROOT / "src/rag_app").rglob("*.py"):
+        if path == identifiers:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            if not (
+                isinstance(node.func, ast.Name)
+                and node.func.id == "deterministic_id"
+            ):
+                continue
+            namespace = node.args[0]
+            if (
+                isinstance(namespace, ast.Constant)
+                and namespace.value == "dver"
+            ):
+                violations.append(
+                    f"{path.relative_to(_ROOT).as_posix()}:{node.lineno}"
+                )
+
+    assert violations == []
+
+
+def test_parser_adapters_have_no_blob_store_write_side_effects() -> None:
+    parser_root = _ROOT / "src/rag_app/adapters/parsers"
+    violations: list[str] = []
+    for path in parser_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        relative = path.relative_to(_ROOT)
+        violations.extend(
+            f"{relative}:import:{name}"
+            for name in _import_names(path)
+            if name.endswith("blob_store")
+        )
+        violations.extend(
+            f"{relative}:{node.lineno}:{node.func.attr}"
+            for node in ast.walk(tree)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"put", "put_if_absent", "delete"}
+            )
+        )
+
+    assert violations == []
+
+
 def test_new_architecture_packages_have_no_absolute_import_cycle() -> None:
     files = _new_architecture_files()
     module_by_path = {

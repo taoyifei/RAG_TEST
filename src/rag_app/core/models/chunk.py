@@ -366,6 +366,11 @@ class ChunkingReport(FrozenModel):
     estimated_token_count: StrictInt = Field(default=0, ge=0)
     oversize_violations: StrictInt = Field(default=0, ge=0)
     cross_boundary_violations: StrictInt = Field(default=0, ge=0)
+    cross_section_violations: StrictInt = Field(default=0, ge=0)
+    cross_group_violations: StrictInt = Field(default=0, ge=0)
+    total_citable_source_chars: StrictInt = Field(default=0, ge=0)
+    unique_covered_source_chars: StrictInt = Field(default=0, ge=0)
+    missing_source_chars: StrictInt = Field(default=0, ge=0)
     source_span_coverage: float = Field(default=1.0, ge=0.0, le=1.0)
     duplicated_citable_chars: StrictInt = Field(default=0, ge=0)
     repeated_context_chars: StrictInt = Field(default=0, ge=0)
@@ -377,12 +382,45 @@ class ChunkingReport(FrozenModel):
     represented_list_label_count: StrictInt = Field(default=0, ge=0)
     orphan_note_count: StrictInt = Field(default=0, ge=0)
     orphan_image_count: StrictInt = Field(default=0, ge=0)
+    orphan_relation_count: StrictInt = Field(default=0, ge=0)
+    missing_child_group_count: StrictInt = Field(default=0, ge=0)
+    missing_note_ref_count: StrictInt = Field(default=0, ge=0)
     stable_id_duplicate_count: StrictInt = Field(default=0, ge=0)
     required_embedding_slots: tuple[str, ...] = ()
     max_embedding_tokens_by_slot: tuple[tuple[str, StrictInt], ...] = ()
     chunks_over_limit_by_slot: tuple[tuple[str, StrictInt], ...] = ()
     warnings: tuple[str, ...] = ()
     elapsed_seconds: float = Field(default=0.0, ge=0.0, exclude=True)
+
+    @model_validator(mode="after")
+    def _validate_metrics(self) -> Self:
+        if self.represented_node_count > self.node_count:
+            raise ValueError("represented node 数不能超过 node 总数。")
+        if self.unique_covered_source_chars > self.total_citable_source_chars:
+            raise ValueError("unique covered chars 不能超过来源总字符数。")
+        if self.missing_source_chars != (
+            self.total_citable_source_chars - self.unique_covered_source_chars
+        ):
+            raise ValueError("missing source chars 与覆盖字符数不一致。")
+        expected_coverage = (
+            1.0
+            if self.total_citable_source_chars == 0
+            else self.unique_covered_source_chars
+            / self.total_citable_source_chars
+        )
+        if abs(self.source_span_coverage - expected_coverage) > 1e-12:
+            raise ValueError("source span coverage 与字符计数不一致。")
+        if self.cross_boundary_violations != (
+            self.cross_section_violations + self.cross_group_violations
+        ):
+            raise ValueError("cross boundary 汇总与分项不一致。")
+        if self.represented_table_row_count > self.table_row_count:
+            raise ValueError("represented table row 数不能超过总数。")
+        if self.represented_table_cell_count > self.table_cell_count:
+            raise ValueError("represented table cell 数不能超过总数。")
+        if self.represented_list_label_count > self.list_label_count:
+            raise ValueError("represented list label 数不能超过总数。")
+        return self
 
 
 class ChunkingResult(FrozenModel):

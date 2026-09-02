@@ -60,10 +60,17 @@ class JinaEmbeddingConfig(BaseModel):
     model: str = _JINA_EMBEDDING_MODEL
     dimension: StrictInt = Field(default=1024, gt=0)
     request_policy_identity: str
+    document_request_policy_identity: str | None = None
+    query_request_policy_identity: str | None = None
+    adapter_revision: str = "1"
     api_key_env: str = "JINA_API_KEY"
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
     max_input_tokens: StrictInt = Field(default=32768, gt=0)
+    document_task: str = "retrieval.passage"
+    query_task: str = "retrieval.query"
+    embedding_type: str = "float"
+    normalization: str = "l2-v1"
 
 
 class JinaRerankerConfig(BaseModel):
@@ -75,6 +82,8 @@ class JinaRerankerConfig(BaseModel):
     api_key_env: str = "JINA_API_KEY"
     egress_allowed: bool = False
     max_total_tokens: StrictInt = Field(default=32768, gt=0)
+    max_candidates: StrictInt = Field(default=100, gt=0)
+    request_policy_revision: str = "1"
 
 
 class JinaV5TextEmbeddingAdapter:
@@ -101,6 +110,8 @@ class JinaV5TextEmbeddingAdapter:
             or config.dimension != _DIMENSION
         ):
             raise ValueError("Jina v5 adapter 只接受固定模型和 1024 维。")
+        if config.normalization != "l2-v1":
+            raise ValueError("Jina v5 adapter 只接受 l2-v1 normalization。")
         self._config = config
         self._http = http_client or ProviderHttpClient(_JINA_BASE_URL)
         self._closed = False
@@ -116,6 +127,19 @@ class JinaV5TextEmbeddingAdapter:
                 roles=("document", "query"),
             ),
         )
+
+    @property
+    def config(self) -> JinaEmbeddingConfig:
+        """返回不含凭据值的已解析配置。
+
+        Args:
+            无参数；读取构造时已验证的配置。
+
+        Returns:
+            仅含公开字段和环境变量名的 Jina Embedding 配置。
+
+        """
+        return self._config
 
     @property
     def capabilities(self) -> ComponentCapabilities:
@@ -159,9 +183,9 @@ class JinaV5TextEmbeddingAdapter:
         limits = BatchLimits(max_input_tokens=self._config.max_input_tokens)
         batches = batch_texts(request.texts, limits)
         task = (
-            "retrieval.passage"
+            self._config.document_task
             if request.role is EmbeddingRequestRole.DOCUMENT
-            else "retrieval.query"
+            else self._config.query_task
         )
         vectors: list[tuple[float, ...]] = []
         calls: list[ProviderCall] = []
@@ -174,8 +198,8 @@ class JinaV5TextEmbeddingAdapter:
                         "model": self._config.model,
                         "task": task,
                         "dimensions": self._config.dimension,
-                        "normalized": True,
-                        "embedding_type": "float",
+                        "normalized": self._config.normalization == "l2-v1",
+                        "embedding_type": self._config.embedding_type,
                         "truncate": False,
                         "input": list(batch),
                     },
@@ -228,7 +252,7 @@ class JinaV5TextEmbeddingAdapter:
             role=request.role,
             vectors=tuple(vectors),
             observed_dimension=self._config.dimension,
-            request_policy_identity=self._config.request_policy_identity,
+            request_policy_identity=self._request_policy_identity(request.role),
             calls=tuple(calls),
         )
 
@@ -281,6 +305,20 @@ class JinaV5TextEmbeddingAdapter:
                 details={"role": role.value},
             )
 
+    def _request_policy_identity(
+        self,
+        role: EmbeddingRequestRole,
+    ) -> str:
+        if role is EmbeddingRequestRole.DOCUMENT:
+            return (
+                self._config.document_request_policy_identity
+                or self._config.request_policy_identity
+            )
+        return (
+            self._config.query_request_policy_identity
+            or self._config.request_policy_identity
+        )
+
 
 class JinaRerankerV35Adapter:
     """对完整候选集评分的 Jina v3.5 Reranker adapter。"""
@@ -318,6 +356,19 @@ class JinaRerankerV35Adapter:
         )
 
     @property
+    def config(self) -> JinaRerankerConfig:
+        """返回不含凭据值的已解析配置。
+
+        Args:
+            无参数；读取构造时已验证的配置。
+
+        Returns:
+            仅含公开字段和环境变量名的 Jina Reranker 配置。
+
+        """
+        return self._config
+
+    @property
     def capabilities(self) -> ComponentCapabilities:
         """返回 Jina Reranker 能力。
 
@@ -337,7 +388,7 @@ class JinaRerankerV35Adapter:
             request: 查询、候选 ID/文本和应用层 limit。
 
         Returns:
-            按相关分数排序的完整候选结果。
+            按相关分数排序并截取应用层 limit 的结果。
 
         Raises:
             PolicyDenied: Jina Reranker 出网未授权。
@@ -349,6 +400,12 @@ class JinaRerankerV35Adapter:
             raise PolicyDenied(
                 "Jina Reranker 出网未授权。",
                 stage="provider.jina.reranker.egress",
+            )
+        if len(request.candidates) > self._config.max_candidates:
+            raise ProviderInputTooLarge(
+                "Jina Reranker 候选数超过本地上限。",
+                stage="provider.jina.reranker",
+                details={"candidate_count": len(request.candidates)},
             )
         api_key = os.environ.get(self._config.api_key_env)
         if not api_key:
@@ -474,11 +531,17 @@ def _rerank_items(
     if set(scores) != set(range(len(request.candidates))):
         raise ValueError("Jina rerank 没有完整返回全部候选。")
     ranked = [
-        RerankItem(candidate_id=request.candidates[index][0], score=score)
-        for index, score in scores.items()
+        (
+            index,
+            RerankItem(
+                candidate_id=request.candidates[index][0],
+                score=scores[index],
+            ),
+        )
+        for index in range(len(request.candidates))
     ]
-    ranked.sort(key=lambda item: (-item.score, item.candidate_id))
-    return tuple(ranked)
+    ranked.sort(key=lambda item: -item[1].score)
+    return tuple(item for _, item in ranked[: request.limit])
 
 
 __all__ = [

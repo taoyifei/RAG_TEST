@@ -34,7 +34,7 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_c25267817018619394aa33c1e0002aeb",
+      "node_id": "node_4f6a9388262d422430fbc4f6c967fb26",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -82,7 +82,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_ec3f2d2eb8f44d3f0a8e8e35eb3cdc43",
+      "node_id": "node_e4482130f5acf9a3da3de4c32ca49f77",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -108,7 +108,7 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_27924235f6168aeae38a8dc52527f60f"
+        "node_8a3f2e3206f7702680d6b6df0d6487ba"
       ],
       "image_attributes": null,
       "kind": "comment",
@@ -118,7 +118,7 @@
         "comment_id": "4",
         "timestamp": null
       },
-      "node_id": "node_5b6bbd127c6e9450421f2c9df271cd12",
+      "node_id": "node_ba0fb115290f2e867c16fd76bbad6e46",
       "order": 2,
       "parent_node_id": null,
       "revision_mark": null,
@@ -149,9 +149,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_27924235f6168aeae38a8dc52527f60f",
+      "node_id": "node_8a3f2e3206f7702680d6b6df0d6487ba",
       "order": 0,
-      "parent_node_id": "node_5b6bbd127c6e9450421f2c9df271cd12",
+      "parent_node_id": "node_ba0fb115290f2e867c16fd76bbad6e46",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -187,22 +187,22 @@
       "metadata": [],
       "relationship_id": "comment:0",
       "relationship_type": "document-comment",
-      "source_node_id": "node_c25267817018619394aa33c1e0002aeb",
-      "target_node_id": "node_5b6bbd127c6e9450421f2c9df271cd12"
+      "source_node_id": "node_4f6a9388262d422430fbc4f6c967fb26",
+      "target_node_id": "node_ba0fb115290f2e867c16fd76bbad6e46"
     }
   ],
   "root_node_ids": [
-    "node_c25267817018619394aa33c1e0002aeb",
-    "node_ec3f2d2eb8f44d3f0a8e8e35eb3cdc43",
-    "node_5b6bbd127c6e9450421f2c9df271cd12"
+    "node_4f6a9388262d422430fbc4f6c967fb26",
+    "node_e4482130f5acf9a3da3de4c32ca49f77",
+    "node_ba0fb115290f2e867c16fd76bbad6e46"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_5585349fde8b236e12e05ac188be3c78",
+    "blob_ref": "sha256:78ff38e9c28ee1f105bd773e56ea9c2d1fc576cd93b4bfefedafbe2f22be521a",
     "content_sha256": "78ff38e9c28ee1f105bd773e56ea9c2d1fc576cd93b4bfefedafbe2f22be521a",
     "display_name": "12-comments.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_5585349fde8b236e12e05ac188be3c78",
+    "document_version_id": "dver_4270ac737a69567ad9751a653248dd24",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -211,6 +211,6 @@
   "version": {
     "content_sha256": "78ff38e9c28ee1f105bd773e56ea9c2d1fc576cd93b4bfefedafbe2f22be521a",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_5585349fde8b236e12e05ac188be3c78"
+    "document_version_id": "dver_4270ac737a69567ad9751a653248dd24"
   }
 }

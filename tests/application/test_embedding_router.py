@@ -14,6 +14,11 @@ from rag_app.application.embedding_router import (
     search_cache_key,
     validate_required_slot_coverage,
 )
+from rag_app.application.provider_health import (
+    CircuitKey,
+    LocalUsageBudget,
+    ProviderCircuitBreaker,
+)
 from rag_app.composition.profiles import default_hot_standby_profile
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -30,6 +35,7 @@ from rag_app.core.errors import (
     ProviderUnavailable,
     RagError,
 )
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     CircuitState,
     EmbeddingCoverage,
@@ -38,6 +44,7 @@ from rag_app.core.models import (
     EmbeddingResult,
     EmbeddingSlotIdentity,
     EmbeddingTopology,
+    ProviderFailureCategory,
     ProviderHealth,
     ProviderHealthStatus,
 )
@@ -81,7 +88,11 @@ class _EmbeddingFake:
             role=request.role,
             vectors=tuple(vector for _ in request.texts),
             observed_dimension=self.slot.dimension,
-            request_policy_identity=f"{self.slot.slot_id}-policy",
+            request_policy_identity=canonical_sha256(
+                self.slot.document_request_policy
+                if request.role is EmbeddingRequestRole.DOCUMENT
+                else self.slot.query_request_policy
+            ),
         )
 
     def health(self, *, network: bool = False) -> ProviderHealth:
@@ -101,7 +112,11 @@ class _ZeroEmbeddingFake(_EmbeddingFake):
             role=request.role,
             vectors=tuple(vector for _ in request.texts),
             observed_dimension=self.slot.dimension,
-            request_policy_identity=f"{self.slot.slot_id}-policy",
+            request_policy_identity=canonical_sha256(
+                self.slot.document_request_policy
+                if request.role is EmbeddingRequestRole.DOCUMENT
+                else self.slot.query_request_policy
+            ),
         )
 
 
@@ -343,8 +358,20 @@ def test_request_is_sticky_and_cache_keys_include_slot_and_mode() -> None:
     ) != embedding_cache_key(
         standby_slot, EmbeddingRequestRole.QUERY, "query"
     )
-    assert search_cache_key("fp", "standby", "provider", "query") != (
-        search_cache_key("fp", "standby", "bypass_keep_rrf", "query")
+    common_cache_identity = {
+        "project_id": "project_a",
+        "knowledge_base_id": "kb_a",
+        "active_index_revision_id": "irev_a",
+        "serving_fingerprint": "fp",
+        "selected_embedding_slot": "standby",
+        "query": "query",
+    }
+    assert search_cache_key(
+        **common_cache_identity,
+        rerank_mode="provider",
+    ) != search_cache_key(
+        **common_cache_identity,
+        rerank_mode="bypass_keep_rrf",
     )
 
 
@@ -406,3 +433,125 @@ def test_coverage_validator_rejects_zero_vectors() -> None:
     assert not validate_required_slot_coverage(
         result, _topology(), chunk_count=1
     )
+
+
+def test_embedding_cache_key_is_role_policy_and_revision_sensitive() -> None:
+    primary, standby = _slots()
+    jina_other_task = primary.model_copy(
+        update={"query_request_policy": (("task", "classification"),)}
+    )
+    qwen_other_instruct = standby.model_copy(
+        update={
+            "query_request_policy": (
+                ("query_instruct", "different instruction"),
+            )
+        }
+    )
+
+    assert embedding_cache_key(
+        primary, EmbeddingRequestRole.QUERY, "same"
+    ) != embedding_cache_key(
+        jina_other_task, EmbeddingRequestRole.QUERY, "same"
+    )
+    assert embedding_cache_key(
+        standby, EmbeddingRequestRole.QUERY, "same"
+    ) != embedding_cache_key(
+        qwen_other_instruct, EmbeddingRequestRole.QUERY, "same"
+    )
+    assert embedding_cache_key(
+        primary, EmbeddingRequestRole.QUERY, "same"
+    ) == embedding_cache_key(
+        primary, EmbeddingRequestRole.QUERY, "same"
+    )
+    assert embedding_cache_key(
+        primary, EmbeddingRequestRole.QUERY, "same"
+    ) != embedding_cache_key(
+        primary.model_copy(update={"adapter_revision": "2"}),
+        EmbeddingRequestRole.QUERY,
+        "same",
+    )
+
+
+def test_partial_document_cache_embeds_only_missing_positions() -> None:
+    primary_slot, standby_slot = _slots()
+    chunks = (
+        DocumentEmbeddingInput("chunk_a", "first"),
+        DocumentEmbeddingInput("chunk_b", "second"),
+    )
+    vector = (1.0,) + (0.0,) * (primary_slot.dimension - 1)
+    cache = {
+        embedding_cache_key(
+            primary_slot,
+            EmbeddingRequestRole.DOCUMENT,
+            chunks[0].text,
+        ): vector,
+        **{
+            embedding_cache_key(
+                standby_slot,
+                EmbeddingRequestRole.DOCUMENT,
+                chunk.text,
+            ): vector
+            for chunk in chunks
+        },
+    }
+    primary = _EmbeddingFake(primary_slot)
+    standby = _EmbeddingFake(standby_slot)
+
+    result = DualEmbeddingCoordinator(
+        {"primary": primary, "standby": standby},
+        cache=cache,
+    ).embed_documents_for_slots(chunks, _topology())
+
+    assert primary.requests[0].texts == ("second",)
+    assert standby.requests == []
+    outcome = result.outcome("primary")
+    assert outcome.reason_code == "PARTIAL_CACHE_FILLED"
+    assert outcome.chunk_ids == ("chunk_a", "chunk_b")
+    assert len(outcome.vectors) == 2
+
+
+def test_open_standby_circuit_does_not_consume_budget() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(
+        primary_slot,
+        (
+            ProviderUnavailable("first", stage="test.primary"),
+            ProviderUnavailable("second", stage="test.primary"),
+        ),
+    )
+    standby = _EmbeddingFake(standby_slot)
+    circuit = ProviderCircuitBreaker()
+    standby_key = CircuitKey(
+        standby_slot.provider_id,
+        "embedding",
+        standby_slot.model,
+    )
+    circuit.record_failure(
+        standby_key,
+        ProviderFailureCategory.AUTH_OR_MODEL,
+    )
+    router = EmbeddingFailoverRouter(
+        primary,
+        standby,
+        circuit_breaker=circuit,
+        usage_budget=LocalUsageBudget(),
+    )
+    egress = _egress(
+        aliyun_daily_request_budget=1,
+        aliyun_daily_token_budget=100,
+    )
+
+    with pytest.raises(DenseUnavailable) as captured:
+        router.embed_query_with_failover(
+            QueryEmbeddingRequest("query"), _revision(), egress
+        )
+    assert dict(captured.value.details)["reason_code"] == (
+        "STANDBY_CIRCUIT_OPEN"
+    )
+
+    circuit.reset(standby_key)
+    result = router.embed_query_with_failover(
+        QueryEmbeddingRequest("query"), _revision(), egress
+    )
+    assert result.selected_slot_id == "standby"
+    assert standby.calls == 1

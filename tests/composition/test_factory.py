@@ -2,6 +2,11 @@ from dataclasses import dataclass
 
 import pytest
 
+from rag_app.adapters.providers import (
+    AliyunQwen37EmbeddingAdapter,
+    JinaRerankerV35Adapter,
+    JinaV5TextEmbeddingAdapter,
+)
 from rag_app.application.engine import RagEngine
 from rag_app.composition import (
     ComponentRegistry,
@@ -23,6 +28,8 @@ from rag_app.core.errors import (
     ComponentNotRegistered,
     ConfigurationError,
 )
+from rag_app.core.models import ChunkingPolicy
+from rag_app.core.policies import ParsingPolicy
 
 
 @dataclass
@@ -180,3 +187,66 @@ def test_required_hot_standby_fragment_passes_composition_validation() -> None:
     )
     with build_components(profile, _registry()) as components:
         assert components.embedding_topology.mode == "hot_standby"
+
+
+def test_resolved_policies_drive_fingerprint_and_topology_limits() -> None:
+    offline = default_offline_profile().model_copy(
+        update={
+            "parsing": ParsingPolicy(hidden_text="include"),
+            "chunking": ChunkingPolicy(target_tokens=256),
+        }
+    )
+    with build_components(offline, _registry()) as components:
+        assert components.parsing_policy.hidden_text == "include"
+        assert components.chunking_policy.target_tokens == 256
+        assert components.chunking_policy.required_embedding_slots == (
+            "primary",
+        )
+        assert dict(
+            components.chunking_policy.max_embedding_tokens_by_slot
+        ) == {"primary": 32768}
+        changed_fingerprint = components.index_fingerprint
+
+    with build_components(default_offline_profile(), _registry()) as baseline:
+        assert baseline.index_fingerprint != changed_fingerprint
+
+    with build_components(
+        default_hot_standby_profile(), _registry()
+    ) as hot_standby:
+        assert hot_standby.chunking_policy.required_embedding_slots == (
+            "primary",
+            "standby",
+        )
+        assert dict(
+            hot_standby.chunking_policy.max_embedding_tokens_by_slot
+        ) == {"primary": 32768, "standby": 128000}
+
+
+def test_profile_fields_reach_provider_configs_without_network() -> None:
+    with build_components(
+        default_hot_standby_profile(), _registry()
+    ) as components:
+        primary = components.embedding_primary
+        standby = components.embedding_standby
+        reranker = components.reranker
+        assert isinstance(primary, JinaV5TextEmbeddingAdapter)
+        assert isinstance(standby, AliyunQwen37EmbeddingAdapter)
+        assert isinstance(reranker, JinaRerankerV35Adapter)
+        assert primary.config.model == "jina-embeddings-v5-text-small"
+        assert primary.config.document_task == "retrieval.passage"
+        assert primary.config.query_task == "retrieval.query"
+        assert primary.config.embedding_type == "float"
+        assert primary.config.api_key_env == "JINA_API_KEY"
+        assert standby.config.transport == "dashscope-native"
+        assert standby.config.document_text_type == "document"
+        assert standby.config.query_text_type == "query"
+        assert standby.config.output_type == "dense"
+        assert standby.config.workspace_id_env == (
+            "ALIYUN_MODEL_STUDIO_WORKSPACE_ID"
+        )
+        assert reranker.config.api_key_env == "JINA_API_KEY"
+        assert reranker.config.max_candidates == 100
+        assert components.query_embedding_router is not None
+        assert components.query_embedding_router.descriptor.name == (
+            "query-embedding-router-hot-standby"
+        )

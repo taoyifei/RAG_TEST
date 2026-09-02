@@ -129,6 +129,55 @@ def test_native_request_role_endpoint_and_reordering(
     assert "dashscope-native" in adapter.descriptor.version
 
 
+def test_native_request_uses_configured_env_names_and_query_instruct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    monkeypatch.setenv("CUSTOM_DASHSCOPE_KEY", "custom-key")
+    monkeypatch.setenv("CUSTOM_WORKSPACE", "workspace-1")
+    monkeypatch.setenv("CUSTOM_REGION", "cn-beijing")
+    observed: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(json.loads(request.content))
+        assert request.headers["Authorization"] == "Bearer custom-key"
+        return httpx.Response(
+            200,
+            json={
+                "status_code": 200,
+                "code": "",
+                "output": {
+                    "embeddings": [
+                        {"text_index": 0, "embedding": _unit()}
+                    ]
+                },
+            },
+        )
+
+    adapter = AliyunQwen37EmbeddingAdapter(
+        _config(
+            api_key_env="CUSTOM_DASHSCOPE_KEY",
+            workspace_id_env="CUSTOM_WORKSPACE",
+            region_env="CUSTOM_REGION",
+            query_instruct="custom retrieval instruction",
+        ),
+        http_client=_http(handler),
+    )
+    assert adapter.health().reason_code == "NOT_PROBED"
+    adapter.embed(
+        EmbeddingRequest(
+            slot_id="standby",
+            role=EmbeddingRequestRole.QUERY,
+            texts=("query",),
+        )
+    )
+    adapter.close()
+
+    parameters = observed["parameters"]
+    assert isinstance(parameters, dict)
+    assert parameters["instruct"] == "custom retrieval instruction"
+
+
 @pytest.mark.parametrize(
     "payload",
     (

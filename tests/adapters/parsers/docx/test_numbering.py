@@ -3,7 +3,7 @@ from __future__ import annotations
 # ruff: noqa: E501
 from rag_app.adapters.parsers.docx import DocxOoxmlV4Parser
 from rag_app.core.models import NodeKind, ParseSource
-from tests.adapters.parsers.docx.fixtures import build_package, policy
+from tests.adapters.parsers.docx.fixtures import build_package, context, policy
 
 _NUMBERING = """<?xml version="1.0" encoding="UTF-8"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -41,6 +41,7 @@ def test_multilevel_and_start_override_labels_are_derived() -> None:
             content=content,
         ),
         policy(),
+        context(),
     )
 
     items = [
@@ -72,6 +73,7 @@ def test_interleaved_num_ids_keep_independent_counters() -> None:
             content=content,
         ),
         policy(),
+        context(),
     )
     markers = [
         node.list_attributes.marker
@@ -106,6 +108,7 @@ def test_style_numbering_is_effective_but_manual_prefix_is_plain_text() -> None:
             ),
         ),
         policy(),
+        context(),
     )
 
     assert result.document_ir.nodes[0].kind is NodeKind.LIST_ITEM

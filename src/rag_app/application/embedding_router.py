@@ -14,6 +14,11 @@ from rag_app.application.provider_health import (
     LocalUsageBudget,
     ProviderCircuitBreaker,
 )
+from rag_app.core.capabilities import (
+    ComponentDescriptor,
+    ComponentKind,
+    ProviderMode,
+)
 from rag_app.core.errors import (
     DenseUnavailable,
     IndexCompatibilityError,
@@ -38,6 +43,7 @@ from rag_app.core.models import (
 )
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import EmbeddingPort
+from rag_app.core.tokenization import estimate_tokens
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +93,7 @@ class SlotEmbeddingOutcome:
     """一个 slot 独立成功或失败的文档向量结果。"""
 
     slot_id: str
+    chunk_ids: tuple[str, ...]
     vectors: tuple[tuple[float, ...], ...]
     calls: tuple[ProviderCall, ...]
     retryable: bool
@@ -118,8 +125,15 @@ class SlotEmbeddingBatchResult:
         raise KeyError(slot_id)
 
 
-class EmbeddingFailoverRouter:
+class QueryEmbeddingRouter:
     """Jina primary 优先且失败时只切换到 Qwen standby。"""
+
+    descriptor = ComponentDescriptor(
+        kind=ComponentKind.EMBEDDING_ROUTER,
+        name="query-embedding-router-hot-standby",
+        version="1",
+        mode=ProviderMode.LOCAL,
+    )
 
     def __init__(
         self,
@@ -214,17 +228,18 @@ class EmbeddingFailoverRouter:
             fallback_reason = "PRIMARY_CIRCUIT_OPEN"
         _require_complete_coverage(standby_slot, revision.coverages)
         EgressGuard.require_query_embedding(egress, "aliyun-qwen37")
-        self._budget.reserve(
-            "aliyun-qwen37",
-            "embedding",
-            max(1, len(request.text)),
-            daily_request_limit=egress.aliyun_daily_request_budget,
-            daily_estimated_token_limit=egress.aliyun_daily_token_budget,
-        )
         if not self._circuit.allow_call(standby_key):
             raise _dense_unavailable(
                 tuple(attempted), tuple(calls), "STANDBY_CIRCUIT_OPEN"
             )
+        estimated_tokens = estimate_tokens(request.text)
+        self._budget.reserve(
+            "aliyun-qwen37",
+            "embedding",
+            estimated_tokens,
+            daily_request_limit=egress.aliyun_daily_request_budget,
+            daily_estimated_token_limit=egress.aliyun_daily_token_budget,
+        )
         attempted.append(standby_slot.slot_id)
         try:
             result = self._embed_slot(self._standby, standby_slot, request.text)
@@ -266,6 +281,8 @@ class EmbeddingFailoverRouter:
             result.slot_id != slot.slot_id
             or result.observed_dimension != slot.dimension
             or len(result.vectors) != 1
+            or result.request_policy_identity
+            != _role_policy_identity(slot, EmbeddingRequestRole.QUERY)
         ):
             raise IndexCompatibilityError(
                 "Provider 结果与选定 slot 身份不匹配。",
@@ -298,6 +315,10 @@ class EmbeddingFailoverRouter:
                 self._circuit.snapshot(standby_key),
             ),
         )
+
+
+# P02-P05 类名兼容；新代码使用能表达真实调用职责的名称。
+EmbeddingFailoverRouter = QueryEmbeddingRouter
 
 
 class DualEmbeddingCoordinator:
@@ -346,6 +367,7 @@ class DualEmbeddingCoordinator:
                 outcomes.append(
                     SlotEmbeddingOutcome(
                         slot_id=slot.slot_id,
+                        chunk_ids=(),
                         vectors=(),
                         calls=(),
                         retryable=False,
@@ -366,6 +388,7 @@ class DualEmbeddingCoordinator:
                 outcomes.append(
                     SlotEmbeddingOutcome(
                         slot_id=slot.slot_id,
+                        chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
                         vectors=tuple(
                             vector for vector in cached if vector is not None
                         ),
@@ -375,18 +398,26 @@ class DualEmbeddingCoordinator:
                     )
                 )
                 continue
+            missing_positions = tuple(
+                index
+                for index, vector in enumerate(cached)
+                if vector is None
+            )
             try:
                 result = provider.embed(
                     EmbeddingRequest(
                         slot_id=slot.slot_id,
                         role=EmbeddingRequestRole.DOCUMENT,
-                        texts=tuple(chunk.text for chunk in chunks),
+                        texts=tuple(
+                            chunks[index].text for index in missing_positions
+                        ),
                     )
                 )
             except RagError as error:
                 outcomes.append(
                     SlotEmbeddingOutcome(
                         slot_id=slot.slot_id,
+                        chunk_ids=(),
                         vectors=(),
                         calls=_error_calls(error),
                         retryable=error.retryable,
@@ -395,11 +426,12 @@ class DualEmbeddingCoordinator:
                 )
                 continue
             if not _document_result_matches_slot(
-                result, slot, expected_count=len(chunks)
+                result, slot, expected_count=len(missing_positions)
             ):
                 outcomes.append(
                     SlotEmbeddingOutcome(
                         slot_id=slot.slot_id,
+                        chunk_ids=(),
                         vectors=(),
                         calls=result.calls,
                         retryable=False,
@@ -407,15 +439,25 @@ class DualEmbeddingCoordinator:
                     )
                 )
                 continue
-            for key, vector in zip(keys, result.vectors, strict=True):
-                self._cache[key] = vector
+            for position, vector in zip(
+                missing_positions,
+                result.vectors,
+                strict=True,
+            ):
+                self._cache[keys[position]] = vector
+            merged_vectors = tuple(self._cache[key] for key in keys)
             outcomes.append(
                 SlotEmbeddingOutcome(
                     slot_id=slot.slot_id,
-                    vectors=result.vectors,
+                    chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
+                    vectors=merged_vectors,
                     calls=result.calls,
                     retryable=False,
-                    reason_code="COMPLETE",
+                    reason_code=(
+                        "PARTIAL_CACHE_FILLED"
+                        if len(missing_positions) < len(chunks)
+                        else "COMPLETE"
+                    ),
                 )
             )
         return SlotEmbeddingBatchResult(outcomes=tuple(outcomes))
@@ -442,7 +484,11 @@ def validate_required_slot_coverage(
         return False
     for slot in topology.slots:
         outcome = result.outcome(slot.slot_id)
-        if outcome.reason_code not in {"COMPLETE", "CACHE_HIT"}:
+        if outcome.reason_code not in {
+            "COMPLETE",
+            "CACHE_HIT",
+            "PARTIAL_CACHE_FILLED",
+        }:
             return False
         if len(outcome.vectors) != chunk_count:
             return False
@@ -467,7 +513,21 @@ def _document_result_matches_slot(
         and result.role is EmbeddingRequestRole.DOCUMENT
         and result.observed_dimension == slot.dimension
         and len(result.vectors) == expected_count
+        and result.request_policy_identity
+        == _role_policy_identity(slot, EmbeddingRequestRole.DOCUMENT)
     )
+
+
+def _role_policy_identity(
+    slot: EmbeddingSlotIdentity,
+    role: EmbeddingRequestRole,
+) -> str:
+    policy = (
+        slot.document_request_policy
+        if role is EmbeddingRequestRole.DOCUMENT
+        else slot.query_request_policy
+    )
+    return canonical_sha256(policy)
 
 
 def embedding_cache_key(
@@ -494,24 +554,45 @@ def embedding_cache_key(
             "role": role.value,
             "dimension": slot.dimension,
             "normalization": slot.normalization,
+            "request_policy_identity": canonical_sha256(
+                slot.document_request_policy
+                if role is EmbeddingRequestRole.DOCUMENT
+                else slot.query_request_policy
+            ),
+            "adapter_revision": slot.adapter_revision,
             "text_sha256": hashlib.sha256(text.encode()).hexdigest(),
         }
     )
 
 
-def search_cache_key(
+def search_cache_key(  # noqa: PLR0913
+    *,
+    project_id: str,
+    knowledge_base_id: str,
+    active_index_revision_id: str,
     serving_fingerprint: str,
     selected_embedding_slot: str,
     rerank_mode: str,
     query: str,
+    metadata_filters: object = (),
+    access_filters: object = (),
+    conversation_identity: str | None = None,
+    rewrite_identity: str | None = None,
 ) -> str:
     """生成绑定实际 slot 和重排模式的搜索缓存键。
 
     Args:
+        project_id: 当前项目边界。
+        knowledge_base_id: 当前知识库边界。
+        active_index_revision_id: 当前 active revision。
         serving_fingerprint: 当前 serving 指纹。
         selected_embedding_slot: 请求实际选择的 slot。
         rerank_mode: Provider 或显式旁路模式。
         query: 只进入 SHA-256 的查询原文。
+        metadata_filters: 已规范化的元数据过滤条件。
+        access_filters: 已规范化的访问控制过滤条件。
+        conversation_identity: 适用时的会话身份。
+        rewrite_identity: 适用时的 query rewrite 身份。
 
     Returns:
         规范化 SHA-256 缓存键。
@@ -519,10 +600,17 @@ def search_cache_key(
     """
     return canonical_sha256(
         {
+            "project_id": project_id,
+            "knowledge_base_id": knowledge_base_id,
+            "active_index_revision_id": active_index_revision_id,
             "serving_fingerprint": serving_fingerprint,
             "selected_embedding_slot": selected_embedding_slot,
             "rerank_mode": rerank_mode,
             "query_sha256": hashlib.sha256(query.encode()).hexdigest(),
+            "metadata_filters": metadata_filters,
+            "access_filters": access_filters,
+            "conversation_identity": conversation_identity,
+            "rewrite_identity": rewrite_identity,
         }
     )
 
@@ -640,6 +728,7 @@ __all__ = [
     "DualEmbeddingCoordinator",
     "EmbeddingFailoverRouter",
     "QueryEmbeddingRequest",
+    "QueryEmbeddingRouter",
     "RoutedEmbeddingResult",
     "SlotEmbeddingBatchResult",
     "SlotEmbeddingOutcome",

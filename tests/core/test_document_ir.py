@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -13,13 +14,17 @@ from rag_app.core.models import (
     DocumentSource,
     DocumentVersionRef,
     NodeKind,
+    ParseContext,
+    ParsedArtifact,
     ParseReport,
     ParseResult,
     SourceAnchor,
     StoryKind,
     canonical_document_ir_json,
     text_payload,
+    validate_document_ref_uniqueness,
 )
+from rag_app.core.policies import ParsingPolicy
 
 _DOCUMENT_ID = f"doc_{'1' * 32}"
 _VERSION_ID = f"dver_{'2' * 32}"
@@ -187,3 +192,116 @@ def test_p01_constructor_shape_migrates_with_read_compatibility() -> None:
     assert old_ir.root_node_ids == (old_node.node_id,)
     assert old_ir.source.blob_ref == f"legacy-source:{_CONTENT_HASH}"
     assert result.document_ir.parse_report == report
+
+
+def test_parse_context_is_separate_from_semantic_parsing_policy() -> None:
+    policy = ParsingPolicy(tracked_changes="all_with_markers")
+    first = ParseContext(
+        document=DocumentRef(
+            project_id=f"prj_{'4' * 32}",
+            knowledge_base_id=f"kb_{'5' * 32}",
+            document_id=_DOCUMENT_ID,
+            display_name="first.docx",
+        )
+    )
+    second = ParseContext(
+        document=first.document.model_copy(
+            update={
+                "project_id": f"prj_{'6' * 32}",
+                "knowledge_base_id": f"kb_{'7' * 32}",
+                "document_id": f"doc_{'8' * 32}",
+            }
+        )
+    )
+
+    assert policy == ParsingPolicy(tracked_changes="all_with_markers")
+    assert first != second
+    with pytest.raises(ValidationError):
+        ParsingPolicy.model_validate(
+            {"metadata": {"document_id": _DOCUMENT_ID}}
+        )
+
+
+def test_document_id_is_globally_unique_across_project_and_kb() -> None:
+    original = DocumentRef(
+        project_id=f"prj_{'4' * 32}",
+        knowledge_base_id=f"kb_{'5' * 32}",
+        document_id=_DOCUMENT_ID,
+        display_name="first.docx",
+    )
+    same_scope = original.model_copy(update={"display_name": "renamed.docx"})
+    validate_document_ref_uniqueness((original, same_scope))
+
+    with pytest.raises(ValueError, match="全局唯一"):
+        validate_document_ref_uniqueness(
+            (
+                original,
+                original.model_copy(
+                    update={"project_id": f"prj_{'6' * 32}"}
+                ),
+            )
+        )
+
+
+def test_parsed_artifact_binds_identity_to_content_hash() -> None:
+    content = b"synthetic artifact"
+    digest = hashlib.sha256(content).hexdigest()
+    artifact = ParsedArtifact(
+        artifact_id=f"sha256:{digest}",
+        content_sha256=digest,
+        media_type="application/octet-stream",
+        content=content,
+        role="source_document",
+    )
+
+    assert artifact.content == content
+    with pytest.raises(ValidationError):
+        ParsedArtifact.model_validate(
+            {**artifact.model_dump(), "content": b"changed"}
+        )
+
+
+def test_redacted_ir_uses_metadata_allowlist() -> None:
+    original = _node("a")
+    node = DocumentNode.model_validate(
+        {
+            **original.model_dump(),
+            "metadata": {
+                "external_hyperlink_schemes": ["https"],
+                "unknown_private_text": "do-not-keep",
+            },
+        }
+    )
+    payload = json.loads(
+        canonical_document_ir_json(
+            _ir((node,), (node.node_id,)),
+            include_content=False,
+        )
+    )
+
+    assert payload["nodes"][0]["metadata"] == {
+        "external_hyperlink_schemes": ["https"]
+    }
+    assert "do-not-keep" not in json.dumps(payload)
+
+
+def test_root_order_and_relationship_ids_fail_closed() -> None:
+    first = _node("a", order=0)
+    second = _node("b", order=1)
+    with pytest.raises(ValidationError, match="root_node_ids"):
+        _ir((first, second), (second.node_id, first.node_id))
+
+    base = _ir((first, second), (first.node_id, second.node_id))
+    relationship = DocumentRelationship(
+        relationship_id="same-id",
+        relationship_type="reference",
+        source_node_id=first.node_id,
+        target_node_id=second.node_id,
+    )
+    with pytest.raises(ValidationError, match="relationship ID"):
+        DocumentIR.model_validate(
+            {
+                **base.model_dump(),
+                "relationships": (relationship, relationship),
+            }
+        )

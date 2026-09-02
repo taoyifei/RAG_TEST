@@ -99,8 +99,8 @@ class EmbeddingRouteRequest(Protocol):
         ...
 
 
-class EmbeddingRouterPort(Protocol):
-    """每次请求只选择一个 Dense slot 的同步 Router。"""
+class SlotEligibilityPort(Protocol):
+    """只验证覆盖、schema、circuit 与出网资格的静态端口。"""
 
     @property
     def descriptor(self) -> ComponentDescriptor:
@@ -126,3 +126,7 @@ class EmbeddingRouterPort(Protocol):
 
         """
         ...
+
+
+# P01-P05 导入兼容；新 Composition 与 P07 接线必须使用明确名称。
+EmbeddingRouterPort = SlotEligibilityPort

@@ -42,6 +42,7 @@ class AtomicUnit:
     child_group_ids: tuple[str, ...] = ()
     note_refs: tuple[str, ...] = ()
     table_header_fragments: tuple[SourceFragment, ...] = ()
+    structural_context: str = ""
 
 
 @dataclass(frozen=True, slots=True)

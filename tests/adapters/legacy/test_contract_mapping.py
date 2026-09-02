@@ -68,12 +68,14 @@ def _revision() -> IndexRevisionRef:
 
 
 def test_legacy_chunk_mapping_reports_omitted_file_path() -> None:
-    mapped, warnings = legacy_chunk_to_core(_legacy_chunk())
+    legacy = _legacy_chunk()
+    mapped, warnings = legacy_chunk_to_core(legacy)
     assert mapped.citation_text == "abc"
     assert mapped.embedding_text == "abc"
     assert mapped.source_spans[0].structural_path
     assert "LEGACY_FILE_PATH_OMITTED" in warnings
     assert "renamed.docx" not in repr(mapped)
+    assert mapped.version.document_version_id != legacy.doc_version
 
 
 def test_chunk_v3_can_be_explicitly_mapped_back_to_legacy() -> None:

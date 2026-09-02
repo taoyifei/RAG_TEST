@@ -30,15 +30,15 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_07d7b5771bd0985c6ceb34248770a4e7",
-        "node_a794f6b8be846a6be2a47c3f7b47ad40",
-        "node_85d7130a4dbf23365f6cfe1d1bb9fbd2"
+        "node_b85132e0010fa58fc9105f246444fe7c",
+        "node_4a73b3572b8816664ee6e926e40384ce",
+        "node_6a2e707cfe7f541e551cd975764d2a79"
       ],
       "image_attributes": null,
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_57165bd3379e9648402db23b2ca7ea3e",
+      "node_id": "node_87f31a2301791ef54a3720fb42a4d66d",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -73,7 +73,7 @@
       "child_ids": [],
       "image_attributes": {
         "alt_text": null,
-        "blob_ref": "media:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
+        "blob_ref": "sha256:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "content_sha256": "603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "display_name": "内嵌",
         "height_px": null,
@@ -88,9 +88,9 @@
         "placement": "inline",
         "width_emu": null
       },
-      "node_id": "node_07d7b5771bd0985c6ceb34248770a4e7",
+      "node_id": "node_b85132e0010fa58fc9105f246444fe7c",
       "order": 0,
-      "parent_node_id": "node_57165bd3379e9648402db23b2ca7ea3e",
+      "parent_node_id": "node_87f31a2301791ef54a3720fb42a4d66d",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -118,7 +118,7 @@
       "child_ids": [],
       "image_attributes": {
         "alt_text": null,
-        "blob_ref": "media:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
+        "blob_ref": "sha256:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "content_sha256": "603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "display_name": "浮动",
         "height_px": null,
@@ -133,9 +133,9 @@
         "placement": "anchor",
         "width_emu": null
       },
-      "node_id": "node_a794f6b8be846a6be2a47c3f7b47ad40",
+      "node_id": "node_4a73b3572b8816664ee6e926e40384ce",
       "order": 1,
-      "parent_node_id": "node_57165bd3379e9648402db23b2ca7ea3e",
+      "parent_node_id": "node_87f31a2301791ef54a3720fb42a4d66d",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -163,7 +163,7 @@
       "child_ids": [],
       "image_attributes": {
         "alt_text": "VML",
-        "blob_ref": "media:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
+        "blob_ref": "sha256:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "content_sha256": "603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
         "display_name": "VML",
         "height_px": null,
@@ -178,9 +178,9 @@
         "placement": "vml",
         "width_emu": null
       },
-      "node_id": "node_85d7130a4dbf23365f6cfe1d1bb9fbd2",
+      "node_id": "node_6a2e707cfe7f541e551cd975764d2a79",
       "order": 2,
-      "parent_node_id": "node_57165bd3379e9648402db23b2ca7ea3e",
+      "parent_node_id": "node_87f31a2301791ef54a3720fb42a4d66d",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -221,7 +221,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_8f0ad258582d6627863c2f18a86c3ed6",
+      "node_id": "node_07c308de0c673da8f9f43a7fb37e4c02",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -250,16 +250,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_57165bd3379e9648402db23b2ca7ea3e",
-    "node_8f0ad258582d6627863c2f18a86c3ed6"
+    "node_87f31a2301791ef54a3720fb42a4d66d",
+    "node_07c308de0c673da8f9f43a7fb37e4c02"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_510b523865e040db353390a5f8e842f2",
+    "blob_ref": "sha256:e9d4312bbf45eb5ca17e099e874532d71f0517487d8a3aa95eeeb78b05ce1ca6",
     "content_sha256": "e9d4312bbf45eb5ca17e099e874532d71f0517487d8a3aa95eeeb78b05ce1ca6",
     "display_name": "14-images-inline-anchor-vml.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_510b523865e040db353390a5f8e842f2",
+    "document_version_id": "dver_89ea4527cb5dca6bf23a35580d6847ad",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -268,6 +268,6 @@
   "version": {
     "content_sha256": "e9d4312bbf45eb5ca17e099e874532d71f0517487d8a3aa95eeeb78b05ce1ca6",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_510b523865e040db353390a5f8e842f2"
+    "document_version_id": "dver_89ea4527cb5dca6bf23a35580d6847ad"
   }
 }

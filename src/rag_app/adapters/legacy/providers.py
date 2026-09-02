@@ -17,6 +17,7 @@ from rag_app.core.errors import ProviderUnavailable
 from rag_app.core.models import (
     AnswerDraft,
     EmbeddingRequest,
+    EmbeddingRequestRole,
     EmbeddingResult,
     EmbeddingRouteDecision,
     ProviderHealth,
@@ -39,6 +40,8 @@ class EmbeddingAdapterConfig(BaseModel):
     model: str
     dimension: StrictInt = Field(gt=0)
     request_policy_identity: str
+    document_request_policy_identity: str
+    query_request_policy_identity: str
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
 
@@ -54,13 +57,15 @@ class RerankerAdapterConfig(BaseModel):
 class DeterministicEmbeddingProvider:
     """用 SHA-256 生成可复现非语义向量的离线 Provider。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         slot_id: str,
         dimension: int,
         model: str = "deterministic-sha256-v1",
         request_policy_identity: str = "deterministic-v1",
+        document_request_policy_identity: str | None = None,
+        query_request_policy_identity: str | None = None,
     ) -> None:
         """冻结 slot、维度和策略身份。
 
@@ -69,6 +74,8 @@ class DeterministicEmbeddingProvider:
             dimension: 输出向量维度。
             model: 可审计模型身份。
             request_policy_identity: 文档/查询策略身份。
+            document_request_policy_identity: 文档角色策略身份。
+            query_request_policy_identity: 查询角色策略身份。
 
         Returns:
             无返回值。
@@ -77,6 +84,12 @@ class DeterministicEmbeddingProvider:
         self._slot_id = slot_id
         self._dimension = dimension
         self._policy_identity = request_policy_identity
+        self._document_policy_identity = (
+            document_request_policy_identity or request_policy_identity
+        )
+        self._query_policy_identity = (
+            query_request_policy_identity or request_policy_identity
+        )
         self.descriptor = ComponentDescriptor(
             kind=ComponentKind.EMBEDDING,
             name="deterministic",
@@ -126,7 +139,11 @@ class DeterministicEmbeddingProvider:
             role=request.role,
             vectors=vectors,
             observed_dimension=self._dimension,
-            request_policy_identity=self._policy_identity,
+            request_policy_identity=(
+                self._document_policy_identity
+                if request.role is EmbeddingRequestRole.DOCUMENT
+                else self._query_policy_identity
+            ),
         )
 
     def health(self, *, network: bool = False) -> ProviderHealth:

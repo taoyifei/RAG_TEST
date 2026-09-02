@@ -22,15 +22,16 @@ from rag_app.core.capabilities import (
     ParserCapabilities,
     ProviderMode,
 )
-from rag_app.core.errors import ConfigurationError, InvalidDocument
-from rag_app.core.identifiers import canonical_sha256, deterministic_id
+from rag_app.core.errors import InvalidDocument
+from rag_app.core.identifiers import canonical_sha256, document_version_id
 from rag_app.core.models import (
     DocumentIR,
     DocumentNode,
-    DocumentRef,
     DocumentSource,
     DocumentVersionRef,
     NodeKind,
+    ParseContext,
+    ParsedArtifact,
     ParseIssue,
     ParseReport,
     ParseResult,
@@ -41,7 +42,6 @@ from rag_app.core.policies import (
     ExternalRelationshipsPolicy,
     ParsingPolicy,
 )
-from rag_app.core.ports.blob_store import BlobStorePort, BlobWriteRequest
 
 _DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument."
@@ -74,44 +74,38 @@ class DocxOoxmlV4Parser:
 
     def __init__(
         self,
-        blob_store: BlobStorePort | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """创建 parser 和可选宿主 BlobStore。
+        """创建无持久化副作用的 parser。
 
         Args:
-            blob_store: 保存源文档和媒体的受控 Store。
             clock: 用于 timeout 与报告的可注入单调时钟。
 
         Returns:
             无返回值。
 
         """
-        self._owns_blob_store = blob_store is None
-        if blob_store is None:
-            from rag_app.adapters.legacy.stores import (  # noqa: PLC0415
-                InMemoryBlobStore,
-            )
-
-            self._blob_store: BlobStorePort = InMemoryBlobStore()
-        else:
-            self._blob_store = blob_store
         self._clock = clock
 
-    def parse(self, source: ParseSource, policy: ParsingPolicy) -> ParseResult:
+    def parse(
+        self,
+        source: ParseSource,
+        policy: ParsingPolicy,
+        context: ParseContext,
+    ) -> ParseResult:
         """安全解析一个 DOCX 字节源。
 
         Args:
             source: 受控字节、显示名和扩展名。
-            policy: 资源、结构和稳定逻辑身份策略。
+            policy: 仅包含资源和解析语义的策略。
+            context: 不进入策略指纹的逻辑文档身份。
 
         Returns:
             Document IR 和同一 ParseReport。
 
         Raises:
-            ConfigurationError: 缺少 project、kb 或 document 逻辑 ID。
-            InvalidDocument: package、安全边界或 Blob 写入失败。
+            InvalidDocument: package 或安全边界无效。
 
         """
         if source.extension.casefold() != ".docx":
@@ -119,10 +113,10 @@ class DocxOoxmlV4Parser:
                 "DOCX v4 仅接受 .docx 扩展名。",
                 stage="docx-ooxml-v4.input",
             )
-        identity = _policy_identity(policy)
+        document = context.document
         started_at = self._clock()
         content_sha256 = hashlib.sha256(source.content).hexdigest()
-        version_id = deterministic_id("dver", content_sha256)
+        version_id = document_version_id(document.document_id, content_sha256)
         issues = IssueCollector()
         builder = IrNodeBuilder(version_id)
         with DocxPackage(
@@ -195,26 +189,23 @@ class DocxOoxmlV4Parser:
                     ],
                 }
             )
-            document_blob_id = f"document:{version_id}"
+            source_artifact_id = f"sha256:{content_sha256}"
             document_ir = DocumentIR(
                 source=DocumentSource(
-                    document_id=identity["document_id"],
+                    document_id=document.document_id,
                     document_version_id=version_id,
                     display_name=source.display_name,
                     media_type=_DOCX_MEDIA_TYPE,
                     extension=".docx",
                     content_sha256=content_sha256,
                     size_bytes=len(source.content),
-                    blob_ref=document_blob_id,
+                    blob_ref=source_artifact_id,
                 ),
-                document=DocumentRef(
-                    project_id=identity["project_id"],
-                    knowledge_base_id=identity["knowledge_base_id"],
-                    document_id=identity["document_id"],
-                    display_name=source.display_name,
+                document=document.model_copy(
+                    update={"display_name": source.display_name}
                 ),
                 version=DocumentVersionRef(
-                    document_id=identity["document_id"],
+                    document_id=document.document_id,
                     document_version_id=version_id,
                     content_sha256=content_sha256,
                 ),
@@ -227,56 +218,33 @@ class DocxOoxmlV4Parser:
                     ("parsing_policy_id", policy.policy_id),
                 ),
             )
-            writes = (
-                BlobWriteRequest(
-                    blob_id=document_blob_id,
+            artifacts = (
+                ParsedArtifact(
+                    artifact_id=source_artifact_id,
                     content_sha256=content_sha256,
                     media_type=_DOCX_MEDIA_TYPE,
                     content=source.content,
+                    role="source_document",
                 ),
-                *block_parser.blob_writes.values(),
+                *block_parser.artifacts.values(),
             )
-        self._commit_blobs(writes)
-        return ParseResult(document_ir=document_ir, report=report)
+        return ParseResult(
+            document_ir=document_ir,
+            report=report,
+            artifacts=artifacts,
+        )
 
     def close(self) -> None:
-        """释放 parser 自己创建的 BlobStore。
+        """保留统一生命周期接口；当前 parser 没有资源。
 
         Args:
-            无参数；宿主注入 Store 的生命周期仍归宿主。
+            无参数。
 
         Returns:
             无返回值。
 
         """
-        if self._owns_blob_store:
-            self._blob_store.close()
-
-    def _commit_blobs(self, writes: tuple[BlobWriteRequest, ...]) -> None:
-        committed: list[str] = []
-        try:
-            for request in writes:
-                self._blob_store.put(request)
-                committed.append(request.blob_id)
-        except Exception as error:
-            for blob_id in reversed(committed):
-                self._blob_store.delete(blob_id)
-            raise InvalidDocument(
-                "DOCX v4 Blob 写入失败并已清理。",
-                stage="docx-ooxml-v4.blob",
-                details={"error_type": type(error).__name__},
-            ) from None
-
-
-def _policy_identity(policy: ParsingPolicy) -> dict[str, str]:
-    metadata = dict(policy.metadata)
-    required = ("project_id", "knowledge_base_id", "document_id")
-    if any(not isinstance(metadata.get(key), str) for key in required):
-        raise ConfigurationError(
-            "ParsingPolicy 必须显式提供 project/kb/document 逻辑 ID。",
-            stage="docx-ooxml-v4.identity",
-        )
-    return {key: str(metadata[key]) for key in required}
+        return None
 
 
 def _validate_external_relationships(

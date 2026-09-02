@@ -10,6 +10,7 @@ from rag_app.core.models import (
     ChunkingPolicy,
     DocumentIR,
     DocumentNode,
+    NodeKind,
     SourceSpan,
     SourceSpanKind,
 )
@@ -39,6 +40,7 @@ def validate_chunks(
     """
     nodes = {node.node_id: node for node in document_ir.nodes}
     by_id = {chunk.chunk_id: chunk for chunk in chunks}
+    group_ids = {chunk.neighbor_group_id for chunk in chunks}
     if len(by_id) != len(chunks):
         raise ValueError("稳定 chunk ID 禁止重复。")
     hard_limit = min(policy.hard_max_tokens, policy.effective_embedding_max)
@@ -52,6 +54,14 @@ def validate_chunks(
                 "Chunk tokenizer identity 与最终 validator 不一致。"
             )
         _validate_sources(chunk, nodes)
+        if _crosses_sections(chunk, nodes):
+            raise ValueError("Chunk 禁止跨 Section 边界。")
+        if _crosses_source_groups(chunk, nodes):
+            raise ValueError("Chunk 禁止跨来源 Group 边界。")
+        if any(group_id not in group_ids for group_id in chunk.child_group_ids):
+            raise ValueError("child group ref 指向不存在的 neighbor group。")
+        if any(note_id not in nodes for note_id in chunk.note_refs):
+            raise ValueError("note ref 指向不存在的 Document IR 节点。")
         _validate_link(chunk, by_id, previous=True)
         _validate_link(chunk, by_id, previous=False)
     _validate_no_neighbor_cycles(chunks, by_id)
@@ -97,14 +107,28 @@ def _validate_sources(
             continue
         if span.node_id not in nodes:
             raise ValueError("source span 指向 Document IR 之外的节点。")
-        if span.span_type is SourceSpanKind.DERIVED_NUMBERING:
-            continue
         node = nodes[span.node_id]
+        if span.source_anchor != node.anchor:
+            raise ValueError("source span 的 SourceAnchor 与目标节点不一致。")
+        if span.span_type is SourceSpanKind.DERIVED_NUMBERING:
+            marker = (
+                node.list_attributes.marker
+                if node.list_attributes is not None
+                else None
+            )
+            observed = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if not marker or observed != marker:
+                raise ValueError("DERIVED_NUMBERING 必须匹配列表 marker。")
+            continue
         source_text = _node_source_text(node)
         source_start = span.source_start_char
         source_end = span.source_end_char
         if source_start is None or source_end is None:
             raise ValueError("原文来源范围缺失。")
+        if source_end > len(source_text):
+            raise ValueError("source span 范围超出目标节点 exact_text。")
         expected = source_text[source_start:source_end]
         observed = chunk.citation_text[
             span.chunk_start_char : span.chunk_end_char
@@ -123,6 +147,52 @@ def _node_source_text(node: DocumentNode) -> str:
             or ""
         )
     return ""
+
+
+def _crosses_sections(
+    chunk: Chunk,
+    nodes: dict[str, DocumentNode],
+) -> bool:
+    sections = {
+        nodes[span.node_id].anchor.section_index
+        for span in chunk.source_spans
+        if span.node_id in nodes
+        and nodes[span.node_id].anchor.section_index is not None
+    }
+    return len(sections) > 1
+
+
+def _crosses_source_groups(
+    chunk: Chunk,
+    nodes: dict[str, DocumentNode],
+) -> bool:
+    groups = {
+        _source_group(nodes[span.node_id], nodes)
+        for span in chunk.source_spans
+        if span.node_id in nodes
+    }
+    return len(groups) > 1
+
+
+def _source_group(
+    node: DocumentNode,
+    nodes: dict[str, DocumentNode],
+) -> tuple[str, str, str]:
+    current = node
+    while current.parent_node_id is not None:
+        parent = nodes[current.parent_node_id]
+        if parent.kind in {NodeKind.TABLE, NodeKind.NOTE, NodeKind.COMMENT}:
+            return (
+                node.anchor.part_uri,
+                node.anchor.story_kind.value,
+                parent.node_id,
+            )
+        current = parent
+    return (
+        node.anchor.part_uri,
+        node.anchor.story_kind.value,
+        "root",
+    )
 
 
 def _validate_link(

@@ -19,12 +19,13 @@ from pydantic import (
 
 from rag_app.core.errors import ConfigurationError
 from rag_app.core.models import (
+    ChunkingPolicy,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
 )
 from rag_app.core.models.common import JsonObject, freeze_json_object
-from rag_app.core.policies import EgressPolicy
+from rag_app.core.policies import EgressPolicy, ParsingPolicy
 
 _QUERY_INSTRUCTION = (
     "Given a user query, retrieve the most relevant passages from enterprise "
@@ -49,8 +50,15 @@ class EmbeddingSlotProfile(_ProfileModel):
     provider: str = Field(pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
     model: str = Field(min_length=1)
     dimension: StrictInt = Field(gt=0)
+    max_input_tokens: StrictInt = Field(default=32768, gt=0)
     vector_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     normalization: str = Field(default="l2-v1", min_length=1)
+    adapter_revision: str = Field(default="1", min_length=1, max_length=80)
+    request_policy_revision: str = Field(
+        default="1",
+        min_length=1,
+        max_length=80,
+    )
     document_task: str | None = None
     query_task: str | None = None
     embedding_type: str | None = None
@@ -84,6 +92,50 @@ class EmbeddingSlotProfile(_ProfileModel):
     def _freeze_policies(cls, value: object) -> JsonObject:
         return freeze_json_object(value)
 
+    @model_validator(mode="after")
+    def _validate_supported_provider_contract(self) -> Self:
+        supported = {
+            "jina-embedding": {
+                "model": "jina-embeddings-v5-text-small",
+                "dimension": 1024,
+                "normalization": "l2-v1",
+                "document_task": (None, "retrieval.passage"),
+                "query_task": (None, "retrieval.query"),
+                "embedding_type": (None, "float"),
+                "transport": (None,),
+                "document_text_type": (None,),
+                "query_text_type": (None,),
+                "query_instruct": (None,),
+                "output_type": (None,),
+                "workspace_id_env": (None,),
+                "region": (None,),
+                "region_env": (None,),
+            },
+            "aliyun-qwen37-embedding": {
+                "model": "qwen3.7-text-embedding",
+                "dimension": 1024,
+                "normalization": "l2-v1",
+                "document_task": (None,),
+                "query_task": (None,),
+                "embedding_type": (None,),
+                "transport": (None, "dashscope-native"),
+                "document_text_type": (None, "document"),
+                "query_text_type": (None, "query"),
+                "output_type": (None, "dense"),
+                "region": (None, "cn-beijing"),
+            },
+        }.get(self.provider)
+        if supported is None:
+            return self
+        for field_name, expected in supported.items():
+            value = getattr(self, field_name)
+            allowed = expected if isinstance(expected, tuple) else (expected,)
+            if value not in allowed:
+                raise ValueError(
+                    f"{self.provider} 不支持 {field_name}={value!r}。"
+                )
+        return self
+
     def to_identity(self, role: EmbeddingSlotRole) -> EmbeddingSlotIdentity:
         """转换为不含 secret 的 Core slot 身份。
 
@@ -115,6 +167,10 @@ class EmbeddingSlotProfile(_ProfileModel):
         if self.output_type is not None:
             document_policy["output_type"] = self.output_type
             query_policy["output_type"] = self.output_type
+        document_policy["request_policy_revision"] = (
+            self.request_policy_revision
+        )
+        query_policy["request_policy_revision"] = self.request_policy_revision
         return EmbeddingSlotIdentity(
             slot_id=self.slot_id,
             role=role,
@@ -122,6 +178,8 @@ class EmbeddingSlotProfile(_ProfileModel):
             model=self.model,
             vector_name=self.vector_name,
             dimension=self.dimension,
+            max_input_tokens=self.max_input_tokens,
+            adapter_revision=self.adapter_revision,
             document_request_policy=freeze_json_object(document_policy),
             query_request_policy=freeze_json_object(query_policy),
             normalization=self.normalization,
@@ -177,10 +235,26 @@ class RerankerProfile(_ProfileModel):
     provider: str = Field(pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
     model: str = Field(min_length=1)
     on_unavailable: str = Field(pattern=r"^bypass_keep_rrf$")
-    api_key_env: str | None = Field(
-        default=None,
+    api_key_env: str = Field(
+        default="JINA_API_KEY",
         pattern=r"^[A-Z][A-Z0-9_]{2,127}$",
     )
+    max_total_tokens: StrictInt = Field(default=32768, gt=0)
+    max_candidates: StrictInt = Field(default=100, gt=0)
+    request_policy_revision: str = Field(
+        default="1",
+        min_length=1,
+        max_length=80,
+    )
+
+    @model_validator(mode="after")
+    def _validate_supported_provider_contract(self) -> Self:
+        if (
+            self.provider == "jina-reranker"
+            and self.model != "jina-reranker-v3.5"
+        ):
+            raise ValueError("Jina Reranker 只支持 jina-reranker-v3.5。")
+        return self
 
 
 class ComponentsProfile(_ProfileModel):
@@ -220,6 +294,8 @@ class RagProfile(_ProfileModel):
         pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
     )
     components: ComponentsProfile = ComponentsProfile()
+    parsing: ParsingPolicy = ParsingPolicy()
+    chunking: ChunkingPolicy = ChunkingPolicy()
     security: EgressPolicy = EgressPolicy()
 
     def redacted_dict(self) -> dict[str, JsonValue]:
@@ -321,6 +397,7 @@ def default_hot_standby_profile() -> RagProfile:
         provider="jina-embedding",
         model="jina-embeddings-v5-text-small",
         dimension=1024,
+        max_input_tokens=32768,
         vector_name="dense_primary",
         normalization="l2-v1",
         document_task="retrieval.passage",
@@ -333,6 +410,7 @@ def default_hot_standby_profile() -> RagProfile:
         provider="aliyun-qwen37-embedding",
         model="qwen3.7-text-embedding",
         dimension=1024,
+        max_input_tokens=128000,
         vector_name="dense_standby",
         normalization="l2-v1",
         transport="dashscope-native",
