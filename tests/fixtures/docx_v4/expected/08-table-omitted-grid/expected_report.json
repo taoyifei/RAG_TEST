@@ -1,0 +1,34 @@
+{
+  "issues": [
+    {
+      "action": "physical_cells_preserved",
+      "anchor": null,
+      "code": "DOCX_TABLE_GRID_MISSING",
+      "count": 1,
+      "metadata": [],
+      "safe_message": "表格缺少 tblGrid，保留物理单元格。",
+      "severity": "warning"
+    }
+  ],
+  "media_count": 0,
+  "node_count": 5,
+  "parser_id": "docx-ooxml-v4",
+  "parser_version": "4.0.0",
+  "part_count": 5,
+  "relationship_count": 2,
+  "represented_visible_text_nodes": 1,
+  "revision_count": 0,
+  "schema_version": "1",
+  "story_counts": [
+    [
+      "body",
+      5
+    ]
+  ],
+  "unsupported_with_media": 0,
+  "unsupported_with_text": 0,
+  "visible_text_nodes": 1,
+  "warnings": [
+    "DOCX_TABLE_GRID_MISSING"
+  ]
+}

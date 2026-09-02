@@ -26,6 +26,7 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
     register_builtin_components(registry)
     names = {item.name for item in registry.list_components()}
     assert {
+        "docx-ooxml-v4",
         "legacy-docx",
         "legacy-docx-ir",
         "jina-embedding",
@@ -34,6 +35,17 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
         "embedding-router-hot-standby",
         "embedding-router-single",
     }.issubset(names)
+
+
+def test_docx_v4_parser_is_explicitly_registered() -> None:
+    registry = ComponentRegistry()
+    register_builtin_components(registry)
+
+    parser = registry.get_parser("docx-ooxml-v4")
+
+    assert parser.descriptor.name == "docx-ooxml-v4"
+    assert parser.parser_capabilities.supports_tables is True
+    assert parser.parser_capabilities.supports_revisions is True
 
 
 def test_legacy_parser_registration_is_a_trusted_compatibility_alias(

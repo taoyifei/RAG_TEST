@@ -1,0 +1,232 @@
+{
+  "document": {
+    "display_name": "03-numbering-restart-override.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:e33bdbedbefc464f41c970db056be4f873fd1ac733e22d58d47e725a804ba846"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 1,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 0,
+        "marker": "1. ",
+        "ordered": true,
+        "ordinal": 1,
+        "restart_group": "num:7:generation:1"
+      },
+      "metadata": {
+        "num_id": 7
+      },
+      "node_id": "node_a9d89c13fb391506d05ae34fc9d1c8aa",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "51a75f4634dfa8598a0a1436da0b7764830edd1f3a97661222387da2fe2b38d1",
+        "exact_text": "一",
+        "semantic_sha256": "51a75f4634dfa8598a0a1436da0b7764830edd1f3a97661222387da2fe2b38d1",
+        "semantic_text": "一"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": 1,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 1,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 0,
+        "marker": "2. ",
+        "ordered": true,
+        "ordinal": 2,
+        "restart_group": "num:7:generation:1"
+      },
+      "metadata": {
+        "num_id": 7
+      },
+      "node_id": "node_29b794694f141c26e873442aa132e5d5",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "084b42f6e95e4e6545e236975ade8e205383fefe1021c9d793f758c21f9377dc",
+        "exact_text": "二",
+        "semantic_sha256": "084b42f6e95e4e6545e236975ade8e205383fefe1021c9d793f758c21f9377dc",
+        "semantic_text": "二"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 2,
+        "paragraph_index": 2,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:2"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 0,
+        "marker": "5. ",
+        "ordered": true,
+        "ordinal": 5,
+        "restart_group": "num:8:generation:1"
+      },
+      "metadata": {
+        "num_id": 8
+      },
+      "node_id": "node_80dc769f2fae30eebd009ea8ab5d05ef",
+      "order": 2,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "562822892865b3778a9ef705f6522e01a32bba11e6dad7ed4e1e99ab7cb534aa",
+        "exact_text": "重启",
+        "semantic_sha256": "562822892865b3778a9ef705f6522e01a32bba11e6dad7ed4e1e99ab7cb534aa",
+        "semantic_text": "重启"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 3,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:3"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_0ec1d505c41ccbd8422b0384128c94d0",
+      "order": 3,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 4,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 6,
+    "relationship_count": 3,
+    "represented_visible_text_nodes": 3,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 4
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 3,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_a9d89c13fb391506d05ae34fc9d1c8aa",
+    "node_29b794694f141c26e873442aa132e5d5",
+    "node_80dc769f2fae30eebd009ea8ab5d05ef",
+    "node_0ec1d505c41ccbd8422b0384128c94d0"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_fac759628f400c43efd0beac55b21ebd",
+    "content_sha256": "a808a4dd86a79f572a4ebe4042a8f090b4829477a6f5eff1bb041d5ff1acfda6",
+    "display_name": "03-numbering-restart-override.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_fac759628f400c43efd0beac55b21ebd",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 14039
+  },
+  "version": {
+    "content_sha256": "a808a4dd86a79f572a4ebe4042a8f090b4829477a6f5eff1bb041d5ff1acfda6",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_fac759628f400c43efd0beac55b21ebd"
+  }
+}

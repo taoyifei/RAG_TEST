@@ -1,0 +1,337 @@
+{
+  "document": {
+    "display_name": "06-table-basic.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:f69cc9acdc1ec91a65cf305f68dbcfb720fb39b1cc4489cae42da4faa04b544c"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_d7014e2bebe26d6650103dc1f1127459"
+      ],
+      "image_attributes": null,
+      "kind": "table",
+      "list_attributes": null,
+      "metadata": {
+        "grid_columns": 2,
+        "nested_depth": 0
+      },
+      "node_id": "node_32b51763e82727007c0bd9913c410a99",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_9d671f56623c702fe6264d765984d74c",
+        "node_554127b1fd7f186ca4c886d7d81162b4"
+      ],
+      "image_attributes": null,
+      "kind": "table_row",
+      "list_attributes": null,
+      "metadata": {
+        "grid_after": 0,
+        "grid_before": 0,
+        "repeated_header": false
+      },
+      "node_id": "node_d7014e2bebe26d6650103dc1f1127459",
+      "order": 0,
+      "parent_node_id": "node_32b51763e82727007c0bd9913c410a99",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": 0,
+        "ordinal": 2,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": {
+        "column_index": 0,
+        "column_span": 1,
+        "row_index": 0,
+        "row_span": 1
+      },
+      "child_ids": [
+        "node_3b3e27c863b1651595818657008ec56c"
+      ],
+      "image_attributes": null,
+      "kind": "table_cell",
+      "list_attributes": null,
+      "metadata": {
+        "physical_cell_index": 0,
+        "vertical_merge": null
+      },
+      "node_id": "node_9d671f56623c702fe6264d765984d74c",
+      "order": 0,
+      "parent_node_id": "node_d7014e2bebe26d6650103dc1f1127459",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 3,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_3b3e27c863b1651595818657008ec56c",
+      "order": 0,
+      "parent_node_id": "node_9d671f56623c702fe6264d765984d74c",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "16a36e86f6fed5d465ff332511a0ce1a863b55d364b25a7cdaa25db19abf9648",
+        "exact_text": "A1",
+        "semantic_sha256": "16a36e86f6fed5d465ff332511a0ce1a863b55d364b25a7cdaa25db19abf9648",
+        "semantic_text": "A1"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": 1,
+        "ordinal": 4,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:1"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": {
+        "column_index": 1,
+        "column_span": 1,
+        "row_index": 0,
+        "row_span": 1
+      },
+      "child_ids": [
+        "node_ec5a2e047b295e2d51957318823e072a"
+      ],
+      "image_attributes": null,
+      "kind": "table_cell",
+      "list_attributes": null,
+      "metadata": {
+        "physical_cell_index": 1,
+        "vertical_merge": null
+      },
+      "node_id": "node_554127b1fd7f186ca4c886d7d81162b4",
+      "order": 1,
+      "parent_node_id": "node_d7014e2bebe26d6650103dc1f1127459",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 5,
+        "paragraph_index": 1,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:1",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_ec5a2e047b295e2d51957318823e072a",
+      "order": 0,
+      "parent_node_id": "node_554127b1fd7f186ca4c886d7d81162b4",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "5b950e77941d01cdf246d00b1ece546bc95234b77d98b44c9187e2733afa696a",
+        "exact_text": "B1",
+        "semantic_sha256": "5b950e77941d01cdf246d00b1ece546bc95234b77d98b44c9187e2733afa696a",
+        "semantic_text": "B1"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 6,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_71d39743754010045b9edfdbeaa7f1f9",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 7,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 5,
+    "relationship_count": 2,
+    "represented_visible_text_nodes": 2,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 7
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 2,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_32b51763e82727007c0bd9913c410a99",
+    "node_71d39743754010045b9edfdbeaa7f1f9"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_e80cd7a2f48147d9551d62253d811b4f",
+    "content_sha256": "b0b1296f7a0f97499236bdb36b5d353be4fd63a1a08607b32617984b830219a9",
+    "display_name": "06-table-basic.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_e80cd7a2f48147d9551d62253d811b4f",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 13598
+  },
+  "version": {
+    "content_sha256": "b0b1296f7a0f97499236bdb36b5d353be4fd63a1a08607b32617984b830219a9",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_e80cd7a2f48147d9551d62253d811b4f"
+  }
+}

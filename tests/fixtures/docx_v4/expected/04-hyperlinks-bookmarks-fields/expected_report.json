@@ -1,0 +1,41 @@
+{
+  "issues": [
+    {
+      "action": "metadata_only_no_fetch",
+      "anchor": null,
+      "code": "DOCX_EXTERNAL_RELATIONSHIP_METADATA_ONLY",
+      "count": 1,
+      "metadata": [
+        [
+          "schemes",
+          [
+            "https"
+          ]
+        ]
+      ],
+      "safe_message": "外部关系仅记录协议类型，未访问目标。",
+      "severity": "warning"
+    }
+  ],
+  "media_count": 0,
+  "node_count": 3,
+  "parser_id": "docx-ooxml-v4",
+  "parser_version": "4.0.0",
+  "part_count": 5,
+  "relationship_count": 3,
+  "represented_visible_text_nodes": 2,
+  "revision_count": 0,
+  "schema_version": "1",
+  "story_counts": [
+    [
+      "body",
+      3
+    ]
+  ],
+  "unsupported_with_media": 0,
+  "unsupported_with_text": 0,
+  "visible_text_nodes": 2,
+  "warnings": [
+    "DOCX_EXTERNAL_RELATIONSHIP_METADATA_ONLY"
+  ]
+}

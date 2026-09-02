@@ -92,6 +92,7 @@ def test_ir_round_trip_is_canonical_and_content_can_be_redacted() -> None:
     assert json.loads(rendered)["schema_version"] == "1"
     assert "abc" not in redacted
     assert "renamed.docx" in rendered
+    assert "renamed.docx" not in redacted
     assert "PosixPath" not in rendered
     assert "binary_data" not in rendered
 

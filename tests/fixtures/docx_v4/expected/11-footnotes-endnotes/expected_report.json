@@ -1,0 +1,30 @@
+{
+  "issues": [],
+  "media_count": 0,
+  "node_count": 6,
+  "parser_id": "docx-ooxml-v4",
+  "parser_version": "4.0.0",
+  "part_count": 7,
+  "relationship_count": 4,
+  "represented_visible_text_nodes": 3,
+  "revision_count": 0,
+  "schema_version": "1",
+  "story_counts": [
+    [
+      "body",
+      2
+    ],
+    [
+      "endnote",
+      2
+    ],
+    [
+      "footnote",
+      2
+    ]
+  ],
+  "unsupported_with_media": 0,
+  "unsupported_with_text": 0,
+  "visible_text_nodes": 3,
+  "warnings": []
+}

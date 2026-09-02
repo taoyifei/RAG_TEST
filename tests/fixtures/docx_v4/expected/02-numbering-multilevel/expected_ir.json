@@ -1,0 +1,187 @@
+{
+  "document": {
+    "display_name": "02-numbering-multilevel.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:e1e9e181c66a1ca19bbb11d4b379d8a708635fac3ebef00afa9182a2c0d432af"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 0,
+        "marker": "1. ",
+        "ordered": true,
+        "ordinal": 1,
+        "restart_group": "num:7:generation:1"
+      },
+      "metadata": {
+        "num_id": 7
+      },
+      "node_id": "node_045ca3c88382a7d241b8b0d98e32585d",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "28b83c628f5b7f6e49c26802f6b009f3026dbdd8479c2c37de8fc382b925eae4",
+        "exact_text": "一级",
+        "semantic_sha256": "28b83c628f5b7f6e49c26802f6b009f3026dbdd8479c2c37de8fc382b925eae4",
+        "semantic_text": "一级"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": 1,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 1,
+        "marker": "1.a)\t",
+        "ordered": true,
+        "ordinal": 1,
+        "restart_group": "num:7:generation:2"
+      },
+      "metadata": {
+        "num_id": 7
+      },
+      "node_id": "node_bf991bbfccd91fba2ff47f19cbd0af66",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "3393c1261d42611d90a914df00e243c985b46218ac6021422de02f63858bb45b",
+        "exact_text": "二级",
+        "semantic_sha256": "3393c1261d42611d90a914df00e243c985b46218ac6021422de02f63858bb45b",
+        "semantic_text": "二级"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 2,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:2"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_87239452259780e68925c87bca76976d",
+      "order": 2,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 3,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 6,
+    "relationship_count": 3,
+    "represented_visible_text_nodes": 2,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 3
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 2,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_045ca3c88382a7d241b8b0d98e32585d",
+    "node_bf991bbfccd91fba2ff47f19cbd0af66",
+    "node_87239452259780e68925c87bca76976d"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_5c4b7c99cea0151b83a7ba1c57d2c9c7",
+    "content_sha256": "1a1879aa24aa8a975c28d86fdf6a8b5b126e58bfd4ba9354c52eebd9083b8bb3",
+    "display_name": "02-numbering-multilevel.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_5c4b7c99cea0151b83a7ba1c57d2c9c7",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 14029
+  },
+  "version": {
+    "content_sha256": "1a1879aa24aa8a975c28d86fdf6a8b5b126e58bfd4ba9354c52eebd9083b8bb3",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_5c4b7c99cea0151b83a7ba1c57d2c9c7"
+  }
+}

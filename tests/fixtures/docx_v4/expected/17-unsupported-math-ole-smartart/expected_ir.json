@@ -1,0 +1,156 @@
+{
+  "document": {
+    "display_name": "17-unsupported-math-ole-smartart.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:85ffbf9216b41483bc69f0f5aec13856bca8219d5d8596dd2dafdf951958a766"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 11,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_2a4ea0c251d4ff1758acb296912edea5",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "efdfa2f745c7c76632ea220e050f86c4f02fd15ca365ad355cb925ce6834802d",
+        "exact_text": "fallbackx对象",
+        "semantic_sha256": "efdfa2f745c7c76632ea220e050f86c4f02fd15ca365ad355cb925ce6834802d",
+        "semantic_text": "fallbackx对象"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_8fd2e5eacbe2596cbe9794536f508544",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [
+      {
+        "action": "metadata_only",
+        "anchor": null,
+        "code": "DOCX_OBJECT_NOT_EXECUTED",
+        "count": 1,
+        "metadata": [],
+        "safe_message": "OLE、Object 或 diagram 未执行或解包。",
+        "severity": "warning"
+      },
+      {
+        "action": "metadata_only",
+        "anchor": null,
+        "code": "DOCX_MATH_METADATA_ONLY",
+        "count": 1,
+        "metadata": [],
+        "safe_message": "Office Math 未计算，仅保留可见 fallback 文本。",
+        "severity": "warning"
+      }
+    ],
+    "media_count": 0,
+    "node_count": 2,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 5,
+    "relationship_count": 2,
+    "represented_visible_text_nodes": 1,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 2
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 1,
+    "warnings": [
+      "DOCX_OBJECT_NOT_EXECUTED",
+      "DOCX_MATH_METADATA_ONLY"
+    ]
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_2a4ea0c251d4ff1758acb296912edea5",
+    "node_8fd2e5eacbe2596cbe9794536f508544"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_275ede41778cfb76052f0aad1221df15",
+    "content_sha256": "6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
+    "display_name": "17-unsupported-math-ole-smartart.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_275ede41778cfb76052f0aad1221df15",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 13624
+  },
+  "version": {
+    "content_sha256": "6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_275ede41778cfb76052f0aad1221df15"
+  }
+}

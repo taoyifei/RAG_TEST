@@ -1,0 +1,338 @@
+{
+  "document": {
+    "display_name": "10-sections-headers-footers.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:c4904bd32fceff1b978fb3b7e28235fa7e5acf71f29035ec99e3d3e27e74eb81"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_9401b610b759f88f87dadb68fb07e75e",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb",
+        "exact_text": "正文",
+        "semantic_sha256": "d661c3d96d53ebc0ca8a55aae24b5df4a4d1bf28d37337b982fe8ebf54846eeb",
+        "semantic_text": "正文"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": {
+          "default": "/word/footer1.xml"
+        },
+        "effective_header_bindings": {
+          "default": "/word/header1.xml"
+        },
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": {
+          "default": "rIdF"
+        },
+        "header_inherited_from": [],
+        "header_references": {
+          "default": "rIdH"
+        },
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_3ee34d24f970c93d2c54da08064b561c",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 2,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 1,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:2"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": {
+          "default": "/word/footer1.xml"
+        },
+        "effective_header_bindings": {
+          "default": "/word/header1.xml"
+        },
+        "even_and_odd_headers": false,
+        "footer_inherited_from": {
+          "default": "node_3ee34d24f970c93d2c54da08064b561c"
+        },
+        "footer_references": [],
+        "header_inherited_from": {
+          "default": "node_3ee34d24f970c93d2c54da08064b561c"
+        },
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_22e036d28b5c8e16e647664378409901",
+      "order": 2,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": null,
+        "part_uri": "/word/header1.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "header",
+        "structural_path": [
+          "header:root"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_f32538b2ea3276623027af9aca1f65d3"
+      ],
+      "image_attributes": null,
+      "kind": "content_control",
+      "list_attributes": null,
+      "metadata": {
+        "story_definition": "header"
+      },
+      "node_id": "node_a0f91b531b7cfd218e6b80b6b916f476",
+      "order": 3,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": 0,
+        "part_uri": "/word/header1.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "header",
+        "structural_path": [
+          "header:root",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_f32538b2ea3276623027af9aca1f65d3",
+      "order": 0,
+      "parent_node_id": "node_a0f91b531b7cfd218e6b80b6b916f476",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "202c6f3a55868bd98052a5e52a40e4c1a8f2fb559c6d83249f55bd26bc33c335",
+        "exact_text": "页眉",
+        "semantic_sha256": "202c6f3a55868bd98052a5e52a40e4c1a8f2fb559c6d83249f55bd26bc33c335",
+        "semantic_text": "页眉"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": null,
+        "part_uri": "/word/footer1.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "footer",
+        "structural_path": [
+          "footer:root"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_adcb1b3a78cc4dc68d51a6bcc56671c3"
+      ],
+      "image_attributes": null,
+      "kind": "content_control",
+      "list_attributes": null,
+      "metadata": {
+        "story_definition": "footer"
+      },
+      "node_id": "node_5292468f33062e9934d962c2cf7c12b3",
+      "order": 4,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": 0,
+        "part_uri": "/word/footer1.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "footer",
+        "structural_path": [
+          "footer:root",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_adcb1b3a78cc4dc68d51a6bcc56671c3",
+      "order": 0,
+      "parent_node_id": "node_5292468f33062e9934d962c2cf7c12b3",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "db7eeb8de478f255c8e6405d679569a1de1e064b31099ec454ab70101cba6631",
+        "exact_text": "页脚",
+        "semantic_sha256": "db7eeb8de478f255c8e6405d679569a1de1e064b31099ec454ab70101cba6631",
+        "semantic_text": "页脚"
+      }
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 7,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 7,
+    "relationship_count": 4,
+    "represented_visible_text_nodes": 3,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 3,
+      "footer": 2,
+      "header": 2
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 3,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_9401b610b759f88f87dadb68fb07e75e",
+    "node_3ee34d24f970c93d2c54da08064b561c",
+    "node_22e036d28b5c8e16e647664378409901",
+    "node_a0f91b531b7cfd218e6b80b6b916f476",
+    "node_5292468f33062e9934d962c2cf7c12b3"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_b024b653d20a82828a76ad8250976466",
+    "content_sha256": "f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
+    "display_name": "10-sections-headers-footers.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_b024b653d20a82828a76ad8250976466",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 14086
+  },
+  "version": {
+    "content_sha256": "f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_b024b653d20a82828a76ad8250976466"
+  }
+}
