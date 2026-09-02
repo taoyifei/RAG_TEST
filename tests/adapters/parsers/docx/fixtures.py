@@ -5,7 +5,12 @@ import io
 import zipfile
 
 from rag_app.adapters.parsers.docx import DocxOoxmlV4Parser
-from rag_app.core.models import ParseResult, ParseSource
+from rag_app.core.models import (
+    DocumentRef,
+    ParseContext,
+    ParseResult,
+    ParseSource,
+)
 from rag_app.core.policies import ParsingPolicy
 
 _CONTENT_TYPES = """<?xml version="1.0" encoding="UTF-8"?>
@@ -103,7 +108,7 @@ def _write_entry(
 
 
 def policy(**updates: object) -> ParsingPolicy:
-    """创建带稳定逻辑身份的解析策略。
+    """创建只包含解析语义的策略。
 
     Args:
         **updates: 覆盖默认策略的字段。
@@ -112,15 +117,32 @@ def policy(**updates: object) -> ParsingPolicy:
         可直接用于合成夹具的解析策略。
 
     """
-    values: dict[str, object] = {
-        "metadata": (
-            ("project_id", f"prj_{'1' * 32}"),
-            ("knowledge_base_id", f"kb_{'2' * 32}"),
-            ("document_id", f"doc_{'3' * 32}"),
+    return ParsingPolicy.model_validate(updates)
+
+
+def context(
+    *,
+    document_id: str | None = None,
+    display_name: str = "sample.docx",
+) -> ParseContext:
+    """创建与 ParsingPolicy 分离的稳定解析上下文。
+
+    Args:
+        document_id: 可选全局逻辑文档 ID。
+        display_name: 当前显示名；不参与内容身份。
+
+    Returns:
+        合成 Parser fixture 使用的 ParseContext。
+
+    """
+    return ParseContext(
+        document=DocumentRef(
+            project_id=f"prj_{'1' * 32}",
+            knowledge_base_id=f"kb_{'2' * 32}",
+            document_id=document_id or f"doc_{'3' * 32}",
+            display_name=display_name,
         )
-    }
-    values.update(updates)
-    return ParsingPolicy.model_validate(values)
+    )
 
 
 def source(content: bytes, name: str = "sample.docx") -> ParseSource:
@@ -146,6 +168,7 @@ def parse_package(
     content: bytes,
     *,
     name: str = "sample.docx",
+    parse_context: ParseContext | None = None,
     **policy_updates: object,
 ) -> ParseResult:
     """用 v4 parser 解析一个合成 package。
@@ -153,6 +176,7 @@ def parse_package(
     Args:
         content: DOCX package 字节。
         name: 显示名。
+        parse_context: 可选逻辑文档身份。
         **policy_updates: 策略覆盖值。
 
     Returns:
@@ -162,4 +186,5 @@ def parse_package(
     return DocxOoxmlV4Parser().parse(
         source(content, name),
         policy(**policy_updates),
+        parse_context or context(display_name=name),
     )

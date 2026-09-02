@@ -114,10 +114,11 @@ def validate_id(prefix: str, value: str) -> str:
     return value
 
 
-def document_version_id(content_sha256: str) -> str:
-    """从文档内容摘要生成版本 ID。
+def document_version_id(document_id: str, content_sha256: str) -> str:
+    """从逻辑文档身份和内容摘要生成版本 ID。
 
     Args:
+        document_id: 全局唯一的逻辑文档 ID。
         content_sha256: 64 位小写十六进制内容摘要。
 
     Returns:
@@ -127,8 +128,9 @@ def document_version_id(content_sha256: str) -> str:
         ValueError: 内容摘要格式无效。
 
     """
+    validate_id("doc", document_id)
     _require_sha256(content_sha256)
-    return deterministic_id("dver", content_sha256)
+    return deterministic_id("dver", document_id, content_sha256)
 
 
 def node_id(

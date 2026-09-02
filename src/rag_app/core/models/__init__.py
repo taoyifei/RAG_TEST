@@ -30,6 +30,8 @@ from rag_app.core.models.document import (
     ListAttributes,
     NodeKind,
     ParseIssue,
+    ParseContext,
+    ParsedArtifact,
     ParseReport,
     ParseResult,
     ParseSource,
@@ -40,6 +42,7 @@ from rag_app.core.models.document import (
     TextPayload,
     canonical_document_ir_json,
     text_payload,
+    validate_document_ref_uniqueness,
     validate_document_ir,
 )
 from rag_app.core.models.lifecycle import IndexRevisionRef, IndexRevisionState
@@ -115,6 +118,8 @@ __all__ = [
     "MetadataModel",
     "NodeKind",
     "ParseIssue",
+    "ParseContext",
+    "ParsedArtifact",
     "ParsePolicy",
     "ParseReport",
     "ParseResult",
@@ -143,5 +148,6 @@ __all__ = [
     "VectorWriteRequest",
     "canonical_document_ir_json",
     "text_payload",
+    "validate_document_ref_uniqueness",
     "validate_document_ir",
 ]

@@ -18,7 +18,7 @@ from rag_app.core.capabilities import (
     ComponentKind,
     ProviderMode,
 )
-from rag_app.core.identifiers import deterministic_id
+from rag_app.core.identifiers import deterministic_id, document_version_id
 from rag_app.core.models import (
     Chunk,
     ChunkingContext,
@@ -179,7 +179,7 @@ def legacy_chunk_to_core(
 
     """
     document_id = deterministic_id("doc", chunk.source_id)
-    version_id = deterministic_id("dver", chunk.doc_version)
+    version_id = document_version_id(document_id, chunk.content_sha256)
     version = DocumentVersionRef(
         document_id=document_id,
         document_version_id=version_id,

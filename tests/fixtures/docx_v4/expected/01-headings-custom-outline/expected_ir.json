@@ -35,7 +35,7 @@
       "list_attributes": null,
       "metadata": {
         "heading_breadcrumb_node_ids": [
-          "node_2ae587c4e9c12a536a50112e078e26b7"
+          "node_621bb8d005b195528a9c1320090bb759"
         ],
         "heading_level": 2,
         "style_hidden": false,
@@ -44,7 +44,7 @@
         "style_quick_format": false,
         "style_unhide_when_used": false
       },
-      "node_id": "node_2ae587c4e9c12a536a50112e078e26b7",
+      "node_id": "node_621bb8d005b195528a9c1320090bb759",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -92,7 +92,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_eb02b7f9ab91c2cb2c76fe5a9974bc37",
+      "node_id": "node_edbe4381d64c3b5bd1c475f71be58ddf",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -121,16 +121,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_2ae587c4e9c12a536a50112e078e26b7",
-    "node_eb02b7f9ab91c2cb2c76fe5a9974bc37"
+    "node_621bb8d005b195528a9c1320090bb759",
+    "node_edbe4381d64c3b5bd1c475f71be58ddf"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_4d754cd3c3f2e573b2948913224ef5c9",
+    "blob_ref": "sha256:9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
     "content_sha256": "9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
     "display_name": "01-headings-custom-outline.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_4d754cd3c3f2e573b2948913224ef5c9",
+    "document_version_id": "dver_94c248e83864e0bc783cc7a02455b4c8",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -139,6 +139,6 @@
   "version": {
     "content_sha256": "9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_4d754cd3c3f2e573b2948913224ef5c9"
+    "document_version_id": "dver_94c248e83864e0bc783cc7a02455b4c8"
   }
 }

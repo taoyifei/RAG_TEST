@@ -18,7 +18,7 @@ from rag_app.composition import (
 from rag_app.composition.provider_profiles import PROFILE_DIRECTORY
 from rag_app.core.errors import RagError
 from rag_app.core.models import ParseSource, canonical_document_ir_json
-from tests.adapters.parsers.docx.fixtures import parse_package, policy
+from tests.adapters.parsers.docx.fixtures import context, parse_package, policy
 from tests.fixtures.docx_v4.generate_fixtures import FixtureCase, _cases
 
 _FIXTURE_ROOT = Path(__file__).parents[3] / "fixtures" / "docx_v4"
@@ -113,6 +113,25 @@ def test_external_relationship_fixture_never_opens_a_socket(
     assert calls == []
 
 
+def test_external_hyperlink_scheme_is_stored_without_target_url() -> None:
+    case = next(
+        item for item in _cases()
+        if item.name == "04-hyperlinks-bookmarks-fields.docx"
+    )
+
+    result = parse_package(case.content, name=case.name)
+    hyperlink_node = next(
+        node for node in result.document_ir.nodes
+        if "external_hyperlink_schemes" in dict(node.metadata)
+    )
+    rendered = result.document_ir.model_dump_json()
+
+    assert dict(hyperlink_node.metadata)["external_hyperlink_schemes"] == [
+        "https"
+    ]
+    assert "example.invalid" not in rendered
+
+
 def test_parser_output_is_identical_across_provider_profiles() -> None:
     case = next(
         item for item in _cases()
@@ -149,6 +168,7 @@ def test_parser_output_is_identical_across_provider_profiles() -> None:
                     content=case.content,
                 ),
                 policy(),
+                context(display_name=case.name),
             )
         canonical = canonical_document_ir_json(result.document_ir)
         observed.append(

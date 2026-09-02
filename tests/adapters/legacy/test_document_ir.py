@@ -7,7 +7,8 @@ from rag_app.adapters.legacy.document_ir import (
 )
 from rag_app.adapters.legacy.stores import InMemoryBlobStore
 from rag_app.adapters.parsers.legacy_docx_ir import LegacyDocxIrParser
-from rag_app.core.models import ParseSource
+from rag_app.application.artifacts import persist_artifacts_transactionally
+from rag_app.core.models import DocumentRef, ParseContext, ParseSource
 from rag_app.core.policies import ParsingPolicy
 from rag_app.parsers.docx import DocxParser
 from tests.adapters.parsers.docx_fixtures import (
@@ -19,11 +20,16 @@ from tests.adapters.parsers.docx_fixtures import (
 
 
 def _policy() -> ParsingPolicy:
-    return ParsingPolicy(
-        metadata=(
-            ("project_id", f"prj_{'1' * 32}"),
-            ("knowledge_base_id", f"kb_{'2' * 32}"),
-            ("document_id", f"doc_{'3' * 32}"),
+    return ParsingPolicy()
+
+
+def _context() -> ParseContext:
+    return ParseContext(
+        document=DocumentRef(
+            project_id=f"prj_{'1' * 32}",
+            knowledge_base_id=f"kb_{'2' * 32}",
+            document_id=f"doc_{'3' * 32}",
+            display_name="basic.docx",
         )
     )
 
@@ -39,14 +45,16 @@ def test_old_parser_and_ir_round_trip_preserve_text_order_and_locator(
         display_path=path.name,
     )
     store = InMemoryBlobStore()
-    result = LegacyDocxIrParser(store).parse(
+    result = LegacyDocxIrParser().parse(
         ParseSource(
             media_type="application/octet-stream",
             display_name=path.name,
             content=content,
         ),
         _policy(),
+        _context(),
     )
+    persist_artifacts_transactionally(result.artifacts, store)
 
     round_trip, report = document_ir_to_legacy_elements(
         result.document_ir,

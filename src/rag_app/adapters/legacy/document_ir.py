@@ -169,7 +169,7 @@ def _node_to_element(
         )
     if blob_store is None or node.image_attributes is None:
         return None
-    blob = blob_store.get(node.image_attributes.blob_ref)
+    blob = blob_store.read(node.image_attributes.blob_ref)
     if (
         blob is None
         or blob.content_sha256 != node.image_attributes.content_sha256

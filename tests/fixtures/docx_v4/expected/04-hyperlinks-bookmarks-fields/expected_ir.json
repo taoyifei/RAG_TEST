@@ -34,7 +34,7 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_8487b8a60531b6be7a6d80802476bb89",
+      "node_id": "node_1b8e1efc1d88d0cdc2f95d49f0ee3140",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -70,6 +70,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": {
+        "external_hyperlink_schemes": [
+          "https"
+        ],
         "field_instruction_hashes": [
           "88c05e99dd40955c28b194d6ed50c27da802d3e7e1ac652baf3dd126a7787b92"
         ],
@@ -86,7 +89,7 @@
           "rIdLink"
         ]
       },
-      "node_id": "node_0aa6f59ddc2dc533a380eab1c002c5e5",
+      "node_id": "node_37a2ff79ff4e846a95a26a5cd326e8a1",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -134,7 +137,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_1a0f2fb48560a0c88081cf561f46cf52",
+      "node_id": "node_6e362e028e50f451bc7d96a72852d13b",
       "order": 2,
       "parent_node_id": null,
       "revision_mark": null,
@@ -182,22 +185,22 @@
       "metadata": [],
       "relationship_id": "bookmark:0",
       "relationship_type": "document-bookmark",
-      "source_node_id": "node_0aa6f59ddc2dc533a380eab1c002c5e5",
-      "target_node_id": "node_8487b8a60531b6be7a6d80802476bb89"
+      "source_node_id": "node_37a2ff79ff4e846a95a26a5cd326e8a1",
+      "target_node_id": "node_1b8e1efc1d88d0cdc2f95d49f0ee3140"
     }
   ],
   "root_node_ids": [
-    "node_8487b8a60531b6be7a6d80802476bb89",
-    "node_0aa6f59ddc2dc533a380eab1c002c5e5",
-    "node_1a0f2fb48560a0c88081cf561f46cf52"
+    "node_1b8e1efc1d88d0cdc2f95d49f0ee3140",
+    "node_37a2ff79ff4e846a95a26a5cd326e8a1",
+    "node_6e362e028e50f451bc7d96a72852d13b"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_be76f7a6221db391b7b34081fb43857f",
+    "blob_ref": "sha256:de2686faa735828cc1734342b31d29c8bca06f7029796127e7b1bb44352f4460",
     "content_sha256": "de2686faa735828cc1734342b31d29c8bca06f7029796127e7b1bb44352f4460",
     "display_name": "04-hyperlinks-bookmarks-fields.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_be76f7a6221db391b7b34081fb43857f",
+    "document_version_id": "dver_f8d8e8d777c27b4a64f806405befc8e0",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -206,6 +209,6 @@
   "version": {
     "content_sha256": "de2686faa735828cc1734342b31d29c8bca06f7029796127e7b1bb44352f4460",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_be76f7a6221db391b7b34081fb43857f"
+    "document_version_id": "dver_f8d8e8d777c27b4a64f806405befc8e0"
   }
 }

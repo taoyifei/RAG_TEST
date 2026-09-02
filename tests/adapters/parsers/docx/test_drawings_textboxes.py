@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 # ruff: noqa: E501
-from rag_app.adapters.legacy.stores import InMemoryBlobStore
 from rag_app.adapters.parsers.docx import DocxOoxmlV4Parser
 from rag_app.core.models import NodeKind, StoryKind
-from tests.adapters.parsers.docx.fixtures import build_package, policy, source
+from tests.adapters.parsers.docx.fixtures import (
+    build_package,
+    context,
+    policy,
+    source,
+)
 
 
 def test_inline_vml_images_share_blob_and_textbox_has_own_story() -> None:
@@ -25,8 +29,7 @@ def test_inline_vml_images_share_blob_and_textbox_has_own_story() -> None:
 <w:p><w:r><w:drawing><wp:inline><wp:extent cx="9525" cy="19050"/><wp:docPr id="1" name="图一" descr="替代文本"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdImage"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>
 <w:r><w:pict><v:shape><v:imagedata r:id="rIdImage" title="旧图"/><v:textbox><w:txbxContent><w:p><w:r><w:t>文本框正文</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>
 """
-    store = InMemoryBlobStore()
-    parser = DocxOoxmlV4Parser(store)
+    parser = DocxOoxmlV4Parser()
 
     result = parser.parse(
         source(
@@ -38,6 +41,7 @@ def test_inline_vml_images_share_blob_and_textbox_has_own_story() -> None:
             )
         ),
         policy(images="extract"),
+        context(),
     )
     images = [
         node for node in result.document_ir.nodes
@@ -48,7 +52,17 @@ def test_inline_vml_images_share_blob_and_textbox_has_own_story() -> None:
     assert images[0].image_attributes is not None
     assert images[1].image_attributes is not None
     assert images[0].image_attributes.blob_ref == images[1].image_attributes.blob_ref
-    assert store.get(images[0].image_attributes.blob_ref) is not None
+    media = tuple(
+        artifact
+        for artifact in result.artifacts
+        if artifact.role == "embedded_media"
+    )
+    assert len(media) == 1
+    assert media[0].artifact_id == images[0].image_attributes.blob_ref
+    assert {artifact.role for artifact in result.artifacts} == {
+        "source_document",
+        "embedded_media",
+    }
     assert any(
         node.anchor.story_kind is StoryKind.TEXT_BOX
         and node.text == "文本框正文"

@@ -34,7 +34,7 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_9401b610b759f88f87dadb68fb07e75e",
+      "node_id": "node_281a2402117f9f9583a4cd335171b955",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -90,7 +90,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_3ee34d24f970c93d2c54da08064b561c",
+      "node_id": "node_ede425f988c3a39130ba3b3077a221e6",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -130,18 +130,18 @@
         },
         "even_and_odd_headers": false,
         "footer_inherited_from": {
-          "default": "node_3ee34d24f970c93d2c54da08064b561c"
+          "default": "node_ede425f988c3a39130ba3b3077a221e6"
         },
         "footer_references": [],
         "header_inherited_from": {
-          "default": "node_3ee34d24f970c93d2c54da08064b561c"
+          "default": "node_ede425f988c3a39130ba3b3077a221e6"
         },
         "header_references": [],
         "page_margins": [],
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_22e036d28b5c8e16e647664378409901",
+      "node_id": "node_a5b1e4e0c5c71d1f6f86384bc1be5f54",
       "order": 2,
       "parent_node_id": null,
       "revision_mark": null,
@@ -167,7 +167,7 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_f32538b2ea3276623027af9aca1f65d3"
+        "node_0b5b4625fcecb4128ba4a9583547f97d"
       ],
       "image_attributes": null,
       "kind": "content_control",
@@ -175,7 +175,7 @@
       "metadata": {
         "story_definition": "header"
       },
-      "node_id": "node_a0f91b531b7cfd218e6b80b6b916f476",
+      "node_id": "node_d76609ac28ac1479ddca43ae6cca62bb",
       "order": 3,
       "parent_node_id": null,
       "revision_mark": null,
@@ -206,9 +206,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_f32538b2ea3276623027af9aca1f65d3",
+      "node_id": "node_0b5b4625fcecb4128ba4a9583547f97d",
       "order": 0,
-      "parent_node_id": "node_a0f91b531b7cfd218e6b80b6b916f476",
+      "parent_node_id": "node_d76609ac28ac1479ddca43ae6cca62bb",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -237,7 +237,7 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_adcb1b3a78cc4dc68d51a6bcc56671c3"
+        "node_d3cca53d0162d0c1782431eaa035b1c7"
       ],
       "image_attributes": null,
       "kind": "content_control",
@@ -245,7 +245,7 @@
       "metadata": {
         "story_definition": "footer"
       },
-      "node_id": "node_5292468f33062e9934d962c2cf7c12b3",
+      "node_id": "node_889b3f87244f78853adfc669d2913d67",
       "order": 4,
       "parent_node_id": null,
       "revision_mark": null,
@@ -276,9 +276,9 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_adcb1b3a78cc4dc68d51a6bcc56671c3",
+      "node_id": "node_d3cca53d0162d0c1782431eaa035b1c7",
       "order": 0,
-      "parent_node_id": "node_5292468f33062e9934d962c2cf7c12b3",
+      "parent_node_id": "node_889b3f87244f78853adfc669d2913d67",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": {
@@ -312,19 +312,19 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_9401b610b759f88f87dadb68fb07e75e",
-    "node_3ee34d24f970c93d2c54da08064b561c",
-    "node_22e036d28b5c8e16e647664378409901",
-    "node_a0f91b531b7cfd218e6b80b6b916f476",
-    "node_5292468f33062e9934d962c2cf7c12b3"
+    "node_281a2402117f9f9583a4cd335171b955",
+    "node_ede425f988c3a39130ba3b3077a221e6",
+    "node_a5b1e4e0c5c71d1f6f86384bc1be5f54",
+    "node_d76609ac28ac1479ddca43ae6cca62bb",
+    "node_889b3f87244f78853adfc669d2913d67"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_b024b653d20a82828a76ad8250976466",
+    "blob_ref": "sha256:f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
     "content_sha256": "f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
     "display_name": "10-sections-headers-footers.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_b024b653d20a82828a76ad8250976466",
+    "document_version_id": "dver_5d6c6cf238d527923f198f67cb54bb01",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -333,6 +333,6 @@
   "version": {
     "content_sha256": "f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_b024b653d20a82828a76ad8250976466"
+    "document_version_id": "dver_5d6c6cf238d527923f198f67cb54bb01"
   }
 }

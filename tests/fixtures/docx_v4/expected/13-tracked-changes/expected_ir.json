@@ -36,7 +36,7 @@
       "metadata": {
         "revision_count": 2
       },
-      "node_id": "node_e3b29ed27e1cfb1231c26a9f28dfcc1a",
+      "node_id": "node_232d04a0b632d4f02c4bd0f337e9cb5a",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": {
@@ -88,7 +88,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_1371e2856554758736e8af6322f503ce",
+      "node_id": "node_9dbefe1385781e66768ae0b78494a5cc",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -117,16 +117,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_e3b29ed27e1cfb1231c26a9f28dfcc1a",
-    "node_1371e2856554758736e8af6322f503ce"
+    "node_232d04a0b632d4f02c4bd0f337e9cb5a",
+    "node_9dbefe1385781e66768ae0b78494a5cc"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_5195b2765cc458e58156aa0ab3089cae",
+    "blob_ref": "sha256:09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
     "content_sha256": "09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
     "display_name": "13-tracked-changes.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_5195b2765cc458e58156aa0ab3089cae",
+    "document_version_id": "dver_72f2e9afc400fb8723420aea3dbaef75",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -135,6 +135,6 @@
   "version": {
     "content_sha256": "09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_5195b2765cc458e58156aa0ab3089cae"
+    "document_version_id": "dver_72f2e9afc400fb8723420aea3dbaef75"
   }
 }

@@ -30,7 +30,7 @@
       },
       "cell_grid": null,
       "child_ids": [
-        "node_d368c9e717911ad613b71a56fb80b081"
+        "node_26a88b600ed9935ef876398c36829e21"
       ],
       "image_attributes": null,
       "kind": "paragraph",
@@ -38,7 +38,7 @@
       "metadata": {
         "hidden_runs": 1
       },
-      "node_id": "node_a81f46b2c1e3bed030b8156f90711285",
+      "node_id": "node_48992bf8397beb869d5237fb677748be",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -77,9 +77,9 @@
       "metadata": {
         "break_type": "page"
       },
-      "node_id": "node_d368c9e717911ad613b71a56fb80b081",
+      "node_id": "node_26a88b600ed9935ef876398c36829e21",
       "order": 0,
-      "parent_node_id": "node_a81f46b2c1e3bed030b8156f90711285",
+      "parent_node_id": "node_48992bf8397beb869d5237fb677748be",
       "revision_mark": null,
       "schema_version": "1",
       "text_payload": null
@@ -120,7 +120,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_41b8137e7752a68ca53d9eef7583c14b",
+      "node_id": "node_490f4085277dfdd1ca2fcc787de39b5b",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -161,16 +161,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_a81f46b2c1e3bed030b8156f90711285",
-    "node_41b8137e7752a68ca53d9eef7583c14b"
+    "node_48992bf8397beb869d5237fb677748be",
+    "node_490f4085277dfdd1ca2fcc787de39b5b"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_ed653c99903c10b4ed7e779517bf6495",
+    "blob_ref": "sha256:75c5c6619280a6c687a622511d98931d04bee6115878c300c046d8e82ae31db5",
     "content_sha256": "75c5c6619280a6c687a622511d98931d04bee6115878c300c046d8e82ae31db5",
     "display_name": "05-breaks-tabs-hidden.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_ed653c99903c10b4ed7e779517bf6495",
+    "document_version_id": "dver_827e761dad7496b6787340dcd14985a6",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -179,6 +179,6 @@
   "version": {
     "content_sha256": "75c5c6619280a6c687a622511d98931d04bee6115878c300c046d8e82ae31db5",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_ed653c99903c10b4ed7e779517bf6495"
+    "document_version_id": "dver_827e761dad7496b6787340dcd14985a6"
   }
 }

@@ -34,7 +34,7 @@
       "kind": "paragraph",
       "list_attributes": null,
       "metadata": [],
-      "node_id": "node_2a4ea0c251d4ff1758acb296912edea5",
+      "node_id": "node_8bce5e0e6ebff2e829d2e0f86386e059",
       "order": 0,
       "parent_node_id": null,
       "revision_mark": null,
@@ -82,7 +82,7 @@
         "page_size": [],
         "title_page": false
       },
-      "node_id": "node_8fd2e5eacbe2596cbe9794536f508544",
+      "node_id": "node_8288d331900098b9a7eccc08f559049a",
       "order": 1,
       "parent_node_id": null,
       "revision_mark": null,
@@ -133,16 +133,16 @@
   },
   "relationships": [],
   "root_node_ids": [
-    "node_2a4ea0c251d4ff1758acb296912edea5",
-    "node_8fd2e5eacbe2596cbe9794536f508544"
+    "node_8bce5e0e6ebff2e829d2e0f86386e059",
+    "node_8288d331900098b9a7eccc08f559049a"
   ],
   "schema_version": "1",
   "source": {
-    "blob_ref": "document:dver_275ede41778cfb76052f0aad1221df15",
+    "blob_ref": "sha256:6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
     "content_sha256": "6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
     "display_name": "17-unsupported-math-ole-smartart.docx",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_275ede41778cfb76052f0aad1221df15",
+    "document_version_id": "dver_8f9179455f1379702a9082d17785c495",
     "extension": ".docx",
     "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "metadata": [],
@@ -151,6 +151,6 @@
   "version": {
     "content_sha256": "6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
     "document_id": "doc_33333333333333333333333333333333",
-    "document_version_id": "dver_275ede41778cfb76052f0aad1221df15"
+    "document_version_id": "dver_8f9179455f1379702a9082d17785c495"
   }
 }

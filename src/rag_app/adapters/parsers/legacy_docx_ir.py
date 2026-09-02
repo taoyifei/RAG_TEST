@@ -20,17 +20,18 @@ from rag_app.core.capabilities import (
     ParserCapabilities,
     ProviderMode,
 )
-from rag_app.core.errors import ConfigurationError, InvalidDocument
-from rag_app.core.identifiers import deterministic_id, node_id
+from rag_app.core.errors import InvalidDocument
+from rag_app.core.identifiers import document_version_id, node_id
 from rag_app.core.models import (
     DocumentIR,
     DocumentNode,
-    DocumentRef,
     DocumentSource,
     DocumentVersionRef,
     ImageAttributes,
     ListAttributes,
     NodeKind,
+    ParseContext,
+    ParsedArtifact,
     ParseIssue,
     ParseReport,
     ParseResult,
@@ -49,7 +50,6 @@ from rag_app.core.policies import (
     StoryPolicy,
     UnknownIndexableContentPolicy,
 )
-from rag_app.core.ports.blob_store import BlobStorePort, BlobWriteRequest
 from rag_app.parsers.docx import (
     DocxParseAudit,
     DocxParser,
@@ -86,42 +86,39 @@ class LegacyDocxIrParser:
         supports_text_boxes=False,
     )
 
-    def __init__(self, blob_store: BlobStorePort | None = None) -> None:
-        """创建 adapter 和可选的宿主 BlobStore。
+    def __init__(self) -> None:
+        """创建无持久化副作用的 legacy adapter。
 
         Args:
-            blob_store: 保存源文档与旧图片二进制的受控 Store。
+            无参数。
 
         Returns:
             无返回值。
 
         """
-        self._owns_blob_store = blob_store is None
-        if blob_store is None:
-            from rag_app.adapters.legacy.stores import (  # noqa: PLC0415
-                InMemoryBlobStore,
-            )
+        return None
 
-            self._blob_store: BlobStorePort = InMemoryBlobStore()
-        else:
-            self._blob_store = blob_store
-
-    def parse(self, source: ParseSource, policy: ParsingPolicy) -> ParseResult:
+    def parse(
+        self,
+        source: ParseSource,
+        policy: ParsingPolicy,
+        context: ParseContext,
+    ) -> ParseResult:
         """解析受控 DOCX 并产出不含 bytes/Path/lxml 的 IR。
 
         Args:
             source: DOCX 字节、显示名和声明格式。
-            policy: 资源边界、结构策略和稳定逻辑身份。
+            policy: 资源边界和解析语义策略。
+            context: 不进入策略指纹的逻辑文档身份。
 
         Returns:
             Document IR 与同一 ParseReport。
 
         Raises:
-            ConfigurationError: 未提供 project/kb/document 逻辑身份。
-            InvalidDocument: 文件、策略或 Blob 写入不满足安全边界。
+            InvalidDocument: 文件或策略不满足安全边界。
 
         """
-        identity = _policy_identity(policy)
+        document = context.document
         if len(source.content) > policy.max_file_bytes:
             raise InvalidDocument(
                 "DOCX 文件大小超过 ParsingPolicy 限制。",
@@ -140,10 +137,12 @@ class LegacyDocxIrParser:
             )
 
         content_sha256 = hashlib.sha256(source.content).hexdigest()
-        version_id = deterministic_id("dver", content_sha256)
-        document_id = identity["document_id"]
-        document_blob_id = f"document:{version_id}"
-        nodes, conversion_issues, image_writes = _convert_elements(
+        version_id = document_version_id(
+            document.document_id,
+            content_sha256,
+        )
+        source_artifact_id = f"sha256:{content_sha256}"
+        nodes, conversion_issues, image_artifacts = _convert_elements(
             elements,
             document_version_id=version_id,
         )
@@ -158,24 +157,21 @@ class LegacyDocxIrParser:
         )
         document_ir = DocumentIR(
             source=DocumentSource(
-                document_id=document_id,
+                document_id=document.document_id,
                 document_version_id=version_id,
                 display_name=source.display_name,
                 media_type=_DOCX_MEDIA_TYPE,
                 extension=".docx",
                 content_sha256=content_sha256,
                 size_bytes=len(source.content),
-                blob_ref=document_blob_id,
+                blob_ref=source_artifact_id,
                 metadata=(("declared_extension", source.extension),),
             ),
-            document=DocumentRef(
-                project_id=identity["project_id"],
-                knowledge_base_id=identity["knowledge_base_id"],
-                document_id=document_id,
-                display_name=source.display_name,
+            document=document.model_copy(
+                update={"display_name": source.display_name}
             ),
             version=DocumentVersionRef(
-                document_id=document_id,
+                document_id=document.document_id,
                 document_version_id=version_id,
                 content_sha256=content_sha256,
             ),
@@ -185,30 +181,33 @@ class LegacyDocxIrParser:
             nodes=nodes,
             parse_report=report,
         )
-        writes = (
-            BlobWriteRequest(
-                blob_id=document_blob_id,
+        artifacts = (
+            ParsedArtifact(
+                artifact_id=source_artifact_id,
                 content_sha256=content_sha256,
                 media_type=_DOCX_MEDIA_TYPE,
                 content=source.content,
+                role="source_document",
             ),
-            *image_writes,
+            *image_artifacts,
         )
-        self._commit_blobs(writes)
-        return ParseResult(document_ir=document_ir, report=report)
+        return ParseResult(
+            document_ir=document_ir,
+            report=report,
+            artifacts=artifacts,
+        )
 
     def close(self) -> None:
-        """释放 adapter 自己创建的 BlobStore。
+        """保留统一生命周期接口；当前 adapter 没有资源。
 
         Args:
-            无参数；宿主注入的 Store 生命周期仍归宿主。
+            无参数。
 
         Returns:
             无返回值。
 
         """
-        if self._owns_blob_store:
-            self._blob_store.close()
+        return None
 
     def _parse_legacy(
         self,
@@ -247,33 +246,6 @@ class LegacyDocxIrParser:
                 stage="legacy-docx-ir.parse",
                 details={"error_type": type(error).__name__},
             ) from None
-
-    def _commit_blobs(self, writes: tuple[BlobWriteRequest, ...]) -> None:
-        committed: list[str] = []
-        try:
-            for request in writes:
-                self._blob_store.put(request)
-                committed.append(request.blob_id)
-        except Exception as error:
-            for blob_id in reversed(committed):
-                self._blob_store.delete(blob_id)
-            raise InvalidDocument(
-                "Document IR Blob 写入失败并已清理。",
-                stage="legacy-docx-ir.blob",
-                details={"error_type": type(error).__name__},
-            ) from None
-
-
-def _policy_identity(policy: ParsingPolicy) -> dict[str, str]:
-    metadata = dict(policy.metadata)
-    required = ("project_id", "knowledge_base_id", "document_id")
-    if any(not isinstance(metadata.get(key), str) for key in required):
-        raise ConfigurationError(
-            "ParsingPolicy 必须显式提供 project/kb/document 逻辑 ID。",
-            stage="legacy-docx-ir.identity",
-        )
-    return {key: str(metadata[key]) for key in required}
-
 
 def _package_policy_issues(
     audit: DocxPackageAudit,
@@ -406,10 +378,10 @@ def _convert_elements(
 ) -> tuple[
     tuple[DocumentNode, ...],
     tuple[ParseIssue, ...],
-    tuple[BlobWriteRequest, ...],
+    tuple[ParsedArtifact, ...],
 ]:
     nodes: list[DocumentNode] = []
-    image_writes: list[BlobWriteRequest] = []
+    image_artifacts: list[ParsedArtifact] = []
     table_count = 0
     for root_order, element in enumerate(elements):
         anchor = _anchor(element, root_order)
@@ -424,14 +396,14 @@ def _convert_elements(
             nodes.extend((table_node, representation))
             continue
         if element.kind is ElementKind.IMAGE:
-            image_node, image_write = _image_node(
+            image_node, image_artifact = _image_node(
                 element,
                 anchor,
                 root_order,
                 document_version_id,
             )
             nodes.append(image_node)
-            image_writes.append(image_write)
+            image_artifacts.append(image_artifact)
             continue
         exact_text = normalize_document_text(element.text)
         kind = (
@@ -478,7 +450,7 @@ def _convert_elements(
         if table_count
         else ()
     )
-    return tuple(nodes), issues, tuple(image_writes)
+    return tuple(nodes), issues, tuple(image_artifacts)
 
 
 def _table_nodes(
@@ -540,7 +512,7 @@ def _image_node(
     anchor: SourceAnchor,
     root_order: int,
     document_version_id: str,
-) -> tuple[DocumentNode, BlobWriteRequest]:
+) -> tuple[DocumentNode, ParsedArtifact]:
     if (
         element.binary_data is None
         or element.media_type is None
@@ -550,9 +522,9 @@ def _image_node(
             "旧图片 Element 缺少受控二进制或媒体元数据。",
             stage="legacy-docx-ir.image",
         )
-    blob_id = f"image:{element.content_sha256}"
+    artifact_id = f"sha256:{element.content_sha256}"
     attributes = ImageAttributes(
-        blob_ref=blob_id,
+        blob_ref=artifact_id,
         media_type=element.media_type,
         content_sha256=element.content_sha256,
         display_name=element.media_name,
@@ -576,11 +548,12 @@ def _image_node(
                 ("legacy_heading_index", element.locator.heading_index),
             ),
         ),
-        BlobWriteRequest(
-            blob_id=blob_id,
+        ParsedArtifact(
+            artifact_id=artifact_id,
             content_sha256=element.content_sha256,
             media_type=element.media_type,
             content=element.binary_data,
+            role="embedded_media",
         ),
     )
 

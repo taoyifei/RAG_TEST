@@ -24,6 +24,7 @@ from rag_app.core.models import (
     VectorWriteRequest,
 )
 from rag_app.core.ports import (
+    BlobPutResult,
     BlobReadResult,
     BlobWriteRequest,
     MetadataRecord,
@@ -382,14 +383,14 @@ class InMemoryBlobStore:
         self._closed = False
         self.close_count = 0
 
-    def put(self, request: BlobWriteRequest) -> None:
-        """校验摘要后幂等写入。
+    def put_if_absent(self, request: BlobWriteRequest) -> BlobPutResult:
+        """校验摘要后幂等写入，并返回创建状态。
 
         Args:
             request: blob 身份、摘要、媒体类型和内容。
 
         Returns:
-            无返回值。
+            新建时 CREATED；相同对象已存在时 EXISTING。
 
         """
         observed = hashlib.sha256(request.content).hexdigest()
@@ -399,9 +400,12 @@ class InMemoryBlobStore:
         existing = self._items.get(request.blob_id)
         if existing is not None and existing != result:
             raise ValueError("同一 blob ID 的内容不一致。")
+        if existing is not None:
+            return BlobPutResult.EXISTING
         self._items[request.blob_id] = result
+        return BlobPutResult.CREATED
 
-    def get(self, blob_id: str) -> BlobReadResult | None:
+    def read(self, blob_id: str) -> BlobReadResult | None:
         """读取一个 blob。
 
         Args:
@@ -412,6 +416,42 @@ class InMemoryBlobStore:
 
         """
         return self._items.get(blob_id)
+
+    def exists(self, blob_id: str) -> bool:
+        """判断一个 blob 是否存在。
+
+        Args:
+            blob_id: blob 身份。
+
+        Returns:
+            存在时为 True。
+
+        """
+        return blob_id in self._items
+
+    def put(self, request: BlobWriteRequest) -> None:
+        """兼容旧调用并委托给 `put_if_absent`。
+
+        Args:
+            request: blob 写入请求。
+
+        Returns:
+            无返回值。
+
+        """
+        self.put_if_absent(request)
+
+    def get(self, blob_id: str) -> BlobReadResult | None:
+        """兼容旧调用并委托给 `read`。
+
+        Args:
+            blob_id: blob 身份。
+
+        Returns:
+            找到的结果，否则为 None。
+
+        """
+        return self.read(blob_id)
 
     def delete(self, blob_id: str) -> None:
         """幂等删除 blob。

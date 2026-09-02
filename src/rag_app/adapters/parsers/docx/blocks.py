@@ -36,12 +36,12 @@ from rag_app.adapters.parsers.docx.text import extract_paragraph_text
 from rag_app.core.models import (
     ListAttributes,
     NodeKind,
+    ParsedArtifact,
     RevisionMark,
     SourceAnchor,
     StoryKind,
 )
 from rag_app.core.policies import ParsingPolicy
-from rag_app.core.ports.blob_store import BlobWriteRequest
 
 
 class BlockParser:
@@ -77,7 +77,7 @@ class BlockParser:
         self.issues = issues
         self.styles = styles
         self.numbering = numbering
-        self.blob_writes: dict[str, BlobWriteRequest] = {}
+        self.artifacts: dict[str, ParsedArtifact] = {}
         self.note_references: list[tuple[str, str, str]] = []
         self.comment_references: list[tuple[str, str]] = []
         self.cross_references: list[tuple[str, str]] = []
@@ -346,6 +346,7 @@ class BlockParser:
                 restart_group=label.restart_group,
             )
             metadata["num_id"] = num_id
+        validate_hyperlinks(self, part_uri, metadata)
         paragraph_node = self.builder.add(
             kind=kind,
             parent_node_id=parent_node_id,
@@ -386,7 +387,6 @@ class BlockParser:
                     self.cross_references.append(
                         (paragraph_node.node_id, target)
                     )
-        validate_hyperlinks(self, part_uri, metadata)
         for break_index, break_type in enumerate(extraction.break_types):
             if break_type == "line":
                 continue

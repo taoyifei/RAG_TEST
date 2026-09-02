@@ -6,7 +6,7 @@ from enum import StrEnum
 
 from pydantic import Field, StrictFloat, StrictInt, field_validator
 
-from rag_app.core._base import FrozenModel, JsonObject, freeze_json_object
+from rag_app.core._base import FrozenModel
 from rag_app.core.identifiers import canonical_json
 
 _MAX_HEADING_LEVEL = 9
@@ -78,7 +78,6 @@ class ParsingPolicy(FrozenModel):
 
     schema_version: str = Field(default="1", pattern=r"^1$")
     policy_id: str = Field(default="docx-safe-v1", min_length=1)
-    metadata: JsonObject = ()
     mode: ParsingMode = ParsingMode.STRICT
     tracked_changes: TrackedChangesPolicy = TrackedChangesPolicy.FINAL_VIEW
     comments: CommentsPolicy = CommentsPolicy.METADATA_ONLY
@@ -107,11 +106,6 @@ class ParsingPolicy(FrozenModel):
     max_field_depth: StrictInt = Field(default=32, gt=0, le=128)
     custom_heading_styles: tuple[tuple[str, StrictInt], ...] = ()
     preserve_soft_hyphen: bool = False
-
-    @field_validator("metadata", mode="before")
-    @classmethod
-    def _freeze_metadata(cls, value: object) -> JsonObject:
-        return freeze_json_object(value)
 
     def canonical_json(self) -> str:
         """返回可进入 index fingerprint 的规范化策略。

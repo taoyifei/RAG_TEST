@@ -21,6 +21,7 @@ from rag_app.core.errors import InvalidDocument, UnsupportedDocumentFeature
 from rag_app.core.models import (
     ImageAttributes,
     NodeKind,
+    ParsedArtifact,
     SourceAnchor,
     StoryKind,
 )
@@ -30,7 +31,6 @@ from rag_app.core.policies import (
     ParsingPolicy,
     UnknownIndexableContentPolicy,
 )
-from rag_app.core.ports.blob_store import BlobWriteRequest
 
 _EMU_PER_PIXEL = 9_525
 
@@ -42,7 +42,7 @@ class BlockMediaContext(Protocol):
     policy: ParsingPolicy
     builder: IrNodeBuilder
     issues: IssueCollector
-    blob_writes: dict[str, BlobWriteRequest]
+    artifacts: dict[str, ParsedArtifact]
 
     def anchor(
         self,
@@ -133,18 +133,19 @@ def parse_image(  # noqa: PLR0913
             action="blob_preserved_with_type",
             message="图片媒体类型未知，按原始字节保存。",
         )
-    blob_id = f"media:{digest}"
-    parser.blob_writes.setdefault(
-        blob_id,
-        BlobWriteRequest(
-            blob_id=blob_id,
+    artifact_id = f"sha256:{digest}"
+    parser.artifacts.setdefault(
+        artifact_id,
+        ParsedArtifact(
+            artifact_id=artifact_id,
             content_sha256=digest,
             media_type=media_type,
             content=payload,
+            role="embedded_media",
         ),
     )
     attributes = ImageAttributes(
-        blob_ref=blob_id,
+        blob_ref=artifact_id,
         media_type=media_type,
         content_sha256=digest,
         display_name=reference.name or PurePosixPath(target).name,

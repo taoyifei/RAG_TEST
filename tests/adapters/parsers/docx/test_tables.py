@@ -6,7 +6,7 @@ import pytest
 from rag_app.adapters.parsers.docx import DocxOoxmlV4Parser
 from rag_app.core.errors import InvalidDocument
 from rag_app.core.models import NodeKind, ParseSource
-from tests.adapters.parsers.docx.fixtures import build_package, policy
+from tests.adapters.parsers.docx.fixtures import build_package, context, policy
 
 
 def test_grid_span_and_vertical_merge_preserve_logical_cells() -> None:
@@ -30,6 +30,7 @@ def test_grid_span_and_vertical_merge_preserve_logical_cells() -> None:
             content=build_package(table),
         ),
         policy(),
+        context(),
     )
 
     tables = [node for node in result.document_ir.nodes if node.kind is NodeKind.TABLE]
@@ -60,6 +61,7 @@ def test_omitted_grid_and_repeated_header_remain_explicit_metadata() -> None:
             content=build_package(table),
         ),
         policy(),
+        context(),
     )
     row = next(
         node for node in result.document_ir.nodes
@@ -95,6 +97,7 @@ def test_nested_table_preserves_physical_child_order() -> None:
             content=build_package(table),
         ),
         policy(),
+        context(),
     )
     cell = next(
         node for node in result.document_ir.nodes
@@ -124,10 +127,11 @@ def test_inconsistent_grid_is_strict_failure_but_best_effort_issue() -> None:
     )
 
     with pytest.raises(InvalidDocument, match="span"):
-        DocxOoxmlV4Parser().parse(source, policy())
+        DocxOoxmlV4Parser().parse(source, policy(), context())
 
     result = DocxOoxmlV4Parser().parse(
         source,
         policy(mode="best_effort"),
+        context(),
     )
     assert "DOCX_TABLE_GRID_INCONSISTENT" in result.report.warnings
