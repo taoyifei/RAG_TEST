@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from rag_app.adapters.parsers.legacy_docx_ir import LegacyDocxIrParser
 from rag_app.contracts import Chunk as LegacyChunk
+from rag_app.contracts import ChunkIdentity as LegacyChunkIdentity
+from rag_app.contracts import ChunkRole as LegacyChunkRole
 from rag_app.contracts import ChunkSourceSpan as LegacySourceSpan
 from rag_app.contracts import Element as LegacyElement
+from rag_app.contracts import ElementKind as LegacyElementKind
+from rag_app.contracts import Locator
+from rag_app.contracts import stable_chunk_id as legacy_stable_chunk_id
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -17,6 +24,7 @@ from rag_app.core.models import (
     ChunkingContext,
     ChunkingReport,
     ChunkingResult,
+    ChunkRole,
     DocumentIR,
     DocumentNode,
     DocumentVersionRef,
@@ -25,6 +33,7 @@ from rag_app.core.models import (
     NodeKind,
     SourceAnchor,
     SourceSpan,
+    SourceSpanKind,
     StoryKind,
     text_payload,
 )
@@ -132,11 +141,25 @@ def legacy_span_to_core(
     return (
         SourceSpan(
             node_id=generated_node_id,
+            source_anchor=SourceAnchor(
+                part_uri="/legacy/document",
+                story_kind=StoryKind.BODY,
+                structural_path=structural_path,
+                ordinal=0,
+                source_start_char=span.source_start_char,
+                source_end_char=span.source_end_char,
+            ),
             structural_path=structural_path,
             chunk_start_char=span.start_char,
             chunk_end_char=span.end_char,
             source_start_char=span.source_start_char,
             source_end_char=span.source_end_char,
+            span_type=(
+                SourceSpanKind.REPEATED_CONTEXT
+                if span.is_repeated
+                else SourceSpanKind.ORIGINAL_TEXT
+            ),
+            is_repeated=span.is_repeated,
             metadata=(("is_repeated", span.is_repeated),),
         ),
         ("LEGACY_FILE_PATH_OMITTED",),
@@ -165,7 +188,10 @@ def legacy_chunk_to_core(
     converted = tuple(
         legacy_span_to_core(span, version_id) for span in chunk.source_spans
     )
-    spans = tuple(item[0] for item in converted)
+    spans = _cover_legacy_span_gaps(
+        chunk.text,
+        tuple(item[0] for item in converted),
+    )
     warnings = tuple(
         sorted(
             {
@@ -188,6 +214,13 @@ def legacy_chunk_to_core(
             source_spans=spans,
             citation_text=chunk.text,
             embedding_text=chunk.embedding_text,
+            lexical_text=chunk.text,
+            token_count=len(chunk.embedding_text.encode("utf-8")),
+            token_count_is_estimate=True,
+            tokenizer_id="legacy-unknown-v1",
+            content_sha256=hashlib.sha256(
+                chunk.text.encode("utf-8")
+            ).hexdigest(),
             metadata=(
                 ("legacy_source_id", chunk.source_id),
                 ("legacy_section_id", chunk.section_id),
@@ -240,13 +273,19 @@ class LegacySectionChunkerAdapter:
         for node in document_ir.nodes:
             if not node.text.strip():
                 continue
+            exact_text = (
+                node.text_payload.exact_text
+                if node.text_payload is not None
+                else node.text
+            )
             span = SourceSpan(
                 node_id=node.node_id,
+                source_anchor=node.anchor,
                 structural_path=node.structural_path,
                 chunk_start_char=0,
-                chunk_end_char=len(node.text),
+                chunk_end_char=len(exact_text),
                 source_start_char=0,
-                source_end_char=len(node.text),
+                source_end_char=len(exact_text),
             )
             chunks.append(
                 Chunk(
@@ -260,8 +299,15 @@ class LegacySectionChunkerAdapter:
                     version=document_ir.version,
                     chunker_fingerprint=context.chunker_fingerprint,
                     source_spans=(span,),
-                    citation_text=node.text,
-                    embedding_text=node.text,
+                    citation_text=exact_text,
+                    embedding_text=exact_text,
+                    lexical_text=exact_text,
+                    token_count=len(exact_text.encode("utf-8")),
+                    token_count_is_estimate=True,
+                    tokenizer_id="legacy-unknown-v1",
+                    content_sha256=hashlib.sha256(
+                        exact_text.encode("utf-8")
+                    ).hexdigest(),
                     metadata=(("legacy_adapter", "one-node-one-chunk"),),
                 )
             )
@@ -269,3 +315,154 @@ class LegacySectionChunkerAdapter:
             chunks=tuple(chunks),
             report=ChunkingReport(chunk_count=len(chunks)),
         )
+
+
+def _cover_legacy_span_gaps(
+    text: str,
+    spans: tuple[SourceSpan, ...],
+) -> tuple[SourceSpan, ...]:
+    covered: list[SourceSpan] = []
+    cursor = 0
+    for span in spans:
+        if span.chunk_start_char > cursor:
+            covered.append(
+                SourceSpan(
+                    span_type=SourceSpanKind.SEPARATOR,
+                    chunk_start_char=cursor,
+                    chunk_end_char=span.chunk_start_char,
+                    is_citable=False,
+                )
+            )
+        covered.append(span)
+        cursor = span.chunk_end_char
+    if cursor < len(text):
+        covered.append(
+            SourceSpan(
+                span_type=SourceSpanKind.SEPARATOR,
+                chunk_start_char=cursor,
+                chunk_end_char=len(text),
+                is_citable=False,
+            )
+        )
+    return tuple(covered)
+
+
+def core_chunk_to_legacy(
+    chunk: Chunk,
+    *,
+    display_name: str,
+) -> tuple[LegacyChunk, tuple[str, ...]]:
+    """把基础 V3 字段映射回旧 Chunk，并报告结构损失。
+
+    Args:
+        chunk: canonical Chunk V3。
+        display_name: 旧 Locator 需要的展示名，不参与稳定身份。
+
+    Returns:
+        可供旧 Query/index 读取的 Chunk 与有序损失 warning。
+
+    """
+    legacy_spans: list[LegacySourceSpan] = []
+    warnings: set[str] = set()
+    for span in chunk.source_spans:
+        if span.span_type in {
+            SourceSpanKind.SEPARATOR,
+            SourceSpanKind.DERIVED_NUMBERING,
+        }:
+            warnings.add("CHUNK_V3_SPAN_NOT_EXPRESSIBLE_IN_LEGACY")
+            continue
+        anchor = span.source_anchor
+        if anchor is None or span.node_id is None:
+            warnings.add("CHUNK_V3_SPAN_NOT_EXPRESSIBLE_IN_LEGACY")
+            continue
+        source_start = span.source_start_char
+        source_end = span.source_end_char
+        if source_start is None or source_end is None:
+            warnings.add("CHUNK_V3_SPAN_NOT_EXPRESSIBLE_IN_LEGACY")
+            continue
+        locator = Locator(
+            file_path=display_name,
+            heading_path=chunk.heading_path,
+            paragraph_index=_legacy_positive(anchor.paragraph_index),
+            table_index=_legacy_positive(anchor.table_index),
+            image_index=(1 if chunk.role is ChunkRole.IMAGE_METADATA else None),
+            fragment=chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ][:240],
+        )
+        legacy_spans.append(
+            LegacySourceSpan(
+                element_id=span.node_id,
+                locator=locator,
+                start_char=span.chunk_start_char,
+                end_char=span.chunk_end_char,
+                source_start_char=source_start,
+                source_end_char=source_end,
+                is_repeated=span.is_repeated,
+            )
+        )
+    if not legacy_spans:
+        raise ValueError("Chunk V3 不含旧 payload 可表达的来源跨度。")
+    if chunk.child_group_ids or chunk.note_refs:
+        warnings.add("CHUNK_V3_RELATIONSHIPS_NOT_EXPRESSIBLE_IN_LEGACY")
+    legacy_role, element_kind = _legacy_chunk_role(chunk.role)
+    source_digest = hashlib.sha256(
+        chunk.version.document_id.encode()
+    ).hexdigest()
+    source_id = f"src_{source_digest[:32]}"
+    doc_version = f"sha256:{chunk.version.content_sha256}"
+    section_id = _legacy_prefixed_id("section", chunk.section_id)
+    group_id = _legacy_prefixed_id("group", chunk.neighbor_group_id)
+    identity = LegacyChunkIdentity(
+        section_id=section_id,
+        neighbor_group_id=group_id,
+        chunk_role=legacy_role,
+        source_spans=tuple(legacy_spans),
+    )
+    legacy_id = legacy_stable_chunk_id(source_id, identity, chunk.citation_text)
+    locators = tuple(dict.fromkeys(span.locator for span in legacy_spans))
+    return (
+        LegacyChunk(
+            chunk_id=legacy_id,
+            source_id=source_id,
+            doc_version=doc_version,
+            pipeline_fingerprint=chunk.chunker_fingerprint,
+            section_id=section_id,
+            neighbor_group_id=group_id,
+            chunk_role=legacy_role,
+            source_spans=tuple(legacy_spans),
+            text=chunk.citation_text,
+            embedding_text=chunk.embedding_text,
+            element_kind=element_kind,
+            locators=locators,
+            content_sha256=chunk.content_sha256,
+            document_status="active",
+            authority_level="official",
+            effective_from=None,
+            effective_to=None,
+            contains_ocr=False,
+        ),
+        tuple(sorted(warnings)),
+    )
+
+
+def _legacy_chunk_role(
+    role: ChunkRole,
+) -> tuple[LegacyChunkRole, LegacyElementKind]:
+    if role is ChunkRole.TABLE:
+        return LegacyChunkRole.TABLE, LegacyElementKind.TABLE
+    if role is ChunkRole.IMAGE_METADATA:
+        return LegacyChunkRole.TEXT, LegacyElementKind.PARAGRAPH
+    return LegacyChunkRole.TEXT, LegacyElementKind.PARAGRAPH
+
+
+def _legacy_prefixed_id(prefix: str, value: str) -> str:
+    expected = f"{prefix}_"
+    if value.startswith(expected) and len(value) == len(expected) + 32:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return f"{prefix}_{digest[:32]}"
+
+
+def _legacy_positive(value: int | None) -> int | None:
+    return None if value is None else max(1, value)

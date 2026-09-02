@@ -16,6 +16,7 @@ from rag_app.core.ports.lexical_store import LexicalStorePort
 from rag_app.core.ports.metadata_store import MetadataRecord, MetadataStorePort
 from rag_app.core.ports.parser import ParserPort
 from rag_app.core.ports.reranker import RerankerPort
+from rag_app.core.ports.tokenizer import TokenCounterPort
 from rag_app.core.ports.trace import TracePort
 from rag_app.core.ports.vector_store import VectorStorePort
 
@@ -34,6 +35,7 @@ __all__ = [
     "MetadataStorePort",
     "ParserPort",
     "RerankerPort",
+    "TokenCounterPort",
     "TracePort",
     "VectorStorePort",
 ]

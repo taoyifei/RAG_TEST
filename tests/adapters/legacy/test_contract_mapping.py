@@ -1,6 +1,9 @@
 import hashlib
 
-from rag_app.adapters.legacy.contracts import legacy_chunk_to_core
+from rag_app.adapters.legacy.contracts import (
+    core_chunk_to_legacy,
+    legacy_chunk_to_core,
+)
 from rag_app.adapters.legacy.query import legacy_evidence_to_core
 from rag_app.adapters.legacy.stores import InMemoryVectorStore
 from rag_app.contracts import (
@@ -71,6 +74,18 @@ def test_legacy_chunk_mapping_reports_omitted_file_path() -> None:
     assert mapped.source_spans[0].structural_path
     assert "LEGACY_FILE_PATH_OMITTED" in warnings
     assert "renamed.docx" not in repr(mapped)
+
+
+def test_chunk_v3_can_be_explicitly_mapped_back_to_legacy() -> None:
+    mapped, _ = legacy_chunk_to_core(_legacy_chunk())
+    restored, warnings = core_chunk_to_legacy(
+        mapped,
+        display_name="restored.docx",
+    )
+    assert restored.text == "abc"
+    assert restored.embedding_text == "abc"
+    assert restored.locators[0].file_path == "restored.docx"
+    assert warnings == ()
 
 
 def test_equal_dimensions_do_not_allow_cross_slot_store_search() -> None:

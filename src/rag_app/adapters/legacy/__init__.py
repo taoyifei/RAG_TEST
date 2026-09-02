@@ -3,6 +3,7 @@
 from rag_app.adapters.legacy.contracts import (
     LegacyDocxParserAdapter,
     LegacySectionChunkerAdapter,
+    core_chunk_to_legacy,
     legacy_chunk_to_core,
     legacy_element_to_core,
     legacy_span_to_core,
@@ -50,6 +51,7 @@ __all__ = [
     "SqliteMetadataStore",
     "SqliteTraceSink",
     "V4DocumentIrToLegacyElementsAdapter",
+    "core_chunk_to_legacy",
     "document_ir_to_legacy_elements",
     "legacy_chunk_to_core",
     "legacy_element_to_core",

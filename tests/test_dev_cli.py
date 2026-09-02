@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
@@ -94,3 +95,47 @@ def test_inspect_document_include_content_is_explicit(
         == 0
     )
     assert "第一步" in output.read_text(encoding="utf-8")
+
+
+def test_chunk_document_defaults_to_statistics_without_content(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "sample.docx"
+    source.write_bytes(build_docx(HEADING + PARAGRAPH))
+
+    assert dev.main(["chunk-document", str(source)]) == 0
+    stdout = capsys.readouterr().out
+
+    assert "chunker=docx-structural-v3" in stdout
+    assert "chunk_id_prefixes=" in stdout
+    assert "第一步" not in stdout
+
+
+def test_chunk_ablation_writes_provisional_json_and_markdown(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample.docx"
+    output = tmp_path / "ablation"
+    source.write_bytes(build_docx(PARAGRAPH))
+
+    assert (
+        dev.main(
+            [
+                "chunk-ablation",
+                str(source),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    rows = json.loads(
+        (output / "chunk-ablation.json").read_text(encoding="utf-8")
+    )
+    markdown = (output / "chunk-ablation.md").read_text(encoding="utf-8")
+    assert len(rows) == 3
+    assert all(row["provisional"] is True for row in rows)
+    assert "P08" in markdown
+    assert "不选择最佳参数" in markdown
+    assert all("selected_candidate" not in row for row in rows)

@@ -36,6 +36,10 @@ from rag_app.composition import (
     load_profile,
     register_builtin_components,
 )
+from rag_app.composition.chunking_cli import (
+    chunk_ablation_command,
+    chunk_document_command,
+)
 from rag_app.composition.provider_profiles import load_provider_catalog
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -70,6 +74,10 @@ _SMOKE_TESTS = (
     (
         "tests/adapters/parsers/docx/test_snapshots.py::"
         "test_restart_fixture_parses_with_v4"
+    ),
+    (
+        "tests/adapters/chunkers/test_docx_structural.py::"
+        "test_table_merge_and_nested_table_keep_real_source_relationships"
     ),
     "tests/test_health_api.py",
     "tests/test_docx_parser.py",
@@ -257,15 +265,16 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             "provider-smoke",
             "failover-smoke",
             "inspect-document",
+            "chunk-document",
+            "chunk-ablation",
         ),
     )
     parser.add_argument("document_path", nargs="?", type=Path)
     parser.add_argument("--profile", type=Path)
     parser.add_argument("--output-json", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--include-content", action="store_true")
-    parser.add_argument(
-        "--provider", choices=("jina", "aliyun-qwen37")
-    )
+    parser.add_argument("--provider", choices=("jina", "aliyun-qwen37"))
     parser.add_argument("--scenario", choices=_FAILOVER_SCENARIOS)
     parsed = parser.parse_args(arguments)
     if parsed.command == "provider-check" and parsed.profile is None:
@@ -276,6 +285,13 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         parser.error("failover-smoke 必须提供 --scenario。")
     if parsed.command == "inspect-document" and parsed.document_path is None:
         parser.error("inspect-document 必须提供文档路径。")
+    if parsed.command == "chunk-document" and parsed.document_path is None:
+        parser.error("chunk-document 必须提供文档路径。")
+    if parsed.command == "chunk-ablation":
+        if parsed.document_path is None:
+            parser.error("chunk-ablation 必须提供文档或目录路径。")
+        if parsed.output is None:
+            parser.error("chunk-ablation 必须提供 --output。")
     return parsed
 
 
@@ -609,6 +625,18 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
             profile_path=parsed.profile,
             output_json=parsed.output_json,
             include_content=parsed.include_content,
+        )
+    if command == "chunk-document":
+        return chunk_document_command(
+            parsed.document_path,
+            profile_path=parsed.profile,
+            include_content=parsed.include_content,
+        )
+    if command == "chunk-ablation":
+        return chunk_ablation_command(
+            parsed.document_path,
+            output_directory=parsed.output,
+            profile_path=parsed.profile,
         )
     if command == "provider-check":
         return _provider_check(parsed.profile)
