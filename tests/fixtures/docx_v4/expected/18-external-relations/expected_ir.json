@@ -1,0 +1,157 @@
+{
+  "document": {
+    "display_name": "18-external-relations.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:d8b93594ad421f9f3b4df1594a8cd7c4b8afd358aa82f2b7b673a4afc3a9cacd"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 5,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": {
+        "hyperlink_kinds": [
+          "external_or_relationship"
+        ],
+        "hyperlink_relationship_ids": [
+          "rIdExternal"
+        ]
+      },
+      "node_id": "node_56cf98b8be7940b0d5c5c6d04a25fcdd",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "7503b32473096186c585f6fc19de3c692bbe99c213013bb37085ee2dbc30edd1",
+        "exact_text": "仅显示文字",
+        "semantic_sha256": "7503b32473096186c585f6fc19de3c692bbe99c213013bb37085ee2dbc30edd1",
+        "semantic_text": "仅显示文字"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_7934c1c29cc1269d499f75d922a78fd2",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [
+      {
+        "action": "metadata_only_no_fetch",
+        "anchor": null,
+        "code": "DOCX_EXTERNAL_RELATIONSHIP_METADATA_ONLY",
+        "count": 1,
+        "metadata": {
+          "schemes": [
+            "https"
+          ]
+        },
+        "safe_message": "外部关系仅记录协议类型，未访问目标。",
+        "severity": "warning"
+      }
+    ],
+    "media_count": 0,
+    "node_count": 2,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 5,
+    "relationship_count": 3,
+    "represented_visible_text_nodes": 1,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 2
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 1,
+    "warnings": [
+      "DOCX_EXTERNAL_RELATIONSHIP_METADATA_ONLY"
+    ]
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_56cf98b8be7940b0d5c5c6d04a25fcdd",
+    "node_7934c1c29cc1269d499f75d922a78fd2"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_4ea2ee7aff901d3779575277735629b4",
+    "content_sha256": "b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
+    "display_name": "18-external-relations.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_4ea2ee7aff901d3779575277735629b4",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 13671
+  },
+  "version": {
+    "content_sha256": "b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_4ea2ee7aff901d3779575277735629b4"
+  }
+}

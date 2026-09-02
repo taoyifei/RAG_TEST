@@ -1,0 +1,132 @@
+[
+  {
+    "name": "01-headings-custom-outline.docx",
+    "policy": {},
+    "sha256": "9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
+    "status": "parsed"
+  },
+  {
+    "name": "02-numbering-multilevel.docx",
+    "policy": {},
+    "sha256": "1a1879aa24aa8a975c28d86fdf6a8b5b126e58bfd4ba9354c52eebd9083b8bb3",
+    "status": "parsed"
+  },
+  {
+    "name": "03-numbering-restart-override.docx",
+    "policy": {},
+    "sha256": "a808a4dd86a79f572a4ebe4042a8f090b4829477a6f5eff1bb041d5ff1acfda6",
+    "status": "parsed"
+  },
+  {
+    "name": "04-hyperlinks-bookmarks-fields.docx",
+    "policy": {},
+    "sha256": "de2686faa735828cc1734342b31d29c8bca06f7029796127e7b1bb44352f4460",
+    "status": "parsed"
+  },
+  {
+    "name": "05-breaks-tabs-hidden.docx",
+    "policy": {},
+    "sha256": "75c5c6619280a6c687a622511d98931d04bee6115878c300c046d8e82ae31db5",
+    "status": "parsed"
+  },
+  {
+    "name": "06-table-basic.docx",
+    "policy": {},
+    "sha256": "b0b1296f7a0f97499236bdb36b5d353be4fd63a1a08607b32617984b830219a9",
+    "status": "parsed"
+  },
+  {
+    "name": "07-table-gridspan-vmerge.docx",
+    "policy": {},
+    "sha256": "8fac56369a5f875f1ee687183134300c2e33b5c70d9d53512a16d94591a6dcb4",
+    "status": "parsed"
+  },
+  {
+    "name": "08-table-omitted-grid.docx",
+    "policy": {},
+    "sha256": "1335a16f259d03cade079f9aaa4aa7f68adfba53711c242f0242290f82f1d883",
+    "status": "parsed"
+  },
+  {
+    "name": "09-table-nested-list-image.docx",
+    "policy": {},
+    "sha256": "ddca0853f1a532644a75c58b207582be5bccccec74ddcc1d0ad775fc988996d8",
+    "status": "parsed"
+  },
+  {
+    "name": "10-sections-headers-footers.docx",
+    "policy": {
+      "headers_footers": "parse"
+    },
+    "sha256": "f7779287d030b74d54fc7014d619b2e5b7977f81f7d4dc036aac0617ad04fb0a",
+    "status": "parsed"
+  },
+  {
+    "name": "11-footnotes-endnotes.docx",
+    "policy": {
+      "footnotes_endnotes": "parse"
+    },
+    "sha256": "4a003eb2bd65f46e6dc8954a18edee7a5da66cc9f12a0832c7de1ac493ffd54b",
+    "status": "parsed"
+  },
+  {
+    "name": "12-comments.docx",
+    "policy": {
+      "comments": "include"
+    },
+    "sha256": "78ff38e9c28ee1f105bd773e56ea9c2d1fc576cd93b4bfefedafbe2f22be521a",
+    "status": "parsed"
+  },
+  {
+    "name": "13-tracked-changes.docx",
+    "policy": {},
+    "sha256": "09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
+    "status": "parsed"
+  },
+  {
+    "name": "14-images-inline-anchor-vml.docx",
+    "policy": {
+      "images": "extract"
+    },
+    "sha256": "e9d4312bbf45eb5ca17e099e874532d71f0517487d8a3aa95eeeb78b05ce1ca6",
+    "status": "parsed"
+  },
+  {
+    "name": "15-content-controls-toc.docx",
+    "policy": {},
+    "sha256": "2c4e05786cf7af670fa8d9ee498389527761a8500ca4af934940866b864760cb",
+    "status": "parsed"
+  },
+  {
+    "name": "16-textbox.docx",
+    "policy": {},
+    "sha256": "dcf0d6d574aaebfc3a501115bfb76fdc32990d3256645839d81a6cbd8d2e4a60",
+    "status": "parsed"
+  },
+  {
+    "name": "17-unsupported-math-ole-smartart.docx",
+    "policy": {},
+    "sha256": "6766f1d4155ce409951dc3f92477b0828f9d47c2b221b66e45538248d5eaf9a3",
+    "status": "parsed"
+  },
+  {
+    "name": "18-external-relations.docx",
+    "policy": {},
+    "sha256": "b3e0854a030a4c401d2cd9b0b4b82a93d122649f94ee4827868a48acf68dad5f",
+    "status": "parsed"
+  },
+  {
+    "name": "19-malformed-relationships.docx",
+    "policy": {},
+    "sha256": "43ffcbbd1bae524f50c937f070bcd98eae998335787341a019b73f2bdd78f3f0",
+    "status": "rejected"
+  },
+  {
+    "name": "20-security-limits.docx",
+    "policy": {
+      "max_entries": 2
+    },
+    "sha256": "194b5c9c8836df765425429fd63055e2600454b73870825da97face66c49d834",
+    "status": "rejected"
+  }
+]

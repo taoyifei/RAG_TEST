@@ -13,7 +13,7 @@ from rag_app.core.errors import ConfigurationError
 def test_offline_profile_matches_required_development_stack() -> None:
     profile = default_offline_profile()
     components = profile.components
-    assert components.parser == "legacy-docx-ir"
+    assert components.parser == "docx-ooxml-v4"
     assert components.chunker == "legacy-section-pack"
     assert components.embedding_topology == "deterministic-single"
     assert components.embedding_primary == "deterministic"

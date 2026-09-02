@@ -28,6 +28,13 @@ _DOCUMENT_TEMPLATE = """<?xml version="1.0" encoding="UTF-8"?>
   <w:body>{blocks}<w:sectPr/></w:body>
 </w:document>
 """
+_ROOT_RELATIONSHIPS = """<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdOfficeDocument"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"
+    Target="word/document.xml"/>
+</Relationships>
+"""
 HEADING = (
     '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
     "<w:r><w:t>安装说明</w:t></w:r></w:p>"
@@ -65,6 +72,7 @@ def build_docx(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", _CONTENT_TYPES)
+        archive.writestr("_rels/.rels", _ROOT_RELATIONSHIPS)
         archive.writestr("word/document.xml", document)
         archive.writestr("word/styles.xml", _STYLES)
         if relationships:

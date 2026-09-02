@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 import shutil
 import subprocess
@@ -66,6 +67,7 @@ _SECRET_PATTERNS = (
 )
 _MAX_SECRET_SCAN_BYTES = 2 * 1024 * 1024
 _NEW_PACKAGE_NAMES = ("adapters", "application", "composition", "core")
+_SYNTHETIC_DOCX_ROOT = PurePosixPath("tests/fixtures/docx_v4")
 
 
 def _inner_layer_files() -> tuple[Path, ...]:
@@ -107,6 +109,23 @@ def _tracked_paths() -> tuple[PurePosixPath, ...]:
     )
 
 
+def _declared_synthetic_docx_paths() -> frozenset[PurePosixPath]:
+    manifest_path = _ROOT.joinpath(
+        *_SYNTHETIC_DOCX_ROOT.parts,
+        "manifest.json",
+    )
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert isinstance(payload, list)
+    declared: set[PurePosixPath] = set()
+    for item in payload:
+        assert isinstance(item, dict)
+        path = _SYNTHETIC_DOCX_ROOT / str(item["name"])
+        assert path.parent == _SYNTHETIC_DOCX_ROOT
+        assert path.suffix == ".docx"
+        declared.add(path)
+    return frozenset(declared)
+
+
 def test_inner_layers_do_not_import_infrastructure() -> None:
     violations = {
         str(path.relative_to(_ROOT)): name
@@ -123,7 +142,9 @@ def test_inner_layers_do_not_import_infrastructure() -> None:
 
 def test_tracked_tree_excludes_sensitive_and_industry_payloads() -> None:
     violations: list[str] = []
-    for path in _tracked_paths():
+    tracked = _tracked_paths()
+    allowed_docx = _declared_synthetic_docx_paths()
+    for path in tracked:
         rendered = path.as_posix()
         lowered = rendered.casefold()
         if path.name == ".env" or path.name.casefold() in {
@@ -135,7 +156,7 @@ def test_tracked_tree_excludes_sensitive_and_industry_payloads() -> None:
         if any(
             lowered.endswith(suffix)
             for suffix in _FORBIDDEN_TRACKED_SUFFIXES
-        ):
+        ) and path not in allowed_docx:
             violations.append(rendered)
         if ".data" in path.parts:
             violations.append(rendered)
@@ -155,6 +176,7 @@ def test_tracked_tree_excludes_sensitive_and_industry_payloads() -> None:
             violations.append(rendered)
 
     assert sorted(set(violations)) == []
+    assert allowed_docx.issubset(set(tracked))
 
 
 def test_tracked_text_excludes_obvious_live_secrets() -> None:

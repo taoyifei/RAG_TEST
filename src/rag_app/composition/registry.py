@@ -614,11 +614,19 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         SqliteMetadataStore,
         SqliteTraceSink,
     )
-    from rag_app.adapters.parsers import LegacyDocxIrParser  # noqa: PLC0415
+    from rag_app.adapters.parsers import (  # noqa: PLC0415
+        DocxOoxmlV4Parser,
+        LegacyDocxIrParser,
+    )
     from rag_app.composition.builtin_providers import (  # noqa: PLC0415
         register_builtin_provider_components,
     )
 
+    registry.register_parser(
+        "docx-ooxml-v4",
+        lambda: DocxOoxmlV4Parser(),  # noqa: PLW0108
+        descriptor=DocxOoxmlV4Parser.descriptor,
+    )
     registry.register_parser(
         "legacy-docx-ir",
         lambda: LegacyDocxIrParser(),  # noqa: PLW0108

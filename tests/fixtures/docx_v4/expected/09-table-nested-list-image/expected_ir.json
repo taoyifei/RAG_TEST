@@ -1,0 +1,535 @@
+{
+  "document": {
+    "display_name": "09-table-nested-list-image.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:17a38c3df0552d2a96e62e243394fa4d39d0d58d050e4e4c034529c6fa5e8d04"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_3ed0b5ccfaceb2e238a54ed70e3cd6b0"
+      ],
+      "image_attributes": null,
+      "kind": "table",
+      "list_attributes": null,
+      "metadata": {
+        "grid_columns": 1,
+        "nested_depth": 0
+      },
+      "node_id": "node_72825d708558732c3b4c5475d2bc6a3f",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_991bc439aab1047d045cfe9336471392"
+      ],
+      "image_attributes": null,
+      "kind": "table_row",
+      "list_attributes": null,
+      "metadata": {
+        "grid_after": 0,
+        "grid_before": 0,
+        "repeated_header": false
+      },
+      "node_id": "node_3ed0b5ccfaceb2e238a54ed70e3cd6b0",
+      "order": 0,
+      "parent_node_id": "node_72825d708558732c3b4c5475d2bc6a3f",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": 0,
+        "ordinal": 2,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0"
+        ],
+        "table_index": 0
+      },
+      "cell_grid": {
+        "column_index": 0,
+        "column_span": 1,
+        "row_index": 0,
+        "row_span": 1
+      },
+      "child_ids": [
+        "node_7647b3c232bc336d4d304b071e018a77",
+        "node_025d8e7cef7b6e02a7ecda0276d81d7b",
+        "node_a600fb0b854ab33c955dddcbd2640ffa"
+      ],
+      "image_attributes": null,
+      "kind": "table_cell",
+      "list_attributes": null,
+      "metadata": {
+        "physical_cell_index": 0,
+        "vertical_merge": null
+      },
+      "node_id": "node_991bc439aab1047d045cfe9336471392",
+      "order": 0,
+      "parent_node_id": "node_3ed0b5ccfaceb2e238a54ed70e3cd6b0",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 3,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 5,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "list_item",
+      "list_attributes": {
+        "level": 0,
+        "marker": null,
+        "ordered": null,
+        "ordinal": 0,
+        "restart_group": "num:7:missing"
+      },
+      "metadata": {
+        "num_id": 7
+      },
+      "node_id": "node_7647b3c232bc336d4d304b071e018a77",
+      "order": 0,
+      "parent_node_id": "node_991bc439aab1047d045cfe9336471392",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "56540d5de8110e8f1b7de7ab8a5cca08c28dc9505ae1d8ec986520a85b40f8d9",
+        "exact_text": "单元格列表",
+        "semantic_sha256": "56540d5de8110e8f1b7de7ab8a5cca08c28dc9505ae1d8ec986520a85b40f8d9",
+        "semantic_text": "单元格列表"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 4,
+        "paragraph_index": 1,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 0,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "p:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_84f5cd4ef54754933c01de08fac7d83e"
+      ],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_025d8e7cef7b6e02a7ecda0276d81d7b",
+      "order": 1,
+      "parent_node_id": "node_991bc439aab1047d045cfe9336471392",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exact_text": "",
+        "semantic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "semantic_text": ""
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 5,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": "rIdImage",
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "p:1",
+          "image:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": {
+        "alt_text": null,
+        "blob_ref": "media:603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
+        "content_sha256": "603b6a8c32e74736c0435e14e68d6c4b92e7d841dae0651b386553aa3793064a",
+        "display_name": "嵌套图",
+        "height_px": null,
+        "media_type": "image/png",
+        "width_px": null
+      },
+      "kind": "image",
+      "list_attributes": null,
+      "metadata": {
+        "height_emu": null,
+        "media_part_uri": "/word/media/image1.png",
+        "placement": "inline",
+        "width_emu": null
+      },
+      "node_id": "node_84f5cd4ef54754933c01de08fac7d83e",
+      "order": 0,
+      "parent_node_id": "node_025d8e7cef7b6e02a7ecda0276d81d7b",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 6,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "tbl:2"
+        ],
+        "table_index": 1
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_31eadb3b4a638261d6353bc3272ccf14"
+      ],
+      "image_attributes": null,
+      "kind": "table",
+      "list_attributes": null,
+      "metadata": {
+        "grid_columns": 1,
+        "nested_depth": 1
+      },
+      "node_id": "node_a600fb0b854ab33c955dddcbd2640ffa",
+      "order": 2,
+      "parent_node_id": "node_991bc439aab1047d045cfe9336471392",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 7,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "tbl:2",
+          "tr:0"
+        ],
+        "table_index": 1
+      },
+      "cell_grid": null,
+      "child_ids": [
+        "node_a95042bb0ba6e131aad099ebce3458fc"
+      ],
+      "image_attributes": null,
+      "kind": "table_row",
+      "list_attributes": null,
+      "metadata": {
+        "grid_after": 0,
+        "grid_before": 0,
+        "repeated_header": false
+      },
+      "node_id": "node_31eadb3b4a638261d6353bc3272ccf14",
+      "order": 0,
+      "parent_node_id": "node_a600fb0b854ab33c955dddcbd2640ffa",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": 0,
+        "ordinal": 8,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": 0,
+        "section_index": null,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "tbl:2",
+          "tr:0",
+          "tc:0"
+        ],
+        "table_index": 1
+      },
+      "cell_grid": {
+        "column_index": 0,
+        "column_span": 1,
+        "row_index": 0,
+        "row_span": 1
+      },
+      "child_ids": [
+        "node_462793f78d84e9097012682c590191d2"
+      ],
+      "image_attributes": null,
+      "kind": "table_cell",
+      "list_attributes": null,
+      "metadata": {
+        "physical_cell_index": 0,
+        "vertical_merge": null
+      },
+      "node_id": "node_a95042bb0ba6e131aad099ebce3458fc",
+      "order": 0,
+      "parent_node_id": "node_31eadb3b4a638261d6353bc3272ccf14",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 9,
+        "paragraph_index": 2,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 2,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "tbl:0",
+          "tr:0",
+          "tc:0",
+          "tbl:2",
+          "tr:0",
+          "tc:0",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": [],
+      "node_id": "node_462793f78d84e9097012682c590191d2",
+      "order": 0,
+      "parent_node_id": "node_a95042bb0ba6e131aad099ebce3458fc",
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "db5fa0eb3c20477e96597280f56754f2158c959cfd5c1061a46e2e8f3302c5b6",
+        "exact_text": "内表",
+        "semantic_sha256": "db5fa0eb3c20477e96597280f56754f2158c959cfd5c1061a46e2e8f3302c5b6",
+        "semantic_text": "内表"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 10,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_a84c47cf6d34ccf5eb856022aa6af29f",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [
+      {
+        "action": "label_unavailable",
+        "anchor": null,
+        "code": "DOCX_NUMBERING_INSTANCE_MISSING",
+        "count": 1,
+        "metadata": {
+          "num_id": 7
+        },
+        "safe_message": "段落引用的 numId 不存在。",
+        "severity": "warning"
+      }
+    ],
+    "media_count": 1,
+    "node_count": 11,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 6,
+    "relationship_count": 3,
+    "represented_visible_text_nodes": 2,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 11
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 2,
+    "warnings": [
+      "DOCX_NUMBERING_INSTANCE_MISSING"
+    ]
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_72825d708558732c3b4c5475d2bc6a3f",
+    "node_a84c47cf6d34ccf5eb856022aa6af29f"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_516338e95b9818d9345096133c5c0fdc",
+    "content_sha256": "ddca0853f1a532644a75c58b207582be5bccccec74ddcc1d0ad775fc988996d8",
+    "display_name": "09-table-nested-list-image.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_516338e95b9818d9345096133c5c0fdc",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 13902
+  },
+  "version": {
+    "content_sha256": "ddca0853f1a532644a75c58b207582be5bccccec74ddcc1d0ad775fc988996d8",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_516338e95b9818d9345096133c5c0fdc"
+  }
+}

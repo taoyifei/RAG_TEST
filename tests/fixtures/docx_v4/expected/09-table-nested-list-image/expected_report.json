@@ -1,0 +1,39 @@
+{
+  "issues": [
+    {
+      "action": "label_unavailable",
+      "anchor": null,
+      "code": "DOCX_NUMBERING_INSTANCE_MISSING",
+      "count": 1,
+      "metadata": [
+        [
+          "num_id",
+          7
+        ]
+      ],
+      "safe_message": "段落引用的 numId 不存在。",
+      "severity": "warning"
+    }
+  ],
+  "media_count": 1,
+  "node_count": 11,
+  "parser_id": "docx-ooxml-v4",
+  "parser_version": "4.0.0",
+  "part_count": 6,
+  "relationship_count": 3,
+  "represented_visible_text_nodes": 2,
+  "revision_count": 0,
+  "schema_version": "1",
+  "story_counts": [
+    [
+      "body",
+      11
+    ]
+  ],
+  "unsupported_with_media": 0,
+  "unsupported_with_text": 0,
+  "visible_text_nodes": 2,
+  "warnings": [
+    "DOCX_NUMBERING_INSTANCE_MISSING"
+  ]
+}

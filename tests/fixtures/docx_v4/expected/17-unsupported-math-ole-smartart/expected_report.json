@@ -1,0 +1,44 @@
+{
+  "issues": [
+    {
+      "action": "metadata_only",
+      "anchor": null,
+      "code": "DOCX_OBJECT_NOT_EXECUTED",
+      "count": 1,
+      "metadata": [],
+      "safe_message": "OLE、Object 或 diagram 未执行或解包。",
+      "severity": "warning"
+    },
+    {
+      "action": "metadata_only",
+      "anchor": null,
+      "code": "DOCX_MATH_METADATA_ONLY",
+      "count": 1,
+      "metadata": [],
+      "safe_message": "Office Math 未计算，仅保留可见 fallback 文本。",
+      "severity": "warning"
+    }
+  ],
+  "media_count": 0,
+  "node_count": 2,
+  "parser_id": "docx-ooxml-v4",
+  "parser_version": "4.0.0",
+  "part_count": 5,
+  "relationship_count": 2,
+  "represented_visible_text_nodes": 1,
+  "revision_count": 0,
+  "schema_version": "1",
+  "story_counts": [
+    [
+      "body",
+      2
+    ]
+  ],
+  "unsupported_with_media": 0,
+  "unsupported_with_text": 0,
+  "visible_text_nodes": 1,
+  "warnings": [
+    "DOCX_OBJECT_NOT_EXECUTED",
+    "DOCX_MATH_METADATA_ONLY"
+  ]
+}

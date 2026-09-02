@@ -13,6 +13,7 @@ from rag_app.core.identifiers import canonical_json
 from rag_app.core.models.common import FrozenModel, MetadataModel
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_MAX_DISPLAY_EXTENSION_LENGTH = 16
 
 
 class ProjectScope(FrozenModel):
@@ -73,7 +74,9 @@ class DocumentSource(MetadataModel):
     @model_validator(mode="after")
     def _validate_source_reference(self) -> Self:
         if self.blob_ref is None and self.materialized_path is None:
-            raise ValueError("DocumentSource 必须提供 blob_ref 或受控本地路径。")
+            raise ValueError(
+                "DocumentSource 必须提供 blob_ref 或受控本地路径。"
+            )
         return self
 
 
@@ -101,6 +104,11 @@ class NodeKind(StrEnum):
     TABLE_CELL = "table_cell"
     IMAGE = "image"
     CONTENT_CONTROL = "content_control"
+    SECTION = "section"
+    BREAK = "break"
+    NOTE = "note"
+    COMMENT = "comment"
+    UNSUPPORTED = "unsupported"
 
 
 class SourceAnchor(FrozenModel):
@@ -181,6 +189,8 @@ class ListAttributes(FrozenModel):
     level: StrictInt = Field(ge=0, le=32)
     ordered: bool | None = None
     marker: str | None = Field(default=None, max_length=80)
+    ordinal: StrictInt | None = Field(default=None, ge=0)
+    restart_group: str | None = Field(default=None, max_length=120)
 
 
 class CellGrid(FrozenModel):
@@ -313,11 +323,17 @@ class DocumentNode(MetadataModel):
 
     @model_validator(mode="after")
     def _validate_attribute_combination(self) -> Self:
-        if self.list_attributes is not None and self.kind is not NodeKind.LIST_ITEM:
+        if (
+            self.list_attributes is not None
+            and self.kind is not NodeKind.LIST_ITEM
+        ):
             raise ValueError("只有 ListItem 节点允许 list_attributes。")
         if self.cell_grid is not None and self.kind is not NodeKind.TABLE_CELL:
             raise ValueError("只有 TableCell 节点允许 cell_grid。")
-        if self.image_attributes is not None and self.kind is not NodeKind.IMAGE:
+        if (
+            self.image_attributes is not None
+            and self.kind is not NodeKind.IMAGE
+        ):
             raise ValueError("只有 Image 节点允许 image_attributes。")
         if self.kind is NodeKind.IMAGE and self.image_attributes is None:
             raise ValueError("Image 节点必须提供 image_attributes。")
@@ -404,6 +420,10 @@ class ParseReport(FrozenModel):
     represented_visible_text_nodes: StrictInt = Field(default=0, ge=0)
     unsupported_with_text: StrictInt = Field(default=0, ge=0)
     unsupported_with_media: StrictInt = Field(default=0, ge=0)
+    part_count: StrictInt = Field(default=0, ge=0)
+    relationship_count: StrictInt = Field(default=0, ge=0)
+    media_count: StrictInt = Field(default=0, ge=0)
+    revision_count: StrictInt = Field(default=0, ge=0)
     story_counts: tuple[tuple[str, StrictInt], ...] = ()
     issues: tuple[ParseIssue, ...] = ()
     elapsed_seconds: float = Field(default=0.0, ge=0.0, exclude=True)
@@ -546,7 +566,10 @@ class ParseResult(FrozenModel):
             return value
         document_ir = value.get("document_ir")
         report = value.get("report")
-        if isinstance(document_ir, DocumentIR) and isinstance(report, ParseReport):
+        if isinstance(document_ir, DocumentIR) and isinstance(
+            report,
+            ParseReport,
+        ):
             return {
                 **value,
                 "document_ir": document_ir.model_copy(
@@ -564,7 +587,10 @@ class ParseResult(FrozenModel):
         return self
 
 
-def text_payload(exact_text: str, semantic_text: str | None = None) -> TextPayload:
+def text_payload(
+    exact_text: str,
+    semantic_text: str | None = None,
+) -> TextPayload:
     """创建带双 SHA-256 的文本载荷。
 
     Args:
@@ -621,12 +647,16 @@ def _p01_node_text(value: object) -> str:
 
 def _display_extension(display_name: str) -> str:
     _, separator, suffix = display_name.rpartition(".")
-    if separator and suffix.isalnum() and len(suffix) <= 16:
+    if (
+        separator
+        and suffix.isalnum()
+        and len(suffix) <= _MAX_DISPLAY_EXTENSION_LENGTH
+    ):
         return f".{suffix.casefold()}"
     return ".bin"
 
 
-def validate_document_ir(document_ir: DocumentIR) -> None:
+def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
     """以 O(n) 校验节点、父子、顺序、环和关系不变量。
 
     Args:
@@ -648,7 +678,9 @@ def validate_document_ir(document_ir: DocumentIR) -> None:
     if not root_ids.issubset(nodes_by_id):
         raise ValueError("DocumentIR root 必须存在。")
     observed_roots = {
-        node.node_id for node in document_ir.nodes if node.parent_node_id is None
+        node.node_id
+        for node in document_ir.nodes
+        if node.parent_node_id is None
     }
     if observed_roots != root_ids:
         raise ValueError("root 必须且只能包含 parent=None 的节点。")
@@ -693,7 +725,10 @@ def validate_document_ir(document_ir: DocumentIR) -> None:
             raise ValueError("relationship source/target 节点必须存在。")
     if document_ir.source.document_id != document_ir.document.document_id:
         raise ValueError("DocumentSource 与 DocumentRef 身份不一致。")
-    if document_ir.source.document_version_id != document_ir.version.document_version_id:
+    if (
+        document_ir.source.document_version_id
+        != document_ir.version.document_version_id
+    ):
         raise ValueError("DocumentSource 与 DocumentVersionRef 身份不一致。")
     if document_ir.source.content_sha256 != document_ir.version.content_sha256:
         raise ValueError("DocumentSource 与 DocumentVersionRef 摘要不一致。")
@@ -718,9 +753,31 @@ def canonical_document_ir_json(
     """
     payload = document_ir.model_dump(mode="json", exclude_none=False)
     if not include_content:
+        payload["source"]["display_name"] = "<redacted>"
+        payload["document"]["display_name"] = "<redacted>"
         for node in payload["nodes"]:
             text = node.get("text_payload")
             if isinstance(text, dict):
                 text.pop("exact_text", None)
                 text.pop("semantic_text", None)
+            revision = node.get("revision_mark")
+            if isinstance(revision, dict):
+                revision["author"] = None
+                revision["timestamp"] = None
+            image = node.get("image_attributes")
+            if isinstance(image, dict):
+                image["display_name"] = None
+                image["alt_text"] = None
+            metadata = node.get("metadata")
+            if isinstance(metadata, dict):
+                for key in (
+                    "alias",
+                    "author",
+                    "field_targets",
+                    "hyperlink_anchors",
+                    "style_name",
+                    "tag",
+                    "timestamp",
+                ):
+                    metadata.pop(key, None)
     return canonical_json(payload)

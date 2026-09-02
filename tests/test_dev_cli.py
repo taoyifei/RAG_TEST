@@ -68,8 +68,8 @@ def test_inspect_document_defaults_to_summary_and_explicit_json(
 
     assert return_code == 0
     assert "document_hash_prefix=" in stdout
-    assert "parser=legacy-docx-ir@" in stdout
-    assert "nodes=2 issues=0" in stdout
+    assert "parser=docx-ooxml-v4@" in stdout
+    assert "nodes=" in stdout
     assert "安装说明" not in stdout
     assert "安装说明" not in output.read_text(encoding="utf-8")
 

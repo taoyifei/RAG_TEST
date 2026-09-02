@@ -1,0 +1,7 @@
+{
+  "error": {
+    "code": "INVALID_DOCUMENT",
+    "stage": "docx-ooxml-v4.resource"
+  },
+  "status": "rejected"
+}

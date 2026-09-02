@@ -1,0 +1,144 @@
+{
+  "document": {
+    "display_name": "01-headings-custom-outline.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:4f28c5be3efebf4dcf5928a444489aeaa097d7a674c87be78a0bc8579ffc2eec"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 4,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "heading",
+      "list_attributes": null,
+      "metadata": {
+        "heading_breadcrumb_node_ids": [
+          "node_2ae587c4e9c12a536a50112e078e26b7"
+        ],
+        "heading_level": 2,
+        "style_hidden": false,
+        "style_id": "Custom",
+        "style_name": "业务标题",
+        "style_quick_format": false,
+        "style_unhide_when_used": false
+      },
+      "node_id": "node_2ae587c4e9c12a536a50112e078e26b7",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "21e7c18f979e9ed68fc54315689466becbfa77e7864fe7f3f482c94736d3c78b",
+        "exact_text": "继承标题",
+        "semantic_sha256": "21e7c18f979e9ed68fc54315689466becbfa77e7864fe7f3f482c94736d3c78b",
+        "semantic_text": "继承标题"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_eb02b7f9ab91c2cb2c76fe5a9974bc37",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 2,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 5,
+    "relationship_count": 2,
+    "represented_visible_text_nodes": 1,
+    "revision_count": 0,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 2
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 1,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_2ae587c4e9c12a536a50112e078e26b7",
+    "node_eb02b7f9ab91c2cb2c76fe5a9974bc37"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_4d754cd3c3f2e573b2948913224ef5c9",
+    "content_sha256": "9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
+    "display_name": "01-headings-custom-outline.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_4d754cd3c3f2e573b2948913224ef5c9",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 1696
+  },
+  "version": {
+    "content_sha256": "9060edaa43616402e9b4ef5d2d76a4b956d618d1ac037d561b4cdad0d269b619",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_4d754cd3c3f2e573b2948913224ef5c9"
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "document": {
+    "display_name": "13-tracked-changes.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "knowledge_base_id": "kb_22222222222222222222222222222222",
+    "project_id": "prj_11111111111111111111111111111111"
+  },
+  "metadata": {
+    "parsing_policy_id": "docx-safe-v1",
+    "part_catalog_identity": "sha256:6d86e405b9249a3f896951547cf1829e8bd69a390f67c09467b5641d21dba507"
+  },
+  "nodes": [
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 0,
+        "paragraph_index": 0,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": null,
+        "source_end_char": 4,
+        "source_start_char": 0,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "p:0"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "paragraph",
+      "list_attributes": null,
+      "metadata": {
+        "revision_count": 2
+      },
+      "node_id": "node_e3b29ed27e1cfb1231c26a9f28dfcc1a",
+      "order": 0,
+      "parent_node_id": null,
+      "revision_mark": {
+        "author": "乙",
+        "kind": "ins",
+        "timestamp": null
+      },
+      "schema_version": "1",
+      "text_payload": {
+        "exact_sha256": "4e842410adfe692799e230cbebffebf8a91e853b6caf88bf9faa910dc6975ca5",
+        "exact_text": "保留新增",
+        "semantic_sha256": "4e842410adfe692799e230cbebffebf8a91e853b6caf88bf9faa910dc6975ca5",
+        "semantic_text": "保留新增"
+      }
+    },
+    {
+      "anchor": {
+        "cell_index": null,
+        "ordinal": 1,
+        "paragraph_index": null,
+        "part_uri": "/word/document.xml",
+        "relationship_id": null,
+        "row_index": null,
+        "section_index": 0,
+        "source_end_char": null,
+        "source_start_char": null,
+        "story_kind": "body",
+        "structural_path": [
+          "body",
+          "sectPr:1"
+        ],
+        "table_index": null
+      },
+      "cell_grid": null,
+      "child_ids": [],
+      "image_attributes": null,
+      "kind": "section",
+      "list_attributes": null,
+      "metadata": {
+        "break_type": "nextPage",
+        "effective_footer_bindings": [],
+        "effective_header_bindings": [],
+        "even_and_odd_headers": false,
+        "footer_inherited_from": [],
+        "footer_references": [],
+        "header_inherited_from": [],
+        "header_references": [],
+        "page_margins": [],
+        "page_size": [],
+        "title_page": false
+      },
+      "node_id": "node_1371e2856554758736e8af6322f503ce",
+      "order": 1,
+      "parent_node_id": null,
+      "revision_mark": null,
+      "schema_version": "1",
+      "text_payload": null
+    }
+  ],
+  "parse_report": {
+    "issues": [],
+    "media_count": 0,
+    "node_count": 2,
+    "parser_id": "docx-ooxml-v4",
+    "parser_version": "4.0.0",
+    "part_count": 5,
+    "relationship_count": 2,
+    "represented_visible_text_nodes": 1,
+    "revision_count": 2,
+    "schema_version": "1",
+    "story_counts": {
+      "body": 2
+    },
+    "unsupported_with_media": 0,
+    "unsupported_with_text": 0,
+    "visible_text_nodes": 1,
+    "warnings": []
+  },
+  "relationships": [],
+  "root_node_ids": [
+    "node_e3b29ed27e1cfb1231c26a9f28dfcc1a",
+    "node_1371e2856554758736e8af6322f503ce"
+  ],
+  "schema_version": "1",
+  "source": {
+    "blob_ref": "document:dver_5195b2765cc458e58156aa0ab3089cae",
+    "content_sha256": "09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
+    "display_name": "13-tracked-changes.docx",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_5195b2765cc458e58156aa0ab3089cae",
+    "extension": ".docx",
+    "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "metadata": [],
+    "size_bytes": 13643
+  },
+  "version": {
+    "content_sha256": "09dca4c0007ad78843dc9494d65a1e73ac7aaeb4d21ba79f3d62c34b7a972e7d",
+    "document_id": "doc_33333333333333333333333333333333",
+    "document_version_id": "dver_5195b2765cc458e58156aa0ab3089cae"
+  }
+}
