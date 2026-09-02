@@ -4,8 +4,11 @@
 
 - Integration base：`c667d05d0e3e43eab2fe7060e16f2f3333586238`。
 - Feature branch：`codex/p03-document-ir`。
-- 实现提交：`081e77e`；测试提交：`7f813b0`；文档提交待本次提交后回填。
-- Integration merge commit：待 `--no-ff` 合并后回填。
+- 实现提交：`081e77e`；测试提交：`7f813b0`；文档提交：`a554efc`。
+- Integration implementation merge commit：
+  `901d7a58fe6f8c5a84826a8c683ae375ff140e12`（`--no-ff`）。
+- 远程实现状态：`origin/codex/p03-document-ir@a554efc` 和
+  `origin/feature/universal-rag@901d7a5` 已由 `git ls-remote` 核对。
 - `main@af30f81fbcbd0577c16fbf59bb9bce8f29a3de91` 与
   `Industry@5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a` 只读。
 
@@ -64,12 +67,38 @@ compileall / Ruff / mypy / Google docstrings passed
 ```
 
 inspect-document 使用的 7 个运行时合成 DOCX 已在命令后删除，没有加入 Git。提交后和
-合并后结果将在完成对应命令后回填，未执行项不写成通过。
+合并后结果如下：
+
+```text
+.venv/bin/python -m pytest -q tests/core/test_document_ir.py \
+  tests/adapters/parsers tests/adapters/legacy/test_document_ir.py
+17 passed in 0.23s
+
+.venv/bin/python scripts/dev.py inspect-document \
+  tests/fixtures/docx/simple-heading-paragraph.docx
+parser=legacy-docx-ir@docx-parser-v3+ir-v1 nodes=2 issues=0
+stories={'body': 2} coverage=1.000000
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1089 passed, 75 deselected, 4 warnings in 184.28s
+
+.venv/bin/python scripts/dev.py smoke
+58 passed, 1 warning in 1.67s
+```
+
+最终门禁失败数为 0。`check` 明确跳过 75 个 `local_integration` 或 `live_provider`
+测试，没有把它们写成通过。
+
+开发期测试真实暴露并修正了兼容 profile 期望（`69 passed, 1 failed`）、IR JSON/Locator
+往返（`13 passed, 2 failed`）和 CLI 缺失 import（`31 passed, 2 failed`）。Google docstring
+门禁曾报告 10 个 property 小节缺失；补齐后为 `missing_google_sections=0`。没有删除或跳过
+失败用例。
 
 ## 外部服务与安全边界
 
 应用测试默认离线，未调用 Jina、阿里、LLM、OCR、Qdrant 或真实 API Key，也未读取用户
-私有文档。当前外部访问只有 GitHub origin 的 fetch/pull；push 状态待交付时回填。
+私有文档。控制面访问了 GitHub origin 执行 fetch/pull/push，并已核对远程 refs。
 
 ## 决策与剩余风险
 
