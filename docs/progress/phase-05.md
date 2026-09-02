@@ -4,9 +4,14 @@
 
 - Integration base：`f0e4c04a78cd5571067ba13b30bae0a0dc6e77d1`。
 - Feature branch：`codex/p05-structured-chunking`。
-- 实现提交：`8cb4a56`；测试提交：`3f51228`；文档提交待本次提交后回填。
-- Integration merge commit：待 `--no-ff` 合并后回填。
-- 远端状态：待 push 与 `git ls-remote` 核对后回填。
+- 实现提交：`8cb4a56`；测试提交：`3f51228`；文档提交：`7f67da0`。
+- 首次远端阶段 head：
+  `origin/codex/p05-structured-chunking@7f67da0d5a9b8da2f1b3bf3648e0fe9a544ca67f`。
+- Integration implementation merge commit：
+  `0ba833111019e6ef97cc9200026344279eb50a6f`（`--no-ff`）。
+- 远端实现状态：
+  `origin/feature/universal-rag@0ba833111019e6ef97cc9200026344279eb50a6f`
+  已由 `git ls-remote` 核对。
 - `main@af30f81fbcbd0577c16fbf59bb9bce8f29a3de91` 与
   `Industry@5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a` 保持只读。
 
@@ -90,7 +95,27 @@ compileall / Ruff / mypy / Google docstrings passed
 首次统一 `check` 在 pytest 前因新增内部函数缺少 Google docstring 小节而停止：编译、
 Ruff 和 mypy 已通过，docstring 检查报告 `missing_google_sections=6`。随后只补齐这两处
 docstring，复跑得到 `missing_google_sections=0` 和上述完整通过结果；没有删除、跳过或改写
-失败用例。合并后结果待 Git 交付后回填。
+失败用例。
+
+合并提交 `0ba8331` 验收：
+
+```text
+.venv/bin/python -m pytest -q tests/adapters/chunkers \
+  tests/core/test_chunk_models.py
+37 passed in 1.58s
+
+.venv/bin/python scripts/dev.py chunk-ablation tests/fixtures/docx_v4 \
+  --output /tmp/chunk-ablation
+documents=20 candidates=3 chunk_runs=57 rejected=1
+selection=provisional; freeze_in=P08
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1172 passed, 75 deselected, 4 warnings in 186.19s
+
+.venv/bin/python scripts/dev.py smoke
+60 passed, 1 warning in 1.88s
+```
 
 ## 结构消融与质量边界
 
@@ -102,7 +127,8 @@ snapshot。输出只含结构报告，不调用真实 Embedding 或 Reranker。�
 
 实现、专项测试和结构消融默认离线，没有调用 Jina、阿里、LLM、OCR、Qdrant 或真实 API
 Key，也没有读取用户私有文档。CLI 只读取仓库内无业务信息的合成 DOCX，默认不输出正文。
-GitHub origin 的 fetch、pull、push 属于控制面访问，交付完成后在此回填远端证据。
+GitHub origin 的 fetch、pull、push 属于控制面访问；远端已核对阶段 head `7f67da0`、
+integration implementation merge `0ba8331`，以及未变化的 `main`、`Industry` SHA。
 
 ## 决策与剩余风险
 
