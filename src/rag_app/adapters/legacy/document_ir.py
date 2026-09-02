@@ -252,6 +252,9 @@ def _issue_message(code: str) -> str:
         ),
         "IR_REVISION_METADATA_NOT_EXPRESSIBLE": "修订标记无法写入旧 Element。",
         "IR_TABLE_EXPORTED_AS_FLAT_TEXT": "表格仅以扁平文本导出。",
+        "V4_COMPLEX_TABLE_FLATTENED": (
+            "v4 复杂表格仅以显式有损文本导出。"
+        ),
     }
     return messages[code]
 
@@ -285,3 +288,144 @@ class LegacyElementCompatibilityAdapter:
 
         """
         return document_ir_to_legacy_elements(document_ir, self._blob_store)
+
+
+class V4DocumentIrToLegacyElementsAdapter:
+    """把 v4 结构显式降级为旧 Element，避免伪造复杂结构。"""
+
+    def __init__(self, blob_store: BlobStorePort | None = None) -> None:
+        """保存可选图片 BlobStore。
+
+        Args:
+            blob_store: 读取图片二进制的受控 Store。
+
+        Returns:
+            无返回值。
+
+        """
+        self._blob_store = blob_store
+
+    def convert(
+        self,
+        document_ir: DocumentIR,
+    ) -> tuple[tuple[Element, ...], CompatibilityReport]:
+        """转换 v4 IR 并对复杂表格生成显式损失报告。
+
+        Args:
+            document_ir: 已校验的 v4 Document IR。
+
+        Returns:
+            旧 Element 和不可表达结构报告。
+
+        """
+        nodes_by_id = {node.node_id: node for node in document_ir.nodes}
+        table_descendants = _table_descendant_ids(document_ir, nodes_by_id)
+        elements: list[Element] = []
+        skipped = 0
+        issue_counts: dict[str, int] = {}
+        headings: list[str] = []
+        ordered = sorted(
+            document_ir.nodes,
+            key=lambda item: (
+                item.anchor.ordinal,
+                item.order,
+                item.node_id,
+            ),
+        )
+        for node in ordered:
+            if node.node_id in table_descendants:
+                skipped += 1
+                continue
+            if node.kind is NodeKind.TABLE:
+                elements.append(
+                    _v4_table_element(node, document_ir, nodes_by_id)
+                )
+                _increment(issue_counts, "V4_COMPLEX_TABLE_FLATTENED")
+                continue
+            if node.kind in {
+                NodeKind.TABLE_ROW,
+                NodeKind.TABLE_CELL,
+                NodeKind.CONTENT_CONTROL,
+                NodeKind.SECTION,
+                NodeKind.BREAK,
+                NodeKind.NOTE,
+                NodeKind.COMMENT,
+                NodeKind.UNSUPPORTED,
+            }:
+                skipped += 1
+                _increment(issue_counts, "IR_NODE_NOT_EXPRESSIBLE_IN_LEGACY")
+                continue
+            element = _node_to_element(
+                node,
+                document_ir,
+                nodes_by_id,
+                tuple(headings),
+                self._blob_store,
+            )
+            if element is None:
+                skipped += 1
+                _increment(issue_counts, "IR_IMAGE_BLOB_UNAVAILABLE")
+                continue
+            elements.append(element)
+            if node.kind is NodeKind.HEADING and node.text:
+                headings[:] = [node.text]
+        issues = tuple(
+            CompatibilityIssue(
+                code=code,
+                count=count,
+                safe_message=_issue_message(code),
+            )
+            for code, count in sorted(issue_counts.items())
+        )
+        return (
+            tuple(elements),
+            CompatibilityReport(
+                converted_count=len(elements),
+                skipped_count=skipped,
+                issues=issues,
+            ),
+        )
+
+
+def _table_descendant_ids(
+    document_ir: DocumentIR,
+    nodes_by_id: dict[str, DocumentNode],
+) -> set[str]:
+    descendants: set[str] = set()
+    for table in document_ir.nodes:
+        if table.kind is not NodeKind.TABLE:
+            continue
+        pending = list(table.child_ids)
+        while pending:
+            descendant_id = pending.pop()
+            if descendant_id in descendants:
+                continue
+            descendants.add(descendant_id)
+            pending.extend(nodes_by_id[descendant_id].child_ids)
+    return descendants
+
+
+def _v4_table_element(
+    table: DocumentNode,
+    document_ir: DocumentIR,
+    nodes_by_id: dict[str, DocumentNode],
+) -> Element:
+    pending = list(table.child_ids)
+    text_nodes: list[DocumentNode] = []
+    while pending:
+        node = nodes_by_id[pending.pop(0)]
+        pending[0:0] = list(node.child_ids)
+        if node.text:
+            text_nodes.append(node)
+    text = "\n".join(node.text for node in text_nodes)
+    return Element(
+        element_id=f"element_{table.node_id.removeprefix('node_')}",
+        kind=ElementKind.TABLE,
+        text=text,
+        locator=Locator(
+            file_path=document_ir.source.display_name,
+            table_index=_positive(table.anchor.table_index),
+            fragment=text[:240] or "table",
+        ),
+        content_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+    )

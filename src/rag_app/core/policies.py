@@ -9,6 +9,8 @@ from pydantic import Field, StrictFloat, StrictInt, field_validator
 from rag_app.core._base import FrozenModel, JsonObject, freeze_json_object
 from rag_app.core.identifiers import canonical_json
 
+_MAX_HEADING_LEVEL = 9
+
 
 class ParsingMode(StrEnum):
     """解析错误处理模式。"""
@@ -99,6 +101,12 @@ class ParsingPolicy(FrozenModel):
     max_entries: StrictInt = Field(default=10_000, gt=0)
     max_compression_ratio: StrictFloat = Field(default=200.0, gt=1.0)
     parse_timeout_seconds: StrictFloat = Field(default=30.0, gt=0.0)
+    max_xml_depth: StrictInt = Field(default=256, gt=0, le=2048)
+    max_xml_nodes: StrictInt = Field(default=1_000_000, gt=0)
+    max_table_depth: StrictInt = Field(default=32, gt=0, le=128)
+    max_field_depth: StrictInt = Field(default=32, gt=0, le=128)
+    custom_heading_styles: tuple[tuple[str, StrictInt], ...] = ()
+    preserve_soft_hyphen: bool = False
 
     @field_validator("metadata", mode="before")
     @classmethod
@@ -116,6 +124,24 @@ class ParsingPolicy(FrozenModel):
 
         """
         return canonical_json(self.model_dump(mode="json", exclude_none=False))
+
+    @field_validator("custom_heading_styles")
+    @classmethod
+    def _validate_custom_heading_styles(
+        cls,
+        value: tuple[tuple[str, StrictInt], ...],
+    ) -> tuple[tuple[str, StrictInt], ...]:
+        names = [name.casefold() for name, _ in value]
+        if any(not name.strip() for name, _ in value):
+            raise ValueError("custom heading style 名称不能为空。")
+        if len(names) != len(set(names)):
+            raise ValueError("custom heading style 名称禁止重复。")
+        if any(
+            level < 1 or level > _MAX_HEADING_LEVEL
+            for _, level in value
+        ):
+            raise ValueError("custom heading style 层级必须在一到九之间。")
+        return value
 
 
 # P01 公共名称继续指向 P03 的正式策略，避免旧宿主立即迁移。

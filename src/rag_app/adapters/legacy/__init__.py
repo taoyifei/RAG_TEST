@@ -11,6 +11,7 @@ from rag_app.adapters.legacy.document_ir import (
     CompatibilityIssue,
     CompatibilityReport,
     LegacyElementCompatibilityAdapter,
+    V4DocumentIrToLegacyElementsAdapter,
     document_ir_to_legacy_elements,
 )
 from rag_app.adapters.legacy.providers import (
@@ -48,6 +49,7 @@ __all__ = [
     "SingleSlotRouter",
     "SqliteMetadataStore",
     "SqliteTraceSink",
+    "V4DocumentIrToLegacyElementsAdapter",
     "document_ir_to_legacy_elements",
     "legacy_chunk_to_core",
     "legacy_element_to_core",

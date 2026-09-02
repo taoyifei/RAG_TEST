@@ -67,6 +67,10 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
 _OFFLINE_MARK_EXPRESSION = "not local_integration and not live_provider"
 _SMOKE_TESTS = (
+    (
+        "tests/adapters/parsers/docx/test_snapshots.py::"
+        "test_restart_fixture_parses_with_v4"
+    ),
     "tests/test_health_api.py",
     "tests/test_docx_parser.py",
     "tests/test_chunker.py",

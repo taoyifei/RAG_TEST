@@ -298,7 +298,9 @@ def default_offline_profile() -> RagProfile:
         使用 deterministic/memory/SQLite/extractive 的离线 Profile。
 
     """
-    return RagProfile()
+    return RagProfile(
+        components=ComponentsProfile(parser="docx-ooxml-v4")
+    )
 
 
 def default_hot_standby_profile() -> RagProfile:
