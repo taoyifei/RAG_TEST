@@ -39,6 +39,8 @@ class EmbeddingAdapterConfig(BaseModel):
     model: str
     dimension: StrictInt = Field(gt=0)
     request_policy_identity: str
+    document_egress_allowed: bool = False
+    query_egress_allowed: bool = False
 
 
 class RerankerAdapterConfig(BaseModel):

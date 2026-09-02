@@ -586,7 +586,7 @@ def _validate_name(name: str) -> None:
 
 
 def register_builtin_components(registry: ComponentRegistry) -> None:
-    """显式注册 P01 内置离线组件和远程声明边界。
+    """显式注册 P02 内置离线组件和真实远程 adapters。
 
     Args:
         registry: 必须由调用方创建的空或未冲突 Registry。
@@ -600,14 +600,11 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         LegacySectionChunkerAdapter,
     )
     from rag_app.adapters.legacy.providers import (  # noqa: PLC0415
-        DeclaredRemoteEmbeddingProvider,
-        DeclaredRemoteReranker,
         DeterministicEmbeddingProvider,
         EmbeddingAdapterConfig,
         ExtractiveGenerator,
         HotStandbyRouter,
         LexicalOverlapReranker,
-        RerankerAdapterConfig,
         SingleSlotRouter,
     )
     from rag_app.adapters.legacy.stores import (  # noqa: PLC0415
@@ -616,6 +613,9 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         InMemoryVectorStore,
         SqliteMetadataStore,
         SqliteTraceSink,
+    )
+    from rag_app.composition.builtin_providers import (  # noqa: PLC0415
+        register_builtin_provider_components,
     )
 
     registry.register_parser(
@@ -652,26 +652,7 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         descriptor=deterministic_descriptor,
         config_model=EmbeddingAdapterConfig,
     )
-    for name in ("jina-embedding", "aliyun-qwen37-embedding"):
-        registry.register_embedding(
-            name,
-            lambda config: DeclaredRemoteEmbeddingProvider(
-                EmbeddingAdapterConfig.model_validate(dict(config))
-            ),
-            descriptor=ComponentDescriptor(
-                kind=ComponentKind.EMBEDDING,
-                name=name,
-                version="p01-declared",
-                mode=ProviderMode.REMOTE,
-                capabilities=ComponentCapabilities(
-                    supports_batch=True,
-                    permits_network=True,
-                    dimensions=(1024,),
-                    roles=("document", "query"),
-                ),
-            ),
-            config_model=EmbeddingAdapterConfig,
-        )
+    register_builtin_provider_components(registry)
     registry.register_embedding_router(
         "embedding-router-single",
         SingleSlotRouter,
@@ -686,21 +667,6 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         "lexical-overlap",
         LexicalOverlapReranker,
         descriptor=LexicalOverlapReranker.descriptor,
-    )
-    registry.register_reranker(
-        "jina-reranker",
-        lambda config: DeclaredRemoteReranker(model=str(dict(config)["model"])),
-        descriptor=ComponentDescriptor(
-            kind=ComponentKind.RERANKER,
-            name="jina-reranker",
-            version="jina-reranker-v3.5",
-            mode=ProviderMode.REMOTE,
-            capabilities=ComponentCapabilities(
-                supports_batch=True,
-                permits_network=True,
-            ),
-        ),
-        config_model=RerankerAdapterConfig,
     )
     registry.register_vector_store(
         "memory",

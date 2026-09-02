@@ -1,0 +1,17 @@
+{
+  "schema_version": "1",
+  "profile_id": "dev-offline",
+  "components": {
+    "embedding_topology": "deterministic-single",
+    "embedding_primary": "deterministic",
+    "embedding_router": "embedding-router-single",
+    "reranker": "lexical-overlap",
+    "vector_store": "memory",
+    "lexical_store": "memory",
+    "metadata_store": "sqlite",
+    "blob_store": "local",
+    "generator": "extractive",
+    "trace_sink": "sqlite"
+  },
+  "security": {}
+}

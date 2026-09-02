@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "profile_id": "dev-jina-only",
+  "components": {
+    "embedding_topology": {
+      "mode": "single",
+      "activation_policy": "all_required_slots_complete",
+      "primary": {
+        "slot_id": "primary",
+        "provider": "jina-embedding",
+        "model": "jina-embeddings-v5-text-small",
+        "dimension": 1024,
+        "vector_name": "dense_primary",
+        "document_task": "retrieval.passage",
+        "query_task": "retrieval.query",
+        "embedding_type": "float",
+        "normalization": "l2-v1",
+        "api_key_env": "JINA_API_KEY"
+      }
+    },
+    "embedding_primary": null,
+    "embedding_standby": null,
+    "embedding_router": "embedding-router-single",
+    "reranker": {
+      "provider": "jina-reranker",
+      "model": "jina-reranker-v3.5",
+      "on_unavailable": "bypass_keep_rrf",
+      "api_key_env": "JINA_API_KEY"
+    }
+  },
+  "security": {
+    "remote_document_embedding": true,
+    "remote_query_embedding": true,
+    "remote_reranking": true,
+    "remote_document_embedding_jina": true,
+    "remote_query_embedding_jina": true,
+    "remote_reranking_jina": true
+  }
+}

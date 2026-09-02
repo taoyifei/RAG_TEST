@@ -266,6 +266,7 @@ def build_components(
             _embedding_component(
                 "embedding_primary",
                 topology.slots[0],
+                resolved_profile,
                 registry,
                 resolved_overrides,
                 created,
@@ -278,6 +279,7 @@ def build_components(
                 _embedding_component(
                     "embedding_standby",
                     topology.slots[1],
+                    resolved_profile,
                     registry,
                     resolved_overrides,
                     created,
@@ -404,9 +406,10 @@ def _create(  # noqa: PLR0913
     return component
 
 
-def _embedding_component(
+def _embedding_component(  # noqa: PLR0913, PLR0917
     field_name: str,
     slot: EmbeddingSlotIdentity,
+    profile: RagProfile,
     registry: ComponentRegistry,
     overrides: Mapping[str, object],
     created: list[object],
@@ -433,6 +436,12 @@ def _embedding_component(
                 "document": slot.document_request_policy,
                 "query": slot.query_request_policy,
             }
+        ),
+        "document_egress_allowed": _embedding_egress_allowed(
+            profile, slot, document=True
+        ),
+        "query_egress_allowed": _embedding_egress_allowed(
+            profile, slot, document=False
         ),
     }
     return _create(
@@ -483,10 +492,40 @@ def _reranker_config(
     if isinstance(configured, RerankerProfile):
         return (
             configured.provider,
-            {"model": configured.model},
+            {
+                "model": configured.model,
+                "egress_allowed": (
+                    profile.security.remote_reranking
+                    and profile.security.remote_reranking_jina
+                ),
+            },
             configured.model,
         )
     return configured, None, configured
+
+
+def _embedding_egress_allowed(
+    profile: RagProfile,
+    slot: EmbeddingSlotIdentity,
+    *,
+    document: bool,
+) -> bool:
+    security = profile.security
+    if document:
+        general = security.remote_document_embedding
+        specific = (
+            security.remote_document_embedding_jina
+            if slot.provider_id == "jina-embedding"
+            else security.remote_document_embedding_aliyun
+        )
+    else:
+        general = security.remote_query_embedding
+        specific = (
+            security.remote_query_embedding_jina
+            if slot.provider_id == "jina-embedding"
+            else security.remote_query_embedding_aliyun
+        )
+    return general and specific
 
 
 def _validate_egress_policy(profile: RagProfile) -> None:
