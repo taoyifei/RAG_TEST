@@ -60,6 +60,7 @@ class ServingFingerprintInput(FrozenModel):
     fusion: JsonObject
     reranker: ComponentDescriptor
     reranker_model: str = Field(min_length=1)
+    reranker_policy: JsonObject = ()
     rerank_mode: str = Field(min_length=1)
     neighbor_parent_expansion: JsonObject
     evidence_policy: JsonObject
@@ -77,6 +78,7 @@ class ServingFingerprintInput(FrozenModel):
         "embedding_query_policies",
         "retrieval_channels",
         "fusion",
+        "reranker_policy",
         "neighbor_parent_expansion",
         "evidence_policy",
         "confidence_policy",

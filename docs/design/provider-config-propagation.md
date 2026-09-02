@@ -34,7 +34,9 @@ types, dense output, or normalization fail at the same boundary.
 
 MockTransport tests inspect actual JSON bodies and authorization derived from
 custom environment-variable names. Adapter construction and health inspection
-perform no network call.
+perform no network call. Reranker token/candidate limits, request-policy
+revision, egress mode, and environment-variable name also enter the Serving
+Fingerprint, so changing their behavior cannot reuse the old search cache.
 
 ## Router and cache boundary
 

@@ -152,7 +152,7 @@ SQLite/Qdrant 数据迁移。
 ## 阶段分支验收补记
 
 实现后的独立门禁为专项 3 passed、Core/Composition/Application/Adapters
-250 passed；完整离线 check 为 1205 passed、75 deselected、4 warnings；smoke
+251 passed；完整离线 check 为 1206 passed、75 deselected、4 warnings；smoke
 为 62 passed、1 warning。compileall、Ruff、mypy 209 source files、Google
 docstring 和 `git diff --check` 均通过。全部 Provider 行为测试使用 Fake 或
 MockTransport，External services actually called: none。
