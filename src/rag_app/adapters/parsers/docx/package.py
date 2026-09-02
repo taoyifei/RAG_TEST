@@ -45,6 +45,8 @@ _FATAL_CONTENT_MARKERS = (
     "macroenabled",
     "vbaproject",
 )
+_READ_CHUNK_BYTES = 64 * 1024
+_XML_TIMEOUT_CHECK_INTERVAL = 1024
 
 
 class DocxPackage:
@@ -139,8 +141,8 @@ class DocxPackage:
                 stage="docx-ooxml-v4.relationship",
             )
         try:
-            return self._archive.read(name)
-        except (KeyError, OSError, RuntimeError) as error:
+            return self._read_entry(name)
+        except (KeyError, OSError, RuntimeError, zipfile.BadZipFile) as error:
             raise InvalidDocument(
                 "DOCX package Part 无法读取。",
                 stage="docx-ooxml-v4.package",
@@ -175,18 +177,26 @@ class DocxPackage:
                 "DOCX package XML 结构无效。",
                 stage="docx-ooxml-v4.xml",
             ) from None
-        for node_count, node in enumerate(root.iter(), start=1):
+        depth = 0
+        node_count = 0
+        for event, _ in etree.iterwalk(root, events=("start", "end")):
+            if event == "end":
+                depth -= 1
+                continue
+            depth += 1
+            node_count += 1
             if node_count > self._policy.max_xml_nodes:
                 raise InvalidDocument(
                     "DOCX XML 节点数超过限制。",
                     stage="docx-ooxml-v4.resource",
                 )
-            depth = len(tuple(node.iterancestors())) + 1
             if depth > self._policy.max_xml_depth:
                 raise InvalidDocument(
                     "DOCX XML 深度超过限制。",
                     stage="docx-ooxml-v4.resource",
                 )
+            if node_count % _XML_TIMEOUT_CHECK_INTERVAL == 0:
+                self.check_timeout()
         self.check_timeout()
         return root
 
@@ -431,13 +441,60 @@ class DocxPackage:
         for name, entry in sorted(self._entries.items()):
             if name.endswith("/"):
                 continue
-            payload = self._archive.read(name)
             parts.append(
                 PartInfo(
                     part_uri=f"/{name}",
                     content_type=content_types[f"/{name}"],
                     size=entry.file_size,
-                    sha256=hashlib.sha256(payload).hexdigest(),
+                    sha256=self._entry_sha256(name),
                 )
             )
         return tuple(parts)
+
+    def _read_entry(self, name: str) -> bytes:
+        expected_size = self._entries[name].file_size
+        chunks: list[bytes] = []
+        observed_size = 0
+        with self._archive.open(name, "r") as stream:
+            while True:
+                chunk = stream.read(_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > expected_size:
+                    raise InvalidDocument(
+                        "DOCX ZIP 解压量与 catalog 不一致。",
+                        stage="docx-ooxml-v4.resource",
+                    )
+                chunks.append(chunk)
+                self.check_timeout()
+        if observed_size != expected_size:
+            raise InvalidDocument(
+                "DOCX ZIP Part 长度与 catalog 不一致。",
+                stage="docx-ooxml-v4.package",
+            )
+        return b"".join(chunks)
+
+    def _entry_sha256(self, name: str) -> str:
+        expected_size = self._entries[name].file_size
+        observed_size = 0
+        digest = hashlib.sha256()
+        with self._archive.open(name, "r") as stream:
+            while True:
+                chunk = stream.read(_READ_CHUNK_BYTES)
+                if not chunk:
+                    break
+                observed_size += len(chunk)
+                if observed_size > expected_size:
+                    raise InvalidDocument(
+                        "DOCX ZIP 解压量与 catalog 不一致。",
+                        stage="docx-ooxml-v4.resource",
+                    )
+                digest.update(chunk)
+                self.check_timeout()
+        if observed_size != expected_size:
+            raise InvalidDocument(
+                "DOCX ZIP Part 长度与 catalog 不一致。",
+                stage="docx-ooxml-v4.package",
+            )
+        return digest.hexdigest()
