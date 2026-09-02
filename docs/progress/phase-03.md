@@ -5,6 +5,7 @@
 - Integration base：`c667d05d0e3e43eab2fe7060e16f2f3333586238`。
 - Feature branch：`codex/p03-document-ir`。
 - 实现提交：`081e77e`；测试提交：`7f813b0`；文档提交：`a554efc`。
+- 兼容修复提交：`add7d35`，保留 P01 `legacy-docx` 受信任注册别名。
 - Integration implementation merge commit：
   `901d7a58fe6f8c5a84826a8c683ae375ff140e12`（`--no-ff`）。
 - 远程实现状态：`origin/codex/p03-document-ir@a554efc` 和
@@ -27,7 +28,8 @@
 
 本阶段把 P01 provisional Document IR 骨架稳定为 schema version 1，并保留
 `ParseSource`、`ParseResult`、`ParsePolicy` 别名和 `DocumentNode.text/structural_path`
-兼容读取。BlobStore 新增幂等 `delete()`，只用于清理本次失败写入。
+兼容读取；显式使用 `legacy-docx` 的旧 Profile 继续可用，新 Profile 使用
+`legacy-docx-ir`。BlobStore 新增幂等 `delete()`，只用于清理本次失败写入。
 
 没有修改 HTTP/SDK schema、RuntimeSettings、SQLite/Qdrant schema、现有生产索引或 Query
 API。旧表格结构损失、旧 metadata 和复杂节点损失都通过报告显式暴露。
@@ -89,6 +91,19 @@ compileall / Ruff / mypy / Google docstrings passed
 
 最终门禁失败数为 0。`check` 明确跳过 75 个 `local_integration` 或 `live_provider`
 测试，没有把它们写成通过。
+
+最终兼容审计补回旧 Registry 名称后：
+
+```text
+.venv/bin/python -m pytest -q tests/composition/test_registry.py \
+  tests/composition/test_profiles.py tests/core/test_document_ir.py \
+  tests/adapters/parsers tests/adapters/legacy/test_document_ir.py
+32 passed in 0.48s
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1090 passed, 75 deselected, 4 warnings in 181.58s
+```
 
 开发期测试真实暴露并修正了兼容 profile 期望（`69 passed, 1 failed`）、IR JSON/Locator
 往返（`13 passed, 2 failed`）和 CLI 缺失 import（`31 passed, 2 failed`）。Google docstring
