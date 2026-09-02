@@ -4,9 +4,15 @@
 
 - Integration base：`1be6790f3fa1f1cf2451bf120195e5360a5fe694`。
 - Feature branch：`codex/p04-docx-parser-v4`。
-- 实现提交：`82d8968`；测试与固定语料提交：`b00240f`。
-- 文档提交：本文件所在提交；最终分支 head 在远端复核后回填。
-- Integration merge commit：待 `--no-ff` 合并后回填。
+- 实现提交：`82d8968`；测试与固定语料提交：`b00240f`；文档提交：
+  `219441b`；合成 DOCX 仓库边界提交：`6671f07`。
+- 首次远端阶段 head：
+  `origin/codex/p04-docx-parser-v4@6671f072bd5d40408afc72df35cd250e986b4ad2`。
+- Integration implementation merge commit：
+  `b0f0dabfcd95bbae6def9eb88a532186e2071ec2`（`--no-ff`）。
+- 远端实现状态：
+  `origin/feature/universal-rag@b0f0dabfcd95bbae6def9eb88a532186e2071ec2`
+  已由 `git ls-remote` 核对。
 - `main@af30f81fbcbd0577c16fbf59bb9bce8f29a3de91` 与
   `Industry@5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a` 保持只读。
 
@@ -71,14 +77,54 @@ compileall / Ruff / mypy / Google docstrings passed
 59 passed, 1 warning in 1.57s
 ```
 
-提交后和合并后结果将在真实执行后回填，不预写通过数字。
+提交后阶段 head 验收：
+
+```text
+.venv/bin/python -m pytest -q tests/adapters/parsers/docx \
+  tests/core/test_document_ir.py
+47 passed in 0.60s
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1132 passed, 75 deselected, 4 warnings in 178.49s
+
+.venv/bin/python scripts/dev.py smoke
+59 passed, 1 warning in 1.61s
+```
+
+合并提交 `b0f0dab` 验收：
+
+```text
+.venv/bin/python -m pytest -q tests/adapters/parsers/docx \
+  tests/core/test_document_ir.py
+47 passed in 0.68s
+
+.venv/bin/python scripts/dev.py inspect-document \
+  tests/fixtures/docx_v4/03-numbering-restart-override.docx
+parser=docx-ooxml-v4@4.0.0 nodes=4 issues=0
+stories={'body': 4} coverage=1.000000
+
+.venv/bin/python scripts/dev.py check
+compileall / Ruff / mypy / Google docstrings passed
+1132 passed, 75 deselected, 4 warnings in 177.41s
+
+.venv/bin/python scripts/dev.py smoke
+59 passed, 1 warning in 1.85s
+```
+
+开发期间强制门禁准确暴露并修复了 1 个 Ruff magic value、38 个 Google docstring 小节
+缺失，以及合成 DOCX 与仓库通用二进制禁令的冲突。冲突首次完整运行结果为
+`1131 passed, 1 failed, 75 deselected, 4 warnings`；没有删除或跳过失败用例，而是把例外
+收紧为仅允许 manifest 声明且由快照验证的 20 个合成 DOCX。
 
 ## 外部服务与安全边界
 
 代码和专项测试均默认离线，没有调用 Jina、阿里、LLM、OCR、Qdrant 或真实 API Key，也
 没有读取用户私有文档。Provider 无关性测试证明 offline、Jina-only 和 Jina 主用/Qwen
-standby 三种装配得到相同 canonical hash、node IDs 与 ParseReport。控制面只访问 GitHub
-origin 完成 fetch/pull，push 与远端复核待提交后执行。
+standby 三种装配得到相同 canonical hash、node IDs 与 ParseReport。默认 check 中既有
+runtime preflight 构造了 Qdrant client 并产生版本探测失败 warning，但没有连接或写入真实
+Qdrant 服务。控制面访问 GitHub origin 完成 fetch、pull、阶段分支 push、integration push
+与远端 SHA 复核。
 
 ## 决策与剩余风险
 
