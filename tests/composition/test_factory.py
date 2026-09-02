@@ -250,3 +250,24 @@ def test_profile_fields_reach_provider_configs_without_network() -> None:
         assert components.query_embedding_router.descriptor.name == (
             "query-embedding-router-hot-standby"
         )
+
+
+def test_reranker_policy_changes_only_serving_fingerprint() -> None:
+    profile = default_hot_standby_profile()
+    reranker = profile.components.reranker
+    assert not isinstance(reranker, str)
+    changed_components = profile.components.model_copy(
+        update={
+            "reranker": reranker.model_copy(
+                update={"max_candidates": 50}
+            )
+        }
+    )
+    changed = profile.model_copy(update={"components": changed_components})
+
+    with (
+        build_components(profile, _registry()) as baseline,
+        build_components(changed, _registry()) as modified,
+    ):
+        assert baseline.index_fingerprint == modified.index_fingerprint
+        assert baseline.serving_fingerprint != modified.serving_fingerprint

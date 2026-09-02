@@ -402,6 +402,7 @@ def build_components(
             ),
             reranker=_descriptor(reranker),
             reranker_model=reranker_model,
+            reranker_policy=reranker_config or {},
             generator=_descriptor(generator),
         )
         return RagComponents(
@@ -757,12 +758,13 @@ def _resolve_chunking_policy(
     )
 
 
-def _serving_fingerprint_input(
+def _serving_fingerprint_input(  # noqa: PLR0913
     topology: EmbeddingTopology,
     *,
     router: ComponentDescriptor,
     reranker: ComponentDescriptor,
     reranker_model: str,
+    reranker_policy: object,
     generator: ComponentDescriptor,
 ) -> ServingFingerprintInput:
     return ServingFingerprintInput(
@@ -783,6 +785,7 @@ def _serving_fingerprint_input(
         fusion=freeze_json_object({"method": "rrf"}),
         reranker=reranker,
         reranker_model=reranker_model,
+        reranker_policy=freeze_json_object(reranker_policy),
         rerank_mode="provider_or_explicit_bypass",
         neighbor_parent_expansion=freeze_json_object({"enabled": True}),
         evidence_policy=freeze_json_object({"id": "legacy-evidence"}),

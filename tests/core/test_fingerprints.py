@@ -56,7 +56,11 @@ def _index_input(*, dimension: int = 1024) -> IndexFingerprintInput:
     )
 
 
-def _serving_input(*, reranker_model: str) -> ServingFingerprintInput:
+def _serving_input(
+    *,
+    reranker_model: str,
+    max_candidates: int = 100,
+) -> ServingFingerprintInput:
     return ServingFingerprintInput(
         query_analyzer={"id": "analyzer-v1"},
         query_planner={"id": "planner-v1"},
@@ -70,6 +74,7 @@ def _serving_input(*, reranker_model: str) -> ServingFingerprintInput:
         fusion={"method": "rrf", "k": 60},
         reranker=_descriptor(ComponentKind.RERANKER, "jina-reranker"),
         reranker_model=reranker_model,
+        reranker_policy={"max_candidates": max_candidates},
         rerank_mode="provider_or_explicit_bypass",
         neighbor_parent_expansion={"enabled": True},
         evidence_policy={"max_items": 8},
@@ -118,6 +123,13 @@ def test_reranker_only_changes_serving_fingerprint() -> None:
     assert compute_index_fingerprint(index) == compute_index_fingerprint(index)
     assert compute_serving_fingerprint(first) != compute_serving_fingerprint(
         second
+    )
+    changed_policy = _serving_input(
+        reranker_model="jina-reranker-v3.5",
+        max_candidates=50,
+    )
+    assert compute_serving_fingerprint(first) != compute_serving_fingerprint(
+        changed_policy
     )
 
 
