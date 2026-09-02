@@ -26,6 +26,7 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
     register_builtin_components(registry)
     names = {item.name for item in registry.list_components()}
     assert {
+        "legacy-docx",
         "legacy-docx-ir",
         "jina-embedding",
         "aliyun-qwen37-embedding",
@@ -33,6 +34,19 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
         "embedding-router-hot-standby",
         "embedding-router-single",
     }.issubset(names)
+
+
+def test_legacy_parser_registration_is_a_trusted_compatibility_alias(
+) -> None:
+    registry = ComponentRegistry()
+    register_builtin_components(registry)
+
+    legacy = registry.get_parser("legacy-docx")
+    current = registry.get_parser("legacy-docx-ir")
+
+    assert legacy.descriptor.name == "legacy-docx"
+    assert current.descriptor.name == "legacy-docx-ir"
+    assert legacy.parser_capabilities == current.parser_capabilities
 
 
 def test_duplicate_and_unknown_registration_fail_closed() -> None:
