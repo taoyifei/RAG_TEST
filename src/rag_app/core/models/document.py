@@ -232,6 +232,76 @@ class DocumentNode(MetadataModel):
     cell_grid: CellGrid | None = None
     image_attributes: ImageAttributes | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_p01_shape(cls, value: object) -> object:
+        """把 P01 provisional 节点输入迁移为 V1 字段。
+
+        Args:
+            value: Pydantic 收到的节点输入。
+
+        Returns:
+            原生 V1 输入，或由 P01 字段显式转换的 V1 输入。
+
+        """
+        if not isinstance(value, dict) or "kind" in value:
+            return value
+        if "node_type" not in value or "structural_path" not in value:
+            return value
+        migrated = dict(value)
+        node_type = str(migrated.pop("node_type"))
+        structural_path = tuple(migrated.pop("structural_path"))
+        exact_text = str(migrated.pop("text", ""))
+        expected_hash = str(migrated.pop("content_sha256", ""))
+        metadata = dict(migrated.get("metadata", ()))
+        list_level = metadata.get("list_level")
+        kind = _p01_node_kind(node_type, list_level)
+        payload = text_payload(exact_text)
+        if (
+            kind is not NodeKind.IMAGE
+            and payload.semantic_sha256 != expected_hash
+        ):
+            raise ValueError("P01 DocumentNode 文本摘要不一致。")
+        if not structural_path:
+            structural_path = ("legacy", f"node:{migrated['node_id']}")
+        migrated.update(
+            kind=kind,
+            order=0,
+            anchor=SourceAnchor(
+                part_uri="/legacy/document",
+                story_kind=StoryKind.BODY,
+                structural_path=structural_path,
+                ordinal=0,
+                source_start_char=0 if exact_text else None,
+                source_end_char=len(exact_text) if exact_text else None,
+            ),
+            text_payload=(payload if kind is not NodeKind.IMAGE else None),
+            list_attributes=(
+                ListAttributes(level=list_level)
+                if kind is NodeKind.LIST_ITEM
+                and isinstance(list_level, int)
+                else None
+            ),
+            image_attributes=(
+                ImageAttributes(
+                    blob_ref=f"legacy-unpersisted:{expected_hash}",
+                    media_type=str(
+                        metadata.get("media_type")
+                        or "application/octet-stream"
+                    ),
+                    content_sha256=expected_hash,
+                    display_name=(
+                        str(metadata["media_name"])
+                        if metadata.get("media_name") is not None
+                        else None
+                    ),
+                )
+                if kind is NodeKind.IMAGE
+                else None
+            ),
+        )
+        return migrated
+
     @field_validator("child_ids")
     @classmethod
     def _validate_child_ids(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -376,6 +446,61 @@ class DocumentIR(MetadataModel):
     relationships: tuple[DocumentRelationship, ...] = ()
     parse_report: ParseReport
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_p01_shape(cls, value: object) -> object:
+        """为 P01 的 document/version/nodes 构造补齐 V1 外壳。
+
+        Args:
+            value: Pydantic 收到的 DocumentIR 输入。
+
+        Returns:
+            原生 V1 输入，或补齐 source、roots 和 report 的输入。
+
+        """
+        if not isinstance(value, dict) or "source" in value:
+            return value
+        required = {"document", "version", "nodes"}
+        if not required.issubset(value):
+            return value
+        migrated = dict(value)
+        document = migrated["document"]
+        version = migrated["version"]
+        nodes = tuple(migrated["nodes"])
+        document_id = str(_field_value(document, "document_id"))
+        version_id = str(_field_value(version, "document_version_id"))
+        content_hash = str(_field_value(version, "content_sha256"))
+        display_name = str(_field_value(document, "display_name"))
+        extension = _display_extension(display_name)
+        root_ids = tuple(
+            str(_field_value(node, "node_id"))
+            for node in nodes
+            if _field_value(node, "parent_node_id", None) is None
+        )
+        visible = sum(bool(_p01_node_text(node).strip()) for node in nodes)
+        migrated.update(
+            source=DocumentSource(
+                document_id=document_id,
+                document_version_id=version_id,
+                display_name=display_name,
+                media_type="application/octet-stream",
+                extension=extension,
+                content_sha256=content_hash,
+                size_bytes=0,
+                blob_ref=f"legacy-source:{content_hash}",
+            ),
+            root_node_ids=root_ids,
+            parse_report=ParseReport(
+                parser_id="p01-migration",
+                parser_version="1",
+                node_count=len(nodes),
+                visible_text_nodes=visible,
+                represented_visible_text_nodes=visible,
+                story_counts=((StoryKind.BODY.value, len(nodes)),),
+            ),
+        )
+        return migrated
+
     @model_validator(mode="after")
     def _validate_ir(self) -> Self:
         validate_document_ir(self)
@@ -405,8 +530,35 @@ class ParseResult(FrozenModel):
     document_ir: DocumentIR
     report: ParseReport
 
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_p01_report(cls, value: object) -> object:
+        """让 P01 独立 report 成为 IR 内的同一 V1 report。
+
+        Args:
+            value: Pydantic 收到的 ParseResult 输入。
+
+        Returns:
+            原始输入，或已同步 report 的 DocumentIR 输入。
+
+        """
+        if not isinstance(value, dict):
+            return value
+        document_ir = value.get("document_ir")
+        report = value.get("report")
+        if isinstance(document_ir, DocumentIR) and isinstance(report, ParseReport):
+            return {
+                **value,
+                "document_ir": document_ir.model_copy(
+                    update={"parse_report": report}
+                ),
+            }
+        return value
+
     @model_validator(mode="after")
     def _validate_report(self) -> Self:
+        if self.report.node_count != len(self.document_ir.nodes):
+            raise ValueError("ParseResult report node_count 与 IR 不一致。")
         if self.report != self.document_ir.parse_report:
             raise ValueError("ParseResult report 必须与 DocumentIR 一致。")
         return self
@@ -430,6 +582,48 @@ def text_payload(exact_text: str, semantic_text: str | None = None) -> TextPaylo
         exact_sha256=hashlib.sha256(exact_text.encode("utf-8")).hexdigest(),
         semantic_sha256=hashlib.sha256(semantic.encode("utf-8")).hexdigest(),
     )
+
+
+def _p01_node_kind(node_type: str, list_level: object) -> NodeKind:
+    if node_type == "heading":
+        return NodeKind.HEADING
+    if node_type == "paragraph":
+        return (
+            NodeKind.LIST_ITEM
+            if isinstance(list_level, int)
+            else NodeKind.PARAGRAPH
+        )
+    if node_type == "table":
+        return NodeKind.TABLE_REPRESENTATION
+    if node_type == "image":
+        return NodeKind.IMAGE
+    raise ValueError(f"P01 DocumentNode node_type 不受支持：{node_type}。")
+
+
+def _field_value(value: object, name: str, default: object = ...) -> object:
+    if isinstance(value, dict):
+        if default is ...:
+            return value[name]
+        return value.get(name, default)
+    if default is ...:
+        return getattr(value, name)
+    return getattr(value, name, default)
+
+
+def _p01_node_text(value: object) -> str:
+    if isinstance(value, DocumentNode):
+        return value.text
+    if isinstance(value, dict):
+        text = value.get("text")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+def _display_extension(display_name: str) -> str:
+    _, separator, suffix = display_name.rpartition(".")
+    if separator and suffix.isalnum() and len(suffix) <= 16:
+        return f".{suffix.casefold()}"
+    return ".bin"
 
 
 def validate_document_ir(document_ir: DocumentIR) -> None:
