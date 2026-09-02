@@ -299,7 +299,10 @@ def default_offline_profile() -> RagProfile:
 
     """
     return RagProfile(
-        components=ComponentsProfile(parser="docx-ooxml-v4")
+        components=ComponentsProfile(
+            parser="docx-ooxml-v4",
+            chunker="docx-structural-v3",
+        )
     )
 
 
@@ -345,6 +348,8 @@ def default_hot_standby_profile() -> RagProfile:
     return RagProfile(
         profile_id="dev-jina-qwen37-hot-standby",
         components=ComponentsProfile(
+            parser="docx-ooxml-v4",
+            chunker="docx-structural-v3",
             embedding_topology=EmbeddingTopologyProfile(
                 mode="hot_standby",
                 primary=primary,

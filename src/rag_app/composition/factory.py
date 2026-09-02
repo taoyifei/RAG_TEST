@@ -351,7 +351,7 @@ def build_components(
         index_input = _index_fingerprint_input(
             topology,
             parser=_descriptor(parser),
-            chunker=_descriptor(chunker),
+            chunker=chunker,
             vector_store=_descriptor(vector_store),
             lexical_store=_descriptor(lexical_store),
         )
@@ -577,20 +577,35 @@ def _index_fingerprint_input(
     topology: EmbeddingTopology,
     *,
     parser: ComponentDescriptor,
-    chunker: ComponentDescriptor,
+    chunker: object,
     vector_store: ComponentDescriptor,
     lexical_store: ComponentDescriptor,
 ) -> IndexFingerprintInput:
+    chunker_descriptor = _descriptor(chunker)
+    policy = getattr(chunker, "policy", None)
+    counter = getattr(chunker, "token_counter", None)
+    counter_probe = counter.count("") if counter is not None else None
+    chunker_parameters = (
+        policy.model_dump(mode="json", exclude_none=False)
+        if policy is not None
+        else {"strategy": "profile"}
+    )
     return IndexFingerprintInput(
         parser=parser,
         parsing_policy=freeze_json_object(
             ParsingPolicy().model_dump(mode="json", exclude_none=False)
         ),
         ir_schema_version="1",
-        chunker=chunker,
-        chunker_parameters=freeze_json_object({"strategy": "profile"}),
-        token_counter_identity="legacy-tokenizer-v1",  # noqa: S106
-        token_count_exact=False,
+        chunker=chunker_descriptor,
+        chunker_parameters=freeze_json_object(chunker_parameters),
+        token_counter_identity=(
+            counter_probe.tokenizer_id
+            if counter_probe is not None
+            else "legacy-tokenizer-v1"
+        ),
+        token_count_exact=(
+            counter_probe.exact if counter_probe is not None else False
+        ),
         embedding_slots=topology.slots,
         lexical_schema=freeze_json_object(
             {"store": lexical_store.name, "rank_semantics": "rank"}
@@ -609,7 +624,15 @@ def _index_fingerprint_input(
                 "distance": "cosine",
             }
         ),
-        chunk_payload_schema=freeze_json_object({"schema_version": "1"}),
+        chunk_payload_schema=freeze_json_object(
+            {
+                "schema_version": (
+                    "3"
+                    if chunker_descriptor.name == "docx-structural-v3"
+                    else "1"
+                )
+            }
+        ),
     )
 
 

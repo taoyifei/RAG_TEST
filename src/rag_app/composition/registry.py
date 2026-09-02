@@ -595,6 +595,9 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         无返回值；所有 factory 仅构造本地对象，不执行网络。
 
     """
+    from rag_app.adapters.chunkers import (  # noqa: PLC0415
+        DocxStructuralChunker,
+    )
     from rag_app.adapters.legacy.contracts import (  # noqa: PLC0415
         LegacyDocxParserAdapter,
         LegacySectionChunkerAdapter,
@@ -636,6 +639,11 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         "legacy-docx",
         lambda: LegacyDocxParserAdapter(),  # noqa: PLW0108
         descriptor=LegacyDocxParserAdapter.descriptor,
+    )
+    registry.register_chunker(
+        "docx-structural-v3",
+        lambda: DocxStructuralChunker(),  # noqa: PLW0108
+        descriptor=DocxStructuralChunker.descriptor,
     )
     registry.register_chunker(
         "legacy-section-pack",
