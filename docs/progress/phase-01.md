@@ -4,7 +4,12 @@
 
 - Integration base：`09702a0fbb99e365ff0cad036e970bb1af2fbaee`。
 - Feature branch：`codex/p01-core-ports`。
-- Feature commit、integration merge commit 与远程状态：Git 交付后回填。
+- Feature commit：`75040b429b850b599d92493a955fa241a68dac72`。
+- Integration implementation merge commit：`0588ed30f0cc8ba4b9e0d7956f7cd7c488939a1f`
+  （`--no-ff`）。
+- 远程状态：`origin/codex/p01-core-ports` 已包含 feature commit，
+  `origin/feature/universal-rag` 已包含 implementation merge commit；两者均以
+  `git ls-remote` 核对。
 - `main` 与 `Industry` 只读；没有向两者提交、合并或推送。
 
 ## 实际修改
@@ -18,6 +23,8 @@
 - 固定 Jina v5 small primary、Qwen3.7 standby、Jina reranker 身份和双 named-vector
   topology；P01 不提供真实 HTTP。
 - 新增 Core/Composition/Legacy/架构边界测试和本阶段设计、公共、迁移文档。
+- Feature commit 共记录 55 个文件、7,099 行新增；没有提交 `.env`、数据库/WAL、索引、
+  模型、ZIP、缓存或 secret。
 
 ## Schema、公共接口与迁移
 
@@ -56,13 +63,31 @@ Google docstrings: missing_google_sections=0
 58 passed, 1 warning in 2.14s
 ```
 
+合并后的 `feature/universal-rag@0588ed30f0cc8ba4b9e0d7956f7cd7c488939a1f`：
+
+```text
+.venv/bin/python -c "from rag_app.application.engine import RagEngine; print('ok')"
+ok
+
+.venv/bin/python -m pytest -q tests/core tests/composition tests/adapters/legacy tests/test_architecture_boundaries.py
+65 passed in 1.21s
+
+.venv/bin/python scripts/dev.py check
+ruff: All checks passed
+mypy: Success: no issues found in 153 source files
+Google docstrings: missing_google_sections=0
+998 passed, 75 deselected, 4 warnings in 177.23s
+
+.venv/bin/python scripts/dev.py smoke
+58 passed, 1 warning in 1.59s
+```
+
 上述命令失败数均为 0。`check` 明确跳过 75 个带 `local_integration` 或
-`live_provider` 标记的测试；没有把它们写成通过。合并后的集成分支验收结果将在 Git
-交付后回填。
+`live_provider` 标记的测试；没有把它们写成通过。
 
 ## 外部服务与安全边界
 
-截至当前只访问 GitHub origin 执行 `git fetch`。应用验证未调用 Jina、阿里、LLM、
+截至当前只访问 GitHub origin 执行 `git fetch/pull/push`。应用验证未调用 Jina、阿里、LLM、
 OCR 或 Qdrant，没有读取真实 API Key，没有使用企业文档；DOCX 行为只使用后续测试合成
 fixture。远程 Provider 在 P01 调用时失败关闭。
 
