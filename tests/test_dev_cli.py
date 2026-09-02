@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
 from scripts import dev
+from tests.adapters.parsers.docx_fixtures import HEADING, PARAGRAPH, build_docx
 
 
 def test_check_uses_existing_offline_quality_tools() -> None:
@@ -44,3 +46,51 @@ def test_command_runner_returns_first_failure(
 
     assert return_code == 7
     assert calls == [("python", "pass"), ("python", "fail")]
+
+
+def test_inspect_document_defaults_to_summary_and_explicit_json(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "sample.docx"
+    output = tmp_path / "ir.json"
+    source.write_bytes(build_docx(HEADING + PARAGRAPH))
+
+    return_code = dev.main(
+        [
+            "inspect-document",
+            str(source),
+            "--output-json",
+            str(output),
+        ]
+    )
+    stdout = capsys.readouterr().out
+
+    assert return_code == 0
+    assert "document_hash_prefix=" in stdout
+    assert "parser=legacy-docx-ir@" in stdout
+    assert "nodes=2 issues=0" in stdout
+    assert "安装说明" not in stdout
+    assert "安装说明" not in output.read_text(encoding="utf-8")
+
+
+def test_inspect_document_include_content_is_explicit(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sample.docx"
+    output = tmp_path / "ir.json"
+    source.write_bytes(build_docx(PARAGRAPH))
+
+    assert (
+        dev.main(
+            [
+                "inspect-document",
+                str(source),
+                "--output-json",
+                str(output),
+                "--include-content",
+            ]
+        )
+        == 0
+    )
+    assert "第一步" in output.read_text(encoding="utf-8")
