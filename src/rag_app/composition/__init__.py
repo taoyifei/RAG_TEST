@@ -12,6 +12,10 @@ from rag_app.composition.profiles import (
     load_profile,
     profile_from_mapping,
 )
+from rag_app.composition.provider_profiles import (
+    load_named_provider_profile,
+    load_provider_catalog,
+)
 from rag_app.composition.registry import (
     ComponentRegistry,
     register_builtin_components,
@@ -28,7 +32,9 @@ __all__ = [
     "build_components",
     "default_hot_standby_profile",
     "default_offline_profile",
+    "load_named_provider_profile",
     "load_profile",
+    "load_provider_catalog",
     "profile_from_mapping",
     "register_builtin_components",
 ]

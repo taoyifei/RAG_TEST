@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "verified_at": "2026-09-01",
+  "providers": [
+    {
+      "provider_id": "jina",
+      "operation": "embedding",
+      "model": "jina-embeddings-v5-text-small",
+      "endpoint": "https://api.jina.ai/v1/embeddings",
+      "dimension": 1024,
+      "document_task": "retrieval.passage",
+      "query_task": "retrieval.query",
+      "normalization": "l2-v1"
+    },
+    {
+      "provider_id": "jina",
+      "operation": "reranking",
+      "model": "jina-reranker-v3.5",
+      "endpoint": "https://api.jina.ai/v1/rerank"
+    },
+    {
+      "provider_id": "aliyun-qwen37",
+      "operation": "embedding",
+      "model": "qwen3.7-text-embedding",
+      "transport": "dashscope-native",
+      "region": "cn-beijing",
+      "endpoint_template": "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding",
+      "dimension": 1024,
+      "document_text_type": "document",
+      "query_text_type": "query",
+      "output_type": "dense",
+      "normalization": "l2-v1"
+    }
+  ]
+}

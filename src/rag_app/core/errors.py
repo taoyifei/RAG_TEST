@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from typing import ClassVar
 
 from rag_app.core.models.common import JsonObject, freeze_json_object
+from rag_app.core.models.provider import ProviderCall
 
 _FORBIDDEN_DETAIL_KEYS = frozenset(
     {
@@ -63,6 +64,8 @@ class RagError(Exception):
         )
         self.stage = stage
         self.trace_id = trace_id
+        self.provider_call: ProviderCall | None = None
+        self.provider_calls: tuple[ProviderCall, ...] = ()
         frozen_details = freeze_json_object(details)
         if _contains_forbidden_details(frozen_details):
             raise ValueError("错误 details 包含禁止的敏感字段。")
@@ -168,6 +171,13 @@ class ProviderInputTooLarge(RagError):
     default_code = "PROVIDER_INPUT_TOO_LARGE"
 
 
+class DenseUnavailable(RagError):
+    """两个 Dense slot 均不可安全使用。"""
+
+    default_code = "DENSE_UNAVAILABLE"
+    default_retryable = True
+
+
 class IndexCompatibilityError(RagError):
     """查询 slot、vector name 或 revision 不匹配。"""
 
@@ -204,6 +214,7 @@ __all__ = [
     "ComponentNotRegistered",
     "ConfigurationError",
     "Conflict",
+    "DenseUnavailable",
     "IndexCompatibilityError",
     "InvalidDocument",
     "NotFound",

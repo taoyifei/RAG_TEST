@@ -50,7 +50,15 @@ class EmbeddingSlotProfile(_ProfileModel):
     model: str = Field(min_length=1)
     dimension: StrictInt = Field(gt=0)
     vector_name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
-    normalization: str = Field(default="l2", min_length=1)
+    normalization: str = Field(default="l2-v1", min_length=1)
+    document_task: str | None = None
+    query_task: str | None = None
+    embedding_type: str | None = None
+    transport: str | None = None
+    document_text_type: str | None = None
+    query_text_type: str | None = None
+    query_instruct: str | None = None
+    output_type: str | None = None
     document_request_policy: JsonObject = ()
     query_request_policy: JsonObject = ()
     api_key_env: str | None = Field(
@@ -62,6 +70,10 @@ class EmbeddingSlotProfile(_ProfileModel):
         pattern=r"^[A-Z][A-Z0-9_]{2,127}$",
     )
     region: str | None = Field(default=None, pattern=r"^cn-beijing$")
+    region_env: str | None = Field(
+        default=None,
+        pattern=r"^[A-Z][A-Z0-9_]{2,127}$",
+    )
 
     @field_validator(
         "document_request_policy",
@@ -82,6 +94,27 @@ class EmbeddingSlotProfile(_ProfileModel):
             可参与指纹和 Store 校验的 slot 身份。
 
         """
+        document_policy = dict(self.document_request_policy)
+        query_policy = dict(self.query_request_policy)
+        if self.document_task is not None:
+            document_policy["task"] = self.document_task
+        if self.query_task is not None:
+            query_policy["task"] = self.query_task
+        if self.embedding_type is not None:
+            document_policy["embedding_type"] = self.embedding_type
+            query_policy["embedding_type"] = self.embedding_type
+        if self.transport is not None:
+            document_policy["transport"] = self.transport
+            query_policy["transport"] = self.transport
+        if self.document_text_type is not None:
+            document_policy["text_type"] = self.document_text_type
+        if self.query_text_type is not None:
+            query_policy["text_type"] = self.query_text_type
+        if self.query_instruct is not None:
+            query_policy["query_instruct"] = self.query_instruct
+        if self.output_type is not None:
+            document_policy["output_type"] = self.output_type
+            query_policy["output_type"] = self.output_type
         return EmbeddingSlotIdentity(
             slot_id=self.slot_id,
             role=role,
@@ -89,8 +122,8 @@ class EmbeddingSlotProfile(_ProfileModel):
             model=self.model,
             vector_name=self.vector_name,
             dimension=self.dimension,
-            document_request_policy=self.document_request_policy,
-            query_request_policy=self.query_request_policy,
+            document_request_policy=freeze_json_object(document_policy),
+            query_request_policy=freeze_json_object(query_policy),
             normalization=self.normalization,
         )
 
@@ -284,13 +317,10 @@ def default_hot_standby_profile() -> RagProfile:
         model="jina-embeddings-v5-text-small",
         dimension=1024,
         vector_name="dense_primary",
-        normalization="l2",
-        document_request_policy=freeze_json_object(
-            {"task": "retrieval.passage", "type": "float"}
-        ),
-        query_request_policy=freeze_json_object(
-            {"task": "retrieval.query", "type": "float"}
-        ),
+        normalization="l2-v1",
+        document_task="retrieval.passage",
+        query_task="retrieval.query",
+        embedding_type="float",
         api_key_env="JINA_API_KEY",
     )
     standby = EmbeddingSlotProfile(
@@ -299,28 +329,19 @@ def default_hot_standby_profile() -> RagProfile:
         model="qwen3.7-text-embedding",
         dimension=1024,
         vector_name="dense_standby",
-        normalization="provider",
-        document_request_policy=freeze_json_object(
-            {
-                "text_type": "document",
-                "output_type": "dense",
-                "transport": "dashscope-native",
-            }
-        ),
-        query_request_policy=freeze_json_object(
-            {
-                "text_type": "query",
-                "output_type": "dense",
-                "query_instruct": _QUERY_INSTRUCTION,
-                "transport": "dashscope-native",
-            }
-        ),
+        normalization="l2-v1",
+        transport="dashscope-native",
+        document_text_type="document",
+        query_text_type="query",
+        query_instruct=_QUERY_INSTRUCTION,
+        output_type="dense",
         api_key_env="DASHSCOPE_API_KEY",
         workspace_id_env="ALIYUN_MODEL_STUDIO_WORKSPACE_ID",
         region="cn-beijing",
+        region_env="ALIYUN_MODEL_STUDIO_REGION",
     )
     return RagProfile(
-        profile_id="jina-qwen37-hot-standby",
+        profile_id="dev-jina-qwen37-hot-standby",
         components=ComponentsProfile(
             embedding_topology=EmbeddingTopologyProfile(
                 mode="hot_standby",
@@ -336,5 +357,18 @@ def default_hot_standby_profile() -> RagProfile:
                 on_unavailable="bypass_keep_rrf",
                 api_key_env="JINA_API_KEY",
             ),
+        ),
+        security=EgressPolicy(
+            remote_document_embedding=True,
+            remote_query_embedding=True,
+            remote_reranking=True,
+            remote_document_embedding_jina=True,
+            remote_query_embedding_jina=True,
+            remote_reranking_jina=True,
+            remote_document_embedding_aliyun=True,
+            remote_query_embedding_aliyun=True,
+            allow_aliyun_embedding_failover=True,
+            aliyun_daily_request_budget=100,
+            aliyun_daily_token_budget=100000,
         ),
     )

@@ -44,6 +44,24 @@ class ProviderCall(FrozenModel):
     retry_count: StrictInt = Field(ge=0)
     elapsed_ms: StrictInt = Field(ge=0)
     reason_code: str | None = None
+    model: str | None = None
+    endpoint: str | None = None
+    attempt_count: StrictInt | None = Field(default=None, ge=1)
+    status_category: str | None = None
+    retry_after_ms: StrictInt | None = Field(default=None, ge=0)
+    input_count: StrictInt | None = Field(default=None, ge=0)
+    estimated_tokens: StrictInt | None = Field(default=None, ge=0)
+
+
+class ProviderFailureCategory(StrEnum):
+    """应用层允许识别的 Provider 失败类别。"""
+
+    TRANSIENT = "transient"
+    RESPONSE_CONTRACT = "response_contract"
+    AUTH_OR_MODEL = "auth_or_model"
+    INPUT_INVALID = "input_invalid"
+    POLICY_DENIED = "policy_denied"
+    STORE_INCOMPATIBLE = "store_incompatible"
 
 
 class EmbeddingSlotRole(StrEnum):

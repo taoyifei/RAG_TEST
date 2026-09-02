@@ -1,0 +1,61 @@
+{
+  "schema_version": "1",
+  "profile_id": "dev-jina-qwen37-hot-standby",
+  "components": {
+    "embedding_topology": {
+      "mode": "hot_standby",
+      "activation_policy": "all_required_slots_complete",
+      "primary": {
+        "slot_id": "primary",
+        "provider": "jina-embedding",
+        "model": "jina-embeddings-v5-text-small",
+        "dimension": 1024,
+        "vector_name": "dense_primary",
+        "document_task": "retrieval.passage",
+        "query_task": "retrieval.query",
+        "embedding_type": "float",
+        "normalization": "l2-v1",
+        "api_key_env": "JINA_API_KEY"
+      },
+      "standby": {
+        "slot_id": "standby",
+        "provider": "aliyun-qwen37-embedding",
+        "model": "qwen3.7-text-embedding",
+        "transport": "dashscope-native",
+        "region": "cn-beijing",
+        "region_env": "ALIYUN_MODEL_STUDIO_REGION",
+        "workspace_id_env": "ALIYUN_MODEL_STUDIO_WORKSPACE_ID",
+        "api_key_env": "DASHSCOPE_API_KEY",
+        "dimension": 1024,
+        "vector_name": "dense_standby",
+        "document_text_type": "document",
+        "query_text_type": "query",
+        "query_instruct": "Given a user query, retrieve the most relevant passages from enterprise DOCX knowledge bases.",
+        "output_type": "dense",
+        "normalization": "l2-v1"
+      }
+    },
+    "embedding_primary": null,
+    "embedding_standby": null,
+    "embedding_router": "embedding-router-hot-standby",
+    "reranker": {
+      "provider": "jina-reranker",
+      "model": "jina-reranker-v3.5",
+      "on_unavailable": "bypass_keep_rrf",
+      "api_key_env": "JINA_API_KEY"
+    }
+  },
+  "security": {
+    "remote_document_embedding": true,
+    "remote_query_embedding": true,
+    "remote_reranking": true,
+    "remote_document_embedding_jina": true,
+    "remote_query_embedding_jina": true,
+    "remote_reranking_jina": true,
+    "remote_document_embedding_aliyun": true,
+    "remote_query_embedding_aliyun": true,
+    "allow_aliyun_embedding_failover": true,
+    "aliyun_daily_request_budget": 100,
+    "aliyun_daily_token_budget": 100000
+  }
+}
