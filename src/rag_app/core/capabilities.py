@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal, TypeAlias
 
 from pydantic import Field, StrictInt
 
@@ -53,3 +54,22 @@ class ComponentDescriptor(FrozenModel):
     mode: ProviderMode
     source: str = Field(default="builtin", min_length=1, max_length=120)
     capabilities: ComponentCapabilities = ComponentCapabilities()
+
+
+CapabilitySupport: TypeAlias = bool | Literal["partial"]
+
+
+class ParserCapabilities(FrozenModel):
+    """Parser 对格式、结构和 IR schema 的诚实能力声明。"""
+
+    supported_extensions: tuple[str, ...]
+    supported_media_types: tuple[str, ...]
+    supports_tables: CapabilitySupport = False
+    supports_images: CapabilitySupport = False
+    supports_numbering: CapabilitySupport = False
+    supports_headers_footers: CapabilitySupport = False
+    supports_footnotes: CapabilitySupport = False
+    supports_revisions: CapabilitySupport = False
+    supports_comments: CapabilitySupport = False
+    supports_text_boxes: CapabilitySupport = False
+    schema_version: str = Field(default="1", pattern=r"^1$")

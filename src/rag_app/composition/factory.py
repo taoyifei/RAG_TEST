@@ -30,7 +30,7 @@ from rag_app.core.models import (
     EmbeddingTopology,
 )
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.policies import CircuitBreakerPolicy
+from rag_app.core.policies import CircuitBreakerPolicy, ParsingPolicy
 from rag_app.core.ports import (
     BlobStorePort,
     ChunkerPort,
@@ -583,7 +583,9 @@ def _index_fingerprint_input(
 ) -> IndexFingerprintInput:
     return IndexFingerprintInput(
         parser=parser,
-        parsing_policy=freeze_json_object({"schema_version": "1"}),
+        parsing_policy=freeze_json_object(
+            ParsingPolicy().model_dump(mode="json", exclude_none=False)
+        ),
         ir_schema_version="1",
         chunker=chunker,
         chunker_parameters=freeze_json_object({"strategy": "profile"}),

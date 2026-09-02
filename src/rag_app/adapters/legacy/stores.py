@@ -413,6 +413,18 @@ class InMemoryBlobStore:
         """
         return self._items.get(blob_id)
 
+    def delete(self, blob_id: str) -> None:
+        """幂等删除 blob。
+
+        Args:
+            blob_id: blob 身份。
+
+        Returns:
+            无返回值。
+
+        """
+        self._items.pop(blob_id, None)
+
     def close(self) -> None:
         """幂等关闭 Store。
 

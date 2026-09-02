@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from rag_app.core.capabilities import ComponentDescriptor
-from rag_app.core.models import ParsePolicy, ParseResult, ParseSource
+from rag_app.core.capabilities import ComponentDescriptor, ParserCapabilities
+from rag_app.core.models import ParseResult, ParseSource
+from rag_app.core.policies import ParsingPolicy
 
 
 class ParserPort(Protocol):
@@ -24,7 +25,20 @@ class ParserPort(Protocol):
         """
         ...
 
-    def parse(self, source: ParseSource, policy: ParsePolicy) -> ParseResult:
+    @property
+    def parser_capabilities(self) -> ParserCapabilities:
+        """返回格式中立 Parser 能力。
+
+        Args:
+            无参数；读取当前 parser。
+
+        Returns:
+            不夸大复杂结构支持程度的能力声明。
+
+        """
+        ...
+
+    def parse(self, source: ParseSource, policy: ParsingPolicy) -> ParseResult:
         """解析一个受控字节源。
 
         Args:
