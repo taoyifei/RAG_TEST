@@ -69,9 +69,15 @@ def build_table_run(
         table.node_id,
     )
     header_fragments: tuple[SourceFragment, ...] = ()
+    header_phase = True
     atoms: list[AtomicUnit] = []
     for row in rows:
-        fragments, child_groups, cell_coordinates = _row_fragments(
+        (
+            fragments,
+            child_groups,
+            cell_coordinates,
+            logical_context,
+        ) = _row_fragments(
             document_ir,
             row,
             nodes,
@@ -100,10 +106,21 @@ def build_table_run(
             ),
             child_group_ids=child_groups,
             table_header_fragments=header_fragments,
+            structural_context=logical_context,
         )
         atoms.append(atom)
-        if is_header:
-            header_fragments = fragments
+        if is_header and header_phase:
+            header_fragments = (
+                (
+                    *header_fragments,
+                    separator_fragment("\n"),
+                    *fragments,
+                )
+                if header_fragments
+                else fragments
+            )
+        else:
+            header_phase = False
     if not atoms:
         return None
     return RunPlan(
@@ -120,7 +137,12 @@ def _row_fragments(
     document_ir: DocumentIR,
     row: DocumentNode,
     nodes: dict[str, DocumentNode],
-) -> tuple[tuple[SourceFragment, ...], tuple[str, ...], tuple[str, ...]]:
+) -> tuple[
+    tuple[SourceFragment, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    str,
+]:
     fragments: list[SourceFragment] = []
     child_groups: list[str] = []
     coordinates: list[str] = []
@@ -129,9 +151,36 @@ def _row_fragments(
         for child_id in row.child_ids
         if nodes[child_id].kind is NodeKind.TABLE_CELL
     ]
-    for cell_index, cell in enumerate(cells):
-        cell_fragments = _cell_fragments(cell, nodes)
-        nested_tables = _nested_tables(cell, nodes)
+    row_metadata = dict(row.metadata)
+    grid_before = _metadata_int(row_metadata.get("grid_before"))
+    grid_after = _metadata_int(row_metadata.get("grid_after"))
+    logical_cells: list[tuple[int, DocumentNode | None, str]] = [
+        (column, None, "omitted") for column in range(grid_before)
+    ]
+    for cell in cells:
+        grid = cell.cell_grid
+        column = grid.column_index if grid is not None else len(logical_cells)
+        state = _cell_state(cell, nodes)
+        logical_cells.append((column, cell, state))
+    last_column = max(
+        (column for column, _, _ in logical_cells),
+        default=-1,
+    )
+    logical_cells.extend(
+        (last_column + offset + 1, None, "omitted")
+        for offset in range(grid_after)
+    )
+    context_parts: list[str] = []
+    for logical_index, (column, logical_cell, state) in enumerate(
+        logical_cells
+    ):
+        if logical_index:
+            fragments.append(separator_fragment(" | "))
+        if logical_cell is None:
+            context_parts.append(f"[列{column + 1}] <OMITTED>")
+            continue
+        cell_fragments = _cell_fragments(logical_cell, nodes)
+        nested_tables = _nested_tables(logical_cell, nodes)
         child_groups.extend(
             table_group_id(
                 document_ir.version.document_version_id,
@@ -139,24 +188,42 @@ def _row_fragments(
             )
             for nested in nested_tables
         )
-        grid = cell.cell_grid
+        grid = logical_cell.cell_grid
         if grid is not None:
             coordinates.append(
                 f"r{grid.row_index}:c{grid.column_index}:"
                 f"rs{grid.row_span}:cs{grid.column_span}"
             )
-        if not cell_fragments:
-            continue
-        if fragments:
-            fragments.append(separator_fragment(" | "))
+        value = "".join(fragment.text for fragment in cell_fragments)
+        marker = value if value else f"<{state.upper()}>"
+        context_parts.append(f"[列{column + 1}] {marker}")
         fragments.extend(cell_fragments)
-        if cell_index + 1 < len(cells) and not cell_fragments:
-            continue
     return (
         tuple(fragments),
         tuple(dict.fromkeys(child_groups)),
         tuple(coordinates),
+        " | ".join(context_parts),
     )
+
+
+def _metadata_int(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 0
+
+
+def _cell_state(
+    cell: DocumentNode,
+    nodes: dict[str, DocumentNode],
+) -> str:
+    metadata = dict(cell.metadata)
+    anchor_id = metadata.get("vmerge_anchor_node_id")
+    if isinstance(anchor_id, str) and anchor_id in nodes:
+        return "vertical_merge_continuation"
+    grid = cell.cell_grid
+    if grid is not None and grid.column_span > 1:
+        return "horizontal_merge_anchor"
+    return "value" if _cell_fragments(cell, nodes) else "empty"
 
 
 def _cell_fragments(

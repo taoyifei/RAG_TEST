@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from rag_app.adapters.chunkers.docx_structural.atoms import AtomicUnit, RunPlan
-from rag_app.adapters.chunkers.docx_structural.context import embedding_text
+from rag_app.adapters.chunkers.docx_structural.context import (
+    embedding_text,
+    pack_structural_context,
+)
 from rag_app.adapters.chunkers.docx_structural.rendering import render_atoms
 from rag_app.adapters.chunkers.docx_structural.splitting import split_atom
 from rag_app.core.models import ChunkingPolicy
@@ -91,6 +94,11 @@ def _pack_size(
     rendered = render_atoms(atoms)
     citation_count = token_counter.count(rendered.text).count
     embedding_count = token_counter.count(
-        embedding_text(document_title, atoms[0], rendered.text)
+        embedding_text(
+            document_title,
+            atoms[0],
+            rendered.text,
+            structural_context=pack_structural_context(atoms),
+        )
     ).count
     return max(citation_count, embedding_count)

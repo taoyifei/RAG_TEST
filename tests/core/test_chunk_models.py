@@ -9,6 +9,7 @@ from rag_app.adapters.chunkers.docx_structural.validation import (
 from rag_app.core.models import (
     Chunk,
     ChunkingPolicy,
+    ChunkingReport,
     DocumentVersionRef,
     SourceAnchor,
     SourceSpan,
@@ -126,3 +127,26 @@ def test_policy_uses_strictest_required_embedding_limit() -> None:
         ),
     )
     assert policy.effective_embedding_max == 480
+
+
+def test_chunking_report_metrics_must_be_internally_consistent() -> None:
+    report = ChunkingReport(
+        chunk_count=1,
+        total_citable_source_chars=10,
+        unique_covered_source_chars=8,
+        missing_source_chars=2,
+        source_span_coverage=0.8,
+        cross_boundary_violations=2,
+        cross_section_violations=1,
+        cross_group_violations=1,
+    )
+    assert report.source_span_coverage == 0.8
+
+    with pytest.raises(ValidationError, match="coverage"):
+        ChunkingReport(
+            chunk_count=1,
+            total_citable_source_chars=10,
+            unique_covered_source_chars=8,
+            missing_source_chars=2,
+            source_span_coverage=1.0,
+        )

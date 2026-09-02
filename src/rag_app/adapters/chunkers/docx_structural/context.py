@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from rag_app.adapters.chunkers.docx_structural.atoms import AtomicUnit
 from rag_app.adapters.chunkers.docx_structural.rendering import (
     render_context_fragments,
@@ -25,6 +27,8 @@ def embedding_text(
     document_title: str,
     atom: AtomicUnit,
     citation_text: str,
+    *,
+    structural_context: str | None = None,
 ) -> str:
     """构造不冒充 citation 来源的确定性 embedding 文本。
 
@@ -32,6 +36,7 @@ def embedding_text(
         document_title: 展示标题，仅用于上下文。
         atom: 当前 pack 的首个结构原子。
         citation_text: 可精确引用的正文。
+        structural_context: 可选的多原子逻辑结构上下文。
 
     Returns:
         受字符预算约束的前缀与 citation 正文。
@@ -47,7 +52,29 @@ def embedding_text(
         header = render_context_fragments(atom.table_header_fragments)
         if header:
             lines.append(f"表头：{header}")
+    resolved_context = (
+        atom.structural_context
+        if structural_context is None
+        else structural_context
+    )
+    if resolved_context:
+        lines.append(f"结构：{resolved_context}")
     prefix = "\n".join(lines)
     if len(prefix) > _CONTEXT_CHARACTER_CAP:
         prefix = f"{prefix[: _CONTEXT_CHARACTER_CAP - 1]}…"
     return f"{prefix}\n\n{citation_text}"
+
+
+def pack_structural_context(atoms: Sequence[AtomicUnit]) -> str:
+    """合并同一 pack 中每个原子的结构上下文。
+
+    Args:
+        atoms: 保持来源顺序的结构原子。
+
+    Returns:
+        非空上下文按换行连接的字符串。
+
+    """
+    return "\n".join(
+        atom.structural_context for atom in atoms if atom.structural_context
+    )
