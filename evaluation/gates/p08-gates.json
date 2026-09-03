@@ -1,0 +1,85 @@
+{
+  "schema_version": "1",
+  "gates": [
+    {
+      "gate_id": "wrong_scope_zero",
+      "metric": "wrong_scope_hit_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 1,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "wrong_revision_zero",
+      "metric": "wrong_revision_hit_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 1,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "wrong_vector_space_zero",
+      "metric": "wrong_vector_space_attempt_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 1,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "citation_validity_complete",
+      "metric": "citation_validity_rate",
+      "operator": "eq",
+      "value": 1.0,
+      "minimum_samples": 5,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "unsupported_claims_zero",
+      "metric": "unsupported_claim_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 1,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "evidence_budget_overflow_zero",
+      "metric": "evidence_budget_overflow_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 1,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "source_ranges_complete",
+      "metric": "source_range_coverage",
+      "operator": "eq",
+      "value": 1.0,
+      "minimum_samples": 5,
+      "source": "explicit provisional engineering gate"
+    },
+    {
+      "gate_id": "answerable_accuracy_complete",
+      "metric": "answerable_accuracy",
+      "operator": "eq",
+      "value": 1.0,
+      "minimum_samples": 8,
+      "source": "explicit provisional engineering gate"
+    },
+    {
+      "gate_id": "refusal_f1_complete",
+      "metric": "refusal_f1",
+      "operator": "eq",
+      "value": 1.0,
+      "minimum_samples": 8,
+      "source": "explicit provisional engineering gate"
+    },
+    {
+      "gate_id": "recall_at_5_provisional",
+      "metric": "recall_at_5",
+      "operator": "ge",
+      "value": 0.9,
+      "minimum_samples": 7,
+      "source": "explicit provisional engineering gate"
+    }
+  ]
+}
