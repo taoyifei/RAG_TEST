@@ -5,9 +5,14 @@
 - Integration base SHA: `76a9d68edec80454928bde78599ca8c1dca55fc8`.
 - Feature branch: `codex/p08-evaluation`.
 - Feature commits: `579d75c`, `de96e49`, `1cf33a8`, `34480c1`, `ce59cdc`,
-  `25490f0`, and `6841ce2`; evidence/report commits follow below.
-- Integration merge commit: pending final integration.
-- Remote feature/integration SHAs: pending final push verification.
+  `25490f0`, `6841ce2`, `c8693fc`, and `958b264`.
+- Integration merge commit: `f608bc30361b731afd7f18345342b6408dbe7341`
+  (`--no-ff`).
+- Verified remote feature SHA:
+  `958b2645b84b89a4da4ccf96d8db6734de9a98d8`.
+- Verified remote gate-tested integration merge SHA:
+  `f608bc30361b731afd7f18345342b6408dbe7341`. The later phase-report-only
+  commit does not change executable behavior.
 - P06/P07 prerequisites: merge commits `687350d4e942cdda75af42fed8b71ead94f7c1dc`
   and `1e8c32242a42ef816c02bbb4d207f828fa1b62dc`; P07 report commit
   `76a9d68edec80454928bde78599ca8c1dca55fc8` records `P07_READY: true`.
@@ -91,7 +96,11 @@ values are engineering observations, not production performance claims.
   4 warnings in 206.03 seconds.
 - Final pre-merge smoke: 71 passed, 1 warning in 7.40 seconds.
 - Final pre-merge `git diff --check`: passed.
-- Post-merge full gate counts: pending integration.
+- Post-merge compileall, Ruff, strict mypy over 274 files, and Google docstrings
+  passed; default-offline pytest reported 1289 passed, 75 deselected, and
+  4 warnings in 205.56 seconds.
+- Post-merge smoke: 71 passed, 1 warning in 7.84 seconds.
+- Post-merge `git diff --check`: passed before the integration push.
 
 ## Remaining risks
 
@@ -112,5 +121,5 @@ OFFLINE_EVALUATION_READY: true
 PRIMARY_LIVE_EVALUATION_STATUS: BLOCKED_NO_CREDENTIALS_AND_EGRESS_AUTHORIZATION
 STANDBY_LIVE_EVALUATION_STATUS: BLOCKED_NO_CREDENTIALS_AND_EGRESS_AUTHORIZATION
 REMOTE_PRODUCTION_PROFILE_READY: false
-P08_READY: pending integration
+P08_READY: true
 ```
