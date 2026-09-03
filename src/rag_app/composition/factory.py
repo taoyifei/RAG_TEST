@@ -233,6 +233,10 @@ def build_components(
                 registry.get_vector_store,
                 resolved_overrides,
                 created,
+                config=_persistent_config(
+                    resolved_profile,
+                    resolved_profile.components.vector_store,
+                ),
             ),
         )
         lexical_store = cast(
@@ -243,6 +247,10 @@ def build_components(
                 registry.get_lexical_store,
                 resolved_overrides,
                 created,
+                config=_persistent_config(
+                    resolved_profile,
+                    resolved_profile.components.lexical_store,
+                ),
             ),
         )
         metadata_store = cast(
@@ -253,6 +261,10 @@ def build_components(
                 registry.get_metadata_store,
                 resolved_overrides,
                 created,
+                config=_persistent_config(
+                    resolved_profile,
+                    resolved_profile.components.metadata_store,
+                ),
             ),
         )
         blob_store = cast(
@@ -263,6 +275,10 @@ def build_components(
                 registry.get_blob_store,
                 resolved_overrides,
                 created,
+                config=_persistent_config(
+                    resolved_profile,
+                    resolved_profile.components.blob_store,
+                ),
             ),
         )
         parser = cast(
@@ -452,6 +468,17 @@ def _create(  # noqa: PLR0913
     return component
 
 
+def _persistent_config(profile: RagProfile, component_name: str) -> object:
+    if component_name not in {
+        "qdrant-local",
+        "sqlite-fts5",
+        "sqlite-control",
+        "filesystem-blob",
+    }:
+        return None
+    return profile.local_data.model_dump(mode="json")
+
+
 def _embedding_component(  # noqa: PLR0913, PLR0917
     field_name: str,
     slot: EmbeddingSlotIdentity,
@@ -497,7 +524,7 @@ def _embedding_component(  # noqa: PLR0913, PLR0917
         ),
     }
     slot_profile = _embedding_slot_profile(profile, slot.slot_id)
-    if slot_profile is not None:
+    if slot_profile is not None and slot.provider_id != "deterministic":
         config.update(
             {
                 "adapter_revision": slot.adapter_revision,
