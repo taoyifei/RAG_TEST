@@ -285,6 +285,19 @@ class ComponentsProfile(_ProfileModel):
         return value
 
 
+class LocalDataProfile(_ProfileModel):
+    """P06 本地持久化位置与 SQLite/Qdrant 模式。"""
+
+    data_root: str = Field(default=".data", min_length=1)
+    sqlite_filename: str = Field(
+        default="universal-rag.sqlite3",
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$",
+    )
+    journal_mode: str = Field(default="WAL", pattern=r"^(WAL|DELETE|MEMORY)$")
+    busy_timeout_ms: StrictInt = Field(default=5000, ge=1, le=60000)
+    qdrant_mode: str = Field(default="memory", pattern=r"^(memory|path)$")
+
+
 class RagProfile(_ProfileModel):
     """可嵌入宿主的严格 V1 Profile。"""
 
@@ -297,6 +310,7 @@ class RagProfile(_ProfileModel):
     parsing: ParsingPolicy = ParsingPolicy()
     chunking: ChunkingPolicy = ChunkingPolicy()
     security: EgressPolicy = EgressPolicy()
+    local_data: LocalDataProfile = LocalDataProfile()
 
     def redacted_dict(self) -> dict[str, JsonValue]:
         """导出不读取环境变量值的安全 Profile。

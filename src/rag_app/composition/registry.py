@@ -621,8 +621,23 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         DocxOoxmlV4Parser,
         LegacyDocxIrParser,
     )
+    from rag_app.adapters.stores import (  # noqa: PLC0415
+        FilesystemBlobStore,
+        MemoryRevisionVectorStore,
+        QdrantRevisionVectorStore,
+        SqliteControlStore,
+        SqliteFtsStore,
+    )
     from rag_app.composition.builtin_providers import (  # noqa: PLC0415
         register_builtin_provider_components,
+    )
+    from rag_app.composition.persistent import (  # noqa: PLC0415
+        LocalPersistenceConfig,
+        filesystem_blob_factory,
+        memory_revision_vector_factory,
+        qdrant_local_factory,
+        sqlite_control_factory,
+        sqlite_fts_factory,
     )
     from rag_app.core.models import ChunkingPolicy  # noqa: PLC0415
 
@@ -705,20 +720,49 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         InMemoryVectorStore,
         descriptor=InMemoryVectorStore.descriptor,
     )
+    registry.register_vector_store(
+        "memory-vector",
+        memory_revision_vector_factory,
+        descriptor=MemoryRevisionVectorStore.descriptor,
+    )
+    registry.register_vector_store(
+        "qdrant-local",
+        qdrant_local_factory,
+        descriptor=QdrantRevisionVectorStore.descriptor,
+        config_model=LocalPersistenceConfig,
+    )
     registry.register_lexical_store(
         "memory",
         InMemoryLexicalStore,
         descriptor=InMemoryLexicalStore.descriptor,
+    )
+    registry.register_lexical_store(
+        "sqlite-fts5",
+        sqlite_fts_factory,
+        descriptor=SqliteFtsStore.descriptor,
+        config_model=LocalPersistenceConfig,
     )
     registry.register_metadata_store(
         "sqlite",
         SqliteMetadataStore,
         descriptor=SqliteMetadataStore.descriptor,
     )
+    registry.register_metadata_store(
+        "sqlite-control",
+        sqlite_control_factory,
+        descriptor=SqliteControlStore.descriptor,
+        config_model=LocalPersistenceConfig,
+    )
     registry.register_blob_store(
         "local",
         InMemoryBlobStore,
         descriptor=InMemoryBlobStore.descriptor,
+    )
+    registry.register_blob_store(
+        "filesystem-blob",
+        filesystem_blob_factory,
+        descriptor=FilesystemBlobStore.descriptor,
+        config_model=LocalPersistenceConfig,
     )
     registry.register_generator(
         "extractive",

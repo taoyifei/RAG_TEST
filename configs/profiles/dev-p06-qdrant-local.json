@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "profile_id": "dev-p06-qdrant-local",
+  "components": {
+    "parser": "docx-ooxml-v4",
+    "chunker": "docx-structural-v3",
+    "embedding_topology": "deterministic-single",
+    "embedding_primary": "deterministic",
+    "embedding_router": "embedding-router-single",
+    "reranker": "lexical-overlap",
+    "vector_store": "qdrant-local",
+    "lexical_store": "sqlite-fts5",
+    "metadata_store": "sqlite-control",
+    "blob_store": "filesystem-blob",
+    "generator": "extractive",
+    "trace_sink": "sqlite"
+  },
+  "local_data": {
+    "data_root": ".data",
+    "sqlite_filename": "universal-rag.sqlite3",
+    "journal_mode": "WAL",
+    "busy_timeout_ms": 5000,
+    "qdrant_mode": "path"
+  },
+  "security": {}
+}

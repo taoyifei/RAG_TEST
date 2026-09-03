@@ -40,6 +40,7 @@ from rag_app.composition.chunking_cli import (
     chunk_ablation_command,
     chunk_document_command,
 )
+from rag_app.composition.p06_cli import P06_COMMANDS, p06_command
 from rag_app.composition.provider_profiles import load_provider_catalog
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -88,6 +89,10 @@ _SMOKE_TESTS = (
     "tests/test_rerank_stage.py",
     "tests/test_answer_guard.py",
     "tests/test_architecture_boundaries.py",
+    (
+        "tests/e2e/test_p06_revision_lifecycle.py::"
+        "test_p06_revision_lifecycle_survives_reopen"
+    ),
 )
 _PROVIDER_ENV_NAMES = frozenset(
     {
@@ -615,6 +620,11 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
         全部检查通过时返回 0，否则返回首个失败命令的原始返回码。
 
     """
+    raw_arguments = (
+        tuple(arguments) if arguments is not None else tuple(sys.argv[1:])
+    )
+    if raw_arguments and raw_arguments[0] in P06_COMMANDS:
+        return p06_command(raw_arguments)
     parsed = _arguments(arguments)
     command = parsed.command
     if command == "doctor":
