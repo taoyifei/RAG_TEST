@@ -715,7 +715,15 @@ def _index_fingerprint_input(  # noqa: PLR0913
         ),
         embedding_slots=topology.slots,
         lexical_schema=freeze_json_object(
-            {"store": lexical_store.name, "rank_semantics": "rank"}
+            {
+                "store": lexical_store.name,
+                "store_version": lexical_store.version,
+                "rank_semantics": "rank",
+                "fts_schema_version": "2",
+                "analyzer_id": "deterministic-cjk-bigram",
+                "analyzer_version": "2",
+                "query_builder_version": "2",
+            }
         ),
         vector_schema=freeze_json_object(
             {

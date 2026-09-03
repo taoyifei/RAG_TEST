@@ -201,7 +201,13 @@ def _resolved_contracts(components: RagComponents) -> dict[str, object]:
         ),
         "chunking_policy": components.chunking_policy.model_dump(mode="json"),
         "embedding_topology": topology.model_dump(mode="json"),
-        "lexical_schema": descriptors["lexical_store"],
+        "lexical_schema": {
+            "component": descriptors["lexical_store"],
+            "fts_schema_version": "2",
+            "analyzer_id": "deterministic-cjk-bigram",
+            "analyzer_version": "2",
+            "query_builder_version": "2",
+        },
         "vector_schema": {
             "component": descriptors["vector_store"],
             "write_semantics": "complete-named-vector-point-v1",
