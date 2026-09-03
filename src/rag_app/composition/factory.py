@@ -814,9 +814,12 @@ def _serving_fingerprint_input(  # noqa: PLR0913
         circuit_breaker=CircuitBreakerPolicy(),
         retrieval_channels=freeze_json_object(
             {
-                "exact": True,
-                "fts5": True,
-                "dense": "one-selected-slot",
+                "enabled": list(policy.enabled_channels),
+                "dense": (
+                    "one-selected-slot"
+                    if "dense" in policy.enabled_channels
+                    else "disabled"
+                ),
                 "max_channels": policy.max_channels,
                 "top_k": policy.channel_top_k,
             }
@@ -832,10 +835,14 @@ def _serving_fingerprint_input(  # noqa: PLR0913
         reranker=reranker,
         reranker_model=reranker_model,
         reranker_policy=freeze_json_object(reranker_policy),
-        rerank_mode="provider_or_explicit_bypass",
+        rerank_mode=(
+            "provider_or_explicit_bypass"
+            if policy.rerank_enabled
+            else "disabled"
+        ),
         neighbor_parent_expansion=freeze_json_object(
             {
-                "enabled": True,
+                "enabled": policy.neighbor_expansion_enabled,
                 "neighbor_count": policy.neighbor_count,
                 "section_limit": policy.section_chunk_limit,
             }

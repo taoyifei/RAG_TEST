@@ -10,6 +10,7 @@ from rag_app.adapters.stores import InMemoryRetrievalCache, SqliteFtsStore
 from rag_app.application.retrieval import RetrievalService
 from rag_app.composition.p06_runtime import P06Runtime, build_p06_runtime
 from rag_app.composition.profiles import RagProfile
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import RetrievalPolicy
 from rag_app.core.ports import ExactStorePort
 
@@ -70,6 +71,14 @@ def build_p07_runtime(
     for revision_id in persistence.control.active_revision_ids():
         persistence.recovery.backfill(revision_id)
     cache = InMemoryRetrievalCache()
+    serving_fingerprint = components.serving_fingerprint
+    if policy is not None:
+        serving_fingerprint = canonical_sha256(
+            {
+                "base_serving_fingerprint": serving_fingerprint,
+                "retrieval_policy": policy.model_dump(mode="json"),
+            }
+        )
     retrieval = RetrievalService(
         source=persistence.control,
         exact_store=cast(ExactStorePort, components.lexical_store),
@@ -80,7 +89,7 @@ def build_p07_runtime(
         generator=components.generator,
         trace=components.trace_sink,
         cache=cache,
-        serving_fingerprint=components.serving_fingerprint,
+        serving_fingerprint=serving_fingerprint,
         egress_policy=components.profile.security,
         policy=policy,
     )

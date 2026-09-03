@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import Self
 
 from pydantic import (
     Field,
@@ -26,6 +27,8 @@ from rag_app.core.models.query import QueryKind
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
 
+_MAX_CONVERSATION_TURN_LENGTH = 2000
+
 
 class RetrievalPolicy(FrozenModel):
     """P07 尚未经过 P08 校准的有界执行参数。"""
@@ -46,7 +49,28 @@ class RetrievalPolicy(FrozenModel):
     rerank_text_char_limit: StrictInt = Field(default=2400, gt=0, le=10000)
     cache_schema_version: StrictInt = Field(default=1, gt=0)
     bypass_policy_denied: bool = True
+    enabled_channels: tuple[str, ...] = ("exact", "lexical", "dense")
+    rerank_enabled: bool = True
+    neighbor_expansion_enabled: bool = True
     provisional: bool = True
+
+    @field_validator("enabled_channels")
+    @classmethod
+    def _validate_channels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        allowed = {"exact", "lexical", "dense"}
+        if (
+            not value
+            or len(value) != len(set(value))
+            or not set(value) <= allowed
+        ):
+            raise ValueError("enabled channels 必须非空、唯一且受支持。")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_dense_requirements(self) -> Self:
+        if self.max_channels < len(self.enabled_channels):
+            raise ValueError("max_channels 不能小于 enabled channels 数量。")
+        return self
 
 
 class SearchRequest(FrozenModel):
@@ -70,7 +94,11 @@ class SearchRequest(FrozenModel):
     @field_validator("conversation_context")
     @classmethod
     def _bound_context(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if any(not item.strip() or len(item) > 2000 for item in value):
+        if any(
+            not item.strip()
+            or len(item) > _MAX_CONVERSATION_TURN_LENGTH
+            for item in value
+        ):
             raise ValueError("conversation turn 必须非空且有界。")
         return value
 
@@ -100,7 +128,9 @@ class ActiveRevisionQuerySnapshot(FrozenModel):
         if self.vector_spec.revision != self.revision:
             raise ValueError("查询 snapshot 的 vector spec revision 不一致。")
         if self.topology.slots != self.vector_spec.slots:
-            raise ValueError("查询 snapshot 的 topology 与 vector spec 不一致。")
+            raise ValueError(
+                "查询 snapshot 的 topology 与 vector spec 不一致。"
+            )
         return self
 
 
