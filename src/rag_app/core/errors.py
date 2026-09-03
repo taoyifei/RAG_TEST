@@ -184,6 +184,18 @@ class IndexCompatibilityError(RagError):
     default_code = "INDEX_COMPATIBILITY_ERROR"
 
 
+class IndexNotReady(RagError):
+    """知识库没有可供普通查询读取的 Active Revision。"""
+
+    default_code = "INDEX_NOT_READY"
+
+
+class IndexCorrupt(RagError):
+    """索引通道身份无法与 canonical store 一致回读。"""
+
+    default_code = "INDEX_CORRUPT"
+
+
 class RevisionStateError(RagError):
     """索引 revision 状态不允许当前转换。"""
 
@@ -216,6 +228,8 @@ __all__ = [
     "Conflict",
     "DenseUnavailable",
     "IndexCompatibilityError",
+    "IndexCorrupt",
+    "IndexNotReady",
     "InvalidDocument",
     "NotFound",
     "PolicyDenied",

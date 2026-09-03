@@ -71,6 +71,29 @@ class RevisionVectorSpec(FrozenModel):
                 return slot
         raise KeyError(slot_id)
 
+    def has_same_schema(self, other: RevisionVectorSpec) -> bool:
+        """比较向量 schema，明确忽略 revision 生命周期状态。
+
+        Args:
+            other: 待比较的 revision vector spec。
+
+        Returns:
+            scope、revision、fingerprint、namespace 与 slots 是否相同。
+
+        """
+        revision = self.revision
+        other_revision = other.revision
+        return (
+            self.physical_namespace == other.physical_namespace
+            and self.slots == other.slots
+            and revision.project_id == other_revision.project_id
+            and revision.knowledge_base_id == other_revision.knowledge_base_id
+            and revision.index_revision_id
+            == other_revision.index_revision_id
+            and revision.index_fingerprint
+            == other_revision.index_fingerprint
+        )
+
 
 class VectorPointPayload(FrozenModel):
     """Qdrant 仅保存定位和过滤字段的小型 payload。"""
@@ -131,6 +154,11 @@ class VectorSearchResult(FrozenModel):
 
     point_id: str
     chunk_id: str
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    role: str = Field(min_length=1)
+    section_id: str = Field(min_length=1)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     score: StrictFloat
     rank: StrictInt = Field(gt=0)
 

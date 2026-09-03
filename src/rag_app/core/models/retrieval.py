@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pydantic import Field, StrictFloat, StrictInt, field_validator
 
-from rag_app.core.models.chunk import Chunk
+from rag_app.core.models.chunk import Chunk, SourceSpan
 from rag_app.core.models.common import FrozenModel, MetadataModel
 from rag_app.core.models.document import KnowledgeBaseScope
 from rag_app.core.models.lifecycle import IndexRevisionRef
@@ -41,6 +41,34 @@ class EvidenceItem(MetadataModel):
     chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
     citation_text: str = Field(min_length=1, repr=False)
     source_label: str = Field(min_length=1)
+    source_spans: tuple[SourceSpan, ...] = ()
+    document_id: str | None = Field(
+        default=None, pattern=r"^doc_[0-9a-f]{32}$"
+    )
+    document_version_id: str | None = Field(
+        default=None, pattern=r"^dver_[0-9a-f]{32}$"
+    )
+    display_name: str | None = None
+    heading_path: tuple[str, ...] = ()
+    section_id: str | None = None
+    table_locator: str | None = None
+    retrieval_origins: tuple[str, ...] = ()
+    fusion_rank: StrictInt | None = Field(default=None, gt=0)
+    rerank_rank: StrictInt | None = Field(default=None, gt=0)
+    quality_flags: tuple[str, ...] = ()
+
+    @property
+    def support_id(self) -> str:
+        """返回 P07 对外使用的 Support ID。
+
+        Args:
+            无参数；读取当前 evidence。
+
+        Returns:
+            应用分配的稳定 Support ID。
+
+        """
+        return self.evidence_id
 
 
 class AnswerDraft(FrozenModel):
