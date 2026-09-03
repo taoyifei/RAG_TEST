@@ -5,6 +5,10 @@ from __future__ import annotations
 import math
 
 from rag_app.adapters.legacy.stores import InMemoryVectorStore
+from rag_app.adapters.stores.vector_audit import (
+    audit_named_point,
+    inventory_from_audits,
+)
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -15,6 +19,7 @@ from rag_app.core.models import (
     EmbeddingSlotIdentity,
     NamedVectorPoint,
     RevisionVectorSpec,
+    VectorRevisionInventory,
     VectorRevisionValidation,
     VectorSearchResult,
 )
@@ -196,23 +201,39 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             实际 Point/vector 计数和无效数。
 
         """
-        self._require_spec(spec)
+        inventory = self.audit_revision(spec)
         counts = {slot.vector_name: 0 for slot in spec.slots}
-        invalid = 0
-        expected = set(counts)
-        for point in self._points[spec.physical_namespace].values():
-            try:
-                self._validate_point(spec, point, expected)
-            except (ValueError, IndexCompatibilityError):
-                invalid += 1
+        for point in inventory.points:
+            if not point.convertible:
                 continue
-            for name in counts:
-                counts[name] += 1
+            for name in point.vector_names:
+                if name in counts:
+                    counts[name] += 1
         return VectorRevisionValidation(
-            point_count=len(self._points[spec.physical_namespace]),
+            point_count=inventory.raw_record_count,
             vector_counts=tuple(sorted(counts.items())),
-            invalid_point_count=invalid,
+            invalid_point_count=inventory.invalid_record_count,
         )
+
+    def audit_revision(
+        self,
+        spec: RevisionVectorSpec,
+    ) -> VectorRevisionInventory:
+        """使用与 Qdrant 相同的 Point 身份和 schema 规则盘点内存。
+
+        Args:
+            spec: 目标 revision schema。
+
+        Returns:
+            每个内存 Point 对应一个安全审计项。
+
+        """
+        self._require_spec(spec)
+        audits = tuple(
+            audit_named_point(spec, point)
+            for point in self._points[spec.physical_namespace].values()
+        )
+        return inventory_from_audits(audits)
 
     def delete_revision(self, spec: RevisionVectorSpec) -> None:
         """删除整个不可变 namespace。
@@ -227,6 +248,18 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
         self._require_spec(spec)
         self._points.pop(spec.physical_namespace, None)
         self._specs.pop(spec.physical_namespace, None)
+
+    def revision_exists(self, spec: RevisionVectorSpec) -> bool:
+        """检查内存 namespace 是否存在。
+
+        Args:
+            spec: 目标 Revision 的向量 Schema。
+
+        Returns:
+            namespace 已登记时返回 True。
+
+        """
+        return spec.physical_namespace in self._specs
 
     def close(self) -> None:
         """幂等释放 legacy 与 P06 Memory 数据。
