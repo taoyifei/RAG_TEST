@@ -3,6 +3,7 @@
 from rag_app.composition.factory import RagComponents, build_components
 from rag_app.composition.p06_runtime import P06Runtime, build_p06_runtime
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
+from rag_app.composition.p09_runtime import P09Runtime, build_p09_runtime
 from rag_app.composition.profiles import (
     ComponentsProfile,
     EmbeddingSlotProfile,
@@ -32,12 +33,14 @@ __all__ = [
     "LocalDataProfile",
     "P06Runtime",
     "P07Runtime",
+    "P09Runtime",
     "RagComponents",
     "RagProfile",
     "RerankerProfile",
     "build_components",
     "build_p06_runtime",
     "build_p07_runtime",
+    "build_p09_runtime",
     "default_hot_standby_profile",
     "default_offline_profile",
     "load_named_provider_profile",

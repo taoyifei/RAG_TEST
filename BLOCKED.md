@@ -17,3 +17,9 @@
   顺序请求持续选择最快副本不是失败；不得重建索引，需核验 index fingerprint 不变。
 - 本地 Trace export 的实际 Qdrant 集成专项受 `127.0.0.1:6333` 返回 502 阻塞；
   不修改 Qdrant、索引或导出逻辑，待可用的本地/授权环境复跑。
+
+## P09 远程质量边界
+
+- P09 本地工程交付当前没有 Decision blocker。真实 Jina/Qwen dense-only Calibration、
+  Remote Qdrant 和生产负载均未在本阶段调用或验证，因此
+  `REMOTE_PRODUCTION_PROFILE_READY=false`；该边界不阻塞默认离线 API/SDK。

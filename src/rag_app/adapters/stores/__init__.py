@@ -10,6 +10,7 @@ from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.adapters.stores.sqlite_control import SqliteControlStore
 from rag_app.adapters.stores.sqlite_embedding_cache import SqliteEmbeddingCache
 from rag_app.adapters.stores.sqlite_fts5 import SqliteFtsStore
+from rag_app.adapters.stores.sqlite_lifecycle import SqliteLifecycleStore
 from rag_app.adapters.stores.sqlite_migrations import MigrationRunner
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     "SqliteControlStore",
     "SqliteEmbeddingCache",
     "SqliteFtsStore",
+    "SqliteLifecycleStore",
 ]

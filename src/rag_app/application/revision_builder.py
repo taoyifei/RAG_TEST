@@ -204,6 +204,18 @@ class _RevisionBuildControl(Protocol):
         """
         ...
 
+    def assert_job_active(self, job_id: str) -> None:
+        """在阶段边界检查持久取消请求。
+
+        Args:
+            job_id: 当前构建 Job ID。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
     def create_revision(
         self,
         revision: IndexRevisionRef,
@@ -488,7 +500,7 @@ class RevisionBuilder:
             tuple(sorted(version_ids)),
             self._index_fingerprint,
         )
-        job_id = deterministic_id("job", knowledge_base_id, idempotency_key)
+        job_id = deterministic_id("job", knowledge_base_id, revision_id)
         revision = IndexRevisionRef(
             project_id=project_id,
             knowledge_base_id=knowledge_base_id,
@@ -521,6 +533,7 @@ class RevisionBuilder:
             )
         self._control.acquire_revision_lease(revision_id, job_id)
         try:
+            self._control.assert_job_active(job_id)
             self._control.create_revision(
                 revision,
                 physical_namespace=spec.physical_namespace,
@@ -557,11 +570,10 @@ class RevisionBuilder:
                 job_id,
                 attempt,
             )
-            embedding_vectors: dict[
-                str, tuple[tuple[float, ...], ...]
-            ] = {}
+            embedding_vectors: dict[str, tuple[tuple[float, ...], ...]] = {}
             remaining_budgets = dict(budgets)
             for slot_index, slot in enumerate(self._slots):
+                self._control.assert_job_active(job_id)
                 if slot_index > 0:
                     current_state = self._advance(
                         revision_id,
@@ -634,6 +646,7 @@ class RevisionBuilder:
             )
             self._control.record_validation(evidence)
             current_state = IndexRevisionState.READY
+            self._control.assert_job_active(job_id)
             self._control.update_job(
                 job_id,
                 state="running",
@@ -677,6 +690,7 @@ class RevisionBuilder:
     ) -> tuple[Chunk, ...]:
         all_chunks: list[Chunk] = []
         for item in documents:
+            self._control.assert_job_active(job_id)
             self._control.upsert_document(item.document)
             result = self._parser.parse(
                 ParseSource(
@@ -745,6 +759,7 @@ class RevisionBuilder:
         job_id: str,
         attempt: int,
     ) -> IndexRevisionState:
+        self._control.assert_job_active(job_id)
         self._control.set_revision_state(revision_id, current, target)
         self._control.update_job(
             job_id,

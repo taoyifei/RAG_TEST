@@ -42,6 +42,7 @@ class P06Runtime:
     recovery: RevisionRecoveryService
     garbage_collector: GarbageCollector
     database_identity: str
+    connections: SqliteConnectionFactory
 
     def default_budgets(self) -> dict[str, DocumentEmbeddingBudget]:
         """返回足够本地开发、仍有硬上限的每槽预算。
@@ -184,6 +185,7 @@ def build_p06_runtime(
             database_identity=database_identity,
         ),
         database_identity=database_identity,
+        connections=connections,
     )
 
 

@@ -20,9 +20,12 @@ from rag_app.core.capabilities import (
 )
 from rag_app.core.errors import (
     Conflict,
+    ConflictActiveWriter,
     IndexCorrupt,
     IndexNotReady,
+    JobCancelled,
     NotFound,
+    ReindexRequired,
     RevisionStateError,
     ValidationFailed,
 )
@@ -176,15 +179,14 @@ class SqliteControlStore:
                 ),
             )
             row = connection.execute(
-                "SELECT project_id, knowledge_base_id, revision_id, "
-                "idempotency_key FROM ingestion_jobs WHERE job_id=?",
+                "SELECT project_id, knowledge_base_id, revision_id "
+                "FROM ingestion_jobs WHERE job_id=?",
                 (job_id,),
             ).fetchone()
             if row is None or tuple(row) != (
                 project_id,
                 knowledge_base_id,
                 revision_id,
-                idempotency_key,
             ):
                 raise Conflict(
                     "Job ID 或幂等键已绑定不同构建。", stage="job.create"
@@ -241,7 +243,7 @@ class SqliteControlStore:
             if existing is not None and str(existing["state"]) == "active":
                 unexpired = _parse_utc(str(existing["expires_at"])) > moment
                 if unexpired and str(existing["owner_job_id"]) != owner_job_id:
-                    raise Conflict(
+                    raise ConflictActiveWriter(
                         "Revision 已有未过期 Writer Lease。",
                         stage="revision.lease",
                     )
@@ -255,9 +257,7 @@ class SqliteControlStore:
                     self._writer_context[revision_id] = (owner_job_id, token)
                     return token
             token = (
-                1
-                if existing is None
-                else int(existing["fencing_token"]) + 1
+                1 if existing is None else int(existing["fencing_token"]) + 1
             )
             connection.execute(
                 "INSERT INTO revision_build_leases("
@@ -281,6 +281,29 @@ class SqliteControlStore:
             )
         self._writer_context[revision_id] = (owner_job_id, token)
         return token
+
+    def assert_job_active(self, job_id: str) -> None:
+        """在构建阶段边界拒绝已持久取消的 Job。
+
+        Args:
+            job_id: 当前 Job ID。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            JobCancelled: Job 已收到取消请求。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT cancel_requested FROM ingestion_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFound("目标 Job 不存在。", stage="job.cancel_check")
+        if bool(row["cancel_requested"]):
+            raise JobCancelled("作业已取消。", stage="job.cancel_check")
 
     def assert_revision_writer(self, revision_id: str) -> None:
         """验证当前进程持有数据库中的最新 fencing token。
@@ -892,9 +915,7 @@ class SqliteControlStore:
                 details={"fields": missing},
             )
         with self._connections.transaction(write=True) as connection:
-            self._assert_writer_lease(
-                connection, revision.index_revision_id
-            )
+            self._assert_writer_lease(connection, revision.index_revision_id)
             existing = connection.execute(
                 "SELECT project_id, knowledge_base_id, state, "
                 "index_fingerprint, physical_vector_namespace, "
@@ -1519,7 +1540,8 @@ class SqliteControlStore:
                 "SELECT kb.project_id, kb.knowledge_base_id, "
                 "kb.active_revision_id, r.state, r.index_fingerprint, "
                 "r.physical_vector_namespace, r.embedding_topology_json, "
-                "r.chunk_payload_schema_json, r.expected_chunk_count "
+                "r.chunk_payload_schema_json, r.lexical_schema_json, "
+                "r.expected_chunk_count "
                 "FROM knowledge_bases kb LEFT JOIN index_revisions r "
                 "ON r.index_revision_id=kb.active_revision_id "
                 "WHERE kb.knowledge_base_id=? AND kb.deleted_at IS NULL",
@@ -1559,12 +1581,22 @@ class SqliteControlStore:
                 str(row["embedding_topology_json"])
             )
             payload_schema = json.loads(str(row["chunk_payload_schema_json"]))
+            lexical_schema = json.loads(str(row["lexical_schema_json"]))
         except (TypeError, ValueError) as error:
             raise IndexCorrupt(
                 "Active Revision resolved contract 无法读取。",
                 stage="retrieval.snapshot",
             ) from error
         slots = tuple(_slot_from_row(item) for item in slot_rows)
+        if (
+            not isinstance(lexical_schema, dict)
+            or str(lexical_schema.get("fts_schema_version")) != "2"
+            or str(lexical_schema.get("analyzer_version")) != "2"
+        ):
+            raise ReindexRequired(
+                "Active Revision 需要显式重建为 FTS V2。",
+                stage="retrieval.snapshot",
+            )
         if topology.slots != slots or not isinstance(payload_schema, str):
             raise IndexCorrupt(
                 "Active Revision topology 或 Chunk schema 漂移。",
@@ -2781,8 +2813,10 @@ class SqliteControlStore:
         revision_id: str,
     ) -> None:
         row = connection.execute(
-            "SELECT owner_job_id, fencing_token, expires_at, state "
-            "FROM revision_build_leases WHERE revision_id=?",
+            "SELECT l.owner_job_id, l.fencing_token, l.expires_at, l.state, "
+            "j.cancel_requested FROM revision_build_leases l "
+            "JOIN ingestion_jobs j ON j.job_id=l.owner_job_id "
+            "WHERE l.revision_id=?",
             (revision_id,),
         ).fetchone()
         if row is None:
@@ -2791,14 +2825,15 @@ class SqliteControlStore:
         if (
             context is None
             or str(row["state"]) != "active"
-            or context
-            != (str(row["owner_job_id"]), int(row["fencing_token"]))
+            or context != (str(row["owner_job_id"]), int(row["fencing_token"]))
             or _parse_utc(str(row["expires_at"])) <= datetime.now(UTC)
         ):
             raise Conflict(
                 "Revision writer fencing token 已失效。",
                 stage="revision.fencing",
             )
+        if bool(row["cancel_requested"]):
+            raise JobCancelled("作业已取消。", stage="job.cancel_check")
 
     def _heartbeat_owned_lease(
         self,

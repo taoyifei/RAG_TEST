@@ -7,6 +7,7 @@ import json
 import math
 import sqlite3
 from dataclasses import dataclass
+from threading import RLock
 
 from rag_app.core.capabilities import (
     ComponentDescriptor,
@@ -502,10 +503,11 @@ class SqliteTraceSink:
             无返回值。
 
         """
-        self._connection = sqlite3.connect(":memory:")
+        self._connection = sqlite3.connect(":memory:", check_same_thread=False)
         self._connection.execute(
             "CREATE TABLE events (trace_id TEXT, event_name TEXT, payload TEXT)"
         )
+        self._lock = RLock()
         self._closed = False
         self.close_count = 0
 
@@ -519,16 +521,17 @@ class SqliteTraceSink:
             无返回值。
 
         """
-        self._connection.execute(
-            "INSERT INTO events(trace_id, event_name, payload) "
-            "VALUES (?, ?, ?)",
-            (
-                event.trace_id,
-                event.event_name,
-                canonical_json(event.model_dump(mode="json")),
-            ),
-        )
-        self._connection.commit()
+        with self._lock:
+            self._connection.execute(
+                "INSERT INTO events(trace_id, event_name, payload) "
+                "VALUES (?, ?, ?)",
+                (
+                    event.trace_id,
+                    event.event_name,
+                    canonical_json(event.model_dump(mode="json")),
+                ),
+            )
+            self._connection.commit()
 
     def events(self, trace_id: str) -> tuple[TraceEvent, ...]:
         """读取一个 trace 的结构化安全事件供本地诊断。
@@ -540,10 +543,11 @@ class SqliteTraceSink:
             按写入顺序返回的 Core TraceEvent。
 
         """
-        rows = self._connection.execute(
-            "SELECT payload FROM events WHERE trace_id=? ORDER BY rowid",
-            (trace_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT payload FROM events WHERE trace_id=? ORDER BY rowid",
+                (trace_id,),
+            ).fetchall()
         return tuple(
             TraceEvent.model_validate_json(str(row[0])) for row in rows
         )
@@ -560,9 +564,12 @@ class SqliteTraceSink:
         """
         if self._closed:
             return
-        self._closed = True
-        self.close_count += 1
-        self._connection.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.close_count += 1
+            self._connection.close()
 
 
 def _cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
