@@ -151,6 +151,11 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             VectorSearchResult(
                 point_id=point.point_id,
                 chunk_id=point.payload.chunk_id,
+                document_id=point.payload.document_id,
+                document_version_id=point.payload.document_version_id,
+                role=point.payload.role,
+                section_id=point.payload.section_id,
+                content_sha256=point.payload.content_sha256,
                 score=score,
                 rank=rank,
             )
@@ -240,7 +245,8 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
         super().close()
 
     def _require_spec(self, spec: RevisionVectorSpec) -> None:
-        if self._specs.get(spec.physical_namespace) != spec:
+        existing = self._specs.get(spec.physical_namespace)
+        if existing is None or not existing.has_same_schema(spec):
             raise IndexCompatibilityError(
                 "Vector revision schema 不匹配。", stage="vector.schema"
             )

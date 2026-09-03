@@ -6,6 +6,7 @@ import json
 import struct
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from sqlite3 import Row
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.adapters.stores.sqlite_fts5 import write_chunks_transaction
@@ -16,6 +17,8 @@ from rag_app.core.capabilities import (
 )
 from rag_app.core.errors import (
     Conflict,
+    IndexCorrupt,
+    IndexNotReady,
     NotFound,
     RevisionStateError,
     ValidationFailed,
@@ -26,6 +29,7 @@ from rag_app.core.identifiers import (
     document_version_id,
 )
 from rag_app.core.models import (
+    ActiveRevisionQuerySnapshot,
     BlobCatalogEntry,
     BlobReference,
     Chunk,
@@ -33,11 +37,16 @@ from rag_app.core.models import (
     ChunkingReport,
     DocumentIR,
     DocumentRef,
+    EmbeddingCoverage,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
+    EmbeddingTopology,
+    HydratedChunk,
     IndexRevisionRef,
     IndexRevisionState,
+    KnowledgeBaseScope,
     ParseReport,
+    RetrievalPolicy,
     RevisionValidationEvidence,
     RevisionVectorSpec,
 )
@@ -49,6 +58,26 @@ _TERMINAL_REVISION_STATES = {
     IndexRevisionState.RETIRED,
     IndexRevisionState.FAILED_TERMINAL,
 }
+_MAX_HYDRATION_CHUNKS = 200
+_MAX_SECTION_CHUNKS = 20
+
+
+def _slot_from_row(row: Row) -> EmbeddingSlotIdentity:
+    return EmbeddingSlotIdentity(
+        slot_id=str(row["slot_id"]),
+        role=EmbeddingSlotRole(str(row["role"])),
+        provider_id=str(row["provider_id"]),
+        model=str(row["model"]),
+        vector_name=str(row["vector_name"]),
+        dimension=int(row["dimension"]),
+        max_input_tokens=int(row["max_input_tokens"]),
+        adapter_revision=str(row["adapter_revision"]),
+        document_request_policy=json.loads(
+            str(row["document_request_policy_json"])
+        ),
+        query_request_policy=json.loads(str(row["query_request_policy_json"])),
+        normalization=str(row["normalization"]),
+    )
 
 
 class SqliteControlStore:
@@ -1274,6 +1303,256 @@ class SqliteControlStore:
             raise NotFound("目标知识库不存在。", stage="revision.active")
         value = row["active_revision_id"]
         return None if value is None else str(value)
+
+    def active_revision_ids(self) -> tuple[str, ...]:
+        """返回启动恢复需要的全部 Active Revision ID。
+
+        Args:
+            无参数；读取当前控制面。
+
+        Returns:
+            按稳定 ID 排序的 Active Revision 序列。
+
+        """
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT active_revision_id FROM knowledge_bases "
+                "WHERE active_revision_id IS NOT NULL AND deleted_at IS NULL "
+                "ORDER BY active_revision_id"
+            ).fetchall()
+        return tuple(str(row["active_revision_id"]) for row in rows)
+
+    def active_query_snapshot(
+        self,
+        scope: KnowledgeBaseScope,
+        *,
+        serving_fingerprint: str,
+        retrieval_policy: RetrievalPolicy,
+    ) -> ActiveRevisionQuerySnapshot:
+        """在一个只读事务中冻结 P07 Active Revision 查询快照。
+
+        Args:
+            scope: 调用方项目和知识库边界。
+            serving_fingerprint: 当前实际查询语义指纹。
+            retrieval_policy: P07 有界 provisional 策略。
+
+        Returns:
+            可贯穿一个请求的 immutable snapshot。
+
+        Raises:
+            NotFound: 知识库不存在或不属于项目。
+            IndexNotReady: 知识库没有 Active Revision。
+            IndexCorrupt: Active 指针、slot 或 coverage 合同损坏。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT kb.project_id, kb.knowledge_base_id, "
+                "kb.active_revision_id, r.state, r.index_fingerprint, "
+                "r.physical_vector_namespace, r.embedding_topology_json, "
+                "r.chunk_payload_schema_json, r.expected_chunk_count "
+                "FROM knowledge_bases kb LEFT JOIN index_revisions r "
+                "ON r.index_revision_id=kb.active_revision_id "
+                "WHERE kb.knowledge_base_id=? AND kb.deleted_at IS NULL",
+                (scope.knowledge_base_id,),
+            ).fetchone()
+            if row is None or str(row["project_id"]) != scope.project_id:
+                raise NotFound("目标知识库不存在。", stage="retrieval.snapshot")
+            revision_id = row["active_revision_id"]
+            if revision_id is None:
+                raise IndexNotReady(
+                    "知识库尚无 Active Revision。",
+                    stage="retrieval.snapshot",
+                )
+            if row["state"] != IndexRevisionState.ACTIVE.value:
+                raise IndexCorrupt(
+                    "Active 指针未指向 ACTIVE revision。",
+                    stage="retrieval.snapshot",
+                )
+            slot_rows = connection.execute(
+                "SELECT * FROM embedding_slots WHERE revision_id=? "
+                "ORDER BY role, slot_id",
+                (revision_id,),
+            ).fetchall()
+            coverage_rows = connection.execute(
+                "SELECT s.slot_id, s.vector_name, s.dimension, "
+                "coalesce(c.valid_vector_count, 0) AS vector_count, "
+                "coalesce(c.expected_chunk_count, 0) AS chunk_count "
+                "FROM embedding_slots s LEFT JOIN "
+                "revision_embedding_coverage c "
+                "ON c.revision_id=s.revision_id AND c.slot_id=s.slot_id "
+                "WHERE s.revision_id=? AND s.required_for_activation=1 "
+                "ORDER BY s.role, s.slot_id",
+                (revision_id,),
+            ).fetchall()
+        try:
+            topology = EmbeddingTopology.model_validate_json(
+                str(row["embedding_topology_json"])
+            )
+            payload_schema = json.loads(str(row["chunk_payload_schema_json"]))
+        except (TypeError, ValueError) as error:
+            raise IndexCorrupt(
+                "Active Revision resolved contract 无法读取。",
+                stage="retrieval.snapshot",
+            ) from error
+        slots = tuple(_slot_from_row(item) for item in slot_rows)
+        if topology.slots != slots or not isinstance(payload_schema, str):
+            raise IndexCorrupt(
+                "Active Revision topology 或 Chunk schema 漂移。",
+                stage="retrieval.snapshot",
+            )
+        expected_chunks = int(row["expected_chunk_count"])
+        coverages = tuple(
+            EmbeddingCoverage(
+                slot_id=str(item["slot_id"]),
+                vector_name=str(item["vector_name"]),
+                vector_count=int(item["vector_count"]),
+                chunk_count=int(item["chunk_count"]),
+                observed_dimension=int(item["dimension"]),
+            )
+            for item in coverage_rows
+        )
+        if len(coverages) != len(slots) or any(
+            coverage.chunk_count != expected_chunks for coverage in coverages
+        ):
+            raise IndexCorrupt(
+                "Active Revision coverage 证据不完整。",
+                stage="retrieval.snapshot",
+            )
+        revision = IndexRevisionRef(
+            project_id=scope.project_id,
+            knowledge_base_id=scope.knowledge_base_id,
+            index_revision_id=str(revision_id),
+            index_fingerprint=str(row["index_fingerprint"]),
+            state=IndexRevisionState.ACTIVE,
+        )
+        return ActiveRevisionQuerySnapshot(
+            revision=revision,
+            serving_fingerprint=serving_fingerprint,
+            topology=topology,
+            coverages=coverages,
+            vector_spec=RevisionVectorSpec(
+                revision=revision,
+                physical_namespace=str(row["physical_vector_namespace"]),
+                slots=slots,
+            ),
+            lexical_namespace=f"sqlite:{revision_id}",
+            exact_namespace=f"sqlite:{revision_id}",
+            chunk_payload_schema=payload_schema,
+            retrieval_policy=retrieval_policy,
+        )
+
+    def hydrate_chunks(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        chunk_ids: tuple[str, ...],
+    ) -> tuple[HydratedChunk, ...]:
+        """批量回读并验证 P07 canonical chunks。
+
+        Args:
+            snapshot: 请求开始时冻结的 revision。
+            chunk_ids: 有界候选 ID，顺序必须保留。
+
+        Returns:
+            与去重输入顺序一致的 canonical chunks。
+
+        Raises:
+            IndexCorrupt: 任一候选缺失、重复或 scope 身份漂移。
+
+        """
+        ordered = tuple(dict.fromkeys(chunk_ids))
+        if not ordered:
+            return ()
+        if len(ordered) > _MAX_HYDRATION_CHUNKS:
+            raise ValueError("单次 canonical hydration 上限为 200。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id, c.chunk_json, d.display_name "
+                "FROM chunks c JOIN index_revisions r "
+                "ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE c.revision_id=? AND c.chunk_id IN "
+                "(SELECT value FROM json_each(?)) "
+                "AND r.project_id=? AND r.knowledge_base_id=?",
+                (
+                    revision.index_revision_id,
+                    canonical_json(ordered),
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                ),
+            ).fetchall()
+        by_id = {str(row["chunk_id"]): row for row in rows}
+        missing = tuple(
+            chunk_id for chunk_id in ordered if chunk_id not in by_id
+        )
+        if missing:
+            raise IndexCorrupt(
+                "检索候选无法从 canonical Chunk Store 回读。",
+                stage="retrieval.hydrate",
+                details={"missing_chunk_ids": list(missing)},
+            )
+        hydrated: list[HydratedChunk] = []
+        for chunk_id in ordered:
+            source = by_id[chunk_id]
+            chunk = Chunk.model_validate_json(str(source["chunk_json"]))
+            if (
+                chunk.project_id != revision.project_id
+                or chunk.knowledge_base_id != revision.knowledge_base_id
+                or chunk.index_revision_id != revision.index_revision_id
+            ):
+                raise IndexCorrupt(
+                    "Canonical Chunk scope/revision 身份漂移。",
+                    stage="retrieval.hydrate",
+                    details={"chunk_id": chunk_id},
+                )
+            hydrated.append(
+                HydratedChunk(
+                    chunk=chunk, display_name=str(source["display_name"])
+                )
+            )
+        return tuple(hydrated)
+
+    def section_chunk_ids(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        document_version_id: str,
+        section_id: str,
+        limit: int,
+    ) -> tuple[str, ...]:
+        """读取同 revision/document version/section 的有界 ID。
+
+        Args:
+            snapshot: 请求开始时冻结的 revision。
+            document_version_id: 不可变逻辑文档版本。
+            section_id: canonical Chunk section。
+            limit: 最大返回数。
+
+        Returns:
+            稳定排序的 Chunk ID。
+
+        """
+        if limit <= 0 or limit > _MAX_SECTION_CHUNKS:
+            raise ValueError("section expansion limit 必须在 1..20。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id FROM chunks c JOIN index_revisions r "
+                "ON r.index_revision_id=c.revision_id "
+                "WHERE c.revision_id=? AND c.document_version_id=? "
+                "AND c.section_id=? AND r.project_id=? "
+                "AND r.knowledge_base_id=? ORDER BY c.chunk_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    document_version_id,
+                    section_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    limit,
+                ),
+            ).fetchall()
+        return tuple(str(item["chunk_id"]) for item in rows)
 
     def knowledge_base_scope(self, knowledge_base_id: str) -> tuple[str, str]:
         """读取知识库的 project 与 Profile 身份。

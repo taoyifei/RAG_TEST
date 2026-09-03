@@ -530,6 +530,24 @@ class SqliteTraceSink:
         )
         self._connection.commit()
 
+    def events(self, trace_id: str) -> tuple[TraceEvent, ...]:
+        """读取一个 trace 的结构化安全事件供本地诊断。
+
+        Args:
+            trace_id: 查询返回的安全 trace ID。
+
+        Returns:
+            按写入顺序返回的 Core TraceEvent。
+
+        """
+        rows = self._connection.execute(
+            "SELECT payload FROM events WHERE trace_id=? ORDER BY rowid",
+            (trace_id,),
+        ).fetchall()
+        return tuple(
+            TraceEvent.model_validate_json(str(row[0])) for row in rows
+        )
+
     def close(self) -> None:
         """幂等关闭 SQLite 连接。
 
