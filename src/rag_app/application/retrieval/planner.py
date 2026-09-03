@@ -62,6 +62,12 @@ class QueryPlanner:
             neighbor = "none"
         elif kind is QueryKind.COMPLEX:
             neighbor = "section"
+        enabled = set(policy.enabled_channels)
+        channels = tuple(channel for channel in channels if channel in enabled)
+        if not channels:
+            channels = tuple(policy.enabled_channels)
+        if not policy.neighbor_expansion_enabled:
+            neighbor = "none"
         top_k = tuple((channel, policy.channel_top_k) for channel in channels)
         return RetrievalPlan(
             query_kind=kind,
@@ -69,7 +75,7 @@ class QueryPlanner:
             channels=channels,
             channel_top_k=top_k,
             must_keep_exact=must_keep,
-            use_reranker=True,
+            use_reranker=policy.rerank_enabled,
             neighbor_mode=neighbor,
             evidence_token_budget=policy.evidence_token_budget,
             dense_required=dense_required,

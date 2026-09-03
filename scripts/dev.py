@@ -14,8 +14,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 from rag_app.adapters.providers import (
     AliyunQwen37EmbeddingAdapter,
@@ -72,6 +73,14 @@ from rag_app.core.policies import EgressPolicy
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 _SOURCE_ROOT = _REPOSITORY_ROOT / "src"
+if str(_REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPOSITORY_ROOT))
+_P08_CLI = importlib.import_module("evaluation.v2.cli")
+P08_COMMANDS = cast(frozenset[str], _P08_CLI.P08_COMMANDS)
+p08_command = cast(
+    Callable[[Sequence[str]], int],
+    _P08_CLI.p08_command,
+)
 _OFFLINE_MARK_EXPRESSION = "not local_integration and not live_provider"
 _SMOKE_TESTS = (
     (
@@ -94,6 +103,14 @@ _SMOKE_TESTS = (
         "test_p06_revision_lifecycle_survives_reopen"
     ),
     "tests/e2e/test_p07_retrieval.py",
+    (
+        "tests/evaluation/test_dataset.py::"
+        "test_synthetic_dataset_is_versioned_and_group_isolated"
+    ),
+    (
+        "tests/evaluation/test_artifacts_and_guards.py::"
+        "test_live_lane_requires_explicit_authorization"
+    ),
 )
 _PROVIDER_ENV_NAMES = frozenset(
     {
@@ -626,6 +643,8 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
     )
     if raw_arguments and raw_arguments[0] in P06_COMMANDS:
         return p06_command(raw_arguments)
+    if raw_arguments and raw_arguments[0] in P08_COMMANDS:
+        return p08_command(raw_arguments)
     parsed = _arguments(arguments)
     command = parsed.command
     if command == "doctor":

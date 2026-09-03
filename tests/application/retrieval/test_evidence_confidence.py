@@ -50,6 +50,53 @@ def test_evidence_dedup_preserves_diversity_with_budget() -> None:
     assert [item.support_id for item in evidence] == ["S1", "S2"]
 
 
+def test_evidence_publishes_each_table_cell_but_not_separator() -> None:
+    candidate = make_ranked_chunk(1, "A|C", role=ChunkRole.TABLE)
+    source = candidate.hydrated.chunk.source_spans[0]
+    first = source.model_copy(
+        update={
+            "chunk_end_char": 1,
+            "source_end_char": 1,
+        }
+    )
+    separator = source.model_copy(
+        update={
+            "span_type": SourceSpanKind.SEPARATOR,
+            "node_id": None,
+            "source_anchor": None,
+            "structural_path": (),
+            "chunk_start_char": 1,
+            "chunk_end_char": 2,
+            "source_start_char": None,
+            "source_end_char": None,
+            "is_citable": False,
+        }
+    )
+    last = source.model_copy(
+        update={
+            "chunk_start_char": 2,
+            "chunk_end_char": 3,
+            "source_start_char": 2,
+            "source_end_char": 3,
+        }
+    )
+    chunk = candidate.hydrated.chunk.model_copy(
+        update={"source_spans": (first, separator, last)}
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(
+                update={"chunk": chunk}
+            )
+        }
+    )
+
+    evidence = EvidenceAssembler().assemble((candidate,), RetrievalPolicy())
+
+    assert [item.citation_text for item in evidence] == ["A", "C"]
+    assert all(item.source_spans[0].is_citable for item in evidence)
+
+
 def test_confidence_refuses_unsupported_evidence() -> None:
     evaluator = ConfidenceEvaluator()
     policy = RetrievalPolicy()
