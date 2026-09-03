@@ -1,0 +1,45 @@
+{
+  "schema_version": "1",
+  "profile_id": "dev-p06-dual-memory",
+  "components": {
+    "parser": "docx-ooxml-v4",
+    "chunker": "docx-structural-v3",
+    "embedding_topology": {
+      "mode": "hot_standby",
+      "primary": {
+        "slot_id": "primary",
+        "provider": "deterministic",
+        "model": "deterministic-sha256-v1",
+        "dimension": 8,
+        "vector_name": "dense_primary",
+        "normalization": "l2"
+      },
+      "standby": {
+        "slot_id": "standby",
+        "provider": "deterministic",
+        "model": "deterministic-sha256-v1",
+        "dimension": 8,
+        "vector_name": "dense_standby",
+        "normalization": "l2"
+      }
+    },
+    "embedding_primary": null,
+    "embedding_standby": null,
+    "embedding_router": "embedding-router-hot-standby",
+    "reranker": "lexical-overlap",
+    "vector_store": "memory-vector",
+    "lexical_store": "sqlite-fts5",
+    "metadata_store": "sqlite-control",
+    "blob_store": "filesystem-blob",
+    "generator": "extractive",
+    "trace_sink": "sqlite"
+  },
+  "local_data": {
+    "data_root": ".data",
+    "sqlite_filename": "universal-rag.sqlite3",
+    "journal_mode": "WAL",
+    "busy_timeout_ms": 5000,
+    "qdrant_mode": "memory"
+  },
+  "security": {}
+}

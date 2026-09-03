@@ -10,10 +10,22 @@ import secrets
 from collections.abc import Mapping, Sequence
 
 _PREFIXES = frozenset(
-    {"prj", "kb", "doc", "dver", "node", "chunk", "irev", "job", "trace"}
+    {
+        "prj",
+        "kb",
+        "doc",
+        "dver",
+        "node",
+        "chunk",
+        "irev",
+        "job",
+        "trace",
+        "bref",
+        "gcplan",
+    }
 )
 _ID_PATTERN = re.compile(
-    r"^(?P<prefix>prj|kb|doc|dver|node|chunk|irev|job|trace)_"
+    r"^(?P<prefix>prj|kb|doc|dver|node|chunk|irev|job|trace|bref|gcplan)_"
     r"(?P<digest>[0-9a-f]{32})$"
 )
 _KEY_VALUE_ITEM_LENGTH = 2

@@ -33,6 +33,7 @@ from rag_app.core.models import (
     Chunk,
     ChunkingContext,
     ChunkingPolicy,
+    ChunkingReport,
     ChunkingResult,
     DocumentIR,
 )
@@ -141,6 +142,37 @@ class DocxStructuralChunker:
             elapsed_seconds=time.monotonic() - started,
         )
         return ChunkingResult(chunks=tuple(linked), report=report)
+
+    def validate_persisted(
+        self,
+        chunks: Sequence[Chunk],
+        document_ir: DocumentIR,
+    ) -> ChunkingReport:
+        """使用当前冻结策略复验持久化 Chunk。
+
+        Args:
+            chunks: 从持久化 Store 重新读取的 Chunk。
+            document_ir: 对应的持久化 Document IR。
+
+        Returns:
+            耗时归零、可与持久化报告比较的结构报告。
+
+        Raises:
+            ValueError: 任一来源、token 或 neighbor 不变量失败。
+
+        """
+        validate_chunks(
+            chunks,
+            document_ir,
+            self.policy,
+            self.token_counter,
+        )
+        return build_chunking_report(
+            chunks,
+            document_ir,
+            self.policy,
+            elapsed_seconds=0.0,
+        )
 
     def _finalize_pack(
         self,
