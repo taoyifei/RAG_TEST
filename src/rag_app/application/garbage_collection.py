@@ -90,6 +90,102 @@ class _GarbageCollectionControl(Protocol):
         """
         ...
 
+    def delete_gc_revision(self, revision_id: str) -> None:
+        """删除已逐项重验的 Revision 控制记录。
+
+        Args:
+            revision_id: 目标 Revision ID。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def gc_revision_exists(self, revision_id: str) -> bool:
+        """检查 Revision 控制行是否存在。
+
+        Args:
+            revision_id: 目标 Revision ID。
+
+        Returns:
+            控制行仍存在时返回 True。
+
+        """
+        ...
+
+    def gc_plan_items(self, plan_id: str) -> tuple[dict[str, object], ...]:
+        """读取 Plan 的逐项进度。
+
+        Args:
+            plan_id: 持久 GC Plan ID。
+
+        Returns:
+            按稳定顺序排列的 item 状态。
+
+        """
+        ...
+
+    def claim_gc_plan_item(
+        self,
+        plan_id: str,
+        item_type: str,
+        item_id: str,
+        expected_snapshot_hash: str,
+    ) -> str:
+        """原子领取一个耐久 GC item。
+
+        Args:
+            plan_id: 持久 GC Plan ID。
+            item_type: `revision` 或 `blob`。
+            item_id: 待处理对象的稳定 ID。
+            expected_snapshot_hash: 计划时绑定的快照摘要。
+
+        Returns:
+            领取后的持久状态。
+
+        """
+        ...
+
+    def set_gc_plan_item_state(
+        self,
+        plan_id: str,
+        item_type: str,
+        item_id: str,
+        state: str,
+        *,
+        safe_error: str | None = None,
+    ) -> None:
+        """记录 GC item 外部副作用进度。
+
+        Args:
+            plan_id: 持久 GC Plan ID。
+            item_type: `revision` 或 `blob`。
+            item_id: 正在处理的对象 ID。
+            state: 外部副作用完成后的状态。
+            safe_error: 可持久化的安全错误类别。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def reconcile_blob_inventory(
+        self,
+        physical: Mapping[str, str],
+    ) -> dict[str, tuple[str, ...]]:
+        """持久化物理 CAS 与 catalog 差集。
+
+        Args:
+            physical: Artifact ID 到内容摘要的受控物理清单。
+
+        Returns:
+            physical-only、catalog-only 与一致对象的 ID 集合。
+
+        """
+        ...
+
     def claim_orphan_blob(self, artifact_id: str) -> bool:
         """原子领取无引用 Artifact。
 
@@ -236,29 +332,137 @@ class GarbageCollector:
             raise ValidationFailed(
                 "GC Plan 状态快照结构损坏。", stage="gc.apply"
             )
+        items = self._control.gc_plan_items(plan_id)
         current = self._control.gc_snapshot(
             protected_retired_count=protected_retired_count,
             grace_before=grace_before,
         )
-        if current != snapshot:
+        progressed = any(item.get("state") != "planned" for item in items)
+        if current != snapshot and not progressed:
             raise ValidationFailed("GC Plan 状态快照已漂移。", stage="gc.apply")
+        by_identity = {
+            (str(item["item_type"]), str(item["item_id"])): item
+            for item in items
+        }
         for revision_id in revision_candidates:
-            spec = self._control.revision_vector_spec(str(revision_id))
-            self._vector_store.delete_revision(spec)
-            self._control.delete_retired_revision(str(revision_id))
-        for artifact_id in orphan_blob_candidates:
-            identifier = str(artifact_id)
-            if not self._control.claim_orphan_blob(identifier):
+            item = by_identity.get(("revision", str(revision_id)))
+            if item is None:
                 raise ValidationFailed(
-                    "GC Blob 引用状态已漂移。", stage="gc.apply"
+                    "GC Revision item 缺失。", stage="gc.apply"
                 )
-            try:
-                self._blob_store.delete(identifier)
-            except Exception:
-                self._control.finish_orphan_blob(identifier, deleted=False)
-                raise
-            self._control.finish_orphan_blob(identifier, deleted=True)
+            self._apply_revision_item(plan_id, str(revision_id), item)
+        for artifact_id in orphan_blob_candidates:
+            item = by_identity.get(("blob", str(artifact_id)))
+            if item is None:
+                raise ValidationFailed("GC Blob item 缺失。", stage="gc.apply")
+            self._apply_blob_item(plan_id, str(artifact_id), item)
         self._control.mark_gc_plan_applied(plan_id)
+
+    def reconcile_filesystem(self) -> dict[str, tuple[str, ...]]:
+        """盘点物理 CAS 并记录 physical/catalog 差集。
+
+        Args:
+            无参数；读取注入的受控 Blob Store。
+
+        Returns:
+            三类安全 Blob ID 集合。
+
+        """
+        physical = {
+            item.blob_id: item.content_sha256
+            for item in self._blob_store.audit_inventory()
+        }
+        return self._control.reconcile_blob_inventory(physical)
+
+    def _apply_revision_item(
+        self,
+        plan_id: str,
+        revision_id: str,
+        item: Mapping[str, object],
+    ) -> None:
+        expected_hash = str(item["expected_snapshot_hash"])
+        state = self._control.claim_gc_plan_item(
+            plan_id, "revision", revision_id, expected_hash
+        )
+        if state == "completed":
+            return
+        try:
+            if state == "claimed":
+                if not self._control.gc_revision_exists(revision_id):
+                    self._control.set_gc_plan_item_state(
+                        plan_id,
+                        "revision",
+                        revision_id,
+                        "sqlite_deleted",
+                    )
+                    state = "sqlite_deleted"
+                else:
+                    spec = self._control.revision_vector_spec(revision_id)
+                    if self._vector_store.revision_exists(spec):
+                        self._vector_store.delete_revision(spec)
+                    self._control.set_gc_plan_item_state(
+                        plan_id, "revision", revision_id, "vector_deleted"
+                    )
+                    state = "vector_deleted"
+            if state == "vector_deleted":
+                if self._control.gc_revision_exists(revision_id):
+                    self._control.delete_gc_revision(revision_id)
+                self._control.set_gc_plan_item_state(
+                    plan_id, "revision", revision_id, "sqlite_deleted"
+                )
+                state = "sqlite_deleted"
+            if state == "sqlite_deleted":
+                self._control.set_gc_plan_item_state(
+                    plan_id, "revision", revision_id, "completed"
+                )
+        except Exception as error:
+            self._control.set_gc_plan_item_state(
+                plan_id,
+                "revision",
+                revision_id,
+                "failed_retryable",
+                safe_error=type(error).__name__,
+            )
+            raise
+
+    def _apply_blob_item(
+        self,
+        plan_id: str,
+        artifact_id: str,
+        item: Mapping[str, object],
+    ) -> None:
+        expected_hash = str(item["expected_snapshot_hash"])
+        state = self._control.claim_gc_plan_item(
+            plan_id, "blob", artifact_id, expected_hash
+        )
+        if state == "completed":
+            return
+        try:
+            if state == "claimed":
+                if not self._control.claim_orphan_blob(artifact_id):
+                    raise ValidationFailed(
+                        "GC Blob 引用状态已漂移。", stage="gc.apply"
+                    )
+                self._blob_store.delete(artifact_id)
+                self._control.finish_orphan_blob(artifact_id, deleted=True)
+                self._control.set_gc_plan_item_state(
+                    plan_id, "blob", artifact_id, "blob_reconciled"
+                )
+                state = "blob_reconciled"
+            if state == "blob_reconciled":
+                self._control.set_gc_plan_item_state(
+                    plan_id, "blob", artifact_id, "completed"
+                )
+        except Exception as error:
+            self._control.finish_orphan_blob(artifact_id, deleted=False)
+            self._control.set_gc_plan_item_state(
+                plan_id,
+                "blob",
+                artifact_id,
+                "failed_retryable",
+                safe_error=type(error).__name__,
+            )
+            raise
 
 
 def _is_identifier_sequence(value: object) -> TypeGuard[Sequence[str]]:

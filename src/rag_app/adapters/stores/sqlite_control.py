@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import struct
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
-from sqlite3 import Row
+from datetime import UTC, datetime, timedelta
+from sqlite3 import Connection, Row
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
-from rag_app.adapters.stores.sqlite_fts5 import write_chunks_transaction
+from rag_app.adapters.stores.sqlite_fts5 import (
+    fts_table_for_revision,
+    write_chunks_transaction,
+)
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -60,6 +63,7 @@ _TERMINAL_REVISION_STATES = {
 }
 _MAX_HYDRATION_CHUNKS = 200
 _MAX_SECTION_CHUNKS = 20
+_DEFAULT_LEASE_SECONDS = 300
 
 
 def _slot_from_row(row: Row) -> EmbeddingSlotIdentity:
@@ -102,6 +106,7 @@ class SqliteControlStore:
         """
         self._connections = connections
         self._closed = False
+        self._writer_context: dict[str, tuple[str, int]] = {}
 
     def put_project(self, project_id: str, name: str) -> None:
         """幂等创建 project。
@@ -185,6 +190,154 @@ class SqliteControlStore:
                     "Job ID 或幂等键已绑定不同构建。", stage="job.create"
                 )
 
+    def acquire_revision_lease(
+        self,
+        revision_id: str,
+        owner_job_id: str,
+        *,
+        now: datetime | None = None,
+        lease_seconds: int = _DEFAULT_LEASE_SECONDS,
+    ) -> int:
+        """获取或接管数据库单 Writer Lease。
+
+        Args:
+            revision_id: 确定性 Revision ID。
+            owner_job_id: 必须绑定该 Revision 的 Job。
+            now: 测试可注入的 UTC 当前时间。
+            lease_seconds: 正数 Lease 生命周期。
+
+        Returns:
+            当前单调递增 fencing token。
+
+        Raises:
+            Conflict: 另一个未过期 Writer 已持有 Lease。
+
+        """
+        if lease_seconds <= 0:
+            raise ValueError("Revision writer lease 必须为正秒数。")
+        moment = _utc_moment(now)
+        heartbeat_at = moment.isoformat()
+        expires_at = (moment + timedelta(seconds=lease_seconds)).isoformat()
+        with self._connections.transaction(write=True) as connection:
+            job = connection.execute(
+                "SELECT revision_id, state FROM ingestion_jobs WHERE job_id=?",
+                (owner_job_id,),
+            ).fetchone()
+            if job is None or str(job["revision_id"]) != revision_id:
+                raise Conflict(
+                    "Lease owner Job 未绑定目标 Revision。",
+                    stage="revision.lease",
+                )
+            if str(job["state"]) in {"completed", "failed_terminal"}:
+                raise Conflict(
+                    "终态 Job 不能获取 Revision Lease。",
+                    stage="revision.lease",
+                )
+            existing = connection.execute(
+                "SELECT owner_job_id, fencing_token, expires_at, state "
+                "FROM revision_build_leases WHERE revision_id=?",
+                (revision_id,),
+            ).fetchone()
+            if existing is not None and str(existing["state"]) == "active":
+                unexpired = _parse_utc(str(existing["expires_at"])) > moment
+                if unexpired and str(existing["owner_job_id"]) != owner_job_id:
+                    raise Conflict(
+                        "Revision 已有未过期 Writer Lease。",
+                        stage="revision.lease",
+                    )
+                if unexpired:
+                    token = int(existing["fencing_token"])
+                    connection.execute(
+                        "UPDATE revision_build_leases SET heartbeat_at=?, "
+                        "expires_at=? WHERE revision_id=?",
+                        (heartbeat_at, expires_at, revision_id),
+                    )
+                    self._writer_context[revision_id] = (owner_job_id, token)
+                    return token
+            token = (
+                1
+                if existing is None
+                else int(existing["fencing_token"]) + 1
+            )
+            connection.execute(
+                "INSERT INTO revision_build_leases("
+                "revision_id, owner_job_id, fencing_token, acquired_at, "
+                "heartbeat_at, expires_at, state) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'active') "
+                "ON CONFLICT(revision_id) DO UPDATE SET "
+                "owner_job_id=excluded.owner_job_id, "
+                "fencing_token=excluded.fencing_token, "
+                "acquired_at=excluded.acquired_at, "
+                "heartbeat_at=excluded.heartbeat_at, "
+                "expires_at=excluded.expires_at, state='active'",
+                (
+                    revision_id,
+                    owner_job_id,
+                    token,
+                    heartbeat_at,
+                    heartbeat_at,
+                    expires_at,
+                ),
+            )
+        self._writer_context[revision_id] = (owner_job_id, token)
+        return token
+
+    def assert_revision_writer(self, revision_id: str) -> None:
+        """验证当前进程持有数据库中的最新 fencing token。
+
+        Args:
+            revision_id: 待写入的 Revision ID。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._connections.transaction() as connection:
+            self._assert_writer_lease(connection, revision_id)
+
+    def release_revision_lease(self, revision_id: str) -> bool:
+        """仅由当前 token 所有者释放 Lease。
+
+        Args:
+            revision_id: 已完成或失败的 Revision ID。
+
+        Returns:
+            当前所有者成功释放时为 True。
+
+        """
+        context = self._writer_context.get(revision_id)
+        if context is None:
+            return False
+        owner_job_id, token = context
+        with self._connections.transaction(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE revision_build_leases SET state='released', "
+                "heartbeat_at=? WHERE revision_id=? AND owner_job_id=? "
+                "AND fencing_token=? AND state='active'",
+                (_now(), revision_id, owner_job_id, token),
+            )
+        self._writer_context.pop(revision_id, None)
+        return cursor.rowcount == 1
+
+    def revision_lease(self, revision_id: str) -> dict[str, object] | None:
+        """返回不含路径和内容的 Lease 摘要。
+
+        Args:
+            revision_id: 目标 Revision ID。
+
+        Returns:
+            Lease 行副本；不存在时为 None。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT revision_id, owner_job_id, fencing_token, "
+                "acquired_at, heartbeat_at, expires_at, state "
+                "FROM revision_build_leases WHERE revision_id=?",
+                (revision_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
     def update_job(  # noqa: PLR0913
         self,
         job_id: str,
@@ -240,6 +393,7 @@ class SqliteControlStore:
             )
             if cursor.rowcount != 1:
                 raise NotFound("ingestion job 不存在。", stage="job.update")
+            self._heartbeat_owned_lease(connection, job_id, now)
 
     def recover_stale_jobs(self, stale_before: str) -> int:
         """把 stale RUNNING Job 标成可显式恢复的 INTERRUPTED。
@@ -258,6 +412,11 @@ class SqliteControlStore:
                 "safe_message='进程中断，需要显式重试。', "
                 "updated_at=? WHERE state='running' AND heartbeat_at<?",
                 (_now(), stale_before),
+            )
+            connection.execute(
+                "UPDATE revision_build_leases SET state='expired' "
+                "WHERE state='active' AND (heartbeat_at<? OR expires_at<=?)",
+                (stale_before, _now()),
             )
         return int(cursor.rowcount)
 
@@ -733,6 +892,9 @@ class SqliteControlStore:
                 details={"fields": missing},
             )
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(
+                connection, revision.index_revision_id
+            )
             existing = connection.execute(
                 "SELECT project_id, knowledge_base_id, state, "
                 "index_fingerprint, physical_vector_namespace, "
@@ -882,6 +1044,7 @@ class SqliteControlStore:
             chunk_count,
         )
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
             existing = connection.execute(
                 "SELECT * FROM revision_documents WHERE revision_id=? "
                 "AND document_id=?",
@@ -980,6 +1143,7 @@ class SqliteControlStore:
                 "终态 revision 禁止继续写入。", stage="revision.state"
             )
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
             cursor = connection.execute(
                 "UPDATE index_revisions SET state=? "
                 "WHERE index_revision_id=? AND state=?",
@@ -1010,6 +1174,7 @@ class SqliteControlStore:
                 "正式写路径禁止零值 scope ID。", stage="revision.chunks"
             )
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
             write_chunks_transaction(connection, chunks)
             connection.execute(
                 "UPDATE index_revisions SET expected_chunk_count=? "
@@ -1065,6 +1230,7 @@ class SqliteControlStore:
 
         """
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
             cursor = connection.execute(
                 "UPDATE revision_chunk_embeddings SET state=?, "
                 "cache_key=COALESCE(?, cache_key), "
@@ -1133,6 +1299,7 @@ class SqliteControlStore:
 
         """
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, revision_id)
             rows = connection.execute(
                 "SELECT state, count(*) AS value "
                 "FROM revision_chunk_embeddings "
@@ -1191,6 +1358,7 @@ class SqliteControlStore:
         serialized = canonical_json(payload)
         evidence_hash = canonical_sha256(payload)
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, evidence.revision_id)
             cursor = connection.execute(
                 "UPDATE index_revisions SET state='ready', "
                 "validation_evidence_json=?, "
@@ -1227,6 +1395,7 @@ class SqliteControlStore:
         evidence_hash = canonical_sha256(evidence.model_dump(mode="json"))
         now = _now()
         with self._connections.transaction(write=True) as connection:
+            self._assert_writer_lease(connection, evidence.revision_id)
             target = connection.execute(
                 "SELECT state, knowledge_base_id, validation_evidence_hash "
                 "FROM index_revisions WHERE index_revision_id=?",
@@ -1252,12 +1421,6 @@ class SqliteControlStore:
             if kb is None:
                 raise NotFound("目标知识库不存在。", stage="revision.activate")
             old_revision_id = kb["active_revision_id"]
-            if old_revision_id is not None:
-                connection.execute(
-                    "UPDATE index_revisions SET state='retired', retired_at=? "
-                    "WHERE index_revision_id=? AND state='active'",
-                    (now, old_revision_id),
-                )
             connection.execute(
                 "UPDATE index_revisions SET state='active', activated_at=? "
                 "WHERE index_revision_id=? AND state='ready'",
@@ -1268,6 +1431,12 @@ class SqliteControlStore:
                 "WHERE knowledge_base_id=?",
                 (evidence.revision_id, now, knowledge_base_id),
             )
+            if old_revision_id is not None:
+                connection.execute(
+                    "UPDATE index_revisions SET state='retired', retired_at=? "
+                    "WHERE index_revision_id=? AND state='active'",
+                    (now, old_revision_id),
+                )
             connection.execute(
                 "INSERT INTO active_revision_history("
                 "knowledge_base_id, old_revision_id, new_revision_id, "
@@ -1495,7 +1664,14 @@ class SqliteControlStore:
         hydrated: list[HydratedChunk] = []
         for chunk_id in ordered:
             source = by_id[chunk_id]
-            chunk = Chunk.model_validate_json(str(source["chunk_json"]))
+            try:
+                chunk = Chunk.model_validate_json(str(source["chunk_json"]))
+            except (TypeError, ValueError) as error:
+                raise IndexCorrupt(
+                    "Canonical Chunk JSON 无法验证。",
+                    stage="retrieval.hydrate",
+                    details={"chunk_id": chunk_id},
+                ) from error
             if (
                 chunk.project_id != revision.project_id
                 or chunk.knowledge_base_id != revision.knowledge_base_id
@@ -1713,8 +1889,9 @@ class SqliteControlStore:
                 "SELECT count(*) AS value FROM chunks WHERE revision_id=?",
                 (revision_id,),
             ).fetchone()["value"]
+            table = fts_table_for_revision(connection, revision_id)
             fts_count = connection.execute(
-                "SELECT count(*) AS value FROM chunks_fts WHERE revision_id=?",
+                f"SELECT count(*) AS value FROM {table} WHERE revision_id=?",  # noqa: S608
                 (revision_id,),
             ).fetchone()["value"]
         return int(document_count), int(chunk_count), int(fts_count)
@@ -1851,6 +2028,26 @@ class SqliteControlStore:
                 else:
                     revision_candidates.append(revision_id)
                 seen_per_kb[kb_id] = seen + 1
+            failed_rows = connection.execute(
+                "SELECT DISTINCT r.index_revision_id "
+                "FROM index_revisions r "
+                "LEFT JOIN ingestion_jobs j "
+                "ON j.revision_id=r.index_revision_id "
+                "LEFT JOIN revision_build_leases l "
+                "ON l.revision_id=r.index_revision_id AND l.state='active' "
+                "AND l.expires_at>? "
+                "WHERE r.created_at<? AND ("
+                "r.state IN ('failed_terminal', 'failed_retryable') "
+                "OR (j.state='interrupted' AND r.state NOT IN ("
+                "'active', 'ready', 'retired'))) "
+                "AND l.revision_id IS NULL ORDER BY r.index_revision_id",
+                (_now(), grace_before),
+            ).fetchall()
+            for row in failed_rows:
+                revision_id = str(row["index_revision_id"])
+                if revision_id not in revision_candidates:
+                    revision_candidates.append(revision_id)
+            revision_candidates.sort()
             orphan_blobs = [
                 str(row["artifact_id"])
                 for row in connection.execute(
@@ -1933,6 +2130,42 @@ class SqliteControlStore:
                     _now(),
                 ),
             )
+            for item_type, key in (
+                ("revision", "revision_candidates"),
+                ("blob", "orphan_blob_candidates"),
+            ):
+                values = snapshot.get(key, ())
+                if not isinstance(values, Sequence) or isinstance(
+                    values, (str, bytes)
+                ):
+                    raise ValidationFailed(
+                        "GC Plan 候选集结构损坏。", stage="gc.save"
+                    )
+                for item_id in values:
+                    if not isinstance(item_id, str):
+                        raise ValidationFailed(
+                            "GC Plan 候选 ID 无效。", stage="gc.save"
+                        )
+                    expected_hash = canonical_sha256(
+                        {
+                            "plan_hash": plan_hash,
+                            "item_type": item_type,
+                            "item_id": item_id,
+                        }
+                    )
+                    connection.execute(
+                        "INSERT INTO gc_plan_items("
+                        "plan_id, item_type, item_id, "
+                        "expected_snapshot_hash, state, attempt, updated_at) "
+                        "VALUES (?, ?, ?, ?, 'planned', 0, ?)",
+                        (
+                            plan_id,
+                            item_type,
+                            item_id,
+                            expected_hash,
+                            _now(),
+                        ),
+                    )
 
     def load_gc_plan(self, plan_id: str) -> tuple[str, dict[str, object], str]:
         """读取尚未 apply 的 GC Plan。
@@ -1957,6 +2190,115 @@ class SqliteControlStore:
         if not isinstance(snapshot, dict):
             raise ValidationFailed("GC Plan snapshot 已损坏。", stage="gc.load")
         return str(row["database_identity"]), snapshot, str(row["plan_hash"])
+
+    def gc_plan_items(self, plan_id: str) -> tuple[dict[str, object], ...]:
+        """读取 GC Plan 的耐久逐项进度。
+
+        Args:
+            plan_id: 目标 Plan ID。
+
+        Returns:
+            按类型和 ID 排序的安全状态行。
+
+        """
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT item_type, item_id, expected_snapshot_hash, state, "
+                "attempt, safe_error FROM gc_plan_items WHERE plan_id=? "
+                "ORDER BY item_type, item_id",
+                (plan_id,),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def claim_gc_plan_item(
+        self,
+        plan_id: str,
+        item_type: str,
+        item_id: str,
+        expected_snapshot_hash: str,
+    ) -> str:
+        """原子 claim 可恢复 GC item 并返回最新状态。
+
+        Args:
+            plan_id: 所属 Plan。
+            item_type: `revision` 或 `blob`。
+            item_id: 稳定对象 ID。
+            expected_snapshot_hash: Plan 创建时绑定的 item hash。
+
+        Returns:
+            claim 后状态；已前进的 item 保持原状态。
+
+        """
+        with self._connections.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT expected_snapshot_hash, state FROM gc_plan_items "
+                "WHERE plan_id=? AND item_type=? AND item_id=?",
+                (plan_id, item_type, item_id),
+            ).fetchone()
+            if row is None or str(row["expected_snapshot_hash"]) != (
+                expected_snapshot_hash
+            ):
+                raise ValidationFailed(
+                    "GC item snapshot hash 已漂移。", stage="gc.item"
+                )
+            state = str(row["state"])
+            if state in {"planned", "failed_retryable"}:
+                connection.execute(
+                    "UPDATE gc_plan_items SET state='claimed', "
+                    "attempt=attempt+1, safe_error=NULL, updated_at=? "
+                    "WHERE plan_id=? AND item_type=? AND item_id=?",
+                    (_now(), plan_id, item_type, item_id),
+                )
+                return "claimed"
+            return state
+
+    def set_gc_plan_item_state(
+        self,
+        plan_id: str,
+        item_type: str,
+        item_id: str,
+        state: str,
+        *,
+        safe_error: str | None = None,
+    ) -> None:
+        """记录外部副作用之后的耐久 GC 状态。
+
+        Args:
+            plan_id: 所属 Plan。
+            item_type: `revision` 或 `blob`。
+            item_id: 稳定对象 ID。
+            state: schema 允许的下一状态。
+            safe_error: 可选安全错误类别。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._connections.transaction(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE gc_plan_items SET state=?, safe_error=?, "
+                "updated_at=? WHERE plan_id=? AND item_type=? AND item_id=?",
+                (state, safe_error, _now(), plan_id, item_type, item_id),
+            )
+            if cursor.rowcount != 1:
+                raise NotFound("GC Plan item 不存在。", stage="gc.item")
+
+    def gc_revision_exists(self, revision_id: str) -> bool:
+        """检查 SQLite Revision 控制行是否仍存在。
+
+        Args:
+            revision_id: 目标 Revision ID。
+
+        Returns:
+            控制行仍存在时返回 True。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM index_revisions WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+        return row is not None
 
     def revision_vector_spec(self, revision_id: str) -> RevisionVectorSpec:
         """严格重建 GC 删除所需 Vector revision schema。
@@ -2015,11 +2357,11 @@ class SqliteControlStore:
             slots=slot_models,
         )
 
-    def delete_retired_revision(self, revision_id: str) -> None:
-        """在 Vector collection 删除成功后清理 retired 控制记录。
+    def delete_gc_revision(self, revision_id: str) -> None:
+        """在 Vector collection 删除成功后清理仍可删除的 Revision。
 
         Args:
-            revision_id: 必须仍为未受保护的 RETIRED revision。
+            revision_id: Plan 已绑定且当前仍可删除的 Revision。
 
         Returns:
             无返回值。
@@ -2027,12 +2369,36 @@ class SqliteControlStore:
         """
         with self._connections.transaction(write=True) as connection:
             state = connection.execute(
-                "SELECT state FROM index_revisions WHERE index_revision_id=?",
-                (revision_id,),
+                "SELECT r.state, "
+                "EXISTS(SELECT 1 FROM knowledge_bases kb "
+                "WHERE kb.active_revision_id=r.index_revision_id) AS active, "
+                "EXISTS(SELECT 1 FROM ingestion_jobs j "
+                "WHERE j.revision_id=r.index_revision_id "
+                "AND j.state IN ('pending', 'running')) AS running, "
+                "EXISTS(SELECT 1 FROM ingestion_jobs j "
+                "WHERE j.revision_id=r.index_revision_id "
+                "AND j.state='interrupted') AS interrupted, "
+                "EXISTS(SELECT 1 FROM revision_build_leases l "
+                "WHERE l.revision_id=r.index_revision_id AND l.state='active' "
+                "AND l.expires_at>?) AS leased "
+                "FROM index_revisions r WHERE r.index_revision_id=?",
+                (_now(), revision_id),
             ).fetchone()
-            if state is None or str(state["state"]) != "retired":
+            allowed_state = state is not None and str(state["state"]) in {
+                "retired",
+                "failed_terminal",
+                "failed_retryable",
+            }
+            interrupted = state is not None and bool(state["interrupted"])
+            if (
+                state is None
+                or bool(state["active"])
+                or bool(state["running"])
+                or bool(state["leased"])
+                or not (allowed_state or interrupted)
+            ):
                 raise RevisionStateError(
-                    "GC 只能删除 RETIRED revision。", stage="gc.delete"
+                    "GC Revision 当前不可删除。", stage="gc.delete"
                 )
             row_ids = tuple(
                 int(row["row_id"])
@@ -2044,6 +2410,9 @@ class SqliteControlStore:
             for row_id in row_ids:
                 connection.execute(
                     "DELETE FROM chunks_fts WHERE rowid=?", (row_id,)
+                )
+                connection.execute(
+                    "DELETE FROM chunks_fts_v2 WHERE rowid=?", (row_id,)
                 )
             connection.execute(
                 "DELETE FROM exact_identifiers WHERE revision_id=?",
@@ -2077,6 +2446,18 @@ class SqliteControlStore:
                 (revision_id,),
             )
 
+    def delete_retired_revision(self, revision_id: str) -> None:
+        """兼容旧调用并委托给可恢复 GC 删除。
+
+        Args:
+            revision_id: 已通过删除前复核的 Revision ID。
+
+        Returns:
+            无返回值。
+
+        """
+        self.delete_gc_revision(revision_id)
+
     def claim_orphan_blob(self, artifact_id: str) -> bool:
         """在写事务内确认无引用并标记 quarantine。
 
@@ -2095,7 +2476,114 @@ class SqliteControlStore:
                 "SELECT 1 FROM blob_references WHERE artifact_id=?)",
                 (artifact_id, artifact_id),
             )
-        return cursor.rowcount == 1
+            if cursor.rowcount == 1:
+                return True
+            row = connection.execute(
+                "SELECT 1 FROM blob_objects b "
+                "WHERE b.artifact_id=? AND b.physical_state='quarantine' "
+                "AND NOT EXISTS (SELECT 1 FROM blob_references r "
+                "WHERE r.artifact_id=b.artifact_id)",
+                (artifact_id,),
+            ).fetchone()
+        return row is not None
+
+    def reconcile_blob_inventory(
+        self,
+        physical: Mapping[str, str],
+    ) -> dict[str, tuple[str, ...]]:
+        """比较物理 CAS 与 catalog 并持久化差集。
+
+        Args:
+            physical: Blob ID 到已验证内容摘要的安全映射。
+
+        Returns:
+            physical-only、catalog-only 与 consistent ID 集合。
+
+        """
+        now = _now()
+        with self._connections.transaction(write=True) as connection:
+            rows = connection.execute(
+                "SELECT artifact_id, content_sha256 FROM blob_objects "
+                "ORDER BY artifact_id"
+            ).fetchall()
+            catalog = {
+                str(row["artifact_id"]): str(row["content_sha256"])
+                for row in rows
+            }
+            physical_ids = set(physical)
+            catalog_ids = set(catalog)
+            physical_only = tuple(sorted(physical_ids - catalog_ids))
+            catalog_only = tuple(sorted(catalog_ids - physical_ids))
+            consistent = tuple(sorted(physical_ids & catalog_ids))
+            for artifact_id in physical_only:
+                connection.execute(
+                    "INSERT INTO blob_reconciliation("
+                    "artifact_id, observed_state, content_sha256, "
+                    "action_state, first_seen_at, last_seen_at, safe_error) "
+                    "VALUES (?, 'physical_only', ?, 'quarantined', ?, ?, NULL) "
+                    "ON CONFLICT(artifact_id) DO UPDATE SET "
+                    "observed_state='physical_only', "
+                    "content_sha256=excluded.content_sha256, "
+                    "action_state='quarantined', "
+                    "last_seen_at=excluded.last_seen_at, safe_error=NULL",
+                    (artifact_id, physical[artifact_id], now, now),
+                )
+            for artifact_id in catalog_only:
+                connection.execute(
+                    "INSERT INTO blob_reconciliation("
+                    "artifact_id, observed_state, content_sha256, "
+                    "action_state, first_seen_at, last_seen_at, safe_error) "
+                    "VALUES (?, 'catalog_only', ?, 'corrupt', ?, ?, "
+                    "'PHYSICAL_BLOB_MISSING') "
+                    "ON CONFLICT(artifact_id) DO UPDATE SET "
+                    "observed_state='catalog_only', "
+                    "content_sha256=excluded.content_sha256, "
+                    "action_state='corrupt', "
+                    "last_seen_at=excluded.last_seen_at, "
+                    "safe_error='PHYSICAL_BLOB_MISSING'",
+                    (artifact_id, catalog[artifact_id], now, now),
+                )
+            for artifact_id in consistent:
+                if physical[artifact_id] != catalog[artifact_id]:
+                    raise ValidationFailed(
+                        "Blob physical/catalog 摘要不一致。",
+                        stage="gc.reconcile",
+                    )
+                connection.execute(
+                    "INSERT INTO blob_reconciliation("
+                    "artifact_id, observed_state, content_sha256, "
+                    "action_state, first_seen_at, last_seen_at, safe_error) "
+                    "VALUES (?, 'consistent', ?, 'verified', ?, ?, NULL) "
+                    "ON CONFLICT(artifact_id) DO UPDATE SET "
+                    "observed_state='consistent', "
+                    "content_sha256=excluded.content_sha256, "
+                    "action_state='verified', "
+                    "last_seen_at=excluded.last_seen_at, safe_error=NULL",
+                    (artifact_id, physical[artifact_id], now, now),
+                )
+        return {
+            "physical_only": physical_only,
+            "catalog_only": catalog_only,
+            "consistent": consistent,
+        }
+
+    def blob_reconciliation_rows(self) -> tuple[dict[str, object], ...]:
+        """读取不含路径和内容的 Blob reconciliation 证据。
+
+        Args:
+            无参数；读取当前数据库。
+
+        Returns:
+            按 Artifact ID 排序的安全对账记录。
+
+        """
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT artifact_id, observed_state, content_sha256, "
+                "action_state, first_seen_at, last_seen_at, safe_error "
+                "FROM blob_reconciliation ORDER BY artifact_id"
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
 
     def finish_orphan_blob(self, artifact_id: str, *, deleted: bool) -> None:
         """完成或回滚一次物理 Blob GC。
@@ -2133,11 +2621,24 @@ class SqliteControlStore:
 
         """
         with self._connections.transaction(write=True) as connection:
-            connection.execute(
+            incomplete = connection.execute(
+                "SELECT count(*) AS value FROM gc_plan_items "
+                "WHERE plan_id=? AND state<>'completed'",
+                (plan_id,),
+            ).fetchone()
+            if incomplete is None or int(incomplete["value"]) != 0:
+                raise ValidationFailed(
+                    "GC Plan 仍有未完成 item。", stage="gc.complete"
+                )
+            cursor = connection.execute(
                 "UPDATE gc_plans SET state='applied', applied_at=? "
                 "WHERE plan_id=? AND state='planned'",
                 (_now(), plan_id),
             )
+            if cursor.rowcount != 1:
+                raise RevisionStateError(
+                    "GC Plan 当前不可标记 applied。", stage="gc.complete"
+                )
 
     def revision_row(self, revision_id: str) -> dict[str, object]:
         """读取不含正文的 revision 控制行。
@@ -2274,6 +2775,62 @@ class SqliteControlStore:
         """
         self._closed = True
 
+    def _assert_writer_lease(
+        self,
+        connection: Connection,
+        revision_id: str,
+    ) -> None:
+        row = connection.execute(
+            "SELECT owner_job_id, fencing_token, expires_at, state "
+            "FROM revision_build_leases WHERE revision_id=?",
+            (revision_id,),
+        ).fetchone()
+        if row is None:
+            return
+        context = self._writer_context.get(revision_id)
+        if (
+            context is None
+            or str(row["state"]) != "active"
+            or context
+            != (str(row["owner_job_id"]), int(row["fencing_token"]))
+            or _parse_utc(str(row["expires_at"])) <= datetime.now(UTC)
+        ):
+            raise Conflict(
+                "Revision writer fencing token 已失效。",
+                stage="revision.fencing",
+            )
+
+    def _heartbeat_owned_lease(
+        self,
+        connection: Connection,
+        job_id: str,
+        heartbeat_at: str,
+    ) -> None:
+        for revision_id, (owner_job_id, token) in self._writer_context.items():
+            if owner_job_id != job_id:
+                continue
+            expires_at = (
+                _parse_utc(heartbeat_at)
+                + timedelta(seconds=_DEFAULT_LEASE_SECONDS)
+            ).isoformat()
+            cursor = connection.execute(
+                "UPDATE revision_build_leases SET heartbeat_at=?, "
+                "expires_at=? WHERE revision_id=? AND owner_job_id=? "
+                "AND fencing_token=? AND state='active'",
+                (
+                    heartbeat_at,
+                    expires_at,
+                    revision_id,
+                    owner_job_id,
+                    token,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise Conflict(
+                    "Revision writer heartbeat 被新 fencing token 拒绝。",
+                    stage="revision.fencing",
+                )
+
 
 def _has_zero_scope(chunk: Chunk) -> bool:
     return any(
@@ -2288,6 +2845,23 @@ def _has_zero_scope(chunk: Chunk) -> bool:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _utc_moment(value: datetime | None) -> datetime:
+    moment = datetime.now(UTC) if value is None else value
+    if moment.tzinfo is None or moment.utcoffset() is None:
+        raise ValueError("Revision lease 时间必须带 UTC offset。")
+    return moment.astimezone(UTC)
+
+
+def _parse_utc(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise Conflict(
+            "Revision lease 时间字段已损坏。", stage="revision.fencing"
+        ) from None
+    return _utc_moment(parsed)
 
 
 __all__ = ["SqliteControlStore"]

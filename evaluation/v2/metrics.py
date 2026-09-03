@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from statistics import mean
 
@@ -197,6 +197,7 @@ def _metric_values(
         pair for pair in answerable if pair[0].expected.required_identifiers
     ]
     values: dict[str, MetricValue] = {}
+    _add_retrieval_stage_metrics(values, answerable, seed=seed)
     for depth in (1, 5, 10):
         values[f"recall_at_{depth}"] = _mean_metric(
             [
@@ -267,8 +268,25 @@ def _metric_values(
         ],
         seed=seed,
     )
-    values["source_range_coverage"] = _ratio_metric(
+    values["source_range_recall"] = _ratio_metric(
         sum(item[1].matched_source_range_count for item in answerable),
+        sum(item[1].required_source_range_count for item in answerable),
+    )
+    values["source_range_coverage"] = values["source_range_recall"]
+    values["source_range_precision"] = _ratio_metric(
+        sum(
+            item[1].relevant_predicted_source_range_count
+            for item in answerable
+        ),
+        sum(item[1].predicted_source_range_count for item in answerable),
+    )
+    source_precision = values["source_range_precision"].value
+    source_recall = values["source_range_recall"].value
+    values["source_range_f1"] = _scalar_metric(
+        _safe_ratio(
+            2.0 * float(source_precision or 0.0) * float(source_recall or 0.0),
+            float(source_precision or 0.0) + float(source_recall or 0.0),
+        ),
         sum(item[1].required_source_range_count for item in answerable),
     )
     values["negative_leakage_at_10"] = _mean_metric(
@@ -297,6 +315,71 @@ def _metric_values(
             status="ok" if paired else "not_executed",
         )
     return values
+
+
+def _add_retrieval_stage_metrics(
+    values: dict[str, MetricValue],
+    answerable: Sequence[tuple[EvaluationCase, CaseObservation]],
+    *,
+    seed: int,
+) -> None:
+    stages: dict[
+        str, Callable[[CaseObservation], tuple[str, ...]]
+    ] = {
+        "fusion": lambda item: item.fused_chunk_ids,
+        "rerank": lambda item: item.reranked_chunk_ids,
+    }
+    for stage, selector in stages.items():
+        for depth in (1, 5, 10):
+            values[f"{stage}_recall_at_{depth}"] = _mean_metric(
+                [
+                    _recall(
+                        selector(observed)[:depth],
+                        set(case.expected.relevant_chunk_ids),
+                    )
+                    for case, observed in answerable
+                ],
+                seed=seed,
+            )
+        values[f"{stage}_mrr_at_10"] = _mean_metric(
+            [
+                reciprocal_rank_at_k(
+                    selector(observed),
+                    set(case.expected.relevant_chunk_ids),
+                    k=10,
+                )
+                for case, observed in answerable
+            ],
+            seed=seed,
+        )
+        values[f"{stage}_ndcg_at_10"] = _mean_metric(
+            [
+                ndcg_at_k(
+                    selector(observed),
+                    set(case.expected.relevant_chunk_ids),
+                    k=10,
+                )
+                for case, observed in answerable
+            ],
+            seed=seed,
+        )
+    for depth in (1, 5, 10):
+        values[f"channel_recall_at_{depth}"] = _mean_metric(
+            [
+                max(
+                    (
+                        _recall(
+                            chunk_ids[:depth],
+                            set(case.expected.relevant_chunk_ids),
+                        )
+                        for _, chunk_ids in observed.channel_chunk_ids
+                    ),
+                    default=0.0,
+                )
+                for case, observed in answerable
+            ],
+            seed=seed,
+        )
 
 
 def _add_answer_metrics(
@@ -348,6 +431,63 @@ def _add_answer_metrics(
         ],
         seed=seed,
     )
+    values["citation_document_precision"] = values[
+        "citation_source_precision"
+    ]
+    values["citation_chunk_precision"] = _mean_metric(
+        [
+            _safe_ratio(
+                len(
+                    set(item.cited_chunk_ids)
+                    & set(case.expected.relevant_chunk_ids)
+                ),
+                len(set(item.cited_chunk_ids)),
+            )
+            for case, item in answerable
+        ],
+        seed=seed,
+    )
+    values["evidence_document_precision"] = _mean_metric(
+        [
+            _safe_ratio(
+                len(
+                    set(item.evidence_document_ids)
+                    & set(case.expected.relevant_document_ids)
+                ),
+                len(set(item.evidence_document_ids)),
+            )
+            for case, item in answerable
+        ],
+        seed=seed,
+    )
+    values["evidence_chunk_precision"] = _mean_metric(
+        [
+            _safe_ratio(
+                len(
+                    set(item.evidence_chunk_ids)
+                    & set(case.expected.relevant_chunk_ids)
+                ),
+                len(set(item.evidence_chunk_ids)),
+            )
+            for case, item in answerable
+        ],
+        seed=seed,
+    )
+    values["evidence_items_per_answer"] = _mean_metric(
+        [float(item.evidence_count) for _, item in answerable],
+        seed=seed,
+    )
+    values["irrelevant_evidence_count"] = MetricValue(
+        value=sum(
+            len(
+                set(item.evidence_chunk_ids)
+                - set(case.expected.relevant_chunk_ids)
+            )
+            for case, item in answerable
+        ),
+        sample_count=len(answerable),
+        status="ok" if answerable else "not_executed",
+    )
 
 
 def _engineering_values(
@@ -367,6 +507,18 @@ def _engineering_values(
         "provider_retry_count": sum(
             item.provider_retry_count for item in observations
         ),
+        "embedding_call_count": sum(
+            item.embedding_call_count for item in observations
+        ),
+        "embedding_retry_count": sum(
+            item.embedding_retry_count for item in observations
+        ),
+        "reranker_call_count": sum(
+            item.reranker_call_count for item in observations
+        ),
+        "reranker_retry_count": sum(
+            item.reranker_retry_count for item in observations
+        ),
         "failover_count": sum(
             item.selected_embedding_slot == "standby"
             for item in observations
@@ -375,6 +527,22 @@ def _engineering_values(
             "bypass" in item.rerank_mode.casefold() for item in observations
         ),
         "cache_hit_count": sum(item.cache_hit for item in observations),
+        "evidence_count": sum(item.evidence_count for item in observations),
+        "evidence_tokens": sum(item.evidence_tokens for item in observations),
+        "stage_elapsed_ms": _stage_elapsed(observations),
+    }
+
+
+def _stage_elapsed(
+    observations: Sequence[CaseObservation],
+) -> dict[str, JsonValue]:
+    values: dict[str, list[float]] = defaultdict(list)
+    for observation in observations:
+        for stage, elapsed_ms in observation.stage_elapsed_ms:
+            values[stage].append(elapsed_ms)
+    return {
+        stage: mean(elapsed_values)
+        for stage, elapsed_values in sorted(values.items())
     }
 
 

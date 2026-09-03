@@ -13,6 +13,7 @@ from rag_app.core.models import (
     ParseReport,
     RevisionValidationEvidence,
     RevisionVectorSpec,
+    VectorPointAudit,
     validate_document_ir,
     vector_point_id,
 )
@@ -195,15 +196,32 @@ class RevisionValidator:
         report_checks = self._validate_documents(
             chunks, self._control.parse_rows(revision_id)
         )
-        vector_validation = self._vector_store.validate_vector_revision(spec)
+        inventory = self._vector_store.audit_revision(spec)
+        expected_inventory = tuple(
+            sorted(
+                (_expected_point(spec, chunk) for chunk in chunks),
+                key=lambda item: (
+                    item.point_id or "",
+                    item.chunk_id or "",
+                ),
+            )
+        )
         if (
-            vector_validation.invalid_point_count
-            or vector_validation.point_count != chunk_count
+            inventory.invalid_record_count
+            or inventory.raw_record_count != chunk_count
+            or inventory.points != expected_inventory
         ):
             raise ValidationFailed(
-                "Vector Point 完整性验证失败。", stage="revision.validate"
+                "Vector Point 未与 canonical Chunk 全量一致。",
+                stage="revision.validate",
             )
-        vector_counts = dict(vector_validation.vector_counts)
+        vector_counts = {
+            slot.vector_name: sum(
+                slot.vector_name in point.vector_names
+                for point in inventory.points
+            )
+            for slot in spec.slots
+        }
         coverage = self._control.embedding_coverage_rows(revision_id)
         for slot in spec.slots:
             values = coverage.get(slot.slot_id)
@@ -232,10 +250,11 @@ class RevisionValidator:
             document_count=document_count,
             chunk_count=chunk_count,
             fts_count=fts_count,
-            vector_counts=vector_validation.vector_counts,
+            vector_counts=tuple(sorted(vector_counts.items())),
             report_checks=freeze_json_object(report_checks),
             deterministic_probe_passed=True,
             running_writer_count=running,
+            vector_inventory_hash=inventory.inventory_hash,
         )
 
     def _validate_documents(
@@ -316,6 +335,32 @@ def _required_int(row: dict[str, object], key: str) -> int:
             f"Revision 字段 {key} 已损坏。", stage="revision.validate"
         )
     return value
+
+
+def _expected_point(
+    spec: RevisionVectorSpec,
+    chunk: Chunk,
+) -> VectorPointAudit:
+    """从 canonical Chunk 构造不可泄密的预期 Point 审计项。"""
+    dimensions = tuple(
+        sorted((slot.vector_name, slot.dimension) for slot in spec.slots)
+    )
+    return VectorPointAudit(
+        point_id=vector_point_id(
+            spec.revision.index_revision_id, chunk.chunk_id
+        ),
+        convertible=True,
+        reason_code="OK",
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.version.document_id,
+        document_version_id=chunk.version.document_version_id,
+        role=chunk.role.value,
+        section_id=chunk.section_id,
+        neighbor_group_id=chunk.neighbor_group_id,
+        content_sha256=chunk.content_sha256,
+        vector_names=tuple(name for name, _ in dimensions),
+        vector_dimensions=dimensions,
+    )
 
 
 __all__ = ["RevisionValidator"]

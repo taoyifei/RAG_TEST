@@ -6,9 +6,9 @@ import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
+from time import perf_counter
 
 from rag_app.application.answering import ExtractiveAnsweringService
-from rag_app.application.embedding_router import search_cache_key
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
@@ -23,6 +23,8 @@ from rag_app.application.retrieval.neighbors import NeighborExpander
 from rag_app.application.retrieval.planner import QueryPlanner
 from rag_app.application.retrieval.reranking import CircuitAwareReranker
 from rag_app.core.errors import (
+    ChannelRateLimited,
+    ChannelUnavailable,
     DenseUnavailable,
     IndexCompatibilityError,
     IndexCorrupt,
@@ -32,12 +34,25 @@ from rag_app.core.errors import (
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    BaseResultCacheKey,
     ChannelHit,
     CircuitSnapshot,
     ConfidenceStatus,
+    DiagnosticEvidenceItem,
+    DiagnosticExpansionItem,
+    DiagnosticRerankItem,
+    EvidenceItem,
+    EvidenceSelectionContext,
+    FusedCandidate,
+    ProviderCall,
+    ProviderCallCount,
+    RankedChunk,
+    RetrievalDiagnostics,
+    RetrievalDiagnosticsSummary,
     RetrievalPolicy,
     SearchAnswerResult,
     SearchRequest,
+    StageTiming,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
@@ -110,6 +125,9 @@ class RetrievalService:
 
         """
         trace_id = f"trace_{uuid.uuid4().hex}"
+        stage_started = perf_counter()
+        stage_timings: list[StageTiming] = []
+        provider_calls: list[ProviderCall] = []
         snapshot = self._source.active_query_snapshot(
             request.scope,
             serving_fingerprint=self._serving_fingerprint,
@@ -124,6 +142,9 @@ class RetrievalService:
                 "serving_fingerprint": snapshot.serving_fingerprint,
             },
         )
+        stage_started = _finish_timing(
+            stage_timings, "snapshot", stage_started
+        )
         analysis = self._analyzer.analyze(request)
         self._record(
             trace_id,
@@ -136,6 +157,9 @@ class RetrievalService:
                 "identifier_count": len(analysis.identifiers),
                 "reason_codes": analysis.reason_codes,
             },
+        )
+        stage_started = _finish_timing(
+            stage_timings, "analyze", stage_started
         )
         variants = self._expander.expand(analysis)
         self._record(
@@ -161,10 +185,54 @@ class RetrievalService:
                 "reason_codes": plan.reason_codes,
             },
         )
+        stage_started = _finish_timing(
+            stage_timings, "plan", stage_started
+        )
+        rewrite_identity = canonical_sha256(
+            tuple(variant.identity for variant in plan.variants)
+        )
+        cache_identity = BaseResultCacheKey(
+            project_id=request.scope.project_id,
+            knowledge_base_id=request.scope.knowledge_base_id,
+            active_revision_id=snapshot.revision.index_revision_id,
+            index_fingerprint=snapshot.revision.index_fingerprint,
+            serving_fingerprint=snapshot.serving_fingerprint,
+            query_sha256=hashlib.sha256(
+                request.text.encode("utf-8")
+            ).hexdigest(),
+            metadata_filter_hash=canonical_sha256(request.metadata_filters),
+            access_filter_hash=canonical_sha256(request.access_filters),
+            conversation_identity=analysis.conversation_fingerprint,
+            rewrite_policy_identity=rewrite_identity,
+            cache_schema=self._policy.cache_schema_version,
+        )
+        cache_key = cache_identity.persistent_key
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            self._record(trace_id, "cache", {"result": "hit"})
+            self._record(trace_id, "complete", {"status": cached.status.value})
+            _finish_timing(stage_timings, "cache", stage_started)
+            diagnostics = RetrievalDiagnostics(
+                cache_hit=True,
+                stage_timings=tuple(stage_timings),
+            )
+            return cached.model_copy(
+                update={
+                    "trace_id": trace_id,
+                    "cache_hit": True,
+                    "diagnostics": diagnostics,
+                    "diagnostics_summary": _diagnostics_summary(diagnostics),
+                }
+            )
+        self._record(trace_id, "cache", {"result": "miss"})
+        stage_started = _finish_timing(
+            stage_timings, "cache", stage_started
+        )
         top_k = dict(plan.channel_top_k)
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
         if "exact" in plan.channels:
+            channel_started = perf_counter()
             try:
                 hits = apply_candidate_filters(
                     self._exact.search(
@@ -172,15 +240,14 @@ class RetrievalService:
                     ),
                     request,
                 )
-            except PolicyDenied:
-                raise
-            # Exact is optional; isolate unexpected store-driver failures.
-            except Exception as error:
-                degraded.append(f"EXACT_STORE_FAILURE:{type(error).__name__}")
+            except (ChannelRateLimited, ChannelUnavailable) as error:
+                degraded.append(error.code)
                 hits = ()
             channel_hits["exact"] = hits
             self._record(trace_id, "exact", {"hit_count": len(hits)})
+            _finish_timing(stage_timings, "exact_channel", channel_started)
         if "lexical" in plan.channels:
+            channel_started = perf_counter()
             for variant in plan.variants:
                 try:
                     hits = apply_candidate_filters(
@@ -189,13 +256,8 @@ class RetrievalService:
                         ),
                         request,
                     )
-                except PolicyDenied:
-                    raise
-                # Lexical is optional; isolate unexpected store-driver failures.
-                except Exception as error:
-                    degraded.append(
-                        f"LEXICAL_STORE_FAILURE:{type(error).__name__}"
-                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
                     hits = ()
                 name = (
                     "lexical"
@@ -214,10 +276,12 @@ class RetrievalService:
                     )
                 },
             )
+            _finish_timing(stage_timings, "lexical_channel", channel_started)
         selected_slot: str | None = None
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
         if "dense" in plan.channels:
+            channel_started = perf_counter()
             route_attributes: dict[str, object] = {
                 "selected_slot": None,
                 "vector_name": None,
@@ -244,6 +308,7 @@ class RetrievalService:
                     stage="retrieval.dense",
                 ) from error
             else:
+                provider_calls.extend(dense.routed.provider_calls)
                 selected_slot = dense.routed.selected_slot_id
                 selected_vector = dense.routed.vector_name
                 route_reason = dense.routed.fallback_reason
@@ -283,6 +348,7 @@ class RetrievalService:
                     )
                 },
             )
+            _finish_timing(stage_timings, "vector_channel", channel_started)
         if len(channel_hits) > self._policy.max_channels:
             raise ValueError("检索实际通道数超过 P07 policy。")
         fused = reciprocal_rank_fusion(
@@ -310,7 +376,12 @@ class RetrievalService:
                 ],
             },
         )
+        stage_started = _finish_timing(
+            stage_timings, "retrieve", stage_started
+        )
+        hydration_started = perf_counter()
         hydrated = self._hydrator.hydrate(snapshot, fused)
+        _finish_timing(stage_timings, "sqlite_hydration", hydration_started)
         self._record(trace_id, "hydrate", {"candidate_count": len(hydrated)})
         reranked = self._reranker.rerank(
             analysis.normalized_query,
@@ -320,6 +391,7 @@ class RetrievalService:
             enabled=plan.use_reranker,
             result_limit=request.limit,
         )
+        provider_calls.extend(reranked.provider_calls)
         self._record(
             trace_id,
             "rerank",
@@ -329,28 +401,6 @@ class RetrievalService:
                 "candidate_count": len(reranked.candidates),
             },
         )
-        rewrite_identity = canonical_sha256(
-            tuple(variant.identity for variant in plan.variants)
-        )
-        cache_key = search_cache_key(
-            project_id=request.scope.project_id,
-            knowledge_base_id=request.scope.knowledge_base_id,
-            active_index_revision_id=snapshot.revision.index_revision_id,
-            serving_fingerprint=snapshot.serving_fingerprint,
-            selected_embedding_slot=selected_slot or "none",
-            rerank_mode=reranked.mode,
-            query=request.text,
-            metadata_filters=request.metadata_filters,
-            access_filters=request.access_filters,
-            conversation_identity=analysis.conversation_fingerprint,
-            rewrite_identity=rewrite_identity,
-        )
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            self._record(trace_id, "cache", {"result": "hit"})
-            self._record(trace_id, "complete", {"status": cached.status.value})
-            return cached.model_copy(update={"trace_id": trace_id})
-        self._record(trace_id, "cache", {"result": "miss"})
         expansion = self._neighbors.expand(
             snapshot, reranked.candidates, plan.neighbor_mode, self._policy
         )
@@ -363,16 +413,35 @@ class RetrievalService:
                 "reason_codes": expansion.degraded_reason_codes,
             },
         )
-        evidence = self._evidence.assemble(expansion.candidates, self._policy)
+        evidence = self._evidence.assemble(
+            expansion.candidates,
+            self._policy,
+            context=EvidenceSelectionContext(
+                analysis=analysis,
+                query_kind=plan.query_kind,
+                rerank_mode=reranked.mode,
+                selected_slot=selected_slot,
+            ),
+        )
         self._record(
             trace_id, "assemble_evidence", {"evidence_count": len(evidence)}
         )
         confidence = self._confidence.evaluate(
             analysis,
             plan.query_kind,
-            reranked.candidates,
+            expansion.candidates,
             evidence,
             tuple(degraded),
+            policy=self._policy,
+            rerank_mode=reranked.mode,
+            selected_vector_space=(
+                snapshot.topology.slot(selected_slot).vector_space_identity
+                if selected_slot is not None
+                else None
+            ),
+        )
+        stage_started = _finish_timing(
+            stage_timings, "rank_and_evidence", stage_started
         )
         self._record(
             trace_id,
@@ -406,6 +475,18 @@ class RetrievalService:
             "validate",
             {"published": answer is not None, "support_count": len(evidence)},
         )
+        _finish_timing(stage_timings, "answer", stage_started)
+        diagnostics = _diagnostics(
+            channel_hits=channel_hits,
+            fused=fused,
+            reranked=reranked.candidates,
+            expanded=expansion.candidates,
+            evidence=evidence,
+            answer_published=answer is not None,
+            provider_calls=tuple(provider_calls),
+            stage_timings=tuple(stage_timings),
+            degraded=tuple(dict.fromkeys(degraded)),
+        )
         result = SearchAnswerResult(
             trace_id=trace_id,
             status=confidence.status,
@@ -424,9 +505,16 @@ class RetrievalService:
             generation_mode="extractive" if answer is not None else "none",
             degraded_reason_codes=tuple(dict.fromkeys(degraded)),
             cache_key=cache_key,
+            diagnostics_summary=_diagnostics_summary(diagnostics),
+            diagnostics=diagnostics,
         )
         if result.status is ConfidenceStatus.ANSWERABLE:
-            self._cache.put(cache_key, result)
+            self._cache.put(cache_key, result, ttl_seconds=300)
+        elif (
+            result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+            and not result.degraded_reason_codes
+        ):
+            self._cache.put(cache_key, result, ttl_seconds=30)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
 
@@ -459,6 +547,98 @@ def _circuit_trace(
         }
         for snapshot in snapshots
     ]
+
+
+def _finish_timing(
+    timings: list[StageTiming], stage: str, started: float
+) -> float:
+    finished = perf_counter()
+    timings.append(
+        StageTiming(stage=stage, elapsed_ms=(finished - started) * 1000.0)
+    )
+    return finished
+
+
+def _diagnostics(  # noqa: PLR0913
+    *,
+    channel_hits: dict[str, tuple[ChannelHit, ...]],
+    fused: tuple[FusedCandidate, ...],
+    reranked: tuple[RankedChunk, ...],
+    expanded: tuple[RankedChunk, ...],
+    evidence: tuple[EvidenceItem, ...],
+    answer_published: bool,
+    provider_calls: tuple[ProviderCall, ...],
+    stage_timings: tuple[StageTiming, ...],
+    degraded: tuple[str, ...],
+) -> RetrievalDiagnostics:
+    call_totals: dict[str, list[int]] = {}
+    for call in provider_calls:
+        totals = call_totals.setdefault(call.operation, [0, 0])
+        totals[0] += call.call_count
+        totals[1] += call.retry_count
+    return RetrievalDiagnostics(
+        channel_chunk_ids=tuple(
+            (name, tuple(item.chunk_id for item in hits))
+            for name, hits in channel_hits.items()
+        ),
+        fused_chunk_ids=tuple(item.chunk_id for item in fused),
+        reranked=tuple(
+            DiagnosticRerankItem(
+                chunk_id=item.hydrated.chunk.chunk_id,
+                rank=item.rerank_rank or rank,
+                score=item.rerank_score,
+            )
+            for rank, item in enumerate(reranked, start=1)
+        ),
+        expanded=tuple(
+            DiagnosticExpansionItem(
+                chunk_id=item.hydrated.chunk.chunk_id,
+                reason=item.expansion_reason,
+            )
+            for item in expanded
+        ),
+        evidence=tuple(
+            DiagnosticEvidenceItem(
+                evidence_id=item.evidence_id,
+                chunk_id=item.chunk_id,
+                source_ranges=item.source_spans,
+            )
+            for item in evidence
+        ),
+        cited_chunk_ids=(
+            tuple(item.chunk_id for item in evidence)
+            if answer_published
+            else ()
+        ),
+        provider_calls=tuple(
+            ProviderCallCount(
+                operation=operation,
+                call_count=counts[0],
+                retry_count=counts[1],
+            )
+            for operation, counts in sorted(call_totals.items())
+        ),
+        stage_timings=stage_timings,
+        degraded_reason_codes=degraded,
+    )
+
+
+def _diagnostics_summary(
+    diagnostics: RetrievalDiagnostics,
+) -> RetrievalDiagnosticsSummary:
+    return RetrievalDiagnosticsSummary(
+        channel_count=len(diagnostics.channel_chunk_ids),
+        fused_count=len(diagnostics.fused_chunk_ids),
+        reranked_count=len(diagnostics.reranked),
+        evidence_count=len(diagnostics.evidence),
+        provider_call_count=sum(
+            item.call_count for item in diagnostics.provider_calls
+        ),
+        provider_retry_count=sum(
+            item.retry_count for item in diagnostics.provider_calls
+        ),
+        cache_hit=diagnostics.cache_hit,
+    )
 
 
 __all__ = ["RetrievalService"]

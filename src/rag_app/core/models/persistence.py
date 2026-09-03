@@ -71,6 +71,15 @@ class BlobReference(FrozenModel):
     )
 
 
+class BlobPhysicalAudit(FrozenModel):
+    """不暴露绝对路径或内容的物理 Blob 盘点项。"""
+
+    blob_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    size_bytes: StrictInt = Field(ge=0)
+    reason_code: str = Field(pattern=r"^OK$")
+
+
 class EmbeddingCacheIdentity(FrozenModel):
     """在 P05.5 语义键外增加合规 scope 的持久化身份。"""
 
@@ -204,6 +213,7 @@ def content_sha256(content: str) -> str:
 __all__ = [
     "BlobCatalogEntry",
     "BlobPhysicalState",
+    "BlobPhysicalAudit",
     "BlobReference",
     "CacheScope",
     "EmbeddingCacheIdentity",

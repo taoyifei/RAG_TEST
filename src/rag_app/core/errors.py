@@ -178,6 +178,20 @@ class DenseUnavailable(RagError):
     default_retryable = True
 
 
+class ChannelUnavailable(RagError):
+    """可选检索通道发生明确、短暂的可用性故障。"""
+
+    default_code = "CHANNEL_UNAVAILABLE"
+    default_retryable = True
+
+
+class ChannelRateLimited(RagError):
+    """可选检索通道明确拒绝当前速率。"""
+
+    default_code = "CHANNEL_RATE_LIMITED"
+    default_retryable = True
+
+
 class IndexCompatibilityError(RagError):
     """查询 slot、vector name 或 revision 不匹配。"""
 
@@ -223,6 +237,8 @@ class ValidationFailed(RagError):
 __all__ = [
     "CapabilityMismatch",
     "CapabilityUnavailable",
+    "ChannelRateLimited",
+    "ChannelUnavailable",
     "ComponentNotRegistered",
     "ConfigurationError",
     "Conflict",

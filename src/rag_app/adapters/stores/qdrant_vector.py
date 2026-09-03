@@ -2,32 +2,43 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Protocol, cast
 
+from pydantic import ValidationError
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
 from rag_app.adapters.legacy.stores import InMemoryVectorStore
+from rag_app.adapters.stores.vector_audit import (
+    audit_named_point,
+    inventory_from_audits,
+    safe_vector_shape,
+)
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
     ProviderMode,
 )
-from rag_app.core.errors import Conflict, IndexCompatibilityError
+from rag_app.core.errors import Conflict, IndexCompatibilityError, IndexCorrupt
 from rag_app.core.models import (
     EmbeddingSlotIdentity,
     IndexRevisionRef,
     NamedVectorPoint,
     RevisionVectorSpec,
     SearchHit,
+    VectorPointAudit,
     VectorPointPayload,
+    VectorRevisionInventory,
     VectorRevisionValidation,
     VectorSearchRequest,
     VectorSearchResult,
     VectorWriteRequest,
 )
+
+_MAX_SCROLL_PAGES = 100_000
 
 
 class _QdrantRecord(Protocol):
@@ -302,27 +313,39 @@ class QdrantRevisionVectorStore:
             实际 Point/vector 计数。
 
         """
-        self._require_spec(spec)
+        inventory = self.audit_revision(spec)
         counts = {slot.vector_name: 0 for slot in spec.slots}
-        invalid = 0
-        points = self._all_points(spec, tolerate_invalid=True)
-        for point in points:
-            try:
-                self._validate_point_identity(spec, point)
-                vectors = point.vector_map()
-                if set(vectors) != set(counts):
-                    raise ValueError("missing vector")
-                for slot in spec.slots:
-                    if len(vectors[slot.vector_name]) != slot.dimension:
-                        raise ValueError("bad dimension")
-                    counts[slot.vector_name] += 1
-            except (ValueError, IndexCompatibilityError):
-                invalid += 1
+        for point in inventory.points:
+            if not point.convertible:
+                continue
+            for name in point.vector_names:
+                if name in counts:
+                    counts[name] += 1
         return VectorRevisionValidation(
-            point_count=len(points),
+            point_count=inventory.raw_record_count,
             vector_counts=tuple(sorted(counts.items())),
-            invalid_point_count=invalid,
+            invalid_point_count=inventory.invalid_record_count,
         )
+
+    def audit_revision(
+        self,
+        spec: RevisionVectorSpec,
+    ) -> VectorRevisionInventory:
+        """逐条盘点 Qdrant 原始 Scroll Record。
+
+        Args:
+            spec: 目标 revision schema。
+
+        Returns:
+            包含无法转换记录的安全 inventory。
+
+        """
+        self._require_spec(spec)
+        audits = tuple(
+            self._audit_record(spec, record)
+            for record in self._raw_records(spec)
+        )
+        return inventory_from_audits(audits)
 
     def delete_revision(self, spec: RevisionVectorSpec) -> None:
         """删除整个 revision collection。
@@ -337,6 +360,18 @@ class QdrantRevisionVectorStore:
         self._require_spec(spec)
         self._client.delete_collection(spec.physical_namespace)
         self._specs.pop(spec.physical_namespace, None)
+
+    def revision_exists(self, spec: RevisionVectorSpec) -> bool:
+        """检查 Qdrant collection 是否存在。
+
+        Args:
+            spec: 目标 Revision 的向量 Schema。
+
+        Returns:
+            collection 存在时返回 True。
+
+        """
+        return bool(self._client.collection_exists(spec.physical_namespace))
 
     def write(self, request: VectorWriteRequest) -> None:
         """保留 P01-P05 slot-specific Memory 兼容路径。
@@ -442,9 +477,15 @@ class QdrantRevisionVectorStore:
     def _all_points(
         self,
         spec: RevisionVectorSpec,
-        *,
-        tolerate_invalid: bool = False,
     ) -> tuple[NamedVectorPoint, ...]:
+        """失败关闭地转换完整物理 Scroll 结果。"""
+        return tuple(
+            self._record_to_point(spec, record)
+            for record in self._raw_records(spec)
+        )
+
+    def _raw_records(self, spec: RevisionVectorSpec) -> tuple[object, ...]:
+        """带重复 offset 和空页保护地读取全部原始记录。"""
         records, offset = self._client.scroll(
             collection_name=spec.physical_namespace,
             limit=256,
@@ -452,7 +493,22 @@ class QdrantRevisionVectorStore:
             with_vectors=True,
         )
         all_records = list(records)
+        seen_offsets: list[object] = []
+        page_count = 1
         while offset is not None:
+            if not _valid_scroll_offset(offset):
+                raise IndexCorrupt(
+                    "Qdrant Scroll offset 类型无效。", stage="qdrant.audit"
+                )
+            if offset in seen_offsets:
+                raise IndexCorrupt(
+                    "Qdrant Scroll offset 重复。", stage="qdrant.audit"
+                )
+            if page_count >= _MAX_SCROLL_PAGES:
+                raise IndexCorrupt(
+                    "Qdrant Scroll 超过页数上限。", stage="qdrant.audit"
+                )
+            seen_offsets.append(offset)
             records, offset = self._client.scroll(
                 collection_name=spec.physical_namespace,
                 offset=offset,
@@ -460,15 +516,80 @@ class QdrantRevisionVectorStore:
                 with_payload=True,
                 with_vectors=True,
             )
+            if not records and offset is not None:
+                raise IndexCorrupt(
+                    "Qdrant Scroll 空页仍返回后续 offset。",
+                    stage="qdrant.audit",
+                )
             all_records.extend(records)
-        points = []
-        for record in all_records:
-            try:
-                points.append(self._record_to_point(spec, record))
-            except (ValueError, IndexCompatibilityError):
-                if not tolerate_invalid:
-                    raise
-        return tuple(points)
+            page_count += 1
+        return tuple(all_records)
+
+    def _audit_record(
+        self,
+        spec: RevisionVectorSpec,
+        record: object,
+    ) -> VectorPointAudit:
+        """把单个未知 Record 转成安全审计项，绝不记录值或正文。"""
+        typed_record = cast(_QdrantRecord, record)
+        point_id = _canonical_uuid(typed_record.id)
+        payload = _safe_payload(typed_record.payload)
+        vector_names, vector_dimensions = safe_vector_shape(
+            typed_record.vector
+        )
+        if payload is None:
+            return VectorPointAudit(
+                point_id=point_id,
+                convertible=False,
+                reason_code="PAYLOAD_INVALID",
+                vector_names=vector_names,
+                vector_dimensions=vector_dimensions,
+            )
+        base = {
+            "point_id": point_id,
+            "chunk_id": payload.chunk_id,
+            "document_id": payload.document_id,
+            "document_version_id": payload.document_version_id,
+            "role": payload.role,
+            "section_id": payload.section_id,
+            "neighbor_group_id": payload.neighbor_group_id,
+            "content_sha256": payload.content_sha256,
+            "vector_names": vector_names,
+            "vector_dimensions": vector_dimensions,
+        }
+        if point_id is None:
+            return VectorPointAudit.model_validate(
+                {
+                    **base,
+                    "convertible": False,
+                    "reason_code": "INVALID_POINT_ID",
+                }
+            )
+        if not isinstance(typed_record.vector, Mapping):
+            return VectorPointAudit.model_validate(
+                {
+                    **base,
+                    "convertible": False,
+                    "reason_code": "NAMED_VECTORS_INVALID",
+                }
+            )
+        try:
+            point = self._record_to_point(spec, record)
+        except (
+            IndexCompatibilityError,
+            OverflowError,
+            TypeError,
+            ValidationError,
+            ValueError,
+        ):
+            return VectorPointAudit.model_validate(
+                {
+                    **base,
+                    "convertible": False,
+                    "reason_code": "VECTOR_VALUES_INVALID",
+                }
+            )
+        return audit_named_point(spec, point)
 
     def _record_to_point(
         self, spec: RevisionVectorSpec, record: object
@@ -507,6 +628,34 @@ class QdrantRevisionVectorStore:
             raise IndexCompatibilityError(
                 "Qdrant Point payload scope 不匹配。", stage="qdrant.point"
             )
+
+
+def _safe_payload(value: object) -> VectorPointPayload | None:
+    try:
+        return VectorPointPayload.model_validate(value)
+    except (TypeError, ValidationError, ValueError):
+        return None
+
+
+def _canonical_uuid(value: object) -> str | None:
+    try:
+        parsed = uuid.UUID(str(value))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    canonical = str(parsed)
+    return canonical if str(value) == canonical else None
+
+
+def _valid_scroll_offset(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    if isinstance(value, uuid.UUID):
+        return True
+    if isinstance(value, str):
+        return bool(value)
+    return False
 
 
 def _match(key: str, value: str) -> models.FieldCondition:

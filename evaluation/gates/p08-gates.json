@@ -80,6 +80,54 @@
       "value": 0.9,
       "minimum_samples": 7,
       "source": "explicit provisional engineering gate"
+    },
+    {
+      "gate_id": "citation_document_precision_v3",
+      "metric": "citation_document_precision",
+      "operator": "ge",
+      "value": 0.8,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "citation_chunk_precision_v3",
+      "metric": "citation_chunk_precision",
+      "operator": "ge",
+      "value": 0.8,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "source_range_precision_v3",
+      "metric": "source_range_precision",
+      "operator": "ge",
+      "value": 0.75,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "source_range_recall_v3",
+      "metric": "source_range_recall",
+      "operator": "ge",
+      "value": 0.9,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "source_range_f1_v3",
+      "metric": "source_range_f1",
+      "operator": "ge",
+      "value": 0.8,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
+    },
+    {
+      "gate_id": "irrelevant_evidence_zero_v3",
+      "metric": "irrelevant_evidence_count",
+      "operator": "eq",
+      "value": 0,
+      "minimum_samples": 20,
+      "source": "accepted product requirement"
     }
   ]
 }

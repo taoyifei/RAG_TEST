@@ -260,6 +260,10 @@ def _metrics_for_execution(
         ),
     )
     build_seconds = execution.build_elapsed_ms / 1000.0
+    raw_stage_elapsed = report.engineering.get("stage_elapsed_ms", {})
+    stage_elapsed: dict[str, JsonValue] = (
+        raw_stage_elapsed if isinstance(raw_stage_elapsed, dict) else {}
+    )
     engineering: dict[str, JsonValue] = {
         **report.engineering,
         "process_mode": "sync_in_process",
@@ -269,8 +273,23 @@ def _metrics_for_execution(
             "logical_cpu_count": os.cpu_count(),
         },
         "ttft": {"status": "not_applicable_non_streaming"},
-        "per_channel_latency": {"status": "not_instrumented"},
-        "sqlite_query_count_time": {"status": "not_instrumented"},
+        "per_channel_latency_ms": {
+            name: value
+            for name, value in stage_elapsed.items()
+            if name in {"exact_channel", "lexical_channel", "vector_channel"}
+        },
+        "sqlite_latency_ms": sum(
+            _json_number(stage_elapsed.get(name, 0.0))
+            for name in (
+                "snapshot",
+                "exact_channel",
+                "lexical_channel",
+                "sqlite_hydration",
+            )
+        ),
+        "vector_latency_ms": _json_number(
+            stage_elapsed.get("vector_channel", 0.0)
+        ),
         "qdrant_search_time": {"status": "not_applicable_memory_vector"},
         "peak_memory_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
         "index_build_elapsed_ms": execution.build_elapsed_ms,
@@ -280,6 +299,12 @@ def _metrics_for_execution(
         "artifact_blob_reuse_rate": {"status": "not_instrumented"},
     }
     return report.model_copy(update={"engineering": engineering})
+
+
+def _json_number(value: JsonValue) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value)
 
 
 def _write_results(  # noqa: PLR0913

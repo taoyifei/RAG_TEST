@@ -160,6 +160,50 @@ class _RevisionBuildControl(Protocol):
         """
         ...
 
+    def acquire_revision_lease(
+        self,
+        revision_id: str,
+        owner_job_id: str,
+        *,
+        lease_seconds: int = 300,
+    ) -> int:
+        """获取同一 Revision 的数据库单 Writer Lease。
+
+        Args:
+            revision_id: 确定性 Revision ID。
+            owner_job_id: 当前 Job ID。
+            lease_seconds: 有界 Lease 生命周期。
+
+        Returns:
+            当前 fencing token。
+
+        """
+        ...
+
+    def assert_revision_writer(self, revision_id: str) -> None:
+        """验证当前 Builder 的 fencing token 仍有效。
+
+        Args:
+            revision_id: 即将写入的 Revision ID。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def release_revision_lease(self, revision_id: str) -> bool:
+        """释放当前 Writer Lease。
+
+        Args:
+            revision_id: 已结束构建的 Revision ID。
+
+        Returns:
+            当前所有者成功释放时为 True。
+
+        """
+        ...
+
     def create_revision(
         self,
         revision: IndexRevisionRef,
@@ -399,7 +443,7 @@ class RevisionBuilder:
         self._index_fingerprint = index_fingerprint
         self._resolved_contracts = dict(resolved_contracts)
 
-    def build_and_activate(  # noqa: PLR0913
+    def build_and_activate(  # noqa: PLR0913, PLR0915
         self,
         *,
         project_id: str,
@@ -475,6 +519,7 @@ class RevisionBuilder:
                 chunk_count=chunk_count,
                 evidence=evidence,
             )
+        self._control.acquire_revision_lease(revision_id, job_id)
         try:
             self._control.create_revision(
                 revision,
@@ -483,6 +528,7 @@ class RevisionBuilder:
                 slots=self._slots,
                 resolved_contracts=self._resolved_contracts,
             )
+            self._control.assert_revision_writer(revision_id)
             self._vector_store.create_revision(spec)
             current_state = self._advance(
                 revision_id,
@@ -511,26 +557,33 @@ class RevisionBuilder:
                 job_id,
                 attempt,
             )
-            embedding = self._embedding_service.embed_missing(
-                job_id=job_id,
-                revision_id=revision_id,
-                project_id=project_id,
-                knowledge_base_id=knowledge_base_id,
-                chunks=chunks,
-                slots=self._slots,
-                budgets=budgets,
-                egress_allowed_slots=egress_allowed_slots,
-                attempt=attempt,
-                cache_scope=CacheScope.PROJECT,
-            )
-            if len(self._slots) > 1:
-                current_state = self._advance(
-                    revision_id,
-                    current_state,
-                    IndexRevisionState.EMBEDDING_STANDBY,
-                    job_id,
-                    attempt,
+            embedding_vectors: dict[
+                str, tuple[tuple[float, ...], ...]
+            ] = {}
+            remaining_budgets = dict(budgets)
+            for slot_index, slot in enumerate(self._slots):
+                if slot_index > 0:
+                    current_state = self._advance(
+                        revision_id,
+                        current_state,
+                        IndexRevisionState.EMBEDDING_STANDBY,
+                        job_id,
+                        attempt,
+                    )
+                embedding = self._embedding_service.embed_missing(
+                    job_id=job_id,
+                    revision_id=revision_id,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                    chunks=chunks,
+                    slots=(slot,),
+                    budgets=remaining_budgets,
+                    egress_allowed_slots=egress_allowed_slots,
+                    attempt=attempt,
+                    cache_scope=CacheScope.PROJECT,
                 )
+                embedding_vectors.update(embedding.vectors)
+                remaining_budgets.update(embedding.budgets)
             current_state = self._advance(
                 revision_id,
                 current_state,
@@ -546,8 +599,9 @@ class RevisionBuilder:
                 attempt,
             )
             points = complete_vector_points(
-                revision, chunks, self._slots, embedding.vectors
+                revision, chunks, self._slots, embedding_vectors
             )
+            self._control.assert_revision_writer(revision_id)
             self._vector_store.upsert_complete_points(spec, points)
             for slot in self._slots:
                 for chunk in chunks:
@@ -611,6 +665,8 @@ class RevisionBuilder:
                 revision_id, current_state, job_id, attempt, error
             )
             raise
+        finally:
+            self._control.release_revision_lease(revision_id)
 
     def _parse_and_chunk(
         self,

@@ -34,6 +34,33 @@ class SourceRangeExpectation(P08Model):
 
     document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
     exact_text: str = Field(min_length=1, max_length=4000, repr=False)
+    occurrence: StrictInt | None = Field(default=None, gt=0)
+    structural_anchor: tuple[str, ...] | None = None
+    node_kind: str | None = None
+    node_id: str | None = Field(
+        default=None, pattern=r"^node_[0-9a-f]{32}$"
+    )
+    source_start_char: StrictInt | None = Field(default=None, ge=0)
+    source_end_char: StrictInt | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _validate_resolved_range(self) -> Self:
+        resolved = (
+            self.node_id,
+            self.source_start_char,
+            self.source_end_char,
+        )
+        if any(value is not None for value in resolved) and not all(
+            value is not None for value in resolved
+        ):
+            raise ValueError("Resolved source range 必须完整。")
+        if (
+            self.source_start_char is not None
+            and self.source_end_char is not None
+            and self.source_end_char <= self.source_start_char
+        ):
+            raise ValueError("Resolved source range 必须非空且前进。")
+        return self
 
 
 class ExpectedResult(P08Model):
@@ -104,7 +131,7 @@ class CaseConstraints(P08Model):
 class EvaluationCase(P08Model):
     """严格版本化且不使用显示名作身份的评测 Case。"""
 
-    schema_version: Literal["2"]
+    schema_version: Literal["2", "3"]
     case_id: str = Field(pattern=r"^eval_[a-z0-9_]{3,80}$")
     split: Literal["tuning", "holdout"]
     group_id: str = Field(pattern=r"^grp_[a-z0-9_]{3,80}$")
@@ -139,7 +166,7 @@ class DatasetDocument(P08Model):
 class DatasetManifest(P08Model):
     """Group Split 和合成文档目录的版本化 Manifest。"""
 
-    schema_version: Literal["2"]
+    schema_version: Literal["2", "3"]
     dataset_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,80}$")
     dataset_version: str = Field(pattern=r"^[0-9]+\.[0-9]+\.[0-9]+$")
     description: str = Field(min_length=1, max_length=1000)
@@ -168,6 +195,12 @@ class CaseObservation(P08Model):
     selected_vector_name: str | None = None
     route_reason_code: str
     rerank_mode: str
+    channel_chunk_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    fused_chunk_ids: tuple[str, ...] = ()
+    reranked_chunk_ids: tuple[str, ...] = ()
+    expanded_chunk_ids: tuple[str, ...] = ()
+    evidence_document_ids: tuple[str, ...] = ()
+    evidence_chunk_ids: tuple[str, ...] = ()
     retrieved_document_ids: tuple[str, ...] = ()
     retrieved_chunk_ids: tuple[str, ...] = ()
     retrieval_origins: tuple[tuple[str, ...], ...] = ()
@@ -175,6 +208,8 @@ class CaseObservation(P08Model):
     cited_chunk_ids: tuple[str, ...] = ()
     matched_source_range_count: StrictInt = Field(ge=0)
     required_source_range_count: StrictInt = Field(ge=0)
+    predicted_source_range_count: StrictInt = Field(default=0, ge=0)
+    relevant_predicted_source_range_count: StrictInt = Field(default=0, ge=0)
     citation_present: bool
     citation_valid: bool
     quote_publishable: bool
@@ -186,6 +221,13 @@ class CaseObservation(P08Model):
     latency_ms: StrictFloat = Field(ge=0.0)
     provider_call_count: StrictInt = Field(ge=0)
     provider_retry_count: StrictInt = Field(ge=0)
+    embedding_call_count: StrictInt = Field(default=0, ge=0)
+    embedding_retry_count: StrictInt = Field(default=0, ge=0)
+    reranker_call_count: StrictInt = Field(default=0, ge=0)
+    reranker_retry_count: StrictInt = Field(default=0, ge=0)
+    stage_elapsed_ms: tuple[tuple[str, StrictFloat], ...] = ()
+    evidence_count: StrictInt = Field(default=0, ge=0)
+    evidence_tokens: StrictInt = Field(default=0, ge=0)
     cache_hit: bool = False
     degraded_reason_codes: tuple[str, ...] = ()
 
