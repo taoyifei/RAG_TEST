@@ -7,8 +7,12 @@ from typing import Protocol
 from rag_app.core.capabilities import ComponentDescriptor
 from rag_app.core.models import (
     IndexRevisionRef,
+    NamedVectorPoint,
+    RevisionVectorSpec,
     SearchHit,
+    VectorRevisionValidation,
     VectorSearchRequest,
+    VectorSearchResult,
     VectorWriteRequest,
 )
 
@@ -34,6 +38,116 @@ class VectorStorePort(Protocol):
 
         Args:
             request: revision、slot、vector name、chunks 与向量。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def create_revision(self, spec: RevisionVectorSpec) -> None:
+        """创建不可变 named-vector namespace。
+
+        Args:
+            spec: revision 与全部 required slot schema。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def upsert_complete_points(
+        self,
+        spec: RevisionVectorSpec,
+        points: tuple[NamedVectorPoint, ...],
+    ) -> None:
+        """一次写入每个 Point 的全部 required named vectors。
+
+        Args:
+            spec: 不可变 revision schema。
+            points: 完整 Point 序列。
+
+        Returns:
+            无返回值。
+
+        """
+        ...
+
+    def fetch_points(
+        self,
+        spec: RevisionVectorSpec,
+        point_ids: tuple[str, ...],
+    ) -> tuple[NamedVectorPoint, ...]:
+        """带全部向量回读 Point。
+
+        Args:
+            spec: 目标 revision schema。
+            point_ids: 稳定 UUIDv5 Point IDs。
+
+        Returns:
+            仅含匹配 revision 的 Point。
+
+        """
+        ...
+
+    def search_named(
+        self,
+        spec: RevisionVectorSpec,
+        *,
+        slot_id: str,
+        vector_name: str,
+        query_vector: tuple[float, ...],
+        limit: int,
+    ) -> tuple[VectorSearchResult, ...]:
+        """拒绝 slot/vector name 交叉并执行精确空间查询。
+
+        Args:
+            spec: 目标 revision schema。
+            slot_id: 查询 slot。
+            vector_name: 查询 named vector。
+            query_vector: 与 slot 同维度的向量。
+            limit: 最大命中数。
+
+        Returns:
+            分数降序且稳定 tie-break 的命中。
+
+        """
+        ...
+
+    def count_vectors(self, spec: RevisionVectorSpec, vector_name: str) -> int:
+        """从实际 Store 统计一个 named vector。
+
+        Args:
+            spec: 目标 revision schema。
+            vector_name: 必须属于 spec 的 named vector。
+
+        Returns:
+            有效向量数量。
+
+        """
+        ...
+
+    def validate_vector_revision(
+        self,
+        spec: RevisionVectorSpec,
+    ) -> VectorRevisionValidation:
+        """回读并校验完整 Point、维度和 payload 身份。
+
+        Args:
+            spec: 目标 revision schema。
+
+        Returns:
+            实际存储证据。
+
+        """
+        ...
+
+    def delete_revision(self, spec: RevisionVectorSpec) -> None:
+        """仅供已验证 GC Plan 删除整个不可变 namespace。
+
+        Args:
+            spec: 待删除 revision schema。
 
         Returns:
             无返回值。
