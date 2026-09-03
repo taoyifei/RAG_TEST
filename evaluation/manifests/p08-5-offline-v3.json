@@ -1,0 +1,19 @@
+{
+  "schema_version": "3",
+  "status": "accepted_offline_only",
+  "evidence_run_id": "p08-20260903T093442Z-8c342979",
+  "evidence_manifest_sha256": "sha256:a321d7534f3149fc67593701d2b98b4b59db9d68a5e134d31b377e5f6c132523",
+  "integration_sha": "e0f8f335d611c2543d274ef4b95c09e8682fc8ca",
+  "dataset_sha256": "sha256:bf2fc34f1d0f83447229f7272a00ae19040d237201debacfec34e658f1f3f164",
+  "requested_profile_id": "dev-offline",
+  "lane": "offline-structural",
+  "selected_variant": "fts5-only",
+  "selection_policy": "v3-lexicographic-safety-first",
+  "observation_source": "retrieval-diagnostics-v2",
+  "source_range_schema": "p08-case-v3",
+  "network_authorization_mode": "offline",
+  "external_services_actually_called": [],
+  "primary_live_evaluation_status": "BLOCKED",
+  "standby_live_evaluation_status": "BLOCKED",
+  "production_default": false
+}
