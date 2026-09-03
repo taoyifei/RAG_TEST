@@ -5205,5 +5205,6 @@ worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。
 - [x] 提交前完整 `scripts/dev.py check` 为 `1338 passed, 75 deselected,
   4 warnings in 229.18s`；smoke 为 `71 passed, 1 warning in 8.30s`。静态门禁与
   `git diff --check` 全部通过。
-- [ ] 待分包提交、推送 feature、`--no-ff` 合并、合并后复验并核对两个远程 SHA；
-  完成前阶段报告保持 `P09_READY: false`。
+- [x] 已完成 5 个 feature 提交并推送；`--no-ff` merge 为 `47d360f`。合并后
+  `scripts/dev.py check` 为 `1338 passed, 75 deselected, 4 warnings in 227.75s`，
+  smoke 为 `71 passed, 1 warning in 8.51s`；阶段报告已置 `P09_READY: true`。

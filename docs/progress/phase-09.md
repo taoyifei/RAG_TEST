@@ -6,11 +6,16 @@
 - Feature branch: `codex/p09-api-sdk`。
 - Integration branch: `feature/universal-rag`。
 - P08.5 merge: `2d2eeecbced072c6801b9d89fb1ebfb85dc28e94`。
-- Feature commits before documentation: `beb0cf4`, `259e1fd`, `c7f0c14`,
-  `a081097`。
-- Documentation commit: 本文件所在提交；完整 SHA 在集成证据更新中补录。
-- Integration merge commit: 待 `--no-ff` 合并后补录。
-- Remote SHAs: 待推送并以 `git ls-remote` 核验后补录。
+- Feature commits: `beb0cf4c6ebd8491437925f6c1a78cba1113f9e9`,
+  `259e1fd64baa466eed8a08f48d52a8a1eba4197f`,
+  `c7f0c14f736e7bbe7a7953e52e76febb25c71ad4`,
+  `a0810974e73fe48935bc66c8d2664b81c5b4b01b` and
+  `2f0149f526b3307ec5b597ed8b76edd28207fdaf`。
+- Integration merge commit: `47d360ffe006659cb9f5a9d181e56f48b400eb40`
+  (`--no-ff`)。
+- Remote feature SHA 已核验为
+  `2f0149f526b3307ec5b597ed8b76edd28207fdaf`；远程集成 tip 在本证据提交推送后
+  以 `git ls-remote` 核验，并记录于最终交接。
 - `main` 与 `Industry` 保持只读。
 
 ## 交付范围
@@ -66,6 +71,10 @@
 - OpenAPI snapshot check、API smoke、SDK smoke 与 `git diff --check` 通过；两条 P09
   smoke 均报告 `network_calls=0`。
 - External services actually called: none。
+- Post-merge default-offline check: `1338 passed, 75 deselected, 4 warnings in
+  227.75s`。
+- Post-merge smoke: `71 passed, 1 warning in 8.51s`；OpenAPI、API/SDK smoke 和
+  `git diff --check` 再次通过，两条 smoke 均报告 `network_calls=0`。
 
 统一门禁曾因新增 migration 10 使两个旧“总数/最后四个版本”断言过期而得到
 `1335 passed, 2 failed, 75 deselected, 4 warnings`。修订为同时精确校验 P08.5
@@ -84,11 +93,10 @@
 
 ## 状态
 
-阶段分支门禁已通过；以下集成状态将在 `--no-ff` 合并、合并后复验和远程 SHA 核验后
-更新：
+阶段分支与 `--no-ff` 合并树的离线门禁均已通过；远程质量边界保持不变：
 
 ```text
 P08_5_CONTRACTS_CONSUMED: true
 REMOTE_PRODUCTION_PROFILE_READY: false
-P09_READY: false
+P09_READY: true
 ```
