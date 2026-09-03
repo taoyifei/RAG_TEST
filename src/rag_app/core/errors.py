@@ -210,6 +210,44 @@ class IndexCorrupt(RagError):
     default_code = "INDEX_CORRUPT"
 
 
+class ReindexRequired(RagError):
+    """Active Revision 使用不兼容且不可原地升级的索引 schema。"""
+
+    default_code = "REINDEX_REQUIRED"
+
+
+class DenseUncalibrated(RagError):
+    """调用方要求尚未完成真实校准的 Dense-only 行为。"""
+
+    default_code = "DENSE_UNCALIBRATED"
+
+
+class Conflict(RagError):
+    """目标资源、状态或注册名已经冲突。"""
+
+    default_code = "CONFLICT"
+
+
+class ConflictActiveWriter(Conflict):
+    """同一确定性 Revision 已有未过期 Writer。"""
+
+    default_code = "CONFLICT_ACTIVE_WRITER"
+    default_retryable = True
+
+
+class JobCancelled(RagError):
+    """持久取消请求阻止后续构建阶段。"""
+
+    default_code = "JOB_CANCELLED"
+
+
+class QueueLimitExceeded(RagError):
+    """本地持久作业队列已达到配置上限。"""
+
+    default_code = "QUEUE_LIMIT_EXCEEDED"
+    default_retryable = True
+
+
 class RevisionStateError(RagError):
     """索引 revision 状态不允许当前转换。"""
 
@@ -220,12 +258,6 @@ class NotFound(RagError):
     """目标逻辑资源不存在。"""
 
     default_code = "NOT_FOUND"
-
-
-class Conflict(RagError):
-    """目标资源或注册名已经存在。"""
-
-    default_code = "CONFLICT"
 
 
 class ValidationFailed(RagError):
@@ -242,11 +274,14 @@ __all__ = [
     "ComponentNotRegistered",
     "ConfigurationError",
     "Conflict",
+    "ConflictActiveWriter",
     "DenseUnavailable",
+    "DenseUncalibrated",
     "IndexCompatibilityError",
     "IndexCorrupt",
     "IndexNotReady",
     "InvalidDocument",
+    "JobCancelled",
     "NotFound",
     "PolicyDenied",
     "ProviderAuthenticationError",
@@ -254,7 +289,9 @@ __all__ = [
     "ProviderInvalidResponse",
     "ProviderRateLimited",
     "ProviderUnavailable",
+    "QueueLimitExceeded",
     "RagError",
+    "ReindexRequired",
     "RevisionStateError",
     "UnsupportedDocumentFeature",
     "ValidationFailed",
