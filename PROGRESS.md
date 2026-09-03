@@ -5179,3 +5179,31 @@ curl -fsS http://127.0.0.1:8088/ready
 
 更新脚本必须输出 `reindex_required=false`、`worker_restarted=false`；不得重建
 worker、OCR、Qdrant、Embedding、Reranker、LLM、corpus 或索引。
+
+## 2026-09-03 P09 开工回执
+
+- 目标：交付项目、知识库、文档版本、稳定 API/SDK 与可恢复作业管理。
+- 顺序：前置门禁 → 兼容审计 → 生命周期/作业 → SDK/API → 全量验证与集成。
+- 基线：`feature/universal-rag@ae82ee1`，P08.5 merge 为 `2d2eeec`。
+- 前置：工作树干净，P05.5 锚点仍为远程集成分支祖先。
+- 前置：`phase-08-5.md` 同时声明 P09 与 Offline Evaluation V3 Ready。
+- 分支：已从最新集成分支创建 `codex/p09-api-sdk`。
+- 最大风险：P09 公共面很大，必须复用 P06—P08 服务，避免在 Controller 复制业务。
+- 安全边界：默认离线，不访问真实 Provider，不改 `main`/`Industry`。
+- 基线门禁：`scripts/dev.py check` 全量通过，`1321 passed, 75 deselected,
+  4 warnings in 210.42s`；compileall、Ruff、strict mypy 和 docstring gate 通过。
+- 审计：已生成 `docs/audits/p09-api-compatibility.md`，确认采用增量 `/api/v1`
+  与新 SDK facade，保留旧 `/api/chat`、管理 Job 和 Trace 路径。
+- [x] 新增 Project/KB/Document/Version 生命周期、全局 document scope 约束、持久
+  幂等记录、受控删除计划，以及默认容量 64 的可恢复 SQLite Job 队列。
+- [x] 新文档、新版本与 Rename 入口分离；UTF-8 display name 不放入 HTTP Header，
+  新版本始终复用当前名称。删除计划与未完成 Job 取消处于同一事务，激活前再次检查。
+- [x] 新增同步 SDK、21-path `/api/v1`、稳定错误结构、Bearer scope、受控上传、Artifact
+  引用授权、SSE final、Admin Diagnostics/Trace、只读 FTS/GC/质量状态和显式 Probe。
+- [x] P09 定向测试最终 `17 passed, 1 warning`；API/SDK/Application 要求集为
+  `99 passed, 1 warning`；OpenAPI、API smoke、SDK smoke 均通过且无外部调用。
+- [x] 提交前完整 `scripts/dev.py check` 为 `1338 passed, 75 deselected,
+  4 warnings in 229.18s`；smoke 为 `71 passed, 1 warning in 8.30s`。静态门禁与
+  `git diff --check` 全部通过。
+- [ ] 待分包提交、推送 feature、`--no-ff` 合并、合并后复验并核对两个远程 SHA；
+  完成前阶段报告保持 `P09_READY: false`。
