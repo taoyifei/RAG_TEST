@@ -78,9 +78,20 @@ values are engineering observations, not production performance claims.
 - Opening `check`: 1267 passed, 75 deselected, 4 warnings; compile, Ruff, mypy,
   and docstrings passed.
 - Opening `smoke`: 69 passed, 1 warning.
-- P08 evaluation tests: 18 passed in the latest focused run.
+- P08 evaluation tests: 18 passed in 4.29 seconds.
 - Dataset validation: 19 cases, 9 tuning, 10 holdout; synthetic public content.
-- Final pre-merge and post-merge full gate counts: pending.
+- Mandatory pre-merge evaluation Run
+  `p08-20260903T065434Z-945696f5`: selected `evidence-cap-8`, all holdout
+  gates passed, and external services actually called was empty.
+- Final pre-merge compileall: passed with no output.
+- Final pre-merge Ruff: all checks passed.
+- Final pre-merge strict mypy: 274 source files, no issues.
+- Final pre-merge Google docstrings: `missing_google_sections=0`.
+- Final pre-merge default-offline pytest: 1289 passed, 75 deselected,
+  4 warnings in 206.03 seconds.
+- Final pre-merge smoke: 71 passed, 1 warning in 7.40 seconds.
+- Final pre-merge `git diff --check`: passed.
+- Post-merge full gate counts: pending integration.
 
 ## Remaining risks
 
@@ -97,9 +108,9 @@ values are engineering observations, not production performance claims.
 ## Status
 
 ```text
-OFFLINE_EVALUATION_READY: pending final gates
+OFFLINE_EVALUATION_READY: true
 PRIMARY_LIVE_EVALUATION_STATUS: BLOCKED_NO_CREDENTIALS_AND_EGRESS_AUTHORIZATION
 STANDBY_LIVE_EVALUATION_STATUS: BLOCKED_NO_CREDENTIALS_AND_EGRESS_AUTHORIZATION
 REMOTE_PRODUCTION_PROFILE_READY: false
-P08_READY: pending final gates and integration
+P08_READY: pending integration
 ```
