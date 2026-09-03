@@ -37,7 +37,7 @@ from rag_app.core.models import (
     SearchRequest,
 )
 from rag_app.core.models.chunk import Chunk, SourceSpanKind
-from rag_app.core.policies import EgressPolicy, StoryPolicy
+from rag_app.core.policies import EgressPolicy, ParsingPolicy, StoryPolicy
 
 _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -75,6 +75,7 @@ class VariantExecution:
     providers: tuple[ProviderRunIdentity, ...]
     parser: ComponentIdentity
     chunker: ComponentIdentity
+    parsing_policy: ParsingPolicy
     tokenizer_identities: tuple[str, ...]
     build_elapsed_ms: float
     chunk_count: int
@@ -238,6 +239,7 @@ def execute_offline_variant(
             providers=providers,
             parser=parser,
             chunker=chunker,
+            parsing_policy=components.parsing_policy,
             tokenizer_identities=tokenizers,
             build_elapsed_ms=build_elapsed_ms,
             chunk_count=len(active_chunks),

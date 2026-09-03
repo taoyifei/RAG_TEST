@@ -321,7 +321,11 @@ def _write_results(  # noqa: PLR0913
         files,
         run_directory,
         "ablations.json",
-        _ablation_summary(tuning_reports, selected.variant_id),
+        _ablation_summary(
+            executions[:-1],
+            tuning_reports,
+            selected.variant_id,
+        ),
     )
     _record_json(
         files,
@@ -331,6 +335,9 @@ def _write_results(  # noqa: PLR0913
             "schema_version": "1",
             "status": "provisional_offline_only",
             "selected_variant": selected.variant_id,
+            "parsing_policy": executions[-1].parsing_policy.model_dump(
+                mode="json"
+            ),
             "retrieval_policy": selected.retrieval_policy.model_dump(
                 mode="json"
             ),
@@ -365,13 +372,43 @@ def _record_jsonl(
 
 
 def _ablation_summary(
-    reports: tuple[MetricReport, ...], selected_identifier: str
+    executions: tuple[VariantExecution, ...],
+    reports: tuple[MetricReport, ...],
+    selected_identifier: str,
 ) -> dict[str, JsonValue]:
+    report_by_variant = {report.variant_id: report for report in reports}
     return {
         "schema_version": "1",
         "split": "tuning",
         "selected_variant": selected_identifier,
-        "executed": [report.variant_id for report in reports],
+        "selection_policy": {
+            "labels": "tuning_only",
+            "objective": (
+                "recall_at_5 + refusal_f1 + citation_validity_rate + "
+                "source_range_coverage - 2 * safety_penalties"
+            ),
+            "tie_break": "declared_variant_order",
+        },
+        "executed": [
+            {
+                "variant_id": execution.variant.variant_id,
+                "changed_variable": execution.variant.changed_variable,
+                "retrieval_policy": (
+                    execution.variant.retrieval_policy.model_dump(mode="json")
+                ),
+                "chunking_policy": (
+                    execution.variant.chunking_policy.model_dump(mode="json")
+                ),
+                "index_fingerprints": list(execution.index_fingerprints),
+                "serving_fingerprints": list(
+                    execution.serving_fingerprints
+                ),
+                "metrics": report_by_variant[
+                    execution.variant.variant_id
+                ].model_dump(mode="json"),
+            }
+            for execution in executions
+        ],
         "blocked": {
             "dense-standby-only": "BLOCKED_LANE_C_NOT_AUTHORIZED",
             "rrf-jina-rerank": "BLOCKED_LANE_B_NOT_AUTHORIZED",
@@ -426,10 +463,34 @@ def _build_manifest(  # noqa: PLR0913
     parameters: dict[str, JsonValue] = {
         "selected_status": "provisional_offline_only",
         "requested_profile_id": requested_profile_id,
+        "parsing_policy": selected_execution.parsing_policy.model_dump(
+            mode="json"
+        ),
         "retrieval_policy": selected.retrieval_policy.model_dump(mode="json"),
         "chunking_policy": selected.chunking_policy.model_dump(mode="json"),
         "fixture_catalog_sha256": fixture_catalog_sha256(),
+        "confidence_refusal_policy": {
+            "id": "rule-confidence-v1",
+            "minimum_ambiguous_evidence": 2,
+            "provisional": True,
+        },
+        "generator_policy": {
+            "id": "extractive-profile-v1",
+            "citation_protocol": "support-ids-v1",
+        },
         "gate_passed": gate_report.passed,
+        "selected_index_revision_ids": list(
+            selected_execution.revision_ids
+        ),
+        "selected_index_fingerprints": list(
+            selected_execution.index_fingerprints
+        ),
+        "selected_serving_fingerprints": list(
+            selected_execution.serving_fingerprints
+        ),
+        "ablation_variant_ids": [
+            execution.variant.variant_id for execution in executions[:-1]
+        ],
         "peak_memory_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
     }
     return RunManifest(
