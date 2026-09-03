@@ -12,10 +12,20 @@ from rag_app.core.models.common import FrozenModel
 class IndexRevisionState(StrEnum):
     """索引构建与激活状态。"""
 
+    CREATED = "created"
     BUILDING = "building"
     BUILDING_DEGRADED = "building_degraded"
+    PARSING = "parsing"
+    CHUNKING = "chunking"
+    EMBEDDING_PRIMARY = "embedding_primary"
+    EMBEDDING_STANDBY = "embedding_standby"
+    LEXICAL_INDEXING = "lexical_indexing"
+    VECTOR_INDEXING = "vector_indexing"
+    VALIDATING = "validating"
     READY = "ready"
     ACTIVE = "active"
+    FAILED_RETRYABLE = "failed_retryable"
+    FAILED_TERMINAL = "failed_terminal"
     RETIRED = "retired"
 
 
