@@ -23,10 +23,11 @@ def _copy_dataset(tmp_path: Path) -> Path:
 def test_synthetic_dataset_is_versioned_and_group_isolated() -> None:
     dataset = load_dataset_directory(_DATASET)
 
-    assert dataset.manifest.schema_version == "2"
+    assert dataset.manifest.schema_version == "3"
     assert dataset.manifest.content_classification == "synthetic_public"
-    assert len(dataset.tuning_cases()) == 9
-    assert len(dataset.holdout_cases()) == 10
+    assert len(dataset.cases) == 52
+    assert len(dataset.tuning_cases()) == 28
+    assert len(dataset.holdout_cases()) == 24
     tuning_groups = {case.group_id for case in dataset.tuning_cases()}
     holdout_groups = {case.group_id for case in dataset.holdout_cases()}
     assert tuning_groups.isdisjoint(holdout_groups)
@@ -45,7 +46,8 @@ def test_group_leakage_is_rejected(tmp_path: Path) -> None:
     dataset = _copy_dataset(tmp_path)
     case_path = dataset / "cases.jsonl"
     payloads = [json.loads(line) for line in case_path.read_text().splitlines()]
-    payloads[-1]["group_id"] = payloads[0]["group_id"]
+    holdout = next(item for item in payloads if item["split"] == "holdout")
+    holdout["group_id"] = payloads[0]["group_id"]
     case_path.write_text(
         "\n".join(json.dumps(item, ensure_ascii=False) for item in payloads)
         + "\n",

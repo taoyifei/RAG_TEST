@@ -91,7 +91,10 @@ def test_evidence_publishes_each_table_cell_but_not_separator() -> None:
         }
     )
 
-    evidence = EvidenceAssembler().assemble((candidate,), RetrievalPolicy())
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(max_evidence_items_per_chunk=2),
+    )
 
     assert [item.citation_text for item in evidence] == ["A", "C"]
     assert all(item.source_spans[0].is_citable for item in evidence)

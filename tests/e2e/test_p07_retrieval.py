@@ -10,6 +10,7 @@ from rag_app.application.embedding_router import QueryEmbeddingRouter
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.errors import (
+    ChannelUnavailable,
     DenseUnavailable,
     IndexCorrupt,
     IndexNotReady,
@@ -232,7 +233,7 @@ def test_lexical_and_dense_failures_degrade_without_false_answer(
 
     def fail_lexical(*args: object, **kwargs: object) -> None:
         del args, kwargs
-        raise RuntimeError("injected lexical failure")
+        raise ChannelUnavailable("injected lexical failure", stage="test")
 
     monkeypatch.setattr(SqliteFtsStore, "search_candidates", fail_lexical)
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
@@ -241,7 +242,7 @@ def test_lexical_and_dense_failures_degrade_without_false_answer(
         )
     assert lexical_failed.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
     assert any(
-        reason.startswith("LEXICAL_STORE_FAILURE")
+        reason == "CHANNEL_UNAVAILABLE"
         for reason in lexical_failed.degraded_reason_codes
     )
 
@@ -307,6 +308,9 @@ def test_active_pointer_state_drift_is_index_corrupt(tmp_path: Path) -> None:
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
         connections = runtime.persistence.control._connections
         with connections.transaction(write=True) as connection:
+            connection.execute(
+                "DROP TRIGGER index_revisions_scope_update"
+            )
             connection.execute(
                 "UPDATE index_revisions SET state='retired' "
                 "WHERE index_revision_id=?",
