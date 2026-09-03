@@ -31,3 +31,15 @@ def test_extractive_validator_rejects_unsupported_claim() -> None:
             ),
             evidence,
         )
+
+
+def test_extractive_validator_preserves_split_span_trailing_space() -> None:
+    evidence = EvidenceAssembler().assemble(
+        (make_ranked_chunk(1, "受控分段原文 "),), RetrievalPolicy()
+    )
+    draft = AnswerDraft(
+        text="受控分段原文 ",
+        cited_evidence_ids=(evidence[0].support_id,),
+    )
+
+    validate_extractive_draft(draft, evidence)

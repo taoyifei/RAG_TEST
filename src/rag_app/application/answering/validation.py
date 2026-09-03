@@ -31,7 +31,7 @@ def validate_extractive_draft(
             "回答包含未知或空 Support ID。", stage="answer.validate"
         )
     cited_quotes = {
-        by_id[support_id].citation_text
+        by_id[support_id].citation_text.strip()
         for support_id in draft.cited_evidence_ids
     }
     if any(

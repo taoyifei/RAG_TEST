@@ -103,6 +103,21 @@ def test_all_p04_fixtures_respect_parser_boundary() -> None:
     assert rejected_count == 2
 
 
+def test_heading_context_is_not_counted_as_missing_citable_text() -> None:
+    result = _chunk(_parse("01-headings-custom-outline.docx"))
+
+    assert result.report.source_span_coverage == 1.0
+    assert result.report.missing_source_chars == 0
+
+
+def test_note_relationship_targets_are_represented_by_child_chunks() -> None:
+    result = _chunk(_parse("11-footnotes-endnotes.docx"))
+
+    assert result.report.orphan_note_count == 0
+    assert result.report.orphan_relation_count == 0
+    assert result.report.missing_note_ref_count == 0
+
+
 def test_list_numbering_and_restart_groups() -> None:
     result = _chunk(_parse("03-numbering-restart-override.docx"))
     assert len(result.chunks) == 2

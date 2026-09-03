@@ -44,60 +44,24 @@ class EvidenceAssembler:
             chunk = candidate.hydrated.chunk
             document_id = chunk.version.document_id
             section_key = (document_id, chunk.section_id)
-            if documents[document_id] >= policy.per_document_cap:
-                continue
-            if sections[section_key] >= policy.per_section_cap:
-                continue
-            selected = _first_unique_citable_span(chunk, used_spans)
-            if selected is None:
-                continue
-            span, quote, span_key = selected
-            estimated_tokens = max(1, (len(quote) + 3) // 4)
-            if estimated_tokens > remaining:
-                continue
-            remaining -= estimated_tokens
-            used_spans.add(span_key)
-            documents[document_id] += 1
-            sections[section_key] += 1
-            support_id = f"S{len(evidence) + 1}"
-            evidence.append(
-                EvidenceItem(
-                    evidence_id=support_id,
-                    chunk_id=chunk.chunk_id,
-                    citation_text=quote,
-                    source_label=_source_label(
-                        candidate.hydrated.display_name, chunk.heading_path
-                    ),
-                    source_spans=(_relative_span(span, len(quote)),),
-                    document_id=document_id,
-                    document_version_id=chunk.version.document_version_id,
-                    display_name=candidate.hydrated.display_name,
-                    heading_path=chunk.heading_path,
-                    section_id=chunk.section_id,
-                    table_locator=(
-                        chunk.neighbor_group_id
-                        if chunk.role.value == "table"
-                        else None
-                    ),
-                    retrieval_origins=tuple(
-                        contribution.channel
-                        for contribution in candidate.contributions
-                    )
-                    + (
-                        (candidate.expansion_reason,)
-                        if candidate.expansion_reason
-                        else ()
-                    ),
-                    fusion_rank=candidate.fusion_rank,
-                    rerank_rank=candidate.rerank_rank,
-                    quality_flags=(
-                        ("METADATA_ONLY",)
-                        if chunk.role.value
-                        in {"image_metadata", "header_footer"}
-                        else ()
-                    ),
+            for span, quote, span_key in _unique_citable_spans(
+                chunk, used_spans
+            ):
+                if documents[document_id] >= policy.per_document_cap:
+                    break
+                if sections[section_key] >= policy.per_section_cap:
+                    break
+                estimated_tokens = max(1, (len(quote) + 3) // 4)
+                if estimated_tokens > remaining:
+                    continue
+                remaining -= estimated_tokens
+                used_spans.add(span_key)
+                documents[document_id] += 1
+                sections[section_key] += 1
+                support_id = f"S{len(evidence) + 1}"
+                evidence.append(
+                    _evidence_item(candidate, span, quote, support_id)
                 )
-            )
         return tuple(evidence)
 
 
@@ -115,10 +79,11 @@ def _diverse_order(
     return tuple(first + rest)
 
 
-def _first_unique_citable_span(
+def _unique_citable_spans(
     chunk: Chunk,
     used: set[tuple[object, ...]],
-) -> tuple[SourceSpan, str, tuple[object, ...]] | None:
+) -> tuple[tuple[SourceSpan, str, tuple[object, ...]], ...]:
+    selected: list[tuple[SourceSpan, str, tuple[object, ...]]] = []
     for span in chunk.source_spans:
         if not span.is_citable or span.span_type is SourceSpanKind.SEPARATOR:
             continue
@@ -133,8 +98,49 @@ def _first_unique_citable_span(
             continue
         quote = chunk.citation_text[span.chunk_start_char : span.chunk_end_char]
         if quote.strip():
-            return span, quote, key
-    return None
+            selected.append((span, quote, key))
+    return tuple(selected)
+
+
+def _evidence_item(
+    candidate: RankedChunk,
+    span: SourceSpan,
+    quote: str,
+    support_id: str,
+) -> EvidenceItem:
+    chunk = candidate.hydrated.chunk
+    return EvidenceItem(
+        evidence_id=support_id,
+        chunk_id=chunk.chunk_id,
+        citation_text=quote,
+        source_label=_source_label(
+            candidate.hydrated.display_name, chunk.heading_path
+        ),
+        source_spans=(_relative_span(span, len(quote)),),
+        document_id=chunk.version.document_id,
+        document_version_id=chunk.version.document_version_id,
+        display_name=candidate.hydrated.display_name,
+        heading_path=chunk.heading_path,
+        section_id=chunk.section_id,
+        table_locator=(
+            chunk.neighbor_group_id if chunk.role.value == "table" else None
+        ),
+        retrieval_origins=tuple(
+            contribution.channel for contribution in candidate.contributions
+        )
+        + (
+            (candidate.expansion_reason,)
+            if candidate.expansion_reason
+            else ()
+        ),
+        fusion_rank=candidate.fusion_rank,
+        rerank_rank=candidate.rerank_rank,
+        quality_flags=(
+            ("METADATA_ONLY",)
+            if chunk.role.value in {"image_metadata", "header_footer"}
+            else ()
+        ),
+    )
 
 
 def _relative_span(span: SourceSpan, length: int) -> SourceSpan:

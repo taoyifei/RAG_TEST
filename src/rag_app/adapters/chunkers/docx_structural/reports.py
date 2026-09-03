@@ -101,9 +101,13 @@ def build_chunking_report(
         for chunk in chunks
         for note_id in chunk.note_refs
     )
+    represented_relationship_nodes = _represented_with_ancestors(
+        represented_nodes,
+        document_ir,
+    )
     orphan_relations = sum(
-        relationship.source_node_id not in represented_nodes
-        or relationship.target_node_id not in represented_nodes
+        relationship.source_node_id not in represented_relationship_nodes
+        or relationship.target_node_id not in represented_relationship_nodes
         for relationship in document_ir.relationships
     )
     return ChunkingReport(
@@ -204,6 +208,8 @@ def _source_coverage(
 
 
 def _is_citable_node(node: DocumentNode, policy: ChunkingPolicy) -> bool:
+    if node.kind is NodeKind.HEADING:
+        return False
     if (
         node.kind is NodeKind.COMMENT
         and policy.comments_policy == "metadata_only"
@@ -294,6 +300,20 @@ def _represented_ancestors(
                 break
             current_id = current.parent_node_id
     return ancestors
+
+
+def _represented_with_ancestors(
+    represented: set[str],
+    document_ir: DocumentIR,
+) -> set[str]:
+    nodes = {node.node_id: node for node in document_ir.nodes}
+    expanded = set(represented)
+    for node_id in represented:
+        current_id = nodes[node_id].parent_node_id
+        while current_id is not None:
+            expanded.add(current_id)
+            current_id = nodes[current_id].parent_node_id
+    return expanded
 
 
 def _warnings(
