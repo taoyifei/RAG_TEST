@@ -1,6 +1,7 @@
 {
   "schema_version": "1",
-  "status": "provisional_offline_only",
+  "status": "diagnostic_superseded",
+  "superseded_reason": "P08.5 V3 replaces evidence-derived retrieval metrics and broad evidence acceptance; this manifest is preserved and is not promotion evidence.",
   "evidence_run_id": "p08-20260903T065037Z-945696f5",
   "evidence_manifest_sha256": "sha256:554485ea613b22bdf593b2e1e355ba942201b0bbf786a23f2a77dbc9a59f1838",
   "dataset_sha256": "sha256:404d5ed72cdc46da0468673aab92a2e3ba4f406741b36eb84bbe7224876f872a",

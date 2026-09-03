@@ -17,6 +17,7 @@ from evaluation.v2.models import (
     ErrorRecord,
     EvaluationCase,
     ProviderRunIdentity,
+    SourceRangeExpectation,
 )
 from evaluation.v2.variants import EvaluationVariant
 from rag_app.application.answering.validation import validate_extractive_draft
@@ -33,6 +34,7 @@ from rag_app.core.models import (
     DocumentRef,
     EvidenceItem,
     KnowledgeBaseScope,
+    ProviderCallCount,
     SearchAnswerResult,
     SearchRequest,
 )
@@ -399,11 +401,83 @@ def _effective_cases(
                 f"{case.case_id}: baseline chunk 标签漂移，"
                 f"expected={fixed} observed={compiled}"
             )
+        resolved_ranges = tuple(
+            _resolve_source_expectation(expectation, relevant_chunks)
+            for expectation in case.expected.required_source_ranges
+        )
         expected = case.expected.model_copy(
-            update={"relevant_chunk_ids": compiled}
+            update={
+                "relevant_chunk_ids": compiled,
+                "required_source_ranges": resolved_ranges,
+            }
         )
         output.append(case.model_copy(update={"expected": expected}))
     return tuple(output)
+
+
+def _resolve_source_expectation(
+    expectation: SourceRangeExpectation,
+    chunks: tuple[Chunk, ...],
+) -> SourceRangeExpectation:
+    matches: list[tuple[str, int, int]] = []
+    for chunk in chunks:
+        if chunk.version.document_id != expectation.document_id:
+            continue
+        if expectation.node_kind is not None and (
+            chunk.role.value != expectation.node_kind
+        ):
+            continue
+        cursor = 0
+        while True:
+            start = chunk.citation_text.find(expectation.exact_text, cursor)
+            if start < 0:
+                break
+            end = start + len(expectation.exact_text)
+            for span in chunk.source_spans:
+                if (
+                    span.is_citable
+                    and span.node_id is not None
+                    and span.source_start_char is not None
+                    and span.chunk_start_char <= start
+                    and span.chunk_end_char >= end
+                    and (
+                        expectation.structural_anchor is None
+                        or span.structural_path
+                        == expectation.structural_anchor
+                    )
+                ):
+                    source_start = span.source_start_char + (
+                        start - span.chunk_start_char
+                    )
+                    matches.append(
+                        (
+                            span.node_id,
+                            source_start,
+                            source_start + len(expectation.exact_text),
+                        )
+                    )
+            cursor = start + 1
+    matches = sorted(set(matches))
+    if not matches:
+        raise ValueError("Source Range 标签无法解析到唯一 canonical span。")
+    if len(matches) > 1 and (
+        expectation.occurrence is None
+        and expectation.structural_anchor is None
+    ):
+        raise ValueError(
+            "重复 Source Range 必须指定 occurrence 或 structural anchor。"
+        )
+    occurrence = expectation.occurrence or 1
+    if occurrence > len(matches):
+        raise ValueError("Source Range occurrence 超出实际出现次数。")
+    node_id, source_start, source_end = matches[occurrence - 1]
+    return expectation.model_copy(
+        update={
+            "node_id": node_id,
+            "source_start_char": source_start,
+            "source_end_char": source_end,
+        }
+    )
 
 
 def _execute_case(
@@ -421,26 +495,55 @@ def _execute_case(
         SearchRequest(scope=scope, text=case.query, limit=10)
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
+    diagnostics = result.diagnostics
+    if diagnostics is None:
+        raise ValueError("Evaluation V3 需要完整 RetrievalDiagnostics。")
     evidence = result.evidence
     evidence_by_chunk: dict[str, EvidenceItem] = {}
     for item in evidence:
         evidence_by_chunk.setdefault(item.chunk_id, item)
-    ranked_evidence = tuple(evidence_by_chunk)
+    ranked_evidence = tuple(item.chunk_id for item in diagnostics.reranked)
     retrieved_documents = tuple(
-        item.document_id
+        context.chunks[identifier].version.document_id
         for identifier in ranked_evidence
-        if (item := evidence_by_chunk[identifier]).document_id is not None
+        if identifier in context.chunks
     )
     retrieved_chunks = ranked_evidence
     cited_ids, citation_valid, unsupported = _validate_answer(result)
     cited = tuple(item for item in evidence if item.evidence_id in cited_ids)
+    predicted_ranges = tuple(
+        (
+            item.document_id,
+            span.node_id,
+            span.source_start_char,
+            span.source_end_char,
+        )
+        for item in evidence
+        for span in item.source_spans
+        if item.document_id is not None
+        and span.node_id is not None
+        and span.source_start_char is not None
+        and span.source_end_char is not None
+    )
+    expected_ranges = tuple(
+        (
+            item.document_id,
+            item.node_id,
+            item.source_start_char,
+            item.source_end_char,
+        )
+        for item in case.expected.required_source_ranges
+    )
     matched = sum(
         any(
-            item.document_id == expectation.document_id
-            and expectation.exact_text in item.citation_text
-            for item in evidence
+            _range_covers(predicted, expected)
+            for predicted in predicted_ranges
         )
-        for expectation in case.expected.required_source_ranges
+        for expected in expected_ranges
+    )
+    relevant_predictions = sum(
+        any(_range_covers(predicted, expected) for expected in expected_ranges)
+        for predicted in predicted_ranges
     )
     scope_by_document = {
         item.document_id: (item.project_id, item.knowledge_base_id)
@@ -470,7 +573,19 @@ def _execute_case(
         and expected_vectors.get(result.selected_embedding_slot)
         != result.selected_vector_name
     )
-    provider_calls = int(result.selected_embedding_slot is not None)
+    call_counts = {item.operation: item for item in diagnostics.provider_calls}
+    embedding_calls, embedding_retries = _operation_counts(
+        call_counts, "embed"
+    )
+    reranker_calls, reranker_retries = _operation_counts(
+        call_counts, "rerank"
+    )
+    provider_calls = sum(item.call_count for item in call_counts.values())
+    provider_retries = sum(item.retry_count for item in call_counts.values())
+    origins_by_chunk: dict[str, list[str]] = defaultdict(list)
+    for channel, chunk_ids in diagnostics.channel_chunk_ids:
+        for chunk_id in chunk_ids:
+            origins_by_chunk[chunk_id].append(channel)
     return CaseObservation(
         case_id=case.case_id,
         split=case.split,
@@ -488,10 +603,24 @@ def _execute_case(
         selected_vector_name=result.selected_vector_name,
         route_reason_code=result.route_reason_code,
         rerank_mode=result.rerank_execution_mode,
+        channel_chunk_ids=diagnostics.channel_chunk_ids,
+        fused_chunk_ids=diagnostics.fused_chunk_ids,
+        reranked_chunk_ids=tuple(
+            item.chunk_id for item in diagnostics.reranked
+        ),
+        expanded_chunk_ids=tuple(
+            item.chunk_id for item in diagnostics.expanded
+        ),
+        evidence_document_ids=tuple(
+            item.document_id
+            for item in evidence
+            if item.document_id is not None
+        ),
+        evidence_chunk_ids=tuple(item.chunk_id for item in evidence),
         retrieved_document_ids=retrieved_documents,
         retrieved_chunk_ids=retrieved_chunks,
         retrieval_origins=tuple(
-            tuple(evidence_by_chunk[identifier].retrieval_origins)
+            tuple(origins_by_chunk.get(identifier, ()))
             for identifier in ranked_evidence
         ),
         cited_document_ids=tuple(
@@ -502,6 +631,8 @@ def _execute_case(
         required_source_range_count=len(
             case.expected.required_source_ranges
         ),
+        predicted_source_range_count=len(predicted_ranges),
+        relevant_predicted_source_range_count=relevant_predictions,
         citation_present=bool(cited),
         citation_valid=citation_valid,
         quote_publishable=bool(cited)
@@ -524,8 +655,53 @@ def _execute_case(
         wrong_vector_space_attempt_count=wrong_vector,
         latency_ms=latency_ms,
         provider_call_count=provider_calls,
-        provider_retry_count=0,
-        degraded_reason_codes=result.degraded_reason_codes,
+        provider_retry_count=provider_retries,
+        embedding_call_count=embedding_calls,
+        embedding_retry_count=embedding_retries,
+        reranker_call_count=reranker_calls,
+        reranker_retry_count=reranker_retries,
+        stage_elapsed_ms=tuple(
+            (item.stage, item.elapsed_ms) for item in diagnostics.stage_timings
+        ),
+        evidence_count=len(evidence),
+        evidence_tokens=sum(
+            max(1, (len(item.citation_text) + 3) // 4)
+            for item in evidence
+        ),
+        cache_hit=diagnostics.cache_hit,
+        degraded_reason_codes=diagnostics.degraded_reason_codes,
+    )
+
+
+def _range_covers(
+    predicted: tuple[str, str | None, int | None, int | None],
+    expected: tuple[str, str | None, int | None, int | None],
+) -> bool:
+    if predicted[:2] != expected[:2]:
+        return False
+    predicted_start, predicted_end = predicted[2:]
+    expected_start, expected_end = expected[2:]
+    return (
+        predicted_start is not None
+        and predicted_end is not None
+        and expected_start is not None
+        and expected_end is not None
+        and predicted_start <= expected_start
+        and predicted_end >= expected_end
+    )
+
+
+def _operation_counts(
+    calls: dict[str, ProviderCallCount], marker: str
+) -> tuple[int, int]:
+    matching = [
+        item
+        for operation, item in calls.items()
+        if marker in operation.casefold()
+    ]
+    return (
+        sum(item.call_count for item in matching),
+        sum(item.retry_count for item in matching),
     )
 
 

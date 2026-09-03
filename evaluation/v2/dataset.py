@@ -151,6 +151,7 @@ def _validate_dataset(
             raise ValueError(f"{case.case_id}: Case 引用了未知 document_id。")
     _validate_group_isolation(manifest, cases)
     _validate_category_coverage(cases)
+    _validate_p08_5_coverage(cases)
 
 
 def _validate_group_isolation(
@@ -197,6 +198,59 @@ def _validate_category_coverage(cases: tuple[EvaluationCase, ...]) -> None:
         raise ValueError("P08 数据集缺少 tuning Case。")
     if not any(case.split == "holdout" for case in cases):
         raise ValueError("P08 数据集缺少 holdout Case。")
+
+
+def _validate_p08_5_coverage(cases: tuple[EvaluationCase, ...]) -> None:
+    counters = {
+        "total": len(cases),
+        "cjk_phrase": sum(case.category == "cjk_phrase" for case in cases),
+        "identifier_free_fact": sum(
+            case.expected.answerable
+            and not case.expected.required_identifiers
+            and any("\u3400" <= char <= "\u9fff" for char in case.query)
+            for case in cases
+        ),
+        "cjk_noise": sum(case.category == "cjk_noise" for case in cases),
+        "duplicate_source_range": sum(
+            case.category == "source_range_duplicate" for case in cases
+        ),
+        "multi_document": sum(
+            len(case.expected.relevant_document_ids) > 1 for case in cases
+        ),
+        "table": sum(case.category == "table_structure" for case in cases),
+        "revision_scope_vector": sum(
+            case.category
+            in {"revision_isolation", "scope_isolation", "routing_failure"}
+            for case in cases
+        ),
+        "unanswerable": sum(
+            not case.expected.answerable for case in cases
+        ),
+        "long_cross_chunk": sum(
+            case.category == "long_cross_chunk"
+            or case.case_id == "eval_hierarchy_long"
+            for case in cases
+        ),
+    }
+    minimums = {
+        "total": 50,
+        "cjk_phrase": 8,
+        "identifier_free_fact": 8,
+        "cjk_noise": 6,
+        "duplicate_source_range": 4,
+        "multi_document": 4,
+        "table": 8,
+        "revision_scope_vector": 6,
+        "unanswerable": 8,
+        "long_cross_chunk": 4,
+    }
+    missing = {
+        name: (counters[name], minimum)
+        for name, minimum in minimums.items()
+        if counters[name] < minimum
+    }
+    if missing:
+        raise ValueError(f"P08.5 数据集覆盖不足：{missing}")
 
 
 def _validate_fixture_coverage(manifest: DatasetManifest) -> None:

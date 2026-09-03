@@ -141,14 +141,93 @@ def select_tuning_candidate(
         raise ValueError("参数选择至少需要一个 tuning 报告。")
     if any(report.split != "tuning" for report in reports):
         raise ValueError("参数选择禁止读取 holdout 指标。")
-    best_identifier = reports[0].variant_id
-    best_score = float("-inf")
-    for report in reports:
-        score = _selection_score(report)
-        if score > best_score:
-            best_identifier = report.variant_id
-            best_score = score
-    return best_identifier
+    if "source_range_precision" not in reports[0].metrics:
+        return max(reports, key=_selection_score).variant_id
+    baseline = next(
+        (report for report in reports if report.variant_id == "baseline"),
+        reports[0],
+    )
+    eligible = tuple(
+        report for report in reports if _passes_v3_safety(report)
+    )
+    if not eligible:
+        raise ValueError("没有候选通过 Evaluation V3 安全与精度门。")
+    return max(
+        eligible,
+        key=lambda report: _v3_selection_key(report, baseline),
+    ).variant_id
+
+
+def _passes_v3_safety(report: MetricReport) -> bool:
+    requirements = {
+        "wrong_scope_hit_count": ("eq", 0.0),
+        "wrong_revision_hit_count": ("eq", 0.0),
+        "wrong_vector_space_attempt_count": ("eq", 0.0),
+        "citation_document_precision": ("ge", 0.8),
+        "citation_chunk_precision": ("ge", 0.8),
+        "source_range_precision": ("ge", 0.75),
+        "source_range_recall": ("ge", 0.9),
+        "source_range_f1": ("ge", 0.8),
+        "irrelevant_evidence_count": ("eq", 0.0),
+    }
+    for name, (operator, expected) in requirements.items():
+        value = report.metrics[name].value
+        if value is None:
+            return False
+        observed = float(value)
+        if operator == "eq" and observed != expected:
+            return False
+        if operator == "ge" and observed < expected:
+            return False
+    return True
+
+
+def _v3_selection_key(
+    report: MetricReport, baseline: MetricReport
+) -> tuple[float, ...]:
+    def value(name: str) -> float:
+        """读取参与选择的有限指标值。
+
+        Args:
+            name: 指标名称。
+
+        Returns:
+            转换后的浮点指标值。
+
+        """
+        observed = report.metrics[name].value
+        if observed is None:
+            raise ValueError(f"参数选择缺少指标值：{name}")
+        return float(observed)
+
+    baseline_recall = baseline.metrics["fusion_recall_at_5"].value
+    non_regression = float(
+        baseline_recall is not None
+        and value("fusion_recall_at_5") >= float(baseline_recall)
+    )
+    latency = _engineering_number(report, "p95_latency_ms")
+    calls = _engineering_number(report, "provider_call_count")
+    return (
+        value("source_range_recall"),
+        min(
+            value("citation_document_precision"),
+            value("citation_chunk_precision"),
+            value("evidence_document_precision"),
+            value("evidence_chunk_precision"),
+        ),
+        non_regression,
+        value("fusion_mrr_at_10"),
+        value("rerank_ndcg_at_10"),
+        -latency,
+        -calls,
+    )
+
+
+def _engineering_number(report: MetricReport, name: str) -> float:
+    value = report.engineering.get(name, 0.0)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"工程指标不是数值：{name}")
+    return float(value)
 
 
 def _selection_score(report: MetricReport) -> float:

@@ -1,6 +1,7 @@
 {
   "schema_version": "1",
-  "status": "provisional_offline_only",
+  "status": "diagnostic_superseded",
+  "superseded_reason": "P08.5 V3 uses retrieval-stage observations, source-range precision, and expanded coverage; this V1 record is preserved for diagnosis only.",
   "integration_sha": "6841ce28f414c5b7063784be5b31f472aa94308e",
   "dataset_id": "p08-synthetic-v2",
   "dataset_sha256": "sha256:404d5ed72cdc46da0468673aab92a2e3ba4f406741b36eb84bbe7224876f872a",
