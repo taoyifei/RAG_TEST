@@ -13,6 +13,7 @@ from rag_app.application.provider_health import (
 )
 from rag_app.core.errors import PolicyDenied, ProviderInvalidResponse, RagError
 from rag_app.core.models import (
+    ProviderCall,
     ProviderFailureCategory,
     RankedChunk,
     RerankItem,
@@ -30,6 +31,7 @@ class RerankingOutcome:
     candidates: tuple[RankedChunk, ...]
     mode: str
     reason_code: str
+    provider_calls: tuple[ProviderCall, ...] = ()
 
 
 class CircuitAwareReranker:
@@ -126,6 +128,7 @@ class CircuitAwareReranker:
             ),
             mode=result.mode.value,
             reason_code="RERANK_EXECUTED",
+            provider_calls=result.calls,
         )
 
 
@@ -223,6 +226,7 @@ def _bypass(
         candidates=candidates,
         mode=reason_code.casefold(),
         reason_code=reason_code,
+        provider_calls=(),
     )
 
 

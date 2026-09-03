@@ -86,12 +86,12 @@ class QueryPlanner:
 
 def _classify(analysis: QueryAnalysis) -> tuple[QueryKind, str]:
     folded = analysis.normalized_query.casefold()
-    if analysis.identifiers:
-        return QueryKind.EXACT_IDENTIFIER, "IDENTIFIER_PLAN"
     if analysis.structural_table_signals and (
-        analysis.numbers or analysis.units
+        analysis.identifiers or analysis.numbers or analysis.units
     ):
         return QueryKind.TABLE_NUMERIC, "TABLE_NUMERIC_PLAN"
+    if analysis.identifiers:
+        return QueryKind.EXACT_IDENTIFIER, "IDENTIFIER_PLAN"
     if any(term in folded for term in _COMPLEX_TERMS):
         return QueryKind.COMPLEX, "COMPLEX_PLAN"
     if len(folded) <= _MAX_AMBIGUOUS_QUERY_LENGTH or folded in _AMBIGUOUS_TERMS:
