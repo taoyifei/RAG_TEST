@@ -4,10 +4,16 @@
 
 - Integration base SHA：`bb13930ba3b06bcfcecb3f0acdf7c023e16afe1b`
 - Feature branch：`codex/p06-local-index`
-- Feature commits：提交后回填
-- Integration merge commit：合并后回填
-- Remote feature SHA：推送后回填
-- Remote integration SHA：推送后回填
+- Feature commits：
+  - Storage/Core：`ee43ff0`、`40f9479`、`d9b19a4`、`c334273`、`07a5c87`、
+    `3259388`、`7882aec`、`d02d9a6`
+  - Vector/Revision/GC：`7017a1f`、`dfcbb1a`、`42ecfec`、`773a339`、`d95cfa0`
+  - Composition/CLI：`fdbc9f1`、`b64065c`、`ae1df25`
+  - Tests/Docs：`b201156`、`c255596`、`93d43d5`、`2fb8401`
+- Integration merge commit：`687350d4e942cdda75af42fed8b71ead94f7c1dc`
+- Remote feature SHA：`2fb84017c38c5546ab51ac55945f9a36f0ef0d89`
+- Remote integration gate-tested merge SHA：
+  `687350d4e942cdda75af42fed8b71ead94f7c1dc`
 
 ## 交付范围
 
@@ -38,6 +44,9 @@ Migration 可空库执行、重复执行；已应用 checksum 漂移和未知更
 - Feature 分支完整 `check`：1226 passed，75 deselected，4 warnings；compile、Ruff、
   mypy（234 source files）和 Google docstring（0 missing sections）通过。
 - Feature 分支 `smoke`：63 passed，1 warning。
+- Integration 合并后完整 `check`：1226 passed，75 deselected，4 warnings；compile、
+  Ruff、mypy（234 source files）和 Google docstring（0 missing sections）通过。
+- Integration 合并后 `smoke`：63 passed，1 warning。
 - `git diff --check`：通过。
 
 所有普通测试使用临时 data dir 和 `RAG_TEST_NETWORK=offline`。实际调用 SQLite、Filesystem、
@@ -50,4 +59,4 @@ Memory Vector、Qdrant embedded local-memory/local-path 和 Deterministic Provid
 Chunk V3 参数和质量提升声明仍保持 provisional；P07 才提供完整 Query Planner/RRF/Rerank/
 Evidence/Answer 运行链路。
 
-P06_READY: false
+P06_READY: true
