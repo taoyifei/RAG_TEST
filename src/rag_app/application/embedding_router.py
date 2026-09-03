@@ -32,6 +32,7 @@ from rag_app.core.errors import (
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    ActiveRevisionEmbeddingState,
     EmbeddingCoverage,
     EmbeddingRequest,
     EmbeddingRequestRole,
@@ -40,44 +41,12 @@ from rag_app.core.models import (
     EmbeddingTopology,
     ProviderCall,
     ProviderFailureCategory,
+    QueryEmbeddingRequest,
+    RoutedEmbeddingResult,
 )
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import EmbeddingPort
 from rag_app.core.tokenization import estimate_tokens
-
-
-@dataclass(frozen=True, slots=True)
-class QueryEmbeddingRequest:
-    """一次只允许选择一个 Dense slot 的查询。"""
-
-    text: str
-
-    def __post_init__(self) -> None:
-        """拒绝空白 query。"""
-        if not self.text.strip():
-            raise ValueError("Query Embedding 文本不能为空。")
-
-
-@dataclass(frozen=True, slots=True)
-class ActiveRevisionEmbeddingState:
-    """Router 所需的 active revision 双槽证据。"""
-
-    topology: EmbeddingTopology
-    coverages: tuple[EmbeddingCoverage, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class RoutedEmbeddingResult:
-    """绑定单一 slot/vector name 的查询向量。"""
-
-    vector: tuple[float, ...]
-    selected_slot_id: str
-    vector_name: str
-    attempted_slot_ids: tuple[str, ...]
-    fallback_reason: str
-    provider_calls: tuple[ProviderCall, ...]
-    circuit_before: tuple[CircuitSnapshot, ...]
-    circuit_after: tuple[CircuitSnapshot, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +107,7 @@ class QueryEmbeddingRouter:
     def __init__(
         self,
         primary: EmbeddingPort,
-        standby: EmbeddingPort,
+        standby: EmbeddingPort | None = None,
         *,
         circuit_breaker: ProviderCircuitBreaker | None = None,
         usage_budget: LocalUsageBudget | None = None,
@@ -147,7 +116,7 @@ class QueryEmbeddingRouter:
 
         Args:
             primary: Jina Embedding 端口。
-            standby: 阿里 Qwen3.7 Embedding 端口。
+            standby: 可选阿里 Qwen3.7 Embedding 端口。
             circuit_breaker: 可注入时钟的 circuit。
             usage_budget: UTC 日预算计数器。
 
@@ -159,6 +128,37 @@ class QueryEmbeddingRouter:
         self._standby = standby
         self._circuit = circuit_breaker or ProviderCircuitBreaker()
         self._budget = usage_budget or LocalUsageBudget()
+        self.descriptor = ComponentDescriptor(
+            kind=ComponentKind.EMBEDDING_ROUTER,
+            name=(
+                "query-embedding-router-hot-standby"
+                if standby is not None
+                else "query-embedding-router-single"
+            ),
+            version="1",
+            mode=ProviderMode.LOCAL,
+        )
+
+    def embed_query(
+        self,
+        request: QueryEmbeddingRequest,
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> RoutedEmbeddingResult:
+        """在 Single 或 Hot-Standby topology 中调用一个查询 slot。
+
+        Args:
+            request: 单条 query 文本。
+            revision: active revision 的 topology 与覆盖证据。
+            egress: 请求作用域默认拒绝策略。
+
+        Returns:
+            恰好绑定一个 named vector 的查询向量。
+
+        """
+        if revision.topology.mode == "single":
+            return self._embed_single(request, revision, egress)
+        return self.embed_query_with_failover(request, revision, egress)
 
     def embed_query_with_failover(
         self,
@@ -183,9 +183,16 @@ class QueryEmbeddingRouter:
             DenseUnavailable: 允许切换的失败耗尽两个 slot。
 
         """
+        if revision.topology.mode == "single":
+            return self._embed_single(request, revision, egress)
+        if self._standby is None:
+            raise IndexCompatibilityError(
+                "Hot-Standby topology 缺少 standby Provider。",
+                stage="embedding_router.revision",
+            )
         primary_slot, standby_slot = _slots(revision.topology)
         _require_complete_coverage(primary_slot, revision.coverages)
-        EgressGuard.require_query_embedding(egress, "jina")
+        _require_query_egress(primary_slot, egress)
         primary_key = _circuit_key(primary_slot)
         standby_key = _circuit_key(standby_slot)
         before = (
@@ -227,27 +234,26 @@ class QueryEmbeddingRouter:
         else:
             fallback_reason = "PRIMARY_CIRCUIT_OPEN"
         _require_complete_coverage(standby_slot, revision.coverages)
-        EgressGuard.require_query_embedding(egress, "aliyun-qwen37")
+        _require_query_egress(standby_slot, egress)
         if not self._circuit.allow_call(standby_key):
             raise _dense_unavailable(
                 tuple(attempted), tuple(calls), "STANDBY_CIRCUIT_OPEN"
             )
-        estimated_tokens = estimate_tokens(request.text)
-        self._budget.reserve(
-            "aliyun-qwen37",
-            "embedding",
-            estimated_tokens,
-            daily_request_limit=egress.aliyun_daily_request_budget,
-            daily_estimated_token_limit=egress.aliyun_daily_token_budget,
-        )
+        if standby_slot.provider_id.startswith("aliyun-qwen37"):
+            estimated_tokens = estimate_tokens(request.text)
+            self._budget.reserve(
+                "aliyun-qwen37",
+                "embedding",
+                estimated_tokens,
+                daily_request_limit=egress.aliyun_daily_request_budget,
+                daily_estimated_token_limit=egress.aliyun_daily_token_budget,
+            )
         attempted.append(standby_slot.slot_id)
         try:
             result = self._embed_slot(self._standby, standby_slot, request.text)
         except RagError as error:
             calls.extend(_error_calls(error))
-            self._circuit.record_failure(
-                standby_key, failure_category(error)
-            )
+            self._circuit.record_failure(standby_key, failure_category(error))
             raise _dense_unavailable(
                 tuple(attempted), tuple(calls), "BOTH_UNAVAILABLE"
             ) from None
@@ -262,6 +268,50 @@ class QueryEmbeddingRouter:
             before,
             primary_key,
             standby_key,
+        )
+
+    def _embed_single(
+        self,
+        request: QueryEmbeddingRequest,
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> RoutedEmbeddingResult:
+        if revision.topology.mode != "single":
+            raise IndexCompatibilityError(
+                "Single Router 收到非 Single topology。",
+                stage="embedding_router.revision",
+            )
+        slot = revision.topology.slot(revision.topology.primary_slot_id)
+        _require_complete_coverage(slot, revision.coverages)
+        _require_query_egress(slot, egress)
+        key = _circuit_key(slot)
+        before = (self._circuit.snapshot(key),)
+        if not self._circuit.allow_call(key):
+            raise _dense_unavailable((), (), "PRIMARY_CIRCUIT_OPEN")
+        try:
+            result = self._embed_slot(self._primary, slot, request.text)
+        except RagError as error:
+            category = failure_category(error)
+            self._circuit.record_failure(key, category)
+            if category in {
+                ProviderFailureCategory.INPUT_INVALID,
+                ProviderFailureCategory.POLICY_DENIED,
+                ProviderFailureCategory.STORE_INCOMPATIBLE,
+            }:
+                raise
+            raise _dense_unavailable(
+                (slot.slot_id,), _error_calls(error), "PRIMARY_UNAVAILABLE"
+            ) from None
+        self._circuit.record_success(key)
+        return RoutedEmbeddingResult(
+            vector=result.vectors[0],
+            selected_slot_id=slot.slot_id,
+            vector_name=slot.vector_name,
+            attempted_slot_ids=(slot.slot_id,),
+            fallback_reason="PRIMARY_SELECTED",
+            provider_calls=result.calls,
+            circuit_before=before,
+            circuit_after=(self._circuit.snapshot(key),),
         )
 
     def _embed_slot(
@@ -399,9 +449,7 @@ class DualEmbeddingCoordinator:
                 )
                 continue
             missing_positions = tuple(
-                index
-                for index, vector in enumerate(cached)
-                if vector is None
+                index for index, vector in enumerate(cached) if vector is None
             )
             try:
                 result = provider.embed(
@@ -690,6 +738,25 @@ def _require_complete_coverage(
 
 def _circuit_key(slot: EmbeddingSlotIdentity) -> CircuitKey:
     return CircuitKey(slot.provider_id, "embedding", slot.model)
+
+
+def _require_query_egress(
+    slot: EmbeddingSlotIdentity,
+    policy: EgressPolicy,
+) -> None:
+    if slot.provider_id == "deterministic":
+        return
+    if slot.provider_id.startswith("jina"):
+        EgressGuard.require_query_embedding(policy, "jina")
+        return
+    if slot.provider_id.startswith("aliyun-qwen37"):
+        EgressGuard.require_query_embedding(policy, "aliyun-qwen37")
+        return
+    raise PolicyDenied(
+        "未知远程 Query Embedding 目的地未授权。",
+        stage="provider.egress",
+        details={"provider_id": slot.provider_id},
+    )
 
 
 def _fallback_reason(category: ProviderFailureCategory) -> str:

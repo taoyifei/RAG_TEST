@@ -31,6 +31,7 @@ from rag_app.core.models import (
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
+    RetrievalPolicy,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import CircuitBreakerPolicy, ParsingPolicy
@@ -42,6 +43,7 @@ from rag_app.core.ports import (
     LexicalStorePort,
     MetadataStorePort,
     ParserPort,
+    QueryEmbeddingPort,
     RerankerPort,
     SlotEligibilityPort,
     TracePort,
@@ -92,7 +94,7 @@ class RagComponents:
     embedding_primary: EmbeddingPort
     embedding_standby: EmbeddingPort | None
     slot_eligibility: SlotEligibilityPort
-    query_embedding_router: QueryEmbeddingRouter | None
+    query_embedding_router: QueryEmbeddingPort
     reranker: RerankerPort
     vector_store: VectorStorePort
     lexical_store: LexicalStorePort
@@ -341,10 +343,8 @@ def build_components(
                 created,
             ),
         )
-        query_embedding_router = (
-            QueryEmbeddingRouter(embedding_primary, embedding_standby)
-            if embedding_standby is not None
-            else None
+        query_embedding_router = QueryEmbeddingRouter(
+            embedding_primary, embedding_standby
         )
         reranker_name, reranker_config, reranker_model = _reranker_config(
             resolved_profile
@@ -411,11 +411,7 @@ def build_components(
         )
         serving_input = _serving_fingerprint_input(
             topology,
-            router=(
-                _descriptor(query_embedding_router)
-                if query_embedding_router is not None
-                else _descriptor(slot_eligibility)
-            ),
+            router=_descriptor(query_embedding_router),
             reranker=_descriptor(reranker),
             reranker_model=reranker_model,
             reranker_policy=reranker_config or {},
@@ -794,10 +790,20 @@ def _serving_fingerprint_input(  # noqa: PLR0913
     reranker_policy: object,
     generator: ComponentDescriptor,
 ) -> ServingFingerprintInput:
+    policy = RetrievalPolicy()
     return ServingFingerprintInput(
-        query_analyzer=freeze_json_object({"id": "legacy-query-analyzer"}),
-        query_planner=freeze_json_object({"id": "legacy-query-planner"}),
-        query_expansion_policy=freeze_json_object({"enabled": False}),
+        query_analyzer=freeze_json_object(
+            {"id": "deterministic-nfkc-signals-v1"}
+        ),
+        query_planner=freeze_json_object(
+            {"id": "five-kind-balanced-v1", "provisional": True}
+        ),
+        query_expansion_policy=freeze_json_object(
+            {
+                "id": "bounded-normalizer-v1",
+                "max_variants": policy.max_variants,
+            }
+        ),
         embedding_query_policies=freeze_json_object(
             {
                 slot.slot_id: dict(slot.query_request_policy)
@@ -807,19 +813,50 @@ def _serving_fingerprint_input(  # noqa: PLR0913
         embedding_router=router,
         circuit_breaker=CircuitBreakerPolicy(),
         retrieval_channels=freeze_json_object(
-            {"exact": True, "fts5": True, "dense": True}
+            {
+                "exact": True,
+                "fts5": True,
+                "dense": "one-selected-slot",
+                "max_channels": policy.max_channels,
+                "top_k": policy.channel_top_k,
+            }
         ),
-        fusion=freeze_json_object({"method": "rrf"}),
+        fusion=freeze_json_object(
+            {
+                "method": "rrf",
+                "k": policy.rrf_k,
+                "weight": 1,
+                "provisional": True,
+            }
+        ),
         reranker=reranker,
         reranker_model=reranker_model,
         reranker_policy=freeze_json_object(reranker_policy),
         rerank_mode="provider_or_explicit_bypass",
-        neighbor_parent_expansion=freeze_json_object({"enabled": True}),
-        evidence_policy=freeze_json_object({"id": "legacy-evidence"}),
-        confidence_policy=freeze_json_object({"id": "legacy-confidence"}),
+        neighbor_parent_expansion=freeze_json_object(
+            {
+                "enabled": True,
+                "neighbor_count": policy.neighbor_count,
+                "section_limit": policy.section_chunk_limit,
+            }
+        ),
+        evidence_policy=freeze_json_object(
+            {
+                "id": "canonical-source-span-v1",
+                "token_budget": policy.evidence_token_budget,
+                "per_document_cap": policy.per_document_cap,
+                "per_section_cap": policy.per_section_cap,
+            }
+        ),
+        confidence_policy=freeze_json_object(
+            {"id": "rule-confidence-v1", "provisional": True}
+        ),
         generator=generator,
         generator_policy=freeze_json_object({"id": "profile"}),
-        citation_protocol=freeze_json_object({"schema_version": "1"}),
+        citation_protocol=freeze_json_object(
+            {"schema_version": "1", "support_ids": "application-assigned"}
+        ),
+        cache_schema_version=policy.cache_schema_version,
     )
 
 
