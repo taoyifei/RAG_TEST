@@ -93,6 +93,7 @@ _SMOKE_TESTS = (
         "tests/e2e/test_p06_revision_lifecycle.py::"
         "test_p06_revision_lifecycle_survives_reopen"
     ),
+    "tests/e2e/test_p07_retrieval.py",
 )
 _PROVIDER_ENV_NAMES = frozenset(
     {
