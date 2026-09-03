@@ -42,6 +42,7 @@ from rag_app.composition.chunking_cli import (
     chunk_document_command,
 )
 from rag_app.composition.p06_cli import P06_COMMANDS, p06_command
+from rag_app.composition.p09_cli import P09_COMMANDS, p09_command
 from rag_app.composition.provider_profiles import load_provider_catalog
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -645,6 +646,8 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
         return p06_command(raw_arguments)
     if raw_arguments and raw_arguments[0] in P08_COMMANDS:
         return p08_command(raw_arguments)
+    if raw_arguments and raw_arguments[0] in P09_COMMANDS:
+        return p09_command(raw_arguments)
     parsed = _arguments(arguments)
     command = parsed.command
     if command == "doctor":
