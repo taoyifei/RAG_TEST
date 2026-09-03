@@ -1,6 +1,8 @@
 """Profile、Registry 与 Composition Root 公共入口。"""
 
 from rag_app.composition.factory import RagComponents, build_components
+from rag_app.composition.p06_runtime import P06Runtime, build_p06_runtime
+from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
 from rag_app.composition.profiles import (
     ComponentsProfile,
     EmbeddingSlotProfile,
@@ -28,10 +30,14 @@ __all__ = [
     "EmbeddingSlotProfile",
     "EmbeddingTopologyProfile",
     "LocalDataProfile",
+    "P06Runtime",
+    "P07Runtime",
     "RagComponents",
     "RagProfile",
     "RerankerProfile",
     "build_components",
+    "build_p06_runtime",
+    "build_p07_runtime",
     "default_hot_standby_profile",
     "default_offline_profile",
     "load_named_provider_profile",

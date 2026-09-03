@@ -17,6 +17,7 @@ from rag_app.core.models.common import (
     MetadataModel,
     SecretRef,
 )
+from rag_app.core.models.confidence import ConfidenceDecision, ConfidenceStatus
 from rag_app.core.models.document import (
     CellGrid,
     DocumentIR,
@@ -57,6 +58,8 @@ from rag_app.core.models.persistence import (
     content_sha256,
 )
 from rag_app.core.models.provider import (
+    CircuitKey,
+    CircuitSnapshot,
     CircuitState,
     EmbeddingCoverage,
     EmbeddingRequest,
@@ -76,6 +79,15 @@ from rag_app.core.models.provider import (
     RerankItem,
     RerankRequest,
     RerankResult,
+)
+from rag_app.core.models.query import (
+    ActiveRevisionEmbeddingState,
+    QueryAnalysis,
+    QueryEmbeddingRequest,
+    QueryKind,
+    QueryVariant,
+    RetrievalPlan,
+    RoutedEmbeddingResult,
 )
 from rag_app.core.models.retrieval import (
     AnswerDraft,
@@ -98,6 +110,18 @@ from rag_app.core.models.revisions import (
     VectorSearchResult,
     vector_point_id,
 )
+from rag_app.core.models.search import (
+    ActiveRevisionQuerySnapshot,
+    ChannelHit,
+    ExactSearchRequest,
+    FusedCandidate,
+    HydratedChunk,
+    RankedChunk,
+    RetrievalPolicy,
+    RrfContribution,
+    SearchAnswerResult,
+    SearchRequest,
+)
 from rag_app.core.policies import ParsePolicy, ParsingPolicy
 
 __all__ = [
@@ -115,7 +139,11 @@ __all__ = [
     "ChunkingPolicy",
     "ChunkingReport",
     "ChunkingResult",
+    "CircuitKey",
+    "CircuitSnapshot",
     "CircuitState",
+    "ConfidenceDecision",
+    "ConfidenceStatus",
     "DocumentEmbeddingBudget",
     "DocumentIR",
     "DocumentNode",
@@ -135,9 +163,12 @@ __all__ = [
     "EmbeddingSlotRole",
     "EmbeddingTopology",
     "EvidenceItem",
+    "ExactSearchRequest",
     "FailoverReason",
     "FrozenModel",
     "GcPlan",
+    "FusedCandidate",
+    "HydratedChunk",
     "ImageAttributes",
     "IndexRevisionRef",
     "IndexRevisionState",
@@ -162,15 +193,26 @@ __all__ = [
     "ProviderFailureCategory",
     "ProviderHealth",
     "ProviderHealthStatus",
+    "QueryAnalysis",
+    "QueryEmbeddingRequest",
+    "QueryKind",
+    "QueryVariant",
     "RerankExecutionMode",
     "RerankItem",
     "RerankRequest",
     "RerankResult",
+    "RankedChunk",
+    "RetrievalPlan",
+    "RetrievalPolicy",
+    "RrfContribution",
     "RevisionMark",
     "RevisionValidationEvidence",
     "RevisionVectorSpec",
+    "RoutedEmbeddingResult",
     "SearchHit",
+    "SearchAnswerResult",
     "SearchQuery",
+    "SearchRequest",
     "SecretRef",
     "SourceAnchor",
     "SourceSpan",
@@ -189,4 +231,7 @@ __all__ = [
     "validate_document_ir",
     "validate_document_ref_uniqueness",
     "vector_point_id",
+    "ActiveRevisionEmbeddingState",
+    "ActiveRevisionQuerySnapshot",
+    "ChannelHit",
 ]

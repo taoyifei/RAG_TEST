@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Protocol
 
 from rag_app.core.capabilities import ComponentDescriptor
-from rag_app.core.models import Chunk, LexicalSearchRequest, SearchHit
+from rag_app.core.models import (
+    ChannelHit,
+    Chunk,
+    LexicalSearchRequest,
+    SearchHit,
+)
 
 
 class LexicalStorePort(Protocol):
@@ -44,6 +49,20 @@ class LexicalStorePort(Protocol):
 
         Returns:
             Store 无关的有序命中。
+
+        """
+        ...
+
+    def search_candidates(
+        self, request: LexicalSearchRequest
+    ) -> tuple[ChannelHit, ...]:
+        """返回不携带正文的 FTS5 候选。
+
+        Args:
+            request: revision、query 和数量上限。
+
+        Returns:
+            受 scope/revision 约束的 1-based rank 候选。
 
         """
         ...

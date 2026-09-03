@@ -16,6 +16,8 @@ from rag_app.core.errors import (
     ProviderUnavailable,
 )
 from rag_app.core.models import (
+    CircuitKey,
+    CircuitSnapshot,
     CircuitState,
     ProviderFailureCategory,
     RerankExecutionMode,
@@ -24,26 +26,6 @@ from rag_app.core.models import (
 )
 from rag_app.core.policies import CircuitBreakerPolicy, EgressPolicy
 from rag_app.core.ports import RerankerPort
-
-
-@dataclass(frozen=True, slots=True)
-class CircuitKey:
-    """Provider、操作与模型组成的 circuit 唯一键。"""
-
-    provider_id: str
-    operation: str
-    model: str
-
-
-@dataclass(frozen=True, slots=True)
-class CircuitSnapshot:
-    """不含 secret 的 circuit 状态快照。"""
-
-    key: CircuitKey
-    state: CircuitState
-    consecutive_failures: int
-    recovery_successes: int
-    reason_code: str
 
 
 @dataclass(slots=True)
@@ -290,9 +272,7 @@ class EgressGuard:
     """在读取或发送正文前执行目的地级授权。"""
 
     @staticmethod
-    def require_query_embedding(
-        policy: EgressPolicy, provider_id: str
-    ) -> None:
+    def require_query_embedding(policy: EgressPolicy, provider_id: str) -> None:
         """检查 query embedding 总授权和厂商授权。
 
         Args:

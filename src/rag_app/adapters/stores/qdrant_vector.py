@@ -257,6 +257,11 @@ class QdrantRevisionVectorStore:
                 VectorSearchResult(
                     point_id=str(point.id),
                     chunk_id=payload.chunk_id,
+                    document_id=payload.document_id,
+                    document_version_id=payload.document_version_id,
+                    role=payload.role,
+                    section_id=payload.section_id,
+                    content_sha256=payload.content_sha256,
                     score=float(point.score),
                     rank=rank,
                 )
@@ -393,7 +398,7 @@ class QdrantRevisionVectorStore:
                 "Qdrant revision collection 不存在。", stage="qdrant.schema"
             )
         existing = self._specs.get(spec.physical_namespace)
-        if existing is not None and existing != spec:
+        if existing is not None and not existing.has_same_schema(spec):
             raise IndexCompatibilityError(
                 "Qdrant revision schema 不匹配。", stage="qdrant.schema"
             )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Self
 
@@ -195,6 +196,26 @@ class CircuitState(StrEnum):
     OPEN = "open"
     HALF_OPEN = "half_open"
     QUARANTINED = "quarantined"
+
+
+@dataclass(frozen=True, slots=True)
+class CircuitKey:
+    """Provider、操作与模型组成的 circuit 唯一键。"""
+
+    provider_id: str
+    operation: str
+    model: str
+
+
+@dataclass(frozen=True, slots=True)
+class CircuitSnapshot:
+    """不含 secret 的 circuit 状态快照。"""
+
+    key: CircuitKey
+    state: CircuitState
+    consecutive_failures: int
+    recovery_successes: int
+    reason_code: str
 
 
 class FailoverReason(StrEnum):

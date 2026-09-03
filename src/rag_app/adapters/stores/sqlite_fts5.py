@@ -15,7 +15,14 @@ from rag_app.core.capabilities import (
 )
 from rag_app.core.errors import Conflict
 from rag_app.core.identifiers import canonical_json
-from rag_app.core.models import Chunk, LexicalSearchRequest, SearchHit
+from rag_app.core.models import (
+    ChannelHit,
+    Chunk,
+    ExactSearchRequest,
+    LexicalSearchRequest,
+    SearchHit,
+)
+from rag_app.core.query_text import normalize_identifier
 
 _QUERY_TOKEN = re.compile(r"[\w.-]+", flags=re.UNICODE)
 
@@ -97,6 +104,150 @@ class SqliteFtsStore:
                 channels=("lexical:fts5",),
             )
             for rank, row in enumerate(rows, start=1)
+        )
+
+    def search_candidates(
+        self, request: LexicalSearchRequest
+    ) -> tuple[ChannelHit, ...]:
+        """返回不携带正文且受 revision/scope 硬过滤的候选。
+
+        Args:
+            request: revision、用户输入和最大命中数。
+
+        Returns:
+            仅含稳定 ID、诊断分数和 1-based rank 的结果。
+
+        """
+        self._ensure_open()
+        expression = build_fts_query(request.query)
+        if not expression:
+            return ()
+        revision = request.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT c.chunk_id, c.document_id, c.document_version_id, "
+                "c.role, c.section_id, c.content_sha256, "
+                "bm25(chunks_fts, 0.0, 0.0, 0.0, "
+                "4.0, 3.0, 6.0, 1.0) AS raw_score "
+                "FROM chunks_fts JOIN chunks c ON c.row_id=chunks_fts.rowid "
+                "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "WHERE chunks_fts MATCH ? AND c.revision_id=? "
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?",
+                (
+                    expression,
+                    revision.index_revision_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    request.limit,
+                ),
+            ).fetchall()
+        return tuple(
+            ChannelHit(
+                revision_id=revision.index_revision_id,
+                chunk_id=str(row["chunk_id"]),
+                document_id=str(row["document_id"]),
+                document_version_id=str(row["document_version_id"]),
+                role=str(row["role"]),
+                section_id=str(row["section_id"]),
+                content_sha256=str(row["content_sha256"]),
+                channel="lexical:fts5",
+                rank=rank,
+                raw_score=float(row["raw_score"]),
+            )
+            for rank, row in enumerate(rows, start=1)
+        )
+
+    def search_exact_candidates(
+        self, request: ExactSearchRequest
+    ) -> tuple[ChannelHit, ...]:
+        """查询正规 identifier 表和受控 quoted phrase。
+
+        Args:
+            request: revision、已分析 identifier/phrase 和最大数量。
+
+        Returns:
+            identifier 优先、稳定去重且不携带正文的候选。
+
+        """
+        self._ensure_open()
+        revision = request.revision
+        found: list[tuple[sqlite3.Row, str, bool]] = []
+        seen: set[str] = set()
+        with self._connections.transaction() as connection:
+            for identifier in request.identifiers:
+                normalized = normalize_identifier(identifier)
+                if not normalized:
+                    continue
+                rows = connection.execute(
+                    "SELECT e.chunk_id, c.document_id, "
+                    "c.document_version_id, c.role, c.section_id, "
+                    "c.content_sha256 FROM exact_identifiers e "
+                    "JOIN chunks c ON c.revision_id=e.revision_id "
+                    "AND c.chunk_id=e.chunk_id "
+                    "JOIN index_revisions r "
+                    "ON r.index_revision_id=e.revision_id "
+                    "WHERE e.revision_id=? AND e.normalized_identifier=? "
+                    "AND r.project_id=? AND r.knowledge_base_id=? "
+                    "ORDER BY e.chunk_id LIMIT ?",
+                    (
+                        revision.index_revision_id,
+                        normalized,
+                        revision.project_id,
+                        revision.knowledge_base_id,
+                        request.limit,
+                    ),
+                ).fetchall()
+                for row in rows:
+                    chunk_id = str(row["chunk_id"])
+                    if chunk_id not in seen:
+                        seen.add(chunk_id)
+                        found.append((row, "identifier", True))
+            for phrase in request.quoted_phrases:
+                expression = _exact_phrase_query(phrase)
+                if not expression or len(found) >= request.limit:
+                    continue
+                rows = connection.execute(
+                    "SELECT c.chunk_id, c.document_id, "
+                    "c.document_version_id, c.role, c.section_id, "
+                    "c.content_sha256 FROM chunks_fts "
+                    "JOIN chunks c ON c.row_id=chunks_fts.rowid "
+                    "JOIN index_revisions r "
+                    "ON r.index_revision_id=c.revision_id "
+                    "WHERE chunks_fts MATCH ? AND c.revision_id=? "
+                    "AND r.project_id=? AND r.knowledge_base_id=? "
+                    "ORDER BY c.chunk_id LIMIT ?",
+                    (
+                        expression,
+                        revision.index_revision_id,
+                        revision.project_id,
+                        revision.knowledge_base_id,
+                        request.limit,
+                    ),
+                ).fetchall()
+                for row in rows:
+                    chunk_id = str(row["chunk_id"])
+                    if chunk_id not in seen:
+                        seen.add(chunk_id)
+                        found.append((row, "quoted_phrase", False))
+        return tuple(
+            ChannelHit(
+                revision_id=revision.index_revision_id,
+                chunk_id=str(row["chunk_id"]),
+                document_id=str(row["document_id"]),
+                document_version_id=str(row["document_version_id"]),
+                role=str(row["role"]),
+                section_id=str(row["section_id"]),
+                content_sha256=str(row["content_sha256"]),
+                channel="exact",
+                rank=rank,
+                raw_score=1.0,
+                match_type=match_type,
+                must_keep=must_keep,
+            )
+            for rank, (row, match_type, must_keep) in enumerate(
+                found[: request.limit], start=1
+            )
         )
 
     def search_exact(
@@ -291,18 +442,11 @@ def build_fts_query(query: str) -> str:
     )
 
 
-def normalize_identifier(identifier: str) -> str:
-    """生成 NFKC/casefold/delimiter-normalized identifier。
-
-    Args:
-        identifier: 原始 identifier。
-
-    Returns:
-        用单个连字符连接的规范形式。
-
-    """
-    normalized = unicodedata.normalize("NFKC", identifier).casefold().strip()
-    return re.sub(r"[\s_./\\-]+", "-", normalized).strip("-")
+def _exact_phrase_query(phrase: str) -> str:
+    normalized = unicodedata.normalize("NFKC", phrase).casefold().strip()
+    if not normalized:
+        return ""
+    return f'"{normalized.replace(chr(34), chr(34) * 2)}"'
 
 
 def _identifier_forms(identifiers: Sequence[str]) -> tuple[str, ...]:

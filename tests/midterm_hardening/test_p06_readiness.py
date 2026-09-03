@@ -44,7 +44,8 @@ def test_identity_and_parse_context_contracts_are_unambiguous() -> None:
 def test_composition_exposes_resolved_policies_and_real_query_router() -> None:
     with build_components(default_offline_profile(), _registry()) as single:
         assert single.chunking_policy.required_embedding_slots == ("primary",)
-        assert single.query_embedding_router is None
+        assert isinstance(single.query_embedding_router, QueryEmbeddingRouter)
+        assert single.query_embedding_router.descriptor.name.endswith("single")
 
     with build_components(
         default_hot_standby_profile(), _registry()
