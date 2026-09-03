@@ -11,8 +11,17 @@
   `af30f81fbcbd0577c16fbf59bb9bce8f29a3de91` 和
   `5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a`。
 
-Feature commits、remote feature SHA、integration merge SHA 和合并后门禁将在
-`--no-ff` 集成完成后回填。
+- Feature commits：
+  - Core contracts：`3b070ff`
+  - Query embedding router：`c02109e`
+  - Revision-bound stores：`9724bfa`
+  - Retrieval/evidence/answer pipeline：`512de1f`
+  - Offline tests and fault injection：`cb6cfbd`
+  - Design and feature evidence：`4ba78ec`
+- Remote feature SHA：`4ba78eceab9d88677b696891e54e5e97ff8b0973`
+- Integration merge commit：`1e8c32242a42ef816c02bbb4d207f828fa1b62dc`
+- Remote integration gate-tested merge SHA：
+  `1e8c32242a42ef816c02bbb4d207f828fa1b62dc`
 
 ## 交付范围
 
@@ -40,6 +49,11 @@ Feature commits、remote feature SHA、integration merge SHA 和合并后门禁�
 - Feature 分支完整 `check`：1267 passed，75 deselected，4 warnings；compile、
   Ruff、mypy（262 source files）和 Google docstring（0 missing sections）通过。
 - Feature 分支 `smoke`：69 passed，1 warning。
+- Integration 合并后完整 `check`：1267 passed，75 deselected，4 warnings；
+  compile、Ruff、mypy（262 source files）和 Google docstring
+  （0 missing sections）通过。
+- Integration 合并后 `smoke`：69 passed，1 warning。
+- `git diff --check`：通过。
 - 故障注入覆盖 Lexical、Dense、Reranker、canonical Chunk、Neighbor、Generator 和
   Active pointer drift；覆盖 active revision 切换后的 cache key 失效。
 - 所有测试使用 `RAG_TEST_NETWORK=offline`、临时目录和 Fake/Deterministic
@@ -53,4 +67,4 @@ Circuit 与 Final Cache 都是进程内状态，不代表多 worker 协调或持
 `document_id`、`section_id`、`role` 以及 `allowed_document_ids`；未知字段 fail closed。
 Qdrant Server、真实 Provider、HTTP 生命周期、UI 和发布部署均未在本阶段验证。
 
-P07_READY: pending-integration
+P07_READY: true
