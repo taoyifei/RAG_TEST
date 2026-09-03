@@ -1,0 +1,137 @@
+{
+  "schema_version": "2",
+  "dataset_id": "p08-synthetic-v2",
+  "dataset_version": "2.1.0",
+  "description": "Non-sensitive deterministic OOXML corpus for P08 structural evaluation.",
+  "split_algorithm": "Document and template families are assigned as indivisible groups before authoring queries; rename and near-duplicate families remain in one split.",
+  "content_classification": "synthetic_public",
+  "cases_file": "cases.jsonl",
+  "documents": [
+    {
+      "document_id": "doc_483d66539ed69a3e7ac6e4b0e3d421be",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_shared",
+      "coverage_tags": ["same_bytes_different_document_id", "short_paragraph"],
+      "versions": [{"fixture_id": "shared-bytes", "display_name": "shared-a.docx"}]
+    },
+    {
+      "document_id": "doc_b2918991fb34dc55cfa4e0848554cd9e",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_shared",
+      "coverage_tags": ["same_bytes_different_document_id", "short_paragraph"],
+      "versions": [{"fixture_id": "shared-bytes", "display_name": "shared-b.docx"}]
+    },
+    {
+      "document_id": "doc_79cce83f8f3a18be2fd1b2811efb09be",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_rename",
+      "coverage_tags": ["rename_only"],
+      "versions": [
+        {"fixture_id": "rename-stable", "display_name": "before.docx"},
+        {"fixture_id": "rename-stable", "display_name": "after.docx"}
+      ]
+    },
+    {
+      "document_id": "doc_be435f4b30a58f59161abe092e3cead7",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_version",
+      "coverage_tags": ["content_version_change", "active_revision"],
+      "versions": [
+        {"fixture_id": "version-original", "display_name": "versioned.docx"},
+        {"fixture_id": "version-changed", "display_name": "versioned.docx"}
+      ]
+    },
+    {
+      "document_id": "doc_82aa7ef973b85e767accdaa269c34260",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_same_name",
+      "coverage_tags": ["same_name_different_content"],
+      "versions": [{"fixture_id": "same-name-alpha", "display_name": "manual.docx"}]
+    },
+    {
+      "document_id": "doc_0d8f4a0fcc01471a7a7b87d580591a65",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identity_same_name",
+      "coverage_tags": ["same_name_different_content"],
+      "versions": [{"fixture_id": "same-name-beta", "display_name": "manual.docx"}]
+    },
+    {
+      "document_id": "doc_64716e1a3a923ec88beffaf233f2fb5c",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_hierarchy_tuning",
+      "coverage_tags": ["long_paragraph_cross_chunk", "multilevel_heading", "body_before_heading", "numbered_list_restart"],
+      "versions": [{"fixture_id": "hierarchy-long", "display_name": "hierarchy.docx"}]
+    },
+    {
+      "document_id": "doc_84346ddf5348e4d9d807675920226c03",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_notes_holdout",
+      "coverage_tags": ["footnote_endnote", "text_box"],
+      "versions": [{"fixture_id": "notes-textbox", "display_name": "notes.docx"}]
+    },
+    {
+      "document_id": "doc_85a86a725c1078be30c0a1f764e666cf",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_table_empty",
+      "coverage_tags": ["table_exact_row", "table_middle_empty", "numeric_unit_negative_percent_date"],
+      "versions": [{"fixture_id": "table-empty", "display_name": "table-empty.docx"}]
+    },
+    {
+      "document_id": "doc_02ae4ff5061505521be8524baa1b1532",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_table_omitted",
+      "coverage_tags": ["table_edge_empty", "table_grid_before_after"],
+      "versions": [{"fixture_id": "table-omitted", "display_name": "table-omitted.docx"}]
+    },
+    {
+      "document_id": "doc_83ea8138af8751939d462fbca559f297",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_table_merged",
+      "coverage_tags": ["table_grid_span", "table_vmerge", "table_multirow_header", "nested_table"],
+      "versions": [{"fixture_id": "table-merged", "display_name": "table-merged.docx"}]
+    },
+    {
+      "document_id": "doc_8875420a57d831ac3ad5b89e41edf6c8",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_identifiers_tuning",
+      "coverage_tags": ["identifier_standard", "identifier_hyphen", "identifier_mixed_language", "identifier_nfkc_case", "identifier_near_miss"],
+      "versions": [{"fixture_id": "identifiers", "display_name": "identifiers.docx"}]
+    },
+    {
+      "document_id": "doc_6240b2bbd701a9204d19e2a1e780a2f7",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_fdbe5b5ea578da6cf547a3d4e2ea3196",
+      "family_group_id": "grp_scope_other",
+      "coverage_tags": ["similar_document_other_kb"],
+      "versions": [{"fixture_id": "scope-similar", "display_name": "other-scope.docx"}]
+    },
+    {
+      "document_id": "doc_642d10111776fd4eba830e51d432dcd2",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_conflict_holdout",
+      "coverage_tags": ["conflicting_evidence"],
+      "versions": [{"fixture_id": "conflict", "display_name": "conflict.docx"}]
+    },
+    {
+      "document_id": "doc_4ef109a760a5c3ae4fad5fc45535fe91",
+      "project_id": "prj_c79d7854160449dd575c2dd98e90a408",
+      "knowledge_base_id": "kb_86ebb81bf5c97106435aab55c94b46da",
+      "family_group_id": "grp_negative_tuning",
+      "coverage_tags": ["knowledge_base_no_answer", "topic_similar_unsupported", "wrong_document"],
+      "versions": [{"fixture_id": "negative", "display_name": "negative.docx"}]
+    }
+  ]
+}
