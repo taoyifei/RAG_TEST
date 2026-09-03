@@ -14,9 +14,11 @@ from rag_app.core.capabilities import (
     ProviderMode,
 )
 from rag_app.core.errors import Conflict, ValidationFailed
+from rag_app.core.models import BlobPhysicalAudit
 from rag_app.core.ports import BlobPutResult, BlobReadResult, BlobWriteRequest
 
 _SHA256_LENGTH = 64
+_CAS_PREFIX_LENGTH = 2
 
 
 class FilesystemBlobStore:
@@ -186,6 +188,64 @@ class FilesystemBlobStore:
             )
         target.unlink(missing_ok=True)
         self._known_media_types.pop(blob_id, None)
+
+    def audit_inventory(self) -> tuple[BlobPhysicalAudit, ...]:
+        """失败关闭地扫描受控 `blobs/sha256` 两级布局。
+
+        Args:
+            无参数；扫描当前 Store 根。
+
+        Returns:
+            已验证摘要且不含路径的稳定物理清单。
+
+        Raises:
+            ValidationFailed: 发现 symlink、非普通文件或异常布局。
+
+        """
+        self._ensure_open()
+        audited: list[BlobPhysicalAudit] = []
+        for prefix in sorted(self._blob_root.iterdir()):
+            if (
+                prefix.is_symlink()
+                or not prefix.is_dir()
+                or len(prefix.name) != _CAS_PREFIX_LENGTH
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in prefix.name
+                )
+            ):
+                raise ValidationFailed(
+                    "Blob inventory 发现异常 prefix。", stage="blob.audit"
+                )
+            for target in sorted(prefix.iterdir()):
+                digest = target.name
+                if (
+                    target.is_symlink()
+                    or not target.is_file()
+                    or len(digest) != _SHA256_LENGTH
+                    or not digest.startswith(prefix.name)
+                    or any(
+                        character not in "0123456789abcdef"
+                        for character in digest
+                    )
+                ):
+                    raise ValidationFailed(
+                        "Blob inventory 发现异常对象。", stage="blob.audit"
+                    )
+                observed = hashlib.sha256(target.read_bytes()).hexdigest()
+                if observed != digest:
+                    raise ValidationFailed(
+                        "Blob inventory 摘要不匹配。", stage="blob.audit"
+                    )
+                audited.append(
+                    BlobPhysicalAudit(
+                        blob_id=f"sha256:{digest}",
+                        content_sha256=digest,
+                        size_bytes=target.stat().st_size,
+                        reason_code="OK",
+                    )
+                )
+        return tuple(audited)
 
     def close(self) -> None:
         """幂等关闭 Store。
