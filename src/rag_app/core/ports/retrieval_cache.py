@@ -22,12 +22,19 @@ class RetrievalCachePort(Protocol):
         """
         ...
 
-    def put(self, cache_key: str, result: SearchAnswerResult) -> None:
+    def put(
+        self,
+        cache_key: str,
+        result: SearchAnswerResult,
+        *,
+        ttl_seconds: int = 300,
+    ) -> None:
         """幂等保存不含未授权正文的结果。
 
         Args:
             cache_key: 实际 route/rerank 绑定的缓存键。
             result: 已通过发布门的最终结果。
+            ttl_seconds: 正数缓存生命周期。
 
         Returns:
             无返回值。

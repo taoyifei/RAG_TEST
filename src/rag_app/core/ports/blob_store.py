@@ -9,6 +9,7 @@ from pydantic import Field
 
 from rag_app.core.capabilities import ComponentDescriptor
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.persistence import BlobPhysicalAudit
 
 
 class BlobWriteRequest(FrozenModel):
@@ -96,6 +97,18 @@ class BlobStorePort(Protocol):
 
         Returns:
             无返回值。
+
+        """
+        ...
+
+    def audit_inventory(self) -> tuple[BlobPhysicalAudit, ...]:
+        """盘点受控 CAS 目录并校验路径、类型和摘要。
+
+        Args:
+            无参数；扫描 Store 自己的受控根。
+
+        Returns:
+            不含绝对路径或内容的物理对象清单。
 
         """
         ...

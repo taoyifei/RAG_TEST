@@ -19,6 +19,7 @@ from rag_app.core.ports.embedding_cache import EmbeddingCachePort
 from rag_app.core.ports.evidence_source import EvidenceSourcePort
 from rag_app.core.ports.exact_store import ExactStorePort
 from rag_app.core.ports.generator import GenerationRequest, GeneratorPort
+from rag_app.core.ports.lexical_analyzer import LexicalAnalyzerPort
 from rag_app.core.ports.lexical_store import LexicalStorePort
 from rag_app.core.ports.metadata_store import MetadataRecord, MetadataStorePort
 from rag_app.core.ports.parser import ParserPort
@@ -46,6 +47,7 @@ __all__ = [
     "ExactStorePort",
     "GenerationRequest",
     "GeneratorPort",
+    "LexicalAnalyzerPort",
     "LexicalStorePort",
     "MetadataRecord",
     "MetadataStorePort",

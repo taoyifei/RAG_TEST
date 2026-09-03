@@ -178,6 +178,43 @@ class VectorRevisionValidation(FrozenModel):
         return value
 
 
+class VectorPointAudit(FrozenModel):
+    """不暴露向量或正文的单个物理 Point 审计结果。"""
+
+    point_id: str | None = None
+    convertible: bool
+    reason_code: str = Field(min_length=1)
+    chunk_id: str | None = None
+    document_id: str | None = None
+    document_version_id: str | None = None
+    role: str | None = None
+    section_id: str | None = None
+    neighbor_group_id: str | None = None
+    content_sha256: str | None = None
+    vector_names: tuple[str, ...] = ()
+    vector_dimensions: tuple[tuple[str, StrictInt], ...] = ()
+
+
+class VectorRevisionInventory(FrozenModel):
+    """一次完整物理遍历生成的安全 Vector inventory。"""
+
+    raw_record_count: StrictInt = Field(ge=0)
+    converted_record_count: StrictInt = Field(ge=0)
+    invalid_record_count: StrictInt = Field(ge=0)
+    points: tuple[VectorPointAudit, ...]
+    inventory_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _validate_counts(self) -> Self:
+        if len(self.points) != self.raw_record_count:
+            raise ValueError("Vector inventory 必须逐条记录原始 Point。")
+        if self.converted_record_count + self.invalid_record_count != (
+            self.raw_record_count
+        ):
+            raise ValueError("Vector inventory 计数不守恒。")
+        return self
+
+
 class RevisionValidationEvidence(FrozenModel):
     """从 SQLite/FTS/Vector 实际读取的不可变激活证据。"""
 
@@ -190,6 +227,10 @@ class RevisionValidationEvidence(FrozenModel):
     report_checks: JsonObject
     deterministic_probe_passed: bool
     running_writer_count: StrictInt = Field(ge=0)
+    vector_inventory_hash: str | None = Field(
+        default=None,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
 
     @field_validator("vector_counts", mode="before")
     @classmethod
@@ -242,6 +283,8 @@ __all__ = [
     "RevisionValidationEvidence",
     "RevisionVectorSpec",
     "VectorPointPayload",
+    "VectorPointAudit",
+    "VectorRevisionInventory",
     "VectorRevisionValidation",
     "VectorSearchResult",
     "vector_point_id",

@@ -10,6 +10,7 @@ from rag_app.core.models import (
     NamedVectorPoint,
     RevisionVectorSpec,
     SearchHit,
+    VectorRevisionInventory,
     VectorRevisionValidation,
     VectorSearchRequest,
     VectorSearchResult,
@@ -143,6 +144,21 @@ class VectorStorePort(Protocol):
         """
         ...
 
+    def audit_revision(
+        self,
+        spec: RevisionVectorSpec,
+    ) -> VectorRevisionInventory:
+        """逐条盘点物理 Point，包含无法转换的原始记录。
+
+        Args:
+            spec: 目标 revision schema。
+
+        Returns:
+            不含正文和向量值的完整安全 inventory。
+
+        """
+        ...
+
     def delete_revision(self, spec: RevisionVectorSpec) -> None:
         """仅供已验证 GC Plan 删除整个不可变 namespace。
 
@@ -151,6 +167,18 @@ class VectorStorePort(Protocol):
 
         Returns:
             无返回值。
+
+        """
+        ...
+
+    def revision_exists(self, spec: RevisionVectorSpec) -> bool:
+        """判断 revision 物理 namespace 是否仍存在。
+
+        Args:
+            spec: 目标 revision schema。
+
+        Returns:
+            namespace 存在时为 True。
 
         """
         ...
