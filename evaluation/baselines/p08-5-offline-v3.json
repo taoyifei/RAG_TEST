@@ -7,6 +7,9 @@
   "split": {"tuning": 28, "holdout": 24},
   "baseline_run_id": "p08-20260903T093442Z-8c342979",
   "baseline_manifest_sha256": "sha256:a321d7534f3149fc67593701d2b98b4b59db9d68a5e134d31b377e5f6c132523",
+  "post_merge_run_id": "p08-20260903T094248Z-8c342979",
+  "post_merge_manifest_sha256": "sha256:f961db71f3716025245ecb9016ecc59b9071178517f25630d6faf0567a03e0ae",
+  "post_merge_integration_sha": "2d2eeecbced072c6801b9d89fb1ebfb85dc28e94",
   "selected_candidate": "fts5-only",
   "holdout_metrics": {
     "fusion_recall_at_1": {"value": 0.9, "sample_count": 20, "status": "ok"},

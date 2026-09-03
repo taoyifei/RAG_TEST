@@ -9,7 +9,9 @@
 - Feature commits before the documentation commit: `5915424`, `a377ba2`,
   `fc6a39b`, `2d72f39`, `cac35e2`, `f1c9e22`, `8bfee5e`, `fccd439`, and
   `e0f8f33`。
-- Integration merge commit: 完成 `--no-ff` 合并后补录。
+- Documentation commit on the phase branch: `c040eba`。
+- Integration merge commit: `2d2eeecbced072c6801b9d89fb1ebfb85dc28e94`
+  (`--no-ff`)。
 - `main` 与 `Industry` 保持只读。
 
 ## 交付范围
@@ -59,12 +61,21 @@ precision、Source Range precision/recall/F1、Answerable Accuracy 和 Refusal F
 - Final smoke: 71 passed、1 warning，8.49 秒。
 - Final offline Evaluation V3: gates passed，selected `fts5-only`。
 - Final `git diff --check`: passed。
+- Post-merge default-offline check: 1321 passed、75 deselected、4 warnings，
+  214.19 秒。
+- Post-merge smoke: 71 passed、1 warning，9.21 秒。
+- Post-merge Evaluation V3 run: `p08-20260903T094248Z-8c342979`，
+  manifest SHA
+  `sha256:f961db71f3716025245ecb9016ecc59b9071178517f25630d6faf0567a03e0ae`，
+  selected `fts5-only`，全部 gates passed，外部调用为空。
+- Post-merge `git diff --check`: passed。
 
 External services actually called: none。
 
 ## 状态
 
-以下状态以远程阶段分支和 `--no-ff` 集成验证完成为最终生效条件：
+以下状态已由阶段分支和 `--no-ff` 合并树的离线门禁证明；远程引用在推送后
+另行核验：
 
 ```text
 OFFLINE_EVALUATION_V3_READY: true
