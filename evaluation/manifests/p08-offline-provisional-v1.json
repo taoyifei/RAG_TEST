@@ -1,0 +1,74 @@
+{
+  "schema_version": "1",
+  "status": "provisional_offline_only",
+  "evidence_run_id": "p08-20260903T065037Z-945696f5",
+  "evidence_manifest_sha256": "sha256:554485ea613b22bdf593b2e1e355ba942201b0bbf786a23f2a77dbc9a59f1838",
+  "dataset_sha256": "sha256:404d5ed72cdc46da0468673aab92a2e3ba4f406741b36eb84bbe7224876f872a",
+  "requested_profile_id": "dev-offline",
+  "derived_profile_id": "p08-offline",
+  "selected_variant": "evidence-cap-8",
+  "selected_index_revision_ids": [
+    "irev_1578b45ec1cdb25d1f45b2f91abe4d67",
+    "irev_f46da66c265fafc66747fff8a9367b3a"
+  ],
+  "selected_index_fingerprint": "sha256:8ab40f2426c644b8a3d9a516428fdc5cedba2090054f82ebd179105dbee81d05",
+  "selected_serving_fingerprint": "sha256:87b403695f4722aff8638959ffbc3655638484afd616834243005e06eb62d87b",
+  "fixture_catalog_sha256": "sha256:a84160b6748fc8c8be126ec2edef30eece806f579c529138eca96fa6a619f280",
+  "parsing_policy": {
+    "policy_id": "docx-safe-v1",
+    "mode": "strict",
+    "tracked_changes": "final_view",
+    "comments": "metadata_only",
+    "hidden_text": "exclude",
+    "headers_footers": "metadata_only",
+    "footnotes_endnotes": "parse",
+    "images": "metadata",
+    "external_relationships": "metadata_only",
+    "unknown_indexable_content": "reject"
+  },
+  "chunking_policy": {
+    "chunker_id": "docx-structural-v3",
+    "target_tokens": 384,
+    "hard_max_tokens": 512,
+    "overlap_cap_tokens": 64,
+    "min_tail_tokens": 64,
+    "include_document_title": true,
+    "include_heading_path": true,
+    "include_list_path": true,
+    "include_table_header": true,
+    "required_embedding_slots": ["primary"],
+    "max_embedding_tokens_by_slot": [["primary", 32768]],
+    "provisional": true
+  },
+  "retrieval_policy": {
+    "max_variants": 2,
+    "max_channels": 6,
+    "enabled_channels": ["exact", "lexical", "dense"],
+    "channel_top_k": 24,
+    "fusion_candidate_limit": 48,
+    "rrf_k": 60,
+    "rerank_enabled": true,
+    "rerank_candidate_limit": 24,
+    "neighbor_expansion_enabled": true,
+    "neighbor_count": 1,
+    "section_chunk_limit": 2,
+    "evidence_token_budget": 1024,
+    "per_document_cap": 8,
+    "per_section_cap": 8,
+    "must_keep_limit": 3,
+    "cache_schema_version": 1,
+    "provisional": true
+  },
+  "confidence_refusal_policy": {
+    "id": "rule-confidence-v1",
+    "minimum_ambiguous_evidence": 2,
+    "provisional": true
+  },
+  "generator_policy": {
+    "id": "extractive-profile-v1",
+    "citation_protocol": "support-ids-v1"
+  },
+  "network_authorization_mode": "offline",
+  "external_services_actually_called": [],
+  "production_default": false
+}
