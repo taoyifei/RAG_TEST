@@ -30,6 +30,16 @@ _SYFT_IMAGE = (
     "anchore/syft@sha256:"
     "95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c"
 )
+_PIP_AUDIT_TRANSPORT_MARKERS = (
+    "connectionerror",
+    "connecttimeout",
+    "name resolution",
+    "readtimeout",
+    "sslerror",
+    "temporary failure",
+    "timed out",
+    "unexpected_eof_while_reading",
+)
 
 
 def _run(
@@ -244,6 +254,191 @@ def _write_license_inventory(sbom: Path, output: Path) -> None:
     )
 
 
+def _locked_dependencies(lock_file: Path) -> list[tuple[str, str]]:
+    """读取只允许精确版本的 Runtime 锁文件。
+
+    Args:
+        lock_file: `name==version` 格式的锁文件。
+
+    Returns:
+        按锁文件顺序排列的包名和版本。
+
+    Raises:
+        RuntimeError: 锁文件包含非精确版本或为空。
+
+    """
+    dependencies: list[tuple[str, str]] = []
+    for line_number, raw_line in enumerate(
+        lock_file.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.count("==") != 1:
+            raise RuntimeError(
+                f"{lock_file}:{line_number} 不是精确的 name==version。"
+            )
+        name, version = (item.strip() for item in line.split("==", 1))
+        if not name or not version:
+            raise RuntimeError(f"{lock_file}:{line_number} 缺少包名或版本。")
+        dependencies.append((name, version))
+    if not dependencies:
+        raise RuntimeError(f"Runtime 锁文件为空：{lock_file}")
+    return dependencies
+
+
+def _assert_osv_audit_clean(
+    dependencies: Sequence[tuple[str, str]],
+    payload: object,
+) -> None:
+    """验证 OSV 批量查询完整且没有漏洞结果。
+
+    Args:
+        dependencies: 本次提交给 OSV 的精确包版本。
+        payload: OSV `querybatch` 返回的 JSON 值。
+
+    Returns:
+        每个依赖都有结果且均无漏洞时无返回值。
+
+    Raises:
+        RuntimeError: 响应合同不完整或发现漏洞。
+
+    """
+    if not isinstance(payload, dict):
+        raise RuntimeError("OSV 依赖审计响应不是 JSON object。")
+    results = payload.get("results")
+    if not isinstance(results, list) or len(results) != len(dependencies):
+        raise RuntimeError("OSV 依赖审计响应数量与锁文件不一致。")
+    findings: list[str] = []
+    for (name, version), result in zip(dependencies, results, strict=True):
+        if not isinstance(result, dict):
+            raise RuntimeError("OSV 依赖审计结果项不是 JSON object。")
+        vulnerabilities = result.get("vulns", [])
+        if not isinstance(vulnerabilities, list):
+            raise RuntimeError("OSV 依赖审计漏洞字段不是数组。")
+        for vulnerability in vulnerabilities:
+            if not isinstance(vulnerability, dict):
+                raise RuntimeError("OSV 依赖审计漏洞项不是 JSON object。")
+            identifier = vulnerability.get("id", "unknown")
+            findings.append(f"{name}=={version}:{identifier}")
+    if findings:
+        raise RuntimeError("OSV 发现依赖漏洞：" + ", ".join(findings))
+
+
+def _run_osv_dependency_audit(lock_file: Path) -> None:
+    """通过 OSV 官方批量接口审计锁定依赖。
+
+    Args:
+        lock_file: Runtime 精确依赖锁文件。
+
+    Returns:
+        OSV 完整查询成功且无漏洞时无返回值。
+
+    Raises:
+        subprocess.CalledProcessError: curl 传输失败。
+        RuntimeError: OSV 响应无效或发现漏洞。
+
+    """
+    curl = _required_executable("curl")
+    dependencies = _locked_dependencies(lock_file)
+    request_payload = json.dumps(
+        {
+            "queries": [
+                {
+                    "package": {"ecosystem": "PyPI", "name": name},
+                    "version": version,
+                }
+                for name, version in dependencies
+            ]
+        }
+    )
+    command = (
+        curl,
+        "--fail-with-body",
+        "--silent",
+        "--show-error",
+        "--header",
+        "Content-Type: application/json",
+        "--data-binary",
+        "@-",
+        "https://api.osv.dev/v1/querybatch",
+    )
+    print("RUN " + " ".join(command), flush=True)
+    result = subprocess.run(  # noqa: S603
+        command,
+        cwd=_ROOT,
+        input=request_payload,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        if result.stderr:
+            print(result.stderr.rstrip(), file=sys.stderr, flush=True)
+        raise subprocess.CalledProcessError(result.returncode, command)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("OSV 依赖审计未返回有效 JSON。") from error
+    _assert_osv_audit_clean(dependencies, payload)
+    print(
+        "OK osv-dependency-audit "
+        f"packages={len(dependencies)} vulnerable_packages=0",
+        flush=True,
+    )
+
+
+def _audit_python_dependencies(lock_file: Path) -> None:
+    """先运行 pip-audit，仅在传输失败时改用 OSV 等价审计。
+
+    Args:
+        lock_file: Runtime 精确依赖锁文件。
+
+    Returns:
+        任一真实审计路径完整成功且无漏洞时无返回值。
+
+    Raises:
+        subprocess.CalledProcessError: 审计失败且不是可识别的传输故障。
+        RuntimeError: OSV 等价审计响应无效或发现漏洞。
+
+    """
+    command = (
+        sys.executable,
+        "-m",
+        "pip_audit",
+        "-r",
+        str(lock_file),
+    )
+    print("RUN " + " ".join(command), flush=True)
+    result = subprocess.run(  # noqa: S603
+        command,
+        cwd=_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    output = result.stdout or ""
+    if output:
+        print(output.rstrip(), flush=True)
+    if result.returncode == 0:
+        return
+    folded_output = output.casefold()
+    if not any(
+        marker in folded_output for marker in _PIP_AUDIT_TRANSPORT_MARKERS
+    ):
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=output,
+        )
+    print(
+        "PIP_AUDIT_TRANSPORT=BLOCKED; 尝试任务书允许的 OSV 官方等价审计。",
+        flush=True,
+    )
+    _run_osv_dependency_audit(lock_file)
+
+
 def _verify() -> None:
     """执行依赖、镜像、Secret、SBOM 与许可证门禁。
 
@@ -257,15 +452,7 @@ def _verify() -> None:
     docker = _required_executable("docker")
     npm = _required_executable("npm")
     output = _artifact_directory()
-    _run(
-        (
-            sys.executable,
-            "-m",
-            "pip_audit",
-            "-r",
-            "requirements.runtime.lock",
-        )
-    )
+    _audit_python_dependencies(_ROOT / "requirements.runtime.lock")
     _run((npm, "audit", "--audit-level=moderate"), cwd=_ROOT / "frontend")
     _verify_image_contract(docker)
     _run(

@@ -42,8 +42,12 @@
 - 真实双 Qdrant、备份恢复、性能证据：3 passed；容器和卷按唯一名称清理。
 - 独立 Compose 演练：Secret 初始化、`/live`、管理员 Session、创建 Project、
   `down/up` 后 Session 与 Project 持久化通过；专用三卷已删除。
-- pip-audit：无已知漏洞。Windows npm 官方审计：0 vulnerabilities；WSL npm 官方
-  Endpoint 两次 socket hangup，未用失败结果冒充通过。
+- pip-audit 曾完成并报告无已知漏洞；最终复核时 WSL Python 到 PyPI 的 TLS 握手
+  超时，明确记录 `PIP_AUDIT_TRANSPORT=BLOCKED`。随后使用任务书允许的等价路径，
+  经 OSV 官方 `querybatch` 实时检查 Runtime 锁文件全部 41 个精确版本，结果为 0 个
+  受影响包。只有识别为传输故障时才允许切换；pip-audit 报告漏洞时仍立即失败。
+- Windows npm 官方审计：0 vulnerabilities；WSL npm 官方 Endpoint 两次 socket
+  hangup，未用失败结果冒充通过。
 - Trivy 完整清单：54 个 Debian High/Critical，均无 FixedVersion；可修复
   High/Critical 阻断门为 0。完整风险保留在忽略跟踪的安全证据中。
 - CycloneDX：镜像 2877 components，源码 1197 components；许可证清单由镜像

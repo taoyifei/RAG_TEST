@@ -39,3 +39,8 @@ Secret 原文。CI 还会运行独立 secret-scan 作业；任何发现都阻止
 可修复 High/Critical 阻断门、CycloneDX SBOM 和确定性许可证清单。完整扫描中的
 无修复版本问题必须记录为剩余风险；`--ignore-unfixed` 只定义当前可修复阻断门，
 不能把完整风险清单说成零漏洞。
+
+Python 依赖默认由 pip-audit 审计。只有输出明确表明 TLS、超时、DNS 或连接传输
+故障时，命令才会把该路径标为 `BLOCKED`，并通过 OSV 官方批量接口实时检查锁文件
+内的全部精确版本。若 pip-audit 已报告漏洞，或 OSV 传输/响应/结果不完整，命令
+立即失败，不允许用回退路径掩盖发现。
