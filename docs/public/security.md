@@ -12,8 +12,8 @@ Product Runtime 的管理员页面使用 HttpOnly、SameSite=Lax Cookie，会话
 nosniff`、`Referrer-Policy: no-referrer`、`X-Frame-Options: DENY` 与受限的
 Permissions Policy。HTTPS 响应额外设置 HSTS。API 响应禁止缓存。
 
-默认固定窗口限流为每客户端每 60 秒：登录 5 次、Provider Test 5 次、上传 10
-次、查询 60 次。外部 API Token 必须满足 scope、项目/知识库范围、过期时间
+默认固定窗口限流为每客户端每 60 秒：Provider Test 5 次、上传 10 次、查询 60
+次；Bootstrap 登录独立限制为 5 次失败。外部 API Token 必须满足 scope、项目/知识库范围、过期时间
 与吊销状态。
 
 ## Secret

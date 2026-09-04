@@ -39,7 +39,6 @@ _INTERNAL_QUERY_PREFIX = "internal-query-"
 _INTERNAL_ADMIN_PREFIX = "internal-admin-"
 _HTTP_TOO_MANY_REQUESTS = 429
 _RATE_LIMITS = {
-    "login": 5,
     "provider-test": 5,
     "query": 60,
     "upload": 10,
@@ -305,8 +304,6 @@ def _request_security_error(
 
 
 def _rate_limit_bucket(path: str, method: str) -> str | None:
-    if method == "POST" and path == "/api/v1/console/session":
-        return "login"
     if method == "POST" and path.endswith(":validate"):
         return "provider-test"
     if method == "POST" and path.endswith((":search", ":answer")):

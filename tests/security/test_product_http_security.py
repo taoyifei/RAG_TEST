@@ -171,21 +171,3 @@ def test_provider_query_and_upload_routes_are_rate_limited(
         assert upload_responses[-1].headers["retry-after"] == "60"
     finally:
         harness.close()
-
-
-def test_login_route_is_rate_limited(tmp_path: Path) -> None:
-    harness = build_product_harness(tmp_path)
-    try:
-        responses = [
-            harness.client.post(
-                "/api/v1/console/session",
-                json={"bootstrap_token": "deliberately-wrong-value"},
-            )
-            for _ in range(5)
-        ]
-
-        assert all(item.status_code != 429 for item in responses[:4])
-        assert responses[-1].status_code == 429
-        assert responses[-1].headers["retry-after"] == "60"
-    finally:
-        harness.close()

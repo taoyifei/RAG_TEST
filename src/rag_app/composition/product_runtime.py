@@ -171,7 +171,15 @@ class _ResolvedProductServices:
     remote_resources: tuple[object, ...]
 
     def close(self) -> None:
-        """关闭当前 Profile 独占的缓存与远程连接池。"""
+        """关闭当前 Profile 独占的缓存与远程连接池。
+
+        Args:
+            无参数；关闭当前资源集合。
+
+        Returns:
+            无返回值。
+
+        """
         self.cache.close()
         for resource in reversed(self.remote_resources):
             closer = getattr(resource, "close", None)
@@ -199,7 +207,19 @@ class _PersistentUsageBudget(LocalUsageBudget):
         daily_request_limit: int,
         daily_estimated_token_limit: int,
     ) -> None:
-        """跨重启原子预留备用 Provider 日预算。"""
+        """跨重启原子预留备用 Provider 日预算。
+
+        Args:
+            provider_id: Provider 标识；连接已由实例冻结。
+            operation: 预算操作类别。
+            estimated_tokens: 本次调用的估算 Token 数。
+            daily_request_limit: 每日请求上限。
+            daily_estimated_token_limit: 每日估算 Token 上限。
+
+        Returns:
+            无返回值。
+
+        """
         del provider_id
         self._control.reserve_daily_provider_budget(
             self._connection_id,
