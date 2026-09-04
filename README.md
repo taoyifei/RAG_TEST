@@ -1,6 +1,6 @@
-# DOCX RAG
+# Word 文档 RAG
 
-这是一个可追溯、可增量更新、可恢复的 DOCX 检索增强生成产品。默认
+这是一个可追溯、可增量更新、可恢复的 DOC/DOCX 检索增强生成产品。默认
 `rag-app serve` 提供中文管理控制台和稳定 API；V1 使用 SQLite 保存产品状态，
 使用正式 Qdrant Server 保存向量。Jina 与阿里云百炼凭据由管理员在页面配置，
 不会写入镜像或浏览器存储。
@@ -30,9 +30,10 @@ docker compose run --rm --no-deps --entrypoint sh app \
 
 打开 `http://127.0.0.1:8088/`，输入 Bootstrap Token。随后在“模型服务”依次
 保存并测试 Jina 与阿里云百炼连接，创建项目和知识库，激活主备检索方案，上传
-DOCX 后即可问答。发送到远程 Provider 的只有管理员明确授权的查询、文档切片和
-重排候选；页面会显示操作、Token 与切换用量。没有凭据时仍可完成本地
-Exact/FTS 检索，但不得把它称为 Live Ready。
+DOC 或 DOCX 后即可问答。DOCX 保留结构化解析；旧版 DOC 以受限纯文本模式解析，
+并明确记录结构降级。发送到远程 Provider 的只有管理员明确授权的查询、文档切片
+和重排候选；页面会显示操作、Token 与切换用量。没有凭据时仍可完成本地 Exact/FTS
+检索，但不得把它称为 Live Ready。
 
 完整步骤见 `docs/public/quickstart.md`，部署与 TLS 见
 `docs/public/deployment.md`，数据出网边界见
@@ -59,7 +60,7 @@ python scripts/release.py acceptance
 
 ## 主要组成
 
-- `src/rag_app/`：安全 DOCX 解析、产品状态、检索、引用、备份与 API。
+- `src/rag_app/`：安全 DOC/DOCX 解析、产品状态、检索、引用、备份与 API。
 - `frontend/`：React/TypeScript 中文控制台与 Playwright 测试。
 - `compose.yaml` 与 `Dockerfile`：V1 默认的简单容器路径。
 - `evaluation/`：独立评测 schema、证据校验和指标计算。

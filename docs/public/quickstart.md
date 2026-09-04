@@ -35,7 +35,8 @@ docker compose run --rm --no-deps --entrypoint sh app \
 2. 保存并测试阿里云百炼连接，区域为 `cn-beijing`。
 3. 创建项目与知识库，选择 Jina Primary、Qwen Standby 和 Jina Reranker。
 4. 预览影响并确认激活；模型或维度变化会要求新索引 Revision。
-5. 上传 DOCX，等待 Primary/Standby 覆盖率均为 100% 后问答。
+5. 上传 DOC 或 DOCX，等待 Primary/Standby 覆盖率均为 100% 后问答。旧版 DOC
+   只保留段落纯文本，不保证表格、图片、页眉页脚、批注或修订结构。
 6. 在“接口访问”按最小 scope 创建外部 API Token；完整值只显示一次。
 
 ## 健康与停止

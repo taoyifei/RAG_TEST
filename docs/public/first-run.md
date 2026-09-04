@@ -10,7 +10,8 @@ Bootstrap Token、Qdrant API Key 与 Qdrant 配置，避免手工生成文件遗
 3. 打开浏览器，在首次使用向导中输入 Bootstrap Token。
 4. 配置并验证 Jina 与百炼连接。
 5. 创建项目和知识库，再创建、预览并确认检索方案。
-6. 上传 DOCX，等待索引任务成功后开始查询。
+6. 上传 DOC 或 DOCX，等待索引任务成功后开始查询。旧版 DOC 使用纯文本降级解析，
+   页面和解析报告会标明结构损失。
 
 没有 Provider 时仍可用离线 FTS/Exact 基础检索，但不能声称 Live Ready。浏览器
 刷新会恢复并轮换管理员会话；退出后 Cookie 立即失效。首次向导不会保存 Bootstrap

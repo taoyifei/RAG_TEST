@@ -37,6 +37,8 @@ Jina 和阿里都可能调整价格、免费额度、有效期和限流。2026-0
 
 ## 内容与质量声明
 
-真实 smoke 只允许公开合成短文本。企业 DOCX 是否允许发往 Jina 或阿里属于项目级数据
-治理决定，不能由“Provider 声明不训练数据”替代。P02 的 MockTransport 证明合同、状态机
-和隔离路径，不证明检索效果或成本。
+真实 smoke 默认只允许公开合成短文本。企业 DOC 或 DOCX 是否允许发往 Jina 或阿里属于
+项目级数据治理决定，必须逐项明确授权，不能由“Provider 声明不训练数据”替代。本次
+任务中点名文件的例外授权和收紧预算记录在
+`docs/decisions/P11-live-provider-authorization.md`。P02 的 MockTransport 证明合同、
+状态机和隔离路径，不证明检索效果或成本。

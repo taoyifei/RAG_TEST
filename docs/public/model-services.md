@@ -14,10 +14,12 @@ Jina 依次执行文档向量、查询向量、结果重排；百炼依次执行
 
 ## P11 Live Gate
 
-真实验收只发送公开合成短文本与由其生成的 DOCX，不发送企业文档、真实知识库、
-Secret、向量或 Provider 原始响应体。手工工作流要求 Environment 审批和显式授权
-短语，请求上限为 30 次 HTTP 尝试，估算输入 Token 上限为 20,000。重试也计入请求和
-Token 预算，超限会在下一次请求发出前失败。
+默认真实验收只发送公开合成短文本与由其生成的 DOCX。本次任务另有一项显式例外：
+只允许发送授权决策中点名的 `GM-03 质量管理制度.doc`，不扩展到其他企业文档或真实
+知识库，也不发送 Secret、向量或 Provider 原始响应体。手工工作流要求 Environment
+审批和显式授权短语；外层上限为 30 次 HTTP 尝试和 20,000 估算输入 Token，本次
+执行已进一步收紧为 25 次、全局 1,000、每 Provider 600。重试也计入请求和 Token
+预算，超限会在下一次请求发出前失败；点名 DOC 的完整双槽发布当前因此被预算阻断。
 
 验收依次覆盖 Jina document/query Embedding、Jina Reranker、百炼
 document/query Embedding、真实 Qdrant 双槽索引、正常 Primary 查询、测试内

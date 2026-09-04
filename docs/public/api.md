@@ -24,8 +24,10 @@ Project、Knowledge Base 和 Document scope，不接收客户端文件系统路�
 
 创建 Project、Knowledge Base、Document 和 DocumentVersion 时使用
 `Idempotency-Key`。新文档的 `display_name` 是 UTF-8 查询参数；新版本始终复用当前
-文档显示名，只有独立 Rename 接口可以修改它。上传正文是原始 DOCX 字节，
-`Content-Type` 必须是 DOCX 或 `application/octet-stream`。默认上传上限为 32 MiB。
+文档显示名，只有独立 Rename 接口可以修改它。上传正文是原始 DOC 或 DOCX 字节：
+DOC 使用 `application/msword` 或 `application/octet-stream`，DOCX 使用官方 OOXML
+MIME 或 `application/octet-stream`。扩展名、MIME 与文件签名必须一致；新版本依据
+上传内容识别格式，不受当前显示名扩展名影响。默认上传上限为 32 MiB。
 
 ## 查询和回答
 

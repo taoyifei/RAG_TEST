@@ -14,7 +14,8 @@
 2. 按 V1 Quickstart 初始化新 Secret；主密钥与旧系统分离。
 3. 运行支持的 Migration 和旧版本夹具升级门禁；FTS V1 明确 Reindex。
 4. 在页面重新创建并验证 Provider Connection 与 Retrieval Profile。
-5. 重新导入 DOCX，确认双槽覆盖、FTS、SourceSpan、引用与删除隔离。
+5. 重新导入 DOC 或 DOCX，确认双槽覆盖、FTS、SourceSpan、引用与删除隔离；旧版 DOC
+   同时核对纯文本降级警告，不将其视为 OOXML 结构保真。
 6. 完成重启、备份到新实例恢复、真实 Provider 和浏览器验收后再切流量。
 
 当前自动升级覆盖 P08.5、P09、P10、P10.5 到 Schema 15。旧 Industry 运行时的
