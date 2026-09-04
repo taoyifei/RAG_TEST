@@ -295,7 +295,17 @@ class LocalDataProfile(_ProfileModel):
     )
     journal_mode: str = Field(default="WAL", pattern=r"^(WAL|DELETE|MEMORY)$")
     busy_timeout_ms: StrictInt = Field(default=5000, ge=1, le=60000)
-    qdrant_mode: str = Field(default="memory", pattern=r"^(memory|path)$")
+    qdrant_mode: str = Field(default="memory", pattern=r"^(memory|path|url)$")
+    qdrant_url: str | None = Field(
+        default=None,
+        pattern=r"^https?://[^\s]+$",
+    )
+
+    @model_validator(mode="after")
+    def _validate_qdrant_location(self) -> Self:
+        if (self.qdrant_mode == "url") != (self.qdrant_url is not None):
+            raise ValueError("qdrant_url 只能且必须用于 url 模式。")
+        return self
 
 
 class RagProfile(_ProfileModel):

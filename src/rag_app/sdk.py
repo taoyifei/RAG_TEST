@@ -48,6 +48,12 @@ class RagSdk:
         system_status: Callable[[], SystemStatus],
         close: Callable[[], None],
         console: ConsoleInspectionService | None = None,
+        retrieval_resolver: Callable[[str, RetrievalService], RetrievalService]
+        | None = None,
+        revision_builder_resolver: Callable[
+            [str, LifecycleService], LifecycleService
+        ]
+        | None = None,
     ) -> None:
         """保存 Application Services，不持有具体 Store 类型。
 
@@ -62,6 +68,9 @@ class RagSdk:
             system_status: 只读系统状态函数。
             close: 组合根关闭函数。
             console: 可选 P10 只读控制台服务。
+            retrieval_resolver: 可选按知识库选择检索服务的解析器。
+            revision_builder_resolver: 可选按知识库选择 Revision
+                构建服务的解析器。
 
         Returns:
             无返回值。
@@ -77,6 +86,8 @@ class RagSdk:
         self._system_status = system_status
         self._close = close
         self._console = console
+        self._retrieval_resolver = retrieval_resolver
+        self._revision_builder_resolver = revision_builder_resolver
         self._closed = False
         self._diagnostics: dict[str, RetrievalDiagnostics] = {}
 
@@ -291,7 +302,8 @@ class RagSdk:
 
         """
         self._require_open()
-        job = self._lifecycle.create_document(
+        lifecycle = self._revision_lifecycle(knowledge_base_id)
+        job = lifecycle.create_document(
             project_id,
             knowledge_base_id,
             display_name=display_name,
@@ -327,7 +339,8 @@ class RagSdk:
 
         """
         self._require_open()
-        job = self._lifecycle.create_document_version(
+        lifecycle = self._revision_lifecycle(knowledge_base_id)
+        job = lifecycle.create_document_version(
             project_id,
             knowledge_base_id,
             document_id,
@@ -706,7 +719,13 @@ class RagSdk:
 
         """
         self._require_open()
-        result = self._retrieval.search_and_answer(
+        retrieval = self._retrieval
+        if self._retrieval_resolver is not None:
+            retrieval = self._retrieval_resolver(
+                knowledge_base_id,
+                self._retrieval,
+            )
+        result = retrieval.search_and_answer(
             SearchRequest(
                 scope=KnowledgeBaseScope(
                     project_id=project_id,
@@ -719,6 +738,14 @@ class RagSdk:
         if result.diagnostics is not None:
             self._diagnostics[result.trace_id] = result.diagnostics
         return result
+
+    def _revision_lifecycle(self, knowledge_base_id: str) -> LifecycleService:
+        if self._revision_builder_resolver is None:
+            return self._lifecycle
+        return self._revision_builder_resolver(
+            knowledge_base_id,
+            self._lifecycle,
+        )
 
     def answer(
         self,

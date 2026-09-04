@@ -181,12 +181,20 @@ class SystemStatus(FrozenModel):
     standby_live_evaluation_status: str = Field(
         default="not_verified", min_length=1, max_length=80
     )
+    reranker_live_evaluation_status: str = Field(
+        default="not_verified", min_length=1, max_length=80
+    )
     lexical_analyzer_id: str = Field(
         default="deterministic-cjk-bigram-v2", min_length=1, max_length=160
     )
     active_revision_schema: str = Field(
         default="chunk-v3/fts-v2", min_length=1, max_length=160
     )
+    runtime_identity: str = Field(
+        default="legacy-runtime", min_length=1, max_length=160
+    )
+    active_profile_count: StrictInt = Field(default=0, ge=0)
+    provider_validation_statuses: JsonObject = ()
 
 
 class QueuedIngestionDocument(FrozenModel):
