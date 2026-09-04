@@ -30,6 +30,8 @@ def test_product_compose_has_only_minimal_runtime_contract() -> None:
     assert environment["RAG_QDRANT_MODE"] == "url"
     assert environment["RAG_QDRANT_URL"] == "http://qdrant:6333"
     assert environment["RAG_QDRANT_API_KEY_FILE"].endswith("qdrant-api-key")
+    assert environment["RAG_TRUST_LOOPBACK_HOST_PROXY"] == "true"
+    assert application["ports"] == ["127.0.0.1:${RAG_PORT:-8088}:8088"]
     assert "/live" in " ".join(application["healthcheck"]["test"])
     assert "ports" not in services["qdrant"]
     assert "QDRANT__SERVICE__API_KEY" not in str(services["qdrant"])

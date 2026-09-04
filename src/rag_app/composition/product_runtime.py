@@ -96,6 +96,7 @@ class ProductRuntimeSettings:
         "http://localhost:8088",
     )
     trusted_proxies: frozenset[str] = frozenset()
+    trust_loopback_host_proxy: bool = False
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -157,6 +158,9 @@ class ProductRuntimeSettings:
             ),
             trusted_proxies=_parse_trusted_proxies(
                 os.environ.get("RAG_TRUSTED_PROXIES", "")
+            ),
+            trust_loopback_host_proxy=(
+                os.environ.get("RAG_TRUST_LOOPBACK_HOST_PROXY") == "true"
             ),
         )
 

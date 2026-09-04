@@ -95,6 +95,22 @@ def test_non_loopback_requires_tls_and_trusts_only_named_proxy(
 
         harness.runtime.settings = replace(
             harness.runtime.settings,
+            trust_loopback_host_proxy=True,
+        )
+        loopback_published = TestClient(
+            create_product_app(harness.runtime),
+            base_url="http://localhost",
+            client=("172.20.0.1", 41000),
+        )
+        try:
+            accepted = loopback_published.get("/live")
+            assert accepted.status_code == 200
+        finally:
+            loopback_published.close()
+
+        harness.runtime.settings = replace(
+            harness.runtime.settings,
+            trust_loopback_host_proxy=False,
             trusted_proxies=frozenset({"10.0.0.2"}),
         )
         proxied = TestClient(

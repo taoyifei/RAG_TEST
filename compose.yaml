@@ -54,6 +54,7 @@ services:
       RAG_QDRANT_API_KEY_FILE: /run/rag-secrets/qdrant-api-key
       RAG_TRUSTED_ORIGINS: ${RAG_TRUSTED_ORIGINS:-http://127.0.0.1:8088,http://localhost:8088}
       RAG_TRUSTED_PROXIES: ${RAG_TRUSTED_PROXIES:-}
+      RAG_TRUST_LOOPBACK_HOST_PROXY: "true"
     volumes:
       - rag_data:/data
       - rag_secrets:/run/rag-secrets
@@ -61,7 +62,7 @@ services:
       - rag-internal
       - rag-egress
     ports:
-      - ${RAG_PORT:-8088}:8088
+      - 127.0.0.1:${RAG_PORT:-8088}:8088
     healthcheck:
       test:
         - CMD

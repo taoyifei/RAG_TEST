@@ -277,8 +277,11 @@ def _request_security_error(
 ) -> StarletteResponse | None:
     hostname = request.url.hostname
     peer = request.client.host if request.client else ""
+    loopback_request = _is_loopback(hostname) and (
+        _is_loopback(peer) or runtime.settings.trust_loopback_host_proxy
+    )
     if (
-        not (_is_loopback(hostname) and _is_loopback(peer))
+        not loopback_request
         and _effective_scheme(request, runtime) != "https"
     ):
         return _policy_error(400, "TLS_REQUIRED", "非本机访问必须使用 HTTPS。")
