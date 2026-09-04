@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
 
 const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
@@ -72,6 +72,24 @@ async function uploadAndWait(page: Page, name: string, content: string) {
   });
 }
 
+async function validateConnection(
+  page: Page,
+  connection: Locator,
+  buttonName: string,
+) {
+  const validationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/api/v1/provider-connections/") &&
+      response.url().endsWith(":validate"),
+  );
+  await connection.getByRole("button", { name: buttonName }).click();
+  const response = await validationResponse;
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { status: string };
+  expect(payload.status).toBe("succeeded");
+}
+
 async function configureModelServices(page: Page) {
   await page.getByRole("button", { name: "模型服务" }).click();
   await page
@@ -79,19 +97,19 @@ async function configureModelServices(page: Page) {
     .fill("synthetic-jina-browser-value");
   await page.getByRole("button", { name: "保存连接" }).click();
   const jina = page.getByRole("article").filter({ hasText: "Jina 主连接" });
-  await jina.getByRole("button", { name: "测试文档向量" }).click();
-  await jina.getByRole("button", { name: "测试查询向量" }).click();
-  await jina.getByRole("button", { name: "测试结果重排" }).click();
+  await validateConnection(page, jina, "测试文档向量");
+  await validateConnection(page, jina, "测试查询向量");
+  await validateConnection(page, jina, "测试结果重排");
 
   await page.getByLabel("服务商").selectOption("aliyun-model-studio");
   await page
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-aliyun-browser-value");
-  await page.getByLabel("工作空间标识").fill("synthetic-workspace");
+  await page.getByLabel("工作空间标识").fill("llm-syntheticworkspace");
   await page.getByRole("button", { name: "保存连接" }).click();
   const aliyun = page.getByRole("article").filter({ hasText: "百炼备用连接" });
-  await aliyun.getByRole("button", { name: "测试文档向量" }).click();
-  await aliyun.getByRole("button", { name: "测试查询向量" }).click();
+  await validateConnection(page, aliyun, "测试文档向量");
+  await validateConnection(page, aliyun, "测试查询向量");
 }
 
 async function createRetrievalProfile(
@@ -222,7 +240,14 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await page.getByRole("button", { name: "模型服务" }).click();
   await page.getByLabel("待轮换凭据").selectOption({ index: 1 });
   await page.getByLabel("新服务密钥").fill("rotated-jina-browser-value");
+  const rotationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/api/v1/provider-credentials/") &&
+      response.url().endsWith(":rotate"),
+  );
   await page.getByRole("button", { name: "轮换密钥" }).click();
+  expect((await rotationResponse).ok()).toBeTruthy();
   await createRetrievalProfile(page);
   await expect(page.getByText("无需重建索引")).toBeVisible();
   await createRetrievalProfile(page, "为新版业务检索查询生成准确表示");
