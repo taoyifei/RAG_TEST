@@ -38,6 +38,13 @@ models/
 *.sqlite3
 *.log
 logs/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/coverage/
+/frontend/.vite/
+/frontend/playwright-report/
+/frontend/test-results/
+/output/playwright/
 *Zone.Identifier*
 /src/CACHEDIR.TAG
 /src/missing_stubs

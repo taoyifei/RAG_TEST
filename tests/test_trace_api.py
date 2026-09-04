@@ -120,7 +120,6 @@ def trace_api(tmp_path: Path) -> Iterator[_ApiContext]:
             jobs=jobs,
             feedback=feedback,
             pipeline_fingerprint="pipeline-1",
-            frontend_dir=Path(__file__).parents[1] / "frontend",
             trace_store=store,
             trace_recorder=recorder,
         )
@@ -459,12 +458,8 @@ def test_full_debug_store_failure_is_503_before_query_executes(
     assert trace_api.query.debug_calls == 0
 
 
-def test_debug_page_uses_only_local_assets(trace_api: _ApiContext) -> None:
-    page = trace_api.client.get("/debug/")
-    script = trace_api.client.get("/assets/debug.js")
-
-    assert page.status_code == 200
-    assert script.status_code == 200
-    assert "https://" not in page.text
-    assert "innerHTML" not in script.text
-    assert "/api/admin/traces" in script.text
+def test_legacy_debug_page_is_not_a_second_frontend(
+    trace_api: _ApiContext,
+) -> None:
+    assert trace_api.client.get("/debug/").status_code == 404
+    assert trace_api.client.get("/assets/debug.js").status_code == 404

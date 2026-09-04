@@ -23,7 +23,7 @@ def test_asset_selfcheck_passes_without_remote_resources(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "config").mkdir()
-    (tmp_path / "frontend").mkdir()
+    (tmp_path / "frontend/assets").mkdir(parents=True)
     source_root = Path(__file__).parents[1]
     pipeline = source_root / "deployment/config/pipeline.json"
     retrieval = source_root / "deployment/config/retrieval.json"
@@ -37,16 +37,23 @@ def test_asset_selfcheck_passes_without_remote_resources(
     (tmp_path / "config/pipeline.json").write_bytes(pipeline.read_bytes())
     (tmp_path / "config/retrieval.json").write_bytes(retrieval.read_bytes())
     tokenizer.save(str(tmp_path / "tokenizer.json"))
-    for name in ("index.html", "styles.css", "app.js"):
-        source = source_root / "frontend" / name
-        (tmp_path / "frontend" / name).write_bytes(source.read_bytes())
+    (tmp_path / "frontend/index.html").write_text(
+        '<script type="module" src="/assets/app.js"></script>',
+        encoding="utf-8",
+    )
+    (tmp_path / "frontend/assets/app.js").write_text(
+        "document.querySelector('#root')", encoding="utf-8"
+    )
+    (tmp_path / "frontend/assets/styles.css").write_text(
+        ":root { color-scheme: light; }", encoding="utf-8"
+    )
     paths = (
         "config/pipeline.json",
         "config/retrieval.json",
         "tokenizer.json",
         "frontend/index.html",
-        "frontend/styles.css",
-        "frontend/app.js",
+        "frontend/assets/styles.css",
+        "frontend/assets/app.js",
     )
     manifest = _write_manifest(tmp_path, paths)
 
