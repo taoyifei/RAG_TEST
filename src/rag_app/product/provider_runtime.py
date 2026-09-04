@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -223,7 +224,10 @@ class ProviderRuntimeRegistry:
         connection = self._control.get_connection(connection_id)
         validate_model(connection.provider_type, model, "embedding.document")
         resolver = self._secret_resolver(connection)
-        http_client = self._adapter_http_client(connection)
+        http_client = self._adapter_http_client(
+            connection,
+            selected_slot=slot_id,
+        )
         common = {
             "slot_id": slot_id,
             "model": model,
@@ -280,7 +284,10 @@ class ProviderRuntimeRegistry:
             raise ValueError("V1 Reranker 只支持 Jina。")
         return JinaRerankerV35Adapter(
             JinaRerankerConfig(model=model, egress_allowed=True),
-            http_client=self._adapter_http_client(connection),
+            http_client=self._adapter_http_client(
+                connection,
+                reranker_mode="remote",
+            ),
             api_key_resolver=self._secret_resolver(connection),
         )
 
@@ -336,19 +343,45 @@ class ProviderRuntimeRegistry:
         return _resolve
 
     def _adapter_http_client(
-        self, connection: ProviderConnection
-    ) -> ProviderHttpClient | None:
-        if self._transport_factory is None:
-            return None
-        transport = self._transport_factory(connection)
-        client = httpx.Client(transport=transport)
+        self,
+        connection: ProviderConnection,
+        *,
+        selected_slot: str | None = None,
+        reranker_mode: str | None = None,
+    ) -> ProviderHttpClient:
+        transport = (
+            None
+            if self._transport_factory is None
+            else self._transport_factory(connection)
+        )
+        client = (
+            None if transport is None else httpx.Client(transport=transport)
+        )
         if connection.provider_type == "jina":
             base_url = "https://api.jina.ai/v1"
         else:
-            workspace = connection.workspace_id or "invalid"
+            workspace = connection.workspace_id or ""
+            if re.fullmatch(r"[a-z0-9-]+", workspace) is None:
+                raise ConfigurationError(
+                    "阿里 Workspace ID 缺失或格式无效。",
+                    stage="provider.aliyun.config",
+                )
             region = connection.region or "cn-beijing"
             base_url = f"https://{workspace}.{region}.maas.aliyuncs.com"
-        return ProviderHttpClient(base_url, client=client)
+        return ProviderHttpClient(
+            base_url,
+            client=client,
+            observer=lambda call: self._control.record_provider_call(
+                connection.connection_id,
+                call,
+                selected_slot=selected_slot,
+                failover=(
+                    selected_slot == "standby"
+                    and call.operation == "embedding.query"
+                ),
+                reranker_mode=reranker_mode,
+            ),
+        )
 
 
 class _ValidationError(Exception):

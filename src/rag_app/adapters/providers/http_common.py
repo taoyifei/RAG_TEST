@@ -80,6 +80,7 @@ class ProviderHttpClient:
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         random_value: Callable[[], float] = random.random,
+        observer: Callable[[ProviderCall], None] | None = None,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -93,6 +94,7 @@ class ProviderHttpClient:
             monotonic: 可测试的耗时钟。
             wall_clock: 解析 HTTP-date Retry-After 的墙上时钟。
             random_value: 返回 ``[0, 1]`` 的 full-jitter 随机源。
+            observer: 可选脱敏调用观察器；失败不得覆盖业务结果。
 
         Returns:
             无返回值。
@@ -126,6 +128,7 @@ class ProviderHttpClient:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._random_value = random_value
+        self._observer = observer
         self._closed = False
 
     def request_json(  # noqa: PLR0913
@@ -196,6 +199,7 @@ class ProviderHttpClient:
                     last_retry_after_ms,
                 )
                 if attempt == self._max_attempts:
+                    self._observe(call)
                     raise ProviderHttpError(
                         ProviderFailureCategory.TRANSIENT,
                         "HTTP_TRANSPORT",
@@ -225,6 +229,7 @@ class ProviderHttpClient:
                     last_retry_after_ms,
                 )
                 if attempt == self._max_attempts:
+                    self._observe(call)
                     raise ProviderHttpError(
                         ProviderFailureCategory.TRANSIENT,
                         f"HTTP_{status}",
@@ -247,6 +252,7 @@ class ProviderHttpClient:
                     estimated_tokens,
                     None,
                 )
+                self._observe(call)
                 raise ProviderHttpError(category, f"HTTP_{status}", call)
             content = response.content
             if len(content) > self._max_response_bytes:
@@ -288,22 +294,21 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                 ) from None
-            return ProviderHttpResult(
-                payload=response_payload,
-                call=self._call(
-                    provider_id,
-                    operation,
-                    model,
-                    path,
-                    attempt,
-                    started,
-                    "SUCCESS",
-                    "OK",
-                    input_count,
-                    estimated_tokens,
-                    last_retry_after_ms,
-                ),
+            call = self._call(
+                provider_id,
+                operation,
+                model,
+                path,
+                attempt,
+                started,
+                "SUCCESS",
+                "OK",
+                input_count,
+                estimated_tokens,
+                last_retry_after_ms,
             )
+            self._observe(call)
+            return ProviderHttpResult(payload=response_payload, call=call)
         raise AssertionError("有限尝试循环必须返回或抛出。")
 
     def close(self) -> None:
@@ -346,6 +351,7 @@ class ProviderHttpClient:
             estimated_tokens,
             None,
         )
+        self._observe(call)
         return ProviderHttpError(
             ProviderFailureCategory.RESPONSE_CONTRACT,
             reason_code,
@@ -386,6 +392,15 @@ class ProviderHttpClient:
             input_count=input_count,
             estimated_tokens=estimated_tokens,
         )
+
+    def _observe(self, call: ProviderCall) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(call)
+        except Exception:
+            # 可观测持久层故障不能覆盖检索或建索引的业务结果。
+            return
 
     def _sleep_before_retry(
         self, attempt: int, retry_after: float | None

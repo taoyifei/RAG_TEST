@@ -80,6 +80,22 @@ export interface ProviderValidation {
   finished_at: string;
 }
 
+export interface ProviderUsageDaily {
+  usage_date: string;
+  connection_id: string;
+  operation: string;
+  request_count: number;
+  successful_requests: number;
+  failed_requests: number;
+  estimated_tokens: number;
+  observed_tokens: number;
+  retry_count: number;
+  rate_limit_count: number;
+  failover_count: number;
+  cache_hit_count: number;
+  average_latency_ms: number;
+}
+
 export interface ImpactPreview {
   impact:
     | "NO_REINDEX"
@@ -488,6 +504,11 @@ export const api = {
   listValidations: (connectionId: string) =>
     request<{ items: ProviderValidation[] }>(
       `/api/v1/provider-connections/${connectionId}/validations`,
+      "",
+    ),
+  listDailyProviderUsage: () =>
+    request<{ items: ProviderUsageDaily[] }>(
+      "/api/v1/provider-usage/daily",
       "",
     ),
   listRetrievalProfiles: (knowledgeBaseId: string) =>

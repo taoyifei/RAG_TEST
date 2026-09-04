@@ -60,7 +60,7 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 14
+        assert migration_count == 15
     finally:
         harness.close()
 
@@ -155,6 +155,14 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
                     (job.job_id,),
                 ).fetchone()[0]
             )
+            operation_rows = tuple(
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT operation, selected_slot, failover "
+                    "FROM provider_operation_events "
+                    "WHERE selected_slot IS NOT NULL"
+                ).fetchall()
+            )
 
         assert job.state.value == "succeeded"
         assert [(row[0], row[1]) for row in slots] == [
@@ -162,6 +170,9 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
             ("standby", "dense_standby"),
         ]
         assert usage == 2
+        assert ("embedding.document", "primary", 0) in operation_rows
+        assert ("embedding.document", "standby", 0) in operation_rows
+        assert ("embedding.query", "primary", 0) in operation_rows
         assert result.selected_embedding_slot == "primary"
         assert result.selected_vector_name == "dense_primary"
         assert result.rerank_execution_mode == "provider"
@@ -250,10 +261,19 @@ def test_product_profile_fails_over_and_returns_to_primary(
         recovered = harness.runtime.sdk.search(
             project_id, knowledge_base_id, "主备切换恢复探测"
         )
+        with harness.runtime.connections.transaction() as connection:
+            failover_count = int(
+                connection.execute(
+                    "SELECT count(*) FROM provider_operation_events "
+                    "WHERE operation='embedding.query' "
+                    "AND selected_slot='standby' AND failover=1"
+                ).fetchone()[0]
+            )
 
         assert first.selected_embedding_slot == "standby"
         assert first.selected_vector_name == "dense_standby"
         assert second.selected_embedding_slot == "standby"
+        assert failover_count == 2
         assert recovered.selected_embedding_slot == "primary"
         assert recovered.selected_vector_name == "dense_primary"
     finally:

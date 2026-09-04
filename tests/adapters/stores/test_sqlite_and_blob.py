@@ -43,7 +43,7 @@ def test_migrations_are_repeatable_and_detect_checksum_drift(
     first = runner.migrate()
     second = runner.migrate()
 
-    assert [item.version for item in first] == list(range(1, 15))
+    assert [item.version for item in first] == list(range(1, 16))
     assert second == first
     path = migrations / "0005_embedding_cache_gc.sql"
     path.write_text(

@@ -23,7 +23,10 @@ from rag_app.application.durable_jobs import DurableJobRunner
 from rag_app.application.embedding_indexing import DocumentEmbeddingService
 from rag_app.application.embedding_router import QueryEmbeddingRouter
 from rag_app.application.lifecycle import LifecycleService
-from rag_app.application.provider_health import ProviderCircuitBreaker
+from rag_app.application.provider_health import (
+    LocalUsageBudget,
+    ProviderCircuitBreaker,
+)
 from rag_app.application.retrieval import RetrievalService
 from rag_app.application.revision_builder import RevisionBuilder
 from rag_app.application.revision_validator import RevisionValidator
@@ -158,6 +161,37 @@ class _ResolvedProductServices:
             closer = getattr(resource, "close", None)
             if callable(closer):
                 closer()
+
+
+class _PersistentUsageBudget(LocalUsageBudget):
+    """把备用查询预算预留写入 Product SQLite。"""
+
+    def __init__(
+        self,
+        control: ProductControlStore,
+        connection_id: str,
+    ) -> None:
+        self._control = control
+        self._connection_id = connection_id
+
+    def reserve(
+        self,
+        provider_id: str,
+        operation: str,
+        estimated_tokens: int,
+        *,
+        daily_request_limit: int,
+        daily_estimated_token_limit: int,
+    ) -> None:
+        """跨重启原子预留备用 Provider 日预算。"""
+        del provider_id
+        self._control.reserve_daily_provider_budget(
+            self._connection_id,
+            operation,
+            estimated_tokens,
+            request_limit=daily_request_limit,
+            token_limit=daily_estimated_token_limit,
+        )
 
 
 class ProductProfileResolver:
@@ -439,6 +473,14 @@ class ProductProfileResolver:
                     None
                     if self._circuit_factory is None
                     else self._circuit_factory()
+                ),
+                usage_budget=(
+                    None
+                    if profile.standby_connection_id is None
+                    else _PersistentUsageBudget(
+                        self._control,
+                        profile.standby_connection_id,
+                    )
                 ),
             ),
             reranker=reranker,

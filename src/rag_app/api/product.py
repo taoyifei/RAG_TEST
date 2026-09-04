@@ -495,6 +495,15 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             ]
         }
 
+    @app.get("/api/v1/provider-usage/daily", tags=["model-services"])
+    def _daily_provider_usage() -> dict[str, object]:
+        return {
+            "items": [
+                item.model_dump(mode="json")
+                for item in runtime.control.list_daily_provider_usage()
+            ]
+        }
+
 
 def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     @app.get(

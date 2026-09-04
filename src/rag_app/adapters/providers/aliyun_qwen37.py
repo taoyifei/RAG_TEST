@@ -216,7 +216,7 @@ class AliyunQwen37EmbeddingAdapter:
                         "Content-Type": "application/json",
                     },
                     provider_id="aliyun-qwen37",
-                    operation="embedding",
+                    operation=f"embedding.{request.role.value}",
                     model=self._config.model,
                     input_count=len(batch),
                     estimated_tokens=sum(

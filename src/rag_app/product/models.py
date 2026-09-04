@@ -85,6 +85,24 @@ class ProviderValidationRun(FrozenModel):
     synthetic_payload_hash: str
 
 
+class ProviderUsageDaily(FrozenModel):
+    """按 UTC 日、连接与操作聚合的脱敏 Provider 用量。"""
+
+    usage_date: str
+    connection_id: str
+    operation: str
+    request_count: StrictInt = Field(ge=0)
+    successful_requests: StrictInt = Field(ge=0)
+    failed_requests: StrictInt = Field(ge=0)
+    estimated_tokens: StrictInt = Field(ge=0)
+    observed_tokens: StrictInt = Field(ge=0)
+    retry_count: StrictInt = Field(ge=0)
+    rate_limit_count: StrictInt = Field(ge=0)
+    failover_count: StrictInt = Field(ge=0)
+    cache_hit_count: StrictInt = Field(ge=0)
+    average_latency_ms: StrictInt = Field(ge=0)
+
+
 class RetrievalProfileRevision(FrozenModel):
     """知识库级不可变 Retrieval Profile Revision。"""
 
@@ -173,6 +191,7 @@ __all__ = [
     "ImpactPreview",
     "ProviderConnection",
     "ProviderConnectionDraft",
+    "ProviderUsageDaily",
     "ProviderValidationRun",
     "RetrievalProfileDraft",
     "RetrievalProfileRevision",

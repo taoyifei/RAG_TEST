@@ -8,8 +8,9 @@ from datetime import UTC, datetime
 from sqlite3 import Row
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
-from rag_app.core.errors import Conflict, NotFound
+from rag_app.core.errors import Conflict, NotFound, PolicyDenied
 from rag_app.core.identifiers import canonical_json, canonical_sha256
+from rag_app.core.models import ProviderCall
 from rag_app.core.models.common import freeze_json_object
 from rag_app.product.catalog import (
     require_provider,
@@ -21,6 +22,7 @@ from rag_app.product.models import (
     ImpactPreview,
     ProviderConnection,
     ProviderConnectionDraft,
+    ProviderUsageDaily,
     ProviderValidationRun,
     RetrievalProfileDraft,
     RetrievalProfileRevision,
@@ -29,6 +31,7 @@ from rag_app.product.models import (
 _MAX_REQUEST_BUDGET = 20
 _MAX_TOKEN_BUDGET = 1_000_000
 _MAX_VALIDATION_PAGE = 200
+_MAX_USAGE_PAGE = 1000
 _P11_DIMENSION = 1024
 
 
@@ -218,7 +221,230 @@ class ProductControlStore:
                     validation.connection_id,
                 ),
             )
+        self.record_provider_operation(
+            validation.connection_id,
+            operation=validation.operation,
+            status_category=(
+                "SUCCESS"
+                if validation.status == "succeeded"
+                else validation.http_category
+            ),
+            latency_ms=validation.latency_ms,
+            estimated_tokens=validation.estimated_tokens,
+            observed_tokens=validation.observed_tokens,
+            retry_count=0,
+            rate_limited=validation.http_category == "http_429",
+            safe_error_code=validation.safe_error_code,
+        )
         return validation
+
+    def record_provider_call(  # noqa: PLR0913
+        self,
+        connection_id: str,
+        call: ProviderCall,
+        *,
+        selected_slot: str | None = None,
+        failover: bool = False,
+        reranker_mode: str | None = None,
+        cache_hit: bool = False,
+    ) -> None:
+        """持久化一个不含请求正文、向量或响应体的调用事件。
+
+        Args:
+            connection_id: 页面配置的连接 ID。
+            call: Provider adapter 生成的脱敏调用摘要。
+            selected_slot: 可选 primary/standby 槽位。
+            failover: 是否实际选择备用槽。
+            reranker_mode: 可选重排模式。
+            cache_hit: 是否命中本地缓存。
+
+        Returns:
+            无返回值。
+
+        """
+        self.record_provider_operation(
+            connection_id,
+            operation=call.operation,
+            status_category=call.status_category or "UNKNOWN",
+            latency_ms=call.elapsed_ms,
+            estimated_tokens=call.estimated_tokens or 0,
+            observed_tokens=None,
+            retry_count=call.retry_count,
+            rate_limited=call.reason_code == "HTTP_429",
+            selected_slot=selected_slot,
+            failover=failover,
+            reranker_mode=reranker_mode,
+            cache_hit=cache_hit,
+            safe_error_code=(
+                None if call.reason_code in {None, "OK"} else call.reason_code
+            ),
+        )
+
+    def record_provider_operation(  # noqa: PLR0913
+        self,
+        connection_id: str,
+        *,
+        operation: str,
+        status_category: str,
+        latency_ms: int,
+        estimated_tokens: int,
+        observed_tokens: int | None,
+        retry_count: int,
+        rate_limited: bool,
+        selected_slot: str | None = None,
+        failover: bool = False,
+        reranker_mode: str | None = None,
+        cache_hit: bool = False,
+        safe_error_code: str | None = None,
+    ) -> None:
+        """写入固定字段的 Provider 可观测事件。
+
+        Args:
+            connection_id: 页面连接 ID。
+            operation: 固定操作类别。
+            status_category: 脱敏状态类别。
+            latency_ms: 总耗时毫秒。
+            estimated_tokens: 本地估算 Token。
+            observed_tokens: Provider 返回的可选 Token。
+            retry_count: 重试次数。
+            rate_limited: 是否遇到限流。
+            selected_slot: 实际选择的向量槽。
+            failover: 是否发生备用切换。
+            reranker_mode: 可选重排模式。
+            cache_hit: 是否命中缓存。
+            safe_error_code: 可选稳定错误码。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._connections.transaction(write=True) as connection:
+            connection.execute(
+                "INSERT INTO provider_operation_events("
+                "event_id, connection_id, occurred_at, operation, "
+                "status_category, latency_ms, estimated_tokens, "
+                "observed_tokens, retry_count, rate_limited, selected_slot, "
+                "failover, reranker_mode, cache_hit, safe_error_code) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _identifier("opevt"),
+                    connection_id,
+                    _now(),
+                    operation,
+                    status_category,
+                    latency_ms,
+                    estimated_tokens,
+                    observed_tokens,
+                    retry_count,
+                    int(rate_limited),
+                    selected_slot,
+                    int(failover),
+                    reranker_mode,
+                    int(cache_hit),
+                    safe_error_code,
+                ),
+            )
+
+    def list_daily_provider_usage(
+        self,
+        *,
+        limit: int = 200,
+    ) -> tuple[ProviderUsageDaily, ...]:
+        """返回 UTC 日、连接和操作三级聚合。
+
+        Args:
+            limit: 最多返回的聚合行数。
+
+        Returns:
+            不含正文、向量、端点和 Secret 的用量行。
+
+        """
+        if not 1 <= limit <= _MAX_USAGE_PAGE:
+            raise ValueError("Provider 用量页大小必须在 1 到 1000。")
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT substr(occurred_at, 1, 10) AS usage_date, "
+                "connection_id, operation, count(*) AS request_count, "
+                "sum(CASE WHEN status_category='SUCCESS' THEN 1 ELSE 0 END) "
+                "AS successful_requests, "
+                "sum(CASE WHEN status_category='SUCCESS' THEN 0 ELSE 1 END) "
+                "AS failed_requests, "
+                "sum(estimated_tokens) AS estimated_tokens, "
+                "sum(COALESCE(observed_tokens, 0)) AS observed_tokens, "
+                "sum(retry_count) AS retry_count, "
+                "sum(rate_limited) AS rate_limit_count, "
+                "sum(failover) AS failover_count, "
+                "sum(cache_hit) AS cache_hit_count, "
+                "CAST(round(avg(latency_ms)) AS INTEGER) AS average_latency_ms "
+                "FROM provider_operation_events "
+                "GROUP BY usage_date, connection_id, operation "
+                "ORDER BY usage_date DESC, connection_id, operation LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(ProviderUsageDaily(**dict(row)) for row in rows)
+
+    def reserve_daily_provider_budget(
+        self,
+        connection_id: str,
+        operation: str,
+        estimated_tokens: int,
+        *,
+        request_limit: int,
+        token_limit: int,
+    ) -> None:
+        """原子预留跨进程、跨重启的 UTC 日 Provider 预算。
+
+        Args:
+            connection_id: 备用 Provider 连接。
+            operation: 固定操作名。
+            estimated_tokens: 本次本地估算量。
+            request_limit: UTC 日请求上限。
+            token_limit: UTC 日 Token 上限。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            PolicyDenied: 预算无效或本次预留将超限。
+
+        """
+        if estimated_tokens < 0 or request_limit <= 0 or token_limit <= 0:
+            raise PolicyDenied(
+                "Provider 日预算未配置正数限制。",
+                stage="provider.budget",
+            )
+        today = datetime.now(UTC).date().isoformat()
+        with self._connections.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT requests, estimated_tokens FROM provider_daily_budgets "
+                "WHERE usage_date=? AND connection_id=? AND operation=?",
+                (today, connection_id, operation),
+            ).fetchone()
+            requests = 0 if row is None else int(row["requests"])
+            tokens = 0 if row is None else int(row["estimated_tokens"])
+            if (
+                requests + 1 > request_limit
+                or tokens + estimated_tokens > token_limit
+            ):
+                raise PolicyDenied(
+                    "Provider 日预算已耗尽。",
+                    stage="provider.budget",
+                    details={
+                        "connection_id": connection_id,
+                        "operation": operation,
+                    },
+                )
+            connection.execute(
+                "INSERT INTO provider_daily_budgets("
+                "usage_date, connection_id, operation, requests, "
+                "estimated_tokens, updated_at) VALUES (?, ?, ?, 1, ?, ?) "
+                "ON CONFLICT(usage_date, connection_id, operation) DO UPDATE "
+                "SET requests=requests + 1, "
+                "estimated_tokens=estimated_tokens + "
+                "excluded.estimated_tokens, "
+                "updated_at=excluded.updated_at",
+                (today, connection_id, operation, estimated_tokens, _now()),
+            )
 
     def list_validations(
         self,

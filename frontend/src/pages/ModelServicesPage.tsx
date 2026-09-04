@@ -6,6 +6,7 @@ import {
   type CredentialSummary,
   type ProviderCatalog,
   type ProviderConnection,
+  type ProviderUsageDaily,
   type ProviderValidation,
 } from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
@@ -41,6 +42,7 @@ export function ModelServicesPage() {
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
   const [catalog, setCatalog] = useState<ProviderCatalog>();
   const [validations, setValidations] = useState<ProviderValidation[]>([]);
+  const [dailyUsage, setDailyUsage] = useState<ProviderUsageDaily[]>([]);
   const [provider, setProvider] = useState<ProviderType>("jina");
   const [source, setSource] =
     useState<CredentialSource>("database_encrypted");
@@ -53,14 +55,17 @@ export function ModelServicesPage() {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
-    const [providerCatalog, credentialPage, connectionPage] = await Promise.all([
-      api.providerCatalog(),
-      api.listCredentials(),
-      api.listConnections(),
-    ]);
+    const [providerCatalog, credentialPage, connectionPage, usagePage] =
+      await Promise.all([
+        api.providerCatalog(),
+        api.listCredentials(),
+        api.listConnections(),
+        api.listDailyProviderUsage(),
+      ]);
     setCatalog(providerCatalog);
     setCredentials(credentialPage.items);
     setConnections(connectionPage.items);
+    setDailyUsage(usagePage.items);
   }, []);
   useEffect(() => {
     let active = true;
@@ -68,12 +73,14 @@ export function ModelServicesPage() {
       api.providerCatalog(),
       api.listCredentials(),
       api.listConnections(),
+      api.listDailyProviderUsage(),
     ])
-      .then(([providerCatalog, credentialPage, connectionPage]) => {
+      .then(([providerCatalog, credentialPage, connectionPage, usagePage]) => {
         if (!active) return;
         setCatalog(providerCatalog);
         setCredentials(credentialPage.items);
         setConnections(connectionPage.items);
+        setDailyUsage(usagePage.items);
       })
       .catch((reason: unknown) => {
         if (active) setError(reason);
@@ -343,6 +350,56 @@ export function ModelServicesPage() {
           </div>
         </section>
       )}
+      <section className="panel">
+        <h3>每日调用与费用边界</h3>
+        <p>仅显示脱敏计数；不记录查询、文档、向量、密钥或响应正文。</p>
+        {!dailyUsage.length ? (
+          <EmptyState title="尚无 Provider 调用记录">
+            连接验证、索引或查询发生后会按 UTC 日聚合。
+          </EmptyState>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>UTC 日期</th>
+                  <th>连接 / 操作</th>
+                  <th>请求</th>
+                  <th>Token</th>
+                  <th>平均耗时</th>
+                  <th>重试 / 限流 / 切换</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyUsage.map((item) => (
+                  <tr
+                    key={`${item.usage_date}:${item.connection_id}:${item.operation}`}
+                  >
+                    <td>{item.usage_date}</td>
+                    <td>
+                      <code>{item.connection_id}</code>
+                      <br />
+                      {item.operation}
+                    </td>
+                    <td>
+                      {item.request_count}（成功 {item.successful_requests} / 失败{" "}
+                      {item.failed_requests}）
+                    </td>
+                    <td>
+                      估算 {item.estimated_tokens} / 实测 {item.observed_tokens}
+                    </td>
+                    <td>{item.average_latency_ms} ms</td>
+                    <td>
+                      {item.retry_count} / {item.rate_limit_count} /{" "}
+                      {item.failover_count}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </section>
   );
 }

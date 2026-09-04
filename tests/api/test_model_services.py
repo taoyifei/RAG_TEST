@@ -28,11 +28,19 @@ def test_catalog_connections_and_five_validation_operations(
         history = harness.client.get(
             f"/api/v1/provider-connections/{jina_connection}/validations"
         )
+        usage = harness.client.get("/api/v1/provider-usage/daily")
 
         assert catalog.status_code == 200
         assert catalog.json()["catalog_version"]
         assert len(history.json()["items"]) == 3
+        assert usage.status_code == 200
+        assert len(usage.json()["items"]) == 5
+        assert all(
+            item["successful_requests"] == 1
+            for item in usage.json()["items"]
+        )
         assert "synthetic-jina-value" not in history.text
+        assert "synthetic-jina-value" not in usage.text
         assert harness.runtime.sdk.health().primary_live_evaluation_status == (
             "mock_validated"
         )
