@@ -214,6 +214,10 @@ class QueuedIngestion(FrozenModel):
     revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     target_document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
     target_document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    retrieval_profile_revision_id: str | None = Field(
+        default=None,
+        pattern=r"^pfr_[0-9a-f]{32}$",
+    )
     documents: tuple[QueuedIngestionDocument, ...] = Field(min_length=1)
 
 

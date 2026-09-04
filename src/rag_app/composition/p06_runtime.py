@@ -168,7 +168,7 @@ def build_p06_runtime(
         validator=validator,
         slots=components.embedding_topology.slots,
         index_fingerprint=components.index_fingerprint,
-        resolved_contracts=_resolved_contracts(components),
+        resolved_contracts=resolved_contracts(components),
     )
     database_identity = canonical_sha256(connections.database_identity())
     return P06Runtime(
@@ -189,7 +189,16 @@ def build_p06_runtime(
     )
 
 
-def _resolved_contracts(components: RagComponents) -> dict[str, object]:
+def resolved_contracts(components: RagComponents) -> dict[str, object]:
+    """导出不含 Secret 的实际 Revision 合同。
+
+    Args:
+        components: 已完成能力校验的组件集合。
+
+    Returns:
+        可持久化并供恢复与验证读取的合同映射。
+
+    """
     descriptors = {
         item.kind.value: item.model_dump(mode="json")
         for item in components.descriptors
@@ -220,4 +229,4 @@ def _resolved_contracts(components: RagComponents) -> dict[str, object]:
     }
 
 
-__all__ = ["P06Runtime", "build_p06_runtime"]
+__all__ = ["P06Runtime", "build_p06_runtime", "resolved_contracts"]

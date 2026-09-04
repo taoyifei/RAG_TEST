@@ -63,6 +63,8 @@ class LifecycleService:
         profile_id: str,
         index_fingerprint: str,
         budgets: dict[str, DocumentEmbeddingBudget],
+        egress_allowed_slots: frozenset[str] = frozenset(),
+        retrieval_profile_revision_id: str | None = None,
     ) -> None:
         """保存全部显式依赖和离线预算。
 
@@ -74,6 +76,8 @@ class LifecycleService:
             profile_id: 当前 resolved Profile ID。
             index_fingerprint: 目标 Revision 身份使用的索引指纹。
             budgets: 每个 embedding slot 的硬预算。
+            egress_allowed_slots: 当前 Profile 明确授权的远程索引 slot。
+            retrieval_profile_revision_id: 队列需要冻结的产品 Profile Revision。
 
         Returns:
             无返回值。
@@ -86,6 +90,8 @@ class LifecycleService:
         self._profile_id = profile_id
         self._index_fingerprint = index_fingerprint
         self._budgets = dict(budgets)
+        self._egress_allowed_slots = egress_allowed_slots
+        self._retrieval_profile_revision_id = retrieval_profile_revision_id
 
     def create_project(
         self, name: str, *, idempotency_key: str | None = None
@@ -689,6 +695,7 @@ class LifecycleService:
             revision_id=revision_id,
             target_document_id=document_id,
             target_document_version_id=document_version_id(document_id, digest),
+            retrieval_profile_revision_id=self._retrieval_profile_revision_id,
             documents=tuple(
                 sorted(documents, key=lambda item: item.document.document_id)
             ),
@@ -711,6 +718,14 @@ class LifecycleService:
         if request is None:
             return
         try:
+            if (
+                request.retrieval_profile_revision_id
+                != self._retrieval_profile_revision_id
+            ):
+                raise RevisionStateError(
+                    "持久作业绑定的 Retrieval Profile 已漂移。",
+                    stage="document.worker",
+                )
             documents = tuple(
                 _ingestion_document(self._blob_store, item)
                 for item in request.documents
@@ -722,6 +737,7 @@ class LifecycleService:
                 documents=documents,
                 idempotency_key=job_id,
                 budgets=self._budgets,
+                egress_allowed_slots=self._egress_allowed_slots,
                 attempt=max(1, self._store.get_job(job_id).attempt),
             )
             if result.revision_id != request.revision_id:

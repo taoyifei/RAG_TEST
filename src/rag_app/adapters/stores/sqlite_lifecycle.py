@@ -813,6 +813,29 @@ class SqliteLifecycleStore:
             )
         return QueuedIngestion.model_validate_json(str(row["request_json"]))
 
+    def ingestion_profile_revision_id(self, job_id: str) -> str | None:
+        """读取持久作业在入队时冻结的 Retrieval Profile Revision。
+
+        Args:
+            job_id: 目标 Job ID。
+
+        Returns:
+            产品 Profile Revision；离线基线作业返回 None。
+
+        Raises:
+            NotFound: 作业或持久请求不存在。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT request_json FROM ingestion_requests WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+        if row is None:
+            raise NotFound("持久构建请求不存在。", stage="job.read")
+        request = QueuedIngestion.model_validate_json(str(row["request_json"]))
+        return request.retrieval_profile_revision_id
+
     def pending_ingestion_jobs(self) -> tuple[str, ...]:
         """恢复中断请求并返回全部 queued Job。
 

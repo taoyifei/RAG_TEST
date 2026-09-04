@@ -29,6 +29,7 @@ from rag_app.product.models import (
 _MAX_REQUEST_BUDGET = 20
 _MAX_TOKEN_BUDGET = 1_000_000
 _MAX_VALIDATION_PAGE = 200
+_P11_DIMENSION = 1024
 
 
 class ProductControlStore:
@@ -288,6 +289,17 @@ class ProductControlStore:
         reranker = self._optional_reranker_connection(
             reranker_connection_id,
             reranker_model,
+        )
+        _validate_v1_profile_contract(
+            primary,
+            primary_dimension,
+            primary_document_policy,
+            primary_query_policy,
+            standby,
+            standby_dimension,
+            standby_document_policy,
+            standby_query_policy,
+            reranker,
         )
         if failover_enabled and standby is None:
             raise ValueError("启用 Failover 时必须配置备用 Embedding。")
@@ -664,6 +676,40 @@ class ProductControlStore:
         connection = self.get_connection(connection_id)
         validate_model(connection.provider_type, model, "reranking")
         return connection
+
+
+def _validate_v1_profile_contract(  # noqa: PLR0913, PLR0917
+    primary: ProviderConnection,
+    primary_dimension: int,
+    primary_document_policy: dict[str, object],
+    primary_query_policy: dict[str, object],
+    standby: ProviderConnection | None,
+    standby_dimension: int | None,
+    standby_document_policy: dict[str, object],
+    standby_query_policy: dict[str, object],
+    reranker: ProviderConnection | None,
+) -> None:
+    """拒绝页面配置偏离 P11 已实现的固定 Provider 合同。"""
+    if (
+        primary.provider_type != "jina"
+        or primary_dimension != _P11_DIMENSION
+    ):
+        raise ValueError("P11 Primary 必须是 1024 维 Jina Embedding。")
+    if primary_document_policy.get("task") != "retrieval.passage":
+        raise ValueError("Jina document task 必须是 retrieval.passage。")
+    if primary_query_policy.get("task") != "retrieval.query":
+        raise ValueError("Jina query task 必须是 retrieval.query。")
+    if standby is not None:
+        if standby.provider_type != "aliyun-model-studio":
+            raise ValueError("P11 Standby 必须是阿里云百炼。")
+        if standby_dimension != _P11_DIMENSION:
+            raise ValueError("P11 Standby 必须是 1024 维。")
+        if standby_document_policy.get("text_type") != "document":
+            raise ValueError("百炼 document text_type 必须是 document。")
+        if standby_query_policy.get("text_type") != "query":
+            raise ValueError("百炼 query text_type 必须是 query。")
+    if reranker is not None and reranker.provider_type != "jina":
+        raise ValueError("P11 Reranker 必须是 Jina。")
 
 
 def _connection(row: Row) -> ProviderConnection:

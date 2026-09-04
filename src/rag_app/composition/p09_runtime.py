@@ -85,6 +85,9 @@ class P09RuntimeHooks:
     revision_builder_resolver: (
         Callable[[str, LifecycleService], LifecycleService] | None
     ) = None
+    job_lifecycle_resolver: (
+        Callable[[str, LifecycleService], LifecycleService] | None
+    ) = None
 
 
 def build_p09_runtime(
@@ -159,8 +162,14 @@ def build_p09_runtime(
             return status
         return hooks.system_status_overlay(status)
 
+    def _run_ingestion(job_id: str) -> None:
+        resolved = lifecycle
+        if hooks is not None and hooks.job_lifecycle_resolver is not None:
+            resolved = hooks.job_lifecycle_resolver(job_id, lifecycle)
+        resolved.run_ingestion(job_id)
+
     jobs = DurableJobRunner(
-        lifecycle.run_ingestion,
+        _run_ingestion,
         store.pending_ingestion_jobs,
         max_workers=max_job_workers,
     )

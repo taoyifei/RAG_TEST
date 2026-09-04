@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from rag_app.api.product import create_product_app
+from rag_app.application.provider_health import ProviderCircuitBreaker
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -45,6 +47,7 @@ def build_product_harness(
     *,
     transport_factory: TransportFactory | None = build_offline_mock_transport,
     master_key: bool = True,
+    circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
 ) -> ProductHarness:
     """构建不访问网络的完整产品测试环境。
 
@@ -52,6 +55,7 @@ def build_product_harness(
         tmp_path: pytest 隔离目录。
         transport_factory: Provider Transport 工厂。
         master_key: 是否配置页面托管 Secret 主密钥。
+        circuit_factory: 可选测试时钟 Circuit 工厂。
 
     Returns:
         已登录的 Product Harness。
@@ -78,6 +82,7 @@ def build_product_harness(
     runtime = build_product_runtime(
         settings,
         transport_factory=transport_factory,
+        circuit_factory=circuit_factory,
     )
     client = TestClient(create_product_app(runtime))
     response = client.post(
@@ -243,8 +248,59 @@ def validate_five_operations(
         assert response.json()["status"] == "succeeded"
 
 
+def activate_hot_standby_profile(
+    harness: ProductHarness,
+    knowledge_base_id: str,
+    jina_connection_id: str,
+    aliyun_connection_id: str,
+) -> str:
+    """通过产品 API 创建并激活标准双槽检索方案。
+
+    Args:
+        harness: 已登录且完成五项 Provider 验证的测试环境。
+        knowledge_base_id: 目标知识库。
+        jina_connection_id: Jina Embedding 与 Reranker 连接。
+        aliyun_connection_id: 阿里百炼 Standby 连接。
+
+    Returns:
+        已激活的 Profile Revision ID。
+
+    """
+    created = harness.client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/retrieval-profiles",
+        headers=harness.write_headers,
+        json={
+            "primary_connection_id": jina_connection_id,
+            "primary_embedding_model": "jina-embeddings-v5-text-small",
+            "primary_dimension": 1024,
+            "primary_document_policy": {"task": "retrieval.passage"},
+            "primary_query_policy": {"task": "retrieval.query"},
+            "standby_connection_id": aliyun_connection_id,
+            "standby_embedding_model": "qwen3.7-text-embedding",
+            "standby_dimension": 1024,
+            "standby_document_policy": {"text_type": "document"},
+            "standby_query_policy": {"text_type": "query"},
+            "reranker_connection_id": jina_connection_id,
+            "reranker_model": "jina-reranker-v3.5",
+            "failover_enabled": True,
+            "standby_budget": {"requests": 2, "tokens": 4096},
+            "retrieval_policy": {"rrf_k": 60},
+        },
+    )
+    created.raise_for_status()
+    profile_id = str(created.json()["profile_revision_id"])
+    activated = harness.client.post(
+        f"/api/v1/retrieval-profiles/{profile_id}:activate",
+        headers=harness.write_headers,
+        json={"confirmed_impact": "NEW_INDEX_REVISION_REQUIRED"},
+    )
+    activated.raise_for_status()
+    return profile_id
+
+
 __all__ = [
     "ProductHarness",
+    "activate_hot_standby_profile",
     "build_product_harness",
     "create_project_and_knowledge_base",
     "create_provider_connections",

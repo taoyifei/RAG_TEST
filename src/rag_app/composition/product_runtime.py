@@ -4,13 +4,30 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
+from typing import cast
 
-from rag_app.adapters.stores import MigrationRunner, SqliteConnectionFactory
+from rag_app.adapters.stores import (
+    InMemoryRetrievalCache,
+    MigrationRunner,
+    SqliteConnectionFactory,
+)
+from rag_app.application.artifact_lifecycle import (
+    ArtifactLifecycleService,
+    BlobLocatorPort,
+)
 from rag_app.application.durable_jobs import DurableJobRunner
+from rag_app.application.embedding_indexing import DocumentEmbeddingService
+from rag_app.application.embedding_router import QueryEmbeddingRouter
 from rag_app.application.lifecycle import LifecycleService
+from rag_app.application.provider_health import ProviderCircuitBreaker
 from rag_app.application.retrieval import RetrievalService
+from rag_app.application.revision_builder import RevisionBuilder
+from rag_app.application.revision_validator import RevisionValidator
+from rag_app.composition.p06_runtime import resolved_contracts
 from rag_app.composition.p07_runtime import P07Runtime
 from rag_app.composition.p09_runtime import (
     P09Runtime,
@@ -23,8 +40,18 @@ from rag_app.composition.profiles import (
     RagProfile,
     default_offline_profile,
 )
-from rag_app.core.models import SystemStatus
+from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.models import (
+    DocumentEmbeddingBudget,
+    EmbeddingSlotIdentity,
+    EmbeddingSlotRole,
+    EmbeddingTopology,
+    RetrievalPolicy,
+    SystemStatus,
+)
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.policies import EgressPolicy
+from rag_app.core.ports import ChunkValidationPort, ExactStorePort
 from rag_app.product.auth import (
     AuthStore,
     ConsoleSessionService,
@@ -115,21 +142,66 @@ class ProductRuntimeSettings:
         )
 
 
+@dataclass(slots=True)
+class _ResolvedProductServices:
+    """一个不可变 Product Profile 对应的数据面资源。"""
+
+    lifecycle: LifecycleService
+    retrieval: RetrievalService
+    cache: InMemoryRetrievalCache
+    remote_resources: tuple[object, ...]
+
+    def close(self) -> None:
+        """关闭当前 Profile 独占的缓存与远程连接池。"""
+        self.cache.close()
+        for resource in reversed(self.remote_resources):
+            closer = getattr(resource, "close", None)
+            if callable(closer):
+                closer()
+
+
 class ProductProfileResolver:
     """每次请求从 SQLite 解析知识库 Active Profile。"""
 
-    def __init__(self, control: ProductControlStore) -> None:
+    def __init__(
+        self,
+        control: ProductControlStore,
+        providers: ProviderRuntimeRegistry,
+        *,
+        circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
+    ) -> None:
         """保存产品控制面。
 
         Args:
             control: Retrieval Profile Store。
+            providers: 页面托管 Credential 的 Provider 工厂。
+            circuit_factory: 仅测试可注入的 Circuit 工厂。
 
         Returns:
             无返回值。
 
         """
         self._control = control
+        self._providers = providers
+        self._circuit_factory = circuit_factory
         self._last_profile: dict[str, str | None] = {}
+        self._runtime: P09Runtime | None = None
+        self._services: dict[str, _ResolvedProductServices] = {}
+        self._lock = RLock()
+
+    def bind_runtime(self, runtime: P09Runtime) -> None:
+        """在基础持久运行时构造后绑定共享 Store。
+
+        Args:
+            runtime: Product Runtime 唯一拥有的 P09 基础运行时。
+
+        Returns:
+            无返回值。
+
+        """
+        if self._runtime is not None:
+            raise RuntimeError("Product Profile Resolver 不允许重复绑定。")
+        self._runtime = runtime
 
     def active_profile(
         self, knowledge_base_id: str
@@ -154,39 +226,242 @@ class ProductProfileResolver:
         knowledge_base_id: str,
         fallback: RetrievalService,
     ) -> RetrievalService:
-        """为单次 Query 解析服务，并保留 FTS 基础模式。
-
-        P10.5 的远程 Profile 只完成配置、验证和版本绑定。真实 Provider 未经
-        P11 授权时，查询继续使用已激活 Revision 的本地 FTS/Exact 安全通道。
+        """为单次 Query 解析页面激活的数据面服务。
 
         Args:
             knowledge_base_id: 当前 Query 的知识库。
             fallback: P08.5 已验证的本地检索服务。
 
         Returns:
-            当前请求可安全使用的检索服务。
+            当前 Profile 对应的检索服务；未配置时返回离线基线。
 
         """
-        self.active_profile(knowledge_base_id)
-        return fallback
+        profile = self.active_profile(knowledge_base_id)
+        if profile is None:
+            return fallback
+        return self._resolve(profile).retrieval
 
     def revision_lifecycle(
         self,
         knowledge_base_id: str,
         fallback: LifecycleService,
     ) -> LifecycleService:
-        """为单次构建作业解析 Active Profile 与安全基础构建器。
+        """为单次入队冻结 Active Profile 对应的构建服务。
 
         Args:
             knowledge_base_id: 新 Revision 所属知识库。
             fallback: P09 已验证的本地 Revision 构建服务。
 
         Returns:
-            P10.5 不联网边界内可安全使用的构建服务。
+            当前 Profile 对应的构建服务；未配置时返回离线基线。
 
         """
-        self.active_profile(knowledge_base_id)
-        return fallback
+        profile = self.active_profile(knowledge_base_id)
+        if profile is None:
+            return fallback
+        return self._resolve(profile).lifecycle
+
+    def job_lifecycle(
+        self,
+        job_id: str,
+        fallback: LifecycleService,
+    ) -> LifecycleService:
+        """按持久请求冻结的 Profile 解析后台作业构建服务。
+
+        Args:
+            job_id: 即将被 Worker 领取的持久 Job。
+            fallback: 离线基线 Lifecycle。
+
+        Returns:
+            入队时选择的精确 Profile 服务。
+
+        """
+        runtime = self._require_runtime()
+        profile_id = runtime.store.ingestion_profile_revision_id(job_id)
+        if profile_id is None:
+            return fallback
+        return self._resolve(self._control.get_profile(profile_id)).lifecycle
+
+    def invalidate(self) -> None:
+        """关闭全部 Profile 缓存，供 Credential 轮换后重建。
+
+        Args:
+            无参数；清理 Resolver 自有资源。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lock:
+            services = tuple(self._services.values())
+            self._services.clear()
+        for item in services:
+            item.close()
+
+    def close(self) -> None:
+        """关闭全部动态 Profile 资源。
+
+        Args:
+            无参数；幂等清理。
+
+        Returns:
+            无返回值。
+
+        """
+        self.invalidate()
+
+    def _resolve(
+        self, profile: RetrievalProfileRevision
+    ) -> _ResolvedProductServices:
+        with self._lock:
+            existing = self._services.get(profile.profile_revision_id)
+            if existing is not None:
+                return existing
+            resolved = self._build(profile)
+            self._services[profile.profile_revision_id] = resolved
+            return resolved
+
+    def _build(
+        self, profile: RetrievalProfileRevision
+    ) -> _ResolvedProductServices:
+        runtime = self._require_runtime()
+        persistence = runtime.retrieval_runtime.persistence
+        components = persistence.components
+        topology = _product_topology(profile, self._control)
+        primary_slot = topology.slot(topology.primary_slot_id)
+        primary = self._providers.embedding_adapter(
+            profile.primary_connection_id,
+            slot_id=primary_slot.slot_id,
+            model=primary_slot.model,
+            dimension=primary_slot.dimension,
+            document_policy_identity=canonical_sha256(
+                primary_slot.document_request_policy
+            ),
+            query_policy_identity=canonical_sha256(
+                primary_slot.query_request_policy
+            ),
+        )
+        embedding_providers = {primary_slot.slot_id: primary}
+        remote_resources: list[object] = [primary]
+        standby = None
+        if topology.standby_slot_id is not None:
+            standby_slot = topology.slot(topology.standby_slot_id)
+            if profile.standby_connection_id is None:
+                raise ValueError("双槽 Profile 缺少 Standby Connection。")
+            standby = self._providers.embedding_adapter(
+                profile.standby_connection_id,
+                slot_id=standby_slot.slot_id,
+                model=standby_slot.model,
+                dimension=standby_slot.dimension,
+                document_policy_identity=canonical_sha256(
+                    standby_slot.document_request_policy
+                ),
+                query_policy_identity=canonical_sha256(
+                    standby_slot.query_request_policy
+                ),
+            )
+            embedding_providers[standby_slot.slot_id] = standby
+            remote_resources.append(standby)
+        reranker = components.reranker
+        if profile.reranker_connection_id is not None:
+            if profile.reranker_model is None:
+                raise ValueError("Reranker Connection 缺少模型。")
+            reranker = self._providers.reranker_adapter(
+                profile.reranker_connection_id,
+                model=profile.reranker_model,
+            )
+            remote_resources.append(reranker)
+        chunk_validator = getattr(
+            components.chunker, "validate_persisted", None
+        )
+        if chunk_validator is None:
+            raise TypeError("Product Chunker 必须实现持久化校验端口。")
+        validator = RevisionValidator(
+            persistence.control,
+            components.vector_store,
+            cast(ChunkValidationPort, components.chunker),
+        )
+        embedding = DocumentEmbeddingService(
+            persistence.cache,
+            persistence.control,
+            embedding_providers,
+        )
+        contracts = resolved_contracts(components)
+        contracts["embedding_topology"] = topology.model_dump(mode="json")
+        vector_schema = dict(
+            cast(dict[str, object], contracts["vector_schema"])
+        )
+        vector_schema["slots"] = [
+            slot.model_dump(mode="json") for slot in topology.slots
+        ]
+        contracts["vector_schema"] = vector_schema
+        builder = RevisionBuilder(
+            control=persistence.control,
+            parser=components.parser,
+            parsing_policy=components.parsing_policy,
+            chunker=components.chunker,
+            chunking_policy=components.chunking_policy,
+            artifact_lifecycle=ArtifactLifecycleService(
+                components.blob_store,
+                persistence.control,
+                cast(BlobLocatorPort, components.blob_store),
+            ),
+            embedding_service=embedding,
+            embedding_providers=embedding_providers,
+            vector_store=components.vector_store,
+            validator=validator,
+            slots=topology.slots,
+            index_fingerprint=profile.index_semantic_fingerprint,
+            resolved_contracts=contracts,
+        )
+        budgets = _document_budgets(profile, self._control, topology)
+        lifecycle = LifecycleService(
+            store=runtime.store,
+            control=persistence.control,
+            builder=builder,
+            blob_store=components.blob_store,
+            profile_id=profile.profile_revision_id,
+            index_fingerprint=profile.index_semantic_fingerprint,
+            budgets=budgets,
+            egress_allowed_slots=frozenset(embedding_providers),
+            retrieval_profile_revision_id=profile.profile_revision_id,
+        )
+        cache = InMemoryRetrievalCache()
+        retrieval = RetrievalService(
+            source=persistence.control,
+            exact_store=cast(ExactStorePort, components.lexical_store),
+            lexical_store=components.lexical_store,
+            vector_store=components.vector_store,
+            query_embedding=QueryEmbeddingRouter(
+                primary,
+                standby,
+                circuit_breaker=(
+                    None
+                    if self._circuit_factory is None
+                    else self._circuit_factory()
+                ),
+            ),
+            reranker=reranker,
+            generator=components.generator,
+            trace=components.trace_sink,
+            cache=cache,
+            serving_fingerprint=profile.serving_fingerprint,
+            egress_policy=_product_egress(profile, self._control),
+            policy=RetrievalPolicy.model_validate(dict(profile.retrieval_policy)),
+        )
+        return _ResolvedProductServices(
+            lifecycle=lifecycle,
+            retrieval=retrieval,
+            cache=cache,
+            remote_resources=tuple(remote_resources),
+        )
+
+    def _require_runtime(self) -> P09Runtime:
+        if self._runtime is None:
+            raise RuntimeError(
+                "Product Profile Resolver 尚未绑定 P09 Runtime。"
+            )
+        return self._runtime
 
 
 @dataclass(slots=True)
@@ -270,6 +545,7 @@ class ProductRuntime:
         if self._closed:
             return
         self._closed = True
+        self.profiles.close()
         self.providers.close()
         self.p09.close()
 
@@ -287,12 +563,14 @@ def build_product_runtime(
     settings: ProductRuntimeSettings,
     *,
     transport_factory: TransportFactory | None = None,
+    circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
 ) -> ProductRuntime:
     """迁移 SQLite 并构造完整 Product Runtime。
 
     Args:
         settings: P10.5 最小启动配置。
         transport_factory: 测试用 Provider MockTransport 工厂。
+        circuit_factory: 测试用可控时钟 Circuit 工厂。
 
     Returns:
         唯一拥有全部产品资源的 Runtime。
@@ -333,7 +611,11 @@ def build_product_runtime(
         control,
         transport_factory=transport_factory,
     )
-    profiles = ProductProfileResolver(control)
+    profiles = ProductProfileResolver(
+        control,
+        providers,
+        circuit_factory=circuit_factory,
+    )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:
         return _product_status(status, control, compatibility)
@@ -346,11 +628,13 @@ def build_product_runtime(
                 system_status_overlay=_status_overlay,
                 retrieval_resolver=profiles.retrieval_service,
                 revision_builder_resolver=profiles.revision_lifecycle,
+                job_lifecycle_resolver=profiles.job_lifecycle,
             ),
         )
     except Exception:
         providers.close()
         raise
+    profiles.bind_runtime(p09)
     return ProductRuntime(
         p09=p09,
         connections=connections,
@@ -363,6 +647,144 @@ def build_product_runtime(
         compatibility=compatibility,
         settings=settings,
     )
+
+
+def _product_topology(
+    profile: RetrievalProfileRevision,
+    control: ProductControlStore,
+) -> EmbeddingTopology:
+    primary_connection = control.get_connection(profile.primary_connection_id)
+    primary_provider = _embedding_provider_id(primary_connection.provider_type)
+    slots = [
+        EmbeddingSlotIdentity(
+            slot_id="primary",
+            role=EmbeddingSlotRole.PRIMARY,
+            provider_id=primary_provider,
+            model=profile.primary_embedding_model,
+            vector_name="dense_primary",
+            dimension=profile.primary_dimension,
+            max_input_tokens=_provider_input_limit(primary_connection.provider_type),
+            adapter_revision="product-managed-v1",
+            document_request_policy=profile.primary_document_policy,
+            query_request_policy=profile.primary_query_policy,
+            normalization="l2-v1",
+        )
+    ]
+    standby_id: str | None = None
+    if profile.standby_connection_id is not None:
+        if (
+            profile.standby_embedding_model is None
+            or profile.standby_dimension is None
+        ):
+            raise ValueError("Standby Profile 合同不完整。")
+        standby_id = "standby"
+        slots.append(
+            EmbeddingSlotIdentity(
+                slot_id=standby_id,
+                role=EmbeddingSlotRole.STANDBY,
+                provider_id=_embedding_provider_id(
+                    control.get_connection(
+                        profile.standby_connection_id
+                    ).provider_type
+                ),
+                model=profile.standby_embedding_model,
+                vector_name="dense_standby",
+                dimension=profile.standby_dimension,
+                max_input_tokens=128000,
+                adapter_revision="product-managed-v1",
+                document_request_policy=profile.standby_document_policy,
+                query_request_policy=profile.standby_query_policy,
+                normalization="l2-v1",
+            )
+        )
+    return EmbeddingTopology(
+        mode="single" if standby_id is None else "hot_standby",
+        primary_slot_id="primary",
+        standby_slot_id=standby_id,
+        slots=tuple(slots),
+    )
+
+
+def _embedding_provider_id(provider_type: str) -> str:
+    return {
+        "jina": "jina-embedding",
+        "aliyun-model-studio": "aliyun-qwen37-embedding",
+    }[provider_type]
+
+
+def _provider_input_limit(provider_type: str) -> int:
+    return 32768 if provider_type == "jina" else 128000
+
+
+def _document_budgets(
+    profile: RetrievalProfileRevision,
+    control: ProductControlStore,
+    topology: EmbeddingTopology,
+) -> dict[str, DocumentEmbeddingBudget]:
+    connection_ids = [profile.primary_connection_id]
+    if profile.standby_connection_id is not None:
+        connection_ids.append(profile.standby_connection_id)
+    return {
+        slot.slot_id: DocumentEmbeddingBudget(
+            max_requests=connection.request_budget,
+            max_tokens=connection.token_budget,
+            max_chunks=10000,
+        )
+        for slot, connection in zip(
+            topology.slots,
+            (control.get_connection(item) for item in connection_ids),
+            strict=True,
+        )
+    }
+
+
+def _product_egress(
+    profile: RetrievalProfileRevision,
+    control: ProductControlStore,
+) -> EgressPolicy:
+    connections = [control.get_connection(profile.primary_connection_id)]
+    if profile.standby_connection_id is not None:
+        connections.append(control.get_connection(profile.standby_connection_id))
+    providers = {item.provider_type for item in connections}
+    standby = (
+        None
+        if profile.standby_connection_id is None
+        else control.get_connection(profile.standby_connection_id)
+    )
+    budget = dict(profile.standby_budget)
+    request_budget = _bounded_budget(
+        budget.get("requests"),
+        fallback=0 if standby is None else standby.request_budget,
+    )
+    token_budget = _bounded_budget(
+        budget.get("tokens"),
+        fallback=0 if standby is None else standby.token_budget,
+    )
+    return EgressPolicy(
+        remote_document_embedding=True,
+        remote_query_embedding=True,
+        remote_reranking=profile.reranker_connection_id is not None,
+        remote_document_embedding_jina="jina" in providers,
+        remote_query_embedding_jina="jina" in providers,
+        remote_reranking_jina=profile.reranker_connection_id is not None,
+        remote_document_embedding_aliyun=(
+            "aliyun-model-studio" in providers
+        ),
+        remote_query_embedding_aliyun=(
+            "aliyun-model-studio" in providers and profile.failover_enabled
+        ),
+        allow_aliyun_embedding_failover=profile.failover_enabled,
+        aliyun_daily_request_budget=request_budget,
+        aliyun_daily_token_budget=token_budget,
+    )
+
+
+def _bounded_budget(value: object, *, fallback: int) -> int:
+    if value is None:
+        return fallback
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError("Standby 预算必须为正整数。")
+    return min(value, fallback) if fallback > 0 else value
 
 
 def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:

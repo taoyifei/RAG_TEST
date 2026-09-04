@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -94,12 +94,14 @@ class JinaV5TextEmbeddingAdapter:
         config: JinaEmbeddingConfig,
         *,
         http_client: ProviderHttpClient | None = None,
+        api_key_resolver: Callable[[], str] | None = None,
     ) -> None:
         """保存非敏感配置并创建长生命周期连接池。
 
         Args:
             config: slot、模型、维度和出网授权。
             http_client: 可注入 MockTransport 的同步客户端。
+            api_key_resolver: 可选页面托管密钥的调用时解析器。
 
         Returns:
             无返回值。
@@ -114,6 +116,7 @@ class JinaV5TextEmbeddingAdapter:
             raise ValueError("Jina v5 adapter 只接受 l2-v1 normalization。")
         self._config = config
         self._http = http_client or ProviderHttpClient(_JINA_BASE_URL)
+        self._api_key_resolver = api_key_resolver
         self._closed = False
         self.descriptor = ComponentDescriptor(
             kind=ComponentKind.EMBEDDING,
@@ -173,13 +176,7 @@ class JinaV5TextEmbeddingAdapter:
         if request.slot_id != self._config.slot_id:
             raise ValueError("Jina Embedding slot 不匹配。")
         self._check_egress(request.role)
-        api_key = os.environ.get(self._config.api_key_env)
-        if not api_key:
-            raise ProviderAuthenticationError(
-                "Jina API Key 环境变量未配置。",
-                stage="provider.jina.embedding",
-                details={"api_key_env": self._config.api_key_env},
-            )
+        api_key = self._resolve_api_key()
         limits = BatchLimits(max_input_tokens=self._config.max_input_tokens)
         batches = batch_texts(request.texts, limits)
         task = (
@@ -267,7 +264,7 @@ class JinaV5TextEmbeddingAdapter:
 
         """
         del network
-        configured = bool(os.environ.get(self._config.api_key_env))
+        configured = bool(self._resolve_api_key(required=False))
         return ProviderHealth(
             status=(
                 ProviderHealthStatus.UNKNOWN
@@ -305,6 +302,19 @@ class JinaV5TextEmbeddingAdapter:
                 details={"role": role.value},
             )
 
+    def _resolve_api_key(self, *, required: bool = True) -> str:
+        value = (
+            self._api_key_resolver()
+            if self._api_key_resolver is not None
+            else os.environ.get(self._config.api_key_env, "")
+        )
+        if required and not value:
+            raise ProviderAuthenticationError(
+                "Jina API Key 未配置。",
+                stage="provider.jina.embedding",
+            )
+        return value
+
     def _request_policy_identity(
         self,
         role: EmbeddingRequestRole,
@@ -328,12 +338,14 @@ class JinaRerankerV35Adapter:
         config: JinaRerankerConfig,
         *,
         http_client: ProviderHttpClient | None = None,
+        api_key_resolver: Callable[[], str] | None = None,
     ) -> None:
         """保存模型、授权与长生命周期连接池。
 
         Args:
             config: 固定模型和安全限制。
             http_client: 可注入的同步 HTTP 客户端。
+            api_key_resolver: 可选页面托管密钥的调用时解析器。
 
         Returns:
             无返回值。
@@ -343,6 +355,7 @@ class JinaRerankerV35Adapter:
             raise ValueError("Jina Reranker adapter 只接受 v3.5。")
         self._config = config
         self._http = http_client or ProviderHttpClient(_JINA_BASE_URL)
+        self._api_key_resolver = api_key_resolver
         self._closed = False
         self.descriptor = ComponentDescriptor(
             kind=ComponentKind.RERANKER,
@@ -407,13 +420,7 @@ class JinaRerankerV35Adapter:
                 stage="provider.jina.reranker",
                 details={"candidate_count": len(request.candidates)},
             )
-        api_key = os.environ.get(self._config.api_key_env)
-        if not api_key:
-            raise ProviderAuthenticationError(
-                "Jina API Key 环境变量未配置。",
-                stage="provider.jina.reranker",
-                details={"api_key_env": self._config.api_key_env},
-            )
+        api_key = self._resolve_api_key()
         documents = tuple(text for _, text in request.candidates)
         estimated_tokens = estimate_tokens(request.query) + sum(
             estimate_tokens(document) for document in documents
@@ -473,7 +480,7 @@ class JinaRerankerV35Adapter:
 
         """
         del network
-        configured = bool(os.environ.get(self._config.api_key_env))
+        configured = bool(self._resolve_api_key(required=False))
         return ProviderHealth(
             status=(
                 ProviderHealthStatus.UNKNOWN
@@ -497,6 +504,19 @@ class JinaRerankerV35Adapter:
             return
         self._closed = True
         self._http.close()
+
+    def _resolve_api_key(self, *, required: bool = True) -> str:
+        value = (
+            self._api_key_resolver()
+            if self._api_key_resolver is not None
+            else os.environ.get(self._config.api_key_env, "")
+        )
+        if required and not value:
+            raise ProviderAuthenticationError(
+                "Jina API Key 未配置。",
+                stage="provider.jina.reranker",
+            )
+        return value
 
 
 def _mapping(value: object) -> Mapping[str, object]:

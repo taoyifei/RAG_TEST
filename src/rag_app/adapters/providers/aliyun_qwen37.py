@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
@@ -88,12 +88,18 @@ class AliyunQwen37EmbeddingAdapter:
         config: AliyunQwen37EmbeddingConfig,
         *,
         http_client: ProviderHttpClient | None = None,
+        api_key_resolver: Callable[[], str] | None = None,
+        workspace_id: str | None = None,
+        region: str | None = None,
     ) -> None:
         """保存配置并延迟构造受控业务空间连接池。
 
         Args:
             config: slot、模型、环境变量名和出网授权。
             http_client: 可注入 MockTransport 的固定 endpoint 客户端。
+            api_key_resolver: 可选页面托管密钥的调用时解析器。
+            workspace_id: 可选页面托管连接的业务空间 ID。
+            region: 可选页面托管连接的区域。
 
         Returns:
             无返回值。
@@ -113,6 +119,9 @@ class AliyunQwen37EmbeddingAdapter:
             raise ValueError("Qwen3.7 adapter 配置偏离已支持请求合同。")
         self._config = config
         self._http = http_client
+        self._api_key_resolver = api_key_resolver
+        self._workspace_id = workspace_id
+        self._region = region
         self._closed = False
         self.descriptor = ComponentDescriptor(
             kind=ComponentKind.EMBEDDING,
@@ -172,13 +181,7 @@ class AliyunQwen37EmbeddingAdapter:
         if request.slot_id != self._config.slot_id:
             raise ValueError("Qwen3.7 Embedding slot 不匹配。")
         self._check_egress(request.role)
-        api_key = os.environ.get(self._config.api_key_env)
-        if not api_key:
-            raise ProviderAuthenticationError(
-                "阿里百炼 API Key 环境变量未配置。",
-                stage="provider.aliyun.embedding",
-                details={"api_key_env": self._config.api_key_env},
-            )
+        api_key = self._resolve_api_key()
         client = self._client()
         limits = BatchLimits(
             max_items=16,
@@ -274,8 +277,8 @@ class AliyunQwen37EmbeddingAdapter:
         del network
         configured = all(
             (
-                os.environ.get(self._config.api_key_env),
-                os.environ.get(self._config.workspace_id_env),
+                self._resolve_api_key(required=False),
+                self._resolved_workspace_id(),
             )
         ) and self._resolved_region() == _REGION
         return ProviderHealth(
@@ -336,7 +339,7 @@ class AliyunQwen37EmbeddingAdapter:
         if self._http is not None:
             return self._http
         region = self._resolved_region()
-        workspace_id = os.environ.get(self._config.workspace_id_env, "")
+        workspace_id = self._resolved_workspace_id()
         if (
             not workspace_id
             or re.fullmatch(r"[a-z0-9-]+", workspace_id) is None
@@ -355,8 +358,28 @@ class AliyunQwen37EmbeddingAdapter:
         self._http = ProviderHttpClient(f"https://{host}")
         return self._http
 
+    def _resolve_api_key(self, *, required: bool = True) -> str:
+        value = (
+            self._api_key_resolver()
+            if self._api_key_resolver is not None
+            else os.environ.get(self._config.api_key_env, "")
+        )
+        if required and not value:
+            raise ProviderAuthenticationError(
+                "阿里百炼 API Key 未配置。",
+                stage="provider.aliyun.embedding",
+            )
+        return value
+
+    def _resolved_workspace_id(self) -> str:
+        return self._workspace_id or os.environ.get(
+            self._config.workspace_id_env, ""
+        )
+
     def _resolved_region(self) -> str:
-        region = os.environ.get(self._config.region_env, self._config.region)
+        region = self._region or os.environ.get(
+            self._config.region_env, self._config.region
+        )
         if region != _REGION:
             raise ConfigurationError(
                 "Qwen3.7 V1 只允许 cn-beijing。",

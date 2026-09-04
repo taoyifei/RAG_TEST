@@ -449,6 +449,7 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             credential_id, body.secret_value
         )
         runtime.providers.invalidate_credential(credential_id)
+        runtime.profiles.invalidate()
         return credential.model_dump(mode="json")
 
     @app.get("/api/v1/provider-connections", tags=["model-services"])

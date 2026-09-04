@@ -11,6 +11,15 @@ from typing import Any
 
 import httpx
 
+from rag_app.adapters.providers import (
+    AliyunQwen37EmbeddingAdapter,
+    AliyunQwen37EmbeddingConfig,
+    JinaEmbeddingConfig,
+    JinaRerankerConfig,
+    JinaRerankerV35Adapter,
+    JinaV5TextEmbeddingAdapter,
+)
+from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.core.errors import ConfigurationError
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.product.catalog import CATALOG_VERSION, validate_model
@@ -187,6 +196,94 @@ class ProviderRuntimeRegistry:
             if key[0] in connection_ids:
                 self._clients.pop(key).close()
 
+    def embedding_adapter(  # noqa: PLR0913
+        self,
+        connection_id: str,
+        *,
+        slot_id: str,
+        model: str,
+        dimension: int,
+        document_policy_identity: str,
+        query_policy_identity: str,
+    ) -> JinaV5TextEmbeddingAdapter | AliyunQwen37EmbeddingAdapter:
+        """创建使用页面托管连接且调用时解密的 Embedding adapter。
+
+        Args:
+            connection_id: 已保存的 Provider Connection。
+            slot_id: primary 或 standby slot。
+            model: 内置目录模型。
+            dimension: 固定向量维度。
+            document_policy_identity: 文档请求策略身份。
+            query_policy_identity: 查询请求策略身份。
+
+        Returns:
+            不把密钥复制到配置或环境变量的真实 Provider adapter。
+
+        """
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "embedding.document")
+        resolver = self._secret_resolver(connection)
+        http_client = self._adapter_http_client(connection)
+        common = {
+            "slot_id": slot_id,
+            "model": model,
+            "dimension": dimension,
+            "request_policy_identity": canonical_sha256(
+                {
+                    "document": document_policy_identity,
+                    "query": query_policy_identity,
+                }
+            ),
+            "document_request_policy_identity": document_policy_identity,
+            "query_request_policy_identity": query_policy_identity,
+            "document_egress_allowed": True,
+            "query_egress_allowed": True,
+        }
+        if connection.provider_type == "jina":
+            return JinaV5TextEmbeddingAdapter(
+                JinaEmbeddingConfig.model_validate(common),
+                http_client=http_client,
+                api_key_resolver=resolver,
+            )
+        return AliyunQwen37EmbeddingAdapter(
+            AliyunQwen37EmbeddingConfig.model_validate(
+                {
+                    **common,
+                    "region": connection.region or "cn-beijing",
+                }
+            ),
+            http_client=http_client,
+            api_key_resolver=resolver,
+            workspace_id=connection.workspace_id,
+            region=connection.region,
+        )
+
+    def reranker_adapter(
+        self,
+        connection_id: str,
+        *,
+        model: str,
+    ) -> JinaRerankerV35Adapter:
+        """创建调用时解析页面托管密钥的 Jina Reranker。
+
+        Args:
+            connection_id: 已保存的 Jina Connection。
+            model: 内置目录 Reranker 模型。
+
+        Returns:
+            复用安全传输边界的 Jina Reranker adapter。
+
+        """
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "reranking")
+        if connection.provider_type != "jina":
+            raise ValueError("V1 Reranker 只支持 Jina。")
+        return JinaRerankerV35Adapter(
+            JinaRerankerConfig(model=model, egress_allowed=True),
+            http_client=self._adapter_http_client(connection),
+            api_key_resolver=self._secret_resolver(connection),
+        )
+
     def close(self) -> None:
         """关闭所有 Provider Client。
 
@@ -229,6 +326,30 @@ class ProviderRuntimeRegistry:
         self._clients[cache_key] = client
         return client, key_version
 
+    def _secret_resolver(
+        self, connection: ProviderConnection
+    ) -> Callable[[], str]:
+        def _resolve() -> str:
+            value, _ = self._credentials.resolve(connection.credential_id)
+            return value
+
+        return _resolve
+
+    def _adapter_http_client(
+        self, connection: ProviderConnection
+    ) -> ProviderHttpClient | None:
+        if self._transport_factory is None:
+            return None
+        transport = self._transport_factory(connection)
+        client = httpx.Client(transport=transport)
+        if connection.provider_type == "jina":
+            base_url = "https://api.jina.ai/v1"
+        else:
+            workspace = connection.workspace_id or "invalid"
+            region = connection.region or "cn-beijing"
+            base_url = f"https://{workspace}.{region}.maas.aliyuncs.com"
+        return ProviderHttpClient(base_url, client=client)
+
 
 class _ValidationError(Exception):
     def __init__(self, code: str) -> None:
@@ -252,20 +373,50 @@ def build_offline_mock_transport(
     def _handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content.decode("utf-8"))
         if "rerank" in request.url.path:
+            documents = body.get("documents", ["公开合成候选文本。"])
             return httpx.Response(
                 200,
-                json={"results": [{"index": 0, "relevance_score": 0.9}]},
+                json={
+                    "results": [
+                        {"index": index, "relevance_score": 0.9 - index / 100}
+                        for index, _ in enumerate(documents)
+                    ]
+                },
             )
-        dimension = int(body.get("dimensions", 8))
+        parameters = body.get("parameters", {})
+        dimension = int(
+            body.get(
+                "dimensions",
+                parameters.get("dimension", 8)
+                if isinstance(parameters, dict)
+                else 8,
+            )
+        )
         vector = [0.125] * dimension
         if connection.provider_type == "jina":
+            inputs = body.get("input", [_SYNTHETIC_TEXT])
             payload: dict[str, Any] = {
-                "data": [{"embedding": vector}],
+                "data": [
+                    {"embedding": vector, "index": index}
+                    for index, _ in enumerate(inputs)
+                ],
                 "usage": {"total_tokens": 8},
             }
         else:
+            raw_input = body.get("input", [_SYNTHETIC_TEXT])
+            texts = (
+                raw_input.get("texts", [])
+                if isinstance(raw_input, dict)
+                else raw_input
+            )
             payload = {
-                "output": {"embeddings": [{"embedding": vector}]},
+                "status_code": 200,
+                "output": {
+                    "embeddings": [
+                        {"embedding": vector, "text_index": index}
+                        for index, _ in enumerate(texts)
+                    ]
+                },
                 "usage": {"total_tokens": 8},
             }
         return httpx.Response(200, json=payload)
