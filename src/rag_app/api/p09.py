@@ -335,7 +335,7 @@ def _register_document_routes(
         display_name: Annotated[str, Query(min_length=1, max_length=512)],
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        """受控接收 DOCX 并创建新逻辑文档。"""
+        """受控接收 DOC 或 DOCX 并创建新逻辑文档。"""
         require_admin(authorization)
         content = await _spool_upload(
             request, runtime.data_dir, max_upload_bytes=max_upload_bytes

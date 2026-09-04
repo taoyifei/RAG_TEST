@@ -889,7 +889,7 @@ def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
         "memory-vector" if settings.qdrant_mode == "memory" else "qdrant-local"
     )
     components = ComponentsProfile(
-        parser="docx-ooxml-v4",
+        parser="word-document-v1",
         chunker="docx-structural-v3",
         embedding_topology="deterministic-single",
         embedding_primary="deterministic",

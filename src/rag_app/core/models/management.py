@@ -205,6 +205,7 @@ class QueuedIngestionDocument(FrozenModel):
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: StrictInt = Field(ge=0)
     media_type: str = Field(min_length=1, max_length=200)
+    extension: str = Field(default=".docx", pattern=r"^\.[a-z0-9]{1,16}$")
 
 
 class QueuedIngestion(FrozenModel):

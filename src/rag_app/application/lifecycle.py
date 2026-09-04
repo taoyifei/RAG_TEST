@@ -42,12 +42,18 @@ from rag_app.core.ports import (
     LifecycleStorePort,
 )
 
-_DOCX_MEDIA_TYPES = frozenset(
-    {
-        "application/octet-stream",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }
-)
+_DOC_MEDIA_TYPES_BY_EXTENSION = {
+    ".doc": frozenset({"application/msword", "application/octet-stream"}),
+    ".docx": frozenset(
+        {
+            "application/octet-stream",
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document",
+        }
+    ),
+}
+_OLE_COMPOUND_FILE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_DOCX_ZIP_MAGIC = b"PK\x03\x04"
 
 
 class LifecycleService:
@@ -329,7 +335,7 @@ class LifecycleService:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             display_name: 仅作显示的文件名。
-            content: 受大小上限保护的 DOCX 字节。
+            content: 受大小上限保护的 DOC 或 DOCX 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
 
@@ -385,7 +391,7 @@ class LifecycleService:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             document_id: 保持不变的逻辑文档 ID。
-            content: 新版本 DOCX 字节。
+            content: 新版本 DOC 或 DOCX 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
 
@@ -402,7 +408,11 @@ class LifecycleService:
                 stage="document_version.create",
             )
         _validate_document_input(
-            current.display_name, content, media_type, idempotency_key
+            current.display_name,
+            content,
+            media_type,
+            idempotency_key,
+            require_display_extension=False,
         )
         digest = hashlib.sha256(content).hexdigest()
         version_id = document_version_id(document_id, digest)
@@ -659,12 +669,11 @@ class LifecycleService:
             )
         )
         documents = [
-            QueuedIngestionDocument(
-                document=item,
-                artifact_id=item_artifact_id,
-                content_sha256=item_artifact_id.removeprefix("sha256:"),
-                size_bytes=_blob_size(self._blob_store, item_artifact_id),
-                media_type=item_media_type,
+            _queued_active_document(
+                self._blob_store,
+                item,
+                item_artifact_id,
+                item_media_type,
             )
             for item, item_artifact_id, item_media_type in (
                 self._control.active_documents(knowledge_base_id)
@@ -678,6 +687,7 @@ class LifecycleService:
                 content_sha256=digest,
                 size_bytes=len(content),
                 media_type=media_type,
+                extension=_detect_document_extension(content, media_type),
             )
         )
         version_ids = tuple(
@@ -777,29 +787,62 @@ def _validate_document_input(
     content: bytes,
     media_type: str,
     idempotency_key: str,
+    *,
+    require_display_extension: bool = True,
 ) -> None:
     _require_text(display_name, "文档显示名")
     _require_text(idempotency_key, "Idempotency-Key")
-    if not display_name.casefold().endswith(".docx"):
+    extension = _detect_document_extension(content, media_type)
+    if require_display_extension and not display_name.casefold().endswith(
+        extension
+    ):
         raise InvalidDocument(
-            "P09 当前仅接受 DOCX 扩展名。", stage="document.upload"
+            "显示名扩展名必须与 DOC 或 DOCX 文件签名一致。",
+            stage="document.upload",
         )
+
+
+def _detect_document_extension(content: bytes, media_type: str) -> str:
     if not content:
         raise InvalidDocument("上传内容不能为空。", stage="document.upload")
-    if media_type not in _DOCX_MEDIA_TYPES:
+    if content.startswith(_OLE_COMPOUND_FILE_MAGIC):
+        extension = ".doc"
+    elif content.startswith(_DOCX_ZIP_MAGIC):
+        extension = ".docx"
+    else:
         raise InvalidDocument(
-            "上传 Content-Type 不受支持。", stage="document.upload"
+            "上传内容不是有效的 DOC 或 DOCX 文件签名。",
+            stage="document.upload",
         )
-
-
-def _blob_size(blob_store: BlobStorePort, artifact_id: str) -> int:
-    blob = blob_store.read(artifact_id)
-    if blob is None:
+    if media_type.casefold() not in _DOC_MEDIA_TYPES_BY_EXTENSION[extension]:
         raise InvalidDocument(
-            "Active DocumentVersion 的来源 Artifact 不存在。",
+            "上传 Content-Type 与文件格式不匹配。",
+            stage="document.upload",
+        )
+    return extension
+
+
+def _queued_active_document(
+    blob_store: BlobStorePort,
+    document: DocumentRef,
+    artifact_id: str,
+    media_type: str,
+) -> QueuedIngestionDocument:
+    blob = blob_store.read(artifact_id)
+    expected_hash = artifact_id.removeprefix("sha256:")
+    if blob is None or blob.content_sha256 != expected_hash:
+        raise InvalidDocument(
+            "Active DocumentVersion 的来源 Artifact 不存在或摘要漂移。",
             stage="document.snapshot",
         )
-    return len(blob.content)
+    return QueuedIngestionDocument(
+        document=document,
+        artifact_id=artifact_id,
+        content_sha256=expected_hash,
+        size_bytes=len(blob.content),
+        media_type=media_type,
+        extension=_detect_document_extension(blob.content, media_type),
+    )
 
 
 def _ingestion_document(
@@ -815,7 +858,7 @@ def _ingestion_document(
         document=request.document,
         content=blob.content,
         media_type=request.media_type,
-        extension=".docx",
+        extension=request.extension,
     )
 
 

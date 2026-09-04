@@ -293,8 +293,8 @@ class RagSdk:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             display_name: 文档显示名。
-            content: DOCX 字节。
-            media_type: DOCX 媒体类型。
+            content: DOC 或 DOCX 字节。
+            media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
 
         Returns:
@@ -330,8 +330,8 @@ class RagSdk:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             document_id: 保持不变的逻辑文档 ID。
-            content: DOCX 字节。
-            media_type: DOCX 媒体类型。
+            content: DOC 或 DOCX 字节。
+            media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
 
         Returns:

@@ -515,7 +515,7 @@ function DocumentsPage({ go }: { go: (path: string) => void }) {
           <input
             data-testid="new-document-file"
             type="file"
-            accept=".docx"
+            accept=".doc,.docx"
             disabled={uploading}
             onChange={(e) =>
               e.target.files?.[0] && void upload(e.target.files[0])
@@ -595,7 +595,7 @@ function DocumentsPage({ go }: { go: (path: string) => void }) {
       )}
       {!items.length && (
         <EmptyState title="暂无文档">
-          上传 DOCX 后，系统会创建不可变版本与新的索引版本。
+          上传 DOC 或 DOCX 后，系统会创建不可变版本与新的索引版本。
         </EmptyState>
       )}
     </section>
@@ -682,7 +682,7 @@ function DocumentActions({
         <input
           data-testid={`version-${document.document_id}`}
           type="file"
-          accept=".docx"
+          accept=".doc,.docx"
           onChange={(e) =>
             e.target.files?.[0] && void version(e.target.files[0])
           }

@@ -22,6 +22,7 @@ _FORBIDDEN_INNER_IMPORTS = (
     "rag_app.ocr",
 )
 _FORBIDDEN_TRACKED_SUFFIXES = (
+    ".doc",
     ".docx",
     ".pdf",
     ".pfx",

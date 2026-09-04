@@ -9,6 +9,7 @@ from time import monotonic, sleep
 import httpx
 import pytest
 
+from rag_app.adapters.parsers import word_document
 from rag_app.application.provider_health import ProviderCircuitBreaker
 from rag_app.core.models import Job
 from rag_app.core.policies import CircuitBreakerPolicy
@@ -27,6 +28,8 @@ from tests.product_support import (
 _DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+_DOC_MEDIA_TYPE = "application/msword"
+_DOC_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
 def _wait_for_job(harness: ProductHarness, job: Job) -> Job:
@@ -98,6 +101,116 @@ def test_product_runtime_without_provider_keeps_fts_exact_flow(
         assert result.diagnostics is not None
         channels = dict(result.diagnostics.channel_chunk_ids)
         assert channels["lexical"]
+    finally:
+        harness.close()
+
+
+def test_product_runtime_rejects_word_signature_masquerade_before_enqueue(
+    tmp_path: Path,
+) -> None:
+    harness = build_product_harness(tmp_path, master_key=False)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        endpoint = (
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}/documents"
+        )
+        response = harness.client.post(
+            endpoint,
+            params={"display_name": "伪装文件.docx"},
+            content=_DOC_MAGIC + b"synthetic-legacy-doc",
+            headers={
+                **harness.write_headers,
+                "Content-Type": _DOCX_MEDIA_TYPE,
+                "Idempotency-Key": "word-signature-masquerade",
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["error"]["code"] == "INVALID_DOCUMENT"
+        jobs = harness.runtime.sdk.list_jobs(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        assert jobs.total == 0
+    finally:
+        harness.close()
+
+
+def test_product_runtime_accepts_mixed_doc_and_docx_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _extract_doc(_content: bytes, _policy: object) -> str:
+        return "旧版质量管理制度\n设备巡检要求"
+
+    monkeypatch.setattr(
+        word_document,
+        "_extract_doc_text",
+        _extract_doc,
+    )
+    harness = build_product_harness(tmp_path, master_key=False)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        endpoint = (
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}/documents"
+        )
+        legacy_response = harness.client.post(
+            endpoint,
+            params={"display_name": "旧版制度.doc"},
+            content=_DOC_MAGIC + b"synthetic-legacy-doc",
+            headers={
+                **harness.write_headers,
+                "Content-Type": _DOC_MEDIA_TYPE,
+                "Idempotency-Key": "legacy-doc",
+            },
+        )
+        assert legacy_response.status_code == 202, legacy_response.text
+        legacy_job = _wait_for_job(
+            harness,
+            Job.model_validate(legacy_response.json()),
+        )
+
+        docx_response = harness.client.post(
+            endpoint,
+            params={"display_name": "新版制度.docx"},
+            content=build_package(
+                "<w:p><w:r><w:t>新版质量制度</w:t></w:r></w:p>"
+            ),
+            headers={
+                **harness.write_headers,
+                "Content-Type": _DOCX_MEDIA_TYPE,
+                "Idempotency-Key": "current-docx",
+            },
+        )
+        assert docx_response.status_code == 202, docx_response.text
+        docx_job = _wait_for_job(
+            harness,
+            Job.model_validate(docx_response.json()),
+        )
+        result = harness.runtime.sdk.search(
+            project_id,
+            knowledge_base_id,
+            "设备巡检",
+        )
+        documents = harness.runtime.sdk.list_documents(
+            project_id,
+            knowledge_base_id,
+        )
+
+        assert legacy_job.state.value == "succeeded"
+        assert docx_job.state.value == "succeeded"
+        assert docx_job.revision_id != legacy_job.revision_id
+        assert {item.display_name for item in documents} == {
+            "旧版制度.doc",
+            "新版制度.docx",
+        }
+        assert result.evidence
     finally:
         harness.close()
 

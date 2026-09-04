@@ -27,6 +27,7 @@ def test_registry_starts_empty_and_builtins_are_explicit() -> None:
     names = {item.name for item in registry.list_components()}
     assert {
         "docx-ooxml-v4",
+        "word-document-v1",
         "legacy-docx",
         "legacy-docx-ir",
         "docx-structural-v3",
@@ -47,6 +48,17 @@ def test_docx_v4_parser_is_explicitly_registered() -> None:
     assert parser.descriptor.name == "docx-ooxml-v4"
     assert parser.parser_capabilities.supports_tables is True
     assert parser.parser_capabilities.supports_revisions is True
+
+
+def test_word_document_parser_is_registered_with_honest_capabilities() -> None:
+    registry = ComponentRegistry()
+    register_builtin_components(registry)
+
+    parser = registry.get_parser("word-document-v1")
+
+    assert parser.parser_capabilities.supported_extensions == (".docx", ".doc")
+    assert parser.parser_capabilities.supports_tables == "partial"
+    assert parser.descriptor.name == "word-document-v1"
 
 
 def test_legacy_parser_registration_is_a_trusted_compatibility_alias() -> None:

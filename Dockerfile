@@ -41,7 +41,10 @@ ENV LANG=C.UTF-8 \
 WORKDIR /app
 COPY requirements.runtime.lock ./
 COPY --from=python-build /wheels /wheels
-RUN python -m pip install \
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends antiword=0.37-17 \
+    && rm -rf /var/lib/apt/lists/* \
+    && python -m pip install \
     --disable-pip-version-check \
     --no-cache-dir \
     --requirement=/app/requirements.runtime.lock \
