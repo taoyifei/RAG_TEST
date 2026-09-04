@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
+import secrets
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,7 @@ from rag_app.core.identifiers import canonical_json
 
 _MASTER_KEY_BYTES = 32
 _NONCE_BYTES = 12
+_PRIVATE_FILE_MODE = stat.S_IRUSR | stat.S_IWUSR
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -67,6 +70,16 @@ class SecretAad:
         ).encode("utf-8")
 
 
+@dataclass(frozen=True, slots=True)
+class ProductSecretBundle:
+    """首次容器启动需要的 Secret 文件安全摘要。"""
+
+    directory: Path
+    master_key_id: str
+    bootstrap_token_id: str
+    qdrant_api_key_id: str
+
+
 def load_master_key(path: str | Path) -> MasterKey:
     """从 0600、非 symlink 普通文件读取主密钥。
 
@@ -116,15 +129,75 @@ def initialize_master_key(path: str | Path) -> MasterKey:
     descriptor = os.open(
         target,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        stat.S_IRUSR | stat.S_IWUSR,
+        _PRIVATE_FILE_MODE,
     )
     try:
         os.write(descriptor, value)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-    target.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    target.chmod(_PRIVATE_FILE_MODE)
     return MasterKey(value=value, key_id=_key_id(value))
+
+
+def initialize_product_secret_bundle(
+    directory: str | Path,
+) -> ProductSecretBundle:
+    """排他创建容器运行所需的三个 Secret 与 Qdrant 配置。
+
+    Args:
+        directory: 已存在、非 symlink 且仅由部署管理员控制的目录。
+
+    Returns:
+        只含路径和不可逆 SHA256 标识的初始化摘要。
+
+    Raises:
+        FileExistsError: 任一目标文件已经存在。
+        ValueError: 目录不是安全的现有目录。
+
+    """
+    target = Path(directory)
+    if target.is_symlink() or not target.is_dir():
+        raise ValueError("Secret 目录必须是现有非 symlink 目录。")
+    resolved = target.resolve(strict=True)
+    paths = {
+        "master": resolved / "master-key",
+        "bootstrap": resolved / "admin-bootstrap-token",
+        "qdrant": resolved / "qdrant-api-key",
+        "config": resolved / "qdrant.yaml",
+    }
+    if any(path.exists() or path.is_symlink() for path in paths.values()):
+        raise FileExistsError("Secret bundle 目标文件已经存在。")
+
+    bootstrap = secrets.token_urlsafe(32)
+    qdrant_api_key = secrets.token_urlsafe(32)
+    created: list[Path] = []
+    try:
+        master_key = initialize_master_key(paths["master"])
+        created.append(paths["master"])
+        _write_private_text(paths["bootstrap"], bootstrap)
+        created.append(paths["bootstrap"])
+        _write_private_text(paths["qdrant"], qdrant_api_key)
+        created.append(paths["qdrant"])
+        qdrant_config = (
+            "telemetry_disabled: true\n"
+            "service:\n"
+            "  host: 0.0.0.0\n"
+            "  http_port: 6333\n"
+            f"  api_key: {json.dumps(qdrant_api_key)}\n"
+        )
+        _write_private_text(paths["config"], qdrant_config)
+        created.append(paths["config"])
+    except Exception:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
+    return ProductSecretBundle(
+        directory=resolved,
+        master_key_id=master_key.key_id,
+        bootstrap_token_id=_secret_id(bootstrap),
+        qdrant_api_key_id=_secret_id(qdrant_api_key),
+    )
 
 
 class SecretCipher:
@@ -236,10 +309,30 @@ def _key_id(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
+def _secret_id(value: str) -> str:
+    return _key_id(value.encode("utf-8"))
+
+
+def _write_private_text(path: Path, value: str) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        _PRIVATE_FILE_MODE,
+    )
+    try:
+        os.write(descriptor, value.encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    path.chmod(_PRIVATE_FILE_MODE)
+
+
 __all__ = [
     "MasterKey",
+    "ProductSecretBundle",
     "SecretAad",
     "SecretCipher",
     "initialize_master_key",
+    "initialize_product_secret_bundle",
     "load_master_key",
 ]

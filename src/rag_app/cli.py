@@ -20,7 +20,10 @@ from rag_app.assets import AssetPaths, verify_offline_assets
 from rag_app.composition.product_runtime import ProductRuntimeSettings
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
-from rag_app.product.crypto import initialize_master_key
+from rag_app.product.crypto import (
+    initialize_master_key,
+    initialize_product_secret_bundle,
+)
 from rag_app.runtime import (
     build_runtime,
     load_pipeline,
@@ -191,6 +194,19 @@ def _run_product_command(arguments: argparse.Namespace) -> int | None:
         return 0
     if arguments.command != "init-secrets":
         return None
+    if arguments.directory is not None:
+        bundle = initialize_product_secret_bundle(arguments.directory)
+        _print_json(
+            {
+                "bootstrap_token_id": bundle.bootstrap_token_id,
+                "directory": str(bundle.directory),
+                "master_key_id": bundle.master_key_id,
+                "qdrant_api_key_id": bundle.qdrant_api_key_id,
+            }
+        )
+        return 0
+    if arguments.output is None:
+        raise AssertionError("argparse 未提供 Secret 输出目标。")
     key = initialize_master_key(arguments.output)
     _print_json(
         {
@@ -431,9 +447,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     secrets_parser = subparsers.add_parser(
         "init-secrets",
-        help="创建 0600 AES-256-GCM 主密钥文件。",
+        help="排他创建 0600 产品 Secret 文件。",
     )
-    secrets_parser.add_argument("--output", required=True, type=Path)
+    secret_target = secrets_parser.add_mutually_exclusive_group(required=True)
+    secret_target.add_argument("--output", type=Path)
+    secret_target.add_argument("--directory", type=Path)
     build = subparsers.add_parser(
         "build-info",
         help="报告安装包与 OCI 期望 revision 是否一致。",

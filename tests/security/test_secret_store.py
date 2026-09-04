@@ -14,6 +14,7 @@ from rag_app.product.crypto import (
     SecretAad,
     SecretCipher,
     initialize_master_key,
+    initialize_product_secret_bundle,
     load_master_key,
 )
 from rag_app.product.models import ProviderConnectionDraft
@@ -84,6 +85,35 @@ def test_master_key_file_contract_rejects_missing_mode_and_symlink(
     symlink.symlink_to(target)
     with pytest.raises(ValueError, match="symlink"):
         load_master_key(symlink)
+
+
+def test_product_secret_bundle_is_private_and_output_safe(
+    tmp_path: Path,
+) -> None:
+    bundle = initialize_product_secret_bundle(tmp_path)
+    paths = tuple(tmp_path.iterdir())
+    bootstrap = (tmp_path / "admin-bootstrap-token").read_text(
+        encoding="utf-8"
+    )
+    qdrant_key = (tmp_path / "qdrant-api-key").read_text(encoding="utf-8")
+    config = (tmp_path / "qdrant.yaml").read_text(encoding="utf-8")
+
+    assert {path.name for path in paths} == {
+        "admin-bootstrap-token",
+        "master-key",
+        "qdrant-api-key",
+        "qdrant.yaml",
+    }
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in paths)
+    assert qdrant_key in config
+    assert bootstrap not in repr(bundle)
+    assert qdrant_key not in repr(bundle)
+    assert bundle.master_key_id.startswith("sha256:")
+    assert bundle.bootstrap_token_id.startswith("sha256:")
+    assert bundle.qdrant_api_key_id.startswith("sha256:")
+
+    with pytest.raises(FileExistsError):
+        initialize_product_secret_bundle(tmp_path)
 
 
 def test_environment_managed_credential_stores_only_variable_name(

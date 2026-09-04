@@ -1,0 +1,92 @@
+name: rag-v1
+
+services:
+  qdrant:
+    image: ${RAG_QDRANT_IMAGE:-qdrant/qdrant:v1.18.3}
+    restart: unless-stopped
+    command:
+      - ./qdrant
+      - --config-path
+      - /run/rag-secrets/qdrant.yaml
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - rag_secrets:/run/rag-secrets:ro
+    networks:
+      - rag-internal
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/grep
+        - -Eq
+        - ^[[:space:]]*[0-9]+:[[:space:]]+[0-9A-Fa-f]{8}:18BD[[:space:]]+[0-9A-Fa-f]{8}:[0-9A-Fa-f]{4}[[:space:]]+0A[[:space:]]
+        - /proc/net/tcp
+        - /proc/net/tcp6
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+
+  app:
+    image: ${RAG_APP_IMAGE:-docx-rag:v1-candidate}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${RAG_RELEASE_REVISION:-development-unset}
+    restart: unless-stopped
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      RAG_DATA_DIR: /data
+      RAG_HOST: 0.0.0.0
+      RAG_PORT: "8088"
+      RAG_FRONTEND_DIR: /app/frontend
+      RAG_MIGRATIONS_DIR: /app/migrations/universal_rag
+      RAG_COMPATIBILITY_MANIFEST: /app/compatibility-manifest.json
+      RAG_MASTER_KEY_FILE: /run/rag-secrets/master-key
+      RAG_ADMIN_BOOTSTRAP_TOKEN_FILE: /run/rag-secrets/admin-bootstrap-token
+      RAG_QDRANT_MODE: url
+      RAG_QDRANT_URL: http://qdrant:6333
+      RAG_QDRANT_API_KEY_FILE: /run/rag-secrets/qdrant-api-key
+      RAG_TRUSTED_ORIGINS: ${RAG_TRUSTED_ORIGINS:-http://127.0.0.1:8088,http://localhost:8088}
+      RAG_TRUSTED_PROXIES: ${RAG_TRUSTED_PROXIES:-}
+    volumes:
+      - rag_data:/data
+      - rag_secrets:/run/rag-secrets
+    networks:
+      - rag-internal
+      - rag-egress
+    ports:
+      - ${RAG_PORT:-8088}:8088
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/live', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  rag-internal:
+    internal: true
+  rag-egress:
+
+volumes:
+  rag_data:
+  qdrant_data:
+  rag_secrets:

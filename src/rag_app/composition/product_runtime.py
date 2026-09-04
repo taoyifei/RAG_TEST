@@ -55,6 +55,7 @@ class ProductRuntimeSettings:
     master_key_file: Path | None = None
     qdrant_mode: str = "memory"
     qdrant_url: str | None = None
+    qdrant_api_key_file: Path | None = None
     compatibility_manifest: Path | None = None
     migrations_dir: Path | None = None
     debug_enabled: bool = False
@@ -95,6 +96,11 @@ class ProductRuntimeSettings:
             master_key_file=None if master is None else Path(master),
             qdrant_mode=os.environ.get("RAG_QDRANT_MODE", "memory"),
             qdrant_url=os.environ.get("RAG_QDRANT_URL"),
+            qdrant_api_key_file=(
+                None
+                if os.environ.get("RAG_QDRANT_API_KEY_FILE") is None
+                else Path(os.environ["RAG_QDRANT_API_KEY_FILE"])
+            ),
             compatibility_manifest=(
                 _discover_compatibility_manifest(repository_root)
                 if manifest is None
@@ -386,6 +392,11 @@ def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
                 data_root=str(settings.data_dir),
                 qdrant_mode=settings.qdrant_mode,
                 qdrant_url=settings.qdrant_url,
+                qdrant_api_key_file=(
+                    None
+                    if settings.qdrant_api_key_file is None
+                    else str(settings.qdrant_api_key_file)
+                ),
             ),
         }
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
@@ -18,6 +19,9 @@ from rag_app.adapters.stores import (
     SqliteFtsStore,
 )
 from rag_app.core.models.common import JsonObject
+
+_MIN_SECRET_LENGTH = 16
+_MAX_SECRET_LENGTH = 4096
 
 
 class LocalPersistenceConfig(BaseModel):
@@ -37,6 +41,7 @@ class LocalPersistenceConfig(BaseModel):
         default=None,
         pattern=r"^https?://[^\s]+$",
     )
+    qdrant_api_key_file: str | None = Field(default=None, min_length=1)
 
 
 def sqlite_control_factory(config: JsonObject) -> SqliteControlStore:
@@ -97,6 +102,10 @@ def qdrant_local_factory(config: JsonObject) -> QdrantRevisionVectorStore:
         return QdrantRevisionVectorStore(
             client=QdrantClient(
                 url=resolved.qdrant_url,
+                api_key=_read_private_secret(
+                    resolved.qdrant_api_key_file,
+                    label="Qdrant API Key",
+                ),
                 check_compatibility=False,
             )
         )
@@ -140,6 +149,33 @@ def _migrations_directory() -> Path:
     if image_migrations.is_dir():
         return image_migrations
     return Path(__file__).resolve().parents[3] / "migrations" / "universal_rag"
+
+
+def _read_private_secret(path_value: str | None, *, label: str) -> str:
+    """读取一个 0600 非 symlink Secret 文件。
+
+    Args:
+        path_value: Secret 文件路径。
+        label: 安全错误消息使用的固定标签。
+
+    Returns:
+        去除末尾换行后的非空 Secret。
+
+    Raises:
+        ValueError: 文件缺失、权限不安全或内容无效。
+
+    """
+    if path_value is None:
+        raise ValueError(f"{label} 文件未配置。")
+    path = Path(path_value)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label} 必须是现有非 symlink 普通文件。")
+    if stat.S_IMODE(path.stat().st_mode) != stat.S_IRUSR | stat.S_IWUSR:
+        raise ValueError(f"{label} 文件权限必须严格为 0600。")
+    value = path.read_text(encoding="utf-8").rstrip("\r\n")
+    if not _MIN_SECRET_LENGTH <= len(value) <= _MAX_SECRET_LENGTH:
+        raise ValueError(f"{label} 长度必须为 16 到 4096 个字符。")
+    return value
 
 
 __all__ = [

@@ -300,11 +300,16 @@ class LocalDataProfile(_ProfileModel):
         default=None,
         pattern=r"^https?://[^\s]+$",
     )
+    qdrant_api_key_file: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _validate_qdrant_location(self) -> Self:
         if (self.qdrant_mode == "url") != (self.qdrant_url is not None):
             raise ValueError("qdrant_url 只能且必须用于 url 模式。")
+        if (self.qdrant_mode == "url") != (
+            self.qdrant_api_key_file is not None
+        ):
+            raise ValueError("qdrant_api_key_file 只能且必须用于 url 模式。")
         return self
 
 
