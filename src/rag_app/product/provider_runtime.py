@@ -46,6 +46,18 @@ _HTTP_REDIRECT = 300
 _HTTP_BAD_REQUEST = 400
 _HTTP_SERVER_ERROR = 500
 _MAX_VALIDATION_RESPONSE_BYTES = 4 * 1024 * 1024
+_ALIYUN_SAFE_ERROR_CODES = {
+    "access_denied": "PROVIDER_AUTHORIZATION_DENIED",
+    "accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
+    "accessdenied.unpurchased": "PROVIDER_AUTHORIZATION_DENIED",
+    "endpoint.accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
+    "invalid_api_key": "PROVIDER_AUTHENTICATION_FAILED",
+    "invalidapikey": "PROVIDER_AUTHENTICATION_FAILED",
+    "model.accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
+    "not authorized": "REGION_OR_WORKSPACE_INVALID",
+    "workspace.accessdenied": "REGION_OR_WORKSPACE_INVALID",
+    "workspacenotfound": "REGION_OR_WORKSPACE_INVALID",
+}
 
 
 class ProviderRuntimeRegistry:
@@ -132,7 +144,7 @@ class ProviderRuntimeRegistry:
                 raise _ValidationError(
                     _http_error_code(
                         connection.provider_type,
-                        response.status_code,
+                        response,
                     )
                 )
             if len(response.content) > _MAX_VALIDATION_RESPONSE_BYTES:
@@ -738,19 +750,46 @@ def _http_category(status_code: int, success: str) -> str:
     return "http_4xx"
 
 
-def _http_error_code(provider_type: str, status_code: int) -> str:
+def _http_error_code(
+    provider_type: str,
+    response: httpx.Response,
+) -> str:
+    if provider_type == "aliyun-model-studio":
+        safe_code = _aliyun_safe_error_code(response)
+        if safe_code is not None:
+            return safe_code
+    status_code = response.status_code
     if status_code in {_HTTP_BAD_REQUEST, 422}:
-        if (
-            provider_type == "aliyun-model-studio"
-            and status_code == _HTTP_BAD_REQUEST
-        ):
-            return "REGION_OR_WORKSPACE_INVALID"
         return "PROVIDER_REQUEST_INVALID"
     return {
         401: "PROVIDER_AUTHENTICATION_FAILED",
         403: "PROVIDER_AUTHORIZATION_DENIED",
         429: "PROVIDER_RATE_LIMITED",
     }.get(status_code, "PROVIDER_UPSTREAM_ERROR")
+
+
+def _aliyun_safe_error_code(response: httpx.Response) -> str | None:
+    if len(response.content) > _MAX_VALIDATION_RESPONSE_BYTES:
+        return None
+    if (
+        "application/json"
+        not in response.headers.get("content-type", "").casefold()
+    ):
+        return None
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = payload.get("code")
+    if not isinstance(code, str):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            code = error.get("code")
+    if not isinstance(code, str):
+        return None
+    return _ALIYUN_SAFE_ERROR_CODES.get(code.strip().casefold())
 
 
 def _identifier(prefix: str) -> str:

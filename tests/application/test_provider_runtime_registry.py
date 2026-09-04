@@ -812,11 +812,66 @@ def test_aliyun_invalid_workspace_has_safe_configuration_error(
         harness.close()
 
 
-def test_aliyun_bad_request_uses_region_or_workspace_error(
+@pytest.mark.parametrize(
+    ("status_code", "response_body", "safe_error_code"),
+    (
+        (
+            400,
+            {"code": "InvalidApiKey"},
+            "PROVIDER_AUTHENTICATION_FAILED",
+        ),
+        (
+            400,
+            {"error": {"code": "invalid_api_key"}},
+            "PROVIDER_AUTHENTICATION_FAILED",
+        ),
+        (
+            401,
+            {"code": "NOT AUTHORIZED"},
+            "REGION_OR_WORKSPACE_INVALID",
+        ),
+        (
+            404,
+            {"code": "WorkSpaceNotFound"},
+            "REGION_OR_WORKSPACE_INVALID",
+        ),
+        (
+            403,
+            {"code": "Workspace.AccessDenied"},
+            "REGION_OR_WORKSPACE_INVALID",
+        ),
+        (
+            403,
+            {"code": "Model.AccessDenied"},
+            "PROVIDER_AUTHORIZATION_DENIED",
+        ),
+        (
+            400,
+            {"code": "InvalidParameter"},
+            "PROVIDER_REQUEST_INVALID",
+        ),
+        (
+            400,
+            {"code": "synthetic-sensitive-upstream-text"},
+            "PROVIDER_REQUEST_INVALID",
+        ),
+    ),
+)
+def test_aliyun_error_body_uses_safe_allowlisted_classification(
     tmp_path: Path,
+    status_code: int,
+    response_body: dict[str, object],
+    safe_error_code: str,
 ) -> None:
+    untrusted_text = "synthetic-sensitive-upstream-text"
+
     def _transport(_connection: object) -> httpx.MockTransport:
-        return httpx.MockTransport(lambda _request: httpx.Response(400))
+        return httpx.MockTransport(
+            lambda _request: httpx.Response(
+                status_code,
+                json={**response_body, "message": untrusted_text},
+            )
+        )
 
     harness = build_product_harness(tmp_path, transport_factory=_transport)
     try:
@@ -840,6 +895,13 @@ def test_aliyun_bad_request_uses_region_or_workspace_error(
         )
 
         assert result.status == "failed"
-        assert result.safe_error_code == "REGION_OR_WORKSPACE_INVALID"
+        assert result.safe_error_code == safe_error_code
+        persisted = harness.runtime.control.list_validations(
+            connection.connection_id
+        )
+        safe_records = json.dumps(
+            [item.model_dump(mode="json") for item in persisted]
+        )
+        assert untrusted_text not in safe_records
     finally:
         harness.close()
