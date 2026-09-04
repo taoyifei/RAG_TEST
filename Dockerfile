@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_IMAGE=node:24-alpine
-ARG PYTHON_IMAGE=python:3.11-slim-bookworm
+ARG PYTHON_IMAGE=python:3.11-slim-trixie
 
 FROM ${NODE_IMAGE} AS frontend-build
 
@@ -55,6 +55,7 @@ RUN python -m pip install \
     'import sys; from rag_app._build_revision import SOURCE_REVISION; expected = sys.argv[1]; sys.exit(0 if expected == "development-unset" or SOURCE_REVISION == sys.argv[1] else 1)' \
     "${VCS_REF}" \
     && rm -rf /wheels \
+    && python -m pip uninstall --yes pip setuptools wheel \
     && groupadd --gid 10001 rag \
     && useradd --uid 10001 --gid rag --no-create-home rag \
     && mkdir -p /data /run/rag-secrets \
