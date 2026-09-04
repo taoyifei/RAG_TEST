@@ -34,7 +34,7 @@
 
 ## 实际门禁证据
 
-- `python scripts/dev.py check`：`1391 passed, 79 deselected`；4 个已知警告。
+- `python scripts/dev.py check`：`1395 passed, 79 deselected`；4 个已知警告。
 - `python scripts/dev.py smoke`：71 passed。
 - `python scripts/dev.py product-check`：33 passed。
 - `python scripts/dev.py product-smoke`：6 passed。
@@ -64,13 +64,13 @@
 环境为真实 loopback Qdrant Server + `httpx.MockTransport` Provider，20 次样本，
 不是 SLA，也不是 Live 模型性能：
 
-- 单块公开合成 DOCX 索引 0.934 s，1.071 chunk/s；
-- Search p50 48.005 ms、p95 50.105 ms；
-- Answer p50 48.655 ms、p95 50.946 ms；当前 answer 与 search 共用检索回答链；
-- SQLite count p50 0.601 ms、p95 0.844 ms；
-- Qdrant get_collection p50 3.451 ms、p95 5.627 ms；
+- 单块公开合成 DOCX 索引 0.969 s，1.032 chunk/s；
+- Search p50 48.282 ms、p95 51.642 ms；
+- Answer p50 49.100 ms、p95 54.429 ms；当前 answer 与 search 共用检索回答链；
+- SQLite count p50 0.558 ms、p95 0.621 ms；
+- Qdrant get_collection p50 3.599 ms、p95 5.559 ms；
 - 首次 cache miss、第二次 cache hit；
-- 峰值进程内存 169948 KiB；候选镜像 119811812 bytes。
+- 峰值进程内存 169832 KiB；候选镜像 119811235 bytes。
 
 ## 验收状态
 
