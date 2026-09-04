@@ -22,6 +22,7 @@ from rag_app.core.models.common import (
 )
 
 _HOT_STANDBY_SLOT_COUNT = 2
+_SIGNED_64_BIT_MAX = (1 << 63) - 1
 
 
 class ProviderHealthStatus(StrEnum):
@@ -57,8 +58,14 @@ class ProviderCall(FrozenModel):
     attempt_count: StrictInt | None = Field(default=None, ge=1)
     status_category: str | None = None
     retry_after_ms: StrictInt | None = Field(default=None, ge=0)
+    rate_limited: bool = False
     input_count: StrictInt | None = Field(default=None, ge=0)
     estimated_tokens: StrictInt | None = Field(default=None, ge=0)
+    observed_tokens: StrictInt | None = Field(
+        default=None,
+        ge=1,
+        le=_SIGNED_64_BIT_MAX,
+    )
 
 
 class ProviderFailureCategory(StrEnum):
@@ -321,8 +328,7 @@ class EmbeddingResult(FrozenModel):
     @model_validator(mode="after")
     def _validate_vectors(self) -> Self:
         if any(
-            len(vector) != self.observed_dimension
-            for vector in self.vectors
+            len(vector) != self.observed_dimension for vector in self.vectors
         ):
             raise ValueError("embedding 向量维度与 observed_dimension 不一致。")
         if any(

@@ -8,14 +8,14 @@ on:
         required: true
         type: string
       max_requests:
-        description: 本次 Provider 请求总上限（21—30）
+        description: 本次 Provider 请求总上限（23—25）
         required: true
-        default: "30"
+        default: "25"
         type: string
       max_tokens:
-        description: 本次估算输入 Token 总上限（最大 20000）
+        description: 本次估算输入 Token 总上限（最大 1000）
         required: true
-        default: "20000"
+        default: "1000"
         type: string
 
 permissions:
@@ -46,8 +46,8 @@ jobs:
           MAX_TOKENS: ${{ inputs.max_tokens }}
         run: >-
           test "$AUTHORIZATION_PHRASE" = I_AUTHORIZE_PUBLIC_SYNTHETIC_TEXT &&
-          test "$MAX_REQUESTS" -ge 21 && test "$MAX_REQUESTS" -le 30 &&
-          test "$MAX_TOKENS" -ge 1 && test "$MAX_TOKENS" -le 20000
+          test "$MAX_REQUESTS" -ge 23 && test "$MAX_REQUESTS" -le 25 &&
+          test "$MAX_TOKENS" -ge 1 && test "$MAX_TOKENS" -le 1000
       - run: python -m pip install --requirement requirements.lock
       - run: python -m pip install --no-deps --editable .
       - name: Prepare synthetic Qdrant key file
@@ -66,4 +66,4 @@ jobs:
           DASHSCOPE_API_KEY: ${{ secrets.P11_ALIYUN_API_KEY }}
           ALIYUN_MODEL_STUDIO_WORKSPACE_ID: ${{ secrets.P11_ALIYUN_WORKSPACE_ID }}
           ALIYUN_MODEL_STUDIO_REGION: cn-beijing
-        run: python -m pytest -q -m live_provider tests/live/test_p11_live_providers.py
+        run: python -m pytest -q -s -m live_provider tests/live/test_p11_live_providers.py

@@ -12,6 +12,7 @@ from threading import RLock
 from typing import cast
 from urllib.parse import urlparse
 
+from rag_app.adapters.providers import AliyunQwen37EmbeddingConfig
 from rag_app.adapters.stores import (
     InMemoryRetrievalCache,
     MigrationRunner,
@@ -529,7 +530,9 @@ class ProductProfileResolver:
             cache=cache,
             serving_fingerprint=profile.serving_fingerprint,
             egress_policy=_product_egress(profile, self._control),
-            policy=RetrievalPolicy.model_validate(dict(profile.retrieval_policy)),
+            policy=RetrievalPolicy.model_validate(
+                dict(profile.retrieval_policy)
+            ),
         )
         return _ResolvedProductServices(
             lifecycle=lifecycle,
@@ -745,7 +748,9 @@ def _product_topology(
             model=profile.primary_embedding_model,
             vector_name="dense_primary",
             dimension=profile.primary_dimension,
-            max_input_tokens=_provider_input_limit(primary_connection.provider_type),
+            max_input_tokens=_provider_input_limit(
+                primary_connection.provider_type
+            ),
             adapter_revision="product-managed-v1",
             document_request_policy=profile.primary_document_policy,
             query_request_policy=profile.primary_query_policy,
@@ -760,14 +765,23 @@ def _product_topology(
         ):
             raise ValueError("Standby Profile 合同不完整。")
         standby_id = "standby"
+        standby_connection = control.get_connection(
+            profile.standby_connection_id
+        )
+        standby_query_policy = dict(profile.standby_query_policy)
+        if standby_connection.provider_type == "aliyun-model-studio":
+            standby_query_policy["query_instruct"] = (
+                AliyunQwen37EmbeddingConfig(
+                    slot_id=standby_id,
+                    request_policy_identity="product-managed",
+                ).query_instruct
+            )
         slots.append(
             EmbeddingSlotIdentity(
                 slot_id=standby_id,
                 role=EmbeddingSlotRole.STANDBY,
                 provider_id=_embedding_provider_id(
-                    control.get_connection(
-                        profile.standby_connection_id
-                    ).provider_type
+                    standby_connection.provider_type
                 ),
                 model=profile.standby_embedding_model,
                 vector_name="dense_standby",
@@ -775,7 +789,7 @@ def _product_topology(
                 max_input_tokens=128000,
                 adapter_revision="product-managed-v1",
                 document_request_policy=profile.standby_document_policy,
-                query_request_policy=profile.standby_query_policy,
+                query_request_policy=freeze_json_object(standby_query_policy),
                 normalization="l2-v1",
             )
         )
@@ -826,7 +840,9 @@ def _product_egress(
 ) -> EgressPolicy:
     connections = [control.get_connection(profile.primary_connection_id)]
     if profile.standby_connection_id is not None:
-        connections.append(control.get_connection(profile.standby_connection_id))
+        connections.append(
+            control.get_connection(profile.standby_connection_id)
+        )
     providers = {item.provider_type for item in connections}
     standby = (
         None
@@ -849,9 +865,7 @@ def _product_egress(
         remote_document_embedding_jina="jina" in providers,
         remote_query_embedding_jina="jina" in providers,
         remote_reranking_jina=profile.reranker_connection_id is not None,
-        remote_document_embedding_aliyun=(
-            "aliyun-model-studio" in providers
-        ),
+        remote_document_embedding_aliyun=("aliyun-model-studio" in providers),
         remote_query_embedding_aliyun=(
             "aliyun-model-studio" in providers and profile.failover_enabled
         ),

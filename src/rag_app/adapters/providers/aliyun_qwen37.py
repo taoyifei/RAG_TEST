@@ -19,7 +19,7 @@ from rag_app.adapters.providers.http_common import (
     invalid_response_error,
     provider_error,
 )
-from rag_app.adapters.providers.validation import ordered_vectors
+from rag_app.adapters.providers.validation import ordered_vectors, usage_tokens
 from rag_app.core.capabilities import (
     ComponentCapabilities,
     ComponentDescriptor,
@@ -188,6 +188,11 @@ class AliyunQwen37EmbeddingAdapter:
             max_input_tokens=self._config.max_input_tokens,
         )
         batches = batch_texts(request.texts, limits)
+        instruction_tokens = (
+            estimate_tokens(self._config.query_instruct)
+            if request.role is EmbeddingRequestRole.QUERY
+            else 0
+        )
         vectors: list[tuple[float, ...]] = []
         calls: list[ProviderCall] = []
         for batch in batches:
@@ -220,20 +225,23 @@ class AliyunQwen37EmbeddingAdapter:
                     model=self._config.model,
                     input_count=len(batch),
                     estimated_tokens=sum(
-                        estimate_tokens(text) for text in batch
+                        estimate_tokens(text) + instruction_tokens
+                        for text in batch
                     ),
                 )
             except ProviderHttpError as failure:
                 raise provider_error(
                     failure, stage="provider.aliyun.embedding"
                 ) from None
+            observed_tokens: int | None = None
             try:
                 payload = _mapping(response.payload)
                 status_code = payload.get("status_code")
                 if status_code not in (200, "200"):
                     raise ValueError("Qwen3.7 status_code 不是 200。")
-                if payload.get("code") not in (None, ""):
+                if payload.get("code") != "":
                     raise ValueError("Qwen3.7 成功响应包含错误 code。")
+                observed_tokens = usage_tokens(payload)
                 output = _mapping(payload.get("output"))
                 batch_vectors = ordered_vectors(
                     output.get("embeddings"),
@@ -242,14 +250,24 @@ class AliyunQwen37EmbeddingAdapter:
                     index_field="text_index",
                     vector_field="embedding",
                 )
-            except (TypeError, ValueError) as error:
-                raise invalid_response_error(
-                    type(error).__name__,
+            except (TypeError, ValueError):
+                reason_code = "INVALID_RESPONSE_CONTRACT"
+                failed_call = client.complete_call(
                     response.call,
+                    observed_tokens=observed_tokens,
+                    failure_reason_code=reason_code,
+                )
+                raise invalid_response_error(
+                    reason_code,
+                    failed_call,
                     stage="provider.aliyun.embedding",
                 ) from None
+            completed_call = client.complete_call(
+                response.call,
+                observed_tokens=observed_tokens,
+            )
             vectors.extend(batch_vectors)
-            calls.append(response.call)
+            calls.append(completed_call)
         if len(vectors) != len(request.texts):
             raise ProviderInvalidResponse(
                 "Qwen3.7 跨批向量总数与输入不一致。",
@@ -275,12 +293,15 @@ class AliyunQwen37EmbeddingAdapter:
 
         """
         del network
-        configured = all(
-            (
-                self._resolve_api_key(required=False),
-                self._resolved_workspace_id(),
+        configured = (
+            all(
+                (
+                    self._resolve_api_key(required=False),
+                    self._resolved_workspace_id(),
+                )
             )
-        ) and self._resolved_region() == _REGION
+            and self._resolved_region() == _REGION
+        )
         return ProviderHealth(
             status=(
                 ProviderHealthStatus.UNKNOWN

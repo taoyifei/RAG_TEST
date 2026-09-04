@@ -18,7 +18,11 @@ from rag_app.adapters.providers.http_common import (
     invalid_response_error,
     provider_error,
 )
-from rag_app.adapters.providers.validation import finite_score, ordered_vectors
+from rag_app.adapters.providers.validation import (
+    finite_score,
+    ordered_vectors,
+    usage_tokens,
+)
 from rag_app.core.capabilities import (
     ComponentCapabilities,
     ComponentDescriptor,
@@ -216,13 +220,11 @@ class JinaV5TextEmbeddingAdapter:
                 raise provider_error(
                     failure, stage="provider.jina.embedding"
                 ) from None
+            observed_tokens: int | None = None
             try:
                 payload = _mapping(response.payload)
-                observed_model = payload.get("model")
-                if (
-                    observed_model is not None
-                    and observed_model != self._config.model
-                ):
+                observed_tokens = usage_tokens(payload)
+                if payload.get("model") != self._config.model:
                     raise ValueError("Jina response model 不匹配。")
                 batch_vectors = ordered_vectors(
                     payload.get("data"),
@@ -231,14 +233,24 @@ class JinaV5TextEmbeddingAdapter:
                     index_field="index",
                     vector_field="embedding",
                 )
-            except (TypeError, ValueError) as error:
-                raise invalid_response_error(
-                    type(error).__name__,
+            except (TypeError, ValueError):
+                reason_code = "INVALID_RESPONSE_CONTRACT"
+                failed_call = self._http.complete_call(
                     response.call,
+                    observed_tokens=observed_tokens,
+                    failure_reason_code=reason_code,
+                )
+                raise invalid_response_error(
+                    reason_code,
+                    failed_call,
                     stage="provider.jina.embedding",
                 ) from None
+            completed_call = self._http.complete_call(
+                response.call,
+                observed_tokens=observed_tokens,
+            )
             vectors.extend(batch_vectors)
-            calls.append(response.call)
+            calls.append(completed_call)
         if len(vectors) != len(request.texts):
             raise ProviderInvalidResponse(
                 "Jina 跨批向量总数与输入不一致。",
@@ -439,6 +451,7 @@ class JinaRerankerV35Adapter:
                     "model": self._config.model,
                     "query": request.query,
                     "documents": list(documents),
+                    "return_documents": False,
                     "top_n": len(documents),
                 },
                 headers={
@@ -455,18 +468,33 @@ class JinaRerankerV35Adapter:
             raise provider_error(
                 failure, stage="provider.jina.reranker"
             ) from None
+        observed_tokens: int | None = None
         try:
-            items = _rerank_items(response.payload, request)
-        except (TypeError, ValueError) as error:
-            raise invalid_response_error(
-                type(error).__name__,
+            payload = _mapping(response.payload)
+            observed_tokens = usage_tokens(payload)
+            if payload.get("model") != self._config.model:
+                raise ValueError("Jina reranker response model 不匹配。")
+            items = _rerank_items(payload, request)
+        except (TypeError, ValueError):
+            reason_code = "INVALID_RESPONSE_CONTRACT"
+            failed_call = self._http.complete_call(
                 response.call,
+                observed_tokens=observed_tokens,
+                failure_reason_code=reason_code,
+            )
+            raise invalid_response_error(
+                reason_code,
+                failed_call,
                 stage="provider.jina.reranker",
             ) from None
+        completed_call = self._http.complete_call(
+            response.call,
+            observed_tokens=observed_tokens,
+        )
         return RerankResult(
             mode=RerankExecutionMode.PROVIDER,
             items=items,
-            calls=(response.call,),
+            calls=(completed_call,),
         )
 
     def health(self, *, network: bool = False) -> ProviderHealth:

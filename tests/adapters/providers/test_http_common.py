@@ -7,7 +7,7 @@ from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
 )
-from rag_app.core.models import ProviderFailureCategory
+from rag_app.core.models import ProviderCall, ProviderFailureCategory
 
 
 def _request(client: ProviderHttpClient) -> object:
@@ -52,8 +52,7 @@ def test_invalid_json_and_content_type_are_contract_failures() -> None:
     client.close()
 
     assert (
-        invalid_json.value.category
-        is ProviderFailureCategory.RESPONSE_CONTRACT
+        invalid_json.value.category is ProviderFailureCategory.RESPONSE_CONTRACT
     )
     assert invalid_json.value.reason_code == "INVALID_JSON"
     assert invalid_content_type.value.reason_code == "INVALID_CONTENT_TYPE"
@@ -77,8 +76,62 @@ def test_response_byte_limit_fails_closed() -> None:
     assert captured.value.reason_code == "RESPONSE_TOO_LARGE"
 
 
+def test_deferred_success_is_observed_only_after_completion() -> None:
+    events: list[ProviderCall] = []
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={})
+            )
+        ),
+        observer=events.append,
+        defer_success_observation=True,
+    )
+
+    result = _request(client)
+    assert events == []
+    completed_call = client.complete_call(
+        result.call,
+        observed_tokens=7,
+    )
+    client.close()
+
+    assert completed_call.status_category == "SUCCESS"
+    assert completed_call.observed_tokens == 7
+    assert events == [completed_call]
+
+
+def test_deferred_semantic_failure_is_observed_without_prior_success() -> None:
+    events: list[ProviderCall] = []
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={})
+            )
+        ),
+        observer=events.append,
+        defer_success_observation=True,
+    )
+
+    result = _request(client)
+    completed_call = client.complete_call(
+        result.call,
+        observed_tokens=5,
+        failure_reason_code="INVALID_RESPONSE_CONTRACT",
+    )
+    client.close()
+
+    assert completed_call.status_category == "RESPONSE_CONTRACT"
+    assert completed_call.reason_code == "INVALID_RESPONSE_CONTRACT"
+    assert completed_call.observed_tokens == 5
+    assert events == [completed_call]
+
+
 def test_retry_after_http_date_is_respected() -> None:
     sleeps: list[float] = []
+    events: list[ProviderCall] = []
     calls = 0
 
     def handler(_: httpx.Request) -> httpx.Response:
@@ -87,9 +140,7 @@ def test_retry_after_http_date_is_respected() -> None:
         if calls == 1:
             return httpx.Response(
                 429,
-                headers={
-                    "Retry-After": "Thu, 01 Jan 1970 00:00:02 GMT"
-                },
+                headers={"Retry-After": "Thu, 01 Jan 1970 00:00:02 GMT"},
                 json={},
             )
         return httpx.Response(200, json={})
@@ -101,12 +152,15 @@ def test_retry_after_http_date_is_respected() -> None:
         sleeper=sleeps.append,
         wall_clock=lambda: 0.0,
         random_value=lambda: 0.0,
+        observer=events.append,
     )
     result = _request(client)
     client.close()
     assert calls == 2
     assert sleeps == [2.0]
     assert result.call.retry_after_ms == 2000
+    assert result.call.rate_limited is True
+    assert events == [result.call]
 
 
 @pytest.mark.parametrize("status", (400, 422))

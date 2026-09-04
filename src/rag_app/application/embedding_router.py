@@ -240,7 +240,19 @@ class QueryEmbeddingRouter:
                 tuple(attempted), tuple(calls), "STANDBY_CIRCUIT_OPEN"
             )
         if standby_slot.provider_id.startswith("aliyun-qwen37"):
-            estimated_tokens = estimate_tokens(request.text)
+            query_policy = dict(standby_slot.query_request_policy)
+            query_instruct = query_policy.get("query_instruct")
+            if (
+                not isinstance(query_instruct, str)
+                or not query_instruct.strip()
+            ):
+                raise IndexCompatibilityError(
+                    "阿里 Query slot 缺少实际 query_instruct。",
+                    stage="embedding_router.revision",
+                )
+            estimated_tokens = estimate_tokens(request.text) + estimate_tokens(
+                query_instruct
+            )
             self._budget.reserve(
                 "aliyun-qwen37",
                 "embedding",

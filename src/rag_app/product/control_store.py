@@ -268,9 +268,9 @@ class ProductControlStore:
             status_category=call.status_category or "UNKNOWN",
             latency_ms=call.elapsed_ms,
             estimated_tokens=call.estimated_tokens or 0,
-            observed_tokens=None,
+            observed_tokens=call.observed_tokens,
             retry_count=call.retry_count,
-            rate_limited=call.reason_code == "HTTP_429",
+            rate_limited=call.rate_limited or call.reason_code == "HTTP_429",
             selected_slot=selected_slot,
             failover=failover,
             reranker_mode=reranker_mode,
@@ -916,10 +916,7 @@ def _validate_v1_profile_contract(  # noqa: PLR0913, PLR0917
     reranker: ProviderConnection | None,
 ) -> None:
     """拒绝页面配置偏离 P11 已实现的固定 Provider 合同。"""
-    if (
-        primary.provider_type != "jina"
-        or primary_dimension != _P11_DIMENSION
-    ):
+    if primary.provider_type != "jina" or primary_dimension != _P11_DIMENSION:
         raise ValueError("P11 Primary 必须是 1024 维 Jina Embedding。")
     if primary_document_policy.get("task") != "retrieval.passage":
         raise ValueError("Jina document task 必须是 retrieval.passage。")

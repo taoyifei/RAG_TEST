@@ -25,6 +25,7 @@ from rag_app.core.models import ProviderCall, ProviderFailureCategory
 _DEFAULT_RETRY_STATUSES = frozenset({408, 429, 502, 503, 504})
 _AUTH_OR_MODEL_STATUSES = frozenset({401, 403, 404})
 _INPUT_INVALID_STATUSES = frozenset({400, 422})
+_HTTP_RATE_LIMITED = 429
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
@@ -81,6 +82,7 @@ class ProviderHttpClient:
         wall_clock: Callable[[], float] = time.time,
         random_value: Callable[[], float] = random.random,
         observer: Callable[[ProviderCall], None] | None = None,
+        defer_success_observation: bool = False,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -95,6 +97,7 @@ class ProviderHttpClient:
             wall_clock: 解析 HTTP-date Retry-After 的墙上时钟。
             random_value: 返回 ``[0, 1]`` 的 full-jitter 随机源。
             observer: 可选脱敏调用观察器；失败不得覆盖业务结果。
+            defer_success_observation: 是否等待响应语义校验后再观察成功。
 
         Returns:
             无返回值。
@@ -129,6 +132,7 @@ class ProviderHttpClient:
         self._wall_clock = wall_clock
         self._random_value = random_value
         self._observer = observer
+        self._defer_success_observation = defer_success_observation
         self._closed = False
 
     def request_json(  # noqa: PLR0913
@@ -172,6 +176,7 @@ class ProviderHttpClient:
             raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
         started = self._monotonic()
         last_retry_after_ms: int | None = None
+        encountered_rate_limit = False
         for attempt in range(1, self._max_attempts + 1):
             try:
                 response = self._client.request(
@@ -197,6 +202,7 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                     last_retry_after_ms,
+                    encountered_rate_limit,
                 )
                 if attempt == self._max_attempts:
                     self._observe(call)
@@ -208,6 +214,9 @@ class ProviderHttpClient:
                 self._sleep_before_retry(attempt, None)
                 continue
             status = response.status_code
+            encountered_rate_limit = (
+                encountered_rate_limit or status == _HTTP_RATE_LIMITED
+            )
             if status in self._retry_statuses:
                 retry_after = _retry_after_seconds(
                     response.headers.get("retry-after"), self._wall_clock()
@@ -227,6 +236,7 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                     last_retry_after_ms,
+                    encountered_rate_limit,
                 )
                 if attempt == self._max_attempts:
                     self._observe(call)
@@ -251,6 +261,7 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                     None,
+                    encountered_rate_limit,
                 )
                 self._observe(call)
                 raise ProviderHttpError(category, f"HTTP_{status}", call)
@@ -266,6 +277,7 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 )
             content_type = response.headers.get("content-type", "")
             if "application/json" not in content_type.casefold():
@@ -279,6 +291,7 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 )
             try:
                 response_payload = response.json()
@@ -293,6 +306,7 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 ) from None
             call = self._call(
                 provider_id,
@@ -306,10 +320,40 @@ class ProviderHttpClient:
                 input_count,
                 estimated_tokens,
                 last_retry_after_ms,
+                encountered_rate_limit,
             )
-            self._observe(call)
+            if not self._defer_success_observation:
+                self._observe(call)
             return ProviderHttpResult(payload=response_payload, call=call)
         raise AssertionError("有限尝试循环必须返回或抛出。")
+
+    def complete_call(
+        self,
+        call: ProviderCall,
+        *,
+        observed_tokens: int | None = None,
+        failure_reason_code: str | None = None,
+    ) -> ProviderCall:
+        """在响应语义校验后生成并观察唯一终态调用。
+
+        Args:
+            call: HTTP 层返回但尚未观察的成功调用。
+            observed_tokens: Provider 返回且已严格校验的 Token 数。
+            failure_reason_code: 可选的稳定响应合同失败码。
+
+        Returns:
+            带最终状态和实际 Token 的脱敏调用。
+
+        """
+        values = call.model_dump()
+        values["observed_tokens"] = observed_tokens
+        if failure_reason_code is not None:
+            values["status_category"] = "RESPONSE_CONTRACT"
+            values["reason_code"] = failure_reason_code
+        completed_call = ProviderCall.model_validate(values)
+        if self._defer_success_observation:
+            self._observe(completed_call)
+        return completed_call
 
     def close(self) -> None:
         """幂等关闭连接池。
@@ -337,6 +381,7 @@ class ProviderHttpClient:
         started: float,
         input_count: int,
         estimated_tokens: int,
+        rate_limited: bool,
     ) -> ProviderHttpError:
         call = self._call(
             provider_id,
@@ -350,6 +395,7 @@ class ProviderHttpClient:
             input_count,
             estimated_tokens,
             None,
+            rate_limited,
         )
         self._observe(call)
         return ProviderHttpError(
@@ -371,6 +417,7 @@ class ProviderHttpClient:
         input_count: int,
         estimated_tokens: int,
         retry_after_ms: int | None,
+        rate_limited: bool,
     ) -> ProviderCall:
         parsed = urlparse(self._base_url)
         host = parsed.hostname or "invalid"
@@ -389,6 +436,7 @@ class ProviderHttpClient:
             attempt_count=attempt_count,
             status_category=status_category,
             retry_after_ms=retry_after_ms,
+            rate_limited=rate_limited,
             input_count=input_count,
             estimated_tokens=estimated_tokens,
         )
