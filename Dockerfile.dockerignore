@@ -5,8 +5,6 @@
 .venv
 .venv-*
 **/__pycache__
-**/*.pyc
-**/*.pyo
 *.egg-info
 .data
 artifacts
@@ -22,6 +20,9 @@ deployment
 docs/**
 !docs/public/
 !docs/public/openapi-v1.json
+**/__pycache__/
+**/*.pyc
+**/*.pyo
 frontend/node_modules
 frontend/dist
 frontend/coverage
