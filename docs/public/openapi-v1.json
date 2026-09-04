@@ -1,6 +1,275 @@
 {
   "components": {
     "schemas": {
+      "Chunk": {
+        "additionalProperties": false,
+        "description": "不依赖向量存储实现的 canonical Chunk V3。",
+        "properties": {
+          "child_group_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Child Group Ids",
+            "type": "array"
+          },
+          "chunk_id": {
+            "pattern": "^chunk_[0-9a-f]{32}$",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "chunker_fingerprint": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Chunker Fingerprint",
+            "type": "string"
+          },
+          "citation_text": {
+            "minLength": 1,
+            "title": "Citation Text",
+            "type": "string"
+          },
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "embedding_text": {
+            "minLength": 1,
+            "title": "Embedding Text",
+            "type": "string"
+          },
+          "heading_path": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Heading Path",
+            "type": "array"
+          },
+          "identifiers": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Identifiers",
+            "type": "array"
+          },
+          "index_revision_id": {
+            "default": "irev_00000000000000000000000000000000",
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Index Revision Id",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "default": "kb_00000000000000000000000000000000",
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "lexical_text": {
+            "minLength": 1,
+            "title": "Lexical Text",
+            "type": "string"
+          },
+          "metadata": {
+            "default": [],
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Metadata",
+            "type": "array"
+          },
+          "neighbor_group_id": {
+            "default": "root",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Neighbor Group Id",
+            "type": "string"
+          },
+          "next_chunk_id": {
+            "anyOf": [
+              {
+                "pattern": "^chunk_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Chunk Id"
+          },
+          "note_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Note Refs",
+            "type": "array"
+          },
+          "parent_node_id": {
+            "anyOf": [
+              {
+                "pattern": "^node_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Node Id"
+          },
+          "previous_chunk_id": {
+            "anyOf": [
+              {
+                "pattern": "^chunk_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Chunk Id"
+          },
+          "project_id": {
+            "default": "prj_00000000000000000000000000000000",
+            "pattern": "^prj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ChunkRole",
+            "default": "text"
+          },
+          "schema_version": {
+            "default": "3",
+            "pattern": "^3$",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "section_id": {
+            "default": "root",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Section Id",
+            "type": "string"
+          },
+          "source_spans": {
+            "items": {
+              "$ref": "#/components/schemas/SourceSpan"
+            },
+            "minItems": 1,
+            "title": "Source Spans",
+            "type": "array"
+          },
+          "token_count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Token Count",
+            "type": "integer"
+          },
+          "token_count_is_estimate": {
+            "title": "Token Count Is Estimate",
+            "type": "boolean"
+          },
+          "tokenizer_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Tokenizer Id",
+            "type": "string"
+          },
+          "version": {
+            "$ref": "#/components/schemas/DocumentVersionRef"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "version",
+          "chunker_fingerprint",
+          "source_spans",
+          "citation_text",
+          "embedding_text",
+          "lexical_text",
+          "token_count",
+          "token_count_is_estimate",
+          "tokenizer_id",
+          "content_sha256"
+        ],
+        "title": "Chunk",
+        "type": "object"
+      },
+      "ChunkPage": {
+        "additionalProperties": false,
+        "description": "带总数的 canonical Chunk 分页。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Chunk"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "page_size": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 200.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page_size",
+          "offset"
+        ],
+        "title": "ChunkPage",
+        "type": "object"
+      },
+      "ChunkRole": {
+        "description": "结构化 Chunk 的检索角色。",
+        "enum": [
+          "text",
+          "list",
+          "table",
+          "note",
+          "image_metadata",
+          "header_footer",
+          "text_box",
+          "comment"
+        ],
+        "title": "ChunkRole",
+        "type": "string"
+      },
       "ConfidenceDecision": {
         "additionalProperties": false,
         "description": "由可审计规则特征产生的 provisional 决策。",
@@ -163,6 +432,43 @@
           "chunk_id"
         ],
         "title": "DiagnosticExpansionItem",
+        "type": "object"
+      },
+      "DiagnosticFusionItem": {
+        "additionalProperties": false,
+        "description": "不含正文的融合排名、分数与逐通道 RRF 贡献。",
+        "properties": {
+          "chunk_id": {
+            "pattern": "^chunk_[0-9a-f]{32}$",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "contributions": {
+            "items": {
+              "$ref": "#/components/schemas/RrfContribution"
+            },
+            "minItems": 1,
+            "title": "Contributions",
+            "type": "array"
+          },
+          "rank": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "score": {
+            "exclusiveMinimum": 0.0,
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "chunk_id",
+          "rank",
+          "score",
+          "contributions"
+        ],
+        "title": "DiagnosticFusionItem",
         "type": "object"
       },
       "DiagnosticRerankItem": {
@@ -338,6 +644,34 @@
         "title": "DocumentVersion",
         "type": "object"
       },
+      "DocumentVersionRef": {
+        "additionalProperties": false,
+        "description": "绑定内容摘要的不可变文档版本引用。",
+        "properties": {
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "document_id": {
+            "pattern": "^doc_[0-9a-f]{32}$",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "document_id",
+          "document_version_id",
+          "content_sha256"
+        ],
+        "title": "DocumentVersionRef",
+        "type": "object"
+      },
       "DocumentVersionStatus": {
         "description": "不可变文档版本的索引状态。",
         "enum": [
@@ -497,6 +831,11 @@
             "title": "Metadata",
             "type": "array"
           },
+          "publishable": {
+            "default": true,
+            "title": "Publishable",
+            "type": "boolean"
+          },
           "quality_flags": {
             "default": [],
             "items": {
@@ -536,6 +875,12 @@
             ],
             "title": "Section Id"
           },
+          "selection_reason": {
+            "default": "retrieval_candidate",
+            "minLength": 1,
+            "title": "Selection Reason",
+            "type": "string"
+          },
           "source_label": {
             "minLength": 1,
             "title": "Source Label",
@@ -548,6 +893,11 @@
             },
             "title": "Source Spans",
             "type": "array"
+          },
+          "table_context": {
+            "default": false,
+            "title": "Table Context",
+            "type": "boolean"
           },
           "table_locator": {
             "anyOf": [
@@ -680,6 +1030,55 @@
           "fencing_safe_status"
         ],
         "title": "Job",
+        "type": "object"
+      },
+      "JobPage": {
+        "additionalProperties": false,
+        "description": "带总数的安全 Job 分页。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Job"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_offset": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Offset"
+          },
+          "offset": {
+            "minimum": 0.0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "page_size": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 200.0,
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "page_size",
+          "offset"
+        ],
+        "title": "JobPage",
         "type": "object"
       },
       "JobStatus": {
@@ -1185,6 +1584,14 @@
             "title": "Fused Chunk Ids",
             "type": "array"
           },
+          "fusion": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticFusionItem"
+            },
+            "title": "Fusion",
+            "type": "array"
+          },
           "provider_calls": {
             "default": [],
             "items": {
@@ -1262,6 +1669,415 @@
           "cache_hit"
         ],
         "title": "RetrievalDiagnosticsSummary",
+        "type": "object"
+      },
+      "RevisionActivation": {
+        "additionalProperties": false,
+        "description": "一次原子激活的只读历史记录。",
+        "properties": {
+          "activated_at": {
+            "title": "Activated At",
+            "type": "string"
+          },
+          "new_revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "New Revision Id",
+            "type": "string"
+          },
+          "old_revision_id": {
+            "anyOf": [
+              {
+                "pattern": "^irev_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Old Revision Id"
+          },
+          "reason": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "trace_id": {
+            "pattern": "^trace_[0-9a-f]{32}$",
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_revision_id",
+          "activated_at",
+          "reason",
+          "trace_id"
+        ],
+        "title": "RevisionActivation",
+        "type": "object"
+      },
+      "RevisionInspection": {
+        "additionalProperties": false,
+        "description": "不含 Secret、向量或物理路径的 Revision 检查视图。",
+        "properties": {
+          "activated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activated At"
+          },
+          "activation_history": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RevisionActivation"
+            },
+            "title": "Activation History",
+            "type": "array"
+          },
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "actual_chunk_count": {
+            "minimum": 0.0,
+            "title": "Actual Chunk Count",
+            "type": "integer"
+          },
+          "actual_document_count": {
+            "minimum": 0.0,
+            "title": "Actual Document Count",
+            "type": "integer"
+          },
+          "chunk_payload_schema": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Chunk Payload Schema",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "expected_chunk_count": {
+            "minimum": 0.0,
+            "title": "Expected Chunk Count",
+            "type": "integer"
+          },
+          "expected_document_count": {
+            "minimum": 0.0,
+            "title": "Expected Document Count",
+            "type": "integer"
+          },
+          "failure_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Code"
+          },
+          "fts_count": {
+            "minimum": 0.0,
+            "title": "Fts Count",
+            "type": "integer"
+          },
+          "index_fingerprint": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Index Fingerprint",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "lexical_schema": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Lexical Schema",
+            "type": "array"
+          },
+          "project_id": {
+            "pattern": "^prj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "retired_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retired At"
+          },
+          "revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "safe_message": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Safe Message"
+          },
+          "serving_compatibility_version": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Serving Compatibility Version",
+            "type": "string"
+          },
+          "serving_fingerprint": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Serving Fingerprint",
+            "type": "string"
+          },
+          "slot_coverages": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RevisionSlotCoverage"
+            },
+            "title": "Slot Coverages",
+            "type": "array"
+          },
+          "state": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          },
+          "validated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validated At"
+          },
+          "validation_evidence_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Evidence Hash"
+          },
+          "validation_report": {
+            "anyOf": [
+              {
+                "items": {
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/components/schemas/JsonValue"
+                    }
+                  ],
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Report"
+          },
+          "vector_schema": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "string"
+                },
+                {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              ],
+              "type": "array"
+            },
+            "title": "Vector Schema",
+            "type": "array"
+          },
+          "writer_status": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Writer Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision_id",
+          "project_id",
+          "knowledge_base_id",
+          "state",
+          "active",
+          "index_fingerprint",
+          "serving_fingerprint",
+          "serving_compatibility_version",
+          "expected_document_count",
+          "expected_chunk_count",
+          "actual_document_count",
+          "actual_chunk_count",
+          "fts_count",
+          "lexical_schema",
+          "vector_schema",
+          "chunk_payload_schema",
+          "writer_status",
+          "created_at"
+        ],
+        "title": "RevisionInspection",
+        "type": "object"
+      },
+      "RevisionReportsResponse": {
+        "description": "Revision 文档质量报告集合。",
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RevisionReportsResponse",
+        "type": "object"
+      },
+      "RevisionSlotCoverage": {
+        "additionalProperties": false,
+        "description": "一个 Revision 的实际向量槽覆盖状态。",
+        "properties": {
+          "coverage_ratio": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Coverage Ratio",
+            "type": "number"
+          },
+          "expected_chunk_count": {
+            "minimum": 0.0,
+            "title": "Expected Chunk Count",
+            "type": "integer"
+          },
+          "failed_count": {
+            "minimum": 0.0,
+            "title": "Failed Count",
+            "type": "integer"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "slot_id": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Slot Id",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          },
+          "valid_vector_count": {
+            "minimum": 0.0,
+            "title": "Valid Vector Count",
+            "type": "integer"
+          },
+          "vector_name": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Vector Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slot_id",
+          "vector_name",
+          "required",
+          "expected_chunk_count",
+          "valid_vector_count",
+          "failed_count",
+          "coverage_ratio",
+          "state"
+        ],
+        "title": "RevisionSlotCoverage",
+        "type": "object"
+      },
+      "RrfContribution": {
+        "additionalProperties": false,
+        "description": "一个通道对候选 RRF 分数的可解释贡献。",
+        "properties": {
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "contribution": {
+            "exclusiveMinimum": 0.0,
+            "title": "Contribution",
+            "type": "number"
+          },
+          "rank": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "weight": {
+            "exclusiveMinimum": 0.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "channel",
+          "rank",
+          "weight",
+          "contribution"
+        ],
+        "title": "RrfContribution",
         "type": "object"
       },
       "SlotProgress": {
@@ -1596,6 +2412,13 @@
         "additionalProperties": false,
         "description": "不主动调用 Provider 的只读系统状态。",
         "properties": {
+          "active_revision_schema": {
+            "default": "chunk-v3/fts-v2",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Active Revision Schema",
+            "type": "string"
+          },
           "analyzer_id": {
             "title": "Analyzer Id",
             "type": "string"
@@ -1629,14 +2452,33 @@
             "title": "Integrity Status",
             "type": "string"
           },
+          "lexical_analyzer_id": {
+            "default": "deterministic-cjk-bigram-v2",
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Lexical Analyzer Id",
+            "type": "string"
+          },
           "lexical_schema": {
             "title": "Lexical Schema",
             "type": "string"
+          },
+          "offline_evaluation_v3_ready": {
+            "default": true,
+            "title": "Offline Evaluation V3 Ready",
+            "type": "boolean"
           },
           "pending_gc_items": {
             "minimum": 0.0,
             "title": "Pending Gc Items",
             "type": "integer"
+          },
+          "primary_live_evaluation_status": {
+            "default": "not_verified",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Primary Live Evaluation Status",
+            "type": "string"
           },
           "profile_id": {
             "title": "Profile Id",
@@ -1674,6 +2516,13 @@
           "serving_fingerprint": {
             "pattern": "^sha256:[0-9a-f]{64}$",
             "title": "Serving Fingerprint",
+            "type": "string"
+          },
+          "standby_live_evaluation_status": {
+            "default": "not_verified",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Standby Live Evaluation Status",
             "type": "string"
           }
         },
@@ -2114,6 +2963,220 @@
         "summary": " Trace Events",
         "tags": [
           "debug"
+        ]
+      }
+    },
+    "/api/v1/jobs": {
+      "get": {
+        "description": "按 scope 和公开状态分页读取 Job。",
+        "operationId": "_list_jobs_api_v1_jobs_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "knowledge_base_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Knowledge Base Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/JobStatus"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " List Jobs",
+        "tags": [
+          "jobs"
         ]
       }
     },
@@ -5902,6 +6965,594 @@
         "summary": " List Artifacts",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/revisions/{revision_id}": {
+      "get": {
+        "description": "读取 scope 绑定的 Revision 状态和实际计数。",
+        "operationId": "_inspect_revision_api_v1_projects__project_id__knowledge_bases__kb_id__revisions__revision_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Inspect Revision",
+        "tags": [
+          "revisions"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/revisions/{revision_id}/chunks": {
+      "get": {
+        "description": "读取 canonical Chunk 三视图和精确 SourceSpan。",
+        "operationId": "_list_chunks_api_v1_projects__project_id__knowledge_bases__kb_id__revisions__revision_id__chunks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "document_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "role",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Role"
+            }
+          },
+          {
+            "in": "query",
+            "name": "section_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Section Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "neighbor_group_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Neighbor Group Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChunkPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " List Chunks",
+        "tags": [
+          "revisions"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/revisions/{revision_id}/reports": {
+      "get": {
+        "description": "读取每个文档的 ParseReport 与 ChunkingReport。",
+        "operationId": "_reports_api_v1_projects__project_id__knowledge_bases__kb_id__revisions__revision_id__reports_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision_id",
+            "required": true,
+            "schema": {
+              "title": "Revision Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionReportsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Reports",
+        "tags": [
+          "revisions"
         ]
       }
     },

@@ -9,6 +9,7 @@ PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
 - `src/rag_app/`：安全 DOCX 解析、稳定 ID、SQLite 任务状态、Qdrant 索引、
   检索/重排/严格引用回答、独立 Query Trace、API 与 PaddleOCR 客户端和服务。
 - `evaluation/`：人工冻结集 schema、独立活动证据 manifest 校验和指标计算。
+- `frontend/`：P10 React/TypeScript 管理控制台、OpenAPI 生成类型与离线 Playwright。
 - `scripts/`：输入审计、负载/检索基准、发布安全扫描及 OCR 资产装配。
 - `deployment/`：应用、Qdrant、单 GPU OCR 的离线 Compose 和恢复脚本。
 - `design/public/`：不含业务语料的构建、发布和运维说明。
@@ -31,6 +32,18 @@ bash -n deployment/*.sh
 docker compose --env-file deployment/.env.example \
   -f deployment/compose.yaml config -q
 git diff --check
+```
+
+前端统一门禁和离线启动方式见 `docs/development/frontend.md`。快速验证命令：
+
+```bash
+.venv/bin/python scripts/dev.py web-install-check
+.venv/bin/python scripts/dev.py web-lint
+.venv/bin/python scripts/dev.py web-typecheck
+.venv/bin/python scripts/dev.py web-test
+.venv/bin/python scripts/dev.py web-build
+.venv/bin/python scripts/dev.py web-e2e \
+  --profile configs/profiles/dev-offline.json
 ```
 
 默认 docstring 命令检查 `src/rag_app`、`evaluation`、`scripts` 全量 Python；

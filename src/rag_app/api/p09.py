@@ -17,6 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from rag_app.api.console import register_console_routes
 from rag_app.api.p09_schemas import (
     CreateKnowledgeBaseRequest,
     CreateProjectRequest,
@@ -306,6 +307,7 @@ def create_p09_app(  # noqa: PLR0915
     )
     _register_trace_routes(app, runtime, _require_admin)
     _register_status_routes(app, runtime, _require_admin)
+    register_console_routes(app, runtime, _require_admin)
     return app
 
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 from rag_app.adapters.stores import SqliteControlStore, SqliteLifecycleStore
+from rag_app.application.console import ConsoleInspectionService
 from rag_app.application.durable_jobs import DurableJobRunner
 from rag_app.application.lifecycle import LifecycleService
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
@@ -128,6 +129,11 @@ def build_p09_runtime(
             reconciliation_summary=freeze_json_object(reconciliation),
             remote_dense_confidence_calibrated=False,
             remote_production_profile_ready=False,
+            offline_evaluation_v3_ready=True,
+            primary_live_evaluation_status="not_verified",
+            standby_live_evaluation_status="not_verified",
+            lexical_analyzer_id=analyzer_id,
+            active_revision_schema="chunk-v3/fts-v2",
             components=tuple(
                 freeze_json_object(item.model_dump(mode="json"))
                 for item in components.descriptors
@@ -138,6 +144,11 @@ def build_p09_runtime(
         lifecycle.run_ingestion,
         store.pending_ingestion_jobs,
         max_workers=max_job_workers,
+    )
+    console = ConsoleInspectionService(
+        revisions=persistence.control,
+        jobs=store,
+        serving_fingerprint=components.serving_fingerprint,
     )
 
     def _close() -> None:
@@ -161,6 +172,7 @@ def build_p09_runtime(
         trace_events=_trace_events,
         system_status=_system_status,
         close=_close,
+        console=console,
     )
     runtime = P09Runtime(
         retrieval_runtime=retrieval_runtime,

@@ -174,6 +174,19 @@ class SystemStatus(FrozenModel):
     remote_dense_confidence_calibrated: bool
     remote_production_profile_ready: bool
     components: tuple[JsonObject, ...]
+    offline_evaluation_v3_ready: bool = True
+    primary_live_evaluation_status: str = Field(
+        default="not_verified", min_length=1, max_length=80
+    )
+    standby_live_evaluation_status: str = Field(
+        default="not_verified", min_length=1, max_length=80
+    )
+    lexical_analyzer_id: str = Field(
+        default="deterministic-cjk-bigram-v2", min_length=1, max_length=160
+    )
+    active_revision_schema: str = Field(
+        default="chunk-v3/fts-v2", min_length=1, max_length=160
+    )
 
 
 class QueuedIngestionDocument(FrozenModel):

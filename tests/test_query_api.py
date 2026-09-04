@@ -135,7 +135,6 @@ def _client(
             jobs=jobs,
             feedback=feedback,
             pipeline_fingerprint="pipeline-1",
-            frontend_dir=Path(__file__).parents[1] / "frontend",
         )
     )
     return TestClient(app), query_token, admin_token
@@ -324,21 +323,11 @@ def test_feedback_requires_query_token_and_is_idempotent(
     ).status_code == 204
 
 
-def test_frontend_uses_only_local_assets_and_required_controls(
+def test_legacy_api_does_not_mount_a_second_frontend(
     tmp_path: Path,
 ) -> None:
     client, _, _ = _client(tmp_path)
 
-    response = client.get("/")
-
-    assert response.status_code == 200
-    assert 'id="question"' in response.text
-    assert 'id="stages"' in response.text
-    assert 'id="answer"' in response.text
-    assert 'id="citations"' in response.text
-    assert 'id="clear"' in response.text
-    assert 'id="feedback-useful"' in response.text
-    assert 'id="feedback-not-useful"' in response.text
-    assert "https://" not in response.text
-    assert client.get("/assets/app.js").status_code == 200
-    assert client.get("/assets/styles.css").status_code == 200
+    assert client.get("/").status_code == 404
+    assert client.get("/assets/app.js").status_code == 404
+    assert client.get("/assets/styles.css").status_code == 404

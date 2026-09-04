@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import importlib
 import importlib.metadata
 import json
@@ -14,7 +15,9 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Sequence
+from http import HTTPStatus
 from pathlib import Path
 from typing import cast
 
@@ -126,6 +129,16 @@ _FAILOVER_SCENARIOS = (
     "jina-429",
     "jina-bad-dimension",
     "both-unavailable",
+)
+_WEB_COMMANDS = frozenset(
+    {
+        "web-install-check",
+        "web-lint",
+        "web-typecheck",
+        "web-test",
+        "web-build",
+        "web-e2e",
+    }
 )
 
 
@@ -278,6 +291,164 @@ def _run_commands(commands: Sequence[Sequence[str]]) -> int:
     return 0
 
 
+def _frontend_npm() -> str | None:
+    """返回可执行的本机 npm，不接受 Windows cmd shim。"""
+    candidates = (str(Path.home() / ".local/bin/npm"), shutil.which("npm"))
+    for candidate in candidates:
+        if (
+            candidate
+            and not candidate.startswith("/mnt/c/")
+            and Path(candidate).is_file()
+            and os.access(candidate, os.X_OK)
+        ):
+            return candidate
+    return None
+
+
+def _run_web_script(script: str) -> int:
+    """执行一个锁定在 frontend package 的 npm script。"""
+    npm = _frontend_npm()
+    if npm is None:
+        print("BLOCKED web: 未找到可执行的 Linux npm。", file=sys.stderr)
+        return 2
+    environment = _offline_environment()
+    environment["PATH"] = (
+        f"{Path(npm).parent}{os.pathsep}{environment.get('PATH', '')}"
+    )
+    command = (npm, "--prefix", "frontend", "run", script)
+    print(f"RUN {shlex.join(command)}", flush=True)
+    completed = subprocess.run(  # noqa: S603
+        command,
+        cwd=_REPOSITORY_ROOT,
+        env=environment,
+        check=False,
+    )
+    return completed.returncode
+
+
+def _web_install_check() -> int:
+    """验证 Node、锁文件和已安装依赖，不隐式下载。"""
+    npm = _frontend_npm()
+    package_lock = _REPOSITORY_ROOT / "frontend" / "package-lock.json"
+    if npm is None or not package_lock.is_file():
+        print(
+            "BLOCKED web-install-check: 需要 Linux Node/npm "
+            "和 package-lock.json。",
+            file=sys.stderr,
+        )
+        return 2
+    environment = _offline_environment()
+    environment["PATH"] = (
+        f"{Path(npm).parent}{os.pathsep}{environment.get('PATH', '')}"
+    )
+    completed = subprocess.run(  # noqa: S603
+        [npm, "--prefix", "frontend", "ls", "--depth=0"],
+        cwd=_REPOSITORY_ROOT,
+        env=environment,
+        check=False,
+    )
+    if completed.returncode != 0:
+        print(
+            "BLOCKED web-install-check: 请在 frontend 执行 npm ci。",
+            file=sys.stderr,
+        )
+    return completed.returncode
+
+
+def _windows_path(path: Path) -> str:
+    """将 WSL 路径转换为 Windows Node 可读取的绝对路径。"""
+    completed = subprocess.run(  # noqa: S603
+        ["/usr/bin/wslpath", "-w", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _wait_for_p10(port: int) -> bool:
+    """在有限时间内等待 loopback P10 服务就绪。"""
+    deadline = time.monotonic() + 30.0
+    while time.monotonic() < deadline:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+        try:
+            connection.request("GET", "/ready")
+            if connection.getresponse().status == HTTPStatus.OK:
+                return True
+        except OSError:
+            time.sleep(0.1)
+        finally:
+            connection.close()
+    return False
+
+
+def _web_e2e(profile: Path) -> int:
+    """运行真实离线 Playwright；WSL 可复用已安装的 Windows Chrome。"""
+    build_result = _run_web_script("build")
+    if build_result != 0:
+        return build_result
+    node = shutil.which("node.exe")
+    chrome = Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
+    if node is None or not chrome.is_file():
+        return _run_web_script("e2e")
+    server = subprocess.Popen(  # noqa: S603
+        [
+            sys.executable,
+            "scripts/serve_p10.py",
+            "--port",
+            "8091",
+            "--frontend-dir",
+            "frontend/dist",
+            "--profile",
+            str(profile),
+        ],
+        cwd=_REPOSITORY_ROOT,
+        env=_offline_environment(),
+    )
+    try:
+        if not _wait_for_p10(8091):
+            print("BLOCKED web-e2e: P10 loopback 服务未就绪。", file=sys.stderr)
+            return 2
+        environment = _offline_environment()
+        environment.update(
+            {
+                "P10_EXTERNAL_SERVER": "1",
+                "P10_BROWSER_CHANNEL": "chrome",
+                "P10_BASE_URL": "http://127.0.0.1:8091",
+            }
+        )
+        wsl_environment = environment.get("WSLENV", "")
+        p10_environment = (
+            "P10_EXTERNAL_SERVER/w:P10_BROWSER_CHANNEL/w:P10_BASE_URL/w"
+        )
+        environment["WSLENV"] = (
+            f"{p10_environment}:{wsl_environment}"
+            if wsl_environment
+            else p10_environment
+        )
+        cli = _windows_path(
+            _REPOSITORY_ROOT
+            / "frontend/node_modules/@playwright/test/cli.js"
+        )
+        config = _windows_path(
+            _REPOSITORY_ROOT / "frontend/playwright.config.ts"
+        )
+        completed = subprocess.run(  # noqa: S603
+            [node, cli, "test", f"--config={config}"],
+            cwd=_REPOSITORY_ROOT,
+            env=environment,
+            check=False,
+        )
+        return completed.returncode
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
+
+
 def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -293,6 +464,7 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             "inspect-document",
             "chunk-document",
             "chunk-ablation",
+            *sorted(_WEB_COMMANDS),
         ),
     )
     parser.add_argument("document_path", nargs="?", type=Path)
@@ -318,6 +490,8 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             parser.error("chunk-ablation 必须提供文档或目录路径。")
         if parsed.output is None:
             parser.error("chunk-ablation 必须提供 --output。")
+    if parsed.command == "web-e2e" and parsed.profile is None:
+        parser.error("web-e2e 必须提供 --profile。")
     return parsed
 
 
@@ -629,7 +803,9 @@ def _failover_smoke(scenario: str) -> int:
     return 0
 
 
-def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
+def main(  # noqa: PLR0911, PLR0912
+    arguments: Sequence[str] | None = None,
+) -> int:
     """运行统一开发入口。
 
     Args:
@@ -656,6 +832,15 @@ def main(arguments: Sequence[str] | None = None) -> int:  # noqa: PLR0911
         return _run_commands(_check_commands())
     if command == "smoke":
         return _run_commands(_smoke_commands())
+    if command == "web-install-check":
+        return _web_install_check()
+    if command.startswith("web-"):
+        script = command.removeprefix("web-")
+        if script == "e2e":
+            if parsed.profile is None:
+                raise AssertionError("web-e2e profile 必须已由参数校验。")
+            return _web_e2e(parsed.profile)
+        return _run_web_script(script)
     if command == "provider-list":
         return _provider_list()
     if command == "inspect-document":

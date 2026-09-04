@@ -87,7 +87,9 @@ class RetrievalPolicy(FrozenModel):
             self.dense_semantic_calibration_state == "UNCALIBRATED"
             or not self.dense_calibrated_vector_spaces
         ):
-            raise ValueError("Dense semantic 启用时必须绑定校准状态和向量空间。")
+            raise ValueError(
+                "Dense semantic 启用时必须绑定校准状态和向量空间。"
+            )
         return self
 
 
@@ -253,6 +255,15 @@ class DiagnosticRerankItem(FrozenModel):
     score: StrictFloat | None = None
 
 
+class DiagnosticFusionItem(FrozenModel):
+    """不含正文的融合排名、分数与逐通道 RRF 贡献。"""
+
+    chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
+    rank: StrictInt = Field(gt=0)
+    score: StrictFloat = Field(gt=0.0)
+    contributions: tuple[RrfContribution, ...] = Field(min_length=1)
+
+
 class DiagnosticExpansionItem(FrozenModel):
     """不含正文的扩展候选身份与原因。"""
 
@@ -288,6 +299,7 @@ class RetrievalDiagnostics(FrozenModel):
 
     channel_chunk_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     fused_chunk_ids: tuple[str, ...] = ()
+    fusion: tuple[DiagnosticFusionItem, ...] = ()
     reranked: tuple[DiagnosticRerankItem, ...] = ()
     expanded: tuple[DiagnosticExpansionItem, ...] = ()
     evidence: tuple[DiagnosticEvidenceItem, ...] = ()
@@ -372,13 +384,14 @@ __all__ = [
     "ChannelHit",
     "DiagnosticEvidenceItem",
     "DiagnosticExpansionItem",
+    "DiagnosticFusionItem",
     "DiagnosticRerankItem",
     "EvidenceSelectionContext",
     "ExactSearchRequest",
     "FusedCandidate",
     "HydratedChunk",
-    "RankedChunk",
     "ProviderCallCount",
+    "RankedChunk",
     "RetrievalDiagnostics",
     "RetrievalDiagnosticsSummary",
     "RetrievalPolicy",

@@ -40,6 +40,7 @@ from rag_app.core.models import (
     ConfidenceStatus,
     DiagnosticEvidenceItem,
     DiagnosticExpansionItem,
+    DiagnosticFusionItem,
     DiagnosticRerankItem,
     EvidenceItem,
     EvidenceSelectionContext,
@@ -582,6 +583,15 @@ def _diagnostics(  # noqa: PLR0913
             for name, hits in channel_hits.items()
         ),
         fused_chunk_ids=tuple(item.chunk_id for item in fused),
+        fusion=tuple(
+            DiagnosticFusionItem(
+                chunk_id=item.chunk_id,
+                rank=rank,
+                score=item.score,
+                contributions=item.contributions,
+            )
+            for rank, item in enumerate(fused, start=1)
+        ),
         reranked=tuple(
             DiagnosticRerankItem(
                 chunk_id=item.hydrated.chunk.chunk_id,

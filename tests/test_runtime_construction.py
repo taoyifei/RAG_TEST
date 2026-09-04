@@ -79,6 +79,17 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
     root = Path(__file__).resolve().parents[1]
     docs = tmp_path / "docs"
     docs.mkdir(exist_ok=True)
+    frontend = tmp_path / "legacy-frontend-fixture"
+    frontend.mkdir(exist_ok=True)
+    for name in (
+        "index.html",
+        "styles.css",
+        "app.js",
+        "debug.html",
+        "debug.css",
+        "debug.js",
+    ):
+        (frontend / name).write_text("test fixture", encoding="utf-8")
     return RuntimeSettings(
         access_mode=AccessMode.SHARED_CORPUS,
         query_token=SecretStr(uuid.uuid4().hex),
@@ -99,7 +110,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         intent_router_calibration_path=(
             root / "deployment/config/intent-router-calibration.json"
         ),
-        frontend_dir=root / "frontend",
+        frontend_dir=frontend,
         llm_tokenizer_path=(
             root / "deployment/assets/tokenizers/llm/tokenizer.json"
         ),

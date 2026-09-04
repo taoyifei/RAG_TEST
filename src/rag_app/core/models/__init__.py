@@ -18,6 +18,14 @@ from rag_app.core.models.common import (
     SecretRef,
 )
 from rag_app.core.models.confidence import ConfidenceDecision, ConfidenceStatus
+from rag_app.core.models.console import (
+    ChunkPage,
+    JobPage,
+    RevisionActivation,
+    RevisionDocumentReport,
+    RevisionInspection,
+    RevisionSlotCoverage,
+)
 from rag_app.core.models.document import (
     CellGrid,
     DocumentIR,
@@ -140,6 +148,7 @@ from rag_app.core.models.search import (
     ChannelHit,
     DiagnosticEvidenceItem,
     DiagnosticExpansionItem,
+    DiagnosticFusionItem,
     DiagnosticRerankItem,
     EvidenceSelectionContext,
     ExactSearchRequest,
@@ -175,6 +184,7 @@ __all__ = [
     "ChannelHit",
     "Chunk",
     "ChunkEmbeddingState",
+    "ChunkPage",
     "ChunkRole",
     "ChunkingContext",
     "ChunkingPolicy",
@@ -187,6 +197,7 @@ __all__ = [
     "ConfidenceStatus",
     "DiagnosticEvidenceItem",
     "DiagnosticExpansionItem",
+    "DiagnosticFusionItem",
     "DiagnosticRerankItem",
     "Document",
     "DocumentEmbeddingBudget",
@@ -223,6 +234,7 @@ __all__ = [
     "IndexRevisionState",
     "IngestionJobState",
     "Job",
+    "JobPage",
     "JobStatus",
     "JsonObject",
     "KnowledgeBase",
@@ -264,7 +276,11 @@ __all__ = [
     "RetrievalDiagnosticsSummary",
     "RetrievalPlan",
     "RetrievalPolicy",
+    "RevisionActivation",
+    "RevisionDocumentReport",
+    "RevisionInspection",
     "RevisionMark",
+    "RevisionSlotCoverage",
     "RevisionValidationEvidence",
     "RevisionVectorSpec",
     "RoutedEmbeddingResult",

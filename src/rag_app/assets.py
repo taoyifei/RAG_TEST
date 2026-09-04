@@ -113,7 +113,7 @@ def _verify_manifest(*, root: Path, manifest_path: Path) -> int:
 
 
 def _verify_frontend(frontend_dir: Path) -> None:
-    """确认必需前端文件不存在远程资源引用。
+    """确认 Vite 构建前端不存在远程资源引用。
 
     Args:
         frontend_dir: 包含固定前端文件的本地目录。
@@ -125,9 +125,21 @@ def _verify_frontend(frontend_dir: Path) -> None:
         ValueError: 任一前端文件引用远程资源。
 
     """
-    for name in ("index.html", "styles.css", "app.js"):
-        path = frontend_dir / name
+    index = frontend_dir / "index.html"
+    assets = frontend_dir / "assets"
+    if not index.is_file() or not assets.is_dir():
+        raise ValueError("前端目录缺少 index.html 或 assets。")
+    files = (
+        index,
+        *sorted(path for path in assets.rglob("*") if path.is_file()),
+    )
+    if len(files) == 1:
+        raise ValueError("前端 assets 目录为空。")
+    for path in files:
+        if path.suffix not in {".css", ".html", ".js", ".map", ".svg"}:
+            continue
         text = path.read_text(encoding="utf-8")
         normalized = text.casefold()
         if any(marker in normalized for marker in _REMOTE_RESOURCE_MARKERS):
-            raise ValueError(f"前端资源含远程引用：{name}")
+            relative = path.relative_to(frontend_dir)
+            raise ValueError(f"前端资源含远程引用：{relative}")

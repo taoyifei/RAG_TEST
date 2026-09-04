@@ -4,15 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from rag_app.application.console import ConsoleInspectionService
 from rag_app.application.lifecycle import LifecycleService
 from rag_app.application.retrieval import RetrievalService
 from rag_app.core.errors import CapabilityUnavailable, NotFound
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import (
     ArtifactDescriptor,
+    ChunkPage,
+    JobPage,
     KnowledgeBaseScope,
     KnowledgeBaseStatus,
     ProjectStatus,
+    RevisionDocumentReport,
+    RevisionInspection,
     SearchRequest,
 )
 from rag_app.core.models.management import (
@@ -42,6 +47,7 @@ class RagSdk:
         trace_events: Callable[[str], tuple[TraceEvent, ...]],
         system_status: Callable[[], SystemStatus],
         close: Callable[[], None],
+        console: ConsoleInspectionService | None = None,
     ) -> None:
         """保存 Application Services，不持有具体 Store 类型。
 
@@ -55,6 +61,7 @@ class RagSdk:
             trace_events: 安全 Trace 事件读取函数。
             system_status: 只读系统状态函数。
             close: 组合根关闭函数。
+            console: 可选 P10 只读控制台服务。
 
         Returns:
             无返回值。
@@ -69,6 +76,7 @@ class RagSdk:
         self._trace_events = trace_events
         self._system_status = system_status
         self._close = close
+        self._console = console
         self._closed = False
         self._diagnostics: dict[str, RetrievalDiagnostics] = {}
 
@@ -565,6 +573,118 @@ class RagSdk:
         self._submit_job(job.job_id)
         return job
 
+    def list_jobs(
+        self,
+        *,
+        project_id: str | None = None,
+        knowledge_base_id: str | None = None,
+        states: tuple[str, ...] = (),
+        page_size: int = 50,
+        offset: int = 0,
+    ) -> JobPage:
+        """分页读取 P10 控制台安全 Job。
+
+        Args:
+            project_id: 可选项目过滤。
+            knowledge_base_id: 可选知识库过滤。
+            states: 可选公开状态过滤。
+            page_size: 单页上限。
+            offset: 稳定偏移量。
+
+        Returns:
+            Job 分页。
+
+        """
+        self._require_open()
+        return self._console_service().list_jobs(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            states=states,
+            page_size=page_size,
+            offset=offset,
+        )
+
+    def inspect_revision(
+        self, project_id: str, knowledge_base_id: str, revision_id: str
+    ) -> RevisionInspection:
+        """读取 scope 绑定的 Revision 检查视图。
+
+        Args:
+            project_id: 项目 ID。
+            knowledge_base_id: 知识库 ID。
+            revision_id: Revision ID。
+
+        Returns:
+            Revision 检查视图。
+
+        """
+        self._require_open()
+        return self._console_service().inspect_revision(
+            project_id, knowledge_base_id, revision_id
+        )
+
+    def list_revision_chunks(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        revision_id: str,
+        *,
+        document_id: str | None = None,
+        role: str | None = None,
+        section_id: str | None = None,
+        neighbor_group_id: str | None = None,
+        page_size: int = 50,
+        offset: int = 0,
+    ) -> ChunkPage:
+        """分页读取 canonical Chunk 三视图。
+
+        Args:
+            project_id: 项目 ID。
+            knowledge_base_id: 知识库 ID。
+            revision_id: Revision ID。
+            document_id: 可选逻辑文档过滤。
+            role: 可选 Chunk role 过滤。
+            section_id: 可选 Section 过滤。
+            neighbor_group_id: 可选相邻组过滤。
+            page_size: 单页上限。
+            offset: 稳定偏移量。
+
+        Returns:
+            canonical Chunk 分页。
+
+        """
+        self._require_open()
+        return self._console_service().list_chunks(
+            project_id,
+            knowledge_base_id,
+            revision_id,
+            document_id=document_id,
+            role=role,
+            section_id=section_id,
+            neighbor_group_id=neighbor_group_id,
+            page_size=page_size,
+            offset=offset,
+        )
+
+    def revision_document_reports(
+        self, project_id: str, knowledge_base_id: str, revision_id: str
+    ) -> tuple[RevisionDocumentReport, ...]:
+        """读取 Revision 内文档质量报告。
+
+        Args:
+            project_id: 项目 ID。
+            knowledge_base_id: 知识库 ID。
+            revision_id: Revision ID。
+
+        Returns:
+            ParseReport 与 ChunkingReport 列表。
+
+        """
+        self._require_open()
+        return self._console_service().document_reports(
+            project_id, knowledge_base_id, revision_id
+        )
+
     def search(
         self,
         project_id: str,
@@ -685,6 +805,13 @@ class RagSdk:
     def _require_open(self) -> None:
         if self._closed:
             raise CapabilityUnavailable("SDK 已关闭。", stage="sdk.lifecycle")
+
+    def _console_service(self) -> ConsoleInspectionService:
+        if self._console is None:
+            raise CapabilityUnavailable(
+                "当前组合根未启用控制台检查能力。", stage="console.inspect"
+            )
+        return self._console
 
 
 __all__ = ["RagSdk"]
