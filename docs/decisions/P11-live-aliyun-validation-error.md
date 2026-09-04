@@ -1,6 +1,6 @@
 # P11 阿里云百炼真实验证请求错误
 
-状态：`BLOCKED_BY_PROVIDER_REQUEST_INVALID`。
+状态：`WAITING_FOR_CORRECT_WORKSPACE_ID`。
 
 发现日期：2026-09-05。
 
@@ -77,3 +77,36 @@ Latency: 270 ms
    替代百炼 Live。
 4. 只有确认同一北京 Workspace/API Key 已开通 `qwen3.7-text-embedding`，或批准
    一次有界的官方最小请求对照诊断后，才恢复 Live Gate；不得在聊天中粘贴 API Key。
+
+## 零调用根因核验与生产护栏
+
+对已保存连接只做形状核验，没有输出 Workspace ID、API Key、哈希或正文。结果为：
+Region 是 `cn-beijing`，凭据仍是页面加密托管且 Key 形状正常，但 Workspace ID
+不以阿里云官方要求的 `llm-` 开头。官方控制台应复制 Workspace ID，而不是 App ID、
+Workspace 名称或 API Host 片段；参考
+[获取 Workspace ID](https://help.aliyun.com/zh/model-studio/obtain-the-app-id-and-workspace-id)
+与[地域和 Workspace](https://help.aliyun.com/zh/model-studio/regions/)。
+
+提交 `224ac930be701cfd6d53ecede8501071cf9129da` 在创建 HTTP Client 前要求
+`llm-` 前缀，避免无效配置继续出网消耗预算。验证证据：
+
+```text
+provider runtime tests: 47 passed, 1 warning
+previously failing product tests: 5 passed, 1 warning
+full offline gate: 1472 passed, 79 deselected, 4 warnings
+```
+
+部署前备份 `pre-224ac93.tar.gz` 校验通过，SHA-256 为
+`2fcd5a2d4b9c9e9bc6506796122cce34d229a198298362347f2faae0a4ab0ed5`；
+候选镜像 digest 为
+`sha256:f82968df74884c80008fb698aa3f55bea6128ffca68b93d22266ce53ceed731f`，
+120,069,668 bytes，OCI revision 与提交一致。只替换 app 后健康；Qdrant 容器
+`1bc4088a449c` 与创建时间未变，2 个 Connection、2 个 Credential 和 6 条历史
+验证记录均保留。
+
+通过正式 Session/API 执行一次生产护栏验收，3 ms 即以
+`PROVIDER_CONFIGURATION_INVALID` / `invalid_configuration` 本地失败；Provider HTTP
+为 0，observed usage 为空。验证记录从 6 增至 7，其中 19 Token 只是未发送的本地
+估算，不计入真实 Provider 消耗；真实总账仍为 6/25 次 HTTP、157/1,000 估算输入
+Token。下一次真实百炼请求须等用户在页面保存以 `llm-` 开头的正确 Workspace ID
+并确认后再运行。

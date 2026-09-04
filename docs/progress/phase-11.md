@@ -170,3 +170,25 @@ Live Gate 见 `docs/decisions/P11-live-provider-authorization.md` 与
   [授权与预算](../decisions/P11-live-provider-authorization.md)、
   [Jina 瞬时故障](../decisions/P11-live-jina-network-error.md)、
   [百炼请求错误](../decisions/P11-live-aliyun-validation-error.md)。
+
+## 2026-09-05 Workspace 零调用诊断与护栏部署
+
+- 只做布尔/形状核验，没有输出 Workspace ID、API Key、哈希或企业正文。已保存的
+  百炼 Region 为 `cn-beijing`，加密凭据与 Key 形状正常；Workspace ID 不以官方
+  `llm-` 前缀开头，定位为当前真实 4xx 的配置根因。
+- `224ac930be701cfd6d53ecede8501071cf9129da` 在 HTTP 前拒绝无效 Workspace ID；
+  Provider 定向测试 47 项、原失败产品测试 5 项和完整离线门禁
+  `1472 passed, 79 deselected` 均通过。
+- 部署前备份 `pre-224ac93.tar.gz` 为 0 个 Collection、4 个文件、SQLite `ok`，
+  SHA-256 为
+  `2fcd5a2d4b9c9e9bc6506796122cce34d229a198298362347f2faae0a4ab0ed5`。
+- 候选镜像 digest 为
+  `sha256:f82968df74884c80008fb698aa3f55bea6128ffca68b93d22266ce53ceed731f`，
+  120,069,668 bytes，OCI revision 与提交一致。只替换 app 后 `/live` 成功；Qdrant
+  容器 `1bc4088a449c` 未重启，2 个 Connection、2 个 Credential 与历史验证均保留。
+- 正式 Session/API 的生产护栏验收在 3 ms 内返回
+  `PROVIDER_CONFIGURATION_INVALID` / `invalid_configuration`，Provider HTTP 为 0；
+  第 7 条验证记录中的 19 Token 是未发送的本地估算。真实账本保持 6/25 次 HTTP、
+  157/1,000 估算输入 Token；指定私有 DOC 未出网。
+- Live Gate 现等待用户在页面保存控制台复制的、以 `llm-` 开头的正确 Workspace ID。
+  保存前不再发起百炼请求；所有 P11 Live/发布 Ready 状态继续保持 `false`。

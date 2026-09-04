@@ -1,6 +1,6 @@
 # P11 真实 Provider 授权门
 
-状态：`AUTHORIZED_CONNECTIONS_SAVED_PRIVATE_DOC_EGRESS_AUTHORIZED_LIVE_BLOCKED_BY_ALIYUN_REQUEST`。
+状态：`AUTHORIZED_CONNECTIONS_SAVED_WAITING_FOR_CORRECT_ALIYUN_WORKSPACE`。
 
 截至 2026-09-04，P11 的离线、浏览器 Mock、真实 Qdrant、备份恢复、升级、安全和
 容器工作已经完成。随后使用页面保存的加密 Jina 连接发起首次真实验证；第一项即以
@@ -91,3 +91,16 @@ HTTP、119 估算输入 Token，成功响应观察用量合计 242 Token。百�
 `BUDGET_BLOCKED`。后续 Provider 调用已按任务书暂停。详见
 [P11-live-jina-network-error.md](P11-live-jina-network-error.md) 和
 [P11-live-aliyun-validation-error.md](P11-live-aliyun-validation-error.md)。
+
+## 2026-09-05 Workspace 根因与零调用护栏（取代上节百炼归因）
+
+只核验连接与加密凭据形状后确认：Region 与 Key 形状正常，已保存的 Workspace ID
+不符合官方 `llm-` 前缀。提交
+`224ac930be701cfd6d53ecede8501071cf9129da` 已把此前宽松 slug 校验收紧为
+HTTP 前置校验；完整离线门禁为 `1472 passed, 79 deselected`。
+
+新镜像部署后，正式 Session/API 的生产护栏验收以
+`PROVIDER_CONFIGURATION_INVALID` 本地结束，Provider HTTP 为 0；因此真实总账仍为
+6/25 次 HTTP、157/1,000 估算输入 Token，指定 DOC 仍未出网。用户须在页面新建或
+更新百炼连接，复制控制台中以 `llm-` 开头的 Workspace ID，且不要把 Workspace ID
+或 API Key 粘贴到聊天；保存后才恢复一次最小 document Live 验证。
