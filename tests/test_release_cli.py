@@ -11,6 +11,7 @@ import pytest
 from scripts import release
 from scripts.release import (
     _assert_osv_audit_clean,
+    _audit_frontend_dependencies,
     _audit_python_dependencies,
     _write_license_inventory,
     main,
@@ -58,7 +59,7 @@ def test_dependency_audit_uses_osv_only_for_transport_failure(
 ) -> None:
     lock_file = tmp_path / "requirements.runtime.lock"
     lock_file.write_text("example==1.0\n", encoding="utf-8")
-    osv_calls: list[Path] = []
+    osv_calls: list[tuple[list[tuple[str, str]], str]] = []
 
     def failed_pip_audit(
         *call_args: object, **_call_kwargs: object
@@ -69,8 +70,10 @@ def test_dependency_audit_uses_osv_only_for_transport_failure(
             stdout="requests.exceptions.SSLError: unexpected EOF",
         )
 
-    def record_osv_call(path: Path) -> None:
-        osv_calls.append(path)
+    def record_osv_call(
+        dependencies: list[tuple[str, str]], ecosystem: str
+    ) -> None:
+        osv_calls.append((dependencies, ecosystem))
 
     monkeypatch.setattr(
         release.subprocess,
@@ -85,7 +88,7 @@ def test_dependency_audit_uses_osv_only_for_transport_failure(
 
     _audit_python_dependencies(lock_file)
 
-    assert osv_calls == [lock_file]
+    assert osv_calls == [([("example", "1.0")], "PyPI")]
 
 
 def test_dependency_audit_does_not_hide_reported_vulnerability(
@@ -125,3 +128,44 @@ def test_osv_dependency_audit_reports_package_and_vulnerability() -> None:
             [("example", "1.0")],
             {"results": [{"vulns": [{"id": "GHSA-test"}]}]},
         )
+
+
+def test_frontend_audit_uses_complete_lock_for_transport_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    lock_file = tmp_path / "package-lock.json"
+    lock_file.write_text(
+        json.dumps(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "": {"name": "frontend", "version": "0.1.0"},
+                    "node_modules/example": {"version": "1.0.0"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    osv_calls: list[tuple[list[tuple[str, str]], str]] = []
+
+    def failed_npm_audit(
+        *call_args: object, **_call_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=call_args[0],
+            returncode=1,
+            stdout="npm error audit endpoint returned an error",
+        )
+
+    def record_osv_call(
+        dependencies: list[tuple[str, str]], ecosystem: str
+    ) -> None:
+        osv_calls.append((dependencies, ecosystem))
+
+    monkeypatch.setattr(release.subprocess, "run", failed_npm_audit)
+    monkeypatch.setattr(release, "_run_osv_dependency_audit", record_osv_call)
+
+    _audit_frontend_dependencies(lock_file, "npm")
+
+    assert osv_calls == [([("example", "1.0.0")], "npm")]

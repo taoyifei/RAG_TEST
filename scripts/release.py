@@ -22,6 +22,7 @@ _QDRANT_IMAGE = "qdrant/qdrant:v1.18.3"
 _QDRANT_TEST_KEY = "test-only-qdrant-key"
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
+_NPM_LOCKFILE_VERSION = 3
 _TRIVY_IMAGE = (
     "aquasec/trivy@sha256:"
     "62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969"
@@ -30,11 +31,16 @@ _SYFT_IMAGE = (
     "anchore/syft@sha256:"
     "95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c"
 )
-_PIP_AUDIT_TRANSPORT_MARKERS = (
+_AUDIT_TRANSPORT_MARKERS = (
+    "audit endpoint returned an error",
+    "client network socket",
     "connectionerror",
     "connecttimeout",
+    "econnrefused",
+    "econnreset",
     "name resolution",
     "readtimeout",
+    "socket hang up",
     "sslerror",
     "temporary failure",
     "timed out",
@@ -254,7 +260,7 @@ def _write_license_inventory(sbom: Path, output: Path) -> None:
     )
 
 
-def _locked_dependencies(lock_file: Path) -> list[tuple[str, str]]:
+def _locked_python_dependencies(lock_file: Path) -> list[tuple[str, str]]:
     """读取只允许精确版本的 Runtime 锁文件。
 
     Args:
@@ -285,6 +291,46 @@ def _locked_dependencies(lock_file: Path) -> list[tuple[str, str]]:
     if not dependencies:
         raise RuntimeError(f"Runtime 锁文件为空：{lock_file}")
     return dependencies
+
+
+def _locked_npm_dependencies(lock_file: Path) -> list[tuple[str, str]]:
+    """读取 npm V3 lockfile 中的全部精确依赖版本。
+
+    Args:
+        lock_file: npm `package-lock.json` 文件。
+
+    Returns:
+        排序并去重后的包名和版本。
+
+    Raises:
+        RuntimeError: lockfile 合同无效或没有依赖。
+
+    """
+    payload = json.loads(lock_file.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("lockfileVersion") != _NPM_LOCKFILE_VERSION
+    ):
+        raise RuntimeError("前端依赖审计只接受 npm V3 lockfile。")
+    packages = payload.get("packages")
+    if not isinstance(packages, dict):
+        raise RuntimeError("npm lockfile 缺少 packages object。")
+    dependencies: set[tuple[str, str]] = set()
+    for location, metadata in packages.items():
+        if not location:
+            continue
+        if not isinstance(location, str) or not isinstance(metadata, dict):
+            raise RuntimeError("npm lockfile package 项无效。")
+        version = metadata.get("version")
+        name = metadata.get("name")
+        if not isinstance(name, str):
+            name = location.rsplit("node_modules/", 1)[-1]
+        if not name or not isinstance(version, str) or not version:
+            raise RuntimeError(f"npm lockfile 依赖缺少精确版本：{location}")
+        dependencies.add((name, version))
+    if not dependencies:
+        raise RuntimeError("npm lockfile 没有可审计依赖。")
+    return sorted(dependencies)
 
 
 def _assert_osv_audit_clean(
@@ -325,11 +371,15 @@ def _assert_osv_audit_clean(
         raise RuntimeError("OSV 发现依赖漏洞：" + ", ".join(findings))
 
 
-def _run_osv_dependency_audit(lock_file: Path) -> None:
+def _run_osv_dependency_audit(
+    dependencies: Sequence[tuple[str, str]],
+    ecosystem: str,
+) -> None:
     """通过 OSV 官方批量接口审计锁定依赖。
 
     Args:
-        lock_file: Runtime 精确依赖锁文件。
+        dependencies: 需要检查的全部精确包版本。
+        ecosystem: OSV 生态名称，例如 `PyPI` 或 `npm`。
 
     Returns:
         OSV 完整查询成功且无漏洞时无返回值。
@@ -340,12 +390,11 @@ def _run_osv_dependency_audit(lock_file: Path) -> None:
 
     """
     curl = _required_executable("curl")
-    dependencies = _locked_dependencies(lock_file)
     request_payload = json.dumps(
         {
             "queries": [
                 {
-                    "package": {"ecosystem": "PyPI", "name": name},
+                    "package": {"ecosystem": ecosystem, "name": name},
                     "version": version,
                 }
                 for name, version in dependencies
@@ -388,31 +437,30 @@ def _run_osv_dependency_audit(lock_file: Path) -> None:
     )
 
 
-def _audit_python_dependencies(lock_file: Path) -> None:
-    """先运行 pip-audit，仅在传输失败时改用 OSV 等价审计。
+def _run_audit_command(
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    blocked_status: str,
+) -> bool:
+    """运行原生审计并区分漏洞结果与传输故障。
 
     Args:
-        lock_file: Runtime 精确依赖锁文件。
+        command: 不经过 shell 的审计命令。
+        cwd: 审计工作目录。
+        blocked_status: 传输故障时输出的状态名称。
 
     Returns:
-        任一真实审计路径完整成功且无漏洞时无返回值。
+        原生审计成功为 True，可切换到等价审计为 False。
 
     Raises:
-        subprocess.CalledProcessError: 审计失败且不是可识别的传输故障。
-        RuntimeError: OSV 等价审计响应无效或发现漏洞。
+        subprocess.CalledProcessError: 审计失败且不是传输故障。
 
     """
-    command = (
-        sys.executable,
-        "-m",
-        "pip_audit",
-        "-r",
-        str(lock_file),
-    )
     print("RUN " + " ".join(command), flush=True)
     result = subprocess.run(  # noqa: S603
-        command,
-        cwd=_ROOT,
+        list(command),
+        cwd=cwd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -422,21 +470,62 @@ def _audit_python_dependencies(lock_file: Path) -> None:
     if output:
         print(output.rstrip(), flush=True)
     if result.returncode == 0:
-        return
+        return True
     folded_output = output.casefold()
-    if not any(
-        marker in folded_output for marker in _PIP_AUDIT_TRANSPORT_MARKERS
-    ):
+    if not any(marker in folded_output for marker in _AUDIT_TRANSPORT_MARKERS):
         raise subprocess.CalledProcessError(
             result.returncode,
             command,
             output=output,
         )
-    print(
-        "PIP_AUDIT_TRANSPORT=BLOCKED; 尝试任务书允许的 OSV 官方等价审计。",
-        flush=True,
-    )
-    _run_osv_dependency_audit(lock_file)
+    print(f"{blocked_status}=BLOCKED; 尝试 OSV 官方等价审计。", flush=True)
+    return False
+
+
+def _audit_python_dependencies(lock_file: Path) -> None:
+    """先运行 pip-audit，仅在传输失败时改用 OSV 等价审计。
+
+    Args:
+        lock_file: Runtime 精确依赖锁文件。
+
+    Returns:
+        任一真实审计路径完整成功且无漏洞时无返回值。
+
+    """
+    command = (sys.executable, "-m", "pip_audit", "-r", str(lock_file))
+    if _run_audit_command(
+        command,
+        cwd=_ROOT,
+        blocked_status="PIP_AUDIT_TRANSPORT",
+    ):
+        return
+    _run_osv_dependency_audit(_locked_python_dependencies(lock_file), "PyPI")
+
+
+def _audit_frontend_dependencies(lock_file: Path, npm: str) -> None:
+    """先运行 npm audit，仅在传输失败时改用 OSV 等价审计。
+
+    Args:
+        lock_file: npm V3 lockfile。
+        npm: npm CLI 路径。
+
+    Returns:
+        任一真实审计路径完整成功且无漏洞时无返回值。
+
+    """
+    if _run_audit_command(
+        (
+            npm,
+            "audit",
+            "--audit-level=moderate",
+            "--fetch-retries=0",
+            "--fetch-timeout=15000",
+        ),
+        cwd=lock_file.parent,
+        blocked_status="NPM_AUDIT_TRANSPORT",
+    ):
+        return
+    _run_osv_dependency_audit(_locked_npm_dependencies(lock_file), "npm")
 
 
 def _verify() -> None:
@@ -453,7 +542,7 @@ def _verify() -> None:
     npm = _required_executable("npm")
     output = _artifact_directory()
     _audit_python_dependencies(_ROOT / "requirements.runtime.lock")
-    _run((npm, "audit", "--audit-level=moderate"), cwd=_ROOT / "frontend")
+    _audit_frontend_dependencies(_ROOT / "frontend" / "package-lock.json", npm)
     _verify_image_contract(docker)
     _run(
         (

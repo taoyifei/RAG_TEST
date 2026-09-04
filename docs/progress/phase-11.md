@@ -46,8 +46,10 @@
   超时，明确记录 `PIP_AUDIT_TRANSPORT=BLOCKED`。随后使用任务书允许的等价路径，
   经 OSV 官方 `querybatch` 实时检查 Runtime 锁文件全部 41 个精确版本，结果为 0 个
   受影响包。只有识别为传输故障时才允许切换；pip-audit 报告漏洞时仍立即失败。
-- Windows npm 官方审计：0 vulnerabilities；WSL npm 官方 Endpoint 两次 socket
-  hangup，未用失败结果冒充通过。
+- npm 官方 bulk advisory Endpoint 在 WSL、Windows PowerShell 和固定 Node 容器
+  三条客户端路径均发生 TLS/socket 传输失败，明确记录
+  `NPM_AUDIT_TRANSPORT=BLOCKED`。随后经 OSV 官方 `querybatch` 实时检查 npm V3
+  lockfile 全部 410 个精确版本，结果为 0 个受影响包；未用失败结果冒充通过。
 - Trivy 完整清单：54 个 Debian High/Critical，均无 FixedVersion；可修复
   High/Critical 阻断门为 0。完整风险保留在忽略跟踪的安全证据中。
 - CycloneDX：镜像 2877 components，源码 1197 components；许可证清单由镜像
