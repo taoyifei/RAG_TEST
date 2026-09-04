@@ -582,6 +582,19 @@ def _qdrant_acceptance() -> None:
             environment = dict(os.environ)
             environment.update(
                 {
+                    "RAG_P11_IMAGE_SIZE_BYTES": _capture(
+                        (
+                            docker,
+                            "image",
+                            "inspect",
+                            "--format",
+                            "{{.Size}}",
+                            _IMAGE,
+                        )
+                    ),
+                    "RAG_P11_PERFORMANCE_OUTPUT": str(
+                        _ROOT / "artifacts" / "p11" / "performance.json"
+                    ),
                     "RAG_QDRANT_API_KEY": _QDRANT_TEST_KEY,
                     "RAG_QDRANT_URL": f"http://127.0.0.1:{source_port}",
                     "RAG_TEST_QDRANT_SOURCE_KEY_FILE": str(key_file),
@@ -602,6 +615,7 @@ def _qdrant_acceptance() -> None:
                     "-q",
                     "tests/integration/test_qdrant_server_p11.py",
                     "tests/integration/test_product_backup_restore.py",
+                    "tests/integration/test_p11_performance.py",
                 ),
                 environment=environment,
             )
