@@ -42,7 +42,10 @@
   显式提供 Python 3.10，Web E2E 使用当前 Python。第三次真实 Run
   [`33864997116`](https://github.com/taoyifei/RAG_TEST/actions/runs/33864997116)
   在 SHA `abd50a128d479a3c8d5082fab41a5dd8994b9703` 上成功，Python、Frontend、
-  Offline Product E2E、Container、Qdrant、Secret 与 SBOM 七类作业全部通过。
+  Offline Product E2E、Container、Qdrant、Secret 与 SBOM 七类作业全部通过。后续
+  文档提交触发的 Run `33865815809` 暴露 Web E2E 在点击吊销后未等待服务端响应，
+  导致并发查询偶发早于吊销提交；验收现显式等待吊销响应及页面状态更新，再验证旧
+  Token 返回 403。
 
 ## 实际门禁证据
 

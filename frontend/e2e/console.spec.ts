@@ -249,7 +249,16 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   const tokenCard = page
     .getByRole("article")
     .filter({ hasText: "浏览器验收令牌" });
-  await tokenCard.getByRole("button", { name: "吊销" }).click();
+  const [revokeResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(":revoke"),
+    ),
+    tokenCard.getByRole("button", { name: "吊销" }).click(),
+  ]);
+  expect(revokeResponse.ok()).toBeTruthy();
+  await expect(tokenCard).toContainText("revoked");
   const deniedQuery = await request.post(
     `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
     {
