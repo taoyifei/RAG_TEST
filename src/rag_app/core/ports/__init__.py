@@ -9,6 +9,10 @@ from rag_app.core.ports.blob_store import (
 )
 from rag_app.core.ports.chunk_validation import ChunkValidationPort
 from rag_app.core.ports.chunker import ChunkerPort
+from rag_app.core.ports.console_inspection import (
+    ConsoleJobStorePort,
+    ConsoleRevisionStorePort,
+)
 from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
@@ -44,6 +48,8 @@ __all__ = [
     "BlobWriteRequest",
     "ChunkValidationPort",
     "ChunkerPort",
+    "ConsoleJobStorePort",
+    "ConsoleRevisionStorePort",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",

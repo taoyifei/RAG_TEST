@@ -53,6 +53,10 @@ from rag_app.core.models import (
     KnowledgeBaseScope,
     ParseReport,
     RetrievalPolicy,
+    RevisionActivation,
+    RevisionDocumentReport,
+    RevisionInspection,
+    RevisionSlotCoverage,
     RevisionValidationEvidence,
     RevisionVectorSpec,
 )
@@ -2696,6 +2700,283 @@ class SqliteControlStore:
             raise NotFound("revision 不存在。", stage="revision.read")
         return dict(row)
 
+    def inspect_revision(
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        revision_id: str,
+        *,
+        serving_fingerprint: str,
+    ) -> RevisionInspection:
+        """读取 scope 绑定且不暴露物理路径的 Revision 视图。
+
+        Args:
+            project_id: 期望项目 ID。
+            knowledge_base_id: 期望知识库 ID。
+            revision_id: 目标 Revision ID。
+            serving_fingerprint: 当前组合根的 serving 指纹。
+
+        Returns:
+            实际计数、向量槽、Writer 和激活历史。
+
+        Raises:
+            NotFound: Revision 不存在或不属于给定 scope。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT index_revision_id, project_id, knowledge_base_id, "
+                "state, index_fingerprint, serving_compatibility_version, "
+                "expected_document_count, expected_chunk_count, "
+                "lexical_schema_json, vector_schema_json, "
+                "chunk_payload_schema_json, validation_evidence_json, "
+                "validation_evidence_hash, created_at, validated_at, "
+                "activated_at, retired_at, failure_code, safe_message "
+                "FROM index_revisions WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+            if row is None or (
+                str(row["project_id"]) != project_id
+                or str(row["knowledge_base_id"]) != knowledge_base_id
+            ):
+                raise NotFound("revision 不存在。", stage="revision.read")
+            active_row = connection.execute(
+                "SELECT active_revision_id FROM knowledge_bases "
+                "WHERE project_id=? AND knowledge_base_id=? "
+                "AND deleted_at IS NULL",
+                (project_id, knowledge_base_id),
+            ).fetchone()
+            lease = connection.execute(
+                "SELECT state FROM revision_build_leases WHERE revision_id=?",
+                (revision_id,),
+            ).fetchone()
+            slot_rows = connection.execute(
+                "SELECT s.slot_id, s.vector_name, s.required_for_activation, "
+                "c.expected_chunk_count, c.valid_vector_count, "
+                "c.failed_count, c.coverage_ratio, c.state "
+                "FROM embedding_slots s LEFT JOIN "
+                "revision_embedding_coverage c ON "
+                "c.revision_id=s.revision_id AND c.slot_id=s.slot_id "
+                "WHERE s.revision_id=? ORDER BY s.slot_id",
+                (revision_id,),
+            ).fetchall()
+            history_rows = connection.execute(
+                "SELECT old_revision_id, new_revision_id, activated_at, "
+                "reason, trace_id FROM active_revision_history "
+                "WHERE knowledge_base_id=? AND (old_revision_id=? OR "
+                "new_revision_id=?) ORDER BY history_id",
+                (knowledge_base_id, revision_id, revision_id),
+            ).fetchall()
+        document_count, chunk_count, fts_count = self.revision_counts(
+            revision_id
+        )
+        validation_json = row["validation_evidence_json"]
+        validation_report = (
+            None
+            if validation_json is None
+            else freeze_json_object(json.loads(str(validation_json)))
+        )
+        return RevisionInspection(
+            revision_id=revision_id,
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            state=str(row["state"]),
+            active=(
+                active_row is not None
+                and str(active_row["active_revision_id"]) == revision_id
+            ),
+            index_fingerprint=str(row["index_fingerprint"]),
+            serving_fingerprint=serving_fingerprint,
+            serving_compatibility_version=str(
+                row["serving_compatibility_version"]
+            ),
+            expected_document_count=int(row["expected_document_count"]),
+            expected_chunk_count=int(row["expected_chunk_count"]),
+            actual_document_count=document_count,
+            actual_chunk_count=chunk_count,
+            fts_count=fts_count,
+            lexical_schema=freeze_json_object(
+                json.loads(str(row["lexical_schema_json"]))
+            ),
+            vector_schema=freeze_json_object(
+                json.loads(str(row["vector_schema_json"]))
+            ),
+            chunk_payload_schema=str(
+                json.loads(str(row["chunk_payload_schema_json"]))
+            ),
+            validation_report=validation_report,
+            validation_evidence_hash=(
+                None
+                if row["validation_evidence_hash"] is None
+                else str(row["validation_evidence_hash"])
+            ),
+            writer_status=(
+                "released" if lease is None else str(lease["state"])
+            ),
+            created_at=str(row["created_at"]),
+            validated_at=_optional_text(row["validated_at"]),
+            activated_at=_optional_text(row["activated_at"]),
+            retired_at=_optional_text(row["retired_at"]),
+            failure_code=_optional_text(row["failure_code"]),
+            safe_message=_optional_text(row["safe_message"]),
+            slot_coverages=tuple(
+                RevisionSlotCoverage(
+                    slot_id=str(slot["slot_id"]),
+                    vector_name=str(slot["vector_name"]),
+                    required=bool(slot["required_for_activation"]),
+                    expected_chunk_count=int(
+                        slot["expected_chunk_count"] or 0
+                    ),
+                    valid_vector_count=int(slot["valid_vector_count"] or 0),
+                    failed_count=int(slot["failed_count"] or 0),
+                    coverage_ratio=float(slot["coverage_ratio"] or 0.0),
+                    state=(
+                        "missing"
+                        if slot["state"] is None
+                        else str(slot["state"])
+                    ),
+                )
+                for slot in slot_rows
+            ),
+            activation_history=tuple(
+                RevisionActivation(
+                    old_revision_id=_optional_text(item["old_revision_id"]),
+                    new_revision_id=str(item["new_revision_id"]),
+                    activated_at=str(item["activated_at"]),
+                    reason=str(item["reason"]),
+                    trace_id=str(item["trace_id"]),
+                )
+                for item in history_rows
+            ),
+        )
+
+    def list_revision_chunks(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        revision_id: str,
+        *,
+        document_id: str | None,
+        role: str | None,
+        section_id: str | None,
+        neighbor_group_id: str | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[Chunk, ...], int]:
+        """按固定字段分页读取 canonical Chunk。
+
+        Args:
+            project_id: 期望项目 ID。
+            knowledge_base_id: 期望知识库 ID。
+            revision_id: 目标 Revision ID。
+            document_id: 可选逻辑文档过滤。
+            role: 可选 Chunk role 过滤。
+            section_id: 可选 Section 过滤。
+            neighbor_group_id: 可选相邻组过滤。
+            limit: 单页上限。
+            offset: 稳定偏移量。
+
+        Returns:
+            Chunk 分页项和过滤后的总数。
+
+        Raises:
+            NotFound: Revision 不存在或不属于给定 scope。
+
+        """
+        clauses = ["revision_id=?"]
+        parameters: list[object] = [revision_id]
+        for column, value in (
+            ("document_id", document_id),
+            ("role", role),
+            ("section_id", section_id),
+            ("neighbor_group_id", neighbor_group_id),
+        ):
+            if value is not None:
+                clauses.append(f"{column}=?")
+                parameters.append(value)
+        where = " AND ".join(clauses)
+        with self._connections.transaction() as connection:
+            revision = connection.execute(
+                "SELECT project_id, knowledge_base_id FROM index_revisions "
+                "WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+            if revision is None or (
+                str(revision["project_id"]) != project_id
+                or str(revision["knowledge_base_id"]) != knowledge_base_id
+            ):
+                raise NotFound("revision 不存在。", stage="revision.read")
+            total = int(
+                connection.execute(
+                    f"SELECT count(*) AS value FROM chunks WHERE {where}",  # noqa: S608
+                    tuple(parameters),
+                ).fetchone()["value"]
+            )
+            rows = connection.execute(
+                f"SELECT chunk_json FROM chunks WHERE {where} "  # noqa: S608
+                "ORDER BY chunk_id LIMIT ? OFFSET ?",
+                (*parameters, limit, offset),
+            ).fetchall()
+        return (
+            tuple(
+                Chunk.model_validate_json(str(item["chunk_json"]))
+                for item in rows
+            ),
+            total,
+        )
+
+    def revision_document_reports(
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        revision_id: str,
+    ) -> tuple[RevisionDocumentReport, ...]:
+        """读取 scope 绑定的 ParseReport 与 ChunkingReport。
+
+        Args:
+            project_id: 期望项目 ID。
+            knowledge_base_id: 期望知识库 ID。
+            revision_id: 目标 Revision ID。
+
+        Returns:
+            按逻辑文档排序的质量报告。
+
+        Raises:
+            NotFound: Revision 不存在或不属于给定 scope。
+
+        """
+        with self._connections.transaction() as connection:
+            revision = connection.execute(
+                "SELECT project_id, knowledge_base_id FROM index_revisions "
+                "WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+            if revision is None or (
+                str(revision["project_id"]) != project_id
+                or str(revision["knowledge_base_id"]) != knowledge_base_id
+            ):
+                raise NotFound("revision 不存在。", stage="revision.read")
+            rows = connection.execute(
+                "SELECT document_id, document_version_id, "
+                "parse_report_json, chunking_report_json "
+                "FROM revision_documents WHERE revision_id=? "
+                "ORDER BY document_id",
+                (revision_id,),
+            ).fetchall()
+        return tuple(
+            RevisionDocumentReport(
+                document_id=str(item["document_id"]),
+                document_version_id=str(item["document_version_id"]),
+                parse_report=ParseReport.model_validate_json(
+                    str(item["parse_report_json"])
+                ),
+                chunking_report=ChunkingReport.model_validate_json(
+                    str(item["chunking_report_json"])
+                ),
+            )
+            for item in rows
+        )
+
     def chunk_rows(self, revision_id: str) -> tuple[Chunk, ...]:
         """严格反序列化 revision 的 canonical chunks。
 
@@ -2876,6 +3157,10 @@ def _has_zero_scope(chunk: Chunk) -> bool:
             chunk.index_revision_id,
         )
     )
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def _now() -> str:

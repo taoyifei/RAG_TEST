@@ -968,6 +968,50 @@ class SqliteLifecycleStore:
             ),
         )
 
+    def list_jobs(
+        self,
+        *,
+        project_id: str | None,
+        knowledge_base_id: str | None,
+        states: tuple[str, ...],
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[Job, ...], int]:
+        """按 scope 和公开状态稳定分页读取 Job。
+
+        Args:
+            project_id: 可选项目过滤。
+            knowledge_base_id: 可选知识库过滤。
+            states: 可选 P09 公开状态值。
+            limit: 单页上限。
+            offset: 稳定偏移量。
+
+        Returns:
+            Job 分页项和过滤后的总数。
+
+        """
+        clauses: list[str] = []
+        parameters: list[object] = []
+        if project_id is not None:
+            clauses.append("project_id=?")
+            parameters.append(project_id)
+        if knowledge_base_id is not None:
+            clauses.append("knowledge_base_id=?")
+            parameters.append(knowledge_base_id)
+        where = "" if not clauses else " WHERE " + " AND ".join(clauses)
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT job_id FROM ingestion_jobs"  # noqa: S608
+                + where
+                + " ORDER BY created_at DESC, job_id DESC",
+                tuple(parameters),
+            ).fetchall()
+        jobs = tuple(self.get_job(str(row["job_id"])) for row in rows)
+        if states:
+            allowed = frozenset(states)
+            jobs = tuple(job for job in jobs if job.state.value in allowed)
+        return jobs[offset : offset + limit], len(jobs)
+
     def request_job_cancellation(self, job_id: str) -> Job:
         """为非终态 Job 保存可恢复取消请求。
 

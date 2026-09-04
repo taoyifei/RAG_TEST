@@ -41,6 +41,18 @@ route reason、rerank mode、degraded reason、Evidence 数量、缓存状态和
 Answer 请求设置 `stream=true` 时返回 SSE。事件顺序为 `meta`、`retrieval`、
 `final`；`final` 是权威完整响应，delta 不伪装为模型 Token。
 
+P10 为管理控制台增加只读 Job 列表和 scope 绑定的 IndexRevision 检查接口：
+
+- `GET /api/v1/jobs`
+- `GET .../revisions/{revision_id}`
+- `GET .../revisions/{revision_id}/chunks`
+- `GET .../revisions/{revision_id}/reports`
+
+Revision 检查返回实际/预期 Document 与 Chunk 数、FTS 数、slot coverage、writer 状态、
+激活历史和双指纹。Chunk 响应可以包含 citation、embedding、lexical 三种视图，但只有
+可引用 SourceSpan 和 Evidence 中的 citation quote 可作为回答引用。检索诊断新增服务端
+计算的 RRF 逐通道贡献；浏览器不重新融合 raw score。
+
 ## 稳定错误
 
 非成功响应统一放在 `error` 对象内，包含 `code`、安全 `message`、`stage`、

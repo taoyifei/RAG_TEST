@@ -274,6 +274,11 @@ def _evidence_item(
         table_locator=(
             chunk.neighbor_group_id if chunk.role.value == "table" else None
         ),
+        table_context=chunk.role.value == "table",
+        selection_reason=(
+            candidate.expansion_reason or "retrieval_candidate"
+        ),
+        publishable=True,
         retrieval_origins=tuple(
             contribution.channel for contribution in candidate.contributions
         )

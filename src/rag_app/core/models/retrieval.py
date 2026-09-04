@@ -52,6 +52,9 @@ class EvidenceItem(MetadataModel):
     heading_path: tuple[str, ...] = ()
     section_id: str | None = None
     table_locator: str | None = None
+    table_context: bool = False
+    selection_reason: str = Field(default="retrieval_candidate", min_length=1)
+    publishable: bool = True
     retrieval_origins: tuple[str, ...] = ()
     fusion_rank: StrictInt | None = Field(default=None, gt=0)
     rerank_rank: StrictInt | None = Field(default=None, gt=0)
