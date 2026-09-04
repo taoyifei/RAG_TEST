@@ -13,8 +13,9 @@
 
 ## 已完成实现
 
-- 根三阶段 Dockerfile；Python 3.11 Trixie Runtime 使用 `rag:rag`，无 Node、pip、
-  setuptools、wheel，OCI revision 对齐候选 SHA。
+- 根三阶段 Dockerfile；BuildKit frontend、Node 24 Alpine 与 Python 3.11 Trixie
+  默认值均使用 `tag@digest`，Runtime 使用 `rag:rag`，无 Node、pip、setuptools、
+  wheel，OCI revision 对齐候选 SHA。
 - 根 Compose 只含 app/Qdrant，使用三个命名卷；Qdrant 不发布宿主端口，应用只绑定
   `127.0.0.1`。首次初始化创建 0600 Secret Bundle。
 - Qdrant Server 1.18.3 与 client 1.18.0 已验证双 Named Vector、过滤、完整
@@ -50,6 +51,9 @@
   三条客户端路径均发生 TLS/socket 传输失败，明确记录
   `NPM_AUDIT_TRANSPORT=BLOCKED`。随后经 OSV 官方 `querybatch` 实时检查 npm V3
   lockfile 全部 410 个精确版本，结果为 0 个受影响包；未用失败结果冒充通过。
+- Docker Hub 可变标签元数据解析连续发生 TLS handshake timeout；将成功构建已经
+  解析的 BuildKit frontend、Node 与 Python 身份固定为精确 Digest 后，统一构建
+  命令重新成功。普通 Compose 命令与按构建参数显式覆盖镜像的能力保持不变。
 - Trivy 完整清单：54 个 Debian High/Critical，均无 FixedVersion；可修复
   High/Critical 阻断门为 0。完整风险保留在忽略跟踪的安全证据中。
 - CycloneDX：镜像 2877 components，源码 1197 components；许可证清单由镜像
