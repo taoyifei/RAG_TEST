@@ -1,75 +1,69 @@
 # DOCX RAG
 
-这是一个面向离线单机部署的 DOCX 检索增强生成产品。核心目标是证据可追溯、
-索引可增量更新、失败可恢复；默认 `rag-app serve` 提供中文管理控制台和稳定
-API。V1 只解析 DOCX，不实现
-PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
+这是一个可追溯、可增量更新、可恢复的 DOCX 检索增强生成产品。默认
+`rag-app serve` 提供中文管理控制台和稳定 API；V1 使用 SQLite 保存产品状态，
+使用正式 Qdrant Server 保存向量。Jina 与阿里云百炼凭据由管理员在页面配置，
+不会写入镜像或浏览器存储。
+
+## 五分钟容器路径
+
+首次拉取基础镜像和构建时间不计入五分钟操作路径。默认只启动 `app` 与
+`qdrant`，应用端口只绑定宿主 loopback：
+
+```bash
+cp .env.example .env
+docker compose build app
+docker compose run --rm --no-deps app \
+  init-secrets --directory /run/rag-secrets
+docker compose up -d
+docker compose ps
+```
+
+初始化命令排他创建 0600 主密钥、Bootstrap Token、Qdrant API Key 与配置。
+先把 `rag_secrets` 卷和主密钥单独备份，再用下面的命令在当前终端读取一次
+Bootstrap Token：
+
+```bash
+docker compose run --rm --no-deps --entrypoint sh app \
+  -c 'cat /run/rag-secrets/admin-bootstrap-token'
+```
+
+打开 `http://127.0.0.1:8088/`，输入 Bootstrap Token。随后在“模型服务”依次
+保存并测试 Jina 与阿里云百炼连接，创建项目和知识库，激活主备检索方案，上传
+DOCX 后即可问答。发送到远程 Provider 的只有管理员明确授权的查询、文档切片和
+重排候选；页面会显示操作、Token 与切换用量。没有凭据时仍可完成本地
+Exact/FTS 检索，但不得把它称为 Live Ready。
+
+完整步骤见 `docs/public/quickstart.md`，部署与 TLS 见
+`docs/public/deployment.md`，数据出网边界见
+`docs/public/data-egress-and-cost.md`。
+
+## 发布验收
+
+Python 3.11 虚拟环境安装 `requirements.lock` 后，根目录只需这些主入口：
+
+```bash
+python scripts/dev.py check
+python scripts/dev.py smoke
+python scripts/dev.py product-check
+python scripts/dev.py web-e2e
+python scripts/release.py build
+python scripts/release.py verify
+python scripts/release.py acceptance
+```
+
+默认验证离线且无 Key。真实 Provider 验收只能由受保护的
+`P11 Live Provider` 工作流手工触发，必须输入授权短语、预算并通过 Environment
+审批。历史 Industry/OCR 七文件部署保留在 `deployment/`，全部标记为 Legacy，
+不再是默认入口；迁移说明见 `docs/migration/from-industry.md`。
 
 ## 主要组成
 
-- `src/rag_app/`：安全 DOCX 解析、稳定 ID、SQLite 任务状态、Qdrant 索引、
-  检索/重排/严格引用回答、独立 Query Trace、API 与 PaddleOCR 客户端和服务。
-- `evaluation/`：人工冻结集 schema、独立活动证据 manifest 校验和指标计算。
-- `frontend/`：React/TypeScript 产品控制台、OpenAPI 生成类型与离线 Playwright。
-- `scripts/`：输入审计、负载/检索基准、发布安全扫描及 OCR 资产装配。
-- `deployment/product/`：Product Runtime 的最小 Compose 合同。
-- `deployment/`：保留的 Industry/OCR 离线部署与恢复脚本；不再是默认入口。
-- `design/public/`：不含业务语料的构建、发布和运维说明。
-
-私有 DOCX、冻结题集、模型、tokenizer、wheels、镜像、结果和证据均由
-`.gitignore` 隔离，不属于源码发布物。
-
-## 本地校验
-
-使用 Python 3.11 虚拟环境安装 `requirements.lock` 与开发工具后执行：
-
-```bash
-.venv/bin/python -m compileall -q src tests scripts evaluation
-.venv/bin/ruff check .
-.venv/bin/mypy --no-incremental src evaluation scripts
-.venv/bin/python -m pytest -q
-.venv/bin/python scripts/check_google_docstrings.py
-.venv/bin/python scripts/check_google_docstrings.py --changed
-bash -n deployment/*.sh
-docker compose --env-file deployment/.env.example \
-  -f deployment/compose.yaml config -q
-git diff --check
-```
-
-## 首次启动
-
-先在受控目录生成 0600 主密钥，并另行创建至少 16 个字符的 Bootstrap Token
-文件；命令只显示路径和密钥指纹，不显示密钥值：
-
-```bash
-rag-app init-secrets --output /srv/rag-product/secrets/master-key
-chmod 600 /srv/rag-product/secrets/admin-bootstrap-token
-RAG_DATA_DIR=.data/product \
-RAG_MASTER_KEY_FILE=/srv/rag-product/secrets/master-key \
-RAG_ADMIN_BOOTSTRAP_TOKEN_FILE=/srv/rag-product/secrets/admin-bootstrap-token \
-rag-app serve
-```
-
-浏览器打开 `http://127.0.0.1:8088/`，首次输入 Bootstrap Token 后会换取
-HttpOnly 管理员会话；Provider 密钥不会进入浏览器存储。容器部署使用
-`deployment/product/compose.yaml` 与同目录 `.env.example`。历史 Industry/OCR
-栈仍保留在 `deployment/compose.yaml`，其中应用已显式调用弃用的
-`legacy-serve`，只用于迁移期兼容。
-
-前端统一门禁和离线启动方式见 `docs/development/frontend.md`。快速验证命令：
-
-```bash
-.venv/bin/python scripts/dev.py web-install-check
-.venv/bin/python scripts/dev.py web-lint
-.venv/bin/python scripts/dev.py web-typecheck
-.venv/bin/python scripts/dev.py web-test
-.venv/bin/python scripts/dev.py web-build
-.venv/bin/python scripts/dev.py web-e2e \
-  --profile configs/profiles/dev-offline.json
-```
-
-默认 docstring 命令检查 `src/rag_app`、`evaluation`、`scripts` 全量 Python；
-只有显式 `--changed` 才缩小到当前新增或修改文件。
+- `src/rag_app/`：安全 DOCX 解析、产品状态、检索、引用、备份与 API。
+- `frontend/`：React/TypeScript 中文控制台与 Playwright 测试。
+- `compose.yaml` 与 `Dockerfile`：V1 默认的简单容器路径。
+- `evaluation/`：独立评测 schema、证据校验和指标计算。
+- `deployment/`：只为迁移保留的旧 Industry/OCR 部署资产。
 
 ## 索引垃圾回收
 

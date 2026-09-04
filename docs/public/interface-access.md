@@ -12,3 +12,7 @@ Authorization: Bearer ragk_<one-time-value>
 
 `query:read` 不能读取系统状态，知识库级 Token 也不能越过绑定的 project 和 knowledge
 base。管理员浏览器不使用这些 Token，而使用 HttpOnly Session Cookie 和 CSRF。
+
+创建后应立即用 SDK 或 HTTP 对绑定知识库执行一次只读查询，再在页面吊销并确认同一
+Token 返回通用 401/403。Token 不能用于 Provider Credential、系统写操作或越过绑定
+范围；API 错误和访问日志不会回显完整 Token。

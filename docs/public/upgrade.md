@@ -27,3 +27,7 @@ Credential 的 AES-GCM AAD 与 key version 在 0015 中没有变化；恢复时�
 
 任何涉及唯一正式数据的破坏性迁移都不在自动流程内，必须先建立单独 Decision 并
 获得明确授权。
+
+发布镜像应保留 Git SHA、镜像 Digest、Lockfile、Compatibility Manifest、Migration
+checksum 与 SBOM。应用回滚前先核对目标镜像支持的 schema range；不能用“每次启动
+完整 Git SHA 相同”代替真实的 schema、索引和 Provider 合同检查。
