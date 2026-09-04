@@ -35,6 +35,6 @@ describe("控制台基础组件", () => {
 
   it("未验证状态不会渲染为成功", () => {
     render(<StatusBadge value="not_verified" />);
-    expect(screen.getByText("not_verified")).toHaveClass("neutral");
+    expect(screen.getByText("未验证")).toHaveClass("neutral");
   });
 });

@@ -1,22 +1,32 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 
-import type { Tokens } from "../api/client";
+import { ApiError, api, type Tokens } from "../api/client";
 
-interface Scope {
+export interface Scope {
   projectId: string;
   kbId: string;
   revisionId: string;
 }
 
+interface SessionState {
+  authenticated: boolean;
+  ready: boolean;
+}
+
 interface ConsoleState {
   tokens: Tokens;
-  setTokens: (tokens: Tokens) => void;
+  session: SessionState;
+  login: (bootstrapToken: string) => Promise<void>;
+  logout: () => Promise<void>;
+  rotateSession: () => Promise<void>;
   scope: Scope;
   setProject: (projectId: string) => void;
   setKnowledgeBase: (kbId: string, revisionId?: string | null) => void;
@@ -24,31 +34,100 @@ interface ConsoleState {
 }
 
 const Context = createContext<ConsoleState | null>(null);
+const EMPTY_SCOPE: Scope = { projectId: "", kbId: "", revisionId: "" };
+
+function readScope(): Scope {
+  const parameters = new URLSearchParams(window.location.search);
+  const fromUrl = {
+    projectId: parameters.get("project") ?? "",
+    kbId: parameters.get("knowledgeBase") ?? "",
+    revisionId: parameters.get("revision") ?? "",
+  };
+  if (Object.values(fromUrl).some(Boolean)) return fromUrl;
+  try {
+    const stored = JSON.parse(
+      sessionStorage.getItem("rag.console.scope") ?? "null",
+    ) as Partial<Scope> | null;
+    return stored
+      ? {
+          projectId: stored.projectId ?? "",
+          kbId: stored.kbId ?? "",
+          revisionId: stored.revisionId ?? "",
+        }
+      : EMPTY_SCOPE;
+  } catch {
+    return EMPTY_SCOPE;
+  }
+}
+
+function persistScope(scope: Scope): void {
+  sessionStorage.setItem("rag.console.scope", JSON.stringify(scope));
+  const url = new URL(window.location.href);
+  const values = {
+    project: scope.projectId,
+    knowledgeBase: scope.kbId,
+    revision: scope.revisionId,
+  };
+  for (const [key, value] of Object.entries(values)) {
+    if (value) url.searchParams.set(key, value);
+    else url.searchParams.delete(key);
+  }
+  window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+}
 
 export function ConsoleProvider({ children }: { children: ReactNode }) {
-  const [tokens, setTokens] = useState<Tokens>({ admin: "", query: "" });
-  const [scope, setScope] = useState<Scope>({
-    projectId: "",
-    kbId: "",
-    revisionId: "",
+  const [session, setSession] = useState<SessionState>({
+    authenticated: false,
+    ready: false,
   });
+  const [scope, setScopeState] = useState<Scope>(readScope);
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (resumed.current) return;
+    resumed.current = true;
+    void api
+      .resumeSession()
+      .then(() => setSession({ authenticated: true, ready: true }))
+      .catch((error: unknown) => {
+        if (!(error instanceof ApiError) || error.status !== 401) {
+          console.warn("会话恢复失败", error);
+        }
+        setSession({ authenticated: false, ready: true });
+      });
+  }, []);
+  const updateScope = (next: Scope) => {
+    persistScope(next);
+    setScopeState(next);
+  };
   const value = useMemo<ConsoleState>(
     () => ({
-      tokens,
-      setTokens,
+      tokens: session.authenticated
+        ? { admin: "cookie-session", query: "cookie-session" }
+        : { admin: "", query: "" },
+      session,
+      login: async (bootstrapToken) => {
+        await api.login(bootstrapToken);
+        setSession({ authenticated: true, ready: true });
+      },
+      logout: async () => {
+        await api.logout();
+        setSession({ authenticated: false, ready: true });
+      },
+      rotateSession: async () => {
+        await api.rotateSession();
+      },
       scope,
       setProject: (projectId) =>
-        setScope({ projectId, kbId: "", revisionId: "" }),
+        updateScope({ projectId, kbId: "", revisionId: "" }),
       setKnowledgeBase: (kbId, revisionId) =>
-        setScope((current) => ({
-          ...current,
+        updateScope({
+          ...scope,
           kbId,
           revisionId: revisionId ?? "",
-        })),
-      setRevision: (revisionId) =>
-        setScope((current) => ({ ...current, revisionId })),
+        }),
+      setRevision: (revisionId) => updateScope({ ...scope, revisionId }),
     }),
-    [scope, tokens],
+    [scope, session],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

@@ -27,6 +27,102 @@ export interface Tokens {
   query: string;
 }
 
+export interface ConsoleSession {
+  authenticated: boolean;
+  session_id: string;
+  csrf_token: string;
+  expires_in: number;
+}
+
+export interface CredentialSummary {
+  credential_id: string;
+  provider_type: "jina" | "aliyun-model-studio";
+  configured: boolean;
+  source: "environment_managed" | "database_encrypted";
+  masked_hint: string;
+  key_version: number;
+  status: string;
+}
+
+export interface ProviderConnection {
+  connection_id: string;
+  display_name: string;
+  provider_type: "jina" | "aliyun-model-studio";
+  credential_id: string;
+  status: string;
+  workspace_id?: string | null;
+  region?: string | null;
+}
+
+export interface CatalogProvider {
+  provider_type: "jina" | "aliyun-model-studio";
+  display_name: string;
+  operations: string[];
+  models: string[];
+  regions: string[];
+  endpoint_profiles: string[];
+}
+
+export interface ProviderCatalog {
+  catalog_version: string;
+  providers: CatalogProvider[];
+}
+
+export interface ProviderValidation {
+  validation_id: string;
+  connection_id: string;
+  operation: string;
+  provider_model: string;
+  status: string;
+  http_category: string;
+  safe_error_code?: string | null;
+  dimension?: number | null;
+  finished_at: string;
+}
+
+export interface ImpactPreview {
+  impact:
+    | "NO_REINDEX"
+    | "SERVING_RELOAD"
+    | "NEW_INDEX_REVISION_REQUIRED";
+  proposed_profile_revision_id: string;
+  current_profile_revision_id?: string | null;
+  index_fingerprint_changed: boolean;
+  serving_fingerprint_changed: boolean;
+}
+
+export interface RetrievalProfile {
+  profile_revision_id: string;
+  knowledge_base_id: string;
+  status: string;
+  primary_connection_id: string;
+  primary_embedding_model: string;
+  standby_connection_id?: string | null;
+  standby_embedding_model?: string | null;
+  reranker_connection_id?: string | null;
+  reranker_model?: string | null;
+  index_semantic_fingerprint: string;
+  serving_fingerprint: string;
+}
+
+export interface AccessTokenSummary {
+  token_id: string;
+  name: string;
+  scopes: string[];
+  project_id?: string | null;
+  knowledge_base_id?: string | null;
+  created_at: string;
+  last_used_at?: string | null;
+  revoked_at?: string | null;
+  token?: string;
+}
+
+let csrfToken = "";
+
+export function setBrowserCsrfToken(value: string): void {
+  csrfToken = value;
+}
+
 export interface ProviderProbeResult {
   request_budget: number;
   last_explicit_probe_at: string;
@@ -67,9 +163,17 @@ async function request<T>(
   token: string,
   init: RequestInit = {},
 ): Promise<T> {
+  void token;
   const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(path, { ...init, headers });
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+  });
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
     throw new ApiError(response.status, payload);
@@ -111,6 +215,38 @@ function jsonInit(
 }
 
 export const api = {
+  login: async (bootstrapToken: string) => {
+    const response = await request<ConsoleSession>(
+      "/api/v1/console/session",
+      "",
+      jsonInit("POST", { bootstrap_token: bootstrapToken }),
+    );
+    setBrowserCsrfToken(response.csrf_token);
+    return response;
+  },
+  resumeSession: async () => {
+    const response = await request<ConsoleSession>(
+      "/api/v1/console/session",
+      "",
+    );
+    setBrowserCsrfToken(response.csrf_token);
+    return response;
+  },
+  rotateSession: async () => {
+    const response = await request<ConsoleSession>(
+      "/api/v1/console/session:rotate",
+      "",
+      { method: "POST" },
+    );
+    setBrowserCsrfToken(response.csrf_token);
+    return response;
+  },
+  logout: async () => {
+    await request<void>("/api/v1/console/session", "", { method: "DELETE" });
+    setBrowserCsrfToken("");
+  },
+  providerCatalog: () =>
+    request<ProviderCatalog>("/api/v1/provider-catalog", ""),
   listProjects: (token: string) =>
     request<Page<Project>>("/api/v1/projects", token),
   createProject: (token: string, name: string, key: string) =>
@@ -287,12 +423,13 @@ export const api = {
     query: string,
     signal?: AbortSignal,
   ) => {
+    void token;
     const init = jsonInit("POST", { query, limit: 10, stream: true });
     const headers = new Headers(init.headers);
-    if (token) headers.set("Authorization", `Bearer ${token}`);
+    if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
     const response = await fetch(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
-      { ...init, headers, signal },
+      { ...init, headers, signal, credentials: "same-origin" },
     );
     return readSseResponse(response);
   },
@@ -311,6 +448,90 @@ export const api = {
         "X-Request-Budget": String(requestBudget),
       },
     }),
+  listCredentials: () =>
+    request<{ items: CredentialSummary[] }>(
+      "/api/v1/provider-credentials",
+      "",
+    ),
+  createCredential: (body: Record<string, unknown>) =>
+    request<CredentialSummary>(
+      "/api/v1/provider-credentials",
+      "",
+      jsonInit("POST", body),
+    ),
+  rotateCredential: (credentialId: string, value: string) =>
+    request<CredentialSummary>(
+      `/api/v1/provider-credentials/${credentialId}:rotate`,
+      "",
+      jsonInit("POST", { secret_value: value }),
+    ),
+  listConnections: () =>
+    request<{ items: ProviderConnection[] }>(
+      "/api/v1/provider-connections",
+      "",
+    ),
+  createConnection: (body: Record<string, unknown>) =>
+    request<ProviderConnection>(
+      "/api/v1/provider-connections",
+      "",
+      jsonInit("POST", body),
+    ),
+  validateConnection: (
+    connectionId: string,
+    body: Record<string, unknown>,
+  ) =>
+    request<ProviderValidation>(
+      `/api/v1/provider-connections/${connectionId}:validate`,
+      "",
+      jsonInit("POST", body),
+    ),
+  listValidations: (connectionId: string) =>
+    request<{ items: ProviderValidation[] }>(
+      `/api/v1/provider-connections/${connectionId}/validations`,
+      "",
+    ),
+  listRetrievalProfiles: (knowledgeBaseId: string) =>
+    request<{ items: RetrievalProfile[] }>(
+      `/api/v1/knowledge-bases/${knowledgeBaseId}/retrieval-profiles`,
+      "",
+    ),
+  createRetrievalProfile: (
+    knowledgeBaseId: string,
+    body: Record<string, unknown>,
+  ) =>
+    request<RetrievalProfile>(
+      `/api/v1/knowledge-bases/${knowledgeBaseId}/retrieval-profiles`,
+      "",
+      jsonInit("POST", body),
+    ),
+  previewRetrievalProfile: (profileRevisionId: string) =>
+    request<ImpactPreview>(
+      `/api/v1/retrieval-profiles/${profileRevisionId}:preview`,
+      "",
+    ),
+  activateRetrievalProfile: (
+    profileRevisionId: string,
+    impact: ImpactPreview["impact"],
+  ) =>
+    request<RetrievalProfile>(
+      `/api/v1/retrieval-profiles/${profileRevisionId}:activate`,
+      "",
+      jsonInit("POST", { confirmed_impact: impact }),
+    ),
+  listAccessTokens: () =>
+    request<{ items: AccessTokenSummary[] }>("/api/v1/access-tokens", ""),
+  createAccessToken: (body: Record<string, unknown>) =>
+    request<AccessTokenSummary>(
+      "/api/v1/access-tokens",
+      "",
+      jsonInit("POST", body),
+    ),
+  revokeAccessToken: (tokenId: string) =>
+    request<AccessTokenSummary>(
+      `/api/v1/access-tokens/${tokenId}:revoke`,
+      "",
+      { method: "POST" },
+    ),
 };
 
 export function createIdempotencyKey(prefix: string): string {
