@@ -1,7 +1,8 @@
 # DOCX RAG
 
-这是一个面向离线单机部署的 DOCX 检索增强生成服务。核心目标是证据可追溯、
-索引可增量更新、失败可恢复；前端仅是验收入口。V1 只解析 DOCX，不实现
+这是一个面向离线单机部署的 DOCX 检索增强生成产品。核心目标是证据可追溯、
+索引可增量更新、失败可恢复；默认 `rag-app serve` 提供中文管理控制台和稳定
+API。V1 只解析 DOCX，不实现
 PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
 
 ## 主要组成
@@ -9,9 +10,10 @@ PDF/PPT/Excel、Text2SQL、账号体系、LangChain 或 LlamaIndex。
 - `src/rag_app/`：安全 DOCX 解析、稳定 ID、SQLite 任务状态、Qdrant 索引、
   检索/重排/严格引用回答、独立 Query Trace、API 与 PaddleOCR 客户端和服务。
 - `evaluation/`：人工冻结集 schema、独立活动证据 manifest 校验和指标计算。
-- `frontend/`：P10 React/TypeScript 管理控制台、OpenAPI 生成类型与离线 Playwright。
+- `frontend/`：React/TypeScript 产品控制台、OpenAPI 生成类型与离线 Playwright。
 - `scripts/`：输入审计、负载/检索基准、发布安全扫描及 OCR 资产装配。
-- `deployment/`：应用、Qdrant、单 GPU OCR 的离线 Compose 和恢复脚本。
+- `deployment/product/`：Product Runtime 的最小 Compose 合同。
+- `deployment/`：保留的 Industry/OCR 离线部署与恢复脚本；不再是默认入口。
 - `design/public/`：不含业务语料的构建、发布和运维说明。
 
 私有 DOCX、冻结题集、模型、tokenizer、wheels、镜像、结果和证据均由
@@ -33,6 +35,26 @@ docker compose --env-file deployment/.env.example \
   -f deployment/compose.yaml config -q
 git diff --check
 ```
+
+## 首次启动
+
+先在受控目录生成 0600 主密钥，并另行创建至少 16 个字符的 Bootstrap Token
+文件；命令只显示路径和密钥指纹，不显示密钥值：
+
+```bash
+rag-app init-secrets --output /srv/rag-product/secrets/master-key
+chmod 600 /srv/rag-product/secrets/admin-bootstrap-token
+RAG_DATA_DIR=.data/product \
+RAG_MASTER_KEY_FILE=/srv/rag-product/secrets/master-key \
+RAG_ADMIN_BOOTSTRAP_TOKEN_FILE=/srv/rag-product/secrets/admin-bootstrap-token \
+rag-app serve
+```
+
+浏览器打开 `http://127.0.0.1:8088/`，首次输入 Bootstrap Token 后会换取
+HttpOnly 管理员会话；Provider 密钥不会进入浏览器存储。容器部署使用
+`deployment/product/compose.yaml` 与同目录 `.env.example`。历史 Industry/OCR
+栈仍保留在 `deployment/compose.yaml`，其中应用已显式调用弃用的
+`legacy-serve`，只用于迁移期兼容。
 
 前端统一门禁和离线启动方式见 `docs/development/frontend.md`。快速验证命令：
 

@@ -38,17 +38,16 @@ function docxBlocks(blocks: string): Buffer {
 
 async function authenticate(page: Page) {
   await page.goto("/");
-  await page.getByLabel("管理员 Token").fill("admin-secret");
-  await page.getByLabel("查询 Token").fill("query-secret");
-  await page.getByRole("button", { name: "保存到当前会话" }).click();
+  await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
+  await page.getByRole("button", { name: "进入工作台" }).click();
 }
 
 async function createScope(page: Page, suffix: string) {
-  await page.getByRole("button", { name: "项目" }).click();
-  await page.getByLabel("项目名称").fill(`P10 离线项目 ${suffix}`);
+  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page.getByLabel("项目名称").fill(`离线项目 ${suffix}`);
   await page.getByRole("button", { name: "创建" }).click();
   const projectCard = page.getByRole("article").filter({
-    hasText: `P10 离线项目 ${suffix}`,
+    hasText: `离线项目 ${suffix}`,
   });
   await projectCard.getByRole("heading").waitFor();
   await projectCard.getByRole("button", { name: "进入" }).click();
@@ -68,9 +67,46 @@ async function uploadAndWait(page: Page, name: string, content: string) {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     buffer: docx(content),
   });
-  await expect(page.getByRole("article").first()).toContainText("succeeded", {
+  await expect(page.getByRole("article").first()).toContainText("已完成", {
     timeout: 20_000,
   });
+}
+
+async function configureModelServices(page: Page) {
+  await page.getByRole("button", { name: "模型服务" }).click();
+  await page
+    .getByLabel("服务密钥", { exact: true })
+    .fill("synthetic-jina-browser-value");
+  await page.getByRole("button", { name: "保存连接" }).click();
+  const jina = page.getByRole("article").filter({ hasText: "Jina 主连接" });
+  await jina.getByRole("button", { name: "测试文档向量" }).click();
+  await jina.getByRole("button", { name: "测试查询向量" }).click();
+  await jina.getByRole("button", { name: "测试结果重排" }).click();
+
+  await page.getByLabel("服务商").selectOption("aliyun-model-studio");
+  await page
+    .getByLabel("服务密钥", { exact: true })
+    .fill("synthetic-aliyun-browser-value");
+  await page.getByLabel("工作空间标识").fill("synthetic-workspace");
+  await page.getByRole("button", { name: "保存连接" }).click();
+  const aliyun = page
+    .getByRole("article")
+    .filter({ hasText: "百炼备用连接" });
+  await aliyun.getByRole("button", { name: "测试文档向量" }).click();
+  await aliyun.getByRole("button", { name: "测试查询向量" }).click();
+}
+
+async function createRetrievalProfile(
+  page: Page,
+  instruction = "为检索查询生成准确表示",
+) {
+  await page.getByRole("button", { name: "检索方案" }).click();
+  await page.getByLabel("主向量连接").selectOption({ label: "Jina 主连接" });
+  await page
+    .getByLabel("备用向量连接")
+    .selectOption({ label: "百炼备用连接" });
+  await page.getByLabel("查询指令").fill(instruction);
+  await page.getByRole("button", { name: "创建并预览影响" }).click();
 }
 
 function documentRow(page: Page, name: string) {
@@ -82,7 +118,7 @@ async function sourceArtifact(page: Page): Promise<string> {
   await expect(detail).toBeVisible();
   return (
     (await detail
-      .locator("dt", { hasText: "Source Artifact" })
+      .locator("dt", { hasText: "来源文件指纹" })
       .first()
       .locator("xpath=following-sibling::dd[1]")
       .textContent()) ?? ""
@@ -94,13 +130,18 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
 }, testInfo) => {
   if (testInfo.project.name !== "chromium-desktop") test.skip();
   await authenticate(page);
+  await configureModelServices(page);
   await createScope(page, `${testInfo.project.name}-${Date.now()}`);
+  await createRetrievalProfile(page);
+  await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+  await page.getByRole("button", { name: "确认应用" }).click();
+  await page.getByRole("button", { name: "文档管理" }).click();
   await uploadAndWait(
     page,
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档" }).click();
+  await page.getByRole("button", { name: "文档管理" }).click();
 
   const originalRow = documentRow(page, "青岛啤酒采购流程.docx");
   const documentId = await originalRow.locator("td").nth(1).innerText();
@@ -125,7 +166,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       buffer: docx("青岛啤酒采购流程第二版要求采购申请、复核和归档。"),
     });
-  await expect(page.getByRole("article").first()).toContainText("succeeded", {
+  await expect(page.getByRole("article").first()).toContainText("已完成", {
     timeout: 20_000,
   });
   await page
@@ -133,8 +174,8 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     .first()
     .getByRole("button", { name: "检查版本" })
     .click();
-  await expect(page.getByText("active", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "文档" }).click();
+  await expect(page.getByText("使用中", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "文档管理" }).click();
   await expect(
     documentRow(page, "青岛啤酒采购制度.docx").locator("td").nth(2),
   ).not.toHaveText(originalVersion);
@@ -144,7 +185,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档" }).click();
+  await page.getByRole("button", { name: "文档管理" }).click();
   const duplicateRow = documentRow(page, "青岛啤酒采购流程.docx");
   await expect(duplicateRow.locator("td").nth(1)).not.toHaveText(documentId);
   await duplicateRow.getByRole("button", { name: "详情" }).click();
@@ -159,7 +200,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "设备巡检记录包含空调滤芯更换和机房温度检查。 ",
   );
 
-  await page.getByRole("button", { name: "检索诊断" }).click();
+  await page.getByRole("button", { name: "检索调试" }).click();
   await page.getByLabel("查询文本").fill("青岛啤酒");
   await page.getByRole("button", { name: "执行" }).click();
 
@@ -178,6 +219,23 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await page.getByRole("button", { name: "关闭证据详情" }).click();
   await expect(page.getByText("RRF 融合贡献")).toBeVisible();
 
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "检索调试" })).toBeVisible();
+  await expect(page.locator(".scope-card")).toContainText("kb_");
+  await page.getByRole("button", { name: "模型服务" }).click();
+  await page.getByLabel("待轮换凭据").selectOption({ index: 1 });
+  await page.getByLabel("新服务密钥").fill("rotated-jina-browser-value");
+  await page.getByRole("button", { name: "轮换密钥" }).click();
+  await createRetrievalProfile(page);
+  await expect(page.getByText("无需重建索引")).toBeVisible();
+  await createRetrievalProfile(page, "为新版业务检索查询生成准确表示");
+  await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+
+  const storageContainsSecret = await page.evaluate(() =>
+    JSON.stringify({ ...localStorage, ...sessionStorage }),
+  );
+  expect(storageContainsSecret).not.toContain("browser-value");
+
   const results = await new AxeBuilder({ page }).analyze();
   expect(results.violations).toEqual([]);
 });
@@ -186,11 +244,11 @@ test("375px 视口可通过导航进入系统状态", async ({ page }) => {
   await authenticate(page);
   if (page.viewportSize()?.width !== 375) test.skip();
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("button", { name: "系统" }).click();
+  await page.getByRole("button", { name: "系统状态" }).click();
   await expect(
-    page.getByRole("heading", { name: "系统", exact: true }),
+    page.getByRole("heading", { name: "系统状态", exact: true, level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("Offline Evaluation V3")).toBeVisible();
+  await expect(page.getByText("离线评测证据")).toBeVisible();
 });
 
 test("表格空列与合并结构保持可定位且不伪造引用", async ({ page }, testInfo) => {
@@ -220,7 +278,7 @@ test("表格空列与合并结构保持可定位且不伪造引用", async ({ pa
     buffer: docxBlocks(table),
   });
   const job = page.getByRole("article").first();
-  await expect(job).toContainText("succeeded", { timeout: 20_000 });
+  await expect(job).toContainText("已完成", { timeout: 20_000 });
   await job.getByRole("button", { name: "检查版本" }).click();
   const tableChunk = page
     .locator("details")
@@ -230,12 +288,12 @@ test("表格空列与合并结构保持可定位且不伪造引用", async ({ pa
   await expect(tableChunk).toContainText("表格定位词");
   await expect(
     tableChunk
-      .locator("h4", { hasText: "Citation" })
+      .locator("h4", { hasText: "引用文本" })
       .locator("xpath=following-sibling::p[1]"),
   ).not.toContainText("<EMPTY>");
   await expect(
     tableChunk
-      .locator("h4", { hasText: "Embedding" })
+      .locator("h4", { hasText: "向量文本" })
       .locator("xpath=following-sibling::p[1]"),
   ).toContainText(/<EMPTY>|<OMITTED>/);
 });

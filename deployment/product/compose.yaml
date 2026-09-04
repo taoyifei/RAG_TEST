@@ -1,0 +1,49 @@
+name: rag-product
+
+services:
+  rag-app:
+    image: ${RAG_APP_IMAGE:?required}
+    pull_policy: never
+    container_name: rag-product-app
+    restart: unless-stopped
+    environment:
+      RAG_DATA_DIR: /data
+      RAG_HOST: 0.0.0.0
+      RAG_PORT: "8088"
+      RAG_FRONTEND_DIR: /app/frontend
+      RAG_MASTER_KEY_FILE: /run/secrets/rag_master_key
+      RAG_ADMIN_BOOTSTRAP_TOKEN_FILE: /run/secrets/rag_admin_bootstrap_token
+      RAG_QDRANT_MODE: ${RAG_QDRANT_MODE:-memory}
+      RAG_QDRANT_URL: ${RAG_QDRANT_URL:-}
+      RAG_TEST_NETWORK: ${RAG_TEST_NETWORK:-}
+    volumes:
+      - ${RAG_DATA_PATH:?required}:/data
+    secrets:
+      - rag_master_key
+      - rag_admin_bootstrap_token
+    ports:
+      - ${RAG_PORT:-8088}:8088
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8088/ready', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    pids_limit: 256
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  rag_master_key:
+    file: ${RAG_MASTER_KEY_FILE:?required}
+  rag_admin_bootstrap_token:
+    file: ${RAG_ADMIN_BOOTSTRAP_TOKEN_FILE:?required}

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from qdrant_client import QdrantClient
 
 from rag_app.adapters.stores import (
     FilesystemBlobStore,
@@ -30,7 +32,11 @@ class LocalPersistenceConfig(BaseModel):
     )
     journal_mode: str = Field(default="WAL", pattern=r"^(WAL|DELETE|MEMORY)$")
     busy_timeout_ms: StrictInt = Field(default=5000, ge=1, le=60000)
-    qdrant_mode: str = Field(default="memory", pattern=r"^(memory|path)$")
+    qdrant_mode: str = Field(default="memory", pattern=r"^(memory|path|url)$")
+    qdrant_url: str | None = Field(
+        default=None,
+        pattern=r"^https?://[^\s]+$",
+    )
 
 
 def sqlite_control_factory(config: JsonObject) -> SqliteControlStore:
@@ -85,6 +91,15 @@ def qdrant_local_factory(config: JsonObject) -> QdrantRevisionVectorStore:
     """
     resolved = LocalPersistenceConfig.model_validate(dict(config))
     location: str | Path = ":memory:"
+    if resolved.qdrant_mode == "url":
+        if resolved.qdrant_url is None:
+            raise ValueError("Qdrant url 模式缺少 RAG_QDRANT_URL。")
+        return QdrantRevisionVectorStore(
+            client=QdrantClient(
+                url=resolved.qdrant_url,
+                check_compatibility=False,
+            )
+        )
     if resolved.qdrant_mode == "path":
         location = Path(resolved.data_root) / "qdrant"
     return QdrantRevisionVectorStore(location)
@@ -110,12 +125,21 @@ def _migrated_connections(config: JsonObject) -> SqliteConnectionFactory:
         busy_timeout_ms=resolved.busy_timeout_ms,
         journal_mode=resolved.journal_mode,
     )
-    repository_root = Path(__file__).resolve().parents[3]
     MigrationRunner(
         connections,
-        repository_root / "migrations" / "universal_rag",
+        _migrations_directory(),
     ).migrate()
     return connections
+
+
+def _migrations_directory() -> Path:
+    configured = os.environ.get("RAG_MIGRATIONS_DIR")
+    if configured is not None:
+        return Path(configured)
+    image_migrations = Path("/app/migrations/universal_rag")
+    if image_migrations.is_dir():
+        return image_migrations
+    return Path(__file__).resolve().parents[3] / "migrations" / "universal_rag"
 
 
 __all__ = [

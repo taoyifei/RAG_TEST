@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api, readSseResponse } from "./client";
+import {
+  ApiError,
+  api,
+  readSseResponse,
+  setBrowserCsrfToken,
+} from "./client";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  setBrowserCsrfToken("");
+  vi.restoreAllMocks();
+});
 
 describe("API 客户端契约", () => {
   it("新文档与新版本使用不同端点", async () => {
@@ -83,5 +91,40 @@ describe("API 客户端契约", () => {
     await expect(readSseResponse(response)).rejects.toMatchObject({
       code: "POLICY_DENIED",
     });
+  });
+
+  it("默认使用同源 Cookie 与 CSRF，不再发送浏览器 Bearer Token", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ project_id: "prj_1" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    setBrowserCsrfToken("synthetic-csrf");
+    await api.createProject("must-not-be-sent", "测试", "project-key");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(init?.credentials).toBe("same-origin");
+    expect(headers.get("Authorization")).toBeNull();
+    expect(headers.get("X-CSRF-Token")).toBe("synthetic-csrf");
+  });
+
+  it("页面托管密钥不写入浏览器 Storage", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ credential_id: "cred_1" }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const credentialValue = "browser-storage-synthetic-value";
+    await api.createCredential({
+      provider_type: "jina",
+      source: "database_encrypted",
+      secret_value: credentialValue,
+    });
+
+    expect(localStorage.getItem(credentialValue)).toBeNull();
+    expect(sessionStorage.getItem(credentialValue)).toBeNull();
+    expect(JSON.stringify(localStorage)).not.toContain(credentialValue);
+    expect(JSON.stringify(sessionStorage)).not.toContain(credentialValue);
   });
 });

@@ -1,0 +1,17 @@
+{
+  "application_version": "0.1.0",
+  "chunk_schema": "canonical-chunk-v3",
+  "database_schema_range": {
+    "maximum": 14,
+    "minimum": 14
+  },
+  "frontend_build_id": "universal-rag-console@0.1.0",
+  "fts_schema": "fts-v2",
+  "ir_schema": "document-ir-v4",
+  "provider_adapter_versions": {
+    "aliyun-model-studio": "1",
+    "jina": "1"
+  },
+  "source_revision": "development-unset",
+  "tested_qdrant_range": ">=1.18,<2"
+}

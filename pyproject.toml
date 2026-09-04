@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "可追溯、可增量更新、可离线部署的 DOCX RAG。"
 requires-python = ">=3.11,<3.12"
 dependencies = [
+  "cryptography==50.0.1",
   "fastapi==0.140.0",
   "httpx==0.28.1",
   "lxml==6.1.1",

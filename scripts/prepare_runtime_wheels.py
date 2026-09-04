@@ -17,10 +17,13 @@ _LOCK_LINE = re.compile(r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.+!-]+$")
 _PROJECT_WHEEL = re.compile(r"^docx_rag-0\.1\.0-.*\.whl$")
 _REQUIRED_PROJECT_MEMBERS = frozenset(
     {
+        "rag_app/api/product.py",
+        "rag_app/composition/product_runtime.py",
         "rag_app/worker_runtime.py",
         "rag_app/_build_revision.py",
         "rag_app/ocr/__init__.py",
         "rag_app/ocr/main.py",
+        "rag_app/product/crypto.py",
     }
 )
 _FULL_GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -62,7 +65,7 @@ def verify_project_wheel(
     missing = _REQUIRED_PROJECT_MEMBERS - members
     if missing:
         raise ValueError(
-            "项目 wheel 缺少 rag_app/ocr 或 worker 模块："
+            "项目 wheel 缺少必需 Runtime 模块："
             f"{sorted(missing)}"
         )
     with zipfile.ZipFile(path) as archive:

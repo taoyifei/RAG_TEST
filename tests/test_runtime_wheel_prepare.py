@@ -10,9 +10,12 @@ from scripts.prepare_runtime_wheels import verify_project_wheel
 _REVISION = "a" * 40
 _REVISION_MEMBER = "rag_app/_build_revision.py"
 _REQUIRED_MEMBERS = (
+    "rag_app/api/product.py",
+    "rag_app/composition/product_runtime.py",
     "rag_app/worker_runtime.py",
     "rag_app/ocr/__init__.py",
     "rag_app/ocr/main.py",
+    "rag_app/product/crypto.py",
 )
 
 
@@ -107,7 +110,7 @@ def _artifact_snapshot(
     )
 
 
-def test_project_wheel_must_contain_ocr_and_worker(
+def test_project_wheel_must_contain_all_runtime_roots(
     tmp_path: Path,
 ) -> None:
     old_wheel = tmp_path / "docx_rag-0.1.0-py3-none-any.whl"

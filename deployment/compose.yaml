@@ -77,6 +77,8 @@ services:
     pull_policy: never
     container_name: rag-app
     restart: unless-stopped
+    command:
+      - legacy-serve
     depends_on:
       rag-qdrant:
         condition: service_healthy

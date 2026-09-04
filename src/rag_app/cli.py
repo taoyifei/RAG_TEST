@@ -15,9 +15,12 @@ import uvicorn
 from qdrant_client import QdrantClient
 
 from rag_app._build_revision import SOURCE_REVISION
+from rag_app.api.product import create_product_lifespan_app
 from rag_app.assets import AssetPaths, verify_offline_assets
+from rag_app.composition.product_runtime import ProductRuntimeSettings
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
+from rag_app.product.crypto import initialize_master_key
 from rag_app.runtime import (
     build_runtime,
     load_pipeline,
@@ -95,21 +98,9 @@ def _run_runtime_command(arguments: argparse.Namespace) -> int:
         服务、worker 或索引任务的退出码。
 
     """
-    if arguments.command == "serve":
-        verify_offline_assets(_default_asset_paths())
-        settings = RuntimeSettings()  # type: ignore[call-arg]
-        service_bundle = build_runtime(settings)
-        try:
-            uvicorn.run(
-                service_bundle.app,
-                host=settings.host,
-                port=settings.port,
-                access_log=True,
-                log_level="info",
-            )
-        finally:
-            service_bundle.close()
-        return 0
+    product_result = _run_product_command(arguments)
+    if product_result is not None:
+        return product_result
     if arguments.command == "worker":
         settings = RuntimeSettings()  # type: ignore[call-arg]
         worker_bundle = build_worker_runtime(settings)
@@ -154,6 +145,63 @@ def _run_runtime_command(arguments: argparse.Namespace) -> int:
     raise AssertionError("argparse 未约束到已知命令。")
 
 
+def _run_product_command(arguments: argparse.Namespace) -> int | None:
+    """执行 Product、Legacy Serve 或 Secret 初始化。
+
+    Args:
+        arguments: 已解析 CLI 参数。
+
+    Returns:
+        已处理命令的退出码；其他命令返回 None。
+
+    """
+    if arguments.command == "serve":
+        product_settings = ProductRuntimeSettings.from_environment()
+        print("PRODUCT_RUNTIME product-runtime-p10.5", flush=True)
+        app = create_product_lifespan_app(
+            product_settings,
+            query_token=os.environ.get("RAG_QUERY_TOKEN"),
+            admin_token=os.environ.get("RAG_ADMIN_TOKEN"),
+        )
+        uvicorn.run(
+            app,
+            host=product_settings.host,
+            port=product_settings.port,
+            access_log=True,
+            log_level="info",
+        )
+        return 0
+    if arguments.command == "legacy-serve":
+        if os.environ.get("RAG_DATA_DIR"):
+            raise ValueError("LEGACY_RUNTIME 禁止复用 RAG_DATA_DIR。")
+        print("LEGACY_RUNTIME deprecated", flush=True)
+        verify_offline_assets(_default_asset_paths())
+        legacy_settings = RuntimeSettings()  # type: ignore[call-arg]
+        service_bundle = build_runtime(legacy_settings)
+        try:
+            uvicorn.run(
+                service_bundle.app,
+                host=legacy_settings.host,
+                port=legacy_settings.port,
+                access_log=True,
+                log_level="info",
+            )
+        finally:
+            service_bundle.close()
+        return 0
+    if arguments.command != "init-secrets":
+        return None
+    key = initialize_master_key(arguments.output)
+    _print_json(
+        {
+            "fingerprint": key.key_id,
+            "key_id": key.key_id,
+            "path": str(arguments.output.resolve()),
+        }
+    )
+    return 0
+
+
 def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
     """执行不创建 runtime 的只读诊断命令。
 
@@ -165,9 +213,7 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
 
     """
     if arguments.command == "build-info":
-        build_report = build_info(
-            expected_revision=arguments.expected_revision
-        )
+        build_report = build_info(expected_revision=arguments.expected_revision)
         print(
             json.dumps(
                 asdict(build_report),
@@ -232,9 +278,7 @@ def _run_index_gc(*, apply: bool, collection_prefix: str) -> int:
     try:
         collector = IndexGarbageCollector(
             client=client,
-            manifests=ReadOnlyManifestRepository(
-                settings.manifest_database
-            ),
+            manifests=ReadOnlyManifestRepository(settings.manifest_database),
             control=ReadOnlyJobStore(settings.state_database),
             config=GarbageCollectorConfig(
                 alias_name=settings.qdrant_alias,
@@ -378,7 +422,18 @@ def _parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(prog="rag-app")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("serve", help="启动 API 与本地静态页。")
+    subparsers.add_parser(
+        "serve", help="启动 Product Runtime 与 React 控制台。"
+    )
+    subparsers.add_parser(
+        "legacy-serve",
+        help="已弃用：启动旧 Runtime，仅用于历史兼容。",
+    )
+    secrets_parser = subparsers.add_parser(
+        "init-secrets",
+        help="创建 0600 AES-256-GCM 主密钥文件。",
+    )
+    secrets_parser.add_argument("--output", required=True, type=Path)
     build = subparsers.add_parser(
         "build-info",
         help="报告安装包与 OCI 期望 revision 是否一致。",
@@ -443,9 +498,7 @@ def _parser() -> argparse.ArgumentParser:
     selfcheck.add_argument(
         "--tokenizer",
         type=Path,
-        default=Path(
-            "/app/deployment/assets/tokenizers/llm/tokenizer.json"
-        ),
+        default=Path("/app/deployment/assets/tokenizers/llm/tokenizer.json"),
     )
     selfcheck.add_argument(
         "--frontend",

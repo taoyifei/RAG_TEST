@@ -11,6 +11,7 @@ from rag_app.adapters.stores import SqliteControlStore, SqliteLifecycleStore
 from rag_app.application.console import ConsoleInspectionService
 from rag_app.application.durable_jobs import DurableJobRunner
 from rag_app.application.lifecycle import LifecycleService
+from rag_app.application.retrieval import RetrievalService
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
 from rag_app.composition.profiles import (
     ComponentsProfile,
@@ -73,12 +74,26 @@ class P09Runtime:
         self.close()
 
 
+@dataclass(frozen=True, slots=True)
+class P09RuntimeHooks:
+    """更高层组合根可注入的动态解析钩子。"""
+
+    system_status_overlay: Callable[[SystemStatus], SystemStatus] | None = None
+    retrieval_resolver: (
+        Callable[[str, RetrievalService], RetrievalService] | None
+    ) = None
+    revision_builder_resolver: (
+        Callable[[str, LifecycleService], LifecycleService] | None
+    ) = None
+
+
 def build_p09_runtime(
     profile: str | Path | RagProfile,
     *,
     data_dir: str | Path | None = None,
     max_job_workers: int = 1,
     max_pending_jobs: int = 64,
+    hooks: P09RuntimeHooks | None = None,
 ) -> P09Runtime:
     """构造默认离线并使用持久队列的 P09 runtime。
 
@@ -87,6 +102,7 @@ def build_p09_runtime(
         data_dir: 可选受控数据根覆盖。
         max_job_workers: 单进程 Worker 并发硬上限。
         max_pending_jobs: SQLite 队列 queued/running 总量上限。
+        hooks: 可选产品控制面动态状态与检索解析钩子。
 
     Returns:
         持有 SDK 与 P08.5 检索服务的 runtime。
@@ -117,7 +133,7 @@ def build_p09_runtime(
     def _system_status() -> SystemStatus:
         integrity, pending_gc, reconciliation = store.system_integrity()
         lexical_schema, analyzer_id, reindex_required = store.lexical_status()
-        return SystemStatus(
+        status = SystemStatus(
             profile_id=components.profile.profile_id,
             index_fingerprint=components.index_fingerprint,
             serving_fingerprint=components.serving_fingerprint,
@@ -139,6 +155,9 @@ def build_p09_runtime(
                 for item in components.descriptors
             ),
         )
+        if hooks is None or hooks.system_status_overlay is None:
+            return status
+        return hooks.system_status_overlay(status)
 
     jobs = DurableJobRunner(
         lifecycle.run_ingestion,
@@ -173,6 +192,12 @@ def build_p09_runtime(
         system_status=_system_status,
         close=_close,
         console=console,
+        retrieval_resolver=(
+            None if hooks is None else hooks.retrieval_resolver
+        ),
+        revision_builder_resolver=(
+            None if hooks is None else hooks.revision_builder_resolver
+        ),
     )
     runtime = P09Runtime(
         retrieval_runtime=retrieval_runtime,
@@ -232,4 +257,4 @@ def _persistent_profile(profile: RagProfile) -> RagProfile:
     )
 
 
-__all__ = ["P09Runtime", "build_p09_runtime"]
+__all__ = ["P09Runtime", "P09RuntimeHooks", "build_p09_runtime"]

@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, X, XCircle } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { ApiError, type Evidence } from "../api/client";
+import { localizeStatus } from "../copy/zh-CN";
 
 function trapFocus(container: HTMLElement, event: KeyboardEvent) {
   if (event.key !== "Tab") return;
@@ -23,15 +24,21 @@ function trapFocus(container: HTMLElement, event: KeyboardEvent) {
 }
 
 export function StatusBadge({ value }: { value: string | boolean }) {
-  const text = typeof value === "boolean" ? (value ? "就绪" : "未就绪") : value;
+  const raw = String(value);
+  const text = localizeStatus(value);
   const good = [
     "active",
     "succeeded",
     "ANSWERABLE",
     "healthy",
     "就绪",
-  ].includes(text);
-  const bad = ["failed_terminal", "INDEX_CORRUPT", "unhealthy"].includes(text);
+  ].includes(raw);
+  const bad = [
+    "failed",
+    "failed_terminal",
+    "INDEX_CORRUPT",
+    "unhealthy",
+  ].includes(raw);
   const Icon = good ? CheckCircle2 : bad ? XCircle : AlertCircle;
   return (
     <span className={`badge ${good ? "good" : bad ? "bad" : "neutral"}`}>
@@ -112,7 +119,7 @@ export function EvidenceDrawer({
       >
         <header>
           <div>
-            <span className="eyebrow">Evidence V2</span>
+            <span className="eyebrow">引用依据</span>
             <h2>{evidence.source_label}</h2>
           </div>
           <button

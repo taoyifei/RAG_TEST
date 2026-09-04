@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { ConsoleProvider, useConsole } from "./console-context";
 
@@ -20,6 +20,15 @@ function Probe() {
 
 describe("内存范围", () => {
   it("切换项目时清空知识库和 Revision，避免串库", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authenticated: false,
+          error: { code: "AUTHENTICATION_REQUIRED" },
+        }),
+        { status: 401, headers: { "Content-Type": "application/json" } },
+      ),
+    );
     const user = userEvent.setup();
     render(
       <ConsoleProvider>
