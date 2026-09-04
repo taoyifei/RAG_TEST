@@ -1,7 +1,7 @@
 # P11 V1 发布候选进度
 
-本报告记录 2026-09-04 的凭据前状态。真实 CI 已通过；最终 Live 与集成 SHA 将在
-各门真实通过后更新，当前不得据此声明 P11 Ready。
+本报告记录 2026-09-04 发布候选重建、原位部署与首次真实 Provider 结果。首次 Jina
+请求发生网络错误并按失败即停规则暂停；当前不得据此声明 P11 Ready。
 
 ## 身份与治理
 
@@ -25,6 +25,9 @@
 - 页面托管 Credential、五项持久连接验证、知识库主备 Profile、双槽索引、查询、
   Reranker、预算和安全观测已经接入 Product Runtime。当前证据为 MockTransport，
   不能替代 Live。
+- Word 上传同时支持签名一致的 `.docx` 与传统 OLE CFB `.doc`。DOCX 保留结构化
+  `docx-ooxml-v4` 路径；DOC 使用受限 antiword 子进程并标记
+  `word-document-v1`/`LEGACY_DOC_FLATTENED_TEXT`，原文件 SHA 继续作为身份。
 - 统一备份含 SQLite、Blob、Qdrant Snapshot、Compatibility/Backup Manifest 和
   SHA；Secret 有意排除，恢复为非覆盖操作。
 - Schema 15 覆盖空库与 P08.5/P09/P10/P10.5 升级，保留 checksum、失败回滚和
@@ -49,13 +52,32 @@
 
 ## 实际门禁证据
 
-- `python scripts/dev.py check`：`1396 passed, 79 deselected`；4 个已知警告。
-- `python scripts/dev.py smoke`：71 passed。
-- `python scripts/dev.py product-check`：33 passed。
+- `python scripts/dev.py check`：`1459 passed, 79 deselected`；4 个已知警告。
+- `python scripts/dev.py smoke`：72 passed。
+- `python scripts/dev.py product-check`：59 passed。
 - `python scripts/dev.py product-smoke`：6 passed。
 - `python scripts/dev.py web-e2e`：3 passed、3 个按浏览器项目矩阵跳过。
 - `tests/upgrade/test_p11_upgrade.py`：7 passed。
 - 真实双 Qdrant、备份恢复、性能证据：3 passed；容器和卷按唯一名称清理。
+- `python scripts/release.py build` 在 SHA `88a260263db425e645a7ef759106342fa4b9d95f`
+  成功，manifest-list digest 为
+  `sha256:a7c7b3f08969a68613e25fde2d5267ef053b2ecf77ac54bd58c4e5cb28e1830f`，
+  镜像大小 120,065,123 bytes，运行用户为 `rag:rag`。
+- `python scripts/release.py verify` 成功：pip-audit 无已知漏洞、npm audit 为 0、
+  secret scan 1202 files、Trivy 179 条且可修复 High/Critical 为 0、SBOM 与
+  license inventory 各 2914 components。
+- `python scripts/release.py acceptance` 成功，统一入口重新执行完整离线门、升级、
+  双 Qdrant、Snapshot/Restore、restart 与性能验收，报告
+  `live_provider=NOT_RUN`。
+- 原位部署前备份 `pre-88a2602.tar.gz` 校验通过，archive SHA-256 为
+  `f849a43115029418a28ce4b3dc3f88d14ec333d05cdea5cd15e92b88f8d42ebb`，SQLite
+  integrity 为 `ok`。只重建 app；Qdrant 容器 `1bc4088a449c` 与启动时间未变。
+- 部署后 app 健康，OCI revision 为 `88a260263db425e645a7ef759106342fa4b9d95f`；
+  页面保存的两条 Connection 与两个加密 Credential 均保留。
+- 五项页面真实验证计划为 5 次 HTTP、231 估算输入 Token。第一项 Jina document
+  embedding 实际尝试 1 次、发送 19 估算 Token，3250 ms 后以
+  `PROVIDER_NETWORK_ERROR` 失败；其余四项、百炼、双槽 Live 与私有 DOC 出网均
+  未运行。DNS、TCP、默认 CA 下 TLS 1.3 均通过，不能替代模型 HTTP 成功证据。
 - 独立 Compose 演练：Secret 初始化、`/live`、管理员 Session、创建 Project、
   `down/up` 后 Session 与 Project 持久化通过；专用三卷已删除。
 - pip-audit 曾完成并报告无已知漏洞；最终复核时 WSL Python 到 PyPI 的 TLS 握手
@@ -79,14 +101,14 @@
 环境为真实 loopback Qdrant Server + `httpx.MockTransport` Provider，20 次样本，
 不是 SLA，也不是 Live 模型性能：
 
-- 单块公开合成 DOCX 索引 0.969 s，1.032 chunk/s；
-- Search p50 48.282 ms、p95 51.642 ms；
-- Answer p50 49.100 ms、p95 54.429 ms；当前 answer 与 search 共用检索回答链；
-- SQLite count p50 0.558 ms、p95 0.621 ms；
-- Qdrant get_collection p50 3.599 ms、p95 5.559 ms；
+- 单块公开合成 DOCX 索引 0.958 s，1.044 chunk/s；
+- Search p50 48.553 ms、p95 54.055 ms；
+- Answer p50 49.019 ms、p95 53.775 ms；当前 answer 与 search 共用检索回答链；
+- SQLite count p50 0.555 ms、p95 0.624 ms；
+- Qdrant get_collection p50 3.765 ms、p95 5.690 ms；
 - 首次 cache miss、第二次 cache hit；
-- 峰值进程内存 169832 KiB；此前 SHA `6b280a3` 候选镜像观察值为
-  119811235 bytes，最终凭据前 SHA 将重新构建并核对 OCI revision。
+- 峰值进程内存 168952 KiB；SHA `88a2602` 候选镜像观察值为 120065123 bytes，
+  OCI revision 已核对一致。
 
 ## 验收状态
 
@@ -100,9 +122,9 @@ LIVE_JINA_EMBEDDING_READY=false
 LIVE_JINA_RERANKER_READY=false
 LIVE_QWEN_STANDBY_READY=false
 AUTOMATIC_FAILOVER_READY=false
-PRODUCT_E2E_READY=true
-RESTART_PERSISTENCE_READY=true
-BACKUP_RESTORE_READY=true
+PRODUCT_E2E_READY=false
+RESTART_PERSISTENCE_READY=false
+BACKUP_RESTORE_READY=false
 UPGRADE_READY=true
 SECURITY_READY=true
 DEPENDENCY_AUDIT_READY=true
@@ -115,5 +137,7 @@ MERGE_TO_MAIN_AUTHORIZED=false
 P11_READY=false
 ```
 
-Live Gate 见 `docs/decisions/P11-live-provider-authorization.md`。在用户配置页面凭据并
-明确授权预算之前停止真实 Provider 验收；不合并回 `feature/universal-rag`。
+Live Gate 见 `docs/decisions/P11-live-provider-authorization.md` 与
+`docs/decisions/P11-live-jina-network-error.md`。凭据和授权均已具备，但首次 Jina
+真实请求发生网络错误；其余 Live、完整产品 E2E、含真实 Provider 查询的恢复验收均
+按失败即停规则未运行，不合并回 `feature/universal-rag`。
