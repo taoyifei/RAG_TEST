@@ -35,9 +35,13 @@ RUN test "$(printf '%s' "${VCS_REF}" | wc -c)" -eq 40 \
     && mkdir -p /state \
     && chown rag:rag /state
 COPY --chown=rag:rag frontend ./frontend
+COPY --chown=rag:rag migrations ./migrations
+COPY --chown=rag:rag compatibility-manifest.json ./compatibility-manifest.json
 COPY --chown=rag:rag deployment/config ./deployment/config
 COPY --chown=rag:rag deployment/assets ./deployment/assets
 COPY --chown=rag:rag deployment/ASSETS.sha256 ./deployment/ASSETS.sha256
+RUN python -c \
+    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")'
 
 USER rag:rag
 EXPOSE 8088
