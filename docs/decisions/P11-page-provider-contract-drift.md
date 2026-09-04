@@ -1,6 +1,6 @@
 # P11 页面 Provider 校验合同漂移
 
-状态：`RESOLVED_IN_SOURCE_REBUILT_LIVE_RETEST_BLOCKED_BY_NETWORK`。
+状态：`RESOLVED_IN_SOURCE_JINA_LIVE_VALIDATED_ALIYUN_STILL_BLOCKED`。
 
 发现日期：2026-09-04。
 
@@ -82,3 +82,21 @@ missing_google_sections=0
 `PROVIDER_NETWORK_ERROR` 失败。百炼修订后的真实合同因此尚未执行，不能将源码修复
 或 Mock 合同测试标记为百炼 Live 成功。后续见
 [P11-live-jina-network-error.md](P11-live-jina-network-error.md)。
+
+
+## 2026-09-05 Live 复核
+
+Jina 三项页面验证已取得真实成功响应。百炼 document 在 workspace 子域和原生
+请求体下返回 HTTP 4xx；随后发现旧逻辑把所有百炼 HTTP 400 都误标为
+`REGION_OR_WORKSPACE_INVALID`。
+
+提交 `c4e68dfa1ba61fef8ac590e81b663682bb0c1a2b` 改为只解析 4 MiB 内 JSON
+中的白名单业务 `code`，原始 `message` 与未知 `code` 均不持久化。定向门禁
+46 项通过，完整离线门禁为 `1471 passed, 79 deselected`。新候选真实重试仍为
+HTTP 4xx，但安全分类已变为 `PROVIDER_REQUEST_INVALID`。
+
+endpoint、model、`input.texts`、`text_type=document`、`dimension=1024` 与
+`output_type=dense` 均符合任务书和当前官方文档。真实服务仍拒绝请求，因此按任务书
+暂停；不得删除 `text_type=document|query` 来绕过 C4，也不得用 Mock 宣称百炼
+Ready。详见
+[P11-live-aliyun-validation-error.md](P11-live-aliyun-validation-error.md)。

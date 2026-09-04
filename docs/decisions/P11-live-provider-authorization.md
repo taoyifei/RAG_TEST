@@ -1,6 +1,6 @@
 # P11 真实 Provider 授权门
 
-状态：`AUTHORIZED_CONNECTIONS_SAVED_PRIVATE_DOC_EGRESS_AUTHORIZED_LIVE_BLOCKED`。
+状态：`AUTHORIZED_CONNECTIONS_SAVED_PRIVATE_DOC_EGRESS_AUTHORIZED_LIVE_BLOCKED_BY_ALIYUN_REQUEST`。
 
 截至 2026-09-04，P11 的离线、浏览器 Mock、真实 Qdrant、备份恢复、升级、安全和
 容器工作已经完成。随后使用页面保存的加密 Jina 连接发起首次真实验证；第一项即以
@@ -76,3 +76,18 @@
 模型 ID、Endpoint 或响应 Schema 与当前合同不一致，出现网络/鉴权/限流错误、意外
 收费/配额、预算将超限、需要发送授权范围外的非公开数据或需要修改真实 Key 制造故障
 时立即停止。问题记录为新的 `docs/decisions/P11-<topic>.md`，不改用 Mock 宣称通过。
+
+
+## 2026-09-05 当前状态（取代上文旧账本）
+
+Jina document/query/reranking 已取得真实 `live_200`；Jina 累计 4 次 Provider
+HTTP、119 估算输入 Token，成功响应观察用量合计 242 Token。百炼 document 累计
+2 次 HTTP、38 估算输入 Token，均为 HTTP 4xx；候选
+`c4e68dfa1ba61fef8ac590e81b663682bb0c1a2b` 的最新安全分类为
+`PROVIDER_REQUEST_INVALID`，百炼 query 未运行。
+
+当前总账为 6/25 次 Provider HTTP、157/1,000 估算输入 Token；Jina
+119/600，百炼 38/600。指定 `GM-03 质量管理制度.doc` 未出网，完整双槽发布仍为
+`BUDGET_BLOCKED`。后续 Provider 调用已按任务书暂停。详见
+[P11-live-jina-network-error.md](P11-live-jina-network-error.md) 和
+[P11-live-aliyun-validation-error.md](P11-live-aliyun-validation-error.md)。

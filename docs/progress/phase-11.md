@@ -1,7 +1,8 @@
 # P11 V1 发布候选进度
 
-本报告记录 2026-09-04 发布候选重建、原位部署与首次真实 Provider 结果。首次 Jina
-请求发生网络错误并按失败即停规则暂停；当前不得据此声明 P11 Ready。
+本报告记录 2026-09-04 至 2026-09-05 的发布候选、原位部署与真实 Provider
+结果。Jina 三项页面验证已成功；百炼 document 持续返回
+`PROVIDER_REQUEST_INVALID`，已按任务书暂停，当前不得声明 P11 Ready。
 
 ## 身份与治理
 
@@ -141,3 +142,31 @@ Live Gate 见 `docs/decisions/P11-live-provider-authorization.md` 与
 `docs/decisions/P11-live-jina-network-error.md`。凭据和授权均已具备，但首次 Jina
 真实请求发生网络错误；其余 Live、完整产品 E2E、含真实 Provider 查询的恢复验收均
 按失败即停规则未运行，不合并回 `feature/universal-rag`。
+
+
+## 2026-09-05 Live 补充证据（取代上文旧 Provider 账本）
+
+- `358f7560eb621f8b2a8736640fc36b558f51462b` 完成传输异常安全分类；完整
+  离线门禁 `1464 passed, 79 deselected`。Jina document/query/reranking 均为
+  `live_200`，维度、完整候选和 usage 通过。
+- `c4e68dfa1ba61fef8ac590e81b663682bb0c1a2b` 完成百炼有界 JSON 白名单
+  错误分类；定向测试 46 项和完整离线门禁
+  `1471 passed, 79 deselected` 均通过。
+- 部署前备份 `pre-c4e68df.tar.gz` 校验通过，SHA-256 为
+  `22e9e3323ced776490815f3ab58e698d3e466455f61e97aacbe9d85f0a96f62a`。
+  候选镜像为
+  `sha256:0a67aa625aa05bf9b01a0ddc899cd4d19106fa9c59a03b05c36a9022376271ad`，
+  120,069,319 bytes，OCI revision 与提交一致。
+- 只重建 app 后容器 `05925fff4659` 健康；Qdrant 容器
+  `1bc4088a449c` 未重启。数据库保持 2 个 Connection、2 个 Credential；
+  重试前 5 条验证记录均保留。
+- 新候选只执行 1 次百炼 document：270 ms 后为 HTTP 4xx、
+  `PROVIDER_REQUEST_INVALID`，无 observed usage，随后立即停止。百炼 query、
+  双槽 Live 与故障切换未运行。
+- 当前总账为 6/25 次 Provider HTTP、157/1,000 估算输入 Token；Jina
+  4 次、119/600，百炼 2 次、38/600；成功响应观察用量为 242 Token。指定私有
+  DOC 未出网。
+- Live Decision：
+  [授权与预算](../decisions/P11-live-provider-authorization.md)、
+  [Jina 瞬时故障](../decisions/P11-live-jina-network-error.md)、
+  [百炼请求错误](../decisions/P11-live-aliyun-validation-error.md)。

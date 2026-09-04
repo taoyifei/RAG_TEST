@@ -1,6 +1,6 @@
 # P11 Jina 首次真实调用网络失败
 
-状态：`BLOCKED_AFTER_FIRST_LIVE_ATTEMPT`。
+状态：`RESOLVED_AS_TRANSIENT_TRANSPORT_FAILURE`。
 
 发现日期：2026-09-04。
 
@@ -65,3 +65,20 @@ Latency: 3250 ms
    不减少槽位，不以局部样本冒充完整发布。
 4. 后续只有在明确决定进行一次受控重试或先增强安全的传输错误分类后，才恢复
    Live Gate；所有尝试继续累计计入同一 25/1,000/600 账本。
+
+
+## 2026-09-05 后续受控结果
+
+提交 `358f7560eb621f8b2a8736640fc36b558f51462b` 增强了传输异常安全分类，
+完整离线门禁为 `1464 passed, 79 deselected`。重建并只重部署 app 后，Jina
+得到以下真实结果：
+
+```text
+embedding.document: live_200, dimension=1024, observed_tokens=15, 1266 ms
+embedding.query:    live_200, dimension=1024, observed_tokens=15, 612 ms
+reranking:          live_200, full candidates, observed_tokens=212, 333 ms
+```
+
+首次 `PROVIDER_NETWORK_ERROR` 因而判定为瞬时传输失败；历史失败记录保留。
+Jina 累计 4 次 HTTP、119 估算输入 Token，成功响应观察用量合计 242 Token。
+这只解除 Jina 传输阻塞，不代表双槽 E2E、自动切换或整个 P11 已通过。
