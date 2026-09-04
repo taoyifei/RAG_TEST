@@ -454,6 +454,62 @@ def test_provider_validation_classifies_timeout_without_leaking_secret(
         harness.close()
 
 
+@pytest.mark.parametrize(
+    ("error_type", "http_category", "safe_error_code"),
+    (
+        (httpx.ConnectError, "connect_error", "PROVIDER_CONNECT_ERROR"),
+        (httpx.ReadError, "read_error", "PROVIDER_READ_ERROR"),
+        (httpx.WriteError, "write_error", "PROVIDER_WRITE_ERROR"),
+        (
+            httpx.RemoteProtocolError,
+            "remote_protocol_error",
+            "PROVIDER_REMOTE_PROTOCOL_ERROR",
+        ),
+        (httpx.RequestError, "network_error", "PROVIDER_NETWORK_ERROR"),
+    ),
+)
+def test_provider_validation_classifies_safe_request_errors(
+    tmp_path: Path,
+    error_type: type[httpx.RequestError],
+    http_category: str,
+    safe_error_code: str,
+) -> None:
+    credential_value = "synthetic-request-error-secret"
+
+    def _transport(_connection: object) -> httpx.MockTransport:
+        def _handler(request: httpx.Request) -> httpx.Response:
+            raise error_type(credential_value, request=request)
+
+        return httpx.MockTransport(_handler)
+
+    harness = build_product_harness(tmp_path, transport_factory=_transport)
+    try:
+        created = harness.runtime.credentials.create_encrypted(
+            "jina", credential_value
+        )
+        connection = harness.runtime.control.create_connection(
+            ProviderConnectionDraft(
+                display_name="网络错误安全分类",
+                provider_type="jina",
+                credential_id=created.credential_id,
+            )
+        )
+        result = harness.runtime.providers.validate(
+            connection.connection_id,
+            operation="embedding.query",
+            model="jina-embeddings-v5-text-small",
+            expected_dimension=1024,
+        )
+
+        assert result.http_category == http_category
+        assert result.safe_error_code == safe_error_code
+        assert credential_value not in json.dumps(
+            result.model_dump(mode="json")
+        )
+    finally:
+        harness.close()
+
+
 def test_reranker_validation_requires_the_synthetic_candidate(
     tmp_path: Path,
 ) -> None:

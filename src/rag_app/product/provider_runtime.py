@@ -156,12 +156,9 @@ class ProviderRuntimeRegistry:
                 "timeout",
                 "PROVIDER_TIMEOUT",
             )
-        except httpx.RequestError:
-            status, category, safe_error = (
-                "failed",
-                "network_error",
-                "PROVIDER_NETWORK_ERROR",
-            )
+        except httpx.RequestError as error:
+            category, safe_error = _request_error_details(error)
+            status = "failed"
         except _ProviderConfigurationError:
             status, category, safe_error = (
                 "failed",
@@ -422,6 +419,19 @@ class _ValidationError(Exception):
 
 class _ProviderConfigurationError(ConfigurationError):
     """标记 Provider endpoint 的非敏感配置错误。"""
+
+
+def _request_error_details(error: httpx.RequestError) -> tuple[str, str]:
+    """把传输异常映射为不含异常消息的稳定分类。"""
+    if isinstance(error, httpx.ConnectError):
+        return "connect_error", "PROVIDER_CONNECT_ERROR"
+    if isinstance(error, httpx.ReadError):
+        return "read_error", "PROVIDER_READ_ERROR"
+    if isinstance(error, httpx.WriteError):
+        return "write_error", "PROVIDER_WRITE_ERROR"
+    if isinstance(error, httpx.RemoteProtocolError):
+        return "remote_protocol_error", "PROVIDER_REMOTE_PROTOCOL_ERROR"
+    return "network_error", "PROVIDER_NETWORK_ERROR"
 
 
 def build_offline_mock_transport(
