@@ -1,7 +1,7 @@
 # P11 V1 发布候选进度
 
-本报告记录 2026-09-04 的凭据前状态。最终 Live、CI 与集成 SHA 将在各门真实通过后
-更新；当前不得据此声明 P11 Ready。
+本报告记录 2026-09-04 的凭据前状态。真实 CI 已通过；最终 Live 与集成 SHA 将在
+各门真实通过后更新，当前不得据此声明 P11 Ready。
 
 ## 身份与治理
 
@@ -9,7 +9,9 @@
 - 阶段分支：`codex/p11-release`；集成目标：`feature/universal-rag`。
 - `main` 与 `Industry` 未修改；`MERGE_TO_MAIN_AUTHORIZED=false`。
 - GitHub Ruleset API 返回空列表，`feature/universal-rag` Branch Protection 返回
-  404。因此 `BRANCH_PROTECTION_READY=false`，本阶段没有自行修改仓库设置。
+  404。当前没有仓库设置权限授权，因此按任务书单独记为
+  `BRANCH_PROTECTION_READY=BLOCKED`，本阶段没有自行修改仓库设置，也没有伪造
+  保护状态。
 
 ## 已完成实现
 
@@ -37,7 +39,10 @@
   `33863275211` 的 Qdrant、Frontend、Secret、SBOM、Container 五项通过；Python
   发现 19 个测试依赖本机忽略的冻结语料、Tokenizer 与 Python 3.10 环境，Web E2E
   发现服务解释器硬编码为 `.venv`。测试现改用公开合成语料与最小 Tokenizer，CI
-  显式提供 Python 3.10，Web E2E 使用当前 Python。真实成功 Run 尚待再次推送确认。
+  显式提供 Python 3.10，Web E2E 使用当前 Python。第三次真实 Run
+  [`33864997116`](https://github.com/taoyifei/RAG_TEST/actions/runs/33864997116)
+  在 SHA `abd50a128d479a3c8d5082fab41a5dd8994b9703` 上成功，Python、Frontend、
+  Offline Product E2E、Container、Qdrant、Secret 与 SBOM 七类作业全部通过。
 
 ## 实际门禁证据
 
@@ -77,7 +82,8 @@
 - SQLite count p50 0.558 ms、p95 0.621 ms；
 - Qdrant get_collection p50 3.599 ms、p95 5.559 ms；
 - 首次 cache miss、第二次 cache hit；
-- 峰值进程内存 169832 KiB；候选镜像 119811235 bytes。
+- 峰值进程内存 169832 KiB；此前 SHA `6b280a3` 候选镜像观察值为
+  119811235 bytes，最终凭据前 SHA 将重新构建并核对 OCI revision。
 
 ## 验收状态
 
@@ -97,8 +103,8 @@ BACKUP_RESTORE_READY=true
 UPGRADE_READY=true
 SECURITY_READY=true
 DEPENDENCY_AUDIT_READY=true
-CI_READY=false
-BRANCH_PROTECTION_READY=false
+CI_READY=true
+BRANCH_PROTECTION_READY=BLOCKED
 OBSERVABILITY_READY=true
 REMOTE_PRODUCTION_PROFILE_READY=false
 RELEASE_CANDIDATE_READY=false
