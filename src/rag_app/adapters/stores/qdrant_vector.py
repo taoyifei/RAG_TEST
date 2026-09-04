@@ -36,6 +36,7 @@ from rag_app.core.models import (
     VectorSearchRequest,
     VectorSearchResult,
     VectorWriteRequest,
+    vector_point_id,
 )
 
 _MAX_SCROLL_PAGES = 100_000
@@ -264,9 +265,22 @@ class QdrantRevisionVectorStore:
                 raise IndexCompatibilityError(
                     "Qdrant payload revision 不匹配。", stage="qdrant.search"
                 )
+            point_id = str(point.id)
+            expected_point_id = vector_point_id(
+                revision.index_revision_id,
+                payload.chunk_id,
+            )
+            if (
+                _canonical_uuid(point.id) is None
+                or point_id != expected_point_id
+            ):
+                raise IndexCompatibilityError(
+                    "Qdrant 搜索结果 Point ID 不匹配。",
+                    stage="qdrant.search",
+                )
             results.append(
                 VectorSearchResult(
-                    point_id=str(point.id),
+                    point_id=point_id,
                     chunk_id=payload.chunk_id,
                     document_id=payload.document_id,
                     document_version_id=payload.document_version_id,
