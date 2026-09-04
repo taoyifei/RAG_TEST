@@ -378,7 +378,7 @@ def test_runtime_revision_mismatch_fails_before_external_resources(
 @pytest.mark.parametrize(
     "arguments",
     (
-        ("serve",),
+        ("legacy-serve",),
         ("worker", "--once"),
         ("index", "full", "--idempotency-key", "revision-test"),
     ),

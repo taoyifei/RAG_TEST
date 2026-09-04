@@ -7,7 +7,9 @@ _ROOT = Path(__file__).parents[1]
 
 def test_frontend_has_one_react_entry_and_no_marketing_slogan() -> None:
     html = (_ROOT / "frontend/index.html").read_text(encoding="utf-8")
-    app = (_ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
+    app = (
+        _ROOT / "frontend/src/features/workspace/WorkspaceConsole.tsx"
+    ).read_text(encoding="utf-8")
 
     assert 'id="root"' in html
     assert "/src/main.tsx" in html
@@ -20,7 +22,9 @@ def test_frontend_handles_final_error_and_abort_signals() -> None:
     client = (_ROOT / "frontend/src/api/client.ts").read_text(
         encoding="utf-8"
     )
-    app = (_ROOT / "frontend/src/App.tsx").read_text(encoding="utf-8")
+    app = (
+        _ROOT / "frontend/src/features/workspace/WorkspaceConsole.tsx"
+    ).read_text(encoding="utf-8")
 
     assert 'event === "final"' in client
     assert 'event === "error"' in client

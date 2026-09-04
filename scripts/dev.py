@@ -140,6 +140,18 @@ _WEB_COMMANDS = frozenset(
         "web-e2e",
     }
 )
+_PRODUCT_TESTS = (
+    "tests/security/test_secret_store.py",
+    "tests/api/test_model_services.py",
+    "tests/api/test_retrieval_profiles.py",
+    "tests/api/test_console_session.py",
+    "tests/api/test_access_tokens.py",
+    "tests/composition/test_product_runtime.py",
+    "tests/composition/test_product_deployment.py",
+    "tests/cli/test_product_serve.py",
+    "tests/application/test_profile_impact.py",
+    "tests/application/test_provider_runtime_registry.py",
+)
 
 
 def _doctor_python() -> str:
@@ -382,7 +394,7 @@ def _wait_for_p10(port: int) -> bool:
     return False
 
 
-def _web_e2e(profile: Path) -> int:
+def _web_e2e(profile: Path | None) -> int:
     """运行真实离线 Playwright；WSL 可复用已安装的 Windows Chrome。"""
     build_result = _run_web_script("build")
     if build_result != 0:
@@ -391,17 +403,18 @@ def _web_e2e(profile: Path) -> int:
     chrome = Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
     if node is None or not chrome.is_file():
         return _run_web_script("e2e")
+    server_command = [
+        sys.executable,
+        "scripts/serve_p10.py",
+        "--port",
+        "8091",
+        "--frontend-dir",
+        "frontend/dist",
+    ]
+    if profile is not None:
+        server_command.extend(("--profile", str(profile)))
     server = subprocess.Popen(  # noqa: S603
-        [
-            sys.executable,
-            "scripts/serve_p10.py",
-            "--port",
-            "8091",
-            "--frontend-dir",
-            "frontend/dist",
-            "--profile",
-            str(profile),
-        ],
+        server_command,
         cwd=_REPOSITORY_ROOT,
         env=_offline_environment(),
     )
@@ -427,8 +440,7 @@ def _web_e2e(profile: Path) -> int:
             else p10_environment
         )
         cli = _windows_path(
-            _REPOSITORY_ROOT
-            / "frontend/node_modules/@playwright/test/cli.js"
+            _REPOSITORY_ROOT / "frontend/node_modules/@playwright/test/cli.js"
         )
         config = _windows_path(
             _REPOSITORY_ROOT / "frontend/playwright.config.ts"
@@ -461,6 +473,8 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             "provider-check",
             "provider-smoke",
             "failover-smoke",
+            "product-check",
+            "product-smoke",
             "inspect-document",
             "chunk-document",
             "chunk-ablation",
@@ -490,9 +504,30 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             parser.error("chunk-ablation 必须提供文档或目录路径。")
         if parsed.output is None:
             parser.error("chunk-ablation 必须提供 --output。")
-    if parsed.command == "web-e2e" and parsed.profile is None:
-        parser.error("web-e2e 必须提供 --profile。")
     return parsed
+
+
+def _product_check_commands() -> tuple[tuple[str, ...], ...]:
+    """返回产品静态审计与离线测试命令。"""
+    return (
+        (sys.executable, "scripts/product_hardcode_audit.py"),
+        (sys.executable, "-m", "pytest", "-q", *_PRODUCT_TESTS),
+    )
+
+
+def _product_smoke_commands() -> tuple[tuple[str, ...], ...]:
+    """返回 CLI、会话、Provider 和 Profile 的最小产品冒烟。"""
+    return (
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/cli/test_product_serve.py",
+            "tests/api/test_console_session.py",
+            "tests/api/test_retrieval_profiles.py",
+        ),
+    )
 
 
 def _inspect_document(
@@ -832,13 +867,15 @@ def main(  # noqa: PLR0911, PLR0912
         return _run_commands(_check_commands())
     if command == "smoke":
         return _run_commands(_smoke_commands())
+    if command == "product-check":
+        return _run_commands(_product_check_commands())
+    if command == "product-smoke":
+        return _run_commands(_product_smoke_commands())
     if command == "web-install-check":
         return _web_install_check()
     if command.startswith("web-"):
         script = command.removeprefix("web-")
         if script == "e2e":
-            if parsed.profile is None:
-                raise AssertionError("web-e2e profile 必须已由参数校验。")
             return _web_e2e(parsed.profile)
         return _run_web_script(script)
     if command == "provider-list":
