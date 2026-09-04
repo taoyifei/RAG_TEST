@@ -110,3 +110,27 @@ full offline gate: 1472 passed, 79 deselected, 4 warnings
 估算，不计入真实 Provider 消耗；真实总账仍为 6/25 次 HTTP、157/1,000 估算输入
 Token。下一次真实百炼请求须等用户在页面保存以 `llm-` 开头的正确 Workspace ID
 并确认后再运行。
+
+## 浏览器回归与已验证候选刷新
+
+统一 Acceptance 首轮在桌面 Chromium 的凭据轮换后 Profile 影响断言失败并停止，
+升级与 Qdrant 子门禁未继续。失败快照显示 E2E 仍使用旧
+`synthetic-workspace`，且五次 Provider 验证与凭据轮换只等待按钮点击，没有等待
+对应写请求完成，因而错误状态延迟到后续“无需重建索引”断言才暴露。
+
+提交 `94b5cfcbb0bd847c89c3d812b6b7d40c383be683` 改用合同合法的合成 Workspace，
+逐次等待并断言五次验证成功，同时等待凭据轮换响应。浏览器门禁随后为 3 passed、
+3 skipped；从头重跑统一 Acceptance 全部通过，最终明确
+`live_provider=NOT_RUN`。
+
+当前候选镜像 digest 为
+`sha256:b096f14495660529f6c7317995dc3c10572ecdfeb5f83e4573423375bae1d17f`，
+120,068,787 bytes，OCI revision 与提交一致。统一 Verify 结果为 pip-audit 无已知
+漏洞、npm audit 0、Secret scan 1205 files、Trivy 可修复 High/Critical 0、SBOM
+与许可证清单各 2914 components。
+
+部署前备份 `pre-94b5cfc.tar.gz` 校验通过，SHA-256 为
+`e7201aab045a63768afd8d4902069fdd81d6a7414434031155445de0638d0f07`。
+只替换 app 后健康，Qdrant 容器 `1bc4088a449c` 未重启；2 个 Connection、2 个
+Credential 和 7 条验证记录保留。以上操作没有新增 Provider HTTP，真实总账仍为
+6/25 次 HTTP、157/1,000 估算输入 Token，指定私有 DOC 仍未出网。

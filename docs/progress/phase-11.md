@@ -192,3 +192,29 @@ Live Gate 见 `docs/decisions/P11-live-provider-authorization.md` 与
   157/1,000 估算输入 Token；指定私有 DOC 未出网。
 - Live Gate 现等待用户在页面保存控制台复制的、以 `llm-` 开头的正确 Workspace ID。
   保存前不再发起百炼请求；所有 P11 Live/发布 Ready 状态继续保持 `false`。
+
+## 2026-09-05 统一 Acceptance 与候选刷新
+
+- 首轮 `release.py acceptance` 按失败即停在桌面 Chromium：凭据轮换后未出现
+  “无需重建索引”，升级与真实 Qdrant 子门禁未运行。失败快照证明 E2E 仍填写旧的
+  `synthetic-workspace`，并且没有等待五次连接验证和凭据轮换请求完成。
+- `94b5cfcbb0bd847c89c3d812b6b7d40c383be683` 改用合法合成 Workspace，逐次等待
+  Provider 验证响应并断言 succeeded，凭据轮换也等待 2xx 响应。定向
+  `web-e2e` 为 3 passed、3 skipped。
+- 从头重跑统一 Acceptance 成功：check 1472 passed、79 deselected；smoke 72；
+  product-check 72；product-smoke 6；web-e2e 3 passed、3 skipped；upgrade 7；
+  隔离双 Qdrant、Snapshot/Restore、restart 和性能验收 3 passed。最终输出
+  `OK release-acceptance live_provider=NOT_RUN`，隔离容器和命名卷均已清理。
+- 当前候选镜像 digest 为
+  `sha256:b096f14495660529f6c7317995dc3c10572ecdfeb5f83e4573423375bae1d17f`，
+  120,068,787 bytes，用户 `rag:rag`，OCI revision 与 `94b5cfc` 一致。
+- `release.py verify` 成功：pip-audit 无已知漏洞、npm audit 0、Secret scan
+  1205 files、Trivy 179 条记录，其中 High/Critical 54 条均无 FixedVersion，
+  可修复 High/Critical 为 0；SBOM 与许可证清单各 2914 components。
+- 部署前备份 `pre-94b5cfc.tar.gz` 为 0 个 Collection、4 个文件、SQLite `ok`，
+  SHA-256 为
+  `e7201aab045a63768afd8d4902069fdd81d6a7414434031155445de0638d0f07`。
+  只替换 app 后 `/live` 成功；Qdrant 容器 `1bc4088a449c` 未重启，2 个 Connection、
+  2 个 Credential、7 条验证记录均保留。
+- 本轮没有新增 Provider HTTP；真实总账仍为 6/25 次 HTTP、157/1,000 估算输入
+  Token，指定私有 DOC 未出网。Live Gate 继续等待正确的 `llm-` Workspace ID。
