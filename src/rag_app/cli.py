@@ -20,6 +20,12 @@ from rag_app.assets import AssetPaths, verify_offline_assets
 from rag_app.composition.product_runtime import ProductRuntimeSettings
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
+from rag_app.product.backup import (
+    create_backup,
+    report_json,
+    restore_backup,
+    verify_backup,
+)
 from rag_app.product.crypto import (
     initialize_master_key,
     initialize_product_secret_bundle,
@@ -83,12 +89,62 @@ def main(argv: Sequence[str] | None = None) -> int:
     read_only_result = _run_read_only_command(arguments)
     if read_only_result is not None:
         return read_only_result
+    backup_result = _run_backup_command(arguments)
+    if backup_result is not None:
+        return backup_result
     if arguments.command == "index-gc":
         return _run_index_gc(
             apply=arguments.apply,
             collection_prefix=arguments.collection_prefix,
         )
     return _run_runtime_command(arguments)
+
+
+def _run_backup_command(arguments: argparse.Namespace) -> int | None:
+    """执行不启动 Web Runtime 的备份、校验与恢复命令。
+
+    Args:
+        arguments: 已解析 CLI 参数。
+
+    Returns:
+        已处理时为零；其他命令返回 None。
+
+    """
+    if arguments.command == "backup" and arguments.backup_command == "verify":
+        print(report_json(verify_backup(arguments.archive)))
+        return 0
+    if arguments.command == "backup" and arguments.backup_command == "create":
+        qdrant_url, key_file = _backup_connection(arguments)
+        report = create_backup(
+            data_dir=arguments.data_dir,
+            output=arguments.output,
+            compatibility_manifest=arguments.compatibility_manifest,
+            qdrant_url=qdrant_url,
+            qdrant_api_key_file=key_file,
+        )
+        print(report_json(report))
+        return 0
+    if arguments.command == "restore":
+        qdrant_url, key_file = _backup_connection(arguments)
+        report = restore_backup(
+            archive_path=arguments.archive,
+            target_data_dir=arguments.target_data_dir,
+            qdrant_url=qdrant_url,
+            qdrant_api_key_file=key_file,
+        )
+        print(report_json(report))
+        return 0
+    return None
+
+
+def _backup_connection(arguments: argparse.Namespace) -> tuple[str, Path]:
+    qdrant_url = arguments.qdrant_url
+    key_file = arguments.qdrant_api_key_file
+    if not isinstance(qdrant_url, str) or not qdrant_url:
+        raise ValueError("必须通过参数或环境配置 Qdrant URL。")
+    if not isinstance(key_file, Path):
+        raise ValueError("必须通过参数或环境配置 Qdrant API Key 文件。")
+    return qdrant_url, key_file
 
 
 def _run_runtime_command(arguments: argparse.Namespace) -> int:
@@ -452,6 +508,40 @@ def _parser() -> argparse.ArgumentParser:
     secret_target = secrets_parser.add_mutually_exclusive_group(required=True)
     secret_target.add_argument("--output", type=Path)
     secret_target.add_argument("--directory", type=Path)
+    backup = subparsers.add_parser(
+        "backup",
+        help="创建或校验 Product Runtime 统一备份。",
+    )
+    backup_commands = backup.add_subparsers(
+        dest="backup_command", required=True
+    )
+    backup_create = backup_commands.add_parser("create")
+    backup_create.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path(os.environ.get("RAG_DATA_DIR", ".data/product")),
+    )
+    backup_create.add_argument("--output", type=Path, required=True)
+    backup_create.add_argument(
+        "--compatibility-manifest",
+        type=Path,
+        default=Path(
+            os.environ.get(
+                "RAG_COMPATIBILITY_MANIFEST",
+                "compatibility-manifest.json",
+            )
+        ),
+    )
+    _add_qdrant_backup_arguments(backup_create)
+    backup_verify = backup_commands.add_parser("verify")
+    backup_verify.add_argument("--archive", type=Path, required=True)
+    restore = subparsers.add_parser(
+        "restore",
+        help="恢复已验证的 Product Runtime 统一备份。",
+    )
+    restore.add_argument("--archive", type=Path, required=True)
+    restore.add_argument("--target-data-dir", type=Path, required=True)
+    _add_qdrant_backup_arguments(restore)
     build = subparsers.add_parser(
         "build-info",
         help="报告安装包与 OCI 期望 revision 是否一致。",
@@ -524,6 +614,28 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("/app/frontend"),
     )
     return parser
+
+
+def _add_qdrant_backup_arguments(parser: argparse.ArgumentParser) -> None:
+    """为备份和恢复命令添加相同 Qdrant 参数。
+
+    Args:
+        parser: 目标子命令解析器。
+
+    Returns:
+        无返回值。
+
+    """
+    parser.add_argument(
+        "--qdrant-url",
+        default=os.environ.get("RAG_QDRANT_URL"),
+    )
+    configured = os.environ.get("RAG_QDRANT_API_KEY_FILE")
+    parser.add_argument(
+        "--qdrant-api-key-file",
+        type=Path,
+        default=None if configured is None else Path(configured),
+    )
 
 
 def build_runtime_fingerprint(settings: RuntimeSettings) -> str:

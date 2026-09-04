@@ -42,12 +42,14 @@ class ProductHarness:
         self.runtime.close()
 
 
-def build_product_harness(
+def build_product_harness(  # noqa: PLR0913
     tmp_path: Path,
     *,
     transport_factory: TransportFactory | None = build_offline_mock_transport,
     master_key: bool = True,
     circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
+    qdrant_url: str | None = None,
+    qdrant_api_key_file: Path | None = None,
 ) -> ProductHarness:
     """构建不访问网络的完整产品测试环境。
 
@@ -56,6 +58,8 @@ def build_product_harness(
         transport_factory: Provider Transport 工厂。
         master_key: 是否配置页面托管 Secret 主密钥。
         circuit_factory: 可选测试时钟 Circuit 工厂。
+        qdrant_url: 可选真实 Qdrant Server URL。
+        qdrant_api_key_file: Qdrant URL 模式的 0600 Key 文件。
 
     Returns:
         已登录的 Product Harness。
@@ -78,6 +82,9 @@ def build_product_harness(
         frontend_dir=frontend,
         bootstrap_token_file=bootstrap,
         master_key_file=key_path if master_key else None,
+        qdrant_mode="memory" if qdrant_url is None else "url",
+        qdrant_url=qdrant_url,
+        qdrant_api_key_file=qdrant_api_key_file,
     )
     runtime = build_product_runtime(
         settings,
