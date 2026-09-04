@@ -724,7 +724,9 @@ def _display_extension(display_name: str) -> str:
     return ".bin"
 
 
-def validate_document_ir(document_ir: DocumentIR) -> None:  # noqa: PLR0912
+def validate_document_ir(  # noqa: PLR0912, PLR0915
+    document_ir: DocumentIR,
+) -> None:
     """以 O(n) 校验节点、父子、顺序、环和关系不变量。
 
     Args:

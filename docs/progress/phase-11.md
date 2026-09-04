@@ -30,11 +30,15 @@
 - Session、CSRF、CSP、TLS/Proxy、Origin、登录/查询/上传/Provider 限流、作用域
   API Token、吊销与错误脱敏已验证。
 - GitHub Actions 包含 python/frontend/offline E2E/container/Qdrant/secret/SBOM
-  七类作业；真实成功 Run 尚待本分支推送后确认。
+  七类作业。首次真实 Run `33862088499` 中 SBOM 通过，但 Python 与 Qdrant 作业
+  因 `src/rag_app/core/models/console.py`、`lexical.py` 被根目录用途的
+  `models/` 忽略规则意外排除而失败；本分支已将规则收紧为 `/models/`、补齐两个
+  源文件，并新增运行时 Python 源必须受 Git 跟踪的架构门。修复后的真实成功 Run
+  尚待推送后确认。
 
 ## 实际门禁证据
 
-- `python scripts/dev.py check`：`1395 passed, 79 deselected`；4 个已知警告。
+- `python scripts/dev.py check`：`1396 passed, 79 deselected`；4 个已知警告。
 - `python scripts/dev.py smoke`：71 passed。
 - `python scripts/dev.py product-check`：33 passed。
 - `python scripts/dev.py product-smoke`：6 passed。

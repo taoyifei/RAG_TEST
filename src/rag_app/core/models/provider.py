@@ -7,14 +7,21 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Self
 
-from pydantic import Field, StrictFloat, StrictInt, field_validator, model_validator
+from pydantic import (
+    Field,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
-from rag_app.core.capabilities import ComponentDescriptor
 from rag_app.core.models.common import (
     FrozenModel,
     JsonObject,
     freeze_json_object,
 )
+
+_HOT_STANDBY_SLOT_COUNT = 2
 
 
 class ProviderHealthStatus(StrEnum):
@@ -119,6 +126,7 @@ class EmbeddingSlotIdentity(FrozenModel):
 
         Returns:
             不会因维度相同而相等的向量空间身份。
+
         """
         return ":".join(
             (
@@ -153,18 +161,26 @@ class EmbeddingTopology(FrozenModel):
         if len(set(vector_names)) != len(vector_names):
             raise ValueError("embedding topology 的 vector_name 必须唯一。")
         primary = tuple(
-            slot for slot in self.slots if slot.role is EmbeddingSlotRole.PRIMARY
+            slot
+            for slot in self.slots
+            if slot.role is EmbeddingSlotRole.PRIMARY
         )
         standby = tuple(
-            slot for slot in self.slots if slot.role is EmbeddingSlotRole.STANDBY
+            slot
+            for slot in self.slots
+            if slot.role is EmbeddingSlotRole.STANDBY
         )
         if len(primary) != 1 or primary[0].slot_id != self.primary_slot_id:
             raise ValueError("topology 必须恰有一个匹配的 primary slot。")
         if self.mode == "single":
-            if len(self.slots) != 1 or standby or self.standby_slot_id is not None:
+            if (
+                len(self.slots) != 1
+                or standby
+                or self.standby_slot_id is not None
+            ):
                 raise ValueError("single topology 只能包含一个 primary slot。")
         elif (
-            len(self.slots) != 2
+            len(self.slots) != _HOT_STANDBY_SLOT_COUNT
             or len(standby) != 1
             or standby[0].slot_id != self.standby_slot_id
         ):
@@ -182,6 +198,7 @@ class EmbeddingTopology(FrozenModel):
 
         Raises:
             KeyError: slot 不在拓扑中。
+
         """
         for candidate in self.slots:
             if candidate.slot_id == slot_id:
@@ -266,6 +283,7 @@ class EmbeddingCoverage(FrozenModel):
 
         Returns:
             chunk 为空时为 0，否则为向量数除以 chunk 数。
+
         """
         if self.chunk_count == 0:
             return 0.0
@@ -302,7 +320,10 @@ class EmbeddingResult(FrozenModel):
 
     @model_validator(mode="after")
     def _validate_vectors(self) -> Self:
-        if any(len(vector) != self.observed_dimension for vector in self.vectors):
+        if any(
+            len(vector) != self.observed_dimension
+            for vector in self.vectors
+        ):
             raise ValueError("embedding 向量维度与 observed_dimension 不一致。")
         if any(
             not math.isfinite(value)

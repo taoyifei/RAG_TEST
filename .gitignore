@@ -31,7 +31,7 @@ deployment/models/
 deployment/sbom/
 deployment/*.tar
 deployment/*.tar.gz
-models/
+/models/
 *.db
 *.db-*
 *.sqlite

@@ -12,6 +12,7 @@ from rag_app.core.models.common import FrozenModel, MetadataModel
 from rag_app.core.models.document import DocumentVersionRef, SourceAnchor
 
 _ZERO_ID = "0" * 32
+_COVERAGE_TOLERANCE = 1e-12
 
 
 class SourceSpanKind(StrEnum):
@@ -408,7 +409,10 @@ class ChunkingReport(FrozenModel):
             else self.unique_covered_source_chars
             / self.total_citable_source_chars
         )
-        if abs(self.source_span_coverage - expected_coverage) > 1e-12:
+        if (
+            abs(self.source_span_coverage - expected_coverage)
+            > _COVERAGE_TOLERANCE
+        ):
             raise ValueError("source span coverage 与字符计数不一致。")
         if self.cross_boundary_violations != (
             self.cross_section_violations + self.cross_group_violations
