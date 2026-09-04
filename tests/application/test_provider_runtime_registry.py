@@ -104,7 +104,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
                 display_name="百炼合同校验",
                 provider_type="aliyun-model-studio",
                 credential_id=credential.credential_id,
-                workspace_id="workspace-1",
+                workspace_id="llm-workspace1",
                 region="cn-beijing",
             )
         )
@@ -121,7 +121,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
         assert len(requests) == 1
         request = requests[0]
         assert str(request.url) == (
-            "https://workspace-1.cn-beijing.maas.aliyuncs.com/"
+            "https://llm-workspace1.cn-beijing.maas.aliyuncs.com/"
             "api/v1/services/embeddings/text-embedding/text-embedding"
         )
         assert "X-DashScope-WorkSpace" not in request.headers
@@ -754,7 +754,7 @@ def test_aliyun_validation_fails_closed_on_response_contract(
                 display_name="百炼响应校验",
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
-                workspace_id="workspace-1",
+                workspace_id="llm-workspace1",
                 region="cn-beijing",
             )
         )
@@ -771,8 +771,10 @@ def test_aliyun_validation_fails_closed_on_response_contract(
         harness.close()
 
 
+@pytest.mark.parametrize("workspace_id", ("workspace-1", "INVALID WORKSPACE"))
 def test_aliyun_invalid_workspace_has_safe_configuration_error(
     tmp_path: Path,
+    workspace_id: str,
 ) -> None:
     requests: list[httpx.Request] = []
 
@@ -793,7 +795,7 @@ def test_aliyun_invalid_workspace_has_safe_configuration_error(
                 display_name="百炼配置校验",
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
-                workspace_id="INVALID WORKSPACE",
+                workspace_id=workspace_id,
                 region="cn-beijing",
             )
         )
@@ -883,7 +885,7 @@ def test_aliyun_error_body_uses_safe_allowlisted_classification(
                 display_name="百炼请求分类",
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
-                workspace_id="workspace-1",
+                workspace_id="llm-workspace1",
                 region="cn-beijing",
             )
         )

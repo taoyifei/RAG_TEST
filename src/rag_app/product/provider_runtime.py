@@ -718,7 +718,7 @@ def _base_url(connection: ProviderConnection) -> str:
     if connection.provider_type == "jina":
         return "https://api.jina.ai"
     workspace = connection.workspace_id or ""
-    if re.fullmatch(r"[a-z0-9-]+", workspace) is None:
+    if re.fullmatch(r"llm-[a-z0-9]+", workspace) is None:
         raise _ProviderConfigurationError(
             "阿里 Workspace ID 缺失或格式无效。",
             stage="provider.aliyun.config",

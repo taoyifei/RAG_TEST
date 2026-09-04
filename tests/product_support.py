@@ -185,7 +185,7 @@ def create_provider_connections(
             "display_name": "百炼备用连接",
             "provider_type": "aliyun-model-studio",
             "credential_id": aliyun_id,
-            "workspace_id": "synthetic-workspace",
+            "workspace_id": "llm-syntheticworkspace",
             "region": "cn-beijing",
         },
     )
