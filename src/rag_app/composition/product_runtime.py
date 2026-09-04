@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
 from typing import cast
+from urllib.parse import urlparse
 
 from rag_app.adapters.stores import (
     InMemoryRetrievalCache,
@@ -89,6 +91,11 @@ class ProductRuntimeSettings:
     compatibility_manifest: Path | None = None
     migrations_dir: Path | None = None
     debug_enabled: bool = False
+    trusted_origins: tuple[str, ...] = (
+        "http://127.0.0.1:8088",
+        "http://localhost:8088",
+    )
+    trusted_proxies: frozenset[str] = frozenset()
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -142,6 +149,15 @@ class ProductRuntimeSettings:
                 else Path(migrations)
             ),
             debug_enabled=os.environ.get("RAG_DEBUG_ENABLED") == "true",
+            trusted_origins=_parse_trusted_origins(
+                os.environ.get(
+                    "RAG_TRUSTED_ORIGINS",
+                    "http://127.0.0.1:8088,http://localhost:8088",
+                )
+            ),
+            trusted_proxies=_parse_trusted_proxies(
+                os.environ.get("RAG_TRUSTED_PROXIES", "")
+            ),
         )
 
 
@@ -949,6 +965,42 @@ def _discover_compatibility_manifest(repository_root: Path) -> Path | None:
         if candidate.is_file():
             return candidate
     return None
+
+
+def _parse_trusted_origins(value: str) -> tuple[str, ...]:
+    origins: list[str] = []
+    for item in (part.strip().rstrip("/") for part in value.split(",")):
+        if not item:
+            continue
+        parsed = urlparse(item)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("RAG_TRUSTED_ORIGINS 包含不安全 Origin。")
+        origins.append(item)
+    if not origins:
+        raise ValueError("RAG_TRUSTED_ORIGINS 至少包含一个完整 Origin。")
+    return tuple(dict.fromkeys(origins))
+
+
+def _parse_trusted_proxies(value: str) -> frozenset[str]:
+    proxies: set[str] = set()
+    for item in (part.strip() for part in value.split(",")):
+        if not item:
+            continue
+        try:
+            proxies.add(str(ipaddress.ip_address(item)))
+        except ValueError:
+            raise ValueError(
+                "RAG_TRUSTED_PROXIES 只接受明确的 IP 地址。"
+            ) from None
+    return frozenset(proxies)
 
 
 __all__ = [

@@ -89,9 +89,7 @@ async function configureModelServices(page: Page) {
     .fill("synthetic-aliyun-browser-value");
   await page.getByLabel("工作空间标识").fill("synthetic-workspace");
   await page.getByRole("button", { name: "保存连接" }).click();
-  const aliyun = page
-    .getByRole("article")
-    .filter({ hasText: "百炼备用连接" });
+  const aliyun = page.getByRole("article").filter({ hasText: "百炼备用连接" });
   await aliyun.getByRole("button", { name: "测试文档向量" }).click();
   await aliyun.getByRole("button", { name: "测试查询向量" }).click();
 }
@@ -102,9 +100,7 @@ async function createRetrievalProfile(
 ) {
   await page.getByRole("button", { name: "检索方案" }).click();
   await page.getByLabel("主向量连接").selectOption({ label: "Jina 主连接" });
-  await page
-    .getByLabel("备用向量连接")
-    .selectOption({ label: "百炼备用连接" });
+  await page.getByLabel("备用向量连接").selectOption({ label: "百炼备用连接" });
   await page.getByLabel("查询指令").fill(instruction);
   await page.getByRole("button", { name: "创建并预览影响" }).click();
 }
@@ -127,6 +123,7 @@ async function sourceArtifact(page: Page): Promise<string> {
 
 test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   page,
+  request,
 }, testInfo) => {
   if (testInfo.project.name !== "chromium-desktop") test.skip();
   await authenticate(page);
@@ -230,6 +227,37 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await expect(page.getByText("无需重建索引")).toBeVisible();
   await createRetrievalProfile(page, "为新版业务检索查询生成准确表示");
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+
+  await page.getByRole("button", { name: "接口访问" }).click();
+  await page.getByLabel("令牌名称").fill("浏览器验收令牌");
+  await page.getByRole("button", { name: "创建令牌" }).click();
+  const token =
+    (await page.getByRole("alert").locator("code").textContent()) ?? "";
+  const projectId =
+    (await page.locator(".scope-card code").nth(1).textContent()) ?? "";
+  const knowledgeBaseId =
+    (await page.locator(".scope-card code").nth(2).textContent()) ?? "";
+  expect(token).toMatch(/^ragk_/);
+  const tokenQuery = await request.post(
+    `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { query: "青岛啤酒", limit: 1 },
+    },
+  );
+  expect(tokenQuery.ok()).toBeTruthy();
+  const tokenCard = page
+    .getByRole("article")
+    .filter({ hasText: "浏览器验收令牌" });
+  await tokenCard.getByRole("button", { name: "吊销" }).click();
+  const deniedQuery = await request.post(
+    `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { query: "青岛啤酒", limit: 1 },
+    },
+  );
+  expect(deniedQuery.status()).toBe(403);
 
   const storageContainsSecret = await page.evaluate(() =>
     JSON.stringify({ ...localStorage, ...sessionStorage }),

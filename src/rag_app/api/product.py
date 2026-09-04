@@ -26,6 +26,7 @@ from rag_app.composition.product_runtime import (
 from rag_app.core.errors import PolicyDenied
 from rag_app.product.auth import SESSION_COOKIE
 from rag_app.product.catalog import provider_catalog
+from rag_app.product.http_security import RequestRateLimiter
 from rag_app.product.models import (
     ImpactKind,
     ProviderConnectionDraft,
@@ -36,6 +37,18 @@ from rag_app.product.provider_runtime import TransportFactory
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _INTERNAL_QUERY_PREFIX = "internal-query-"
 _INTERNAL_ADMIN_PREFIX = "internal-admin-"
+_HTTP_TOO_MANY_REQUESTS = 429
+_RATE_LIMITS = {
+    "login": 5,
+    "provider-test": 5,
+    "query": 60,
+    "upload": 10,
+}
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; "
+    "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+    "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,15 +254,96 @@ def _register_auth_middleware(
     runtime: ProductRuntime,
     config: _AuthConfig,
 ) -> None:
+    limiter = RequestRateLimiter()
+
     @app.middleware("http")
     async def _product_auth(
         request: Request,
         call_next: Callable[[Request], Awaitable[StarletteResponse]],
     ) -> StarletteResponse:
+        security_error = _request_security_error(request, runtime, limiter)
+        if security_error is not None:
+            return _apply_security_headers(request, security_error, runtime)
         auth_error = _authenticate_request(request, runtime, config)
         if auth_error is not None:
-            return auth_error
-        return await call_next(request)
+            return _apply_security_headers(request, auth_error, runtime)
+        response = await call_next(request)
+        return _apply_security_headers(request, response, runtime)
+
+
+def _request_security_error(
+    request: Request,
+    runtime: ProductRuntime,
+    limiter: RequestRateLimiter,
+) -> StarletteResponse | None:
+    hostname = request.url.hostname
+    peer = request.client.host if request.client else ""
+    if (
+        not (_is_loopback(hostname) and _is_loopback(peer))
+        and _effective_scheme(request, runtime) != "https"
+    ):
+        return _policy_error(400, "TLS_REQUIRED", "非本机访问必须使用 HTTPS。")
+    if request.method not in _SAFE_METHODS:
+        origin = request.headers.get("Origin")
+        if (
+            origin is not None
+            and origin.rstrip("/") not in runtime.settings.trusted_origins
+        ):
+            return _policy_error(403, "ORIGIN_DENIED", "请求来源不受信任。")
+    bucket = _rate_limit_bucket(request.url.path, request.method)
+    if bucket is None:
+        return None
+    if limiter.allow(peer or "unknown", bucket, limit=_RATE_LIMITS[bucket]):
+        return None
+    response = _policy_error(
+        _HTTP_TOO_MANY_REQUESTS,
+        "RATE_LIMITED",
+        "请求过于频繁。",
+    )
+    response.headers["Retry-After"] = "60"
+    return response
+
+
+def _rate_limit_bucket(path: str, method: str) -> str | None:
+    if method == "POST" and path == "/api/v1/console/session":
+        return "login"
+    if method == "POST" and path.endswith(":validate"):
+        return "provider-test"
+    if method == "POST" and path.endswith((":search", ":answer")):
+        return "query"
+    if method == "POST" and "/documents" in path:
+        return "upload"
+    return None
+
+
+def _effective_scheme(request: Request, runtime: ProductRuntime) -> str:
+    peer = request.client.host if request.client else ""
+    if peer in runtime.settings.trusted_proxies:
+        forwarded = request.headers.get("X-Forwarded-Proto", "")
+        if forwarded in {"http", "https"}:
+            return forwarded
+    return request.url.scheme
+
+
+def _apply_security_headers(
+    request: Request,
+    response: StarletteResponse,
+    runtime: ProductRuntime,
+) -> StarletteResponse:
+    response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    if _effective_scheme(request, runtime) == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 def _authenticate_request(
@@ -659,8 +753,30 @@ def _auth_error(status_code: int, code: str) -> JSONResponse:
     )
 
 
+def _policy_error(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "stage": "http.security",
+                "retryable": status_code == _HTTP_TOO_MANY_REQUESTS,
+                "trace_id": "",
+                "details": {},
+            }
+        },
+    )
+
+
 def _is_loopback(hostname: str | None) -> bool:
-    return hostname in {"127.0.0.1", "localhost", "::1", "testserver"}
+    return hostname in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+        "testclient",
+        "testserver",
+    }
 
 
 __all__ = [
