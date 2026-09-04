@@ -113,3 +113,18 @@ def test_profile_fingerprint_impact_and_credential_rotation(
         assert first.index_semantic_fingerprint == before_rotation
     finally:
         harness.close()
+
+
+def test_profile_draft_rejects_unsupported_retrieval_policy() -> None:
+    with pytest.raises(ValueError, match="cache"):
+        RetrievalProfileDraft.model_validate(
+            {
+                "knowledge_base_id": "kb_test",
+                "primary_connection_id": "conn_test",
+                "primary_embedding_model": "embedding-test",
+                "primary_dimension": 1024,
+                "primary_document_policy": {},
+                "primary_query_policy": {},
+                "retrieval_policy": {"cache": "revision-bound"},
+            }
+        )

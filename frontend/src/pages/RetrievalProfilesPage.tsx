@@ -83,15 +83,19 @@ export function RetrievalProfilesPage() {
         standby_embedding_model: standby ? standbyModel : null,
         standby_dimension: standby ? 1024 : null,
         standby_document_policy: standby ? { text_type: "document" } : {},
-        standby_query_policy: standby ? { text_type: "query", instruction } : {},
+        standby_query_policy: standby
+          ? { text_type: "query", instruction }
+          : {},
         reranker_connection_id: primary,
         reranker_model: rerankerModel,
         failover_enabled: Boolean(standby),
         standby_budget: { requests: 2, tokens: 4096 },
-        retrieval_policy: { rrf_k: 60, cache: "revision-bound" },
+        retrieval_policy: { rrf_k: 60 },
         evidence_policy: { minimum_units: 1 },
       });
-      const impact = await api.previewRetrievalProfile(next.profile_revision_id);
+      const impact = await api.previewRetrievalProfile(
+        next.profile_revision_id,
+      );
       setDraft(next);
       setPreview(impact);
       await load();
@@ -188,7 +192,8 @@ export function RetrievalProfilesPage() {
             <h3>{zhCN.impact[preview.impact]}</h3>
             <p>
               索引语义{preview.index_fingerprint_changed ? "已变化" : "未变化"}
-              ，查询配置{preview.serving_fingerprint_changed ? "已变化" : "未变化"}。
+              ，查询配置
+              {preview.serving_fingerprint_changed ? "已变化" : "未变化"}。
             </p>
             <code>{draft.profile_revision_id}</code>
           </div>
@@ -201,9 +206,7 @@ export function RetrievalProfilesPage() {
         {profiles.map((profile) => (
           <article key={profile.profile_revision_id}>
             <div className="grow">
-              <h3>
-                {profile.status === "active" ? "当前方案" : "方案草稿"}
-              </h3>
+              <h3>{profile.status === "active" ? "当前方案" : "方案草稿"}</h3>
               <code>{profile.profile_revision_id}</code>
               <small>主模型：{profile.primary_embedding_model}</small>
               {profile.standby_embedding_model && (

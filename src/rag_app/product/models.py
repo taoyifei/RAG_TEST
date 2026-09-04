@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, field_validator
 
 from rag_app.core.models.common import FrozenModel, JsonObject
+from rag_app.core.models.search import RetrievalPolicy
 
 
 class ImpactKind(StrEnum):
@@ -151,6 +152,15 @@ class RetrievalProfileDraft(FrozenModel):
     standby_budget: dict[str, object] = Field(default_factory=dict)
     retrieval_policy: dict[str, object] = Field(default_factory=dict)
     evidence_policy: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("retrieval_policy")
+    @classmethod
+    def _validate_retrieval_policy(
+        cls, value: dict[str, object]
+    ) -> dict[str, object]:
+        """在保存和激活前拒绝运行时不支持的检索参数。"""
+        RetrievalPolicy.model_validate(value)
+        return value
 
 
 class ImpactPreview(FrozenModel):
