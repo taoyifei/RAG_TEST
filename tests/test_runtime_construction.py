@@ -13,6 +13,7 @@ from rag_app.clients.resilience import ExternalServiceUnavailableError
 from rag_app.runtime import build_runtime
 from rag_app.settings import AccessMode, RuntimeSettings
 from rag_app.worker_runtime import build_worker_runtime
+from tests.synthetic_evaluation import write_synthetic_tokenizer
 
 
 @pytest.fixture(autouse=True)
@@ -90,6 +91,7 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
         "debug.js",
     ):
         (frontend / name).write_text("test fixture", encoding="utf-8")
+    tokenizer_path = write_synthetic_tokenizer(tmp_path / "tokenizer.json")
     return RuntimeSettings(
         access_mode=AccessMode.SHARED_CORPUS,
         query_token=SecretStr(uuid.uuid4().hex),
@@ -111,12 +113,8 @@ def _settings(tmp_path: Path) -> RuntimeSettings:
             root / "deployment/config/intent-router-calibration.json"
         ),
         frontend_dir=frontend,
-        llm_tokenizer_path=(
-            root / "deployment/assets/tokenizers/llm/tokenizer.json"
-        ),
-        embedding_tokenizer_path=(
-            root / "deployment/assets/tokenizers/embedding/tokenizer.json"
-        ),
+        llm_tokenizer_path=tokenizer_path,
+        embedding_tokenizer_path=tokenizer_path,
         input_root=docs,
         index_state_dir=tmp_path / "indexes",
         embedding_endpoints='["http://embedding:80"]',

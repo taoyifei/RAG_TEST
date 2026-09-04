@@ -33,8 +33,11 @@
   七类作业。首次真实 Run `33862088499` 中 SBOM 通过，但 Python 与 Qdrant 作业
   因 `src/rag_app/core/models/console.py`、`lexical.py` 被根目录用途的
   `models/` 忽略规则意外排除而失败；本分支已将规则收紧为 `/models/`、补齐两个
-  源文件，并新增运行时 Python 源必须受 Git 跟踪的架构门。修复后的真实成功 Run
-  尚待推送后确认。
+  源文件，并新增运行时 Python 源必须受 Git 跟踪的架构门。第二次 Run
+  `33863275211` 的 Qdrant、Frontend、Secret、SBOM、Container 五项通过；Python
+  发现 19 个测试依赖本机忽略的冻结语料、Tokenizer 与 Python 3.10 环境，Web E2E
+  发现服务解释器硬编码为 `.venv`。测试现改用公开合成语料与最小 Tokenizer，CI
+  显式提供 Python 3.10，Web E2E 使用当前 Python。真实成功 Run 尚待再次推送确认。
 
 ## 实际门禁证据
 

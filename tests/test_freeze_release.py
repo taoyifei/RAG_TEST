@@ -20,6 +20,11 @@ from rag_app.freeze_evidence import (
 from rag_app.runtime import load_pipeline
 from rag_app.settings import RetrievalSettings
 from rag_app.worker_runtime import require_indexable_configuration
+from scripts.freeze_corpus_manifest import freeze_corpus_manifest
+from tests.synthetic_evaluation import (
+    write_synthetic_dataset,
+    write_synthetic_evidence_docx,
+)
 
 _MODEL_REPORT_NAMES = (
     "model-contract-embedding.json",
@@ -126,11 +131,20 @@ def _write_model_reports(directory: Path) -> Path:
     return summary_path
 
 
-def _write_final_corpus(path: Path) -> None:
-    source = _project_root() / "corpus-manifests/frozen-docx-v1.json"
-    payload = json.loads(source.read_text(encoding="utf-8"))
-    payload["corpus_id"] = "frozen-docx-v2"
-    path.write_text(
+def _write_synthetic_evidence(tmp_path: Path) -> tuple[Path, Path, Path]:
+    docs = tmp_path / "synthetic-docs"
+    docs.mkdir()
+    write_synthetic_evidence_docx(docs / "synthetic.docx")
+    calibration_corpus = tmp_path / "synthetic-corpus-v1.json"
+    freeze_corpus_manifest(
+        docs_root=docs,
+        corpus_id="synthetic-public-v1",
+        output_path=calibration_corpus,
+    )
+    final_corpus = tmp_path / "synthetic-corpus-v2.json"
+    payload = json.loads(calibration_corpus.read_text(encoding="utf-8"))
+    payload["corpus_id"] = "synthetic-public-v2"
+    final_corpus.write_text(
         json.dumps(
             payload,
             ensure_ascii=False,
@@ -140,22 +154,9 @@ def _write_final_corpus(path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
-
-
-def _write_final_dataset(path: Path) -> None:
-    source = _project_root() / "evaluation/frozen/dataset.json"
-    payload = json.loads(source.read_text(encoding="utf-8"))
-    for case in payload["cases"]:
-        if case["split"] != "holdout":
-            continue
-        case["validation_state"] = "verified_text"
-        if case["expected"]["answerable"] is None:
-            case["expected"]["answerable"] = True
-            case["expected"]["required_facts"] = ["人工复核 OCR 事实"]
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    final_dataset = tmp_path / "synthetic-dataset.json"
+    write_synthetic_dataset(final_dataset)
+    return calibration_corpus, final_corpus, final_dataset
 
 
 def _structural_candidate() -> dict[str, object]:
@@ -195,8 +196,8 @@ def _write_reports(
     root = _project_root()
     pipeline_path = root / "deployment/config/pipeline.json"
     retrieval_path = root / "deployment/config/retrieval.json"
-    corpus_path = root / "corpus-manifests/frozen-docx-v1.json"
-    dataset_path = root / "evaluation/frozen/dataset.json"
+    corpus_path = tmp_path / "synthetic-corpus-v1.json"
+    dataset_path = tmp_path / "synthetic-dataset.json"
     pipeline = load_pipeline(pipeline_path)
     retrieval = RetrievalSettings.load(retrieval_path)
     corpus = json.loads(corpus_path.read_text(encoding="utf-8"))
@@ -223,8 +224,8 @@ def _write_reports(
                 "mode": "structural",
                 "status": "provisional_no_parameter_selection",
                 "identity": identity,
-                "documents": 6,
-                "parser_counts": {"documents": 6},
+                "documents": corpus["document_count"],
+                "parser_counts": {"documents": corpus["document_count"]},
                 "candidates": [_structural_candidate()],
             },
             sort_keys=True,
@@ -311,6 +312,9 @@ def _freeze_inputs(
     root = _project_root()
     model_reports = tmp_path / "model-contract-attempt"
     fleet_report = _write_model_reports(model_reports)
+    calibration_corpus, final_corpus, final_dataset = (
+        _write_synthetic_evidence(tmp_path)
+    )
     structural, retrieval_report = _write_reports(
         tmp_path,
         model_reports,
@@ -318,10 +322,6 @@ def _freeze_inputs(
         recall_at_20=recall_at_20,
         ocr_calibrated=ocr_calibrated,
     )
-    final_corpus = tmp_path / "frozen-docx-v2.json"
-    final_dataset = tmp_path / "final-dataset.json"
-    _write_final_corpus(final_corpus)
-    _write_final_dataset(final_dataset)
     return FreezeReleaseInputs(
         pipeline_path=root / "deployment/config/pipeline.json",
         retrieval_path=root / "deployment/config/retrieval.json",
@@ -329,9 +329,7 @@ def _freeze_inputs(
         retrieval_report_path=retrieval_report,
         fleet_report_path=fleet_report,
         model_contract_directory=model_reports,
-        calibration_corpus_manifest_path=(
-            root / "corpus-manifests/frozen-docx-v1.json"
-        ),
+        calibration_corpus_manifest_path=calibration_corpus,
         final_corpus_manifest_path=final_corpus,
         final_evaluation_manifest_path=final_dataset,
         output_directory=tmp_path / "frozen",
@@ -369,7 +367,7 @@ def test_freeze_release_writes_bound_outputs_without_endpoints(
         decision.model_revisions.calibration_source_revision
         == _CALIBRATION_REVISION
     )
-    assert decision.evidence.final_corpus_id == "frozen-docx-v2"
+    assert decision.evidence.final_corpus_id == "synthetic-public-v2"
     assert len(decision.evidence.model_contract_reports) == 6
     require_indexable_configuration(pipeline, retrieval, decision)
 

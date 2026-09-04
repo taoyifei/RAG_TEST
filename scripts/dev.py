@@ -325,6 +325,7 @@ def _run_web_script(script: str) -> int:
         return 2
     environment = _offline_environment()
     environment["PATH"] = (
+        f"{Path(sys.executable).parent}{os.pathsep}"
         f"{Path(npm).parent}{os.pathsep}{environment.get('PATH', '')}"
     )
     command = (npm, "--prefix", "frontend", "run", script)
