@@ -5,7 +5,15 @@ on:
     branches:
       - codex/p11-release
       - feature/universal-rag
+    paths-ignore:
+      - '**/*.md'
+      - 'release/p11-repair-acceptance.json'
+      - 'release/p11-r4-evidence.json'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - 'release/p11-repair-acceptance.json'
+      - 'release/p11-r4-evidence.json'
   workflow_dispatch:
 
 permissions:
