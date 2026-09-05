@@ -45,3 +45,4 @@ frontend/test-results
 *.sqlite3
 *.log
 *Zone.Identifier*
+artifacts/**
