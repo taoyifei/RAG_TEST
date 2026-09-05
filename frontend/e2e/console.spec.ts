@@ -1,3 +1,19 @@
+async function navigate(page: Page, name: string) {
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  const button = nav.getByRole("button", { name, exact: true });
+  if (!(await button.isVisible())) {
+    const menu = page.getByRole("button", { name: "打开导航" });
+    if (
+      (await menu.isVisible()) &&
+      !(await page
+        .locator(".sidebar")
+        .evaluate((element) => element.classList.contains("open")))
+    )
+      await menu.click();
+    if (!(await button.isVisible())) await nav.locator("summary").click();
+  }
+  await button.click();
+}
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
@@ -40,10 +56,11 @@ async function authenticate(page: Page) {
   await page.goto("/");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
 }
 
 async function createScope(page: Page, suffix: string) {
-  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page.getByRole("button", { name: "管理项目", exact: true }).click();
   await page.getByLabel("项目名称").fill(`离线项目 ${suffix}`);
   await page.getByRole("button", { name: "创建" }).click();
   const projectCard = page.getByRole("article").filter({
@@ -84,6 +101,7 @@ async function validateConnection(
       response.url().endsWith(":validate"),
   );
   await connection.getByRole("button", { name: buttonName }).click();
+  await page.getByRole("button", { name: "开始测试", exact: true }).click();
   const response = await validationResponse;
   expect(response.ok()).toBeTruthy();
   const payload = (await response.json()) as { status: string };
@@ -92,6 +110,7 @@ async function validateConnection(
 
 async function configureModelServices(page: Page) {
   await page.getByRole("button", { name: "模型服务" }).click();
+  await page.getByRole("button", { name: "新增连接" }).click();
   await page
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-jina-browser-value");
@@ -101,6 +120,7 @@ async function configureModelServices(page: Page) {
   await validateConnection(page, jina, "测试查询向量");
   await validateConnection(page, jina, "测试结果重排");
 
+  await page.getByRole("button", { name: "新增连接" }).click();
   await page.getByLabel("服务商").selectOption("aliyun-model-studio");
   await page
     .getByLabel("服务密钥", { exact: true })
@@ -116,9 +136,11 @@ async function configureModelServices(page: Page) {
 }
 
 async function createRetrievalProfile(page: Page, instruction = "") {
-  await page.getByRole("button", { name: "检索方案" }).click();
+  await navigate(page, "检索方案");
   await page.getByLabel("主向量连接").selectOption({ label: "Jina 主连接" });
   await page.getByLabel("备用向量连接").selectOption({ label: "百炼备用连接" });
+  if (!(await page.getByLabel("Qwen 查询指令").isVisible()))
+    await page.getByText("高级设置", { exact: true }).click();
   await page.getByLabel("Qwen 查询指令").fill(instruction);
   await page.getByRole("button", { name: "创建并预览影响" }).click();
 }
@@ -154,18 +176,18 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
       response.request().method() === "POST" &&
       response.url().endsWith(":activate"),
   );
-  await page.getByRole("button", { name: "确认应用" }).click();
+  await page.getByRole("button", { name: "建立新索引并切换" }).click();
   expect((await applied).ok()).toBeTruthy();
   await expect(
     page.getByRole("heading", { name: "当前方案", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
   await uploadAndWait(
     page,
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
 
   const originalRow = documentRow(page, "青岛啤酒采购流程.docx");
   const documentId = await originalRow.locator("td").nth(1).innerText();
@@ -199,7 +221,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     .getByRole("button", { name: "检查版本" })
     .click();
   await expect(page.getByText("使用中", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
   await expect(
     documentRow(page, "青岛啤酒采购制度.docx").locator("td").nth(2),
   ).not.toHaveText(originalVersion);
@@ -209,7 +231,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
   const duplicateRow = documentRow(page, "青岛啤酒采购流程.docx");
   await expect(duplicateRow.locator("td").nth(1)).not.toHaveText(documentId);
   await duplicateRow.getByRole("button", { name: "详情" }).click();
@@ -224,7 +246,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "设备巡检记录包含空调滤芯更换和机房温度检查。 ",
   );
 
-  await page.getByRole("button", { name: "检索调试" }).click();
+  await navigate(page, "检索调试");
   await page.getByLabel("查询文本").fill("青岛啤酒");
   await page.getByRole("button", { name: "执行" }).click();
 
@@ -247,7 +269,12 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await expect(page.getByRole("heading", { name: "检索调试" })).toBeVisible();
   await expect(page.locator(".scope-card")).toContainText("kb_");
   await page.getByRole("button", { name: "模型服务" }).click();
-  await page.getByLabel("待轮换凭据").selectOption({ index: 1 });
+  await page
+    .getByRole("article")
+    .filter({ hasText: "Jina 主连接" })
+    .getByRole("button", { name: "编辑连接" })
+    .click();
+  await page.getByRole("button", { name: "更换密钥", exact: true }).click();
   await page.getByLabel("新服务密钥").fill("rotated-jina-browser-value");
   const rotationResponse = page.waitForResponse(
     (response) =>
@@ -255,14 +282,18 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
       response.url().includes("/api/v1/provider-credentials/") &&
       response.url().endsWith(":rotate"),
   );
-  await page.getByRole("button", { name: "轮换密钥" }).click();
+  await page.getByRole("button", { name: "确认更换密钥" }).click();
   expect((await rotationResponse).ok()).toBeTruthy();
+  await expect(page.getByText("密钥已更换，请重新测试。")).toBeVisible();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
   await createRetrievalProfile(page);
   await expect(page.getByText("无需重建索引")).toBeVisible();
   await createRetrievalProfile(page, "为新版业务检索查询生成准确表示");
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
 
-  await page.getByRole("button", { name: "接口访问" }).click();
+  if (await page.getByRole("dialog", { name: "编辑 Jina 连接" }).isVisible())
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+  await navigate(page, "接口访问");
   await page.getByLabel("令牌名称").fill("浏览器验收令牌");
   await page.getByRole("button", { name: "创建令牌" }).click();
   const token =
@@ -292,7 +323,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     tokenCard.getByRole("button", { name: "吊销" }).click(),
   ]);
   expect(revokeResponse.ok()).toBeTruthy();
-  await expect(tokenCard).toContainText("revoked");
+  await expect(tokenCard).toContainText("已吊销");
   const deniedQuery = await request.post(
     `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
     {
@@ -315,7 +346,7 @@ test("375px 视口可通过导航进入系统状态", async ({ page }) => {
   await authenticate(page);
   if (page.viewportSize()?.width !== 375) test.skip();
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("button", { name: "系统状态" }).click();
+  await navigate(page, "系统状态");
   await expect(
     page.getByRole("heading", { name: "系统状态", exact: true, level: 1 }),
   ).toBeVisible();

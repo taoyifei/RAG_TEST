@@ -90,8 +90,13 @@ describe("产品页面", () => {
     });
     render(<ModelServicesPage />);
 
-    expect(await screen.findByRole("heading", { name: "模型服务" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "Jina" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "模型服务" }),
+    ).toBeVisible();
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "新增连接" }));
+    expect(await screen.findByRole("option", { name: "Jina" })).toBeVisible();
     expect(screen.getByRole("option", { name: "阿里云百炼" })).toBeVisible();
     expect(screen.getByText("尚未配置模型服务")).toBeVisible();
   });

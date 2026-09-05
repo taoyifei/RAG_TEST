@@ -16,7 +16,7 @@ export type Evidence = components["schemas"]["EvidenceItem"];
 
 export interface Page<T> {
   items: T[];
-  total: number;
+  total?: number;
   offset: number;
   page_size: number;
   next_offset?: number | null;
@@ -67,6 +67,7 @@ export interface CatalogProvider {
   models: string[];
   regions: string[];
   endpoint_profiles: string[];
+  operation_models: Record<string, string[]>;
 }
 
 export interface ProviderCatalog {
@@ -89,6 +90,12 @@ export interface ProviderValidation {
   http_status?: number | null;
   provider_code?: string | null;
   provider_request_id?: string | null;
+  configuration_version: number;
+  credential_key_version: number;
+  catalog_version: string;
+  validation_mode: string;
+  request_policy_identity: string;
+  is_current?: boolean;
 }
 
 export interface ProviderUsageDaily {
@@ -108,10 +115,7 @@ export interface ProviderUsageDaily {
 }
 
 export interface ImpactPreview {
-  impact:
-    | "NO_REINDEX"
-    | "SERVING_RELOAD"
-    | "NEW_INDEX_REVISION_REQUIRED";
+  impact: "NO_REINDEX" | "SERVING_RELOAD" | "NEW_INDEX_REVISION_REQUIRED";
   proposed_profile_revision_id: string;
   current_profile_revision_id?: string | null;
   index_fingerprint_changed: boolean;
@@ -137,6 +141,9 @@ export interface RetrievalProfile {
   standby_document_policy: Record<string, unknown>;
   standby_query_policy: Record<string, unknown> & { query_instruct?: string };
   retrieval_policy: Record<string, unknown>;
+  evidence_policy: Record<string, unknown>;
+  standby_budget: { requests?: number; tokens?: number };
+  failover_enabled: boolean;
   activation_job_id?: string | null;
   effective_serving_fingerprint?: string;
 }
@@ -283,17 +290,17 @@ export const api = {
   },
   providerCatalog: () =>
     request<ProviderCatalog>("/api/v1/provider-catalog", ""),
-  listProjects: (token: string) =>
-    request<Page<Project>>("/api/v1/projects", token),
+  listProjects: (token: string, offset = 0) =>
+    request<Page<Project>>(`/api/v1/projects?offset=${offset}`, token),
   createProject: (token: string, name: string, key: string) =>
     request<Project>(
       "/api/v1/projects",
       token,
       jsonInit("POST", { name }, key),
     ),
-  listKnowledgeBases: (token: string, projectId: string) =>
+  listKnowledgeBases: (token: string, projectId: string, offset = 0) =>
     request<Page<KnowledgeBase>>(
-      `/api/v1/projects/${projectId}/knowledge-bases`,
+      `/api/v1/projects/${projectId}/knowledge-bases?offset=${offset}`,
       token,
     ),
   createKnowledgeBase: (
@@ -307,9 +314,9 @@ export const api = {
       token,
       jsonInit("POST", { name, description: "" }, key),
     ),
-  listDocuments: (token: string, projectId: string, kbId: string) =>
+  listDocuments: (token: string, projectId: string, kbId: string, offset = 0) =>
     request<Page<Document>>(
-      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents`,
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents?offset=${offset}`,
       token,
     ),
   getDocument: (
@@ -446,11 +453,17 @@ export const api = {
       token,
       { ...jsonInit("POST", { query, limit: 10, stream: false }), signal },
     ),
-  answer: (token: string, projectId: string, kbId: string, query: string) =>
+  answer: (
+    token: string,
+    projectId: string,
+    kbId: string,
+    query: string,
+    signal?: AbortSignal,
+  ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
       token,
-      jsonInit("POST", { query, limit: 10, stream: false }),
+      { ...jsonInit("POST", { query, limit: 10, stream: false }), signal },
     ),
   answerStream: async (
     token: string,
@@ -485,10 +498,7 @@ export const api = {
       },
     }),
   listCredentials: () =>
-    request<{ items: CredentialSummary[] }>(
-      "/api/v1/provider-credentials",
-      "",
-    ),
+    request<{ items: CredentialSummary[] }>("/api/v1/provider-credentials", ""),
   createCredential: (body: Record<string, unknown>) =>
     request<CredentialSummary>(
       "/api/v1/provider-credentials",
@@ -518,10 +528,7 @@ export const api = {
       "",
       jsonInit("PATCH", body),
     ),
-  validateConnection: (
-    connectionId: string,
-    body: Record<string, unknown>,
-  ) =>
+  validateConnection: (connectionId: string, body: Record<string, unknown>) =>
     request<ProviderValidation>(
       `/api/v1/provider-connections/${connectionId}:validate`,
       "",
@@ -574,11 +581,9 @@ export const api = {
       jsonInit("POST", body),
     ),
   revokeAccessToken: (tokenId: string) =>
-    request<AccessTokenSummary>(
-      `/api/v1/access-tokens/${tokenId}:revoke`,
-      "",
-      { method: "POST" },
-    ),
+    request<AccessTokenSummary>(`/api/v1/access-tokens/${tokenId}:revoke`, "", {
+      method: "POST",
+    }),
 };
 
 export function createIdempotencyKey(prefix: string): string {

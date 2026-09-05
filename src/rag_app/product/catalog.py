@@ -16,6 +16,7 @@ class CatalogProvider(BaseModel):
     display_name: str
     operations: tuple[str, ...]
     models: tuple[str, ...]
+    operation_models: dict[str, tuple[str, ...]]
     regions: tuple[str, ...] = ()
     endpoint_profiles: tuple[str, ...] = ("default",)
 
@@ -31,12 +32,21 @@ _PROVIDERS: Final = (
             "reranking",
         ),
         models=("jina-embeddings-v5-text-small", "jina-reranker-v3.5"),
+        operation_models={
+            "embedding.document": ("jina-embeddings-v5-text-small",),
+            "embedding.query": ("jina-embeddings-v5-text-small",),
+            "reranking": ("jina-reranker-v3.5",),
+        },
     ),
     CatalogProvider(
         provider_type="aliyun-model-studio",
         display_name="阿里云百炼",
         operations=("embedding.document", "embedding.query"),
         models=("qwen3.7-text-embedding",),
+        operation_models={
+            "embedding.document": ("qwen3.7-text-embedding",),
+            "embedding.query": ("qwen3.7-text-embedding",),
+        },
         regions=("cn-beijing",),
     ),
 )
@@ -99,8 +109,7 @@ def validate_model(
     provider = require_provider(provider_type)
     if operation not in provider.operations or model not in provider.models:
         raise ValueError("Provider、模型和操作组合不在内置目录中。")
-    is_reranker = "reranker" in model
-    if (operation == "reranking") != is_reranker:
+    if model not in provider.operation_models.get(operation, ()):
         raise ValueError("模型用途与 Provider 操作不匹配。")
 
 

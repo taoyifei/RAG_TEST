@@ -85,6 +85,10 @@ it("单项测试在途禁用重复点击，失败后仍可编辑", async () => {
         display_name: "百炼",
         models: ["qwen3.7-text-embedding"],
         operations: ["embedding.document", "embedding.query"],
+        operation_models: {
+          "embedding.document": ["qwen3.7-text-embedding"],
+          "embedding.query": ["qwen3.7-text-embedding"],
+        },
         regions: ["cn-beijing"],
         endpoint_profiles: ["default"],
       },
@@ -92,6 +96,7 @@ it("单项测试在途禁用重复点击，失败后仍可编辑", async () => {
   });
   vi.spyOn(api, "listCredentials").mockResolvedValue({ items: [] });
   vi.spyOn(api, "listConnections").mockResolvedValue({ items: [connection] });
+  vi.spyOn(api, "listValidations").mockResolvedValue({ items: [] });
   vi.spyOn(api, "listDailyProviderUsage").mockResolvedValue({ items: [] });
   let rejectProbe: (reason: Error) => void = () => undefined;
   const validate = vi.spyOn(api, "validateConnection").mockImplementation(
@@ -102,7 +107,9 @@ it("单项测试在途禁用重复点击，失败后仍可编辑", async () => {
   );
   render(<ModelServicesPage />);
   const button = await screen.findByRole("button", { name: "测试文档向量" });
-  await user.dblClick(button);
+  await user.click(button);
+  expect(validate).not.toHaveBeenCalled();
+  await user.dblClick(screen.getByRole("button", { name: "开始测试" }));
   expect(validate).toHaveBeenCalledOnce();
   expect(screen.getByRole("button", { name: "测试中…" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "测试查询向量" })).toBeEnabled();
@@ -111,10 +118,47 @@ it("单项测试在途禁用重复点击，失败后仍可编辑", async () => {
     await screen.findByRole("button", { name: "测试文档向量" }),
   ).toBeEnabled();
   await user.click(screen.getByRole("button", { name: "编辑连接" }));
-  const editor = screen
-    .getByRole("heading", { name: "编辑连接" })
-    .closest("form")!;
+  const editor = screen.getByRole("dialog", { name: "编辑百炼连接" });
   expect(within(editor).getByLabelText("工作空间标识")).toHaveValue(
     connection.workspace_id,
   );
+});
+
+it("取消不会写入或测试，轮换失败清空密钥且保留连接字段", async () => {
+  const user = userEvent.setup();
+  const update = vi.spyOn(api, "updateConnection");
+  const validate = vi.spyOn(api, "validateConnection");
+  const cancel = vi.fn();
+  const rotate = vi
+    .spyOn(api, "rotateCredential")
+    .mockRejectedValue(new Error("synthetic failure"));
+  render(
+    <ConnectionEditor
+      connection={connection}
+      credential={{
+        credential_id: "cred_saved",
+        provider_type: "aliyun-model-studio",
+        configured: true,
+        source: "database_encrypted",
+        masked_hint: "••••demo",
+        key_version: 1,
+        status: "active",
+      }}
+      onSaved={() => Promise.resolve()}
+      onCancel={cancel}
+    />,
+  );
+  await user.click(screen.getByRole("button", { name: "更换密钥" }));
+  await user.type(
+    screen.getByLabelText("新服务密钥"),
+    "synthetic-rotation-value",
+  );
+  await user.click(screen.getByRole("button", { name: "确认更换密钥" }));
+  expect(rotate).toHaveBeenCalledOnce();
+  expect(screen.getByLabelText("新服务密钥")).toHaveValue("");
+  expect(screen.getByLabelText("API Host")).toHaveValue(connection.api_host);
+  await user.click(screen.getByRole("button", { name: "取消" }));
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(update).not.toHaveBeenCalled();
+  expect(validate).not.toHaveBeenCalled();
 });
