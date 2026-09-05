@@ -415,18 +415,174 @@
         "title": "ConfidenceStatus",
         "type": "string"
       },
+      "ConnectionPatchRequest": {
+        "additionalProperties": false,
+        "description": "版本受控的非 Secret 连接编辑，未知字段一律拒绝。",
+        "properties": {
+          "api_host": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Host"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "endpoint_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_host",
+                  "beijing_dashscope"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Mode"
+          },
+          "expected_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "const": "cn-beijing",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "request_budget": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Budget"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ConnectionPatchRequest",
+        "type": "object"
+      },
       "ConnectionRequest": {
         "additionalProperties": false,
         "description": "Provider Connection 非 Secret 配置。",
         "properties": {
+          "api_host": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Host"
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CredentialRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credential_id": {
-            "title": "Credential Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Id"
           },
           "display_name": {
             "maxLength": 200,
             "minLength": 1,
             "title": "Display Name",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "default": "workspace_host",
+            "enum": [
+              "workspace_host",
+              "beijing_dashscope"
+            ],
+            "title": "Endpoint Mode",
             "type": "string"
           },
           "endpoint_profile": {
@@ -485,8 +641,7 @@
         },
         "required": [
           "display_name",
-          "provider_type",
-          "credential_id"
+          "provider_type"
         ],
         "title": "ConnectionRequest",
         "type": "object"
@@ -3064,6 +3219,11 @@
             ],
             "title": "Operation",
             "type": "string"
+          },
+          "request_policy": {
+            "additionalProperties": true,
+            "title": "Request Policy",
+            "type": "object"
           }
         },
         "required": [
@@ -9878,6 +10038,150 @@
           }
         },
         "summary": " Create Connection",
+        "tags": [
+          "model-services"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/{connection_id}": {
+      "patch": {
+        "operationId": "_update_connection_api_v1_provider_connections__connection_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Update Connection Api V1 Provider Connections  Connection Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Update Connection",
         "tags": [
           "model-services"
         ]

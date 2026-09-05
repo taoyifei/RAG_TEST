@@ -13,6 +13,9 @@ from rag_app.adapters.stores.sqlite_fts5 import (
     fts_table_for_revision,
     write_chunks_transaction,
 )
+from rag_app.adapters.stores.sqlite_profile_publication import (
+    activate_bound_profile,
+)
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -1446,6 +1449,9 @@ class SqliteControlStore:
             if kb is None:
                 raise NotFound("目标知识库不存在。", stage="revision.activate")
             old_revision_id = kb["active_revision_id"]
+            activate_bound_profile(
+                connection, evidence.revision_id, knowledge_base_id, now
+            )
             connection.execute(
                 "UPDATE index_revisions SET state='active', activated_at=? "
                 "WHERE index_revision_id=? AND state='ready'",
@@ -1497,6 +1503,23 @@ class SqliteControlStore:
             raise NotFound("目标知识库不存在。", stage="revision.active")
         value = row["active_revision_id"]
         return None if value is None else str(value)
+
+    def is_ready_revision(self, revision_id: str) -> bool:
+        """检查是否已有完整 READY 索引等待重试发布。
+
+        Args:
+            revision_id: 不可变索引身份。
+
+        Returns:
+            只有持久状态为 READY 时返回 True。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT state FROM index_revisions WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+        return row is not None and row[0] == "ready"
 
     def active_revision_ids(self) -> tuple[str, ...]:
         """返回启动恢复需要的全部 Active Revision ID。
@@ -1564,6 +1587,20 @@ class SqliteControlStore:
                     "Active 指针未指向 ACTIVE revision。",
                     stage="retrieval.snapshot",
                 )
+            profile_row = None
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE "
+                    "name='retrieval_profile_revisions'"
+                ).fetchone()
+                is not None
+            ):
+                profile_row = connection.execute(
+                    "SELECT profile_revision_id FROM "
+                    "retrieval_profile_revisions WHERE knowledge_base_id=? "
+                    "AND status='active'",
+                    (scope.knowledge_base_id,),
+                ).fetchone()
             slot_rows = connection.execute(
                 "SELECT * FROM embedding_slots WHERE revision_id=? "
                 "ORDER BY role, slot_id",
@@ -1632,6 +1669,9 @@ class SqliteControlStore:
             state=IndexRevisionState.ACTIVE,
         )
         return ActiveRevisionQuerySnapshot(
+            profile_revision_id=None
+            if profile_row is None
+            else str(profile_row[0]),
             revision=revision,
             serving_fingerprint=serving_fingerprint,
             topology=topology,
@@ -2824,9 +2864,7 @@ class SqliteControlStore:
                     slot_id=str(slot["slot_id"]),
                     vector_name=str(slot["vector_name"]),
                     required=bool(slot["required_for_activation"]),
-                    expected_chunk_count=int(
-                        slot["expected_chunk_count"] or 0
-                    ),
+                    expected_chunk_count=int(slot["expected_chunk_count"] or 0),
                     valid_vector_count=int(slot["valid_vector_count"] or 0),
                     failed_count=int(slot["failed_count"] or 0),
                     coverage_ratio=float(slot["coverage_ratio"] or 0.0),

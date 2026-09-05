@@ -7,6 +7,7 @@ import sqlite3
 from datetime import UTC, datetime
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.adapters.stores.sqlite_profile_publication import bind_publication
 from rag_app.core.errors import (
     Conflict,
     NotFound,
@@ -772,6 +773,7 @@ class SqliteLifecycleStore:
                 "VALUES (?, ?, 'queued', ?, ?)",
                 (request.job_id, serialized, now, now),
             )
+            bind_publication(connection, request, now)
         return self.get_job(request.job_id)
 
     def claim_ingestion(self, job_id: str) -> QueuedIngestion | None:

@@ -130,6 +130,15 @@ export interface RetrievalProfile {
   reranker_model?: string | null;
   index_semantic_fingerprint: string;
   serving_fingerprint: string;
+  primary_dimension: number;
+  standby_dimension?: number | null;
+  primary_document_policy: Record<string, unknown>;
+  primary_query_policy: Record<string, unknown>;
+  standby_document_policy: Record<string, unknown>;
+  standby_query_policy: Record<string, unknown> & { query_instruct?: string };
+  retrieval_policy: Record<string, unknown>;
+  activation_job_id?: string | null;
+  effective_serving_fingerprint?: string;
 }
 
 export interface AccessTokenSummary {

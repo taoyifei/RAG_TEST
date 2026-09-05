@@ -12,7 +12,6 @@ from threading import RLock
 from typing import cast
 from urllib.parse import urlparse
 
-from rag_app.adapters.providers import AliyunQwen37EmbeddingConfig
 from rag_app.adapters.stores import (
     InMemoryRetrievalCache,
     MigrationRunner,
@@ -67,12 +66,17 @@ from rag_app.product.compatibility import CompatibilityManifest, load_manifest
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
-from rag_app.product.models import RetrievalProfileRevision
+from rag_app.product.models import (
+    ProviderValidationRun,
+    RetrievalProfileRevision,
+)
 from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     TransportFactory,
     build_offline_mock_transport,
 )
+from rag_app.product.resolved_profile import ResolvedEmbeddingSpec
+from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 
 
@@ -278,6 +282,46 @@ class ProductProfileResolver:
         if self._runtime is not None:
             raise RuntimeError("Product Profile Resolver 不允许重复绑定。")
         self._runtime = runtime
+        contracts = resolved_contracts(
+            runtime.retrieval_runtime.persistence.components
+        )
+        self._control.index_contract = {
+            key: contracts[key]
+            for key in (
+                "parser_identity",
+                "parsing_policy",
+                "chunker_identity",
+                "chunking_policy",
+                "lexical_schema",
+                "chunk_payload_schema",
+            )
+        }
+        self._control.queue_profile = self._queue_profile
+
+    def _queue_profile(
+        self,
+        profile: RetrievalProfileRevision,
+        expected_profile: str | None,
+        expected_index: str | None,
+    ) -> None:
+        validations = self._control.profile_validations(
+            profile.profile_revision_id
+        )
+        if any(
+            run is None or run.status != "succeeded"
+            for run in validations.values()
+        ):
+            raise ValueError("候选方案的验证已失效，请重新验证。")
+        self._resolve(profile).lifecycle.queue_profile_rebuild(
+            profile.knowledge_base_id,
+            expected_profile,
+            expected_index,
+            tuple(
+                run.validation_id
+                for run in validations.values()
+                if run is not None
+            ),
+        )
 
     def active_profile(
         self, knowledge_base_id: str
@@ -359,7 +403,7 @@ class ProductProfileResolver:
         return self._resolve(self._control.get_profile(profile_id)).lifecycle
 
     def invalidate(self) -> None:
-        """关闭全部 Profile 缓存，供 Credential 轮换后重建。
+        """退役全部 Profile 缓存，供 Credential 轮换后重建。
 
         Args:
             无参数；清理 Resolver 自有资源。
@@ -393,12 +437,56 @@ class ProductProfileResolver:
         self, profile: RetrievalProfileRevision
     ) -> _ResolvedProductServices:
         with self._lock:
-            existing = self._services.get(profile.profile_revision_id)
+            cache_key = self._control.quality.binding_identity(
+                profile.profile_revision_id
+            )
+            cache_key = profile.profile_revision_id + cache_key
+            cache_key += canonical_sha256(
+                self._control.quality.states(profile.profile_revision_id)
+            )
+            existing = self._services.get(cache_key)
             if existing is not None:
                 return existing
             resolved = self._build(profile)
-            self._services[profile.profile_revision_id] = resolved
+            self._services[cache_key] = resolved
             return resolved
+
+    def serving_contract(
+        self,
+        profile: RetrievalProfileRevision,
+    ) -> tuple[RetrievalPolicy, EgressPolicy, str]:
+        """供 UI 回读和查询共同使用的实际服务合同。
+
+        Args:
+            profile: 已持久化的不可变方案。
+
+        Returns:
+            包含当前预算和已接受校准证据的策略、出网约束与指纹。
+
+        """
+        policy = RetrievalPolicy.model_validate(dict(profile.retrieval_policy))
+        spaces = self._control.quality.calibrated_spaces(
+            profile.profile_revision_id
+        )
+        calibrated = bool(spaces) and not self._providers.test_only_transport
+        policy = policy.model_copy(
+            update={
+                "dense_semantic_enabled": calibrated,
+                "dense_semantic_calibration_state": "LIVE_CALIBRATED"
+                if calibrated
+                else "UNCALIBRATED",
+                "dense_calibrated_vector_spaces": spaces if calibrated else (),
+            }
+        )
+        egress = _product_egress(profile, self._control)
+        identity = canonical_sha256(
+            {
+                "profile_serving": profile.serving_fingerprint,
+                "retrieval": policy.model_dump(mode="json"),
+                "egress": egress.model_dump(mode="json"),
+            }
+        )
+        return policy, egress, identity
 
     def _build(
         self, profile: RetrievalProfileRevision
@@ -406,7 +494,8 @@ class ProductProfileResolver:
         runtime = self._require_runtime()
         persistence = runtime.retrieval_runtime.persistence
         components = persistence.components
-        topology = _product_topology(profile, self._control)
+        specs = profile_specs(profile, self._control.get_connection)
+        topology = _product_topology(specs)
         primary_slot = topology.slot(topology.primary_slot_id)
         primary = self._providers.embedding_adapter(
             profile.primary_connection_id,
@@ -419,6 +508,7 @@ class ProductProfileResolver:
             query_policy_identity=canonical_sha256(
                 primary_slot.query_request_policy
             ),
+            resolved=specs[0],
         )
         embedding_providers = {primary_slot.slot_id: primary}
         remote_resources: list[object] = [primary]
@@ -438,6 +528,7 @@ class ProductProfileResolver:
                 query_policy_identity=canonical_sha256(
                     standby_slot.query_request_policy
                 ),
+                resolved=specs[1],
             )
             embedding_providers[standby_slot.slot_id] = standby
             remote_resources.append(standby)
@@ -506,6 +597,7 @@ class ProductProfileResolver:
             retrieval_profile_revision_id=profile.profile_revision_id,
         )
         cache = InMemoryRetrievalCache()
+        policy, egress, serving_fingerprint = self.serving_contract(profile)
         retrieval = RetrievalService(
             source=persistence.control,
             exact_store=cast(ExactStorePort, components.lexical_store),
@@ -532,11 +624,11 @@ class ProductProfileResolver:
             generator=components.generator,
             trace=components.trace_sink,
             cache=cache,
-            serving_fingerprint=profile.serving_fingerprint,
-            egress_policy=_product_egress(profile, self._control),
-            policy=RetrievalPolicy.model_validate(
-                dict(profile.retrieval_policy)
-            ),
+            serving_fingerprint=serving_fingerprint,
+            egress_policy=egress,
+            policy=policy,
+            expected_index_fingerprint=profile.index_semantic_fingerprint,
+            expected_profile_revision_id=profile.profile_revision_id,
         )
         return _ResolvedProductServices(
             lifecycle=lifecycle,
@@ -634,6 +726,7 @@ class ProductRuntime:
         if self._closed:
             return
         self._closed = True
+        self.p09.jobs.close()
         self.profiles.close()
         self.providers.close()
         self.p09.close()
@@ -707,7 +800,12 @@ def build_product_runtime(
     )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:
-        return _product_status(status, control, compatibility)
+        return _product_status(
+            status,
+            control,
+            compatibility,
+            test_only_transport=providers.test_only_transport,
+        )
 
     try:
         p09 = build_p09_runtime(
@@ -739,81 +837,34 @@ def build_product_runtime(
 
 
 def _product_topology(
-    profile: RetrievalProfileRevision,
-    control: ProductControlStore,
+    specs: tuple[ResolvedEmbeddingSpec, ...],
 ) -> EmbeddingTopology:
-    primary_connection = control.get_connection(profile.primary_connection_id)
-    primary_provider = _embedding_provider_id(primary_connection.provider_type)
-    slots = [
+    slots = tuple(
         EmbeddingSlotIdentity(
-            slot_id="primary",
-            role=EmbeddingSlotRole.PRIMARY,
-            provider_id=primary_provider,
-            model=profile.primary_embedding_model,
-            vector_name="dense_primary",
-            dimension=profile.primary_dimension,
-            max_input_tokens=_provider_input_limit(
-                primary_connection.provider_type
-            ),
-            adapter_revision="product-managed-v1",
-            document_request_policy=profile.primary_document_policy,
-            query_request_policy=profile.primary_query_policy,
-            normalization="l2-v1",
+            slot_id=role.value,
+            role=role,
+            provider_id=spec.provider_id,
+            model=spec.model,
+            vector_name=f"dense_{role.value}",
+            dimension=spec.dimension,
+            max_input_tokens=spec.max_input_tokens,
+            adapter_revision=spec.adapter_revision,
+            document_request_policy=spec.document_policy,
+            query_request_policy=spec.query_policy,
+            normalization=spec.normalization,
         )
-    ]
-    standby_id: str | None = None
-    if profile.standby_connection_id is not None:
-        if (
-            profile.standby_embedding_model is None
-            or profile.standby_dimension is None
-        ):
-            raise ValueError("Standby Profile 合同不完整。")
-        standby_id = "standby"
-        standby_connection = control.get_connection(
-            profile.standby_connection_id
+        for spec, role in zip(
+            specs,
+            (EmbeddingSlotRole.PRIMARY, EmbeddingSlotRole.STANDBY),
+            strict=False,
         )
-        standby_query_policy = dict(profile.standby_query_policy)
-        if standby_connection.provider_type == "aliyun-model-studio":
-            standby_query_policy["query_instruct"] = (
-                AliyunQwen37EmbeddingConfig(
-                    slot_id=standby_id,
-                    request_policy_identity="product-managed",
-                ).query_instruct
-            )
-        slots.append(
-            EmbeddingSlotIdentity(
-                slot_id=standby_id,
-                role=EmbeddingSlotRole.STANDBY,
-                provider_id=_embedding_provider_id(
-                    standby_connection.provider_type
-                ),
-                model=profile.standby_embedding_model,
-                vector_name="dense_standby",
-                dimension=profile.standby_dimension,
-                max_input_tokens=128000,
-                adapter_revision="product-managed-v1",
-                document_request_policy=profile.standby_document_policy,
-                query_request_policy=freeze_json_object(standby_query_policy),
-                normalization="l2-v1",
-            )
-        )
-    return EmbeddingTopology(
-        mode="single" if standby_id is None else "hot_standby",
-        primary_slot_id="primary",
-        standby_slot_id=standby_id,
-        slots=tuple(slots),
     )
-
-
-def _embedding_provider_id(provider_type: str) -> str:
-    return {
-        "jina": "jina-embedding",
-        "aliyun-model-studio": "aliyun-qwen37-embedding",
-    }[provider_type]
-
-
-def _provider_input_limit(provider_type: str) -> int:
-    return 32768 if provider_type == "jina" else 128000
+    return EmbeddingTopology(
+        mode="single" if len(slots) == 1 else "hot_standby",
+        primary_slot_id="primary",
+        standby_slot_id=None if len(slots) == 1 else "standby",
+        slots=slots,
+    )
 
 
 def _document_budgets(
@@ -928,50 +979,106 @@ def _product_status(
     status: SystemStatus,
     control: ProductControlStore,
     compatibility: CompatibilityManifest,
+    *,
+    test_only_transport: bool = False,
 ) -> SystemStatus:
     evidence = control.system_evidence()
-    validations = evidence["provider_validation_statuses"]
-    if not isinstance(validations, dict):
-        raise TypeError("Provider validation evidence 必须为 object。")
-    primary = _validation_state(validations, "jina:embedding.query")
-    standby = _validation_state(
-        validations, "aliyun-model-studio:embedding.query"
+    profile_ids = evidence["active_profile_ids"]
+    if not isinstance(profile_ids, list):
+        raise TypeError("Active Profile IDs 必须为列表。")
+    records = [
+        control.profile_validations(str(profile_id))
+        for profile_id in profile_ids
+    ]
+    states = [
+        control.quality.states(str(profile_id)) for profile_id in profile_ids
+    ]
+    runs = [run for required in records for run in required.values()]
+    connectivity = bool(runs) and all(
+        run is not None
+        and run.status == "succeeded"
+        and run.validation_mode == "live"
+        for run in runs
     )
-    reranker = _validation_state(validations, "jina:reranking")
-    live_ready = (
-        all(item == "live_validated" for item in (primary, standby, reranker))
-        and status.remote_dense_confidence_calibrated
+    calibrated = bool(states) and all(
+        item.get("retrieval_quality_verified") == "live" for item in states
     )
+    ready = (
+        connectivity
+        and calibrated
+        and not test_only_transport
+        and not evidence["reindex_required"]
+        and all(
+            item.get("local_contract_verified") == "offline"
+            and item.get("offline_evaluation_ready") == "offline"
+            and all(
+                item.get(kind) == "live"
+                for kind in (
+                    "provider_connectivity_verified",
+                    "dual_slot_function_verified",
+                    "release_candidate_verified",
+                )
+            )
+            for item in states
+        )
+    )
+    validations = {
+        key: {
+            "status": "not_verified" if run is None else run.status,
+            "validation_mode": "unknown"
+            if run is None
+            else run.validation_mode,
+        }
+        for required in records
+        for key, run in required.items()
+    }
+    operation_states = []
+    for role in ("primary", "standby", "reranker"):
+        selected: list[ProviderValidationRun | None] = []
+        for profile_id, required in zip(profile_ids, records, strict=True):
+            profile = control.get_profile(str(profile_id))
+            connection_id = getattr(profile, f"{role}_connection_id")
+            if connection_id is not None:
+                selected.extend(
+                    run
+                    for key, run in required.items()
+                    if key.startswith(connection_id + ":")
+                )
+        if not selected or any(
+            run is None or run.status != "succeeded" for run in selected
+        ):
+            operation_states.append("not_verified")
+        else:
+            operation_states.append(
+                "live_validated"
+                if all(
+                    run is not None and run.validation_mode == "live"
+                    for run in selected
+                )
+                else "mock_validated"
+            )
     return status.model_copy(
         update={
-            "active_profile_count": evidence["active_profile_count"],
+            "active_profile_count": len(profile_ids),
             "active_revision_schema": (
                 f"{compatibility.chunk_schema}/{compatibility.fts_schema}"
             ),
-            "offline_evaluation_v3_ready": compatibility.fts_schema == "fts-v2",
-            "primary_live_evaluation_status": primary,
-            "provider_validation_statuses": freeze_json_object(validations),
-            "reindex_required": (
-                status.reindex_required or bool(evidence["reindex_required"])
+            "offline_evaluation_v3_ready": bool(states)
+            and all(
+                item.get("offline_evaluation_ready") == "offline"
+                for item in states
             ),
-            "remote_production_profile_ready": live_ready,
-            "reranker_live_evaluation_status": reranker,
+            "remote_dense_confidence_calibrated": calibrated
+            and not test_only_transport,
+            "primary_live_evaluation_status": operation_states[0],
+            "standby_live_evaluation_status": operation_states[1],
+            "reranker_live_evaluation_status": operation_states[2],
+            "provider_validation_statuses": freeze_json_object(validations),
+            "reindex_required": status.reindex_required
+            or bool(evidence["reindex_required"]),
+            "remote_production_profile_ready": bool(ready),
             "runtime_identity": "product-runtime-p10.5",
-            "standby_live_evaluation_status": standby,
         }
-    )
-
-
-def _validation_state(
-    validations: dict[str, object],
-    key: str,
-) -> str:
-    value = validations.get(key)
-    if not isinstance(value, dict) or value.get("status") != "succeeded":
-        return "not_verified"
-    category = str(value.get("http_category", ""))
-    return (
-        "live_validated" if category.startswith("live_") else "mock_validated"
     )
 
 

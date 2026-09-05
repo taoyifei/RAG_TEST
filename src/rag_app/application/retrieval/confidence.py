@@ -133,6 +133,12 @@ class ConfidenceEvaluator:
                 + 0.05 * rank_stability
                 + 0.05 * rerank_margin,
             )
+        if (
+            status is ConfidenceStatus.ANSWERABLE
+            and independent_supports < resolved_policy.minimum_support_items
+        ):
+            status = ConfidenceStatus.INSUFFICIENT_EVIDENCE
+            score = 0.15
         return ConfidenceDecision(
             status=status,
             score=score,

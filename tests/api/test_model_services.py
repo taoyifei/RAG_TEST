@@ -42,13 +42,13 @@ def test_catalog_connections_and_five_validation_operations(
         assert "synthetic-jina-value" not in history.text
         assert "synthetic-jina-value" not in usage.text
         assert harness.runtime.sdk.health().primary_live_evaluation_status == (
-            "mock_validated"
+            "not_verified"
         )
         assert harness.runtime.sdk.health().standby_live_evaluation_status == (
-            "mock_validated"
+            "not_verified"
         )
         assert harness.runtime.sdk.health().reranker_live_evaluation_status == (
-            "mock_validated"
+            "not_verified"
         )
     finally:
         harness.close()

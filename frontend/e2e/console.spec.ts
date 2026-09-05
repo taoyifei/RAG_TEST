@@ -115,14 +115,11 @@ async function configureModelServices(page: Page) {
   await validateConnection(page, aliyun, "测试查询向量");
 }
 
-async function createRetrievalProfile(
-  page: Page,
-  instruction = "为检索查询生成准确表示",
-) {
+async function createRetrievalProfile(page: Page, instruction = "") {
   await page.getByRole("button", { name: "检索方案" }).click();
   await page.getByLabel("主向量连接").selectOption({ label: "Jina 主连接" });
   await page.getByLabel("备用向量连接").selectOption({ label: "百炼备用连接" });
-  await page.getByLabel("查询指令").fill(instruction);
+  await page.getByLabel("Qwen 查询指令").fill(instruction);
   await page.getByRole("button", { name: "创建并预览影响" }).click();
 }
 
@@ -152,7 +149,16 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await createScope(page, `${testInfo.project.name}-${Date.now()}`);
   await createRetrievalProfile(page);
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+  const applied = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(":activate"),
+  );
   await page.getByRole("button", { name: "确认应用" }).click();
+  expect((await applied).ok()).toBeTruthy();
+  await expect(
+    page.getByRole("heading", { name: "当前方案", exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "文档管理" }).click();
   await uploadAndWait(
     page,

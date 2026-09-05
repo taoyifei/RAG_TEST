@@ -72,6 +72,18 @@ class RevisionBuildResult(FrozenModel):
 class _RevisionBuildControl(Protocol):
     """Builder 所需的持久化控制面。"""
 
+    def is_ready_revision(self, revision_id: str) -> bool:
+        """检查已有 READY 状态。
+
+        Args:
+            revision_id: 待重试的索引。
+
+        Returns:
+            是否仅需重新验证并发布。
+
+        """
+        ...
+
     def upsert_document(self, document: DocumentRef) -> None:
         """保存逻辑文档。
 
@@ -534,6 +546,9 @@ class RevisionBuilder:
         self._control.acquire_revision_lease(revision_id, job_id)
         try:
             self._control.assert_job_active(job_id)
+            if self._control.is_ready_revision(revision_id):
+                current_state = IndexRevisionState.READY
+                return self._resume_ready(spec, job_id, attempt)
             self._control.create_revision(
                 revision,
                 physical_namespace=spec.physical_namespace,
@@ -680,6 +695,37 @@ class RevisionBuilder:
             raise
         finally:
             self._control.release_revision_lease(revision_id)
+
+    def _resume_ready(
+        self,
+        spec: RevisionVectorSpec,
+        job_id: str,
+        attempt: int,
+    ) -> RevisionBuildResult:
+        self._control.update_job(
+            job_id, state="running", stage="validating", attempt=attempt
+        )
+        evidence = self._validator.validate(
+            spec,
+            current_index_fingerprint=self._index_fingerprint,
+        )
+        self._control.assert_job_active(job_id)
+        self._control.activate(
+            spec.revision.knowledge_base_id,
+            evidence,
+            reason="P11_RESUME_VALIDATED",
+            trace_id=deterministic_id("trace", job_id, evidence.revision_id),
+        )
+        self._control.update_job(
+            job_id, state="completed", stage="activated", attempt=attempt
+        )
+        return RevisionBuildResult(
+            job_id=job_id,
+            revision_id=evidence.revision_id,
+            document_count=evidence.document_count,
+            chunk_count=evidence.chunk_count,
+            evidence=evidence,
+        )
 
     def _parse_and_chunk(
         self,

@@ -63,7 +63,7 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 16
+        assert migration_count == 17
     finally:
         harness.close()
 

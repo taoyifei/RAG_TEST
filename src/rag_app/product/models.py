@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, StrictInt, field_validator
+from pydantic import Field, StrictInt, field_serializer, field_validator
 
 from rag_app.core.models.common import FrozenModel, JsonObject
 from rag_app.core.models.search import RetrievalPolicy
@@ -97,6 +97,8 @@ class ProviderValidationRun(FrozenModel):
     endpoint_mode: str | None = None
     endpoint_host: str | None = None
     synthetic_payload_hash: str
+    endpoint_identity: str | None = None
+    validation_mode: str = "unknown"
 
 
 class ProviderUsageDaily(FrozenModel):
@@ -143,6 +145,23 @@ class RetrievalProfileRevision(FrozenModel):
     serving_fingerprint: str
     created_at: str
     activated_at: str | None = None
+    primary_resolved: JsonObject = ()
+    standby_resolved: JsonObject = ()
+    activation_job_id: str | None = None
+
+    @field_serializer(
+        "primary_document_policy",
+        "primary_query_policy",
+        "standby_document_policy",
+        "standby_query_policy",
+        "standby_budget",
+        "retrieval_policy",
+        "evidence_policy",
+        "primary_resolved",
+        "standby_resolved",
+    )
+    def _serialize_policy(self, value: JsonObject) -> dict[str, object]:
+        return dict(value)
 
 
 class RetrievalProfileDraft(FrozenModel):

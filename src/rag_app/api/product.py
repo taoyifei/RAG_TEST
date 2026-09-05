@@ -127,6 +127,7 @@ class ValidationRequest(_RequestModel):
     operation: Literal["embedding.document", "embedding.query", "reranking"]
     model: str = Field(min_length=1, max_length=200)
     expected_dimension: int | None = Field(default=None, gt=0)
+    request_policy: dict[str, object] = Field(default_factory=dict)
 
 
 class RetrievalProfileRequest(_RequestModel):
@@ -301,10 +302,7 @@ def _request_security_error(
     loopback_request = _is_loopback(hostname) and (
         _is_loopback(peer) or runtime.settings.trust_loopback_host_proxy
     )
-    if (
-        not loopback_request
-        and _effective_scheme(request, runtime) != "https"
-    ):
+    if not loopback_request and _effective_scheme(request, runtime) != "https":
         return _policy_error(400, "TLS_REQUIRED", "非本机访问必须使用 HTTPS。")
     if request.method not in _SAFE_METHODS:
         origin = request.headers.get("Origin")
@@ -669,7 +667,12 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     def _profiles(knowledge_base_id: str) -> dict[str, object]:
         return {
             "items": [
-                item.model_dump(mode="json")
+                {
+                    **item.model_dump(mode="json"),
+                    "effective_serving_fingerprint": (
+                        runtime.profiles.serving_contract(item)[2]
+                    ),
+                }
                 for item in runtime.control.list_profiles(knowledge_base_id)
             ]
         }
@@ -683,13 +686,20 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         knowledge_base_id: str,
         body: RetrievalProfileRequest,
     ) -> dict[str, object]:
-        profile = runtime.control.create_profile(
-            RetrievalProfileDraft(
-                knowledge_base_id=knowledge_base_id,
-                **body.model_dump(),
+        try:
+            profile = runtime.control.create_profile(
+                RetrievalProfileDraft(
+                    knowledge_base_id=knowledge_base_id, **body.model_dump()
+                )
             )
-        )
-        return profile.model_dump(mode="json")
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return {
+            **profile.model_dump(mode="json"),
+            "effective_serving_fingerprint": runtime.profiles.serving_contract(
+                profile
+            )[2],
+        }
 
     @app.get(
         "/api/v1/retrieval-profiles/{profile_revision_id}:preview",
@@ -712,7 +722,14 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             profile_revision_id,
             confirmed_impact=body.confirmed_impact,
         )
-        return profile.model_dump(mode="json")
+        if profile.activation_job_id is not None and profile.status == "draft":
+            runtime.jobs.submit(profile.activation_job_id)
+        return {
+            **profile.model_dump(mode="json"),
+            "effective_serving_fingerprint": runtime.profiles.serving_contract(
+                profile
+            )[2],
+        }
 
 
 def _register_access_token_routes(

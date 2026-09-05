@@ -29,7 +29,6 @@ def _profile_payload(
         "standby_document_policy": {"text_type": "document"},
         "standby_query_policy": {
             "text_type": "query",
-            "instruction": "为检索查询生成表示",
         },
         "reranker_connection_id": jina_connection,
         "reranker_model": "jina-reranker-v3.5",

@@ -714,6 +714,65 @@ class LifecycleService:
             request, idempotency_key=idempotency_key
         )
 
+    def queue_profile_rebuild(
+        self,
+        knowledge_base_id: str,
+        expected_profile_revision_id: str | None,
+        expected_index_revision_id: str | None,
+        activation_validation_ids: tuple[str, ...],
+    ) -> Job:
+        """冻结现有文档快照并提交候选 Profile 的持久构建。
+
+        Args:
+            knowledge_base_id: 候选方案所属知识库。
+            expected_profile_revision_id: 确认时的 Active Profile。
+            expected_index_revision_id: 确认时的 Active Revision。
+            activation_validation_ids: 准入时通过的独立 Provider 验证记录。
+
+        Returns:
+            已持久化但尚未领取的作业。
+
+        """
+        documents = tuple(
+            _queued_active_document(self._blob_store, item, artifact, media)
+            for item, artifact, media in self._control.active_documents(
+                knowledge_base_id
+            )
+        )
+        if not documents:
+            raise RevisionStateError(
+                "没有可构建的文档快照。", stage="profile.queue"
+            )
+        versions = tuple(
+            sorted(
+                document_version_id(
+                    item.document.document_id, item.content_sha256
+                )
+                for item in documents
+            )
+        )
+        revision_id = deterministic_id(
+            "irev", knowledge_base_id, versions, self._index_fingerprint
+        )
+        first = documents[0]
+        request = QueuedIngestion(
+            job_id=deterministic_id("job", knowledge_base_id, revision_id),
+            revision_id=revision_id,
+            target_document_id=first.document.document_id,
+            target_document_version_id=document_version_id(
+                first.document.document_id, first.content_sha256
+            ),
+            retrieval_profile_revision_id=self._retrieval_profile_revision_id,
+            documents=documents,
+            activate_profile=True,
+            expected_profile_revision_id=expected_profile_revision_id,
+            expected_index_revision_id=expected_index_revision_id,
+            activation_validation_ids=activation_validation_ids,
+        )
+        return self._store.enqueue_ingestion(
+            request, idempotency_key=request.job_id
+        )
+
     def run_ingestion(self, job_id: str) -> None:
         """领取并执行一个持久 Revision 构建请求。
 
