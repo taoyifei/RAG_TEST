@@ -35,6 +35,7 @@ from rag_app.product.models import (
     RetrievalProfileDraft,
 )
 from rag_app.product.provider_runtime import TransportFactory
+from rag_app.product.verification import validation_is_current
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _INTERNAL_QUERY_PREFIX = "internal-query-"
@@ -642,9 +643,16 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         tags=["model-services"],
     )
     def _validations(connection_id: str) -> dict[str, object]:
+        connection = runtime.control.get_connection(connection_id)
+        credential = runtime.credentials.get(connection.credential_id)
         return {
             "items": [
-                item.model_dump(mode="json")
+                {
+                    **item.model_dump(mode="json"),
+                    "is_current": validation_is_current(
+                        item, connection, credential.key_version
+                    ),
+                }
                 for item in runtime.control.list_validations(connection_id)
             ]
         }
