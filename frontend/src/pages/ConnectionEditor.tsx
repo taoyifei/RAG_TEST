@@ -7,6 +7,7 @@ import {
   type ProviderConnection,
 } from "../api/client";
 import { ErrorPanel, Modal } from "../components/ui";
+import { previewAliyunEndpoint } from "./aliyun-endpoint";
 
 export function ConnectionEditor({
   connection,
@@ -23,9 +24,7 @@ export function ConnectionEditor({
 }) {
   const [name, setName] = useState(connection.display_name);
   const [workspace, setWorkspace] = useState(connection.workspace_id ?? "");
-  const [mode, setMode] = useState(
-    connection.endpoint_mode ?? "workspace_host",
-  );
+  const [mode, setMode] = useState<string>(connection.endpoint_mode ?? "");
   const [host, setHost] = useState(connection.api_host ?? "");
   const [requestBudget, setRequestBudget] = useState(
     connection.request_budget ?? 5,
@@ -42,10 +41,15 @@ export function ConnectionEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>();
   const aliyun = connection.provider_type === "aliyun-model-studio";
+  const endpointPreview = previewAliyunEndpoint(mode, host);
 
   async function save(event: FormEvent) {
     event.preventDefault();
     if (saving) return;
+    if (aliyun && endpointPreview.error) {
+      setError(new Error(endpointPreview.error));
+      return;
+    }
     if (connection.enabled !== false && !enabled && !confirmDisable) {
       setConfirmDisable(true);
       return;
@@ -63,7 +67,7 @@ export function ConnectionEditor({
           ? {
               workspace_id: workspace,
               endpoint_mode: mode,
-              api_host: host || null,
+              api_host: endpointPreview.endpoint,
               region: "cn-beijing",
             }
           : {}),
@@ -122,7 +126,7 @@ export function ConnectionEditor({
               <select
                 value={mode}
                 onChange={(e) => {
-                  setMode(e.target.value as typeof mode);
+                  setMode(e.target.value);
                   setHost(
                     e.target.value === "beijing_dashscope"
                       ? "https://dashscope.aliyuncs.com"
@@ -130,6 +134,9 @@ export function ConnectionEditor({
                   );
                 }}
               >
+                <option value="" disabled>
+                  请选择端点模式
+                </option>
                 <option value="workspace_host">北京业务空间 API Host</option>
                 <option value="beijing_dashscope">
                   北京 DashScope（显式选择）
@@ -153,9 +160,14 @@ export function ConnectionEditor({
                 <option value="cn-beijing">北京</option>
               </select>
             </label>
+            <p role="status" className="span-two">
+              {endpointPreview.endpoint
+                ? `保存前规范结果：${endpointPreview.endpoint}`
+                : endpointPreview.error}
+            </p>
             <p className="span-two">
-              从百炼当前地域控制台复制。系统不按 llm- 或 ws-
-              前缀判断账号是否有效。
+              Workspace ID 与 API Host 分别从控制台获取，不能互相推导。 系统不按
+              llm- 或 ws- 前缀判断账号是否有效。
             </p>
             <p className="span-two">
               在 API Key 创建弹窗或业务空间管理的 API Host

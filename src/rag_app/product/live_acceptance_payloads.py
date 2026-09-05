@@ -94,6 +94,9 @@ def approved_payload_contracts(
     text_hashes = {canonical_sha256(text) for text in texts}
     shape_hashes: set[str] = set()
     request_identities: set[str] = set()
+    rerank_limit = (
+        retrieval_policy or RetrievalPolicy()
+    ).rerank_candidate_limit
     for connection, spec in zip(connections, specs, strict=True):
         payloads = [
             _payload(connection, operation, spec.model, resolved=spec)
@@ -103,7 +106,7 @@ def approved_payload_contracts(
             rerank = _payload(connection, "reranking", "jina-reranker-v3.5")
             payloads.extend(
                 {**rerank, "top_n": top_n}
-                for top_n in range(1, QUERY_LIMIT + 1)
+                for top_n in range(1, rerank_limit + 1)
             )
         for payload in payloads:
             payload_hash, approved_texts, shape = payload_contract(payload)

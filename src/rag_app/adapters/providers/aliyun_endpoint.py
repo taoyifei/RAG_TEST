@@ -16,6 +16,14 @@ _DNS_HOST = re.compile(
 )
 
 
+class AliyunEndpointError(ValueError):
+    """携带稳定原因码且不复制实际 Host 的本地输入错误。"""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(message)
+
+
 class AliyunEndpointConfig(BaseModel):
     """不含 Secret 的端点配置，禁止通过 ID 前缀推导可用性。"""
 
@@ -40,7 +48,7 @@ class AliyunEndpointConfig(BaseModel):
 
 
 def resolve_endpoint(config: AliyunEndpointConfig) -> str:
-    """解析受信任 HTTPS Origin，不猜测或切换主机。
+    """规范受信任裸主机或 HTTPS Origin，不猜测或切换主机。
 
     Args:
         config: 已通过工作空间形状检查的非敏感配置。
@@ -56,31 +64,50 @@ def resolve_endpoint(config: AliyunEndpointConfig) -> str:
         return "https://dashscope.aliyuncs.com"
     value = config.api_host or ""
     if not value:
-        raise ValueError(
-            "请从当前北京业务空间复制API Host，或明确选择北京DashScope模式。"
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_REQUIRED",
+            "请从当前北京业务空间复制API Host，或明确选择北京DashScope模式。",
         )
     if not value.isascii() or any(char.isspace() for char in value):
-        raise ValueError("API Host 不能包含空白或非 ASCII 字符。")
-    parsed = urlsplit(value)
-    host = parsed.hostname or ""
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_FORMAT_INVALID",
+            "API Host 不能包含空白或非 ASCII 字符。",
+        )
+    # 在 URL 解析之前拒绝解析器可能规范化掉的分隔符和控制字符。
+    if any(char in value for char in "?#%\\") or not value.isprintable():
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_FORMAT_INVALID", "API Host 含禁止的分隔符。"
+        )
+    candidate = value if "://" in value else "https://" + value
+    try:
+        parsed = urlsplit(candidate)
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_FORMAT_INVALID", "API Host 格式无效。"
+        ) from None
     if (
         parsed.scheme != "https"
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.port not in (None, 443)
+        or port not in (None, 443)
         or parsed.path not in ("", "/")
         or parsed.query
         or parsed.fragment
-        or any(char in value for char in "?#%\\")
         or parsed.netloc.lower() not in (host, host + ":443")
     ):
-        raise ValueError(
-            "API Host 必须是无认证信息、查询参数或路径的 HTTPS Origin。"
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_FORMAT_INVALID",
+            "API Host 必须是无认证信息、查询参数或路径的 HTTPS Origin。",
         )
     if config.endpoint_mode == "workspace_host":
         allowed = _DNS_HOST.fullmatch(host) is not None
     else:
         allowed = host == "dashscope.aliyuncs.com"
     if not allowed:
-        raise ValueError("API Host 不在所选北京端点模式的受信任范围。")
+        raise AliyunEndpointError(
+            "ALIYUN_API_HOST_NOT_ALLOWED",
+            "API Host 不在所选北京端点模式的受信任范围。",
+        )
     return f"https://{host}"

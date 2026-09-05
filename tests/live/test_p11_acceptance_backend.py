@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from time import monotonic
+from typing import cast
 
 import pytest
 
@@ -15,16 +17,20 @@ from rag_app.adapters.providers.budget_ledger import (
 )
 from rag_app.adapters.providers.budget_transport import (
     estimated_input_tokens,
+    payload_contract,
     provider_budget_fault,
     provider_budget_scope,
 )
 from rag_app.composition.product_runtime import build_product_runtime
+from rag_app.core.models import RetrievalPolicy
 from rag_app.core.tokenization import estimate_tokens
 from rag_app.product.live_acceptance import AcceptanceState, run_acceptance
 from rag_app.product.live_acceptance_backend import (
     ProductAcceptanceBackend,
     _p11_limits,
 )
+from rag_app.product.live_acceptance_payloads import approved_payload_contracts
+from rag_app.product.models import ProviderConnection
 from rag_app.product.provider_runtime import build_offline_mock_transport
 from tests.product_support import (
     ProductHarness,
@@ -98,7 +104,11 @@ def test_config_check_does_not_open_master_key_or_start_runtime(
         forbidden,
     )
     report = run_acceptance(config, steps=("config_check",))
-    assert report["steps"]["config_check"]["status"] == "PASS"
+    diagnosis = report["steps"]["config_check"]
+    assert diagnosis["status"] == "BLOCKED"
+    assert diagnosis["evidence"]["endpoint_contract"] == "PASS"
+    assert diagnosis["evidence"]["connection_configuration"] == "PASS"
+    assert diagnosis["evidence"]["campaign_binding"] == "BLOCKED"
     assert report["budget"]["this_run"]["forwarded"] == 0
 
 
@@ -109,7 +119,13 @@ def test_aliyun_config_does_not_require_jina_profile_or_qdrant(
     config.pop("jina_connection_id")
     config.pop("source_profile_revision_id")
     report = run_acceptance(config, steps=("config_check",))
-    assert report["steps"]["config_check"]["status"] == "PASS"
+    assert (
+        report["steps"]["config_check"]["evidence"]["endpoint_contract"]
+        == "PASS"
+    )
+    assert (
+        report["steps"]["config_check"]["reason"] == "CAMPAIGN_BINDING_REQUIRED"
+    )
 
 
 def test_mock_connection_validation_never_becomes_live_success(
@@ -387,3 +403,173 @@ def test_probe_budget_denial_is_blocked_and_retains_minimum_additional(
         second.evidence["budget"]["forwarded"]
         == first.evidence["budget"]["forwarded"]
     )
+
+
+def test_midnight_does_not_change_identity_and_expired_validation_is_not_reused(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, config = configured_product
+    ledger = ProviderBudgetLedger(Path(str(config["ledger_path"])))
+    config.update(campaign_id="ttl-campaign", authorization_id="ttl-auth")
+    state = AcceptanceState(Path(str(config["state_path"])), "ttl-campaign")
+    backend = ProductAcceptanceBackend(config, state)
+    finished = datetime(2026, 9, 5, 23, 55, tzinfo=UTC)
+
+    class Clock(datetime):
+        current = finished
+
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            """固定时钟只用于合成证据 TTL 回归。"""
+            return cls.current.astimezone(tz)
+
+    monkeypatch.setattr(
+        "rag_app.product.live_acceptance_backend.datetime", Clock
+    )
+    monkeypatch.setattr("rag_app.product.verification.datetime", Clock)
+    connection_id = str(config["aliyun_connection_id"])
+    control = backend.control
+    assert control is not None
+    original = next(
+        item
+        for item in control.list_validations(connection_id)
+        if item.operation == "embedding.document"
+    )
+    ledger.create_campaign(
+        BudgetCampaign(
+            campaign_id="ttl-campaign",
+            authorization_id="ttl-auth",
+            scope="p11-public-synthetic-v1",
+            request_limit=1,
+            estimated_token_limit=1000,
+            approved_payload_hashes=(original.synthetic_payload_hash,),
+        )
+    )
+    ledger.activate_campaign("ttl-campaign")
+    simulated = original.model_copy(
+        update={
+            "finished_at": finished.isoformat(),
+            "status": "succeeded",
+            "validation_mode": "live",
+            "http_category": "live_200",
+            "request_dispatched": True,
+            "http_status": 200,
+        }
+    )
+    monkeypatch.setattr(control, "list_validations", lambda _key: (simulated,))
+    record: dict[str, object] = {
+        "status": "PASS",
+        "timestamp": finished.isoformat(),
+        "evidence": {
+            "validation_id": original.validation_id,
+            "authorization": {
+                "campaign_id": config["campaign_id"],
+                "authorization_id": config["authorization_id"],
+                "scope": "p11-public-synthetic-v1",
+            },
+        },
+    }
+    before = backend.identity("aliyun_document_canary")
+    Clock.current = finished + timedelta(minutes=10)
+    assert backend.identity("aliyun_document_canary") == before
+    assert backend.evidence_is_current("aliyun_document_canary", record)
+    Clock.current = finished + timedelta(hours=24, seconds=1)
+    assert not backend.evidence_is_current("aliyun_document_canary", record)
+    # 刷新调度时间也不能使实际已经过期的 Provider 验证变新。
+    record["timestamp"] = Clock.current.isoformat()
+    assert not backend.evidence_is_current("aliyun_document_canary", record)
+    Clock.current = finished + timedelta(minutes=10)
+    cast(dict[str, object], record["evidence"])["authorization"] = {
+        "campaign_id": "another-campaign"
+    }
+    assert not backend.evidence_is_current("aliyun_document_canary", record)
+
+
+def test_another_provider_configuration_does_not_change_jina_identity(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _, config = configured_product
+    backend = ProductAcceptanceBackend(
+        config,
+        AcceptanceState(Path(str(config["state_path"])), "synthetic-campaign"),
+    )
+    before = backend.identity("jina_connection")
+    control = backend.control
+    assert control is not None
+    get_connection = control.get_connection
+
+    def changed(key: str) -> ProviderConnection:
+        connection = get_connection(key)
+        return (
+            connection.model_copy(update={"configuration_version": 99})
+            if (key == config["aliyun_connection_id"])
+            else connection
+        )
+
+    monkeypatch.setattr(control, "get_connection", changed)
+    assert backend.identity("jina_connection") == before
+
+
+def test_approved_rerank_shapes_cover_actual_policy_candidate_limit(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+):
+    _, config = configured_product
+    backend = ProductAcceptanceBackend(
+        config,
+        AcceptanceState(Path(str(config["state_path"])), "synthetic-campaign"),
+    )
+    assert backend.control is not None
+    connection = backend.control.get_connection(
+        str(config["jina_connection_id"])
+    )
+    policy = RetrievalPolicy()
+    assert policy.rerank_candidate_limit > 5
+    contracts = approved_payload_contracts(
+        (connection,),
+        (backend._spec("jina_connection_id"),),
+        policy,
+    )
+    _, _, shape = payload_contract(
+        {
+            "model": "jina-reranker-v3.5",
+            "query": "公开合成查询",
+            "documents": ["公开合成候选"] * policy.rerank_candidate_limit,
+            "top_n": policy.rerank_candidate_limit,
+            "return_documents": False,
+        }
+    )
+    assert shape in contracts["approved_request_shape_hashes"]
+
+
+def test_unscoped_jina_record_is_not_relabelled_as_current_authorization(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    harness, config = configured_product
+    backend = ProductAcceptanceBackend(
+        config,
+        AcceptanceState(Path(str(config["state_path"])), "synthetic-campaign"),
+    )
+    backend.provider_registry = harness.runtime.providers
+    control = backend.control
+    assert control is not None
+    runs = control.list_validations(str(config["jina_connection_id"]))
+    simulated = tuple(
+        item.model_copy(
+            update={
+                "validation_mode": "live",
+                "http_category": "live_200",
+                "dimension": 64,
+                "synthetic_payload_hash": "0" * 64,
+            }
+        )
+        for item in runs
+    )
+    monkeypatch.setattr(control, "list_validations", lambda _key: simulated)
+    result = backend._validate("jina_connection_id", "embedding.document")
+    assert result.status == "FAIL"
+    assert result.reason != "CURRENT_LIVE_VALIDATION_REUSED"
+    assert result.evidence["validation_mode"] == "mock"
+    assert "endpoint_host" not in result.evidence

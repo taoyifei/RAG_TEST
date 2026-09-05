@@ -6,6 +6,7 @@ import {
   type CredentialSummary,
 } from "../api/client";
 import { ErrorPanel, Modal } from "../components/ui";
+import { previewAliyunEndpoint } from "./aliyun-endpoint";
 type ProviderType = "jina" | "aliyun-model-studio";
 type CredentialSource =
   | "database_encrypted"
@@ -34,8 +35,13 @@ export function ConnectionCreator({
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
+  const endpointPreview = previewAliyunEndpoint(endpointMode, apiHost);
   async function createConnection(event: FormEvent) {
     event.preventDefault();
+    if (provider === "aliyun-model-studio" && endpointPreview.error) {
+      setError(new Error(endpointPreview.error));
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
@@ -59,7 +65,9 @@ export function ConnectionCreator({
         endpoint_mode:
           provider === "aliyun-model-studio" ? endpointMode : undefined,
         api_host:
-          provider === "aliyun-model-studio" ? apiHost || null : undefined,
+          provider === "aliyun-model-studio"
+            ? endpointPreview.endpoint
+            : undefined,
         workspace_id:
           provider === "aliyun-model-studio" ? workspaceId : undefined,
         region: provider === "aliyun-model-studio" ? "cn-beijing" : undefined,
@@ -205,6 +213,15 @@ export function ConnectionCreator({
                 placeholder="请从当前北京业务空间复制API Host"
               />
             </label>
+            <p role="status">
+              {endpointPreview.endpoint
+                ? `保存前规范结果：${endpointPreview.endpoint}`
+                : endpointPreview.error}
+            </p>
+            <p>
+              从北京控制台 API Key 弹窗或业务空间管理的 API Host 列复制。
+              Workspace ID 与 Host 分别获取；保存后测试需单独发起。
+            </p>
             <p>Key 非空仅代表本地形状检查；端点选择不代表鉴权成功。</p>
           </>
         )}

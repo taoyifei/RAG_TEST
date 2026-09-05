@@ -70,6 +70,26 @@ def test_workspace_injection_rejected(workspace: str):
 @pytest.mark.parametrize(
     "host",
     [
+        "api-demo.cn-beijing.maas.aliyuncs.com",
+        "https://api-demo.cn-beijing.maas.aliyuncs.com",
+        "https://api-demo.cn-beijing.maas.aliyuncs.com:443/",
+    ],
+)
+def test_equivalent_trusted_host_inputs(host: str):
+    assert (
+        resolve_endpoint(
+            AliyunEndpointConfig(
+                workspace_id="ws-demo",
+                api_host=host,
+            )
+        )
+        == "https://api-demo.cn-beijing.maas.aliyuncs.com"
+    )
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
         "http://demo.cn-beijing.maas.aliyuncs.com",
         "https://user@demo.cn-beijing.maas.aliyuncs.com",
         "https://demo.cn-beijing.maas.aliyuncs.com:444",
@@ -86,6 +106,13 @@ def test_workspace_injection_rejected(workspace: str):
         "https://demo.cn-beijing.maas.aliyuncs.com%2f",
         "https://demo.cn-beijing.maas.aliyuncs.com?",
         "https://demo.cn-beijing.maas.aliyuncs.com\n",
+        "demo.cn-shanghai.maas.aliyuncs.com",
+        "https://10.0.0.1",
+        "https://[::1]",
+        "https://demo.cn-beijing.maas.aliyuncs.com:abc",
+        "https://ｄemo.cn-beijing.maas.aliyuncs.com",
+        "https://demo.cn-beijing.maas.aliyuncs.com\\evil",
+        "https://demo.cn-beijing.maas.aliyuncs.com\x00",
     ],
 )
 def test_untrusted_origin_rejected(host: str):

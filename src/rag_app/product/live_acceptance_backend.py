@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from http import HTTPStatus
 from pathlib import Path
 from time import monotonic, sleep
 from typing import cast
@@ -18,11 +19,13 @@ import httpx
 from evaluation.p11_pilot_runtime import run_pilot
 from rag_app.adapters.providers.budget_authorization import (
     bind_existing_product_campaign,
+    read_product_budget_history,
 )
 from rag_app.adapters.providers.budget_ledger import (
     BudgetBlockedError,
     BudgetCampaign,
     ProviderBudgetLedger,
+    summarize_attempts,
 )
 from rag_app.adapters.providers.budget_transport import (
     provider_budget_fault,
@@ -44,6 +47,7 @@ from rag_app.core.models import (
     SearchAnswerResult,
 )
 from rag_app.core.policies import CircuitBreakerPolicy
+from rag_app.product.connection_diagnostics import diagnose_configuration
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import SecretCipher, load_master_key
@@ -214,14 +218,6 @@ class ProductAcceptanceBackend:
             identity["configuration_error"] = self.configuration_error
             return canonical_sha256(identity)
         try:
-            if step in {
-                "jina_connection",
-                "aliyun_document_canary",
-                "aliyun_query_canary",
-            }:
-                identity["validation_day"] = (
-                    datetime.now(UTC).date().isoformat()
-                )
             names = (
                 ("jina_connection_id",)
                 if step == "jina_connection"
@@ -261,6 +257,115 @@ class ProductAcceptanceBackend:
         except (RagError, ValueError, sqlite3.DatabaseError):
             identity["configuration_error"] = "CONNECTION_OR_PROFILE_INVALID"
         return canonical_sha256(identity)
+
+    def evidence_is_current(
+        self, step: str, record: Mapping[str, object]
+    ) -> bool:
+        """核对实际证据 TTL、当前操作与持久授权，不按 UTC 日期失效。
+
+        Args:
+            step: 待复用阶段。
+            record: 已保存的成功证据。
+
+        Returns:
+            同一授权下未过期且实际验证仍匹配时为真。
+
+        """
+        if not self._record_authorization_current(record):
+            return False
+        evidence = cast(dict[str, object], record["evidence"])
+        try:
+            if step == "jina_connection":
+                return all(
+                    self._validation_evidence_current(
+                        "jina_connection_id", operation, evidence.get(operation)
+                    )
+                    for operation in (
+                        "embedding.document",
+                        "embedding.query",
+                        "reranking",
+                    )
+                )
+            if step.startswith("aliyun_"):
+                return self._validation_evidence_current(
+                    "aliyun_connection_id",
+                    "embedding.document"
+                    if step == "aliyun_document_canary"
+                    else "embedding.query",
+                    evidence,
+                )
+        except (RagError, ValueError, OSError, sqlite3.DatabaseError):
+            return False
+        return True
+
+    def _record_authorization_current(
+        self, record: Mapping[str, object]
+    ) -> bool:
+        evidence = record.get("evidence")
+        expected = {
+            name: self.config.get(name)
+            for name in ("campaign_id", "authorization_id")
+        }
+        expected["scope"] = self.config.get("scope", "p11-public-synthetic-v1")
+        if (
+            self.control is None
+            or not isinstance(evidence, dict)
+            or evidence.get("authorization") != expected
+        ):
+            return False
+        try:
+            timestamp = datetime.fromisoformat(str(record.get("timestamp")))
+            now = datetime.now(UTC)
+            ledger = ProviderBudgetLedger(
+                Path(str(self.config["ledger_path"])), read_only=True
+            )
+            campaign = ledger.active_campaign()
+            return (
+                campaign is not None
+                and campaign.campaign_id == expected["campaign_id"]
+                and campaign.authorization_id == expected["authorization_id"]
+                and campaign.scope == expected["scope"]
+                and timestamp.tzinfo is not None
+                and now - timedelta(hours=24) <= timestamp <= now
+            )
+        except (RagError, ValueError, OSError, sqlite3.DatabaseError):
+            return False
+
+    def _validation_evidence_current(
+        self, key: str, operation: str, evidence: object
+    ) -> bool:
+        if self.control is None or not isinstance(evidence, dict):
+            return False
+        connection = self.control.get_connection(str(self.config[key]))
+        spec = self._spec(key)
+        model = "jina-reranker-v3.5" if operation == "reranking" else spec.model
+        policy = (
+            canonical_sha256({"model": model, "operation": operation})
+            if operation == "reranking"
+            else spec.policy_identity(operation)
+        )
+        campaign = ProviderBudgetLedger(
+            Path(str(self.config["ledger_path"])), read_only=True
+        ).campaign(str(self.config["campaign_id"]))
+        return any(
+            run.validation_id == evidence.get("validation_id")
+            and run.operation == operation
+            and run.provider_model == model
+            and run.request_policy_identity == policy
+            and run.validation_mode == "live"
+            and run.http_category == "live_200"
+            and run.status == "succeeded"
+            and run.request_dispatched is True
+            and run.http_status == HTTPStatus.OK
+            and run.synthetic_payload_hash in campaign.approved_payload_hashes
+            and (operation == "reranking" or run.dimension == spec.dimension)
+            and validation_is_current(
+                run,
+                connection,
+                self.control.credential_version(connection.credential_id),
+            )
+            for run in self.control.list_validations(connection.connection_id)
+        )
 
     def _spec(self, key: str) -> ResolvedEmbeddingSpec:
         if self.control is None:
@@ -364,6 +469,11 @@ class ProductAcceptanceBackend:
         ]
         evidence = {
             **result.evidence,
+            "authorization": {
+                "campaign_id": campaign_id,
+                "authorization_id": campaign.authorization_id,
+                "scope": campaign.scope,
+            },
             "attempts": attempts,
             "budget": ledger.summary(campaign_id),
             "new_forwarded_http": sum(
@@ -499,44 +609,9 @@ class ProductAcceptanceBackend:
             yield
 
     def _check(self) -> StepResult:
-        if self.configuration_error or self.control is None:
-            return StepResult(
-                "BLOCKED", self.configuration_error or "CONFIGURATION_REQUIRED"
-            )
-        try:
-            expected_ledger = (
-                Path(str(self.config["data_dir"])).resolve()
-                / "provider-budget.sqlite3"
-            )
-            if (
-                Path(str(self.config["ledger_path"])).resolve()
-                != expected_ledger
-            ):
-                return StepResult("BLOCKED", "PRODUCT_LEDGER_PATH_MISMATCH")
-            for name in ("jina_connection_id", "aliyun_connection_id"):
-                if not self.config.get(name):
-                    continue
-                connection = self.control.get_connection(str(self.config[name]))
-                endpoint_identity(connection)
-                self._spec(name)
-                if not connection.enabled:
-                    return StepResult("BLOCKED", "CONNECTION_DISABLED")
-                credential = self.control.credential_version(
-                    connection.credential_id
-                )
-                if credential < 1:
-                    raise ValueError("Credential 版本无效。")
-            if not Path(str(self.config["ledger_path"])).is_file():
-                return StepResult("BLOCKED", "PERSISTENT_CAMPAIGN_REQUIRED")
-        except (RagError, ValueError, sqlite3.DatabaseError):
-            return StepResult("BLOCKED", "CONNECTION_OR_PROFILE_INVALID")
-        budget = self.budget_snapshot()
+        diagnosis = diagnose_configuration(self.config)
         return StepResult(
-            "PASS" if budget["status"] == "PASS" else "BLOCKED",
-            "LOCAL_CONFIGURATION_VALID"
-            if budget["status"] == "PASS"
-            else str(budget["reason"]),
-            {"http_requests": 0, "secret_decryption": False},
+            str(diagnosis["status"]), str(diagnosis["reason"]), diagnosis
         )
 
     def budget_snapshot(self) -> dict[str, object]:
@@ -552,10 +627,7 @@ class ProductAcceptanceBackend:
         path = self.config.get("ledger_path")
         campaign_id = str(self.config.get("campaign_id", ""))
         if not path or not Path(str(path)).is_file() or not campaign_id:
-            return {
-                "status": "BLOCKED",
-                "reason": "PERSISTENT_CAMPAIGN_REQUIRED",
-            }
+            return self._unbound_budget_snapshot()
         try:
             ledger = ProviderBudgetLedger(Path(str(path)), read_only=True)
             campaign = ledger.campaign(campaign_id)
@@ -578,6 +650,50 @@ class ProductAcceptanceBackend:
                 "status": "BLOCKED",
                 "reason": "PERSISTENT_CAMPAIGN_UNAVAILABLE",
             }
+
+    def _unbound_budget_snapshot(self) -> dict[str, object]:
+        result: dict[str, object] = {
+            "status": "BLOCKED",
+            "reason": "CAMPAIGN_BINDING_REQUIRED",
+            "campaign_bound": False,
+        }
+        data_dir = self.config.get("data_dir")
+        if (
+            not data_dir
+            or not (Path(str(data_dir)) / "universal-rag.sqlite3").is_file()
+        ):
+            return result
+        try:
+            summary = read_product_budget_history(Path(str(data_dir)))
+        except (RagError, ValueError, OSError, sqlite3.DatabaseError) as error:
+            result.update(
+                status="FAIL",
+                reason="HISTORICAL_BUDGET_READ_FAILED",
+                safe_error_type=type(error).__name__,
+            )
+            return result
+        summary.update(
+            request_limit=_AUTHORIZED_REQUEST_LIMIT,
+            estimated_token_limit=_AUTHORIZED_TOKEN_LIMIT,
+            provider_token_limits={
+                "jina": _AUTHORIZED_PROVIDER_TOKEN_LIMIT,
+                "aliyun": _AUTHORIZED_PROVIDER_TOKEN_LIMIT,
+            },
+        )
+        result.update(
+            cumulative=summary,
+            this_run=summarize_attempts([]),
+            remaining={
+                "requests": max(
+                    0, _AUTHORIZED_REQUEST_LIMIT - summary["reserved"]
+                ),
+                "estimated_input_tokens": max(
+                    0,
+                    _AUTHORIZED_TOKEN_LIMIT - summary["estimated_input_tokens"],
+                ),
+            },
+        )
+        return result
 
     def bind_campaign(self) -> StepResult:
         """离线绑定明确批准的固定公开数据集与累计额度。
@@ -764,31 +880,21 @@ class ProductAcceptanceBackend:
             else spec.query_policy
         )
         model = "jina-reranker-v3.5" if operation == "reranking" else spec.model
-        connection = self.control.get_connection(connection_id)
-        expected_policy = (
-            canonical_sha256({"model": model, "operation": operation})
-            if operation == "reranking"
-            else spec.policy_identity(operation)
-        )
-        for run in self.control.list_validations(connection_id):
-            if (
-                key == "jina_connection_id"
-                and run.operation == operation
-                and run.provider_model == model
-                and run.request_policy_identity == expected_policy
-                and run.validation_mode == "live"
-                and run.http_category == "live_200"
-                and run.status == "succeeded"
-                and validation_is_current(
-                    run,
-                    connection,
-                    self.control.credential_version(connection.credential_id),
-                )
+        prior = self.state.latest("jina_connection")
+        if (
+            key == "jina_connection_id"
+            and prior is not None
+            and self._record_authorization_current(prior)
+        ):
+            prior_evidence = cast(dict[str, object], prior["evidence"])
+            operation_evidence = prior_evidence.get(operation)
+            if self._validation_evidence_current(
+                key, operation, operation_evidence
             ):
                 return StepResult(
                     "PASS",
                     "CURRENT_LIVE_VALIDATION_REUSED",
-                    {"validation_id": run.validation_id},
+                    cast(dict[str, object], operation_evidence),
                 )
         run = self._providers().validate(
             connection_id,
@@ -797,7 +903,7 @@ class ProductAcceptanceBackend:
             expected_dimension=None if operation == "reranking" else 1024,
             request_policy={} if operation == "reranking" else policy,
         )
-        evidence = run.model_dump(mode="json")
+        evidence = run.model_dump(mode="json", exclude={"endpoint_host"})
         if run.stage == "budget":
             return StepResult(
                 "BLOCKED", run.safe_error_code or "BLOCKED_BUDGET", evidence
