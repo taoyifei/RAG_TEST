@@ -2,8 +2,8 @@
   "application_version": "0.1.0",
   "chunk_schema": "canonical-chunk-v3",
   "database_schema_range": {
-    "maximum": 15,
-    "minimum": 15
+    "maximum": 16,
+    "minimum": 16
   },
   "frontend_build_id": "universal-rag-console@0.1.0",
   "fts_schema": "fts-v2",

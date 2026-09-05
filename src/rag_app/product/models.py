@@ -39,6 +39,8 @@ class ProviderConnectionDraft(FrozenModel):
     provider_type: str
     credential_id: str
     endpoint_profile: str = "default"
+    endpoint_mode: str = "workspace_host"
+    api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=20)
@@ -53,9 +55,12 @@ class ProviderConnection(FrozenModel):
     provider_type: str
     credential_id: str
     endpoint_profile: str
+    configuration_version: StrictInt = Field(default=1, gt=0)
     enabled: bool
     status: str
     last_validation_id: str | None = None
+    endpoint_mode: str = "workspace_host"
+    api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=20)
@@ -83,6 +88,14 @@ class ProviderValidationRun(FrozenModel):
     observed_tokens: StrictInt | None = Field(default=None, ge=0)
     latency_ms: StrictInt = Field(ge=0)
     safe_error_code: str | None = None
+    configuration_version: StrictInt = Field(default=1, gt=0)
+    stage: str = "legacy"
+    request_dispatched: bool | None = None
+    http_status: int | None = None
+    provider_code: str | None = None
+    provider_request_id: str | None = None
+    endpoint_mode: str | None = None
+    endpoint_host: str | None = None
     synthetic_payload_hash: str
 
 

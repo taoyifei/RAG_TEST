@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.product.models import ProviderConnectionDraft
 from tests.product_support import (
@@ -105,6 +106,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
                 provider_type="aliyun-model-studio",
                 credential_id=credential.credential_id,
                 workspace_id="llm-workspace1",
+                api_host="https://llm-workspace1.cn-beijing.maas.aliyuncs.com",
                 region="cn-beijing",
             )
         )
@@ -755,6 +757,7 @@ def test_aliyun_validation_fails_closed_on_response_contract(
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
                 workspace_id="llm-workspace1",
+                api_host="https://llm-workspace1.cn-beijing.maas.aliyuncs.com",
                 region="cn-beijing",
             )
         )
@@ -771,7 +774,7 @@ def test_aliyun_validation_fails_closed_on_response_contract(
         harness.close()
 
 
-@pytest.mark.parametrize("workspace_id", ("workspace-1", "INVALID WORKSPACE"))
+@pytest.mark.parametrize("workspace_id", ("bad workspace", "INVALID WORKSPACE"))
 def test_aliyun_invalid_workspace_has_safe_configuration_error(
     tmp_path: Path,
     workspace_id: str,
@@ -795,10 +798,23 @@ def test_aliyun_invalid_workspace_has_safe_configuration_error(
                 display_name="百炼配置校验",
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
-                workspace_id=workspace_id,
+                workspace_id="ws-demo000000001",
+                api_host="https://safe.cn-beijing.maas.aliyuncs.com",
                 region="cn-beijing",
             )
         )
+        # 模拟迁移保留的旧无效元数据；新创建接口会更早拒绝。
+
+        factory = SqliteConnectionFactory(
+            harness.runtime.settings.data_dir / "universal-rag.sqlite3"
+        )
+        with factory.transaction(write=True) as database:
+            database.execute(
+                "UPDATE provider_connections SET config_json="
+                "json_set(config_json, '$.workspace_id', ?) "
+                "WHERE connection_id=?",
+                (workspace_id, connection.connection_id),
+            )
         result = harness.runtime.providers.validate(
             connection.connection_id,
             operation="embedding.document",
@@ -830,7 +846,7 @@ def test_aliyun_invalid_workspace_has_safe_configuration_error(
         (
             401,
             {"code": "NOT AUTHORIZED"},
-            "REGION_OR_WORKSPACE_INVALID",
+            "PROVIDER_AUTHENTICATION_FAILED",
         ),
         (
             404,
@@ -840,7 +856,7 @@ def test_aliyun_invalid_workspace_has_safe_configuration_error(
         (
             403,
             {"code": "Workspace.AccessDenied"},
-            "REGION_OR_WORKSPACE_INVALID",
+            "PROVIDER_AUTHORIZATION_DENIED",
         ),
         (
             403,
@@ -886,6 +902,7 @@ def test_aliyun_error_body_uses_safe_allowlisted_classification(
                 provider_type="aliyun-model-studio",
                 credential_id=created.credential_id,
                 workspace_id="llm-workspace1",
+                api_host="https://llm-workspace1.cn-beijing.maas.aliyuncs.com",
                 region="cn-beijing",
             )
         )

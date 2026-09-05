@@ -7,6 +7,10 @@ import secrets
 from datetime import UTC, datetime
 from sqlite3 import Row
 
+from rag_app.adapters.providers.aliyun_endpoint import (
+    AliyunEndpointConfig,
+    resolve_endpoint,
+)
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.core.errors import Conflict, NotFound, PolicyDenied
 from rag_app.core.identifiers import canonical_json, canonical_sha256
@@ -28,8 +32,7 @@ from rag_app.product.models import (
     RetrievalProfileRevision,
 )
 
-_MAX_REQUEST_BUDGET = 20
-_MAX_TOKEN_BUDGET = 1_000_000
+_MAX_DISPLAY_NAME = 200
 _MAX_VALIDATION_PAGE = 200
 _MAX_USAGE_PAGE = 1000
 _P11_DIMENSION = 1024
@@ -71,6 +74,10 @@ class ProductControlStore:
             ValueError: 目录、Credential 或预算不匹配。
 
         """
+        draft = validate_connection_metadata(draft)
+        credential = self._credentials.get(draft.credential_id)
+        if credential.provider_type != draft.provider_type:
+            raise ValueError("Credential 与 Provider 类型不匹配。")
         display_name = draft.display_name
         provider_type = draft.provider_type
         credential_id = draft.credential_id
@@ -79,27 +86,12 @@ class ProductControlStore:
         region = draft.region
         request_budget = draft.request_budget
         token_budget = draft.token_budget
-        provider = require_provider(provider_type)
-        credential = self._credentials.get(credential_id)
-        if credential.provider_type != provider_type:
-            raise ValueError("Credential 与 Provider 类型不匹配。")
-        if endpoint_profile not in provider.endpoint_profiles:
-            raise ValueError("Endpoint Profile 不在内置目录中。")
-        if provider_type == "aliyun-model-studio":
-            if not workspace_id or region not in provider.regions:
-                raise ValueError(
-                    "阿里云百炼需要受支持的 Region 和 Workspace ID。"
-                )
-        elif workspace_id is not None or region is not None:
-            raise ValueError("Jina 连接不能保存 Region 或 Workspace ID。")
-        if not 1 <= request_budget <= _MAX_REQUEST_BUDGET or not (
-            1 <= token_budget <= _MAX_TOKEN_BUDGET
-        ):
-            raise ValueError("Provider 请求或 Token 预算越界。")
         connection_id = _identifier("conn")
         now = _now()
         config = canonical_json(
             {
+                "endpoint_mode": draft.endpoint_mode,
+                "api_host": draft.api_host,
                 "region": region,
                 "request_budget": request_budget,
                 "token_budget": token_budget,
@@ -121,6 +113,97 @@ class ProductControlStore:
                     config,
                     now,
                     now,
+                ),
+            )
+        return self.get_connection(connection_id)
+
+    def update_connection(
+        self,
+        connection_id: str,
+        *,
+        expected_version: int,
+        changes: dict[str, object],
+    ) -> ProviderConnection:
+        """在同一事务内修改非 Secret 元数据并使旧验证失效。
+
+        Args:
+            connection_id: 保持不变的连接 ID。
+            expected_version: 客户端读取的配置版本。
+            changes: 白名单非敏感字段。
+
+        Returns:
+            新配置版本的连接。
+
+        Raises:
+            Conflict: 其他管理员已保存配置。
+            ValueError: 字段或端点无效。
+
+        """
+        allowed = {
+            "display_name",
+            "workspace_id",
+            "endpoint_mode",
+            "api_host",
+            "region",
+            "request_budget",
+            "token_budget",
+            "enabled",
+        }
+        if not changes or set(changes) - allowed:
+            raise ValueError("连接修改包含不支持的字段。")
+        with self._connections.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM provider_connections WHERE connection_id=?",
+                (connection_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFound("连接不存在。", stage="connection.update")
+            current = _connection(row)
+            if current.configuration_version != expected_version:
+                raise Conflict(
+                    "连接已被修改，请刷新后重试。", stage="connection.update"
+                )
+            draft_fields = ProviderConnectionDraft.model_fields
+            values = {
+                key: value
+                for key, value in current.model_dump().items()
+                if key in draft_fields
+            }
+            values.update(
+                {
+                    key: value
+                    for key, value in changes.items()
+                    if key in draft_fields
+                }
+            )
+            draft = validate_connection_metadata(
+                ProviderConnectionDraft.model_validate(values)
+            )
+            enabled = changes.get("enabled", current.enabled)
+            if not isinstance(enabled, bool):
+                raise ValueError("enabled 必须为布尔值。")
+            config = draft.model_dump(
+                exclude={
+                    "display_name",
+                    "provider_type",
+                    "credential_id",
+                    "endpoint_profile",
+                }
+            )
+            connection.execute(
+                "UPDATE provider_connections SET display_name=?, "
+                "config_json=?, "
+                "configuration_version=configuration_version+1, "
+                "enabled=?, "
+                "last_validation_id=NULL, status='configured', "
+                "updated_at=? "
+                "WHERE connection_id=?",
+                (
+                    draft.display_name,
+                    canonical_json(config),
+                    int(enabled),
+                    _now(),
+                    connection_id,
                 ),
             )
         return self.get_connection(connection_id)
@@ -187,8 +270,10 @@ class ProductControlStore:
                 "request_policy_identity, started_at, "
                 "finished_at, status, http_category, dimension, "
                 "estimated_tokens, observed_tokens, latency_ms, "
-                "safe_error_code, synthetic_payload_hash) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "safe_error_code, synthetic_payload_hash, "
+                "configuration_version, diagnostics_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+                "?, ?, ?)",
                 (
                     validation.validation_id,
                     validation.connection_id,
@@ -207,11 +292,26 @@ class ProductControlStore:
                     validation.latency_ms,
                     validation.safe_error_code,
                     validation.synthetic_payload_hash,
+                    validation.configuration_version,
+                    canonical_json(
+                        validation.model_dump(
+                            include={
+                                "stage",
+                                "request_dispatched",
+                                "http_status",
+                                "provider_code",
+                                "provider_request_id",
+                                "endpoint_mode",
+                                "endpoint_host",
+                            }
+                        )
+                    ),
                 ),
             )
             connection.execute(
                 "UPDATE provider_connections SET last_validation_id=?, "
-                "status=?, updated_at=? WHERE connection_id=?",
+                "status=?, updated_at=? WHERE connection_id=? "
+                "AND configuration_version=?",
                 (
                     validation.validation_id,
                     "validated"
@@ -219,8 +319,11 @@ class ProductControlStore:
                     else "degraded",
                     validation.finished_at,
                     validation.connection_id,
+                    validation.configuration_version,
                 ),
             )
+        if validation.request_dispatched is False:
+            return validation
         self.record_provider_operation(
             validation.connection_id,
             operation=validation.operation,
@@ -811,6 +914,16 @@ class ProductControlStore:
             succeeded、failed 或 not_verified。
 
         """
+        try:
+            validate_connection_metadata(
+                ProviderConnectionDraft.model_validate(
+                    self.get_connection(connection_id).model_dump(
+                        include=set(ProviderConnectionDraft.model_fields)
+                    )
+                )
+            )
+        except ValueError:
+            return "not_verified"
         with self._connections.transaction() as connection:
             row = connection.execute(
                 "SELECT v.status FROM provider_validation_runs v "
@@ -820,6 +933,7 @@ class ProductControlStore:
                 "ON d.credential_id=c.credential_id "
                 "WHERE v.connection_id=? AND v.operation=? "
                 "AND v.credential_key_version=d.key_version "
+                "AND v.configuration_version=c.configuration_version "
                 "ORDER BY v.finished_at DESC LIMIT 1",
                 (connection_id, operation),
             ).fetchone()
@@ -950,6 +1064,9 @@ def _connection(row: Row) -> ProviderConnection:
             if row["last_validation_id"] is None
             else str(row["last_validation_id"])
         ),
+        configuration_version=int(row["configuration_version"]),
+        endpoint_mode=config.get("endpoint_mode", "workspace_host"),
+        api_host=config.get("api_host"),
         workspace_id=config.get("workspace_id"),
         region=config.get("region"),
         request_budget=int(config["request_budget"]),
@@ -961,6 +1078,8 @@ def _connection(row: Row) -> ProviderConnection:
 
 def _validation(row: Row) -> ProviderValidationRun:
     return ProviderValidationRun(
+        configuration_version=int(row["configuration_version"]),
+        **json.loads(str(row["diagnostics_json"])),
         validation_id=str(row["validation_id"]),
         connection_id=str(row["connection_id"]),
         catalog_version=str(row["catalog_version"]),
@@ -1061,4 +1180,52 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-__all__ = ["ProductControlStore"]
+def validate_connection_metadata(
+    draft: ProviderConnectionDraft,
+) -> ProviderConnectionDraft:
+    """在创建 Credential 之前校验完整连接元数据。
+
+    Args:
+        draft: 非 Secret 连接草稿。
+
+    Returns:
+        仅 trim 外侧空格并规范化 Origin 的草稿。
+
+    Raises:
+        ValueError: 目录、名称、端点或预算无效。
+
+    """
+    provider = require_provider(draft.provider_type)
+    if (
+        not draft.display_name.strip()
+        or len(draft.display_name) > _MAX_DISPLAY_NAME
+    ):
+        raise ValueError("连接名称必须为 1 到 200 个字符。")
+    if draft.endpoint_profile not in provider.endpoint_profiles:
+        raise ValueError("Endpoint Profile 不在内置目录中。")
+    if draft.provider_type == "aliyun-model-studio":
+        config = AliyunEndpointConfig.model_validate(
+            {
+                "workspace_id": draft.workspace_id,
+                "region": draft.region,
+                "endpoint_mode": draft.endpoint_mode,
+                "api_host": draft.api_host,
+            }
+        )
+        return draft.model_copy(
+            update={
+                "workspace_id": config.workspace_id,
+                "api_host": resolve_endpoint(config),
+            }
+        )
+    if (
+        draft.workspace_id is not None
+        or draft.region is not None
+        or draft.api_host is not None
+        or draft.endpoint_mode != "workspace_host"
+    ):
+        raise ValueError("Jina 连接不能保存百炼端点配置。")
+    return draft
+
+
+__all__ = ["ProductControlStore", "validate_connection_metadata"]

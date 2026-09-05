@@ -106,6 +106,9 @@ async function configureModelServices(page: Page) {
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-aliyun-browser-value");
   await page.getByLabel("工作空间标识").fill("llm-syntheticworkspace");
+  await page
+    .getByLabel("API Host", { exact: true })
+    .fill("https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com");
   await page.getByRole("button", { name: "保存连接" }).click();
   const aliyun = page.getByRole("article").filter({ hasText: "百炼备用连接" });
   await validateConnection(page, aliyun, "测试文档向量");

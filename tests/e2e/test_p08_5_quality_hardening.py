@@ -57,4 +57,4 @@ def test_p08_5_dataset_and_schema_migrations_are_complete(
 
     assert len(dataset.cases) >= 50
     assert migrations[5:9] == (6, 7, 8, 9)
-    assert migrations[-1] == 15
+    assert migrations[-1] == 16

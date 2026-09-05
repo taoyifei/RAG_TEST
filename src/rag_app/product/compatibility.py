@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from rag_app._build_revision import SOURCE_REVISION
 
-CURRENT_DATABASE_SCHEMA = 15
+CURRENT_DATABASE_SCHEMA = 16
 
 
 class SchemaRange(BaseModel):
@@ -78,7 +78,7 @@ def default_manifest() -> CompatibilityManifest:
         application_version="0.1.0",
         source_revision=SOURCE_REVISION,
         frontend_build_id="universal-rag-console@0.1.0",
-        database_schema_range=SchemaRange(minimum=15, maximum=15),
+        database_schema_range=SchemaRange(minimum=16, maximum=16),
         ir_schema="document-ir-v4",
         chunk_schema="canonical-chunk-v3",
         fts_schema="fts-v2",

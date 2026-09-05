@@ -52,6 +52,12 @@ export interface ProviderConnection {
   status: string;
   workspace_id?: string | null;
   region?: string | null;
+  configuration_version: number;
+  endpoint_mode?: "workspace_host" | "beijing_dashscope";
+  api_host?: string | null;
+  request_budget?: number;
+  token_budget?: number;
+  enabled?: boolean;
 }
 
 export interface CatalogProvider {
@@ -78,6 +84,11 @@ export interface ProviderValidation {
   safe_error_code?: string | null;
   dimension?: number | null;
   finished_at: string;
+  stage?: string;
+  request_dispatched?: boolean | null;
+  http_status?: number | null;
+  provider_code?: string | null;
+  provider_request_id?: string | null;
 }
 
 export interface ProviderUsageDaily {
@@ -491,6 +502,12 @@ export const api = {
       "/api/v1/provider-connections",
       "",
       jsonInit("POST", body),
+    ),
+  updateConnection: (connectionId: string, body: Record<string, unknown>) =>
+    request<ProviderConnection>(
+      `/api/v1/provider-connections/${connectionId}`,
+      "",
+      jsonInit("PATCH", body),
     ),
   validateConnection: (
     connectionId: string,

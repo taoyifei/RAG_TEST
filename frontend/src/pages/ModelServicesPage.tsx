@@ -1,5 +1,11 @@
 import { KeyRound, PlugZap, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 
 import {
   api,
@@ -10,9 +16,13 @@ import {
   type ProviderValidation,
 } from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
+import { ConnectionEditor } from "./ConnectionEditor";
 
 type ProviderType = "jina" | "aliyun-model-studio";
-type CredentialSource = "database_encrypted" | "environment_managed";
+type CredentialSource =
+  | "database_encrypted"
+  | "environment_managed"
+  | "existing";
 
 const operationLabels: Record<string, string> = {
   "embedding.document": "文档向量",
@@ -44,12 +54,17 @@ export function ModelServicesPage() {
   const [validations, setValidations] = useState<ProviderValidation[]>([]);
   const [dailyUsage, setDailyUsage] = useState<ProviderUsageDaily[]>([]);
   const [provider, setProvider] = useState<ProviderType>("jina");
-  const [source, setSource] =
-    useState<CredentialSource>("database_encrypted");
+  const [source, setSource] = useState<CredentialSource>("database_encrypted");
   const [displayName, setDisplayName] = useState("Jina 主连接");
   const [credentialValue, setCredentialValue] = useState("");
   const [environmentName, setEnvironmentName] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
+  const [endpointMode, setEndpointMode] = useState("workspace_host");
+  const [apiHost, setApiHost] = useState("");
+  const [existingCredential, setExistingCredential] = useState("");
+  const [editing, setEditing] = useState<ProviderConnection>();
+  const pendingRef = useRef(new Set<string>());
+  const [pending, setPending] = useState<string[]>([]);
   const [rotationId, setRotationId] = useState("");
   const [rotationValue, setRotationValue] = useState("");
   const [error, setError] = useState<unknown>();
@@ -95,22 +110,30 @@ export function ModelServicesPage() {
     setBusy(true);
     setError(undefined);
     try {
-      const credential = await api.createCredential({
-        provider_type: provider,
-        source,
-        environment_name:
-          source === "environment_managed" ? environmentName : undefined,
-        secret_value:
-          source === "database_encrypted" ? credentialValue : undefined,
-      });
       await api.createConnection({
         display_name: displayName,
         provider_type: provider,
-        credential_id: credential.credential_id,
+        credential_id: source === "existing" ? existingCredential : undefined,
+        credential:
+          source === "existing"
+            ? undefined
+            : {
+                provider_type: provider,
+                source,
+                environment_name:
+                  source === "environment_managed"
+                    ? environmentName
+                    : undefined,
+                secret_value:
+                  source === "database_encrypted" ? credentialValue : undefined,
+              },
+        endpoint_mode:
+          provider === "aliyun-model-studio" ? endpointMode : undefined,
+        api_host:
+          provider === "aliyun-model-studio" ? apiHost || null : undefined,
         workspace_id:
           provider === "aliyun-model-studio" ? workspaceId : undefined,
-        region:
-          provider === "aliyun-model-studio" ? "cn-beijing" : undefined,
+        region: provider === "aliyun-model-studio" ? "cn-beijing" : undefined,
       });
       setCredentialValue("");
       setEnvironmentName("");
@@ -127,6 +150,10 @@ export function ModelServicesPage() {
     operation: string,
     model: string,
   ) {
+    const key = `${connection.connection_id}:${operation}`;
+    if (pendingRef.current.has(key)) return;
+    pendingRef.current.add(key);
+    setPending([...pendingRef.current]);
     setError(undefined);
     try {
       await api.validateConnection(connection.connection_id, {
@@ -139,6 +166,9 @@ export function ModelServicesPage() {
       await load();
     } catch (reason) {
       setError(reason);
+    } finally {
+      pendingRef.current.delete(key);
+      setPending([...pendingRef.current]);
     }
   }
 
@@ -203,6 +233,7 @@ export function ModelServicesPage() {
             }
           >
             <option value="database_encrypted">页面加密托管</option>
+            <option value="existing">选择已有凭据</option>
             <option value="environment_managed">部署环境托管</option>
           </select>
         </label>
@@ -217,6 +248,24 @@ export function ModelServicesPage() {
               required
             />
           </label>
+        ) : source === "existing" ? (
+          <label>
+            已有凭据
+            <select
+              value={existingCredential}
+              onChange={(e) => setExistingCredential(e.target.value)}
+              required
+            >
+              <option value="">请选择匹配服务商的凭据</option>
+              {credentials
+                .filter((item) => item.provider_type === provider)
+                .map((item) => (
+                  <option key={item.credential_id} value={item.credential_id}>
+                    {item.masked_hint}
+                  </option>
+                ))}
+            </select>
+          </label>
         ) : (
           <label>
             环境变量名
@@ -230,20 +279,66 @@ export function ModelServicesPage() {
           </label>
         )}
         {provider === "aliyun-model-studio" && (
-          <label>
-            工作空间标识
-            <input
-              value={workspaceId}
-              onChange={(event) => setWorkspaceId(event.target.value)}
-              required
-            />
-          </label>
+          <>
+            <label>
+              工作空间标识
+              <input
+                value={workspaceId}
+                onChange={(event) => setWorkspaceId(event.target.value)}
+                required
+              />
+            </label>
+          </>
+        )}
+        {provider === "aliyun-model-studio" && (
+          <>
+            <label>
+              端点模式
+              <select
+                value={endpointMode}
+                onChange={(e) => {
+                  setEndpointMode(e.target.value);
+                  setApiHost(
+                    e.target.value === "beijing_dashscope"
+                      ? "https://dashscope.aliyuncs.com"
+                      : "",
+                  );
+                }}
+              >
+                <option value="workspace_host">北京业务空间 API Host</option>
+                <option value="beijing_dashscope">
+                  北京 DashScope（显式选择）
+                </option>
+              </select>
+            </label>
+            <label>
+              API Host
+              <input
+                value={apiHost}
+                onChange={(e) => setApiHost(e.target.value)}
+                required={endpointMode === "workspace_host"}
+                placeholder="请从当前北京业务空间复制API Host"
+              />
+            </label>
+            <p>Key 非空仅代表本地形状检查；端点选择不代表鉴权成功。</p>
+          </>
         )}
         <button className="primary" disabled={busy}>
           <PlugZap aria-hidden="true" size={17} />
           {busy ? "正在保存…" : "保存连接"}
         </button>
       </form>
+      {editing && (
+        <ConnectionEditor
+          key={editing.connection_id}
+          connection={editing}
+          onSaved={async () => {
+            await load();
+            setEditing(undefined);
+          }}
+          onCancel={() => setEditing(undefined)}
+        />
+      )}
       <div className="card-list">
         {connections.map((connection) => (
           <article key={connection.connection_id} className="provider-card">
@@ -256,13 +351,24 @@ export function ModelServicesPage() {
             </div>
             <StatusBadge value={connection.status} />
             <div className="row-actions">
+              <button onClick={() => setEditing(connection)}>编辑连接</button>
               {catalogOperations(catalog, connection.provider_type).map(
                 ([operation, model, label]) => (
                   <button
                     key={operation}
+                    disabled={
+                      connection.enabled === false ||
+                      pending.includes(
+                        `${connection.connection_id}:${operation}`,
+                      )
+                    }
                     onClick={() => void validate(connection, operation, model)}
                   >
-                    测试{label}
+                    {pending.includes(
+                      `${connection.connection_id}:${operation}`,
+                    )
+                      ? "测试中…"
+                      : `测试${label}`}
                   </button>
                 ),
               )}
@@ -301,7 +407,8 @@ export function ModelServicesPage() {
             .filter((item) => item.source === "database_encrypted")
             .map((item) => (
               <option key={item.credential_id} value={item.credential_id}>
-                {item.provider_type} · {item.masked_hint} · 第{item.key_version}版
+                {item.provider_type} · {item.masked_hint} · 第{item.key_version}
+                版
               </option>
             ))}
         </select>
@@ -341,8 +448,17 @@ export function ModelServicesPage() {
                     <td>
                       <StatusBadge value={item.status} />
                     </td>
-                    <td>{item.http_category}</td>
-                    <td>{new Date(item.finished_at).toLocaleString("zh-CN")}</td>
+                    <td>
+                      {validationMessage(item)}
+                      <br />
+                      {item.http_status ? `HTTP ${item.http_status}` : ""}{" "}
+                      {item.provider_code}
+                      <br />
+                      {item.provider_request_id}
+                    </td>
+                    <td>
+                      {new Date(item.finished_at).toLocaleString("zh-CN")}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -382,8 +498,8 @@ export function ModelServicesPage() {
                       {item.operation}
                     </td>
                     <td>
-                      {item.request_count}（成功 {item.successful_requests} / 失败{" "}
-                      {item.failed_requests}）
+                      {item.request_count}（成功 {item.successful_requests} /
+                      失败 {item.failed_requests}）
                     </td>
                     <td>
                       估算 {item.estimated_tokens} / 实测 {item.observed_tokens}
@@ -402,4 +518,14 @@ export function ModelServicesPage() {
       </section>
     </section>
   );
+}
+
+function validationMessage(item: ProviderValidation): string {
+  if (item.request_dispatched === false) return "本地配置未通过，请求未发出";
+  if (item.http_category === "connect_error") return "DNS/TLS 连接失败";
+  if (item.http_status === 401) return "HTTP 鉴权失败";
+  if (item.http_status === 403) return "权限或模型访问被拒绝，请核对资源授权";
+  if (item.status === "failed" && item.stage === "response_contract")
+    return "响应不兼容";
+  return item.safe_error_code ?? item.http_category;
 }
