@@ -9,11 +9,17 @@ on:
       - '**/*.md'
       - 'release/p11-repair-acceptance.json'
       - 'release/p11-r4-evidence.json'
+      - 'release/p11-blocker-diagnosis.json'
+      - 'release/p11-budget-plan.json'
+      - 'release/p11-os-risk-review.json'
   pull_request:
     paths-ignore:
       - '**/*.md'
       - 'release/p11-repair-acceptance.json'
       - 'release/p11-r4-evidence.json'
+      - 'release/p11-blocker-diagnosis.json'
+      - 'release/p11-budget-plan.json'
+      - 'release/p11-os-risk-review.json'
   workflow_dispatch:
 
 permissions:
@@ -96,11 +102,31 @@ jobs:
           'test "$(id -u)" = 10001 &&
           test ! -e /usr/local/bin/node &&
           test ! -e /usr/local/bin/pip'
-      - run: >-
+      - name: Archive complete vulnerability scan including unfixed findings
+        run: >-
           docker run --rm
           -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$RUNNER_TEMP:/output"
+          -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy"
           aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
-          image --scanners vuln --ignore-unfixed --exit-code 1
+          image --scanners vuln --format json
+          --output /output/p11-trivy-all.json docx-rag:v1-candidate
+      - name: Retain complete scan and vulnerability database identity
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: p11-complete-container-vulnerability-scan
+          path: |
+            ${{ runner.temp }}/p11-trivy-all.json
+            ${{ runner.temp }}/trivy-cache/db/metadata.json
+          if-no-files-found: error
+      - name: Block fixable High or Critical vulnerabilities only
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy"
+          aquasec/trivy@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+          image --skip-db-update --scanners vuln --ignore-unfixed --exit-code 1
           --severity HIGH,CRITICAL docx-rag:v1-candidate
 
   qdrant-integration:
