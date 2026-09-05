@@ -234,3 +234,110 @@ P11-R1 使用显式 `workspace_host` / `beijing_dashscope` 两种北京 Native �
 成功示例包含 `status_code`、空 `code`、`output.embeddings` 与 `usage`。
 Probe 和 Adapter 共用严格编解码；未声称真实接口必定缺字段，尚未采集新真实响应。
 本轮 Provider 外部 HTTP=0，`ALIYUN_LIVE_READY=false`；阶段证据见 [P11-R1](p11-r1.md)。
+
+## 2026-09-06 P11-R4：交付延误原因、当前阻断与恢复条件
+
+本节追加纠错，不删除上文旧 4xx、旧预算或旧部署记录。完整门状态、执行回执和资产身份见
+[简明验收报告](../../release/p11-repair-acceptance.md)、
+[机器报告](../../release/p11-repair-acceptance.json)及
+[单份证据包](../../release/p11-r4-evidence.json)。
+
+### 为什么长时间没有交付，是否在等用户点击
+
+代码和报告提交不需要用户再点击或批准。此次延误首先是 Codex 的执行安排问题：
+没有及时冻结跨模块修改、集中安排阶段末验收，导致完整离线回归重复执行。
+验收又暴露了 release 入口的模块搜索路径缺失、浏览器测试写死端口/Origin、
+Docker 上下文包含旧安全扫描缓存且无法读取权限等问题。问题已修复，保留失败日志，
+不能把后来的通过写成第一次就通过。
+
+代码合并 `8e58720c59dc3187361fce32fc26fbf6572dc641` 已推送；其 P11 CI 在
+**2026-09-05 23:36（Asia/Hong_Kong）**完成，7 个 job 全部成功。
+CI 完成后仍未及时汇总、提交文档，是 Codex 收尾和状态跟踪不到位，不能继续归因于
+CI 等待、工具正在运行或用户未操作。单次完整离线 check 的实际耗时约 6 分 23 秒，
+不能用它解释之后整段交付空档。
+
+真实 Live 的下一步确实有独立的用户前置条件，但它不妨碍离线工作、文档和阶段分支保存：
+R4 任务书第 4 节明确要求用户在自己的页面确认百炼 `endpoint_mode`、对应 API Host
+及北京地域。当前本地 `config_check` 实际返回 `CONNECTION_OR_PROFILE_INVALID`；
+旧连接尚未完成该确认，持久 campaign 因此尚未首绑。不能代替用户选择业务空间 Host，
+不能以历史 `llm-` 前缀推断正确配置，也不能读取真实 Key。页面核对完成后，续跑命令
+先在 app 停止的维护窗口导入旧账、绑定原预算，再允许有界 canary。
+
+另外两项发布阻断不是多点击一次页面就会解除：
+
+- 质量 pilot 有 30 个预标注问题，主/备各一轮。仅 Query embedding 下限为
+  60 次 HTTP、3590 估算输入 Token；当前剩余 19 次、843 Token，至少还差
+  41 次、2747 Token，尚未计文档、重排和重试。未扩大预算，真实质量未执行。
+- 最终镜像扫描有 High/Critical 54 条，可修复 0 条、无修复版本 54 条。
+  可达性与缓解尚未逐项评估，没有风险接受责任人或期限，因此安全门 BLOCKED。
+  “可修复漏洞 0”不能作为发布安全通过结论。
+
+### 已完成且可验证的工作
+
+实现持久 SQLite campaign/attempt 账本，原子预留覆盖 Probe、SDK、后台索引、Reranker
+及 HTTP 重试；重启不重置预算，恢复旧备份会阻止未经核对的继续外呼。
+已有 Live 测试和 release 入口改为可选阶段及持久续跑，不再以 23 次为启动下限。
+质量 pilot 复用 Evaluation V3 的实际 fusion/rerank 观测和预标注标签，保留既有阈值。
+发布门从执行证据、相关组件身份及镜像身份计算，局部通过不能把整个 P11 写绿。
+
+实际命令与最终结果如下，细节及退出码保存在证据包：
+
+| 命令 / 范围 | 结果 | 来源 |
+| --- | --- | --- |
+| `.venv/bin/python scripts/release.py acceptance` 内部完整离线门 | check 1629 passed / 88 deselected；smoke 72；product-check 72；product-smoke 6；升级 7；隔离 Qdrant 3 | 本次执行 |
+| `scripts/dev.py web-lint / web-typecheck / web-test` | 全部退出 0；前端测试 27 passed | 本次执行 |
+| `scripts/release.py acceptance --resume --candidate` | 正式 `rag-app serve` 启动、资源就绪、浏览器 5 passed / 3 skipped、Qdrant 双槽及重启持久性通过；总报告仍退出 2 | 本次执行 |
+| `scripts/release.py verify` | Python/npm 审计和 Secret 扫描通过；OS 风险尚未评估，整体 BLOCKED | 本次执行 |
+| `scripts/dev.py smoke`，P11 合并后 | 72 passed，退出 0；业务代码树不变，复用相关完整门证据 | 本次执行及有效复用 |
+| `gh run view 33975025319 --repo taoyifei/RAG_TEST` | 7/7 job success，代码 SHA 为 `8e58720c59dc3187361fce32fc26fbf6572dc641` | 本次核验 |
+| `release.py acceptance --resume --steps config_check --container rag-v1-app-1 --config artifacts/p11-r4/live-config.json` | 无 Provider HTTP；配置 BLOCKED，整体退出 2 | 本次执行 |
+| 百炼 document/query、当前 Jina 验证、真实双槽/切换、真实标注质量 | 未执行；当前候选不复用已变更请求策略的历史 Jina 200 | 未执行 |
+
+CI：[P11 CI Run 33975025319](https://github.com/taoyifei/RAG_TEST/actions/runs/33975025319)。
+最终候选镜像为 `sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1`，
+OCI revision 为 `2081446`。之后的改动只修正浏览器测试的 Origin；候选前端构建产物逐文件
+哈希相等，最终候选浏览器已重跑。报告提交不重新构建相同业务资产。
+本地 `rag-v1-app-1` 已使用该候选且健康，地址为 `http://127.0.0.1:8088`；
+此次为本地候选更新，未执行远程生产发布。
+
+本地更新前保留一份 `pre-r4-2081446.tar.gz`，校验 SHA-256 为
+`1390d339828ac555d455d9039946ff41dcceea485eb0450b3dce2677423b497c`，SQLite integrity `ok`。
+更新前后仍为 2 个 Connection、2 个 Credential、7 条验证记录、0 个文档和 0 个 KB；
+原 Qdrant 容器保留。隔离验收的临时 Compose 容器、网络及卷已清理。
+
+只读现有数据库核验：本次新增真实 Provider HTTP **0**，累计 **6/25**；
+估算输入 Token 累计 **157/1000**；已知 observed usage 合计 **242**，另有 **3** 次缺 usage。
+另有历史本地拦截 1 次、估算 19 Token，未发 HTTP，不混入供应商消费。
+验证记录与 operation event 去重计数，重启没有新开额度。私有 DOC/DOCX 未出网。
+
+### 用户后续只有两个操作步骤
+
+1. 在本地页面原地核对并保存百炼连接的 Endpoint 模式、对应可信 API Host、北京地域。
+   Workspace 保留控制台真实复制值；真实 Key 仍只在页面管理。此步先保存配置，
+   Provider canary 由下一步在预算首绑后发出。
+2. 在 WSL 仓库目录运行下面的现有 release 续跑命令组。首绑需要短暂停止 app，以免旧进程
+   和预算导入并发；此处不停止或删除 Qdrant，不重建镜像，不清空数据。
+
+```bash
+cd /home/jerry/work/RAG
+docker compose stop app
+.venv/bin/python scripts/release.py acceptance --resume --bind-campaign \
+  --steps config_check --container rag-v1-app-1 \
+  --config artifacts/p11-r4/live-config.json
+docker compose start app
+.venv/bin/python scripts/release.py acceptance --resume --live \
+  --steps aliyun_document_canary,aliyun_query_canary \
+  --container rag-v1-app-1 --config artifacts/p11-r4/live-config.json
+```
+
+当前机器的非秘密配置已准备于 `artifacts/p11-r4/live-config.json`，包含既有连接 ID 和
+原 25/1000 总预算、每 Provider 600 Token 上限；不包含 API Key、Workspace 正文或 Host。
+首绑步骤本身不发 Provider 请求。首个 document canary 最多一次、无自动重试；只有成功
+才进行一次 query。失败会留下安全诊断和预算，不自动扩展调用范围。
+命令返回 2 表示整体 P11 尚未通过，应读取报告的单步状态；不能把 2 一律当作 API 失败，
+也不能把 canary 的局部成功理解为整个发布成功。首绑成功后正常续跑不再需要首绑操作。
+
+当前 `CONNECTIVITY_READY=false`、`QUALITY_READY=BLOCKED_BUDGET`、`P11_READY=false`。
+R4 代码允许合回并保存到 `codex/p11-release`，已以 `--no-ff` 完成；
+`feature/universal-rag`、`main`、`Industry` 保持原引用，未合入主产品集成分支。
+`MERGE_TO_MAIN_AUTHORIZED=false`。完整门状态以本节链接的机器报告为准。
