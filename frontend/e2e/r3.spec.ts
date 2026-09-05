@@ -9,15 +9,16 @@ test("R3 连接编辑保留密钥、并发保护和键盘导航", async ({
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
+  const origin = new URL(page.url()).origin;
   const session = (await (
     await request.post("/api/v1/console/session", {
-      headers: { Origin: "http://127.0.0.1:8091" },
+      headers: { Origin: origin },
       data: { bootstrap_token: "offline-bootstrap-credential" },
     })
   ).json()) as { csrf_token: string };
   const headers = {
     "X-CSRF-Token": session.csrf_token,
-    Origin: "http://127.0.0.1:8091",
+    Origin: origin,
   };
   const suffix = testInfo.project.name;
   const host =
@@ -39,7 +40,7 @@ test("R3 连接编辑保留密钥、并发保护和键盘导航", async ({
         region: "cn-beijing",
       },
     });
-    expect(response.ok()).toBeTruthy();
+    expect(response.ok(), await response.text()).toBeTruthy();
     return response.json() as Promise<ProviderConnection>;
   };
   const first = await seed(`合成连接甲 ${suffix}`);

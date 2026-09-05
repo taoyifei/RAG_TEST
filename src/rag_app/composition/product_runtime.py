@@ -746,6 +746,7 @@ def build_product_runtime(
     *,
     transport_factory: TransportFactory | None = None,
     circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
+    recover_jobs: bool = True,
 ) -> ProductRuntime:
     """迁移 SQLite 并构造完整 Product Runtime。
 
@@ -753,6 +754,7 @@ def build_product_runtime(
         settings: P10.5 最小启动配置。
         transport_factory: 测试用 Provider MockTransport 工厂。
         circuit_factory: 测试用可控时钟 Circuit 工厂。
+        recover_jobs: 是否恢复已有持久作业；验收入口只运行自己的新作业。
 
     Returns:
         唯一拥有全部产品资源的 Runtime。
@@ -792,6 +794,7 @@ def build_product_runtime(
         credentials,
         control,
         transport_factory=transport_factory,
+        budget_ledger_path=data_dir / "provider-budget.sqlite3",
     )
     profiles = ProductProfileResolver(
         control,
@@ -812,6 +815,7 @@ def build_product_runtime(
             _product_profile(settings),
             data_dir=data_dir,
             hooks=P09RuntimeHooks(
+                recover_jobs=recover_jobs,
                 system_status_overlay=_status_overlay,
                 retrieval_resolver=profiles.retrieval_service,
                 revision_builder_resolver=profiles.revision_lifecycle,
@@ -1007,6 +1011,8 @@ def _product_status(
         connectivity
         and calibrated
         and not test_only_transport
+        and not status.reindex_required
+        and status.integrity_status == "ok"
         and not evidence["reindex_required"]
         and all(
             item.get("local_contract_verified") == "offline"

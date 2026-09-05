@@ -414,13 +414,18 @@ def _web_e2e(profile: Path | None) -> int:
     ]
     if profile is not None:
         server_command.extend(("--profile", str(profile)))
-    server = subprocess.Popen(  # noqa: S603
-        server_command,
-        cwd=_REPOSITORY_ROOT,
-        env=_offline_environment(),
+    external = os.environ.get("P10_EXTERNAL_SERVER") == "1"
+    server = (
+        None
+        if external
+        else subprocess.Popen(  # noqa: S603
+            server_command,
+            cwd=_REPOSITORY_ROOT,
+            env=_offline_environment(),
+        )
     )
     try:
-        if not _wait_for_p10(8091):
+        if not external and not _wait_for_p10(8091):
             print("BLOCKED web-e2e: P10 loopback 服务未就绪。", file=sys.stderr)
             return 2
         environment = _offline_environment()
@@ -428,7 +433,11 @@ def _web_e2e(profile: Path | None) -> int:
             {
                 "P10_EXTERNAL_SERVER": "1",
                 "P10_BROWSER_CHANNEL": "chrome",
-                "P10_BASE_URL": "http://127.0.0.1:8091",
+                "P10_BASE_URL": os.environ.get(
+                    "P10_BASE_URL", "http://127.0.0.1:8091"
+                )
+                if external
+                else "http://127.0.0.1:8091",
             }
         )
         wsl_environment = environment.get("WSLENV", "")
@@ -454,12 +463,13 @@ def _web_e2e(profile: Path | None) -> int:
         )
         return completed.returncode
     finally:
-        server.terminate()
-        try:
-            server.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            server.kill()
-            server.wait(timeout=5)
+        if server is not None:
+            server.terminate()
+            try:
+                server.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=5)
 
 
 def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:

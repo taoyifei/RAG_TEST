@@ -863,6 +863,56 @@ class SqliteLifecycleStore:
             ).fetchall()
         return tuple(str(row["job_id"]) for row in rows)
 
+    def resume_ingestion_job(
+        self,
+        job_id: str,
+        *,
+        project_id: str,
+        knowledge_base_id: str,
+        idempotency_key: str,
+    ) -> Job:
+        """仅恢复调用方明确引用且租约已失效的同 scope 持久作业。
+
+        Args:
+            job_id: 已由验收状态明确引用的作业。
+            project_id: 预期项目身份。
+            knowledge_base_id: 预期知识库身份。
+            idempotency_key: 入队时的原始幂等键。
+
+        Returns:
+            当前作业；仍在运行或已终结的作业保持原样。
+
+        Raises:
+            Conflict: 作业不属于调用方指定的 scope。
+
+        """
+        now = _now()
+        with self._connections.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT project_id, knowledge_base_id, idempotency_key "
+                "FROM ingestion_jobs WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None or tuple(row) != (
+                project_id,
+                knowledge_base_id,
+                idempotency_key,
+            ):
+                raise Conflict(
+                    "续跑作业与授权 scope 不符。", stage="job.resume"
+                )
+            connection.execute(
+                "UPDATE ingestion_requests SET state='queued', updated_at=? "
+                "WHERE job_id=? AND state='running' AND EXISTS("
+                "SELECT 1 FROM ingestion_jobs j WHERE j.job_id=? "
+                "AND j.state='interrupted' AND j.cancel_requested=0 "
+                "AND NOT EXISTS(SELECT 1 FROM revision_build_leases l "
+                "WHERE l.revision_id=j.revision_id AND l.state='active' "
+                "AND l.expires_at>?))",
+                (now, job_id, job_id, now),
+            )
+        return self.get_job(job_id)
+
     def finish_ingestion(
         self,
         job_id: str,

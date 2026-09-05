@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from rag_app.adapters.providers.budget_transport import budgeted_client
 from rag_app.core.errors import (
     ProviderAuthenticationError,
     ProviderInputTooLarge,
@@ -121,10 +122,15 @@ class ProviderHttpClient:
         if max_attempts <= 0 or max_response_bytes <= 0:
             raise ValueError("HTTP 尝试次数和响应上限必须为正数。")
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
-            follow_redirects=False,
-            trust_env=False,
+        self._client = budgeted_client(
+            client
+            or httpx.Client(
+                timeout=httpx.Timeout(
+                    connect=5.0, read=30.0, write=30.0, pool=5.0
+                ),
+                follow_redirects=False,
+                trust_env=False,
+            )
         )
         self._max_attempts = max_attempts
         self._max_response_bytes = max_response_bytes
@@ -186,6 +192,7 @@ class ProviderHttpClient:
                     self._base_url + path,
                     json=payload,
                     headers=headers,
+                    extensions={"rag_provider_retry_index": attempt - 1},
                 )
             except (
                 httpx.ConnectError,

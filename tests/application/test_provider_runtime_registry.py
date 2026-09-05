@@ -131,7 +131,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
         assert set(body) == {"input", "model", "parameters"}
         assert result.synthetic_payload_hash == canonical_sha256(body)
         assert body["input"] == {
-            "texts": ["公开合成文本：青岛啤酒知识库连接验证。"]
+            "texts": ["验收示例：审批完成后归档。"]
         }
         assert body["model"] == "qwen3.7-text-embedding"
         parameters = body["parameters"]
@@ -211,7 +211,7 @@ def test_jina_validation_uses_strict_embedding_contract(
         assert body == {
             "dimensions": 1024,
             "embedding_type": "float",
-            "input": ["公开合成文本：青岛啤酒知识库连接验证。"],
+            "input": ["验收示例：审批完成后归档。"],
             "model": "jina-embeddings-v5-text-small",
             "normalized": True,
             "task": task,

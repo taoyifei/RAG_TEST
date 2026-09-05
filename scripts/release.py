@@ -3,20 +3,36 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Sequence
-from pathlib import Path
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from functools import partial
+from pathlib import Path, PurePosixPath
 from typing import cast
 
+from rag_app.product.live_acceptance import run_acceptance
+from rag_app.product.release_evidence import (
+    build_report,
+    component_identity,
+    evidence_identity,
+    provider_operation_identities,
+    vulnerability_report,
+    write_report,
+)
+
 _ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 _IMAGE = "docx-rag:v1-candidate"
 _QDRANT_IMAGE = "qdrant/qdrant:v1.18.3"
 _QDRANT_TEST_KEY = "test-only-qdrant-key"
@@ -77,12 +93,18 @@ def _run(
     )
 
 
-def _capture(command: Sequence[str], *, cwd: Path = _ROOT) -> str:
+def _capture(
+    command: Sequence[str],
+    *,
+    cwd: Path = _ROOT,
+    input_text: str | None = None,
+) -> str:
     """运行只读命令并返回去除行尾的标准输出。
 
     Args:
         command: 不经过 shell 的参数列表。
         cwd: 命令工作目录。
+        input_text: 可选标准输入；只传递不含 Secret 的验收配置。
 
     Returns:
         标准输出文本。
@@ -97,6 +119,7 @@ def _capture(command: Sequence[str], *, cwd: Path = _ROOT) -> str:
         check=True,
         capture_output=True,
         text=True,
+        input=input_text,
     ).stdout.strip()
 
 
@@ -191,8 +214,33 @@ def _verify_image_contract(docker: str) -> None:
     labels = cast(dict[str, str], config.get("Labels") or {})
     if config.get("User") != "rag:rag":
         raise RuntimeError("候选镜像必须使用 rag:rag 非 root 用户。")
-    if labels.get("org.opencontainers.image.revision") != _revision():
-        raise RuntimeError("候选镜像 Git SHA 与当前 checkout 不一致。")
+    built_revision = labels.get("org.opencontainers.image.revision", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", built_revision):
+        raise RuntimeError("候选镜像缺少可信 Git 身份。")
+    changed_assets = _capture(
+        (
+            _required_executable("git"),
+            "diff",
+            "--name-only",
+            built_revision,
+            "--",
+            "src",
+            "frontend",
+            ":(exclude)frontend/e2e/**",
+            "migrations",
+            "evaluation",
+            "Dockerfile",
+            ".dockerignore",
+            "Dockerfile.dockerignore",
+            "requirements.runtime.lock",
+            "pyproject.toml",
+            "compatibility-manifest.json",
+            "docs/public/openapi-v1.json",
+            "compose.yaml",
+        )
+    )
+    if changed_assets:
+        raise RuntimeError("候选镜像业务资产与当前 checkout 不一致。")
     _run(
         (
             docker,
@@ -541,20 +589,37 @@ def _verify() -> None:
     docker = _required_executable("docker")
     npm = _required_executable("npm")
     output = _artifact_directory()
-    _audit_python_dependencies(_ROOT / "requirements.runtime.lock")
-    _audit_frontend_dependencies(_ROOT / "frontend" / "package-lock.json", npm)
+    evidence_path = _ROOT / "artifacts/p11-r4/evidence.json"
+    _record_action(
+        lambda: _audit_python_dependencies(_ROOT / "requirements.runtime.lock"),
+        ("python_dependency_audit",),
+        ("scripts/release.py", "verify", "internal:python-audit"),
+        evidence_path,
+    )
+    _record_action(
+        lambda: _audit_frontend_dependencies(
+            _ROOT / "frontend/package-lock.json", npm
+        ),
+        ("npm_dependency_audit",),
+        ("scripts/release.py", "verify", "internal:npm-audit"),
+        evidence_path,
+    )
     _verify_image_contract(docker)
-    _run(
-        (
-            sys.executable,
-            "scripts/secret_scan.py",
-            "--docker-image",
-            _IMAGE,
-            "--path",
-            "src",
-            "--path",
-            "frontend/dist",
-        )
+    scan_command = (
+        sys.executable,
+        "scripts/secret_scan.py",
+        "--docker-image",
+        _IMAGE,
+        "--path",
+        "src",
+        "--path",
+        "frontend/dist",
+    )
+    _record_action(
+        lambda: _run(scan_command),
+        ("secret_scan", "image_secret_scan"),
+        scan_command,
+        evidence_path,
     )
     docker_socket = "/var/run/docker.sock:/var/run/docker.sock"
     artifact_mount = f"{output}:/output"
@@ -583,6 +648,27 @@ def _verify() -> None:
             _IMAGE,
         )
     )
+    risks = vulnerability_report(
+        json.loads(
+            (output / "trivy-all.json").read_text(encoding="utf-8"),
+        )
+    )
+    if risks.get("image_id") != _current_identity()["image_id"]:
+        risks.update(status="BLOCKED", reason="OS_SCAN_IMAGE_IDENTITY_MISMATCH")
+    _save_evidence(output / "os-risk-review.json", risks)
+    evidence = _load_evidence(evidence_path)
+    checks = cast(dict[str, object], evidence.setdefault("checks", {}))
+    review_path = output / "os-risk-review.json"
+    checks["os_risk"] = {
+        "status": risks["status"],
+        "reason": risks["reason"],
+        "identity": evidence_identity("os_risk", _current_identity()),
+        "origin": "本次执行",
+        "evidence": str(review_path),
+        "exit_code": 0,
+        "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
+    }
+    _save_evidence(evidence_path, evidence)
     _run(
         (
             docker,
@@ -628,6 +714,13 @@ def _verify() -> None:
         )
     )
     _write_license_inventory(sbom, output / "licenses-image.json")
+    if risks["status"] != "PASS":
+        raise RuntimeError(
+            f"SECURITY_READY={risks['status']}: "
+            f"全部 High/Critical={risks['all_high_critical']}，"
+            f"可修复={risks['fixable_high_critical']}，"
+            f"无修复={risks['without_fix']}；风险评估见 os-risk-review.json。"
+        )
     print(f"OK release-verify evidence={output}")
 
 
@@ -903,36 +996,592 @@ def _qdrant_acceptance() -> None:
             _cleanup_volume(docker, source_volume)
 
 
-def _acceptance() -> None:
+def _acceptance(
+    evidence_file: Path | None = None,
+) -> None:
     """执行不需要真实 Provider 凭据的 P11 验收。
 
     Args:
-        无参数；真实 Provider Live Gate 单独受用户授权控制。
+        evidence_file: 可选执行记录；真实 Provider Live Gate 单独受授权控制。
 
     Returns:
         全部离线、浏览器、升级与 Qdrant 门禁通过时无返回值。
 
     """
+    evidence_path = evidence_file or _ROOT / "artifacts/p11-r4/evidence.json"
     for command in (
         "doctor",
         "check",
         "smoke",
         "product-check",
         "product-smoke",
+        "web-lint",
+        "web-typecheck",
+        "web-test",
         "web-e2e",
     ):
-        _run((sys.executable, "scripts/dev.py", command))
-    _run(
+        command_line = (sys.executable, "scripts/dev.py", command)
+        checks: tuple[str, ...] = (command.replace("-", "_"),)
+        if command == "check":
+            checks += (
+                "authorization_tests",
+                "endpoint_tests",
+                "connection_tests",
+                "conformance_tests",
+                "publication_tests",
+                "security_matrix",
+            )
+        _record_action(
+            partial(_run, command_line),
+            checks,
+            command_line,
+            evidence_path,
+        )
+    upgrade_command = (
+        sys.executable,
+        "-m",
+        "pytest",
+        "-q",
+        "tests/upgrade/test_p11_upgrade.py",
+    )
+    _record_action(
+        lambda: _run(upgrade_command),
+        ("upgrade_tests",),
+        upgrade_command,
+        evidence_path,
+    )
+    _record_action(
+        _qdrant_acceptance,
+        ("qdrant", "backup_restore"),
+        ("scripts/release.py", "acceptance", "internal:qdrant"),
+        evidence_path,
+    )
+    print("OK release-acceptance live_provider=NOT_RUN")
+
+
+def _candidate_acceptance() -> None:
+    """以正式入口验收隔离候选镜像，Provider 明确使用离线测试传输。"""
+    docker = _required_executable("docker")
+    _verify_image_contract(docker)
+    project = f"rag-p11-candidate-{os.getpid()}-{time.time_ns()}"
+    port = _free_loopback_port()
+    environment = {
+        **os.environ,
+        "RAG_APP_IMAGE": _IMAGE,
+        "RAG_PORT": str(port),
+        "RAG_TRUSTED_ORIGINS": f"http://127.0.0.1:{port}",
+        "P10_EXTERNAL_SERVER": "1",
+        "P10_BASE_URL": f"http://127.0.0.1:{port}",
+    }
+    with tempfile.TemporaryDirectory(prefix="rag-p11-candidate-") as temporary:
+        override = Path(temporary) / "compose-acceptance.json"
+        override.write_text(
+            json.dumps(
+                {
+                    "services": {
+                        "app": {
+                            "environment": {
+                                "RAG_TEST_NETWORK": "offline",
+                                "RAG_DEBUG_ENABLED": "true",
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        compose = (
+            docker,
+            "compose",
+            "--project-name",
+            project,
+            "--file",
+            str(_ROOT / "compose.yaml"),
+            "--file",
+            str(override),
+        )
+        try:
+            _run(
+                (
+                    *compose,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "app",
+                    "init-secrets",
+                    "--directory",
+                    "/run/rag-secrets",
+                ),
+                environment=environment,
+            )
+            # 只为新建的隔离测试卷设置公开合成口令，绝不访问用户 Secret 卷。
+            bootstrap = (
+                "from pathlib import Path; "
+                "Path('/run/rag-secrets/admin-bootstrap-token').write_text("
+                "'offline-bootstrap-credential', encoding='utf-8')"
+            )
+            _run(
+                (
+                    *compose,
+                    "run",
+                    "--rm",
+                    "--no-deps",
+                    "--entrypoint",
+                    "python",
+                    "app",
+                    "-c",
+                    bootstrap,
+                ),
+                environment=environment,
+            )
+            _run(
+                (
+                    *compose,
+                    "up",
+                    "--detach",
+                    "--no-build",
+                    "--wait",
+                    "--wait-timeout",
+                    "120",
+                ),
+                environment=environment,
+            )
+            _wait_candidate(port)
+            _run(
+                (sys.executable, "scripts/dev.py", "web-e2e"),
+                environment=environment,
+            )
+            before = _candidate_inventory(compose)
+            _run(
+                (*compose, "restart", "app", "qdrant"), environment=environment
+            )
+            _wait_candidate(port)
+            after = _candidate_inventory(compose)
+            if before != after:
+                raise RuntimeError("候选重启后产品数据或双槽向量身份变化。")
+            _save_evidence(
+                _ROOT / "artifacts/p11-r4/candidate-instance.json",
+                {
+                    "image_id": _capture(
+                        (
+                            docker,
+                            "image",
+                            "inspect",
+                            "--format",
+                            "{{.Id}}",
+                            _IMAGE,
+                        )
+                    ),
+                    "entrypoint": "rag-app serve",
+                    "provider_mode": "offline_mock",
+                    "external_provider_http": 0,
+                    "inventory": after,
+                    "ready": True,
+                    "restart_persistence": True,
+                },
+            )
+        finally:
+            _run(
+                (*compose, "down", "--volumes", "--remove-orphans"),
+                environment=environment,
+            )
+
+
+def _wait_candidate(port: int) -> None:
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        try:
+            connection.request("GET", "/ready")
+            response = connection.getresponse()
+            if response.status == _HTTP_SUCCESS_MIN:
+                response.read()
+                return
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            connection.close()
+        time.sleep(0.5)
+    raise RuntimeError("候选实例未在期限内就绪。")
+
+
+def _candidate_inventory(compose: Sequence[str]) -> dict[str, object]:
+    program = (
+        "import json,sqlite3; from pathlib import Path; "
+        "from qdrant_client import QdrantClient; "
+        "db=sqlite3.connect('file:/data/universal-rag.sqlite3?mode=ro',"
+        "uri=True); "
+        "counts={t:db.execute('SELECT count(*) FROM '+t).fetchone()[0] "
+        "for t in ('projects','knowledge_bases','documents',"
+        "'provider_connections')}; "
+        "q=QdrantClient(url='http://qdrant:6333',"
+        "api_key=Path('/run/rag-secrets/qdrant-api-key').read_text().strip(),"
+        "check_compatibility=False); "
+        "collections={c.name:q.get_collection(c.name).model_dump(mode='json') "
+        "for c in q.get_collections().collections}; "
+        "vectors={n:{'vectors':v['config']['params']['vectors'],"
+        "'points':v['points_count']} "
+        "for n,v in collections.items()}; "
+        "assert any('dense_primary' in v['vectors'] and "
+        "'dense_standby' in v['vectors'] and v['points']>0 "
+        "for v in vectors.values()), 'DUAL_SLOT_INVENTORY_MISSING'; "
+        "print(json.dumps({'counts':counts,'collections':vectors},sort_keys=True))"
+    )
+    return cast(
+        dict[str, object],
+        json.loads(
+            _capture(
+                (
+                    *compose,
+                    "exec",
+                    "-T",
+                    "app",
+                    "python",
+                    "-c",
+                    program,
+                )
+            )
+        ),
+    )
+
+
+def _current_identity() -> dict[str, str]:
+    names = _capture(
         (
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "tests/upgrade/test_p11_upgrade.py",
+            _required_executable("git"),
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        )
+    ).split("\0")
+    identity = component_identity(_ROOT, names)
+    operation_identities = provider_operation_identities(_ROOT)
+    identity.update(
+        provider_jina=operation_identities["jina_connection"],
+        provider_aliyun=operation_identities["aliyun_document_canary"],
+        image_id="unavailable",
+    )
+    docker = shutil.which("docker")
+    if docker is not None:
+        try:
+            identity["image_id"] = _capture(
+                (
+                    docker,
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Id}}",
+                    _IMAGE,
+                )
+            )
+        except subprocess.CalledProcessError:
+            identity["image_id"] = "unavailable"
+    return identity
+
+
+def _load_evidence(path: Path) -> dict[str, object]:
+    if not path.is_file():
+        return {"checks": {}}
+    return cast(dict[str, object], json.loads(path.read_text(encoding="utf-8")))
+
+
+def _save_evidence(path: Path, evidence: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _record_action(
+    action: Callable[[], None],
+    names: Sequence[str],
+    command: Sequence[str],
+    evidence_path: Path,
+) -> None:
+    evidence = _load_evidence(evidence_path)
+    receipt: dict[str, object] = {
+        "command": list(command),
+        "started_at": datetime.now(UTC).isoformat(),
+        "identity": _current_identity(),
+        "exit_code": None,
+    }
+    try:
+        action()
+        receipt["exit_code"] = 0
+    except subprocess.CalledProcessError as error:
+        receipt["exit_code"] = error.returncode
+        raise
+    finally:
+        receipt["finished_at"] = datetime.now(UTC).isoformat()
+        receipt_path = evidence_path.parent / f"{names[0]}-execution.json"
+        _save_evidence(receipt_path, receipt)
+        record = {
+            **receipt,
+            "origin": "本次执行",
+            "evidence": str(receipt_path),
+            "sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            "status": "PASS" if receipt["exit_code"] == 0 else "FAIL",
+            "reason": "COMMAND_EXIT_ZERO"
+            if receipt["exit_code"] == 0
+            else "COMMAND_FAILED",
+        }
+        checks = cast(dict[str, object], evidence.setdefault("checks", {}))
+        for name in names:
+            checks[name] = {
+                **record,
+                "identity": evidence_identity(
+                    name, cast(dict[str, str], receipt["identity"])
+                ),
+            }
+        _save_evidence(evidence_path, evidence)
+
+
+def _campaign_container_metadata(
+    docker: str, container: str
+) -> dict[str, object]:
+    """读取停机和挂载证据，不读取容器环境或健康检查输出。"""
+    template = (
+        '{"id":{{json .Id}},"image":{{json .Image}},'
+        '"running":{{json .State.Running}},"pid":{{json .State.Pid}},'
+        '"mounts":{{json .Mounts}}}'
+    )
+    return cast(
+        dict[str, object],
+        json.loads(
+            _capture((docker, "inspect", "--format", template, container))
+        ),
+    )
+
+
+def _stopped_campaign_volume(
+    docker: str, container: str, candidate_image: str
+) -> str:
+    """仅允许已停机且无运行容器共享的命名数据卷进入绑定。"""
+    target = _campaign_container_metadata(docker, container)
+    if target["running"] is not False or target["pid"] != 0:
+        raise RuntimeError("BLOCKED_MAINTENANCE_REQUIRED: 目标容器必须已停止。")
+    if target["image"] != candidate_image:
+        raise RuntimeError(
+            "BLOCKED_CANDIDATE_IMAGE: 目标未使用已验证候选镜像。"
+        )
+    mounts = cast(list[dict[str, object]], target["mounts"])
+    data_mounts = [item for item in mounts if item["Destination"] == "/data"]
+    if len(data_mounts) != 1:
+        raise RuntimeError("BLOCKED_DATA_VOLUME: 必须存在唯一 /data 命名卷。")
+    data = data_mounts[0]
+    if data["Type"] != "volume" or not data.get("Name") or not data.get("RW"):
+        raise RuntimeError("BLOCKED_DATA_VOLUME: 不支持 bind mount 或只读卷。")
+    for container_id in _capture((docker, "ps", "-q")).splitlines():
+        peer = _campaign_container_metadata(docker, container_id)
+        if peer["running"] is not True:
+            continue
+        for mount in cast(list[dict[str, object]], peer["mounts"]):
+            if mount.get("Name") == data["Name"] or (
+                data.get("Source") and mount.get("Source") == data["Source"]
+            ):
+                raise RuntimeError(
+                    "BLOCKED_SHARED_DATA: 仍有运行容器挂载目标数据卷。"
+                )
+    # 检查期间不得替换或重新启动目标；不根据配置字段推定维护窗口。
+    if _campaign_container_metadata(docker, container) != target:
+        raise RuntimeError("BLOCKED_MAINTENANCE_CHANGED: 目标状态已变化。")
+    return str(data["Name"])
+
+
+def _campaign_binding_command(
+    docker: str, container: str, config: dict[str, object]
+) -> tuple[str, ...]:
+    """为首绑构建断网辅助容器，只挂载已验证的产品数据卷。"""
+    state_path = PurePosixPath(
+        str(config.get("state_path", "/data/p11-live-state.sqlite3"))
+    )
+    if (
+        config.get("data_dir") != "/data"
+        or config.get("ledger_path", "/data/provider-budget.sqlite3")
+        != "/data/provider-budget.sqlite3"
+        or PurePosixPath("/data") not in state_path.parents
+        or ".." in state_path.parts
+    ):
+        raise RuntimeError("BLOCKED_DATA_PATH: 绑定状态必须位于 /data 数据卷。")
+    inspect_image = (docker, "image", "inspect", "--format", "{{.Id}}", _IMAGE)
+    candidate_image = _capture(inspect_image)
+    target_id = str(_campaign_container_metadata(docker, container)["id"])
+    _stopped_campaign_volume(docker, target_id, candidate_image)
+    _verify_image_contract(docker)
+    if _capture(inspect_image) != candidate_image:
+        raise RuntimeError("BLOCKED_CANDIDATE_IMAGE: 镜像验证期间标签已变化。")
+    volume = _stopped_campaign_volume(docker, target_id, candidate_image)
+    config["maintenance_confirmed"] = True
+    return (
+        docker,
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--no-healthcheck",
+        "--mount",
+        f"type=volume,src={volume},dst=/data",
+        "--entrypoint",
+        "python",
+        candidate_image,
+    )
+
+
+def _run_live_acceptance(args: argparse.Namespace) -> dict[str, object]:
+    config = (
+        None
+        if args.config is None
+        else json.loads(args.config.read_text(encoding="utf-8"))
+    )
+    binding = args.bind_campaign or (
+        isinstance(config, dict) and config.get("bind_campaign") is True
+    )
+    if binding and (
+        args.live
+        or not args.container
+        or any(
+            step.strip() not in {"config_check", "final_report"}
+            for argument in args.steps or ()
+            for step in argument.split(",")
+            if step.strip()
+        )
+    ):
+        raise RuntimeError(
+            "BLOCKED_BIND_ARGUMENTS: 绑定需要已停止的 --container，"
+            "且不能包含 --live 或付费步骤。"
+        )
+    if binding and not isinstance(config, dict):
+        raise RuntimeError("BLOCKED_BIND_CONFIG: 绑定需要非秘密配置。")
+    if config is not None:
+        config["operation_identities"] = provider_operation_identities(_ROOT)
+        if binding:
+            config["bind_campaign"] = True
+        identity = _current_identity()
+        config["candidate_identity"] = hashlib.sha256(
+            json.dumps(
+                {
+                    name: identity[name]
+                    for name in ("runtime", "image", "migrations", "evaluation")
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+    steps = (
+        None
+        if args.steps is None
+        else tuple(
+            step
+            for argument in args.steps
+            for step in argument.split(",")
+            if step
         )
     )
-    _qdrant_acceptance()
-    print("OK release-acceptance live_provider=NOT_RUN")
+    if args.container:
+        docker = _required_executable("docker")
+        command: tuple[str, ...] = (
+            docker,
+            "exec",
+            "-i",
+            args.container,
+            "python",
+        )
+        if binding:
+            command = _campaign_binding_command(
+                docker, args.container, cast(dict[str, object], config)
+            )
+            steps = ("config_check",)
+        elif args.live:
+            _verify_image_contract(docker)
+            container_image = _capture(
+                (
+                    docker,
+                    "inspect",
+                    "--format",
+                    "{{.Image}}",
+                    args.container,
+                )
+            )
+            candidate_image = _capture(
+                (
+                    docker,
+                    "image",
+                    "inspect",
+                    "--format",
+                    "{{.Id}}",
+                    _IMAGE,
+                )
+            )
+            if container_image != candidate_image:
+                raise RuntimeError("目标实例尚未使用已验证候选镜像。")
+        payload = {
+            "config": config,
+            "steps": steps,
+            "resume": False if binding else args.resume,
+            "live": False if binding else args.live,
+        }
+        program = (
+            "import json,sys; "
+            "from rag_app.product.live_acceptance import run_acceptance; "
+            "p=json.load(sys.stdin); "
+            "print('P11_ACCEPTANCE_RESULT='+json.dumps(run_acceptance(**p)))"
+        )
+        output = _capture(
+            (*command, "-c", program),
+            input_text=json.dumps(payload),
+        )
+        for line in reversed(output.splitlines()):
+            if line.startswith("P11_ACCEPTANCE_RESULT="):
+                return cast(
+                    dict[str, object], json.loads(line.split("=", 1)[1])
+                )
+        raise RuntimeError("容器未生成可验证的验收报告。")
+    return run_acceptance(
+        config, steps=steps, resume=args.resume, live=args.live
+    )
+
+
+def _write_acceptance_report(args: argparse.Namespace) -> int:
+    evidence = _load_evidence(args.evidence_file)
+    live_report = _run_live_acceptance(args)
+    live_path = args.evidence_file.parent / "live-result.json"
+    _save_evidence(live_path, live_report)
+    # Runner 会保留全部阶段；未选中项不能被本次选中的成功项覆盖。
+    evidence["live_runner"] = live_report
+    identity = _current_identity()
+    checks = cast(dict[str, object], evidence.setdefault("checks", {}))
+    step_records = cast(
+        dict[str, dict[str, object]], live_report.get("steps", {})
+    )
+    for name, value in step_records.items():
+        check_name = "campaign_config" if name == "config_check" else name
+        checks[check_name] = {
+            "status": value["status"],
+            "reason": value["reason"],
+            "identity": evidence_identity(check_name, identity),
+            "step_identity": value.get("identity"),
+            "origin": value.get("provenance", "未执行"),
+            "evidence": str(live_path),
+            "sha256": hashlib.sha256(live_path.read_bytes()).hexdigest(),
+            "exit_code": 0 if value["status"] == "PASS" else None,
+            "details": value.get("evidence", {}),
+        }
+    if "budget" in live_report:
+        evidence["budget"] = live_report["budget"]
+    _save_evidence(args.evidence_file, evidence)
+    report = build_report(_ROOT, evidence, identity)
+    report["live_runner"] = live_report
+    write_report(report, args.report_output)
+    print(f"REPORT {args.report_output} P11_READY={report['P11_READY']}")
+    return 0 if report["P11_READY"] else 2
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -947,6 +1596,43 @@ def _parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("build", "verify", "acceptance"))
+    parser.add_argument(
+        "--resume", action="store_true", help="复用有效记录，仅续跑选中验收阶段"
+    )
+    parser.add_argument(
+        "--steps", nargs="+", help="config_check、canary 等阶段；支持逗号分隔"
+    )
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="启用已持久授权 campaign 内的真实调用",
+    )
+    parser.add_argument(
+        "--config", type=Path, help="非秘密验收配置；不接受 API Key"
+    )
+    parser.add_argument(
+        "--container", help="在已有候选容器内使用其页面托管连接"
+    )
+    parser.add_argument(
+        "--bind-campaign",
+        action="store_true",
+        help="按显式授权配置导入旧账并首绑持久campaign，不发Provider请求",
+    )
+    parser.add_argument(
+        "--candidate",
+        action="store_true",
+        help="对当前候选镜像执行隔离Compose、浏览器及持久性验收",
+    )
+    parser.add_argument(
+        "--evidence-file",
+        type=Path,
+        default=_ROOT / "artifacts/p11-r4/evidence.json",
+    )
+    parser.add_argument(
+        "--report-output",
+        type=Path,
+        default=_ROOT / "release/p11-repair-acceptance.json",
+    )
     return parser
 
 
@@ -960,19 +1646,32 @@ def main(arguments: Sequence[str] | None = None) -> int:
         成功为 0，缺少工具为 2，子命令失败为其原始返回码。
 
     """
-    command = _parser().parse_args(arguments).command
+    args = _parser().parse_args(arguments)
+    command = args.command
     try:
         if command == "build":
             _build()
         elif command == "verify":
             _verify()
         else:
-            _acceptance()
+            if not args.resume and args.steps is None and not args.live:
+                _acceptance(args.evidence_file)
+            if args.candidate:
+                _record_action(
+                    _candidate_acceptance,
+                    ("candidate_startup", "candidate_browser"),
+                    ("scripts/release.py", "acceptance", "--candidate"),
+                    args.evidence_file,
+                )
+            return _write_acceptance_report(args)
     except OSError as error:
         print(f"BLOCKED release: {error}", file=sys.stderr)
         return 2
     except subprocess.CalledProcessError as error:
         return error.returncode
+    except (RuntimeError, ValueError) as error:
+        print(f"BLOCKED release: {error}", file=sys.stderr)
+        return 2
     return 0
 
 

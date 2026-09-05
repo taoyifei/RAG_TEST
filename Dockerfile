@@ -67,6 +67,10 @@ RUN apt-get update \
 COPY --from=frontend-build --chown=rag:rag /build/frontend/dist/ ./frontend/
 COPY --chown=rag:rag migrations/ ./migrations/
 COPY --chown=rag:rag compatibility-manifest.json ./compatibility-manifest.json
+COPY --chown=rag:rag evaluation/__init__.py evaluation/p11_pilot.py evaluation/p11_pilot_data.py evaluation/p11_pilot_runtime.py ./evaluation/
+COPY --chown=rag:rag evaluation/v2/*.py ./evaluation/v2/
+COPY --chown=rag:rag evaluation/gates/p08-gates.json ./evaluation/gates/p08-gates.json
+COPY --chown=rag:rag evaluation/datasets/p11-pilot/ ./evaluation/datasets/p11-pilot/
 RUN python -c \
     'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")'
 
