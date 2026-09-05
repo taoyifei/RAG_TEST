@@ -191,12 +191,17 @@ class ProductQualityStore:
             return {}
         with self._connections.transaction() as connection:
             rows = connection.execute(
-                "SELECT kind, validation_mode FROM quality_validation_records "
-                "WHERE profile_revision_id=? AND binding_identity=? AND "
-                "accepted=1 ORDER BY created_at",
+                "SELECT kind, validation_mode, accepted "
+                "FROM quality_validation_records "
+                "WHERE profile_revision_id=? AND binding_identity=? "
+                "ORDER BY created_at, rowid",
                 (profile_id, binding),
             ).fetchall()
-        return {str(row[0]): str(row[1]) for row in rows}
+        # 同一绑定的后续失败必须撤销旧的通过状态；历史记录仍完整保留。
+        latest = {str(row[0]): row for row in rows}
+        return {
+            kind: str(row[1]) for kind, row in latest.items() if bool(row[2])
+        }
 
     def calibrated_spaces(self, profile_id: str) -> tuple[str, ...]:
         """从独立 Live 质量记录取得当前方案允许的真实向量空间。

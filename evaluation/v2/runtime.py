@@ -19,26 +19,21 @@ from evaluation.v2.models import (
     ProviderRunIdentity,
     SourceRangeExpectation,
 )
+from evaluation.v2.observations import ObservationContext, observe_case_result
 from evaluation.v2.variants import EvaluationVariant
-from rag_app.application.answering.validation import validate_extractive_draft
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import P07Runtime, build_p07_runtime
 from rag_app.composition.profiles import ComponentsProfile, RagProfile
-from rag_app.core.errors import ValidationFailed
 from rag_app.core.identifiers import (
     canonical_sha256,
     document_version_id,
 )
 from rag_app.core.models import (
-    AnswerDraft,
     DocumentRef,
-    EvidenceItem,
     KnowledgeBaseScope,
-    ProviderCallCount,
-    SearchAnswerResult,
     SearchRequest,
 )
-from rag_app.core.models.chunk import Chunk, SourceSpanKind
+from rag_app.core.models.chunk import Chunk
 from rag_app.core.policies import EgressPolicy, ParsingPolicy, StoryPolicy
 
 _MEDIA_TYPE = (
@@ -184,8 +179,7 @@ def execute_offline_variant(
             documents=dataset.manifest.documents,
         )
         observations = tuple(
-            _execute_case(case, context)
-            for case in effective_cases
+            _execute_case(case, context) for case in effective_cases
         )
         errors = tuple(
             record
@@ -375,9 +369,7 @@ def _effective_cases(
             if not any(
                 marker in chunk.embedding_text for chunk in relevant_chunks
             ):
-                raise ValueError(
-                    f"{case.case_id}: embedding marker 未保留。"
-                )
+                raise ValueError(f"{case.case_id}: embedding marker 未保留。")
             if any(marker in chunk.citation_text for chunk in relevant_chunks):
                 raise ValueError(
                     f"{case.case_id}: 非原文 marker 泄漏到 citation_text。"
@@ -442,8 +434,7 @@ def _resolve_source_expectation(
                     and span.chunk_end_char >= end
                     and (
                         expectation.structural_anchor is None
-                        or span.structural_path
-                        == expectation.structural_anchor
+                        or span.structural_path == expectation.structural_anchor
                     )
                 ):
                     source_start = span.source_start_char + (
@@ -461,8 +452,7 @@ def _resolve_source_expectation(
     if not matches:
         raise ValueError("Source Range 标签无法解析到唯一 canonical span。")
     if len(matches) > 1 and (
-        expectation.occurrence is None
-        and expectation.structural_anchor is None
+        expectation.occurrence is None and expectation.structural_anchor is None
     ):
         raise ValueError(
             "重复 Source Range 必须指定 occurrence 或 structural anchor。"
@@ -495,244 +485,25 @@ def _execute_case(
         SearchRequest(scope=scope, text=case.query, limit=10)
     )
     latency_ms = (time.perf_counter() - started) * 1000.0
-    diagnostics = result.diagnostics
-    if diagnostics is None:
-        raise ValueError("Evaluation V3 需要完整 RetrievalDiagnostics。")
-    evidence = result.evidence
-    evidence_by_chunk: dict[str, EvidenceItem] = {}
-    for item in evidence:
-        evidence_by_chunk.setdefault(item.chunk_id, item)
-    ranked_evidence = tuple(item.chunk_id for item in diagnostics.reranked)
-    retrieved_documents = tuple(
-        context.chunks[identifier].version.document_id
-        for identifier in ranked_evidence
-        if identifier in context.chunks
-    )
-    retrieved_chunks = ranked_evidence
-    cited_ids, citation_valid, unsupported = _validate_answer(result)
-    cited = tuple(item for item in evidence if item.evidence_id in cited_ids)
-    predicted_ranges = tuple(
-        (
-            item.document_id,
-            span.node_id,
-            span.source_start_char,
-            span.source_end_char,
-        )
-        for item in evidence
-        for span in item.source_spans
-        if item.document_id is not None
-        and span.node_id is not None
-        and span.source_start_char is not None
-        and span.source_end_char is not None
-    )
-    expected_ranges = tuple(
-        (
-            item.document_id,
-            item.node_id,
-            item.source_start_char,
-            item.source_end_char,
-        )
-        for item in case.expected.required_source_ranges
-    )
-    matched = sum(
-        any(
-            _range_covers(predicted, expected)
-            for predicted in predicted_ranges
-        )
-        for expected in expected_ranges
-    )
-    relevant_predictions = sum(
-        any(_range_covers(predicted, expected) for expected in expected_ranges)
-        for predicted in predicted_ranges
-    )
-    scope_by_document = {
-        item.document_id: (item.project_id, item.knowledge_base_id)
-        for item in context.documents
-    }
-    wrong_scope = sum(
-        scope_by_document.get(identifier)
-        != (case.project_id, case.knowledge_base_id)
-        for identifier in retrieved_documents
-    )
-    expected_revision = context.revisions[
-        (case.project_id, case.knowledge_base_id)
-    ]
-    wrong_revision = sum(
-        context.chunks[identifier].index_revision_id != expected_revision
-        for identifier in retrieved_chunks
-        if identifier in context.chunks
-    ) + sum(
-        identifier not in context.chunks for identifier in retrieved_chunks
-    )
-    expected_vectors = {
-        slot.slot_id: slot.vector_name
-        for slot in runtime.persistence.components.embedding_topology.slots
-    }
-    wrong_vector = int(
-        result.selected_embedding_slot is not None
-        and expected_vectors.get(result.selected_embedding_slot)
-        != result.selected_vector_name
-    )
-    call_counts = {item.operation: item for item in diagnostics.provider_calls}
-    embedding_calls, embedding_retries = _operation_counts(
-        call_counts, "embed"
-    )
-    reranker_calls, reranker_retries = _operation_counts(
-        call_counts, "rerank"
-    )
-    provider_calls = sum(item.call_count for item in call_counts.values())
-    provider_retries = sum(item.retry_count for item in call_counts.values())
-    origins_by_chunk: dict[str, list[str]] = defaultdict(list)
-    for channel, chunk_ids in diagnostics.channel_chunk_ids:
-        for chunk_id in chunk_ids:
-            origins_by_chunk[chunk_id].append(channel)
-    return CaseObservation(
-        case_id=case.case_id,
-        split=case.split,
-        group_id=case.group_id,
-        category=case.category,
-        failure_severity=case.failure_severity,
-        variant_id=variant.variant_id,
-        lane="offline-structural",
-        status=result.status.value,
-        reason_code=result.reason_code,
-        active_index_revision_id=result.active_index_revision_id,
-        index_fingerprint=result.index_fingerprint,
-        serving_fingerprint=result.serving_fingerprint,
-        selected_embedding_slot=result.selected_embedding_slot,
-        selected_vector_name=result.selected_vector_name,
-        route_reason_code=result.route_reason_code,
-        rerank_mode=result.rerank_execution_mode,
-        channel_chunk_ids=diagnostics.channel_chunk_ids,
-        fused_chunk_ids=diagnostics.fused_chunk_ids,
-        reranked_chunk_ids=tuple(
-            item.chunk_id for item in diagnostics.reranked
-        ),
-        expanded_chunk_ids=tuple(
-            item.chunk_id for item in diagnostics.expanded
-        ),
-        evidence_document_ids=tuple(
-            item.document_id
-            for item in evidence
-            if item.document_id is not None
-        ),
-        evidence_chunk_ids=tuple(item.chunk_id for item in evidence),
-        retrieved_document_ids=retrieved_documents,
-        retrieved_chunk_ids=retrieved_chunks,
-        retrieval_origins=tuple(
-            tuple(origins_by_chunk.get(identifier, ()))
-            for identifier in ranked_evidence
-        ),
-        cited_document_ids=tuple(
-            item.document_id for item in cited if item.document_id is not None
-        ),
-        cited_chunk_ids=tuple(item.chunk_id for item in cited),
-        matched_source_range_count=matched,
-        required_source_range_count=len(
-            case.expected.required_source_ranges
-        ),
-        predicted_source_range_count=len(predicted_ranges),
-        relevant_predicted_source_range_count=relevant_predictions,
-        citation_present=bool(cited),
-        citation_valid=citation_valid,
-        quote_publishable=bool(cited)
-        and all(
-            item.source_spans
-            and all(
-                span.is_citable
-                and span.span_type is not SourceSpanKind.SEPARATOR
-                for span in item.source_spans
-            )
-            for item in cited
-        ),
-        unsupported_claim_count=unsupported,
-        evidence_budget_overflow_count=int(
-            sum(max(1, (len(item.citation_text) + 3) // 4) for item in evidence)
-            > variant.retrieval_policy.evidence_token_budget
-        ),
-        wrong_scope_hit_count=wrong_scope,
-        wrong_revision_hit_count=wrong_revision,
-        wrong_vector_space_attempt_count=wrong_vector,
-        latency_ms=latency_ms,
-        provider_call_count=provider_calls,
-        provider_retry_count=provider_retries,
-        embedding_call_count=embedding_calls,
-        embedding_retry_count=embedding_retries,
-        reranker_call_count=reranker_calls,
-        reranker_retry_count=reranker_retries,
-        stage_elapsed_ms=tuple(
-            (item.stage, item.elapsed_ms) for item in diagnostics.stage_timings
-        ),
-        evidence_count=len(evidence),
-        evidence_tokens=sum(
-            max(1, (len(item.citation_text) + 3) // 4)
-            for item in evidence
-        ),
-        cache_hit=diagnostics.cache_hit,
-        degraded_reason_codes=diagnostics.degraded_reason_codes,
-    )
-
-
-def _range_covers(
-    predicted: tuple[str, str | None, int | None, int | None],
-    expected: tuple[str, str | None, int | None, int | None],
-) -> bool:
-    if predicted[:2] != expected[:2]:
-        return False
-    predicted_start, predicted_end = predicted[2:]
-    expected_start, expected_end = expected[2:]
-    return (
-        predicted_start is not None
-        and predicted_end is not None
-        and expected_start is not None
-        and expected_end is not None
-        and predicted_start <= expected_start
-        and predicted_end >= expected_end
-    )
-
-
-def _operation_counts(
-    calls: dict[str, ProviderCallCount], marker: str
-) -> tuple[int, int]:
-    matching = [
-        item
-        for operation, item in calls.items()
-        if marker in operation.casefold()
-    ]
-    return (
-        sum(item.call_count for item in matching),
-        sum(item.retry_count for item in matching),
-    )
-
-
-def _validate_answer(
-    result: SearchAnswerResult,
-) -> tuple[tuple[str, ...], bool, int]:
-    if result.answer is None:
-        return (), False, 0
-    claims = tuple(
-        line.strip() for line in result.answer.splitlines() if line.strip()
-    )
-    by_quote = {item.citation_text.strip(): item for item in result.evidence}
-    cited_ids = tuple(
-        dict.fromkeys(
-            by_quote[claim].evidence_id
-            for claim in claims
-            if claim in by_quote
-        )
-    )
-    unsupported = sum(claim not in by_quote for claim in claims)
-    try:
-        validate_extractive_draft(
-            AnswerDraft(
-                text=result.answer,
-                cited_evidence_ids=cited_ids,
+    topology = runtime.persistence.components.embedding_topology
+    return observe_case_result(
+        case,
+        result,
+        ObservationContext(
+            chunks=context.chunks,
+            documents=context.documents,
+            expected_revision=context.revisions[
+                (case.project_id, case.knowledge_base_id)
+            ],
+            expected_vectors=tuple(
+                (slot.slot_id, slot.vector_name) for slot in topology.slots
             ),
-            result.evidence,
-        )
-    except (ValidationFailed, ValueError):
-        return cited_ids, False, unsupported
-    return cited_ids, True, unsupported
+            variant_id=variant.variant_id,
+            lane="offline-structural",
+            evidence_token_budget=variant.retrieval_policy.evidence_token_budget,
+        ),
+        latency_ms=latency_ms,
+    )
 
 
 def _error_record(
