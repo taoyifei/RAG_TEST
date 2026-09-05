@@ -226,6 +226,7 @@ def _verify_image_contract(docker: str) -> None:
             "--",
             "src",
             "frontend",
+            ":(exclude)frontend/e2e/**",
             "migrations",
             "evaluation",
             "Dockerfile",
