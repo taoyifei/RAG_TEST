@@ -19,6 +19,7 @@ import httpx
 from qdrant_client import QdrantClient
 
 _DATABASE_NAME = "universal-rag.sqlite3"
+_AUXILIARY_DATABASES = ("provider-budget.sqlite3", "p11-live-state.sqlite3")
 _MANIFEST_NAME = "backup-manifest.json"
 _COMPATIBILITY_NAME = "compatibility-manifest.json"
 _FORMAT_VERSION = 1
@@ -82,6 +83,13 @@ def create_backup(
         sqlite_target = staging / "sqlite" / _DATABASE_NAME
         sqlite_target.parent.mkdir()
         _sqlite_snapshot(database, sqlite_target)
+        auxiliary_databases = []
+        for name in _AUXILIARY_DATABASES:
+            source = root / name
+            if source.exists():
+                source = _safe_file(source, label="验收账本")
+                _sqlite_snapshot(source, sqlite_target.parent / name)
+                auxiliary_databases.append(name)
         shutil.copyfile(compatibility, staging / _COMPATIBILITY_NAME)
         _copy_blob_tree(root / "blobs", staging / "blobs")
         collections = _active_collections(sqlite_target)
@@ -96,6 +104,7 @@ def create_backup(
             "format_version": _FORMAT_VERSION,
             "created_at": datetime.now(UTC).isoformat(),
             "database": f"sqlite/{_DATABASE_NAME}",
+            "auxiliary_databases": auxiliary_databases,
             "compatibility_manifest": _COMPATIBILITY_NAME,
             "qdrant_server_version": qdrant_version,
             "collections": qdrant_files,
@@ -169,6 +178,9 @@ def verify_backup(archive_path: Path) -> BackupReport:
         integrity = _sqlite_integrity(database)
         if integrity != "ok":
             raise ValueError("备份 SQLite integrity_check 失败。")
+        for name in _auxiliary_databases(manifest):
+            if _sqlite_integrity(root / "sqlite" / name) != "ok":
+                raise ValueError("备份预算或阶段账本 integrity_check 失败。")
         collections = manifest.get("collections")
         if not isinstance(collections, dict):
             raise ValueError("Qdrant Snapshot 清单缺失。")
@@ -242,6 +254,14 @@ def restore_backup(
                 root / "sqlite" / _DATABASE_NAME,
                 target / _DATABASE_NAME,
             )
+            for name in _auxiliary_databases(manifest):
+                shutil.copyfile(root / "sqlite" / name, target / name)
+            if (target / "provider-budget.sqlite3").is_file():
+                # 旧快照可能缺少备份后的消费；保留数字，但对账前禁止出站。
+                (target / "provider-budget.restore-blocked").write_text(
+                    "RECONCILE_WITH_AUTHORITATIVE_CAMPAIGN_BEFORE_LIVE\n",
+                    encoding="utf-8",
+                )
             source_blobs = root / "blobs"
             if source_blobs.is_dir():
                 shutil.copytree(source_blobs, target / "blobs")
@@ -266,6 +286,17 @@ def _sqlite_snapshot(source: Path, target: Path) -> None:
         source_connection.backup(target_connection)
     if _sqlite_integrity(target) != "ok":
         raise ValueError("SQLite 一致性快照完整性失败。")
+
+
+def _auxiliary_databases(manifest: dict[str, Any]) -> tuple[str, ...]:
+    names = manifest.get("auxiliary_databases", [])
+    if (
+        not isinstance(names, list)
+        or any(name not in _AUXILIARY_DATABASES for name in names)
+        or len(set(names)) != len(names)
+    ):
+        raise ValueError("备份包含未知或重复辅助数据库。")
+    return tuple(names)
 
 
 def _sqlite_integrity(path: Path) -> str:
@@ -456,8 +487,10 @@ def _safe_extract(archive_path: Path, target: Path) -> None:
         members = archive.getmembers()
         for member in members:
             relative = _safe_relative_path(member.name)
-            if member.issym() or member.islnk() or not (
-                member.isdir() or member.isfile()
+            if (
+                member.issym()
+                or member.islnk()
+                or not (member.isdir() or member.isfile())
             ):
                 raise ValueError("备份归档含不安全成员。")
             destination = target / relative

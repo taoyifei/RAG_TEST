@@ -88,6 +88,7 @@ class P09RuntimeHooks:
     job_lifecycle_resolver: (
         Callable[[str, LifecycleService], LifecycleService] | None
     ) = None
+    recover_jobs: bool = True
 
 
 def build_p09_runtime(
@@ -216,7 +217,8 @@ def build_p09_runtime(
         jobs=jobs,
         data_dir=resolved_data_dir,
     )
-    jobs.recover()
+    if hooks is None or hooks.recover_jobs:
+        jobs.recover()
     return runtime
 
 

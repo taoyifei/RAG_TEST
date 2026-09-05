@@ -219,7 +219,7 @@ def test_patch_preserves_secret_and_shared_probe_adapter_contract(
                 EmbeddingRequest(
                     slot_id="standby",
                     role=EmbeddingRequestRole.DOCUMENT,
-                    texts=("公开合成文本：青岛啤酒知识库连接验证。",),
+                    texts=("验收示例：审批完成后归档。",),
                 )
             )
         finally:

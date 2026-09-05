@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from http import HTTPStatus
+from pathlib import Path
 from threading import RLock
 from typing import Any
 from urllib.parse import urlsplit
@@ -33,6 +34,8 @@ from rag_app.adapters.providers.aliyun_endpoint import (
     resolve_endpoint,
 )
 from rag_app.adapters.providers.batching import estimate_tokens
+from rag_app.adapters.providers.budget_ledger import BudgetBlockedError
+from rag_app.adapters.providers.budget_transport import BudgetedTransport
 from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.validation import (
     finite_score,
@@ -51,7 +54,7 @@ from rag_app.product.resolved_profile import (
 )
 
 TransportFactory = Callable[[ProviderConnection], httpx.BaseTransport]
-_SYNTHETIC_TEXT = "公开合成文本：青岛啤酒知识库连接验证。"
+_SYNTHETIC_TEXT = "验收示例：审批完成后归档。"
 _SYNTHETIC_RERANK_DOCUMENTS = (
     "公开合成候选：青岛啤酒创建于 1903 年。",
     "公开合成候选：这段测试文本不包含私有信息。",
@@ -97,6 +100,7 @@ class ProviderRuntimeRegistry:
         control: ProductControlStore,
         *,
         transport_factory: TransportFactory | None = None,
+        budget_ledger_path: Path | None = None,
     ) -> None:
         """保存安全解析器、控制面和可注入 Transport。
 
@@ -104,6 +108,7 @@ class ProviderRuntimeRegistry:
             credentials: 只在调用边界解密的 Credential Store。
             control: Provider Connection 与验证记录 Store。
             transport_factory: 测试用 MockTransport 工厂。
+            budget_ledger_path: 产品共享的持久预算账本路径。
 
         Returns:
             无返回值。
@@ -112,6 +117,7 @@ class ProviderRuntimeRegistry:
         self._credentials = credentials
         self._control = control
         self._transport_factory = transport_factory
+        self._budget_ledger_path = budget_ledger_path
         self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
         self._lock = RLock()
 
@@ -258,6 +264,13 @@ class ProviderRuntimeRegistry:
                 model,
                 expected_dimension,
             )
+        except BudgetBlockedError as error:
+            diagnostics.request_dispatched, diagnostics.stage = False, "budget"
+            status, category, safe_error = (
+                "failed",
+                "locally_blocked",
+                error.reason,
+            )
         except httpx.TimeoutException:
             status, category, safe_error = (
                 "failed",
@@ -289,7 +302,6 @@ class ProviderRuntimeRegistry:
                 "invalid_contract",
                 "INVALID_RESPONSE_CONTRACT",
             )
-        finished = datetime.now(UTC)
         validation = ProviderValidationRun(
             validation_id=_identifier("val"),
             connection_id=connection_id,
@@ -315,7 +327,7 @@ class ProviderRuntimeRegistry:
             endpoint_identity=resolved_endpoint_identity,
             validation_mode="mock" if self._transport_factory else "live",
             started_at=started.isoformat(),
-            finished_at=finished.isoformat(),
+            finished_at=datetime.now(UTC).isoformat(),
             status=status,
             http_category=category,
             dimension=dimension,
@@ -519,7 +531,15 @@ class ProviderRuntimeRegistry:
             base_url=_base_url(connection),
             headers=headers,
             timeout=httpx.Timeout(10.0),
-            transport=transport,
+            transport=BudgetedTransport(
+                transport,
+                ledger_path=self._budget_ledger_path,
+                identity={
+                    "connection_id": connection.connection_id,
+                    "configuration_version": connection.configuration_version,
+                    "credential_key_version": key_version,
+                },
+            ),
             follow_redirects=False,
             trust_env=False,
         )
@@ -549,8 +569,21 @@ class ProviderRuntimeRegistry:
             if self._transport_factory is None
             else self._transport_factory(connection)
         )
-        client = (
-            None if transport is None else httpx.Client(transport=transport)
+        client = httpx.Client(
+            transport=BudgetedTransport(
+                transport,
+                ledger_path=self._budget_ledger_path,
+                identity=lambda: {
+                    "connection_id": connection.connection_id,
+                    "configuration_version": connection.configuration_version,
+                    "credential_key_version": self._credentials.get(
+                        connection.credential_id
+                    ).key_version,
+                },
+            ),
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+            follow_redirects=False,
+            trust_env=False,
         )
         if connection.provider_type == "jina":
             base_url = "https://api.jina.ai/v1"
