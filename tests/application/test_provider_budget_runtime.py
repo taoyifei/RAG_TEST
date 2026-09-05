@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NoReturn
 
+import httpx
 import pytest
 
 from rag_app.adapters.providers.budget_ledger import (
@@ -21,7 +23,75 @@ from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     build_offline_mock_transport,
 )
-from tests.product_support import build_product_harness
+from tests.product_support import (
+    build_product_harness,
+    create_provider_connections,
+    validate_five_operations,
+)
+
+
+@pytest.mark.parametrize("ledger_present", [False, True])
+def test_restored_builtin_mock_does_not_use_network_or_modify_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ledger_present: bool
+) -> None:
+    def no_network(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("内建离线恢复不得打开套接字或执行 HTTP。")
+
+    monkeypatch.setattr("socket.create_connection", no_network)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", no_network)
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "synthetic-aliyun-value")
+    harness = build_product_harness(tmp_path)
+    try:
+        _, _, jina, aliyun = create_provider_connections(harness)
+        data = harness.runtime.data_dir
+        ledger_path = data / "provider-budget.sqlite3"
+        if ledger_present:
+            ledger = ProviderBudgetLedger(ledger_path)
+            ledger.create_campaign(
+                BudgetCampaign(
+                    "restore-test", "restore-auth", "public", 25, 1000
+                )
+            )
+            ledger.import_history(
+                "restore-test",
+                source_identity="a" * 64,
+                events=[
+                    {
+                        "event_id": "prior-unknown",
+                        "provider": "jina",
+                        "operation": "embedding.query",
+                        "forwarded": True,
+                        "estimated_input_tokens": 19,
+                        "observed_tokens": None,
+                    }
+                ],
+            )
+            ledger.activate_campaign("restore-test")
+        before = ledger_path.read_bytes() if ledger_present else None
+        marker = data / "provider-budget.restore-blocked"
+        marker.write_text("RECONCILE_REQUIRED", encoding="utf-8")
+        validate_five_operations(harness, jina, aliyun)
+        assert marker.read_text() == "RECONCILE_REQUIRED"
+        if before is None:
+            assert not ledger_path.exists()
+        else:
+            assert ledger_path.read_bytes() == before
+        for connection_id in (jina, aliyun):
+            validations = harness.runtime.control.list_validations(
+                connection_id
+            )
+            assert all(item.validation_mode == "mock" for item in validations)
+        (data / "provider-budget.initializing").touch()
+        blocked = harness.runtime.providers.validate(
+            jina,
+            operation="embedding.query",
+            model="jina-embeddings-v5-text-small",
+            expected_dimension=1024,
+        )
+        assert blocked.status == "failed"
+        assert blocked.safe_error_code == "BUDGET_INITIALIZATION_IN_PROGRESS"
+    finally:
+        harness.close()
 
 
 def test_probe_sdk_index_embedding_and_reranker_share_persistent_limit(

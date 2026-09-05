@@ -19,6 +19,7 @@ from starlette.responses import Response as StarletteResponse
 
 from rag_app.api.p09 import create_p09_app
 from rag_app.api.product_token_policy import resolve_token_route
+from rag_app.api.provider_budget import register_provider_budget_routes
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -431,6 +432,7 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     _register_provider_routes(app, runtime)
     _register_profile_routes(app, runtime)
     _register_access_token_routes(app, runtime)
+    register_provider_budget_routes(app, runtime)
 
 
 def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:

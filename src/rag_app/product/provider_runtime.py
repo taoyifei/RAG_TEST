@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from threading import RLock
-from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
@@ -37,6 +36,9 @@ from rag_app.adapters.providers.batching import estimate_tokens
 from rag_app.adapters.providers.budget_ledger import BudgetBlockedError
 from rag_app.adapters.providers.budget_transport import BudgetedTransport
 from rag_app.adapters.providers.http_common import ProviderHttpClient
+from rag_app.adapters.providers.offline_mock_transport import (
+    BuiltinOfflineMockTransport,
+)
 from rag_app.adapters.providers.validation import (
     finite_score,
     ordered_vectors,
@@ -638,106 +640,13 @@ def build_offline_mock_transport(
         connection: 用于选择固定响应形状的连接。
 
     Returns:
-        仅处理内存请求的 httpx MockTransport。
+        固定代码响应的内存 Transport，不接受外部 Handler。
 
     """
-
-    def _handler(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
-        body = json.loads(request.content.decode("utf-8"))
-        if "rerank" in request.url.path:
-            documents = body.get("documents")
-            if (
-                request.url.host != "api.jina.ai"
-                or request.url.path != "/v1/rerank"
-                or body.get("model") != "jina-reranker-v3.5"
-                or not isinstance(documents, list)
-                or not documents
-                or any(
-                    not isinstance(item, str) or not item for item in documents
-                )
-                or body.get("top_n") != len(documents)
-                or body.get("top_n") <= 0
-                or body.get("return_documents") is not False
-            ):
-                return httpx.Response(400)
-            return httpx.Response(
-                200,
-                json={
-                    "model": body["model"],
-                    "results": [
-                        {"index": index, "relevance_score": 0.9 - index / 100}
-                        for index, _ in enumerate(documents)
-                    ],
-                    "usage": {"total_tokens": 12},
-                },
-            )
-        if connection.provider_type == "jina":
-            if (
-                request.url.host != "api.jina.ai"
-                or request.url.path != "/v1/embeddings"
-                or body.get("model") != "jina-embeddings-v5-text-small"
-                or body.get("task")
-                not in {"retrieval.passage", "retrieval.query"}
-                or body.get("dimensions") != _EMBEDDING_DIMENSION
-                or body.get("normalized") is not True
-                or body.get("embedding_type") != "float"
-                or body.get("truncate") is not False
-            ):
-                return httpx.Response(400)
-            inputs = body.get("input")
-            if not isinstance(inputs, list):
-                return httpx.Response(400)
-            dimension = int(body.get("dimensions", 8))
-            vector = [0.125] * dimension
-            payload: dict[str, Any] = {
-                "data": [
-                    {"embedding": vector, "index": index}
-                    for index, _ in enumerate(inputs)
-                ],
-                "model": body["model"],
-                "usage": {"total_tokens": 8},
-            }
-        else:
-            raw_input = body.get("input")
-            parameters = body.get("parameters")
-
-            expected_host = urlsplit(_base_url(connection)).hostname
-            if (
-                request.url.host != expected_host
-                or not isinstance(raw_input, dict)
-                or not isinstance(parameters, dict)
-                or body.get("model") != "qwen3.7-text-embedding"
-                or parameters.get("text_type") not in {"document", "query"}
-                or parameters.get("dimension") != _EMBEDDING_DIMENSION
-                or parameters.get("output_type") != "dense"
-                or any(key in body for key in ("dimensions", "region", "task"))
-            ):
-                return httpx.Response(400)
-            text_type = parameters["text_type"]
-            if (
-                text_type == "query"
-                and not isinstance(parameters.get("instruct"), str)
-            ) or (text_type == "document" and "instruct" in parameters):
-                return httpx.Response(400)
-            texts = raw_input.get("texts")
-            if not isinstance(texts, list):
-                return httpx.Response(400)
-            dimension = int(parameters.get("dimension", 8))
-            vector = [0.125] * dimension
-            payload = {
-                "code": "",
-                "status_code": 200,
-                "output": {
-                    "embeddings": [
-                        {"embedding": vector, "text_index": index}
-                        for index, _ in enumerate(texts)
-                    ]
-                },
-                "usage": {"total_tokens": 8},
-            }
-        return httpx.Response(200, json=payload)
-
-    return httpx.MockTransport(_handler)
+    return BuiltinOfflineMockTransport(
+        connection.provider_type,
+        str(urlsplit(_base_url(connection)).hostname),
+    )
 
 
 def _payload(

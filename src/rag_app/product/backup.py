@@ -256,12 +256,11 @@ def restore_backup(
             )
             for name in _auxiliary_databases(manifest):
                 shutil.copyfile(root / "sqlite" / name, target / name)
-            if (target / "provider-budget.sqlite3").is_file():
-                # 旧快照可能缺少备份后的消费；保留数字，但对账前禁止出站。
-                (target / "provider-budget.restore-blocked").write_text(
-                    "RECONCILE_WITH_AUTHORITATIVE_CAMPAIGN_BEFORE_LIVE\n",
-                    encoding="utf-8",
-                )
+            # 首绑前备份也可能缺少后来消费；所有恢复都必须先对账。
+            (target / "provider-budget.restore-blocked").write_text(
+                "RECONCILE_WITH_AUTHORITATIVE_CAMPAIGN_BEFORE_LIVE\n",
+                encoding="utf-8",
+            )
             source_blobs = root / "blobs"
             if source_blobs.is_dir():
                 shutil.copytree(source_blobs, target / "blobs")

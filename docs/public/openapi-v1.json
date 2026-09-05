@@ -9666,6 +9666,377 @@
         ]
       }
     },
+    "/api/v1/provider-budget/campaign": {
+      "get": {
+        "operationId": "_campaign_api_v1_provider_budget_campaign_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Campaign Api V1 Provider Budget Campaign Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Campaign",
+        "tags": [
+          "provider-budget"
+        ]
+      }
+    },
+    "/api/v1/provider-budget/revisions": {
+      "post": {
+        "description": "必须使用现有管理员 Session Cookie 和 X-CSRF-Token；受限 API Token 与计划文件不能扩额。approver 必须由实际授权人明确填写；全部数值是保留历史消费的累计总上限。",
+        "operationId": "_approve_api_v1_provider_budget_revisions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "实际管理员确认的累计总上限，保持同一 campaign 与批准数据集。",
+                "properties": {
+                  "approval_reference": {
+                    "title": "Approval Reference",
+                    "type": "string"
+                  },
+                  "approved_at": {
+                    "title": "Approved At",
+                    "type": "string"
+                  },
+                  "approver": {
+                    "title": "Approver",
+                    "type": "string"
+                  },
+                  "authorization_id": {
+                    "title": "Authorization Id",
+                    "type": "string"
+                  },
+                  "campaign_id": {
+                    "title": "Campaign Id",
+                    "type": "string"
+                  },
+                  "estimated_token_limit": {
+                    "title": "Estimated Token Limit",
+                    "type": "integer"
+                  },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Expires At"
+                  },
+                  "payload_set_identity": {
+                    "title": "Payload Set Identity",
+                    "type": "string"
+                  },
+                  "previous_revision_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Previous Revision Id"
+                  },
+                  "provider_request_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Provider Request Limits",
+                    "type": "object"
+                  },
+                  "provider_token_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Provider Token Limits",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "request_limit": {
+                    "title": "Request Limit",
+                    "type": "integer"
+                  },
+                  "revision_id": {
+                    "title": "Revision Id",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "title": "Scope",
+                    "type": "string"
+                  },
+                  "status": {
+                    "default": "PROPOSED",
+                    "enum": [
+                      "APPROVED"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  },
+                  "step_request_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Step Request Limits",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "revision_id",
+                  "campaign_id",
+                  "previous_revision_id",
+                  "authorization_id",
+                  "approval_reference",
+                  "approver",
+                  "approved_at",
+                  "scope",
+                  "payload_set_identity",
+                  "request_limit",
+                  "estimated_token_limit",
+                  "reason"
+                ],
+                "title": "BudgetAuthorizationRevision",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Approve Api V1 Provider Budget Revisions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": "由已登录管理员明确批准累计预算修订",
+        "tags": [
+          "provider-budget"
+        ]
+      }
+    },
     "/api/v1/provider-catalog": {
       "get": {
         "operationId": "_catalog_api_v1_provider_catalog_get",

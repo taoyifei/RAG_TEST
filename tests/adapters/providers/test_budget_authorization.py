@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -10,6 +11,7 @@ from rag_app.adapters.providers.budget_authorization import (
     bind_existing_product_campaign,
     budget_initialization,
     provider_request_lease,
+    read_product_budget_history,
 )
 from rag_app.adapters.providers.budget_ledger import (
     BudgetBlockedError,
@@ -46,6 +48,12 @@ def _history(data_dir: Path) -> None:
                 observed_tokens INTEGER, retry_count INTEGER,
                 cache_hit INTEGER, occurred_at TEXT
             );
+            CREATE TABLE provider_validation_runs (
+                validation_id TEXT,connection_id TEXT,operation TEXT,
+                started_at TEXT,finished_at TEXT,status TEXT,http_category TEXT,
+                estimated_tokens INTEGER,observed_tokens INTEGER,
+                validation_mode TEXT,diagnostics_json TEXT
+            );
             INSERT INTO provider_connections VALUES ('jina-test', 'jina');
             INSERT INTO provider_connections
             VALUES ('aliyun-test', 'aliyun-model-studio');
@@ -64,7 +72,7 @@ def _history(data_dir: Path) -> None:
                     9,
                     0,
                     0,
-                    "1",
+                    "2026-01-01T00:00:01+00:00",
                 ),
                 (
                     "synthetic-2",
@@ -75,7 +83,7 @@ def _history(data_dir: Path) -> None:
                     None,
                     1,
                     0,
-                    "2",
+                    "2026-01-01T00:00:02+00:00",
                 ),
                 (
                     "synthetic-3",
@@ -86,7 +94,7 @@ def _history(data_dir: Path) -> None:
                     None,
                     0,
                     0,
-                    "3",
+                    "2026-01-01T00:00:03+00:00",
                 ),
                 (
                     "synthetic-cache",
@@ -97,7 +105,7 @@ def _history(data_dir: Path) -> None:
                     None,
                     0,
                     1,
-                    "4",
+                    "2026-01-01T00:00:04+00:00",
                 ),
             ],
         )
@@ -178,3 +186,98 @@ def test_initialization_stops_new_http_before_any_ledger_exists(
             "https://api.jina.ai/v1/embeddings", json={"input": ["synthetic"]}
         )
     assert requests == []
+
+
+def _validation(
+    database: sqlite3.Connection, identifier: str, *, matched: bool
+) -> None:
+    database.execute(
+        "INSERT INTO provider_validation_runs VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            identifier,
+            "jina-test",
+            "embedding.document",
+            "2026-01-01T00:00:00+00:00"
+            if matched
+            else "2026-02-01T00:00:00+00:00",
+            "2026-01-01T00:00:00.5+00:00"
+            if matched
+            else "2026-02-01T00:00:00+00:00",
+            "succeeded",
+            "SUCCESS",
+            6,
+            9,
+            "live",
+            '{"request_dispatched":true}',
+        ),
+    )
+
+
+def test_history_reconciles_validation_once_and_reserves_missing_event_unknown(
+    tmp_path: Path,
+) -> None:
+    _history(tmp_path)
+    source = tmp_path / "universal-rag.sqlite3"
+    with sqlite3.connect(source) as database:
+        _validation(database, "validation-covered", matched=True)
+        _validation(database, "validation-missing-event", matched=False)
+    before = source.read_bytes()
+    summary = read_product_budget_history(tmp_path)
+    assert summary["forwarded"] == 4
+    assert summary["estimated_input_tokens"] == 20
+    assert summary["unmatched_validation_attempts"] == 1
+    assert summary["unknown_forwarding_attempts"] == 2
+    assert source.read_bytes() == before
+    assert not (tmp_path / "provider-budget.sqlite3").exists()
+    bound = bind_existing_product_campaign(
+        tmp_path, _campaign(), maintenance_confirmed=True
+    )
+    assert bound["forwarded"] == summary["forwarded"]
+    replay = bind_existing_product_campaign(
+        tmp_path, _campaign(), maintenance_confirmed=True
+    )
+    assert replay == bound
+
+
+def test_history_ambiguous_correlations_and_unknown_provider_fail_closed(
+    tmp_path: Path,
+) -> None:
+    _history(tmp_path)
+    source = tmp_path / "universal-rag.sqlite3"
+    with sqlite3.connect(source) as database:
+        _validation(database, "validation-ambiguous", matched=True)
+        database.execute(
+            "INSERT INTO provider_operation_events SELECT 'duplicate',"
+            "connection_id,operation,status_category,estimated_tokens,"
+            "observed_tokens,retry_count,cache_hit,occurred_at "
+            "FROM provider_operation_events WHERE event_id='synthetic-1'"
+        )
+    with pytest.raises(BudgetBlockedError, match="CORRELATION_AMBIGUOUS"):
+        read_product_budget_history(tmp_path)
+    with sqlite3.connect(source) as database:
+        database.execute("DELETE FROM provider_validation_runs")
+        database.execute(
+            "DELETE FROM provider_connections WHERE provider_type='jina'"
+        )
+    with pytest.raises(BudgetBlockedError, match="PROVIDER_IDENTITY_UNKNOWN"):
+        read_product_budget_history(tmp_path)
+
+
+def test_rebinding_does_not_reimport_events_already_protected_by_transport(
+    tmp_path: Path,
+) -> None:
+    _history(tmp_path)
+    before = bind_existing_product_campaign(
+        tmp_path, _campaign(), maintenance_confirmed=True
+    )
+    with sqlite3.connect(tmp_path / "universal-rag.sqlite3") as database:
+        database.execute(
+            "INSERT INTO provider_operation_events VALUES "
+            "('already-in-ledger','jina-test','embedding.query','SUCCESS',"
+            "7,8,0,0,?)",
+            (datetime.now(UTC).isoformat(),),
+        )
+    replay = bind_existing_product_campaign(
+        tmp_path, _campaign(), maintenance_confirmed=True
+    )
+    assert replay == before

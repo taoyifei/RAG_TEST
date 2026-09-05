@@ -22,6 +22,9 @@ from rag_app.adapters.providers.budget_ledger import (
     ProviderBudgetLedger,
     safe_identifier,
 )
+from rag_app.adapters.providers.offline_mock_transport import (
+    BuiltinOfflineMockTransport,
+)
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.tokenization import estimate_tokens
 
@@ -287,7 +290,23 @@ class BudgetedTransport(httpx.BaseTransport):
             经过预算检查后的供应商响应。
 
         """
-        with provider_request_lease(self._ledger_path.parent):
+        offline_restore = (
+            type(self._transport) is BuiltinOfflineMockTransport
+            and (
+                self._ledger_path.parent / "provider-budget.restore-blocked"
+            ).exists()
+        )
+        with provider_request_lease(
+            self._ledger_path.parent, offline_restore=offline_restore
+        ):
+            if offline_restore:
+                # 恢复标记只限制真实出站；固定内存结果不消耗或重置累计账。
+                blocker = _LOCAL_BLOCKER.get()
+                if blocker is not None and blocker(request):
+                    raise httpx.ConnectTimeout(
+                        "ACCEPTANCE_LOCALLY_BLOCKED", request=request
+                    )
+                return self._transport.handle_request(request)
             return self._handle_request(request)
 
     def _handle_request(self, request: httpx.Request) -> httpx.Response:

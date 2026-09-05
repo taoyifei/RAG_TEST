@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NoReturn
 
 import httpx
 import pytest
@@ -19,9 +20,49 @@ from rag_app.adapters.providers.budget_transport import (
     provider_request_identity,
 )
 from rag_app.adapters.providers.http_common import ProviderHttpClient
+from rag_app.adapters.providers.offline_mock_transport import (
+    BuiltinOfflineMockTransport,
+)
 from rag_app.core.identifiers import canonical_sha256
 
 _PAYLOAD = {"model": "synthetic-model", "input": ["公开合成文本"]}
+
+
+@pytest.mark.parametrize("use_real_transport", [False, True])
+def test_restore_marker_still_blocks_custom_mock_and_real_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, use_real_transport: bool
+) -> None:
+    def no_dispatch(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("必须在调用任何真实或自定义 Transport 前阻断。")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", no_dispatch)
+    monkeypatch.setattr("socket.create_connection", no_dispatch)
+    marker = tmp_path / "provider-budget.restore-blocked"
+    marker.write_text("RECONCILE_REQUIRED", encoding="utf-8")
+    transport = (
+        httpx.HTTPTransport(trust_env=False)
+        if use_real_transport
+        else httpx.MockTransport(no_dispatch)
+    )
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                transport,
+                ledger_path=tmp_path / "provider-budget.sqlite3",
+            )
+        ) as client,
+        pytest.raises(BudgetBlockedError, match="RECONCILIATION_REQUIRED"),
+    ):
+        client.post("https://api.jina.ai/v1/embeddings", json=_PAYLOAD)
+    assert marker.read_text() == "RECONCILE_REQUIRED"
+    assert not (tmp_path / "provider-budget.sqlite3").exists()
+
+
+def test_builtin_offline_responder_does_not_accept_injected_handler() -> None:
+    with pytest.raises(TypeError):
+        BuiltinOfflineMockTransport(
+            handler=lambda _: httpx.Response(200)
+        )
 
 
 def _ledger(
