@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
@@ -24,6 +25,8 @@ class FakeBackend:
     revisions: dict[str, str] = field(default_factory=dict)
     calls: list[str] = field(default_factory=list)
     closed: bool = False
+    expired: set[str] = field(default_factory=set)
+    configuration: dict[str, object] = field(default_factory=dict)
 
     def identity(self, step: str) -> str:
         """返回离线配置版本。"""
@@ -33,7 +36,17 @@ class FakeBackend:
         """保存实际调用序列。"""
         self.calls.append(step)
         status = self.failures.get(step, "PASS")
-        return StepResult(status, "OFFLINE_SCHEDULER_FIXTURE")
+        return StepResult(
+            status,
+            "OFFLINE_SCHEDULER_FIXTURE",
+            self.configuration if step == "config_check" else {},
+        )
+
+    def evidence_is_current(
+        self, step: str, record: Mapping[str, object]
+    ) -> bool:
+        """调度测试独立控制证据有效期，不冒充 Live 验证。"""
+        return record["status"] == "PASS" and step not in self.expired
 
     def close(self) -> None:
         """确认资源清理回调被执行。"""
@@ -167,3 +180,56 @@ def test_unknown_steps_are_rejected(tmp_path: Path):
         run_acceptance(
             _config(tmp_path), steps=("fictional",), backend=FakeBackend()
         )
+
+
+def test_expired_success_cannot_be_reused_or_satisfy_dependencies(
+    tmp_path: Path,
+):
+    run_acceptance(_config(tmp_path), live=True, backend=FakeBackend())
+    backend = FakeBackend(expired={"aliyun_document_canary"})
+    report = run_acceptance(
+        _config(tmp_path),
+        steps=("aliyun_query_canary",),
+        live=True,
+        backend=backend,
+    )
+    assert _steps(report)["aliyun_document_canary"]["status"] == "NOT_RUN"
+    assert _steps(report)["aliyun_query_canary"]["status"] == "BLOCKED"
+    assert backend.calls == ["config_check"]
+
+
+def test_selected_success_is_separate_from_incomplete_release(tmp_path: Path):
+    report = run_acceptance(
+        _config(tmp_path), steps=("config_check",), backend=FakeBackend()
+    )
+    assert report["selected_steps_status"] == "PASS"
+    assert report["overall_release_status"] == "BLOCKED"
+    assert report["P11_READY"] is False
+
+
+def test_blocked_aliyun_configuration_preserves_current_jina_evidence(
+    tmp_path: Path,
+):
+    run_acceptance(_config(tmp_path), live=True, backend=FakeBackend())
+    backend = FakeBackend(
+        failures={"config_check": "BLOCKED"},
+        configuration={
+            "campaign_binding": "PASS",
+            "connections": {
+                "jina_connection_id": {"status": "PASS"},
+                "aliyun_connection_id": {"status": "BLOCKED"},
+            },
+        },
+    )
+    report = run_acceptance(
+        _config(tmp_path),
+        steps=("jina_connection",),
+        live=True,
+        backend=backend,
+    )
+    assert _steps(report)["config_check"]["status"] == "BLOCKED"
+    assert _steps(report)["jina_connection"]["status"] == "PASS"
+    assert _steps(report)["jina_connection"]["provenance"] == "有效复用"
+    assert report["selected_steps_status"] == "PASS"
+    assert report["P11_READY"] is False
+    assert backend.calls == ["config_check"]

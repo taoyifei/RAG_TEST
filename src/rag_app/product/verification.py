@@ -118,8 +118,10 @@ def validation_is_current(
     """
     try:
         identity = endpoint_identity(connection)
+        finished = datetime.fromisoformat(run.finished_at)
     except ValueError:
         return False
+    now = datetime.now(UTC)
     return (
         connection.enabled
         and run.connection_id == connection.connection_id
@@ -127,7 +129,6 @@ def validation_is_current(
         and run.credential_key_version == key_version
         and run.endpoint_identity == identity
         and run.validation_mode in {"live", "mock"}
-        and datetime.now(UTC) - timedelta(hours=24)
-        <= datetime.fromisoformat(run.finished_at)
-        <= datetime.now(UTC)
+        and finished.tzinfo is not None
+        and now - timedelta(hours=24) <= finished <= now
     )

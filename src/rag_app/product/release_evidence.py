@@ -9,11 +9,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from rag_app.product.os_risk_review import (
+    ReviewContext,
+    apply_review,
+    load_review_inputs,
+)
+
 _STATUSES = frozenset({"PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"})
 _TRIVY_SCHEMA_VERSION = 2
 _GATE_CHECKS = {
-    "AUTHORIZATION_BOUNDARY_READY": ("authorization_tests", "campaign_config"),
-    "ALIYUN_ENDPOINT_CONTRACT_READY": ("endpoint_tests", "campaign_config"),
+    "AUTHORIZATION_BOUNDARY_READY": ("authorization_tests",),
+    "ALIYUN_ENDPOINT_CONTRACT_READY": ("endpoint_tests", "endpoint_contract"),
+    "CONNECTION_CONFIGURATION_READY": ("connection_configuration",),
+    "CAMPAIGN_BINDING_READY": ("campaign_binding",),
     "CONNECTION_EDIT_READY": ("connection_tests", "web_e2e"),
     "RESOLVED_POLICY_CONFORMANCE_READY": ("conformance_tests",),
     "PROFILE_INDEX_SWITCH_READY": ("publication_tests", "upgrade_tests"),
@@ -65,6 +73,9 @@ _CHECK_IDENTITIES = {
         ("connection_tests", "web_e2e"), (*_SOURCE_IDENTITY, "frontend")
     ),
     "campaign_config": ("runtime", "migrations"),
+    "endpoint_contract": ("provider_aliyun", "migrations"),
+    "connection_configuration": ("runtime", "migrations"),
+    "campaign_binding": ("runtime", "migrations"),
     "aliyun_document_canary": ("provider_aliyun",),
     "aliyun_query_canary": ("provider_aliyun",),
     "jina_connection": ("provider_jina",),
@@ -276,6 +287,25 @@ def _checked_record(
         result.update(status="BLOCKED", reason="EVIDENCE_ORIGIN_UNVERIFIED")
     if record.get("exit_code") != 0:
         result.update(status="FAIL", reason="EVIDENCE_COMMAND_FAILED")
+    if name == "os_risk" and result.get("status") == "PASS":
+        try:
+            payload, overlay, scan_path = load_review_inputs(record, root)
+            current = vulnerability_report(
+                payload, overlay=overlay, root=root, scan_path=scan_path
+            )
+        except (ValueError, OSError, TypeError) as error:
+            result.update(
+                status="BLOCKED",
+                reason="OS_REVIEW_EVIDENCE_INVALID",
+                safe_error_type=type(error).__name__,
+            )
+        else:
+            result.update(status=current["status"], reason=current["reason"])
+            result["risk_summary"] = {
+                key: value
+                for key, value in current.items()
+                if key != "findings"
+            }
     return result
 
 
@@ -335,6 +365,17 @@ def build_report(
         ("RELEASE_CANDIDATE_READY",),
         identity,
     )
+    code_checks = (
+        *_OFFLINE_CHECKS,
+        *_FRONTEND_CHECKS,
+        "authorization_tests",
+        "endpoint_tests",
+        "connection_tests",
+        "conformance_tests",
+        "publication_tests",
+        "upgrade_tests",
+        "security_matrix",
+    )
     return {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -344,6 +385,10 @@ def build_report(
         "checks": checks,
         "gates": gates,
         "P11_READY": gates["P11_READY"]["status"] == "PASS",
+        "CODE_FIXES_READY": all(
+            checks.get(name, {}).get("status") == "PASS" for name in code_checks
+        ),
+        "overall_release_status": gates["P11_READY"]["status"],
         "MERGE_TO_MAIN_AUTHORIZED": False,
         "limitations": evidence.get("limitations", []),
         "private_documents_sent": evidence.get(
@@ -388,9 +433,10 @@ def write_report(report: Mapping[str, object], output: Path) -> None:
     )
     gates = cast(dict[str, dict[str, object]], report["gates"])
     lines = [
-        "# P11-R4 验收",
+        "# P11 当前验收",
         "",
         f"P11_READY={report['P11_READY']}",
+        f"CODE_FIXES_READY={report.get('CODE_FIXES_READY', False)}",
         "",
         "| Gate | 状态 | 原因 / 待补证据 |",
         "| --- | --- | --- |",
@@ -419,11 +465,22 @@ def write_report(report: Mapping[str, object], output: Path) -> None:
     output.with_suffix(".md").write_text("\n".join(lines), encoding="utf-8")
 
 
-def vulnerability_report(payload: Mapping[str, object]) -> dict[str, object]:
+def vulnerability_report(
+    payload: Mapping[str, object],
+    *,
+    overlay: Mapping[str, object] | None = None,
+    root: Path | None = None,
+    scan_path: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, object]:
     """分列全部与可修复高危，未知可达性不会自动接受风险。
 
     Args:
         payload: 完整 Trivy JSON，不是 ignore-unfixed 过滤结果。
+        overlay: 本地管理员控制的逐项审查文件，计划不构成批准。
+        root: 本地证据的可信根目录。
+        scan_path: 原始扫描文件，用于验证扫描内容和身份。
+        now: 可注入的 UTC 校验时间，默认使用当前时间。
 
     Returns:
         包级风险清单和保守的安全子门状态。
@@ -455,11 +512,24 @@ def vulnerability_report(payload: Mapping[str, object]) -> dict[str, object]:
         }
     findings: list[dict[str, object]] = []
     for result in cast(list[dict[str, object]], payload.get("Results", [])):
+        packages = {
+            item.get("ID"): item
+            for item in cast(
+                list[dict[str, object]], result.get("Packages") or []
+            )
+        }
         for item in cast(
             list[dict[str, object]], result.get("Vulnerabilities") or []
         ):
             if item.get("Severity") not in {"HIGH", "CRITICAL"}:
                 continue
+            package_id = f"{item.get('PkgName')}@{item.get('InstalledVersion')}"
+            package = packages.get(package_id, {})
+            source_version = str(package.get("SrcVersion") or "")
+            if package.get("SrcRelease"):
+                source_version += f"-{package['SrcRelease']}"
+            if package.get("SrcEpoch"):
+                source_version = f"{package['SrcEpoch']}:{source_version}"
             findings.append(
                 {
                     "id": item.get("VulnerabilityID"),
@@ -468,6 +538,8 @@ def vulnerability_report(payload: Mapping[str, object]) -> dict[str, object]:
                     "fixed_version": item.get("FixedVersion") or None,
                     "severity": item.get("Severity"),
                     "target": result.get("Target"),
+                    "source_package": package.get("SrcName"),
+                    "source_version": source_version or None,
                     "reachability": "NOT_ASSESSED",
                     "mitigation": "NOT_ASSESSED",
                     "risk_accepted": False,
@@ -476,16 +548,40 @@ def vulnerability_report(payload: Mapping[str, object]) -> dict[str, object]:
                 }
             )
     fixable = sum(bool(item["fixed_version"]) for item in findings)
-    return {
+    report: dict[str, object] = {
         "status": "FAIL" if fixable else "BLOCKED" if findings else "PASS",
         "image_id": metadata["ImageID"],
+        "os": metadata["OS"],
+        "scanned_at": payload.get("CreatedAt"),
+        "scanner": payload.get("Trivy"),
         "reason": "FIXABLE_HIGH_CRITICAL"
         if fixable
         else "RISK_REVIEW_REQUIRED"
         if findings
         else "NO_HIGH_CRITICAL",
         "all_high_critical": len(findings),
+        "raw_high_critical": len(findings),
+        "raw_findings": sum(
+            len(cast(list[object], result.get("Vulnerabilities") or []))
+            for result in cast(list[dict[str, object]], results)
+        ),
+        "unique_cves": len({str(item["id"]) for item in findings}),
+        "unique_cve_package_versions": len(
+            {
+                (
+                    str(item["id"]),
+                    str(item["package"]),
+                    str(item["installed_version"]),
+                )
+                for item in findings
+            }
+        ),
         "fixable_high_critical": fixable,
         "without_fix": len(findings) - fixable,
         "findings": findings,
     }
+    return apply_review(
+        report,
+        payload,
+        ReviewContext(overlay, root, scan_path, now or datetime.now(UTC)),
+    )

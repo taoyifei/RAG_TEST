@@ -1240,7 +1240,9 @@ def _connection(row: Row) -> ProviderConnection:
             else str(row["last_validation_id"])
         ),
         configuration_version=int(row["configuration_version"]),
-        endpoint_mode=config.get("endpoint_mode", "workspace_host"),
+        endpoint_mode=config.get("endpoint_mode") or (
+            "workspace_host" if row["provider_type"] == "jina" else ""
+        ),
         api_host=config.get("api_host"),
         workspace_id=config.get("workspace_id"),
         region=config.get("region"),

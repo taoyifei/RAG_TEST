@@ -76,6 +76,21 @@ class AcceptanceBackend(Protocol):
         """
         ...
 
+    def evidence_is_current(
+        self, step: str, record: Mapping[str, object]
+    ) -> bool:
+        """核验成功证据的时效、操作及授权，身份哈希本身不够。
+
+        Args:
+            step: 要复用的阶段。
+            record: 既有成功记录。
+
+        Returns:
+            真实证据仍在有效期及批准范围内时为真。
+
+        """
+        ...
+
     def close(self) -> None:
         """释放执行器拥有的资源。
 
@@ -242,6 +257,42 @@ def _selected_steps(steps: Sequence[str] | None) -> set[str]:
     return selected | {"config_check", "final_report"}
 
 
+def _dependencies_ready(
+    step: str, records: Mapping[str, Mapping[str, object]]
+) -> bool:
+    for name in DEPENDENCIES[step]:
+        record = records[name]
+        if record["status"] == "PASS":
+            continue
+        if name == "config_check" and _own_connection_ready(step, record):
+            continue
+        return False
+    return True
+
+
+def _own_connection_ready(step: str, record: Mapping[str, object]) -> bool:
+    key = {
+        "jina_connection": "jina_connection_id",
+        "aliyun_document_canary": "aliyun_connection_id",
+    }.get(step)
+    evidence = record.get("evidence")
+    if (
+        key is None
+        or record["status"] == "FAIL"
+        or not isinstance(evidence, dict)
+    ):
+        return False
+    connections = evidence.get("connections")
+    if not isinstance(connections, dict):
+        return False
+    connection = connections.get(key)
+    return (
+        evidence.get("campaign_binding") == "PASS"
+        and isinstance(connection, dict)
+        and connection.get("status") == "PASS"
+    )
+
+
 def run_acceptance(
     config: Mapping[str, object] | None,
     *,
@@ -301,14 +352,13 @@ def run_acceptance(
                 }
             )
             prior = state.latest(step)
-            dependencies_pass = all(
-                records[name]["status"] == "PASS" for name in DEPENDENCIES[step]
-            )
+            dependencies_pass = _dependencies_ready(step, records)
             reusable = (
                 prior is not None
                 and prior["identity"] == identity
                 and prior["status"] == "PASS"
                 and dependencies_pass
+                and backend.evidence_is_current(step, prior)
             )
             if step != "config_check" and resume and reusable:
                 records[step] = cast(dict[str, object], prior)
@@ -326,7 +376,7 @@ def run_acceptance(
                 continue
             if step != "config_check" and not live:
                 result = StepResult("BLOCKED", "BLOCKED_AUTHORIZATION")
-            elif (
+            elif step != "config_check" and (
                 values.get("bind_campaign") is True and binding.status != "PASS"
             ):
                 result = StepResult("BLOCKED", binding.reason, binding.evidence)
@@ -355,6 +405,23 @@ def run_acceptance(
     records["final_report"] = state.record(
         "final_report", canonical_sha256(records), final_result
     )
+    requested = (
+        set(STEPS[:-1])
+        if steps is None
+        else {part.strip() for item in steps for part in item.split(",")}
+    )
+    selected_statuses = {str(records[name]["status"]) for name in requested}
+    if values.get("bind_campaign") is True:
+        selected_statuses.add(binding.status)
+    selected_status = (
+        "FAIL"
+        if "FAIL" in selected_statuses
+        else "BLOCKED"
+        if "BLOCKED" in selected_statuses
+        else "NOT_RUN"
+        if "NOT_RUN" in selected_statuses
+        else "PASS"
+    )
     return {
         "schema": "p11-live-acceptance-v1",
         "campaign_id": values.get("campaign_id"),
@@ -365,6 +432,9 @@ def run_acceptance(
             "reason": binding.reason,
             "evidence": binding.evidence,
         },
+        "selected_steps": sorted(requested),
+        "selected_steps_status": selected_status,
+        "overall_release_status": "BLOCKED",
         "CONNECTIVITY_READY": connectivity,
         "QUALITY_READY": records["citation_quality"]["status"],
         "LIVE_ACCEPTANCE_READY": complete,

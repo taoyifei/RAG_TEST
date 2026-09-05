@@ -53,7 +53,7 @@ export interface ProviderConnection {
   workspace_id?: string | null;
   region?: string | null;
   configuration_version: number;
-  endpoint_mode?: "workspace_host" | "beijing_dashscope";
+  endpoint_mode?: "workspace_host" | "beijing_dashscope" | "";
   api_host?: string | null;
   request_budget?: number;
   token_budget?: number;

@@ -14,9 +14,11 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
+from importlib import import_module
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -33,6 +35,10 @@ from rag_app.product.release_evidence import (
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+_build_budget_plan = cast(
+    Callable[[dict[str, object]], dict[str, object]],
+    import_module("rag_app.product.budget_plan").build_p11_budget_plan,
+)
 _IMAGE = "docx-rag:v1-candidate"
 _QDRANT_IMAGE = "qdrant/qdrant:v1.18.3"
 _QDRANT_TEST_KEY = "test-only-qdrant-key"
@@ -181,18 +187,22 @@ def _build() -> None:
     _run((docker, "compose", "config", "--quiet"))
 
 
-def _artifact_directory() -> Path:
+def _artifact_directory(evidence_path: Path) -> Path:
     """创建并返回忽略跟踪的 P11 安全证据目录。
 
     Args:
-        无参数；路径固定在 artifacts 下。
+        evidence_path: 本轮执行记录路径；每次扫描另存完整原始证据。
 
     Returns:
         已创建的安全证据目录。
 
     """
-    directory = _ROOT / "artifacts" / "p11" / "security"
-    directory.mkdir(parents=True, exist_ok=True)
+    directory = (
+        evidence_path.resolve().parent
+        / "security"
+        / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    )
+    directory.mkdir(parents=True, exist_ok=False)
     return directory
 
 
@@ -576,11 +586,12 @@ def _audit_frontend_dependencies(lock_file: Path, npm: str) -> None:
     _run_osv_dependency_audit(_locked_npm_dependencies(lock_file), "npm")
 
 
-def _verify() -> None:
+def _verify(evidence_path: Path, review_overlay: Path) -> None:
     """执行依赖、镜像、Secret、SBOM 与许可证门禁。
 
     Args:
-        无参数；验证固定候选镜像和锁文件。
+        evidence_path: 本轮独立执行证据汇总文件。
+        review_overlay: 绑定完整扫描及实际处置证据的本地审查文件。
 
     Returns:
         全部门禁通过时无返回值。
@@ -588,8 +599,7 @@ def _verify() -> None:
     """
     docker = _required_executable("docker")
     npm = _required_executable("npm")
-    output = _artifact_directory()
-    evidence_path = _ROOT / "artifacts/p11-r4/evidence.json"
+    output = _artifact_directory(evidence_path)
     _record_action(
         lambda: _audit_python_dependencies(_ROOT / "requirements.runtime.lock"),
         ("python_dependency_audit",),
@@ -651,7 +661,12 @@ def _verify() -> None:
     risks = vulnerability_report(
         json.loads(
             (output / "trivy-all.json").read_text(encoding="utf-8"),
-        )
+        ),
+        overlay=_load_evidence(review_overlay)
+        if review_overlay.is_file()
+        else None,
+        root=_ROOT,
+        scan_path=output / "trivy-all.json",
     )
     if risks.get("image_id") != _current_identity()["image_id"]:
         risks.update(status="BLOCKED", reason="OS_SCAN_IMAGE_IDENTITY_MISMATCH")
@@ -667,6 +682,27 @@ def _verify() -> None:
         "evidence": str(review_path),
         "exit_code": 0,
         "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
+        "details": {
+            "raw_scan": {
+                "path": str(output / "trivy-all.json"),
+                "sha256": hashlib.sha256(
+                    (output / "trivy-all.json").read_bytes()
+                ).hexdigest(),
+            },
+            "review_overlay": {
+                "path": str(review_overlay),
+                "sha256": hashlib.sha256(
+                    review_overlay.read_bytes()
+                ).hexdigest()
+                if review_overlay.is_file()
+                else None,
+            },
+            "risk_summary": {
+                name: value
+                for name, value in risks.items()
+                if name != "findings"
+            },
+        },
     }
     _save_evidence(evidence_path, evidence)
     _run(
@@ -1008,7 +1044,7 @@ def _acceptance(
         全部离线、浏览器、升级与 Qdrant 门禁通过时无返回值。
 
     """
-    evidence_path = evidence_file or _ROOT / "artifacts/p11-r4/evidence.json"
+    evidence_path = evidence_file or _ROOT / "artifacts/p11-r5/evidence.json"
     for command in (
         "doctor",
         "check",
@@ -1160,7 +1196,7 @@ def _candidate_acceptance() -> None:
             if before != after:
                 raise RuntimeError("候选重启后产品数据或双槽向量身份变化。")
             _save_evidence(
-                _ROOT / "artifacts/p11-r4/candidate-instance.json",
+                _ROOT / "artifacts/p11-r5/candidate-instance.json",
                 {
                     "image_id": _capture(
                         (
@@ -1436,6 +1472,33 @@ def _campaign_binding_command(
     )
 
 
+@contextmanager
+def _campaign_maintenance(
+    docker: str, container: str
+) -> Iterator[dict[str, object]]:
+    """只恢复进入维护前运行的目标 App，失败也不遗留额外停机。"""
+    original = _campaign_container_metadata(docker, container)
+    target_id = str(original["id"])
+    was_running = original["running"] is True
+    receipt: dict[str, object] = {
+        "app_was_running": was_running,
+        "app_restored": False,
+        "qdrant_action": "NONE",
+    }
+    try:
+        if was_running:
+            _capture((docker, "stop", target_id))
+        yield receipt
+    finally:
+        # 即使 stop 或辅助容器失败，也按进入时的状态恢复原实例。
+        if was_running:
+            _capture((docker, "start", target_id))
+            restored = _campaign_container_metadata(docker, target_id)
+            if restored["running"] is not True:
+                raise RuntimeError("APP_RESTORE_FAILED: 原 App 未恢复运行。")
+            receipt["app_restored"] = True
+
+
 def _run_live_acceptance(args: argparse.Namespace) -> dict[str, object]:
     config = (
         None
@@ -1456,7 +1519,7 @@ def _run_live_acceptance(args: argparse.Namespace) -> dict[str, object]:
         )
     ):
         raise RuntimeError(
-            "BLOCKED_BIND_ARGUMENTS: 绑定需要已停止的 --container，"
+            "BLOCKED_BIND_ARGUMENTS: 绑定需要指定 --container，"
             "且不能包含 --live 或付费步骤。"
         )
     if binding and not isinstance(config, dict):
@@ -1494,12 +1557,7 @@ def _run_live_acceptance(args: argparse.Namespace) -> dict[str, object]:
             args.container,
             "python",
         )
-        if binding:
-            command = _campaign_binding_command(
-                docker, args.container, cast(dict[str, object], config)
-            )
-            steps = ("config_check",)
-        elif args.live:
+        if args.live:
             _verify_image_contract(docker)
             container_image = _capture(
                 (
@@ -1534,19 +1592,29 @@ def _run_live_acceptance(args: argparse.Namespace) -> dict[str, object]:
             "p=json.load(sys.stdin); "
             "print('P11_ACCEPTANCE_RESULT='+json.dumps(run_acceptance(**p)))"
         )
-        output = _capture(
-            (*command, "-c", program),
-            input_text=json.dumps(payload),
-        )
-        for line in reversed(output.splitlines()):
-            if line.startswith("P11_ACCEPTANCE_RESULT="):
-                return cast(
-                    dict[str, object], json.loads(line.split("=", 1)[1])
+        if binding:
+            with _campaign_maintenance(docker, args.container) as maintenance:
+                command = _campaign_binding_command(
+                    docker, args.container, cast(dict[str, object], config)
                 )
-        raise RuntimeError("容器未生成可验证的验收报告。")
+                payload["steps"] = ("config_check",)
+                report = _capture_acceptance(command, program, payload)
+            report["maintenance"] = maintenance
+            return report
+        return _capture_acceptance(command, program, payload)
     return run_acceptance(
         config, steps=steps, resume=args.resume, live=args.live
     )
+
+
+def _capture_acceptance(
+    command: Sequence[str], program: str, payload: dict[str, object]
+) -> dict[str, object]:
+    output = _capture((*command, "-c", program), input_text=json.dumps(payload))
+    for line in reversed(output.splitlines()):
+        if line.startswith("P11_ACCEPTANCE_RESULT="):
+            return cast(dict[str, object], json.loads(line.split("=", 1)[1]))
+    raise RuntimeError("容器未生成可验证的验收报告。")
 
 
 def _write_acceptance_report(args: argparse.Namespace) -> int:
@@ -1574,28 +1642,70 @@ def _write_acceptance_report(args: argparse.Namespace) -> int:
             "exit_code": 0 if value["status"] == "PASS" else None,
             "details": value.get("evidence", {}),
         }
+    configuration = cast(
+        dict[str, object],
+        step_records.get("config_check", {}).get("evidence", {}),
+    )
+    for name in (
+        "endpoint_contract",
+        "connection_configuration",
+        "campaign_binding",
+    ):
+        status = str(configuration.get(name, "NOT_RUN"))
+        checks[name] = {
+            **cast(dict[str, object], checks.get("campaign_config", {})),
+            "status": status,
+            "reason": "LOCAL_DIAGNOSTIC_PASSED"
+            if status == "PASS"
+            else ",".join(
+                str(item["reason_code"])
+                for item in cast(
+                    list[dict[str, object]], configuration.get("issues", [])
+                )
+                if item["blocking_scope"] == name
+            )
+            or "DIAGNOSTIC_REQUIRED",
+            "identity": evidence_identity(name, identity),
+            "exit_code": 0 if status == "PASS" else None,
+        }
     if "budget" in live_report:
         evidence["budget"] = live_report["budget"]
     _save_evidence(args.evidence_file, evidence)
     report = build_report(_ROOT, evidence, identity)
     report["live_runner"] = live_report
+    selected_status = str(live_report.get("selected_steps_status", "NOT_RUN"))
+    report["selected_steps_status"] = selected_status
+    report["overall_release_status"] = cast(
+        dict[str, dict[str, object]], report["gates"]
+    )["P11_READY"]["status"]
+    report["live_allowed"] = False
     write_report(report, args.report_output)
     print(f"REPORT {args.report_output} P11_READY={report['P11_READY']}")
+    if args.exit_scope == "selected":
+        return (
+            0
+            if selected_status == "PASS"
+            else 1
+            if selected_status == "FAIL"
+            else 2
+        )
     return 0 if report["P11_READY"] else 2
 
 
 def _parser() -> argparse.ArgumentParser:
-    """构建三个稳定发布入口。
+    """构建发布、零调用预算计划与分步验收入口。
 
     Args:
-        无参数；命令固定为 build、verify、acceptance。
+        无参数；仅解析已实现的子命令与显式作用域。
 
     Returns:
         发布参数解析器。
 
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("build", "verify", "acceptance"))
+    parser.add_argument(
+        "command", choices=("build", "verify", "acceptance", "budget-plan")
+    )
     parser.add_argument(
         "--resume", action="store_true", help="复用有效记录，仅续跑选中验收阶段"
     )
@@ -1616,7 +1726,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bind-campaign",
         action="store_true",
-        help="按显式授权配置导入旧账并首绑持久campaign，不发Provider请求",
+        help="仅停止目标App，断网首绑旧账，finally恢复原运行状态",
+    )
+    parser.add_argument(
+        "--exit-scope",
+        choices=("release", "selected"),
+        default="release",
+        help="默认按整个发布退出；selected只反映所选动作，不能用于发布放行",
     )
     parser.add_argument(
         "--candidate",
@@ -1626,7 +1742,25 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--evidence-file",
         type=Path,
-        default=_ROOT / "artifacts/p11-r4/evidence.json",
+        default=_ROOT / "artifacts/p11-r5/evidence.json",
+    )
+    parser.add_argument(
+        "--risk-review",
+        type=Path,
+        default=_ROOT / "release/p11-os-risk-review.json",
+        help="完整扫描的本地处置overlay；计划和未批准风险保持阻断",
+    )
+    parser.add_argument(
+        "--budget-history",
+        type=Path,
+        default=_ROOT / "release/p11-blocker-diagnosis.json",
+        help="只读诊断historical_budget或现有ledger.summary，不能替代预算批准",
+    )
+    parser.add_argument(
+        "--plan-output",
+        type=Path,
+        default=_ROOT / "release/p11-budget-plan.json",
+        help="仅写PROPOSED预算估计，不修改campaign或尝试记录",
     )
     parser.add_argument(
         "--report-output",
@@ -1652,9 +1786,24 @@ def main(arguments: Sequence[str] | None = None) -> int:
         if command == "build":
             _build()
         elif command == "verify":
-            _verify()
+            _verify(args.evidence_file, args.risk_review)
+        elif command == "budget-plan":
+            _write_budget_plan(args)
         else:
-            if not args.resume and args.steps is None and not args.live:
+            config_binding = False
+            if args.config is not None:
+                config = json.loads(args.config.read_text(encoding="utf-8"))
+                config_binding = (
+                    isinstance(config, dict)
+                    and config.get("bind_campaign") is True
+                )
+            if (
+                not args.resume
+                and args.steps is None
+                and not args.live
+                and not args.bind_campaign
+                and not config_binding
+            ):
                 _acceptance(args.evidence_file)
             if args.candidate:
                 _record_action(
@@ -1673,6 +1822,24 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(f"BLOCKED release: {error}", file=sys.stderr)
         return 2
     return 0
+
+
+def _write_budget_plan(args: argparse.Namespace) -> None:
+    history_document = _load_evidence(args.budget_history)
+    history = history_document.get("historical_budget", history_document)
+    if (
+        not isinstance(history, dict)
+        or not {"reserved", "estimated_input_tokens", "providers"}
+        <= history.keys()
+    ):
+        raise ValueError("BUDGET_HISTORY_REQUIRED: 必须提供已核对的累计账。")
+    plan = _build_budget_plan(history)
+    plan["history_evidence"] = {
+        "path": str(args.budget_history),
+        "sha256": hashlib.sha256(args.budget_history.read_bytes()).hexdigest(),
+    }
+    _save_evidence(args.plan_output, plan)
+    print(f"PROPOSED budget-plan {args.plan_output} activated=false")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,61 @@ const connection: ProviderConnection = {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("保存前展示裸主机的规范结果，保存保留模式与凭据", async () => {
+  const user = userEvent.setup();
+  const update = vi
+    .spyOn(api, "updateConnection")
+    .mockResolvedValue(connection);
+  const validate = vi.spyOn(api, "validateConnection");
+  const rotate = vi.spyOn(api, "rotateCredential");
+  render(
+    <ConnectionEditor
+      connection={connection}
+      onSaved={() => Promise.resolve()}
+      onCancel={() => undefined}
+    />,
+  );
+  await user.clear(screen.getByLabelText("API Host"));
+  await user.type(
+    screen.getByLabelText("API Host"),
+    "api-synthetic.cn-beijing.maas.aliyuncs.com:443/",
+  );
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "保存前规范结果：https://api-synthetic.cn-beijing.maas.aliyuncs.com",
+  );
+  expect(update).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "保存修改" }));
+  expect(update).toHaveBeenCalledWith(
+    "conn_synthetic",
+    expect.objectContaining({
+      endpoint_mode: "workspace_host",
+      api_host: "https://api-synthetic.cn-beijing.maas.aliyuncs.com",
+    }),
+  );
+  expect(JSON.stringify(update.mock.calls)).not.toContain("credential");
+  expect(validate).not.toHaveBeenCalled();
+  expect(rotate).not.toHaveBeenCalled();
+});
+
+it("历史缺失模式保持未选择且非法 Host 无法保存", async () => {
+  const user = userEvent.setup();
+  const update = vi.spyOn(api, "updateConnection");
+  render(
+    <ConnectionEditor
+      connection={{ ...connection, endpoint_mode: "", api_host: "" }}
+      onSaved={() => Promise.resolve()}
+      onCancel={() => undefined}
+    />,
+  );
+  expect(screen.getByLabelText("端点模式")).toHaveValue("");
+  await user.click(screen.getByRole("button", { name: "保存修改" }));
+  expect(update).not.toHaveBeenCalled();
+  await user.selectOptions(screen.getByLabelText("端点模式"), "workspace_host");
+  await user.type(screen.getByLabelText("API Host"), "https://evil.invalid");
+  await user.click(screen.getByRole("button", { name: "保存修改" }));
+  expect(update).not.toHaveBeenCalled();
+});
+
 it("原地编辑保留凭据且不触发付费测试", async () => {
   const user = userEvent.setup();
   const update = vi

@@ -228,7 +228,14 @@ def campaign_docker(
             return json.dumps(peers.get(command[-1], state["target"]))
         if command[1] == "run":
             state["payload"] = json.loads(input_text or "null")
+            if state.get("fail_helper"):
+                raise subprocess.CalledProcessError(2, command)
             return "P11_ACCEPTANCE_RESULT=" + json.dumps(state["report"])
+        if command[1] in {"start", "stop"}:
+            target = cast(dict[str, object], state["target"])
+            target["running"] = command[1] == "start"
+            target["pid"] = 123 if command[1] == "start" else 0
+            return "target-id"
         pytest.fail(f"不允许的 Docker 操作：{command}")
 
     def verify(docker: str) -> None:
@@ -275,7 +282,12 @@ def test_campaign_binding_uses_only_offline_data_volume(
 ) -> None:
     args = _binding_args(tmp_path, "--resume", "--steps", "config_check")
     result = release._run_live_acceptance(args)
-    assert result == campaign_docker["report"]
+    assert result["campaign_binding"] == {"status": "PASS"}
+    assert result["maintenance"] == {
+        "app_was_running": False,
+        "app_restored": False,
+        "qdrant_action": "NONE",
+    }
     calls = cast(list[tuple[str, ...]], campaign_docker["calls"])
     helper = next(command for command in calls if command[1] == "run")
     assert helper[helper.index("--network") + 1] == "none"
@@ -305,7 +317,6 @@ def test_campaign_binding_uses_only_offline_data_volume(
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [
-        ("running", True, "BLOCKED_MAINTENANCE_REQUIRED"),
         ("pid", 100, "BLOCKED_MAINTENANCE_REQUIRED"),
         ("image", "sha256:old", "BLOCKED_CANDIDATE_IMAGE"),
     ],
@@ -395,9 +406,156 @@ def test_campaign_binding_in_config_cannot_bypass_stopped_check(
         encoding="utf-8",
     )
     cast(dict[str, object], campaign_docker["target"])["running"] = True
-    with pytest.raises(RuntimeError, match="BLOCKED_MAINTENANCE_REQUIRED"):
-        release._run_live_acceptance(args)
-    assert "payload" not in campaign_docker
+    report = release._run_live_acceptance(args)
+    assert report["maintenance"]["app_was_running"] is True
+    assert report["maintenance"]["app_restored"] is True
+    calls = cast(list[tuple[str, ...]], campaign_docker["calls"])
+    operations = [command[1] for command in calls]
+    assert (
+        operations.index("stop")
+        < operations.index("run")
+        < operations.index("start")
+    )
+
+
+@pytest.mark.parametrize("fail_helper", [False, True])
+def test_campaign_binding_restores_running_app_after_blocked_or_failed_helper(
+    tmp_path: Path, campaign_docker: dict[str, object], fail_helper: bool
+) -> None:
+    target = cast(dict[str, object], campaign_docker["target"])
+    target.update(running=True, pid=123)
+    campaign_docker["fail_helper"] = fail_helper
+    campaign_docker["report"] = {
+        "campaign_binding": {"status": "BLOCKED"},
+        "steps": {"config_check": {"status": "BLOCKED"}},
+        "P11_READY": False,
+    }
+    if fail_helper:
+        with pytest.raises(subprocess.CalledProcessError):
+            release._run_live_acceptance(_binding_args(tmp_path))
+    else:
+        report = release._run_live_acceptance(_binding_args(tmp_path))
+        assert report["campaign_binding"]["status"] == "BLOCKED"
+        assert report["maintenance"]["app_restored"] is True
+    calls = cast(list[tuple[str, ...]], campaign_docker["calls"])
+    changed = [command for command in calls if command[1] in {"start", "stop"}]
+    assert changed == [
+        ("docker", "stop", "target-id"),
+        ("docker", "start", "target-id"),
+    ]
+    assert target["running"] is True
+
+
+@pytest.mark.parametrize(
+    ("scope", "selected", "exit_code"),
+    [
+        ("release", "PASS", 2),
+        ("selected", "PASS", 0),
+        ("selected", "BLOCKED", 2),
+        ("selected", "NOT_RUN", 2),
+        ("selected", "FAIL", 1),
+    ],
+)
+def test_selected_exit_scope_does_not_change_release_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    scope: str,
+    selected: str,
+    exit_code: int,
+) -> None:
+    monkeypatch.setattr(release, "_current_identity", dict)
+    monkeypatch.setattr(
+        release,
+        "_run_live_acceptance",
+        lambda _: {
+            "steps": {},
+            "selected_steps_status": selected,
+            "P11_READY": False,
+        },
+    )
+    path = tmp_path / "report.json"
+    args = release._parser().parse_args(
+        [
+            "acceptance",
+            "--resume",
+            "--steps",
+            "config_check",
+            "--exit-scope",
+            scope,
+            "--evidence-file",
+            str(tmp_path / "evidence.json"),
+            "--report-output",
+            str(path),
+        ]
+    )
+    assert release._write_acceptance_report(args) == exit_code
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["P11_READY"] is False
+    assert report["selected_steps_status"] == selected
+    assert report["overall_release_status"] != "PASS"
+
+
+@pytest.mark.parametrize("in_config", [False, True])
+def test_binding_without_steps_does_not_repeat_full_offline_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    in_config: bool,
+) -> None:
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps({"bind_campaign": in_config}), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        release, "_acceptance", lambda _: pytest.fail("首绑不跑全量")
+    )
+    monkeypatch.setattr(release, "_write_acceptance_report", lambda _: 2)
+    command = ["acceptance", "--config", str(config), "--container", "target"]
+    if not in_config:
+        command.append("--bind-campaign")
+    assert release.main(command) == 2
+
+
+def test_budget_plan_command_requires_history_and_never_activates_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "history.json"
+    output = tmp_path / "plan.json"
+    command = [
+        "budget-plan",
+        "--budget-history",
+        str(source),
+        "--plan-output",
+        str(output),
+    ]
+    monkeypatch.setattr(
+        release, "_run_live_acceptance", lambda _: pytest.fail("计划不发HTTP")
+    )
+    assert release.main(command) == 2
+    assert not output.exists()
+    source.write_text(
+        json.dumps(
+            {
+                "historical_budget": {
+                    "reserved": 6,
+                    "estimated_input_tokens": 157,
+                    "providers": {
+                        "jina": {"reserved": 4, "estimated_input_tokens": 119},
+                        "aliyun": {"reserved": 2, "estimated_input_tokens": 38},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert release.main(command) == 0
+    plan = json.loads(output.read_text(encoding="utf-8"))
+    assert plan["status"] == "PROPOSED"
+    assert plan["activated"] is False
+    assert plan["new_provider_http"] == 0
+    assert plan["current_authorization"]["used_requests"] == 6
+    assert plan["current_authorization"]["used_estimated_tokens"] == 157
+    assert plan["sample_count"] == 30
 
 
 def test_direct_release_cli_writes_blocked_report_without_import_failure(
