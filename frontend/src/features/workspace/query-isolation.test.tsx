@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { ConsoleProvider } from "../../state/console-context";
-import { QueryPage } from "./WorkspaceConsole";
+import { QueryPage } from "../../pages/QueryPage";
 
 afterEach(() => {
   sessionStorage.clear();

@@ -1,5 +1,5 @@
-import WorkspaceConsole from "./features/workspace/WorkspaceConsole";
+import AppShell from "./app/AppShell";
 
 export default function App() {
-  return <WorkspaceConsole />;
+  return <AppShell />;
 }
