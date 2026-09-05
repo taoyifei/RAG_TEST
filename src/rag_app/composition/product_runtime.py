@@ -262,6 +262,7 @@ class ProductProfileResolver:
         self._last_profile: dict[str, str | None] = {}
         self._runtime: P09Runtime | None = None
         self._services: dict[str, _ResolvedProductServices] = {}
+        self._retired_services: list[_ResolvedProductServices] = []
         self._lock = RLock()
 
     def bind_runtime(self, runtime: P09Runtime) -> None:
@@ -368,22 +369,25 @@ class ProductProfileResolver:
 
         """
         with self._lock:
-            services = tuple(self._services.values())
+            # 已分发查询和作业仍持有旧服务；在 Runtime 停止后统一关闭。
+            self._retired_services.extend(self._services.values())
             self._services.clear()
-        for item in services:
-            item.close()
 
     def close(self) -> None:
-        """关闭全部动态 Profile 资源。
+        """在 Runtime 请求生命周期结束后关闭当前和退役服务。
 
         Args:
-            无参数；幂等清理。
+            无参数；由 Runtime shutdown 调用。
 
         Returns:
             无返回值。
 
         """
         self.invalidate()
+        with self._lock:
+            for item in self._retired_services:
+                item.close()
+            self._retired_services.clear()
 
     def _resolve(
         self, profile: RetrievalProfileRevision

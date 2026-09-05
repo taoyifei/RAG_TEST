@@ -134,3 +134,19 @@ Token。下一次真实百炼请求须等用户在页面保存以 `llm-` 开头�
 只替换 app 后健康，Qdrant 容器 `1bc4088a449c` 未重启；2 个 Connection、2 个
 Credential 和 7 条验证记录保留。以上操作没有新增 Provider HTTP，真实总账仍为
 6/25 次 HTTP、157/1,000 估算输入 Token，指定私有 DOC 仍未出网。
+
+## 2026-09-05 P11-R1 定向纠正
+
+以上关于“Workspace 必须以 llm- 开头”以及“非 llm- 就是真实 4xx 根因”的
+判断依据不足，现予纠正。历史请求、失败状态、用量、部署与测试记录保持原样，
+不能据此推断 ws- 或 llm- 标识对应的账户有效性。Key 非空等形状检查也不代表鉴权通过。
+
+P11-R1 使用显式 `workspace_host` / `beijing_dashscope` 两种北京 Native 端点模式。
+业务空间模式须从当前北京控制台复制受信任 API Host；北京 DashScope 模式须由
+管理员主动选择，仍须验证 Key 与目标业务空间资源权限。旧连接不自动改域名或前缀，
+无需新建 llm- 空间。未提供 Host 的旧连接保留数据并等待原地编辑。
+
+当前[官方同步向量接口文档](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)
+成功示例包含 `status_code`、空 `code`、`output.embeddings` 与 `usage`。
+Probe 和 Adapter 共用严格编解码；未声称真实接口必定缺字段，尚未采集新真实响应。
+本轮 Provider 外部 HTTP=0，`ALIYUN_LIVE_READY=false`；阶段证据见 [P11-R1](../progress/p11-r1.md)。

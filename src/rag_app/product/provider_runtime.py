@@ -7,8 +7,12 @@ import re
 import secrets
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from http import HTTPStatus
+from threading import RLock
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -19,6 +23,14 @@ from rag_app.adapters.providers import (
     JinaRerankerConfig,
     JinaRerankerV35Adapter,
     JinaV5TextEmbeddingAdapter,
+)
+from rag_app.adapters.providers.aliyun_contract import (
+    decode_embeddings,
+    embedding_payload,
+)
+from rag_app.adapters.providers.aliyun_endpoint import (
+    AliyunEndpointConfig,
+    resolve_endpoint,
 )
 from rag_app.adapters.providers.batching import estimate_tokens
 from rag_app.adapters.providers.http_common import ProviderHttpClient
@@ -40,6 +52,7 @@ _SYNTHETIC_RERANK_DOCUMENTS = (
     "公开合成候选：青岛啤酒创建于 1903 年。",
     "公开合成候选：这段测试文本不包含私有信息。",
 )
+_MAX_PROVIDER_CODE = 80
 _HTTP_OK = 200
 _EMBEDDING_DIMENSION = 1024
 _HTTP_REDIRECT = 300
@@ -54,10 +67,21 @@ _ALIYUN_SAFE_ERROR_CODES = {
     "invalid_api_key": "PROVIDER_AUTHENTICATION_FAILED",
     "invalidapikey": "PROVIDER_AUTHENTICATION_FAILED",
     "model.accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
-    "not authorized": "REGION_OR_WORKSPACE_INVALID",
-    "workspace.accessdenied": "REGION_OR_WORKSPACE_INVALID",
+    "not authorized": "PROVIDER_AUTHORIZATION_DENIED",
+    "notauthorized": "PROVIDER_AUTHORIZATION_DENIED",
+    "workspace.accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
     "workspacenotfound": "REGION_OR_WORKSPACE_INVALID",
 }
+
+
+@dataclass
+class _ProbeDiagnostics:
+    request_dispatched: bool = False
+    http_status: int | None = None
+    provider_code: str | None = None
+    provider_request_id: str | None = None
+    endpoint_host: str | None = None
+    stage: str = "local_configuration"
 
 
 class ProviderRuntimeRegistry:
@@ -84,7 +108,8 @@ class ProviderRuntimeRegistry:
         self._credentials = credentials
         self._control = control
         self._transport_factory = transport_factory
-        self._clients: dict[tuple[str, int], httpx.Client] = {}
+        self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
+        self._lock = RLock()
 
     @property
     def client_count(self) -> int:
@@ -100,6 +125,49 @@ class ProviderRuntimeRegistry:
         return len(self._clients)
 
     def validate(
+        self,
+        connection_id: str,
+        *,
+        operation: str,
+        model: str,
+        expected_dimension: int | None = None,
+    ) -> ProviderValidationRun:
+        """持有请求租约，等待在途 Probe 完成后才允许关闭旧 Client。
+
+        Args:
+            connection_id: 当前连接。
+            operation: 独立测试操作。
+            model: 目录模型。
+            expected_dimension: 预期向量维度。
+
+        Returns:
+            安全持久化验证摘要。
+
+        """
+        with self._lock:
+            return self._validate(
+                connection_id,
+                operation=operation,
+                model=model,
+                expected_dimension=expected_dimension,
+            )
+
+    def invalidate_connection(self, connection_id: str) -> None:
+        """在在途 Probe 结束后关闭指定连接缓存。
+
+        Args:
+            connection_id: 已修改的连接 ID。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lock:
+            for key in tuple(self._clients):
+                if key[0] == connection_id:
+                    self._clients.pop(key).close()
+
+    def _validate(
         self,
         connection_id: str,
         *,
@@ -128,17 +196,25 @@ class ProviderRuntimeRegistry:
         safe_error: str | None = None
         dimension: int | None = None
         observed_tokens: int | None = None
-        request_path = _path(connection.provider_type, operation)
         request_payload = _payload(connection, operation, model)
         credential_key_version = self._credentials.get(
             connection.credential_id
         ).key_version
+        diagnostics = _ProbeDiagnostics()
         try:
+            diagnostics.endpoint_host = urlsplit(_base_url(connection)).hostname
             client, credential_key_version = self._client(connection)
+            diagnostics.request_dispatched = True
+            diagnostics.stage = "transport"
             response = client.post(
-                request_path,
+                _path(connection.provider_type, operation),
                 json=request_payload,
             )
+            diagnostics.http_status = response.status_code
+            diagnostics.provider_code, diagnostics.provider_request_id = (
+                _safe_response_details(response)
+            )
+            diagnostics.stage = "http"
             category = _http_category(response.status_code, category)
             if response.status_code != _HTTP_OK:
                 raise _ValidationError(
@@ -154,6 +230,7 @@ class ProviderRuntimeRegistry:
                 not in response.headers.get("content-type", "").casefold()
             ):
                 raise _ValidationError("INVALID_CONTENT_TYPE")
+            diagnostics.stage = "response_contract"
             payload = response.json()
             dimension, observed_tokens = _validate_payload(
                 connection.provider_type,
@@ -197,6 +274,16 @@ class ProviderRuntimeRegistry:
         validation = ProviderValidationRun(
             validation_id=_identifier("val"),
             connection_id=connection_id,
+            configuration_version=connection.configuration_version,
+            stage=diagnostics.stage,
+            request_dispatched=diagnostics.request_dispatched,
+            http_status=diagnostics.http_status,
+            provider_code=diagnostics.provider_code,
+            provider_request_id=diagnostics.provider_request_id,
+            endpoint_mode=connection.endpoint_mode
+            if connection.provider_type == "aliyun-model-studio"
+            else None,
+            endpoint_host=diagnostics.endpoint_host,
             catalog_version=CATALOG_VERSION,
             operation=operation,
             provider_model=model,
@@ -207,7 +294,7 @@ class ProviderRuntimeRegistry:
                     "expected_dimension": expected_dimension,
                     "model": model,
                     "operation": operation,
-                    "path": request_path,
+                    "path": _path(connection.provider_type, operation),
                     "provider_type": connection.provider_type,
                     "request_payload": request_payload,
                 }
@@ -240,9 +327,8 @@ class ProviderRuntimeRegistry:
             for item in self._control.list_connections()
             if item.credential_id == credential_id
         }
-        for key in tuple(self._clients):
-            if key[0] in connection_ids:
-                self._clients.pop(key).close()
+        for connection_id in connection_ids:
+            self.invalidate_connection(connection_id)
 
     def embedding_adapter(  # noqa: PLR0913
         self,
@@ -301,6 +387,8 @@ class ProviderRuntimeRegistry:
                 {
                     **common,
                     "region": connection.region or "cn-beijing",
+                    "endpoint_mode": connection.endpoint_mode,
+                    "api_host": connection.api_host,
                 }
             ),
             http_client=http_client,
@@ -355,10 +443,20 @@ class ProviderRuntimeRegistry:
     def _client(
         self, connection: ProviderConnection
     ) -> tuple[httpx.Client, int]:
+        if not connection.enabled:
+            raise _ProviderConfigurationError(
+                "连接已停用。", stage="provider.config"
+            )
         secret, key_version = self._credentials.resolve(
             connection.credential_id
         )
-        cache_key = (connection.connection_id, key_version)
+        endpoint = _base_url(connection)
+        cache_key = (
+            connection.connection_id,
+            connection.configuration_version,
+            key_version,
+            endpoint,
+        )
         existing = self._clients.get(cache_key)
         if existing is not None:
             return existing, key_version
@@ -374,6 +472,8 @@ class ProviderRuntimeRegistry:
             headers=headers,
             timeout=httpx.Timeout(10.0),
             transport=transport,
+            follow_redirects=False,
+            trust_env=False,
         )
         self._clients[cache_key] = client
         return client, key_version
@@ -394,6 +494,8 @@ class ProviderRuntimeRegistry:
         selected_slot: str | None = None,
         reranker_mode: str | None = None,
     ) -> ProviderHttpClient:
+        if not connection.enabled:
+            raise ConfigurationError("连接已停用。", stage="provider.config")
         transport = (
             None
             if self._transport_factory is None
@@ -517,9 +619,8 @@ def build_offline_mock_transport(
         else:
             raw_input = body.get("input")
             parameters = body.get("parameters")
-            workspace = connection.workspace_id or ""
-            region = connection.region or "cn-beijing"
-            expected_host = f"{workspace}.{region}.maas.aliyuncs.com"
+
+            expected_host = urlsplit(_base_url(connection)).hostname
             if (
                 request.url.host != expected_host
                 or not isinstance(raw_input, dict)
@@ -595,22 +696,13 @@ def _payload(
         request_policy_identity="validation",
         region=connection.region or "cn-beijing",
     )
-    parameters: dict[str, object] = {
-        "dimension": aliyun_config.dimension,
-        "output_type": aliyun_config.output_type,
-        "text_type": (
-            aliyun_config.document_text_type
-            if is_document
-            else aliyun_config.query_text_type
-        ),
-    }
-    if not is_document:
-        parameters["instruct"] = aliyun_config.query_instruct
-    return {
-        "input": {"texts": [_SYNTHETIC_TEXT]},
-        "model": model,
-        "parameters": parameters,
-    }
+    return embedding_payload(
+        [_SYNTHETIC_TEXT],
+        model=model,
+        dimension=aliyun_config.dimension,
+        text_type="document" if is_document else "query",
+        instruct=aliyun_config.query_instruct,
+    )
 
 
 def _validate_payload(  # noqa: PLR0912
@@ -658,17 +750,16 @@ def _validate_payload(  # noqa: PLR0912
         vectors = payload["data"]
         index_field = "index"
     else:
-        if (
-            payload.get("status_code") not in (_HTTP_OK, str(_HTTP_OK))
-            or "code" not in payload
-            or payload["code"] != ""
-        ):
-            raise ValueError("Qwen3.7 响应状态无效。")
-        output = payload["output"]
-        if not isinstance(output, dict):
-            raise TypeError("Qwen3.7 output 必须为 object。")
-        vectors = output["embeddings"]
-        index_field = "text_index"
+        dimension = expected_dimension or _EMBEDDING_DIMENSION
+        try:
+            _, tokens = decode_embeddings(
+                payload, expected_count=1, dimension=dimension
+            )
+        except ValueError as error:
+            if "维度" in str(error):
+                raise _ValidationError("EMBEDDING_DIMENSION_MISMATCH") from None
+            raise
+        return dimension, tokens
     dimension = expected_dimension or _EMBEDDING_DIMENSION
     if isinstance(vectors, list) and vectors:
         first_item = vectors[0]
@@ -717,19 +808,21 @@ def _estimated_tokens(
 def _base_url(connection: ProviderConnection) -> str:
     if connection.provider_type == "jina":
         return "https://api.jina.ai"
-    workspace = connection.workspace_id or ""
-    if re.fullmatch(r"llm-[a-z0-9]+", workspace) is None:
-        raise _ProviderConfigurationError(
-            "阿里 Workspace ID 缺失或格式无效。",
-            stage="provider.aliyun.config",
+    try:
+        return resolve_endpoint(
+            AliyunEndpointConfig.model_validate(
+                {
+                    "workspace_id": connection.workspace_id,
+                    "region": connection.region,
+                    "endpoint_mode": connection.endpoint_mode,
+                    "api_host": connection.api_host,
+                }
+            )
         )
-    region = connection.region or "cn-beijing"
-    if region != "cn-beijing":
+    except ValueError:
         raise _ProviderConfigurationError(
-            "Qwen3.7 V1 只允许 cn-beijing。",
-            stage="provider.aliyun.config",
-        )
-    return f"https://{workspace}.{region}.maas.aliyuncs.com"
+            "百炼端点配置未通过。", stage="provider.aliyun.config"
+        ) from None
 
 
 def _path(provider_type: str, operation: str) -> str:
@@ -754,6 +847,8 @@ def _http_error_code(
     provider_type: str,
     response: httpx.Response,
 ) -> str:
+    if response.status_code == HTTPStatus.UNAUTHORIZED:
+        return "PROVIDER_AUTHENTICATION_FAILED"
     if provider_type == "aliyun-model-studio":
         safe_code = _aliyun_safe_error_code(response)
         if safe_code is not None:
@@ -794,6 +889,33 @@ def _aliyun_safe_error_code(response: httpx.Response) -> str | None:
 
 def _identifier(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(16)}"
+
+
+def _safe_response_details(
+    response: httpx.Response,
+) -> tuple[str | None, str | None]:
+    if len(response.content) > _MAX_VALIDATION_RESPONSE_BYTES:
+        return None, None
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    code = payload.get("code")
+    if (
+        not isinstance(code, str)
+        or len(code) > _MAX_PROVIDER_CODE
+        or code.casefold() not in _ALIYUN_SAFE_ERROR_CODES
+    ):
+        code = None
+    request_id = payload.get("request_id")
+    if (
+        not isinstance(request_id, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id) is None
+    ):
+        request_id = None
+    return code, request_id
 
 
 __all__ = [

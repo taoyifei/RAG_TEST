@@ -186,6 +186,7 @@ def create_provider_connections(
             "provider_type": "aliyun-model-studio",
             "credential_id": aliyun_id,
             "workspace_id": "llm-syntheticworkspace",
+            "api_host": "https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com",
             "region": "cn-beijing",
         },
     )

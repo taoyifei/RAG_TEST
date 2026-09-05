@@ -18,6 +18,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
 from rag_app.api.p09 import create_p09_app
+from rag_app.api.product_token_policy import resolve_token_route
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -26,6 +27,7 @@ from rag_app.composition.product_runtime import (
 from rag_app.core.errors import PolicyDenied
 from rag_app.product.auth import SESSION_COOKIE
 from rag_app.product.catalog import provider_catalog
+from rag_app.product.control_store import validate_connection_metadata
 from rag_app.product.http_security import RequestRateLimiter
 from rag_app.product.models import (
     ImpactKind,
@@ -92,12 +94,31 @@ class ConnectionRequest(_RequestModel):
 
     display_name: str = Field(min_length=1, max_length=200)
     provider_type: Literal["jina", "aliyun-model-studio"]
-    credential_id: str
+    credential_id: str | None = None
+    credential: CredentialRequest | None = None
     endpoint_profile: Literal["default"] = "default"
+    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] = (
+        "workspace_host"
+    )
+    api_host: str | None = Field(default=None, max_length=300)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
     region: Literal["cn-beijing"] | None = None
     request_budget: int = Field(default=5, ge=1, le=20)
     token_budget: int = Field(default=4096, ge=1, le=1_000_000)
+
+
+class ConnectionPatchRequest(_RequestModel):
+    """版本受控的非 Secret 连接编辑，未知字段一律拒绝。"""
+
+    expected_version: int = Field(gt=0)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
+    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] | None = None
+    api_host: str | None = Field(default=None, max_length=300)
+    region: Literal["cn-beijing"] | None = None
+    request_budget: int | None = Field(default=None, ge=1, le=20)
+    token_budget: int | None = Field(default=None, ge=1, le=1_000_000)
+    enabled: bool | None = None
 
 
 class ValidationRequest(_RequestModel):
@@ -370,15 +391,17 @@ def _authenticate_request(
         _replace_authorization(request, expected)
         return None
     try:
-        project_id, knowledge_base_id = _scope_from_path(path)
-        runtime.auth.authorize_access_token(
+        route = resolve_token_route(request, runtime)
+        principal = runtime.auth.authorize_access_token(
             token,
-            required_scope=_required_scope(path, request.method),
-            project_id=project_id,
-            knowledge_base_id=knowledge_base_id,
+            required_scope=route.scope,
+            project_id=route.project_id,
+            knowledge_base_id=route.knowledge_base_id,
         )
     except PolicyDenied:
         return _auth_error(403, "TOKEN_DENIED")
+    request.state.product_principal = "external_token"
+    request.state.access_token_id = principal.token_id
     _replace_authorization(request, expected)
     return None
 
@@ -399,6 +422,7 @@ def _authenticate_session(
         runtime.auth.validate_session(cookie, csrf_token=csrf)
     except PolicyDenied:
         return _auth_error(401, "CONSOLE_SESSION_REQUIRED")
+    request.state.product_principal = "admin_session"
     _replace_authorization(request, expected)
     return None
 
@@ -561,9 +585,47 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         status_code=201,
     )
     def _create_connection(body: ConnectionRequest) -> dict[str, object]:
-        connection = runtime.control.create_connection(
-            ProviderConnectionDraft(**body.model_dump())
+        if (body.credential_id is None) == (body.credential is None):
+            raise ValueError("请选择已有凭据或提供新凭据。")
+        draft = validate_connection_metadata(
+            ProviderConnectionDraft(
+                **body.model_dump(exclude={"credential", "credential_id"}),
+                credential_id=body.credential_id or "pending-new-credential",
+            )
         )
+        if body.credential is None:
+            return runtime.control.create_connection(draft).model_dump(
+                mode="json"
+            )
+        if body.credential.provider_type != body.provider_type:
+            raise ValueError("Credential 与 Provider 类型不匹配。")
+        credential = _create_credential(body.credential)
+        credential_id = str(credential["credential_id"])
+        try:
+            connection = runtime.control.create_connection(
+                draft.model_copy(update={"credential_id": credential_id})
+            )
+        except Exception:
+            # 只补偿本次调用新建且未被引用的凭据；保留已有共享凭据。
+            runtime.credentials.remove_new_orphan(credential_id)
+            raise
+        return connection.model_dump(mode="json")
+
+    @app.patch(
+        "/api/v1/provider-connections/{connection_id}", tags=["model-services"]
+    )
+    def _update_connection(
+        connection_id: str, body: ConnectionPatchRequest
+    ) -> dict[str, object]:
+        connection = runtime.control.update_connection(
+            connection_id,
+            expected_version=body.expected_version,
+            changes=body.model_dump(
+                exclude_unset=True, exclude={"expected_version"}
+            ),
+        )
+        runtime.providers.invalidate_connection(connection_id)
+        runtime.profiles.invalidate()
         return connection.model_dump(mode="json")
 
     @app.post(
@@ -712,29 +774,6 @@ def _bearer_token(header: str | None) -> str | None:
     if not separator or scheme.casefold() != "bearer" or not token:
         return None
     return token
-
-
-def _required_scope(path: str, method: str) -> str:
-    if path.endswith((":search", ":answer")):
-        return "query:read"
-    if path.startswith(("/api/v1/system", "/api/v1/provider")):
-        return "system:read"
-    return "knowledge:read" if method in _SAFE_METHODS else "knowledge:write"
-
-
-def _scope_from_path(path: str) -> tuple[str | None, str | None]:
-    parts = path.strip("/").split("/")
-    project_id = None
-    knowledge_base_id = None
-    if "projects" in parts:
-        index = parts.index("projects")
-        if len(parts) > index + 1:
-            project_id = parts[index + 1]
-    if "knowledge-bases" in parts:
-        index = parts.index("knowledge-bases")
-        if len(parts) > index + 1:
-            knowledge_base_id = parts[index + 1].split(":", maxsplit=1)[0]
-    return project_id, knowledge_base_id
 
 
 def _auth_error(status_code: int, code: str) -> JSONResponse:

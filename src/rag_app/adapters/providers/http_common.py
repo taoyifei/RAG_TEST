@@ -122,7 +122,9 @@ class ProviderHttpClient:
             raise ValueError("HTTP 尝试次数和响应上限必须为正数。")
         self._base_url = base_url.rstrip("/")
         self._client = client or httpx.Client(
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+            follow_redirects=False,
+            trust_env=False,
         )
         self._max_attempts = max_attempts
         self._max_response_bytes = max_response_bytes
