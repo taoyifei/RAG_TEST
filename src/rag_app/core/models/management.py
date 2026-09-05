@@ -220,6 +220,10 @@ class QueuedIngestion(FrozenModel):
         pattern=r"^pfr_[0-9a-f]{32}$",
     )
     documents: tuple[QueuedIngestionDocument, ...] = Field(min_length=1)
+    activate_profile: bool = False
+    expected_profile_revision_id: str | None = None
+    expected_index_revision_id: str | None = None
+    activation_validation_ids: tuple[str, ...] = ()
 
 
 __all__ = [

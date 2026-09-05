@@ -45,6 +45,10 @@ from rag_app.product.catalog import CATALOG_VERSION, validate_model
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.models import ProviderConnection, ProviderValidationRun
+from rag_app.product.resolved_profile import (
+    ResolvedEmbeddingSpec,
+    resolve_embedding,
+)
 
 TransportFactory = Callable[[ProviderConnection], httpx.BaseTransport]
 _SYNTHETIC_TEXT = "公开合成文本：青岛啤酒知识库连接验证。"
@@ -124,6 +128,19 @@ class ProviderRuntimeRegistry:
         """
         return len(self._clients)
 
+    @property
+    def test_only_transport(self) -> bool:
+        """说明当前是否只能提供 Mock 合同证据。
+
+        Args:
+            无参数；读取组合根配置。
+
+        Returns:
+            注入测试 Transport 时为 True。
+
+        """
+        return self._transport_factory is not None
+
     def validate(
         self,
         connection_id: str,
@@ -131,6 +148,7 @@ class ProviderRuntimeRegistry:
         operation: str,
         model: str,
         expected_dimension: int | None = None,
+        request_policy: dict[str, object] | None = None,
     ) -> ProviderValidationRun:
         """持有请求租约，等待在途 Probe 完成后才允许关闭旧 Client。
 
@@ -139,6 +157,7 @@ class ProviderRuntimeRegistry:
             operation: 独立测试操作。
             model: 目录模型。
             expected_dimension: 预期向量维度。
+            request_policy: 当前角色的非 Secret 实际请求策略。
 
         Returns:
             安全持久化验证摘要。
@@ -150,6 +169,7 @@ class ProviderRuntimeRegistry:
                 operation=operation,
                 model=model,
                 expected_dimension=expected_dimension,
+                request_policy=request_policy,
             )
 
     def invalidate_connection(self, connection_id: str) -> None:
@@ -174,6 +194,7 @@ class ProviderRuntimeRegistry:
         operation: str,
         model: str,
         expected_dimension: int | None = None,
+        request_policy: dict[str, object] | None = None,
     ) -> ProviderValidationRun:
         """用合成公开文本执行并持久化一次连接验证。
 
@@ -182,6 +203,7 @@ class ProviderRuntimeRegistry:
             operation: embedding.document、embedding.query 或 reranking。
             model: 内置目录模型。
             expected_dimension: Embedding 预期维度。
+            request_policy: 需要验证的完整角色策略。
 
         Returns:
             不含原文、Secret 和 Provider Body 的验证记录。
@@ -196,13 +218,18 @@ class ProviderRuntimeRegistry:
         safe_error: str | None = None
         dimension: int | None = None
         observed_tokens: int | None = None
-        request_payload = _payload(connection, operation, model)
+        spec = _validation_spec(
+            connection, operation, model, expected_dimension, request_policy
+        )
+        request_payload = _payload(connection, operation, model, resolved=spec)
         credential_key_version = self._credentials.get(
             connection.credential_id
         ).key_version
         diagnostics = _ProbeDiagnostics()
+        resolved_endpoint_identity = None
         try:
             diagnostics.endpoint_host = urlsplit(_base_url(connection)).hostname
+            resolved_endpoint_identity = canonical_sha256(_base_url(connection))
             client, credential_key_version = self._client(connection)
             diagnostics.request_dispatched = True
             diagnostics.stage = "transport"
@@ -223,21 +250,13 @@ class ProviderRuntimeRegistry:
                         response,
                     )
                 )
-            if len(response.content) > _MAX_VALIDATION_RESPONSE_BYTES:
-                raise _ValidationError("RESPONSE_TOO_LARGE")
-            if (
-                "application/json"
-                not in response.headers.get("content-type", "").casefold()
-            ):
-                raise _ValidationError("INVALID_CONTENT_TYPE")
             diagnostics.stage = "response_contract"
-            payload = response.json()
-            dimension, observed_tokens = _validate_payload(
+            dimension, observed_tokens = _probe_response_contract(
+                response,
                 connection.provider_type,
                 operation,
-                payload,
-                expected_model=model,
-                expected_dimension=expected_dimension,
+                model,
+                expected_dimension,
             )
         except httpx.TimeoutException:
             status, category, safe_error = (
@@ -288,17 +307,13 @@ class ProviderRuntimeRegistry:
             operation=operation,
             provider_model=model,
             credential_key_version=credential_key_version,
-            request_policy_identity=canonical_sha256(
-                {
-                    "endpoint_profile": connection.endpoint_profile,
-                    "expected_dimension": expected_dimension,
-                    "model": model,
-                    "operation": operation,
-                    "path": _path(connection.provider_type, operation),
-                    "provider_type": connection.provider_type,
-                    "request_payload": request_payload,
-                }
+            request_policy_identity=(
+                canonical_sha256({"model": model, "operation": operation})
+                if spec is None
+                else spec.policy_identity(operation)
             ),
+            endpoint_identity=resolved_endpoint_identity,
+            validation_mode="mock" if self._transport_factory else "live",
             started_at=started.isoformat(),
             finished_at=finished.isoformat(),
             status=status,
@@ -339,6 +354,7 @@ class ProviderRuntimeRegistry:
         dimension: int,
         document_policy_identity: str,
         query_policy_identity: str,
+        resolved: ResolvedEmbeddingSpec | None = None,
     ) -> JinaV5TextEmbeddingAdapter | AliyunQwen37EmbeddingAdapter:
         """创建使用页面托管连接且调用时解密的 Embedding adapter。
 
@@ -349,6 +365,7 @@ class ProviderRuntimeRegistry:
             dimension: 固定向量维度。
             document_policy_identity: 文档请求策略身份。
             query_policy_identity: 查询请求策略身份。
+            resolved: 产品组合根传入的完整已解析策略。
 
         Returns:
             不把密钥复制到配置或环境变量的真实 Provider adapter。
@@ -376,6 +393,37 @@ class ProviderRuntimeRegistry:
             "document_egress_allowed": True,
             "query_egress_allowed": True,
         }
+        if resolved is not None:
+            if (resolved.connection_id, resolved.model, resolved.dimension) != (
+                connection_id,
+                model,
+                dimension,
+            ):
+                raise ValueError("Resolved Embedding 与 Adapter 引用不一致。")
+            common.update(
+                {
+                    "normalization": resolved.normalization,
+                    "adapter_revision": resolved.adapter_revision,
+                    "max_input_tokens": resolved.max_input_tokens,
+                }
+            )
+            document = dict(resolved.document_policy)
+            query = dict(resolved.query_policy)
+            if connection.provider_type == "jina":
+                common.update(
+                    {
+                        "document_task": document["task"],
+                        "query_task": query["task"],
+                    }
+                )
+            else:
+                common.update(
+                    {
+                        "document_text_type": document["text_type"],
+                        "query_text_type": query["text_type"],
+                        "query_instruct": query["query_instruct"],
+                    }
+                )
         if connection.provider_type == "jina":
             return JinaV5TextEmbeddingAdapter(
                 JinaEmbeddingConfig.model_validate(common),
@@ -663,6 +711,8 @@ def _payload(
     connection: ProviderConnection,
     operation: str,
     model: str,
+    *,
+    resolved: ResolvedEmbeddingSpec | None = None,
 ) -> dict[str, object]:
     if operation == "reranking":
         return {
@@ -701,7 +751,52 @@ def _payload(
         model=model,
         dimension=aliyun_config.dimension,
         text_type="document" if is_document else "query",
-        instruct=aliyun_config.query_instruct,
+        instruct=aliyun_config.query_instruct
+        if resolved is None
+        else str(dict(resolved.query_policy)["query_instruct"]),
+    )
+
+
+def _validation_spec(
+    connection: ProviderConnection,
+    operation: str,
+    model: str,
+    dimension: int | None,
+    policy: dict[str, object] | None,
+) -> ResolvedEmbeddingSpec | None:
+    if operation == "reranking":
+        if policy:
+            raise ValueError("Reranker 暂不支持可编辑请求策略。")
+        return None
+    return resolve_embedding(
+        connection,
+        model,
+        dimension or 1024,
+        (policy or {}) if operation == "embedding.document" else {},
+        (policy or {}) if operation == "embedding.query" else {},
+    )
+
+
+def _probe_response_contract(
+    response: httpx.Response,
+    provider_type: str,
+    operation: str,
+    model: str,
+    dimension: int | None,
+) -> tuple[int | None, int | None]:
+    if len(response.content) > _MAX_VALIDATION_RESPONSE_BYTES:
+        raise _ValidationError("RESPONSE_TOO_LARGE")
+    if (
+        "application/json"
+        not in response.headers.get("content-type", "").casefold()
+    ):
+        raise _ValidationError("INVALID_CONTENT_TYPE")
+    return _validate_payload(
+        provider_type,
+        operation,
+        response.json(),
+        expected_model=model,
+        expected_dimension=dimension,
     )
 
 

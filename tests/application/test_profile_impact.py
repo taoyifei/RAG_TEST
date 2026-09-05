@@ -20,7 +20,7 @@ def _draft(
     jina_connection: str,
     aliyun_connection: str,
     *,
-    instruction: str = "默认查询指令",
+    instruction: str = "",
     rrf_k: int = 60,
 ) -> RetrievalProfileDraft:
     return RetrievalProfileDraft.model_validate(
@@ -32,13 +32,15 @@ def _draft(
             "primary_document_policy": {"task": "retrieval.passage"},
             "primary_query_policy": {
                 "task": "retrieval.query",
-                "instruction": instruction,
             },
             "standby_connection_id": aliyun_connection,
             "standby_embedding_model": "qwen3.7-text-embedding",
             "standby_dimension": 1024,
             "standby_document_policy": {"text_type": "document"},
-            "standby_query_policy": {"text_type": "query"},
+            "standby_query_policy": {
+                "text_type": "query",
+                **({"query_instruct": instruction} if instruction else {}),
+            },
             "reranker_connection_id": jina_connection,
             "reranker_model": "jina-reranker-v3.5",
             "failover_enabled": True,

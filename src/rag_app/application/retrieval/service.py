@@ -88,8 +88,12 @@ class RetrievalService:
         serving_fingerprint: str,
         egress_policy: EgressPolicy,
         policy: RetrievalPolicy | None = None,
+        expected_index_fingerprint: str | None = None,
+        expected_profile_revision_id: str | None = None,
     ) -> None:
         self._source = source
+        self._expected_index_fingerprint = expected_index_fingerprint
+        self._expected_profile_revision_id = expected_profile_revision_id
         self._exact = ExactChannel(exact_store)
         self._lexical = LexicalChannel(lexical_store)
         self._dense = DenseChannel(query_embedding, vector_store)
@@ -134,6 +138,23 @@ class RetrievalService:
             serving_fingerprint=self._serving_fingerprint,
             retrieval_policy=self._policy,
         )
+        if (
+            self._expected_index_fingerprint is not None
+            and snapshot.revision.index_fingerprint
+            != self._expected_index_fingerprint
+        ):
+            raise IndexCorrupt(
+                "Query Profile 与 Active Revision 语义不一致。",
+                stage="retrieval.snapshot",
+            )
+        if (
+            self._expected_profile_revision_id is not None
+            and snapshot.profile_revision_id
+            != self._expected_profile_revision_id
+        ):
+            raise IndexCorrupt(
+                "Query Profile 已切换，请重试查询。", stage="retrieval.snapshot"
+            )
         self._record(
             trace_id,
             "snapshot",
@@ -143,9 +164,7 @@ class RetrievalService:
                 "serving_fingerprint": snapshot.serving_fingerprint,
             },
         )
-        stage_started = _finish_timing(
-            stage_timings, "snapshot", stage_started
-        )
+        stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
         analysis = self._analyzer.analyze(request)
         self._record(
             trace_id,
@@ -159,9 +178,7 @@ class RetrievalService:
                 "reason_codes": analysis.reason_codes,
             },
         )
-        stage_started = _finish_timing(
-            stage_timings, "analyze", stage_started
-        )
+        stage_started = _finish_timing(stage_timings, "analyze", stage_started)
         variants = self._expander.expand(analysis)
         self._record(
             trace_id,
@@ -186,9 +203,7 @@ class RetrievalService:
                 "reason_codes": plan.reason_codes,
             },
         )
-        stage_started = _finish_timing(
-            stage_timings, "plan", stage_started
-        )
+        stage_started = _finish_timing(stage_timings, "plan", stage_started)
         rewrite_identity = canonical_sha256(
             tuple(variant.identity for variant in plan.variants)
         )
@@ -226,9 +241,7 @@ class RetrievalService:
                 }
             )
         self._record(trace_id, "cache", {"result": "miss"})
-        stage_started = _finish_timing(
-            stage_timings, "cache", stage_started
-        )
+        stage_started = _finish_timing(stage_timings, "cache", stage_started)
         top_k = dict(plan.channel_top_k)
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
@@ -377,9 +390,7 @@ class RetrievalService:
                 ],
             },
         )
-        stage_started = _finish_timing(
-            stage_timings, "retrieve", stage_started
-        )
+        stage_started = _finish_timing(stage_timings, "retrieve", stage_started)
         hydration_started = perf_counter()
         hydrated = self._hydrator.hydrate(snapshot, fused)
         _finish_timing(stage_timings, "sqlite_hydration", hydration_started)

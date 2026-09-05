@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Callable
 from datetime import UTC, datetime
 from sqlite3 import Row
 
@@ -31,6 +32,12 @@ from rag_app.product.models import (
     RetrievalProfileDraft,
     RetrievalProfileRevision,
 )
+from rag_app.product.quality import ProductQualityStore
+from rag_app.product.resolved_profile import (
+    resolve_embedding,
+    resolve_retrieval_policy,
+)
+from rag_app.product.verification import profile_specs, validation_is_current
 
 _MAX_DISPLAY_NAME = 200
 _MAX_VALIDATION_PAGE = 200
@@ -58,6 +65,24 @@ class ProductControlStore:
         """
         self._connections = connections
         self._credentials = credentials
+        self.index_contract: dict[str, object] = {}
+        self.queue_profile: (
+            Callable[[RetrievalProfileRevision, str | None, str | None], None]
+            | None
+        ) = None
+        self.quality = ProductQualityStore(connections, self)
+
+    def credential_version(self, credential_id: str) -> int:
+        """只读取凭据版本以使缓存与验证失效。
+
+        Args:
+            credential_id: 已保存凭据引用。
+
+        Returns:
+            不含 Secret 的版本号。
+
+        """
+        return self._credentials.get(credential_id).key_version
 
     def create_connection(
         self, draft: ProviderConnectionDraft
@@ -320,6 +345,53 @@ class ProductControlStore:
                     validation.finished_at,
                     validation.connection_id,
                     validation.configuration_version,
+                ),
+            )
+            connection.execute(
+                "UPDATE provider_validation_runs SET endpoint_identity=?, "
+                "validation_mode=? WHERE validation_id=?",
+                (
+                    validation.endpoint_identity,
+                    validation.validation_mode,
+                    validation.validation_id,
+                ),
+            )
+            current = connection.execute(
+                "SELECT c.provider_type, c.configuration_version, "
+                "d.key_version "
+                "FROM provider_connections c JOIN provider_credentials d "
+                "ON d.credential_id=c.credential_id WHERE c.connection_id=?",
+                (validation.connection_id,),
+            ).fetchone()
+            operations = require_provider(
+                str(current["provider_type"])
+            ).operations
+            rows = connection.execute(
+                "SELECT operation, status FROM (SELECT operation, status, "
+                "ROW_NUMBER() OVER (PARTITION BY operation ORDER BY "
+                "finished_at DESC, validation_id DESC) AS position "
+                "FROM provider_validation_runs WHERE connection_id=? AND "
+                "configuration_version=? "
+                "AND credential_key_version=? AND validation_mode IN "
+                "('mock', 'live')) WHERE position=1",
+                (
+                    validation.connection_id,
+                    current["configuration_version"],
+                    current["key_version"],
+                ),
+            ).fetchall()
+            statuses = {str(row[0]): str(row[1]) for row in rows}
+            connection.execute(
+                "UPDATE provider_connections SET status=? WHERE "
+                "connection_id=?",
+                (
+                    "validated"
+                    if all(
+                        statuses.get(operation) == "succeeded"
+                        for operation in operations
+                    )
+                    else "degraded",
+                    validation.connection_id,
                 ),
             )
         if validation.request_dispatched is False:
@@ -603,8 +675,10 @@ class ProductControlStore:
         reranker_model = draft.reranker_model
         failover_enabled = draft.failover_enabled
         standby_budget = draft.standby_budget
-        retrieval_policy = draft.retrieval_policy
-        evidence_policy = draft.evidence_policy
+        retrieval_policy = resolve_retrieval_policy(
+            draft.retrieval_policy, draft.evidence_policy
+        )
+        evidence_policy: dict[str, object] = {}
         primary = self.get_connection(primary_connection_id)
         validate_model(
             primary.provider_type,
@@ -619,6 +693,28 @@ class ProductControlStore:
             reranker_connection_id,
             reranker_model,
         )
+        primary_spec = resolve_embedding(
+            primary,
+            primary_embedding_model,
+            primary_dimension,
+            primary_document_policy,
+            primary_query_policy,
+        )
+        primary_document_policy = dict(primary_spec.document_policy)
+        primary_query_policy = dict(primary_spec.query_policy)
+        standby_spec = None
+        if standby is not None:
+            if standby_embedding_model is None or standby_dimension is None:
+                raise ValueError("备用模型和维度必须完整。")
+            standby_spec = resolve_embedding(
+                standby,
+                standby_embedding_model,
+                standby_dimension,
+                standby_document_policy,
+                standby_query_policy,
+            )
+            standby_document_policy = dict(standby_spec.document_policy)
+            standby_query_policy = dict(standby_spec.query_policy)
         _validate_v1_profile_contract(
             primary,
             primary_dimension,
@@ -637,30 +733,20 @@ class ProductControlStore:
         ):
             raise ValueError("Embedding Dimension 必须为正数。")
         index_payload: dict[str, object] = {
+            "resolved_index_contract": self.index_contract,
             "chunker": "docx-structural-v3",
             "fts_analyzer": "deterministic-cjk-bigram-v2",
-            "primary": {
-                "dimension": primary_dimension,
-                "document_policy": primary_document_policy,
-                "model": primary_embedding_model,
-                "provider": primary.provider_type,
-                "query_policy": primary_query_policy,
-            },
+            "primary": primary_spec.semantic_identity(),
             "standby": None
-            if standby is None
-            else {
-                "dimension": standby_dimension,
-                "document_policy": standby_document_policy,
-                "model": standby_embedding_model,
-                "provider": standby.provider_type,
-                "query_policy": standby_query_policy,
-            },
+            if standby_spec is None
+            else standby_spec.semantic_identity(),
             "topology": "hot_standby" if standby is not None else "single",
         }
         index_fingerprint = canonical_sha256(index_payload)
         serving_fingerprint = canonical_sha256(
             {
                 "base_index": index_fingerprint,
+                "failover_enabled": failover_enabled,
                 "evidence_policy": evidence_policy,
                 "reranker": None
                 if reranker is None
@@ -670,6 +756,14 @@ class ProductControlStore:
                 },
                 "retrieval_policy": retrieval_policy,
                 "standby_budget": standby_budget,
+                "connection_budgets": [
+                    {
+                        "requests": item.request_budget,
+                        "tokens": item.token_budget,
+                    }
+                    for item in (primary, standby, reranker)
+                    if item is not None
+                ],
             }
         )
         profile_id = _identifier("pfr")
@@ -720,6 +814,18 @@ class ProductControlStore:
                 "VALUES (?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
                 "?, ?, ?, ?, ?, ?, ?, ?) ",
                 values,
+            )
+            connection.execute(
+                "UPDATE retrieval_profile_revisions SET "
+                "primary_resolved_json=?, "
+                "standby_resolved_json=? WHERE profile_revision_id=?",
+                (
+                    canonical_json(primary_spec.model_dump(mode="json")),
+                    None
+                    if standby_spec is None
+                    else canonical_json(standby_spec.model_dump(mode="json")),
+                    profile_id,
+                ),
             )
         return self.get_profile(profile_id)
 
@@ -857,18 +963,53 @@ class ProductControlStore:
                 stage="profile.activate",
                 details={"missing_validations": list(missing)},
             )
+        with self._connections.transaction() as connection:
+            kb = connection.execute(
+                "SELECT active_revision_id FROM knowledge_bases WHERE "
+                "knowledge_base_id=?",
+                (proposed.knowledge_base_id,),
+            ).fetchone()
+            documents = connection.execute(
+                "SELECT 1 FROM documents WHERE knowledge_base_id=? "
+                "AND lifecycle_status='active' LIMIT 1",
+                (proposed.knowledge_base_id,),
+            ).fetchone()
+        if preview.index_fingerprint_changed and documents is not None:
+            if self.queue_profile is None:
+                raise Conflict(
+                    "持久构建服务尚未绑定。", stage="profile.activate"
+                )
+            self.queue_profile(
+                proposed,
+                preview.current_profile_revision_id,
+                kb["active_revision_id"],
+            )
+            return self.get_profile(profile_revision_id)
         now = _now()
         with self._connections.transaction(write=True) as connection:
+            current = connection.execute(
+                "SELECT profile_revision_id FROM retrieval_profile_revisions "
+                "WHERE knowledge_base_id=? AND status='active'",
+                (proposed.knowledge_base_id,),
+            ).fetchone()
+            if (
+                None if current is None else current[0]
+            ) != preview.current_profile_revision_id:
+                raise Conflict("Profile 预览已过期。", stage="profile.activate")
             connection.execute(
                 "UPDATE retrieval_profile_revisions SET status='retired' "
                 "WHERE knowledge_base_id=? AND status='active'",
                 (proposed.knowledge_base_id,),
             )
-            connection.execute(
+            changed = connection.execute(
                 "UPDATE retrieval_profile_revisions SET status='active', "
                 "activated_at=? WHERE profile_revision_id=? AND status='draft'",
                 (now, profile_revision_id),
             )
+            if changed.rowcount != 1:
+                raise Conflict(
+                    "Draft 已被其他请求处理。", stage="profile.activate"
+                )
         return self.get_profile(profile_revision_id)
 
     def profile_validation_issues(
@@ -883,25 +1024,76 @@ class ProductControlStore:
             稳定排序的 connection:operation 标识；空元组表示可激活。
 
         """
+        return tuple(
+            key
+            for key, run in self.profile_validations(
+                profile_revision_id
+            ).items()
+            if run is None or run.status != "succeeded"
+        )
+
+    def profile_validations(
+        self, profile_revision_id: str
+    ) -> dict[str, ProviderValidationRun | None]:
+        """按精确连接、模型、角色和解析参数读取有效验证。
+
+        Args:
+            profile_revision_id: 目标不可变方案。
+
+        Returns:
+            每个必需操作的独立记录；未验证为 None。
+
+        """
         profile = self.get_profile(profile_revision_id)
-        required = [
-            (profile.primary_connection_id, "embedding.document"),
-            (profile.primary_connection_id, "embedding.query"),
+        try:
+            specs = profile_specs(profile, self.get_connection)
+        except ValueError:
+            return {f"{profile.primary_connection_id}:embedding.query": None}
+        required: list[tuple[str, str, str, int | None, str]] = [
+            (
+                spec.connection_id,
+                operation,
+                spec.model,
+                spec.dimension,
+                spec.policy_identity(operation),
+            )
+            for spec in specs
+            for operation in ("embedding.document", "embedding.query")
         ]
-        if profile.standby_connection_id is not None:
-            required.extend(
+        if profile.reranker_connection_id is not None:
+            required.append(
                 (
-                    (profile.standby_connection_id, "embedding.document"),
-                    (profile.standby_connection_id, "embedding.query"),
+                    profile.reranker_connection_id,
+                    "reranking",
+                    profile.reranker_model or "",
+                    None,
+                    canonical_sha256(
+                        {
+                            "model": profile.reranker_model,
+                            "operation": "reranking",
+                        }
+                    ),
                 )
             )
-        if profile.reranker_connection_id is not None:
-            required.append((profile.reranker_connection_id, "reranking"))
-        return tuple(
-            f"{connection_id}:{operation}"
-            for connection_id, operation in required
-            if self.latest_status(connection_id, operation) != "succeeded"
-        )
+        results: dict[str, ProviderValidationRun | None] = {}
+        for connection_id, operation, model, dimension, policy in required:
+            connection = self.get_connection(connection_id)
+            key_version = self._credentials.get(
+                connection.credential_id
+            ).key_version
+            results[f"{connection_id}:{operation}"] = next(
+                (
+                    run
+                    for run in self.list_validations(connection_id)
+                    if run.operation == operation
+                    and run.provider_model == model
+                    and run.dimension == dimension
+                    and run.request_policy_identity == policy
+                    and validation_is_current(run, connection, key_version)
+                ),
+                None,
+            )
+        return results
 
     def latest_status(self, connection_id: str, operation: str) -> str:
         """返回指定操作最近一次持久验证状态。
@@ -932,6 +1124,7 @@ class ProductControlStore:
                 "JOIN provider_credentials d "
                 "ON d.credential_id=c.credential_id "
                 "WHERE v.connection_id=? AND v.operation=? "
+                "AND c.enabled=1 AND v.validation_mode IN ('mock', 'live') "
                 "AND v.credential_key_version=d.key_version "
                 "AND v.configuration_version=c.configuration_version "
                 "ORDER BY v.finished_at DESC LIMIT 1",
@@ -963,31 +1156,13 @@ class ProductControlStore:
                 "WHERE p.status='active' AND (r.index_revision_id IS NULL "
                 "OR r.index_fingerprint<>p.index_semantic_fingerprint)"
             ).fetchone()
-            rows = connection.execute(
-                "SELECT provider_type, operation, status, http_category FROM ("
-                "SELECT c.provider_type, v.operation, v.status, "
-                "v.http_category, ROW_NUMBER() OVER ("
-                "PARTITION BY c.provider_type, v.operation "
-                "ORDER BY v.finished_at DESC, v.validation_id DESC"
-                ") AS position FROM provider_connections c "
-                "JOIN provider_validation_runs v "
-                "ON v.connection_id=c.connection_id "
-                "JOIN provider_credentials d "
-                "ON d.credential_id=c.credential_id "
-                "WHERE c.enabled=1 "
-                "AND v.credential_key_version=d.key_version) "
-                "WHERE position=1"
+            profiles = connection.execute(
+                "SELECT profile_revision_id FROM retrieval_profile_revisions "
+                "WHERE status='active' ORDER BY profile_revision_id"
             ).fetchall()
-        statuses = {
-            f"{row['provider_type']}:{row['operation']}": {
-                "http_category": str(row["http_category"]),
-                "status": str(row["status"]),
-            }
-            for row in rows
-        }
         return {
             "active_profile_count": int(active["count"]) if active else 0,
-            "provider_validation_statuses": statuses,
+            "active_profile_ids": [str(row[0]) for row in profiles],
             "reindex_required": bool(mismatches and mismatches["count"]),
         }
 
@@ -1078,6 +1253,8 @@ def _connection(row: Row) -> ProviderConnection:
 
 def _validation(row: Row) -> ProviderValidationRun:
     return ProviderValidationRun(
+        endpoint_identity=row["endpoint_identity"],
+        validation_mode=str(row["validation_mode"]),
         configuration_version=int(row["configuration_version"]),
         **json.loads(str(row["diagnostics_json"])),
         validation_id=str(row["validation_id"]),
@@ -1110,6 +1287,13 @@ def _validation(row: Row) -> ProviderValidationRun:
 
 def _profile(row: Row) -> RetrievalProfileRevision:
     return RetrievalProfileRevision(
+        primary_resolved=freeze_json_object(
+            json.loads(row["primary_resolved_json"] or "{}")
+        ),
+        standby_resolved=freeze_json_object(
+            json.loads(row["standby_resolved_json"] or "{}")
+        ),
+        activation_job_id=row["activation_job_id"],
         profile_revision_id=str(row["profile_revision_id"]),
         knowledge_base_id=str(row["knowledge_base_id"]),
         status=str(row["status"]),

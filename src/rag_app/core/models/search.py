@@ -140,6 +140,7 @@ class ActiveRevisionQuerySnapshot(FrozenModel):
     exact_namespace: str = Field(min_length=1)
     chunk_payload_schema: str = Field(min_length=1)
     retrieval_policy: RetrievalPolicy
+    profile_revision_id: str | None = None
 
     @model_validator(mode="after")
     def _validate_snapshot(self) -> ActiveRevisionQuerySnapshot:

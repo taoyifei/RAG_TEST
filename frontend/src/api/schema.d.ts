@@ -588,6 +588,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-connections/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Connection */
+        patch: operations["_update_connection_api_v1_provider_connections__connection_id__patch"];
+        trace?: never;
+    };
     "/api/v1/provider-connections/{connection_id}/validations": {
         parameters: {
             query?: never;
@@ -964,14 +981,47 @@ export interface components {
          */
         ConfidenceStatus: "ANSWERABLE" | "INSUFFICIENT_EVIDENCE" | "PROVIDER_UNAVAILABLE" | "POLICY_DENIED" | "INDEX_NOT_READY" | "INDEX_CORRUPT" | "AMBIGUOUS_NEEDS_CLARIFICATION";
         /**
+         * ConnectionPatchRequest
+         * @description 版本受控的非 Secret 连接编辑，未知字段一律拒绝。
+         */
+        ConnectionPatchRequest: {
+            /** Api Host */
+            api_host?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Endpoint Mode */
+            endpoint_mode?: ("workspace_host" | "beijing_dashscope") | null;
+            /** Expected Version */
+            expected_version: number;
+            /** Region */
+            region?: "cn-beijing" | null;
+            /** Request Budget */
+            request_budget?: number | null;
+            /** Token Budget */
+            token_budget?: number | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /**
          * ConnectionRequest
          * @description Provider Connection 非 Secret 配置。
          */
         ConnectionRequest: {
+            /** Api Host */
+            api_host?: string | null;
+            credential?: components["schemas"]["CredentialRequest"] | null;
             /** Credential Id */
-            credential_id: string;
+            credential_id?: string | null;
             /** Display Name */
             display_name: string;
+            /**
+             * Endpoint Mode
+             * @default workspace_host
+             * @enum {string}
+             */
+            endpoint_mode: "workspace_host" | "beijing_dashscope";
             /**
              * Endpoint Profile
              * @default default
@@ -2017,6 +2067,10 @@ export interface components {
              * @enum {string}
              */
             operation: "embedding.document" | "embedding.query" | "reranking";
+            /** Request Policy */
+            request_policy?: {
+                [key: string]: unknown;
+            };
         };
     };
     responses: never;
@@ -6924,6 +6978,124 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _update_connection_api_v1_provider_connections__connection_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
