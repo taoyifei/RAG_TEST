@@ -341,3 +341,12 @@ docker compose start app
 R4 代码允许合回并保存到 `codex/p11-release`，已以 `--no-ff` 完成；
 `feature/universal-rag`、`main`、`Industry` 保持原引用，未合入主产品集成分支。
 `MERGE_TO_MAIN_AUTHORIZED=false`。完整门状态以本节链接的机器报告为准。
+
+
+## P11-R5 当前工程交付（2026-09-06）
+
+本节取代前面R4的手写停机/首绑操作说明。当前事实、零调用归因、累计审批入口、完整风险处置及实际测试详见 [P11-R5](p11-r5.md)，唯一总体状态见 [当前验收](../../release/p11-repair-acceptance.md)。
+
+本轮候选代码 `ae38b086217f2d186e3c7693df447ce4e580f4a1`，CI七项通过；完整check 1738 passed、smoke72、产品72+6、前端50、浏览器5+3既有skip、升级7、隔离Qdrant3均通过。候选业务代码只构建一个本地镜像；第4职责提交含报告与发布脚本相对路径修复，后者另跑CLI28项、Ruff/mypy与verify。运行时和镜像资产未变，复用已有门；最终合并CI由交付前实际核对，详见任务交付收据。
+
+CODE_FIXES_READY=true，P11_READY=false。新增Provider HTTP0，累计6/25、estimated157/1000，known observed242及3次未知usage，本地拦截1/19单列。预算计划434/145703累计cap仍为PROPOSED。原App和Qdrant未停止/更新，campaign未首绑。安全未知项无人工接受，真实连接、双槽/故障恢复、原30问Live质量未放行。main、Industry和feature/universal-rag保持原引用；MERGE_TO_MAIN_AUTHORIZED=false。

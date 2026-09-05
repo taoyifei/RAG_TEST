@@ -1,0 +1,3861 @@
+{
+  "schema_version": 1,
+  "review_status": "UNDER_INVESTIGATION",
+  "generated_at": "2026-09-05T19:41:47.170091+00:00",
+  "scan": {
+    "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+    "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b",
+    "scanned_at": "2026-09-05T19:38:29.683633895Z",
+    "scanner_version": "0.74.0",
+    "db_updated_at": "2026-09-05T13:02:41.107875606Z",
+    "db_metadata": {
+      "path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-db-metadata.json",
+      "sha256": "c0ea13d82051131242a4d12e863d0c5e64509878e1b2c94590a10f575bd5726b"
+    }
+  },
+  "scan_path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-all.json",
+  "summary": {
+    "raw_findings": 179,
+    "raw_high_critical": 54,
+    "unique_cves": 18,
+    "unique_cve_package_versions": 54,
+    "fixable_high_critical": 0,
+    "without_fix": 54,
+    "reviewed_findings": 54,
+    "under_investigation": 54,
+    "mitigated": 0,
+    "approved_dispositions": 0,
+    "objective_dispositions": 0,
+    "status": "BLOCKED"
+  },
+  "base_image_check": {
+    "status": "PASS",
+    "tag": "python:3.11-slim-trixie",
+    "verified_digest": "sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534",
+    "changed": false,
+    "evidence": {
+      "path": "artifacts/p11-r5/security/base-image-inspect.log",
+      "sha256": "ab7649d8cd810697d9e23d402bec427b7ed5db60df0a64d1cc74a541247c8e73"
+    },
+    "decision": "当前可信受支持标签与已钉摘要一致；不切换旧发行版、sid 或卸载 Essential 包。antiword/prlimit、FTS5、TLS 能力保留。"
+  },
+  "reviews": [
+    {
+      "id": "CVE-2026-76642",
+      "package": "bsdutils",
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "bsdutils",
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "bsdutils",
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "bsdutils",
+      "installed_version": "1:2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-41992",
+      "package": "gzip",
+      "installed_version": "1.13-1",
+      "source_package": "gzip",
+      "source_version": "1.13-1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "GNU gzip 为 Essential 且存在；备份实现使用 Python tarfile 的 r:gz/x:gz，未调用 GNU gzip -d。",
+      "trigger_conditions": "单次 GNU gzip -d 依次解析恶意 LZW/LZH 文件。",
+      "upload_reachability": "DOCX 使用 ZIP；备份恢复只走 Python tarfile，不是该公告的 LZW/LZH CLI 组合；本地 CLI 路径仍需调查。",
+      "network_path": "无通用 gzip CLI HTTP 接口；管理员归档路径有独立校验。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-41992",
+        "retrieved_at": "2026-09-05T18:30:19.5789137+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "gzip",
+        "matched_source_version": "1.13-1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "避免将上传交给任意 shell/解压命令；本次未把 Python gzip 与 GNU gzip 的漏洞混为一谈。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-41992.html",
+          "sha256": "783190551880d43ba13c6a02fca84432921846437a47cad7b9e5f8b3725cac2c"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-54369",
+      "package": "libacl1",
+      "installed_version": "2.3.2-2+b1",
+      "source_package": "acl",
+      "source_version": "2.3.2-2",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "libacl1 存在；Python 产品代码未发现 acl_* 调用，间接运行库/运维调用未穷尽。",
+      "trigger_conditions": "特权进程调用 libacl pathname 函数时路径元素可被替换为符号链接。",
+      "upload_reachability": "受控上传写入服务管理目录；路径遍历防护和符号链接策略是缓解，仍需证明无特权 ACL 调用链。",
+      "network_path": "未发现 ACL 管理 HTTP 入口；本地特权调用路径不能由网络配置排除。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-54369",
+        "retrieved_at": "2026-09-05T18:30:20.9011637+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "acl",
+        "matched_source_version": "2.3.2-2",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、无新增权限、只读根目录；不能统一证明符号链接漏洞不可利用。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-54369.html",
+          "sha256": "4677cdb2b848eca7bc76f57dd54e5d01e309f438bba58d892550db432fbde5ca"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "libblkid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "libblkid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "libblkid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "libblkid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "liblastlog2-2",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "liblastlog2-2",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "liblastlog2-2",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "liblastlog2-2",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "libmount1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "libmount1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "libmount1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "libmount1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2025-69720",
+      "package": "libncursesw6",
+      "installed_version": "6.5+20250216-2",
+      "source_package": "ncurses",
+      "source_version": "6.5+20250216-2",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "ncurses-bin/ncurses-base 为 Essential，infocmp 存在；本应用未发现 infocmp 调用。",
+      "trigger_conditions": "infocmp analyze_string 处理恶意终端描述。",
+      "upload_reachability": "上传解析使用 antiword/Python；未发现终端描述输入链，需确认运维入口和第三方子进程。",
+      "network_path": "未发现终端数据库管理 HTTP 接口；不能自动覆盖本地交互工具路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2025-69720",
+        "retrieved_at": "2026-09-05T18:30:22.2398457+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "ncurses",
+        "matched_source_version": "6.5+20250216-2",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2025-69720.html",
+          "sha256": "3542be519daaef8f60a0fd662f4a6129a238f59ef9b86155869d49cfd2b3af78"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "libsmartcols1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "libsmartcols1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "libsmartcols1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "libsmartcols1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-11822",
+      "package": "libsqlite3-0",
+      "installed_version": "3.46.1-7+deb13u1",
+      "source_package": "sqlite3",
+      "source_version": "3.46.1-7+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "隔离镜像 python sqlite3 实际加载 libsqlite3，内存 FTS5 表创建成功；正式 store 使用 FTS5 MATCH。",
+      "trigger_conditions": "FTS5 MATCH 查询恶意数据库中的损坏页结构。",
+      "upload_reachability": "DOC/DOCX 文本进入系统生成的 FTS5 索引；管理员恢复可导入 SQLite 文件，恶意页到达链尚需独立审计。",
+      "network_path": "检索 API 使用系统数据库；恢复入口另有管理员权限与 manifest 检查，未证明恶意备份无法满足这些检查。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-11822",
+        "retrieved_at": "2026-09-05T18:30:23.7903752+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "sqlite3",
+        "matched_source_version": "3.46.1-7+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "不接受任意上传 SQLite 作为文档；恢复需受控管理员与可信备份。未运行该 CVE exploit，未知保持阻断。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-11822.html",
+          "sha256": "90c6111395c4401788413c01cf34e7df241b9d9de7bbc2b86fed8545dae8ba4f"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-11824",
+      "package": "libsqlite3-0",
+      "installed_version": "3.46.1-7+deb13u1",
+      "source_package": "sqlite3",
+      "source_version": "3.46.1-7+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "隔离镜像 python sqlite3 实际加载 libsqlite3，内存 FTS5 表创建成功；正式 store 使用 FTS5 MATCH。",
+      "trigger_conditions": "FTS5 查询遇到特制 continuation page 长度，发生下溢及堆写越界。",
+      "upload_reachability": "DOC/DOCX 文本进入系统生成的 FTS5 索引；管理员恢复可导入 SQLite 文件，恶意页到达链尚需独立审计。",
+      "network_path": "检索 API 使用系统数据库；恢复入口另有管理员权限与 manifest 检查，未证明恶意备份无法满足这些检查。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-11824",
+        "retrieved_at": "2026-09-05T18:30:25.0973538+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "sqlite3",
+        "matched_source_version": "3.46.1-7+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "不接受任意上传 SQLite 作为文档；恢复需受控管理员与可信备份。未运行该 CVE exploit，未知保持阻断。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-11824.html",
+          "sha256": "a45cb457e3c9394bbf3ef446061ee18d9ce6dfa0dd10342547d699d33fcd6724"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-16742",
+      "package": "libsystemd0",
+      "installed_version": "257.13-1~deb13u1",
+      "source_package": "systemd",
+      "source_version": "257.13-1~deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "扫描存在 libsystemd0/libudev1；隔离镜像未发现 systemd-homed 或 homectl，应用不启动 systemd。",
+      "trigger_conditions": "systemd-homed 管理的本地登录用户触发 home record 验证漏洞。",
+      "upload_reachability": "未发现上传到达 homed；缺失组件是一项客观减弱条件，当前审查未形成自动客观处置附件。",
+      "network_path": "未发现 homed 服务入口；本结论只覆盖被检查镜像，不能推断宿主机或未来镜像。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-16742",
+        "retrieved_at": "2026-09-05T18:30:26.6260159+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "systemd",
+        "matched_source_version": "257.13-1~deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留组件缺失证据供正式不受影响审查；不以主机 loopback 代替漏洞触发分析。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-16742.html",
+          "sha256": "fd2e348336f07000c7495d76fac75edb36f56dc416d6650301f3bbc11fe90507"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2025-69720",
+      "package": "libtinfo6",
+      "installed_version": "6.5+20250216-2",
+      "source_package": "ncurses",
+      "source_version": "6.5+20250216-2",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "ncurses-bin/ncurses-base 为 Essential，infocmp 存在；本应用未发现 infocmp 调用。",
+      "trigger_conditions": "infocmp analyze_string 处理恶意终端描述。",
+      "upload_reachability": "上传解析使用 antiword/Python；未发现终端描述输入链，需确认运维入口和第三方子进程。",
+      "network_path": "未发现终端数据库管理 HTTP 接口；不能自动覆盖本地交互工具路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2025-69720",
+        "retrieved_at": "2026-09-05T18:30:22.2398457+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "ncurses",
+        "matched_source_version": "6.5+20250216-2",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2025-69720.html",
+          "sha256": "3542be519daaef8f60a0fd662f4a6129a238f59ef9b86155869d49cfd2b3af78"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-16742",
+      "package": "libudev1",
+      "installed_version": "257.13-1~deb13u1",
+      "source_package": "systemd",
+      "source_version": "257.13-1~deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "扫描存在 libsystemd0/libudev1；隔离镜像未发现 systemd-homed 或 homectl，应用不启动 systemd。",
+      "trigger_conditions": "systemd-homed 管理的本地登录用户触发 home record 验证漏洞。",
+      "upload_reachability": "未发现上传到达 homed；缺失组件是一项客观减弱条件，当前审查未形成自动客观处置附件。",
+      "network_path": "未发现 homed 服务入口；本结论只覆盖被检查镜像，不能推断宿主机或未来镜像。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-16742",
+        "retrieved_at": "2026-09-05T18:30:26.6260159+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "systemd",
+        "matched_source_version": "257.13-1~deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留组件缺失证据供正式不受影响审查；不以主机 loopback 代替漏洞触发分析。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-16742.html",
+          "sha256": "fd2e348336f07000c7495d76fac75edb36f56dc416d6650301f3bbc11fe90507"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "libuuid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "libuuid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "libuuid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "libuuid1",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "login",
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "login",
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "login",
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "login",
+      "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "mount",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "mount",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "mount",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "mount",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2025-69720",
+      "package": "ncurses-base",
+      "installed_version": "6.5+20250216-2",
+      "source_package": "ncurses",
+      "source_version": "6.5+20250216-2",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "ncurses-bin/ncurses-base 为 Essential，infocmp 存在；本应用未发现 infocmp 调用。",
+      "trigger_conditions": "infocmp analyze_string 处理恶意终端描述。",
+      "upload_reachability": "上传解析使用 antiword/Python；未发现终端描述输入链，需确认运维入口和第三方子进程。",
+      "network_path": "未发现终端数据库管理 HTTP 接口；不能自动覆盖本地交互工具路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2025-69720",
+        "retrieved_at": "2026-09-05T18:30:22.2398457+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "ncurses",
+        "matched_source_version": "6.5+20250216-2",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2025-69720.html",
+          "sha256": "3542be519daaef8f60a0fd662f4a6129a238f59ef9b86155869d49cfd2b3af78"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2025-69720",
+      "package": "ncurses-bin",
+      "installed_version": "6.5+20250216-2",
+      "source_package": "ncurses",
+      "source_version": "6.5+20250216-2",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "ncurses-bin/ncurses-base 为 Essential，infocmp 存在；本应用未发现 infocmp 调用。",
+      "trigger_conditions": "infocmp analyze_string 处理恶意终端描述。",
+      "upload_reachability": "上传解析使用 antiword/Python；未发现终端描述输入链，需确认运维入口和第三方子进程。",
+      "network_path": "未发现终端数据库管理 HTTP 接口；不能自动覆盖本地交互工具路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2025-69720",
+        "retrieved_at": "2026-09-05T18:30:22.2398457+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "ncurses",
+        "matched_source_version": "6.5+20250216-2",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2025-69720.html",
+          "sha256": "3542be519daaef8f60a0fd662f4a6129a238f59ef9b86155869d49cfd2b3af78"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-13221",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "CRITICAL",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl 编译超过 65535 固定分支的正则造成匹配错误。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-13221",
+        "retrieved_at": "2026-09-05T18:30:27.9547998+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-13221.html",
+          "sha256": "63e37845cf765a9072fed487f851baa6aeed2db454578436cc1e352c73c42655"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-42496",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "CRITICAL",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl Archive::Tar 解包恶意 symlink，后续文件操作越界。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-42496",
+        "retrieved_at": "2026-09-05T18:30:30.1308854+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-42496.html",
+          "sha256": "53da22f8230afc9d463165595be4c54a9e1bdd4a61f5c33b45923d946841ea11"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-8376",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "CRITICAL",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "32 位 Perl 编译特制重复字符串正则。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-8376",
+        "retrieved_at": "2026-09-05T18:30:31.6987670+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-8376.html",
+          "sha256": "38a7aabc958207c0512c858a56a2a86afe6f9f1d2fa3833d983a6c18ecf071f8"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ],
+      "additional_evidence": "被检查镜像是 amd64、Python 指针 64 位；尚未独立核验 Perl 构建 SSize_t，不能仅凭 Python 位宽形成 Perl 豁免。"
+    },
+    {
+      "id": "CVE-2026-42497",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl Archive::Tar 解包恶意 hardlink，修改目录外文件。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-42497",
+        "retrieved_at": "2026-09-05T18:30:33.2222962+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-42497.html",
+          "sha256": "8cd7ff455df4c4acce387c256cf39d76382e4865c9ea1c81dbe027bfce18fc94"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-48962",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl IO::Compress 使用攻击者控制的输出 glob 触发 eval。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-48962",
+        "retrieved_at": "2026-09-05T18:30:34.9708000+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-48962.html",
+          "sha256": "39bd6f1e0c6351005df4ce5a45d9802b4a131dc838d44cfb253bebcff6cf7288"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-57432",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl pack/unpack 使用恶意重复计数模板。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-57432",
+        "retrieved_at": "2026-09-05T18:30:36.5243173+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-57432.html",
+          "sha256": "b91c282be3e4fb7f714fa3f2bd3c8532b4df716fc5578954a180b7a9394fa145"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-57433",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl Storable thaw/retrieve 解码恶意 SX_HOOK。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-57433",
+        "retrieved_at": "2026-09-05T18:30:38.1009904+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-57433.html",
+          "sha256": "fd821420cd37e0f173c80d78523bd456fb413131899107bc01c341b6cfee7502"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-9538",
+      "package": "perl-base",
+      "installed_version": "5.40.1-6",
+      "source_package": "perl",
+      "source_version": "5.40.1-6",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "perl-base 在镜像中且为 Essential；应用静态代码未发现 Perl 调用。扫描所列 Archive::Tar/IO::Compress 等是否随最小包安装需逐模块确认。",
+      "trigger_conditions": "Perl Archive::Tar 读取声明极大 entry size 的 tar。",
+      "upload_reachability": "DOC 走 antiword；DOCX 走 Python/lxml；未找到上传直接进入 Perl 的调用，但未据此宣称全路径不可达。",
+      "network_path": "无 Perl 服务或 Perl HTTP 处理入口证据；仍保留运维、辅助进程或既有代码执行路径。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-9538",
+        "retrieved_at": "2026-09-05T18:30:39.9557479+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "perl",
+        "matched_source_version": "5.40.1-6",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-9538.html",
+          "sha256": "c94d1c52c3b859077aa0a90a99c4af9ae03f3926c525807e6fe8b1c7a2b2196d"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-76642",
+      "package": "util-linux",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 mount helper 失败后仍执行 X-mount post-hook。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-76642",
+        "retrieved_at": "2026-09-05T18:30:14.7706055+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-76642.html",
+          "sha256": "2f8d391c8a7f7fe322471cba571f353b0d36c82cbe0f0dd721087741728f6733"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78408",
+      "package": "util-linux",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "特权 nsenter --join-cgroup 将已打开的 cgroup 权限传给目标进程。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78408",
+        "retrieved_at": "2026-09-05T18:30:16.3562408+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78408.html",
+          "sha256": "525b3cd105e5a1acbada6c9fff6bb8157a10ffe275f34a54ca90d3fb30548443"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78409",
+      "package": "util-linux",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "Linux 6.15+ 的 X-mount.subdir 中间符号链接越过受限目录。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78409",
+        "retrieved_at": "2026-09-05T18:30:16.9810742+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78409.html",
+          "sha256": "e4549a2b3910953509a536721a368e0751e5d469e55404b540974f8050528571"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    },
+    {
+      "id": "CVE-2026-78410",
+      "package": "util-linux",
+      "installed_version": "2.41.5-0+deb13u1",
+      "source_package": "util-linux",
+      "source_version": "2.41.5-0+deb13u1",
+      "severity": "HIGH",
+      "package_present": true,
+      "loaded_or_called": "DOC 上传会调用本源包提供的 prlimit，再执行 antiword；mount/nsenter 的漏洞函数未在应用静态调用点发现。",
+      "trigger_conditions": "fstab 授权的受限 bind mount 源路径被并发替换。",
+      "upload_reachability": "上传到达 prlimit，但未证明能触达 mount/nsenter 参数链；需保留本地已有代码执行或运维误用条件。",
+      "network_path": "API 仅通过固定 argv 的 prlimit/antiword；无 mount/nsenter HTTP 接口。不能据此证明所有本地路径不可达。",
+      "reachability": "UNDER_INVESTIGATION",
+      "distribution_advisory": {
+        "url": "https://security-tracker.debian.org/tracker/CVE-2026-78410",
+        "retrieved_at": "2026-09-05T18:30:18.2824395+00:00",
+        "debian_trixie_status": "vulnerable",
+        "fixed_in_current_supported_release": false,
+        "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
+        "source_package": "util-linux",
+        "matched_source_version": "2.41.5-0+deb13u1",
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+      },
+      "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
+      "conclusion": "UNDER_INVESTIGATION",
+      "reviewed_at": "2026-09-05T19:41:47.170091+00:00",
+      "scope": "P11_RELEASE",
+      "owner": null,
+      "approver": null,
+      "expires_at": null,
+      "risk_accepted": false,
+      "evidence": [
+        {
+          "path": "artifacts/p11-r5/security/CVE-2026-78410.html",
+          "sha256": "08ebd55e6e1280021ef9948dbe38c5ed7e6d20166a6d4be463814a07276ea9e7"
+        },
+        {
+          "path": "Dockerfile",
+          "sha256": "793e7993651a5cc6d1ae84fe7637052bbd42d2c6b15f3546ae4f59e9d0cf4db2"
+        },
+        {
+          "path": "compose.yaml",
+          "sha256": "9bfbb49f90c114c6272df16cb7e5c612a451907ecdaeba1378025bff051833f8"
+        },
+        {
+          "path": "src/rag_app/adapters/parsers/word_document.py",
+          "sha256": "92b06b307696140db6e4cad466ca0a65f5a461536972429965a340483fd0a38d"
+        },
+        {
+          "path": "src/rag_app/adapters/stores/sqlite_fts5.py",
+          "sha256": "c37dd091567b1a19ff727e1183b8ce4fc72f16eb91e7f2ef5816050f9e73a984"
+        },
+        {
+          "path": "src/rag_app/product/backup.py",
+          "sha256": "c7903abb8824074111cdaa9a8821f62c7310613567e9c84f976a1a5dc88f7154"
+        },
+        {
+          "path": "artifacts/p11-r5/candidate-capabilities.json",
+          "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection.json",
+          "sha256": "c2a7ddb8391ccd6b554dc0342998ddd09191041307d8090cda0a3f5e23d9b86b"
+        },
+        {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
+          "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        }
+      ]
+    }
+  ],
+  "policy": {
+    "manual_approval_present": false,
+    "approval_records_created": 0,
+    "automatic_activation": false,
+    "objective_evidence_contract": "自动 NOT_AFFECTED 仅支持官方 Debian data/json 同发行版 source package resolved 且 fixed_version=0；FIXED 只接受精确源包固定版本。自由文本、上游版本和 no-dsa 不能豁免。",
+    "manual_approval_contract": "AFFECTED_MITIGATED 必须由本地发布管理员附独立 APPROVED JSON，绑定 scope=P11_RELEASE、scan 身份、元组、review_sha256、实际 approver/owner/approval_reference、approved_at/expires_at。计划文件不是批准。",
+    "local_trust_boundary": "仅发布 CLI 可读本地证据，不为普通 HTTP 请求暴露写入；批准附件由实际人完成，不由 AI 生成。"
+  },
+  "limitations": [
+    "对象为本轮最终候选镜像及本次完整Trivy扫描；扫描时间、Trivy版本和DB更新时间均绑定真实证据。旧R4完整扫描和DB另存保留。",
+    "54条为High/Critical包记录；完整所有等级发现179条；18个唯一CVE；不能写成54个独立可利用漏洞。",
+    "54个元组均重新核对安装版本、源包版本和本轮18份Debian官方公告；无有效客观处置或实际人工批准，全部UNDER_INVESTIGATION，安全门保持BLOCKED。",
+    "本轮新候选的包存在/库加载探查在独立断网只读容器执行，无原data/Secret卷；不是服务器验收，未执行ProviderHTTP。",
+    "候选能力实测包含80份公开DOCX解析文本视图、FTS5、prlimit+antiword受控拒绝及本地TLS握手；这些功能结果不是CVE不可利用的证明。",
+    "镜像、包版本、扫描字节或DB身份变化后旧审查不自动生效；未知风险不替用户接受。"
+  ],
+  "previous_scan_preserved": {
+    "path": "artifacts/p11-r5/security/trivy-r4-original.json",
+    "sha256": "0932c1699a5b5751b421de8656f1f2751f9f9da73c75ac7da1af3a160e802dfb"
+  },
+  "candidate_capabilities": {
+    "path": "artifacts/p11-r5/candidate-capabilities.json",
+    "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+  },
+  "advisory_evidence_reuse": {
+    "reason": "本轮同日下载的18份官方公告快照逐项复核；新候选CVE/包/安装版本集合与原扫描一致，源包版本全部匹配公告中trixie或trixie-security的vulnerable行。未沿用任何风险接受。",
+    "source_manifest": {
+      "path": "artifacts/p11-r5/security/official-advisories.json",
+      "sha256": "69f1203cefcfccee3bfdf64cc06f87af2e93326c286ee6c6d850210ddc02ffe3"
+    },
+    "rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+    "row_verification": {
+      "path": "artifacts/p11-r5/security/20260905T193755688409Z/official-advisory-row-verification.json",
+      "sha256": "81e7f6e72e999732b9f3fb6ffd90191fec4c9fd3b703e4f7d1c3f224a3ffe8ab"
+    }
+  }
+}

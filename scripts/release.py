@@ -198,7 +198,7 @@ def _artifact_directory(evidence_path: Path) -> Path:
 
     """
     directory = (
-        evidence_path.parent
+        evidence_path.resolve().parent
         / "security"
         / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     )

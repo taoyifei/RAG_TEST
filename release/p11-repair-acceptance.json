@@ -1,56 +1,95 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-05T17:49:24.136085+00:00",
+  "generated_at": "2026-09-05T19:42:31.390008+00:00",
   "identity": {
-    "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-    "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-    "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+    "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+    "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+    "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
     "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
     "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-    "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+    "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
     "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-    "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-    "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-    "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+    "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+    "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+    "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
   },
   "assets": {
-    "code_merge_sha": "8e58720c59dc3187361fce32fc26fbf6572dc641",
-    "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-    "image_revision": "2081446",
-    "instance": "rag-v1-app-1",
-    "local_url": "http://127.0.0.1:8088",
-    "provider_mode_in_candidate_test": "offline_mock",
+    "start_sha": "816d6be3404466cbe11f4285ec2ee124ba9d1559",
+    "branch": "codex/p11-r5-blocker-closure",
+    "code_commits": [
+      {
+        "sha": "103e2f75b7d129fe21aecc1541d73de1116c1921",
+        "title": "feat(budget): apply explicit cumulative authorization revisions",
+        "paths": [
+          "src/rag_app/adapters/providers/budget_errors.py",
+          "src/rag_app/adapters/providers/budget_models.py",
+          "src/rag_app/adapters/providers/budget_revision.py",
+          "src/rag_app/adapters/providers/budget_ledger.py",
+          "src/rag_app/adapters/providers/budget_transport.py",
+          "src/rag_app/adapters/providers/offline_mock_transport.py",
+          "src/rag_app/adapters/providers/budget_authorization.py",
+          "src/rag_app/api/provider_budget.py",
+          "src/rag_app/api/product.py",
+          "src/rag_app/product/budget_approval.py",
+          "src/rag_app/product/budget_plan.py",
+          "src/rag_app/product/provider_runtime.py",
+          "tests/adapters/providers/test_budget_transport.py",
+          "tests/application/test_provider_budget_runtime.py",
+          "src/rag_app/product/backup.py",
+          "tests/adapters/providers/test_budget_revision.py",
+          "tests/adapters/providers/test_budget_authorization.py",
+          "tests/api/test_provider_budget_revision.py",
+          "tests/application/test_p11_budget_plan.py",
+          "tests/application/test_p11_r4_backup.py",
+          "docs/public/openapi-v1.json",
+          "frontend/src/api/schema.d.ts"
+        ]
+      },
+      {
+        "sha": "60f6c88b40db04799a9566212a8d203a45b545c1",
+        "title": "fix(release): diagnose blockers and resume acceptance safely",
+        "paths": [
+          "src/rag_app/adapters/providers/aliyun_endpoint.py",
+          "src/rag_app/product/connection_diagnostics.py",
+          "src/rag_app/product/control_store.py",
+          "src/rag_app/product/live_acceptance.py",
+          "src/rag_app/product/live_acceptance_backend.py",
+          "src/rag_app/product/live_acceptance_payloads.py",
+          "src/rag_app/product/verification.py",
+          "scripts/release.py",
+          "frontend/src/api/client.ts",
+          "frontend/src/pages/ConnectionCreator.tsx",
+          "frontend/src/pages/ConnectionEditor.tsx",
+          "frontend/src/pages/aliyun-endpoint.ts",
+          "frontend/src/pages/aliyun-endpoint.test.ts",
+          "frontend/src/pages/connection-editor.test.tsx",
+          "tests/application/test_p11_r1_connections.py",
+          "tests/application/test_p11_r5_diagnostics.py",
+          "tests/live/test_p11_acceptance_backend.py",
+          "tests/live/test_p11_acceptance_runner.py",
+          "tests/test_release_cli.py"
+        ]
+      },
+      {
+        "sha": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
+        "title": "fix(security): evaluate complete scans with scoped dispositions",
+        "paths": [
+          "src/rag_app/product/os_risk_review.py",
+          "src/rag_app/product/release_evidence.py",
+          "tests/test_p11_r5_os_risk_review.py",
+          ".github/workflows/p11-ci.yml"
+        ]
+      }
+    ],
+    "candidate_code_sha": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
     "candidate": {
-      "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
+      "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
       "entrypoint": "rag-app serve",
       "provider_mode": "offline_mock",
       "external_provider_http": 0,
       "inventory": {
         "collections": {
-          "irev_6bc8d8b3a25545e6354a6ce48548db8f": {
-            "points": 3,
-            "vectors": {
-              "dense_primary": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              },
-              "dense_standby": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              }
-            }
-          },
-          "irev_79c0f33f3de380b23c49b1fa3a1f3c1f": {
+          "irev_444d048af0bace0fc6f3e2a0f86e4302": {
             "points": 2,
             "vectors": {
               "dense_primary": {
@@ -73,7 +112,7 @@
               }
             }
           },
-          "irev_87931b3f4cdfdae6b8a1590f1772985f": {
+          "irev_4c52930e11eb759885110c5c4e7c1120": {
             "points": 1,
             "vectors": {
               "dense_primary": {
@@ -96,7 +135,7 @@
               }
             }
           },
-          "irev_bf2083ddfc13ea11adbaa060ca269e3c": {
+          "irev_55b3eb22e8601d536add20b1ae286019": {
             "points": 1,
             "vectors": {
               "dense_primary": {
@@ -119,7 +158,7 @@
               }
             }
           },
-          "irev_dbe0407b5db2663f4c24157380e6c977": {
+          "irev_576848b6b310b1395940689e97c6ca95": {
             "points": 1,
             "vectors": {
               "dense_primary": {
@@ -130,6 +169,29 @@
                 "on_disk": null,
                 "quantization_config": null,
                 "size": 8
+              }
+            }
+          },
+          "irev_58003adcecbb09cc5776220076f80a29": {
+            "points": 3,
+            "vectors": {
+              "dense_primary": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
+              },
+              "dense_standby": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
               }
             }
           }
@@ -144,126 +206,238 @@
       "ready": true,
       "restart_persistence": true
     },
-    "frontend_parity": {
+    "candidate_capabilities": {
       "status": "PASS",
-      "file_count": 3,
-      "files": {
-        "index.html": "67bf4d314cc291f5c03ab1900c69cb2e62e24a65ca2850fd6effbcb3420f6a41",
-        "assets/index-CG4q9aqp.js": "0eb09b22ca01b37eb047f61e1dfcb868d2910ce3ee1eaf879d971f5cd19c1167",
-        "assets/index-B73DxPtn.css": "a3d7adf88073c7e2c1767f7075b04368284dd6911dd1a4e754196c953e0bbbbb"
+      "public_pilot_cases": 30,
+      "public_docx_parse_text_views": 80,
+      "dataset_sha256": "sha256:88b40b8c92062cb7a479f9e4f087bd90c705d549cf1f4ab3eb99a96df5db0164",
+      "legacy_doc_process": "prlimit+antiword controlled rejection verified",
+      "sqlite_fts5": "3.46.1",
+      "tls_handshake": "TLSv1.3",
+      "qdrant_client": "1.18.0",
+      "provider_http": 0,
+      "mounted_product_data": false,
+      "mounted_secret": false,
+      "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "command": [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,noexec,nosuid,size=32m,mode=1777",
+        "--no-healthcheck",
+        "--entrypoint",
+        "python",
+        "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "-"
+      ],
+      "exit_code": 0,
+      "executed_at": "2026-09-05T19:33:57.092257+00:00",
+      "program_sha256": "d295fedc449d54d4ea48ccc2b227aceadc984094410af4dcd30aa20a339f6b4c"
+    },
+    "configuration_diagnosis": {
+      "path": "release/p11-blocker-diagnosis.json",
+      "sha256": "a4e2aa7896cddba6c3c08c23b78e6ae2b57b9ad4d956dba934aacf2064afccf7"
+    },
+    "budget_plan": {
+      "path": "release/p11-budget-plan.json",
+      "sha256": "86ceaff470d211a5e94e92d8b7deb856f111b998cbeb9b4af664196907d7279f"
+    },
+    "os_review": {
+      "path": "release/p11-os-risk-review.json",
+      "sha256": "0d3bb2b133c80c77d08df5d24c47c9ba0094259c62a5c16dc9e0dd0f1ae3f035"
+    },
+    "ci_code_run": {
+      "path": "artifacts/p11-r5/ci-code.json",
+      "sha256": "9dd321ecb556b9ef5d23bd38f92b56021545f5ce609f24f92fd9c92c3cb0c73f"
+    },
+    "test_receipts": [
+      {
+        "path": "artifacts/p11-r5/closure-check-execution.json",
+        "sha256": "7afaa50b0c358ee1db61a53ef32a1a3b0a56fd01da2ee252449a37075cae806a"
       },
-      "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-      "reason": "EXACT_RUNTIME_FRONTEND_BYTES_MATCH_AFTER_TEST_ONLY_CHANGE"
+      {
+        "path": "artifacts/p11-r5/closure-doctor-execution.json",
+        "sha256": "c6594e4f4880b96f1e020bbbb829996ce1a1d95e7fd31cd87c6b40ec0d41abd5"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-product-check-execution.json",
+        "sha256": "f6f57f599870178ca46ceb986472cd8bae21095e71324558baf9405d40bf2514"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-product-smoke-execution.json",
+        "sha256": "c238ed02caf206d042e02b74e49cb687cd3a312bb00227599dd05e44275a5462"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-qdrant-execution.json",
+        "sha256": "a05c4c3276f0ba963ffde4d21e46533ef4c2132118ec072a132ee479e370d317"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-smoke-execution.json",
+        "sha256": "e2adeb0ed9ad2902098dabe31f438a2ef032586a673487b57abc07c6ab3233e6"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-upgrade_tests-execution.json",
+        "sha256": "cd5ffea7932a809fd4cd1c820a67bed818421fbb19c6968f794f55501332c06b"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-web-e2e-execution.json",
+        "sha256": "043cbebd9e727fac45de38aef84f26865082e846da3c1080d9a0514cfef87596"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-web-lint-execution.json",
+        "sha256": "f2ced1b46bbd1ce67b272a84dc72b04502816fbe0c33c8cd2a7d7e6ccf7802fc"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-web-test-execution.json",
+        "sha256": "f1751c6b39b719d89bf966dc9a912cac093b3b0f4d1f7f73419586bd5a989bfd"
+      },
+      {
+        "path": "artifacts/p11-r5/closure-web-typecheck-execution.json",
+        "sha256": "045a172d8b0496b5fd5771fe9f1ed4bf5ec75129decbd285bf8463b1d4309de5"
+      }
+    ],
+    "original_instance": {
+      "executed_at": "2026-09-05T19:36:07.520860+00:00",
+      "source": "local Docker read-only metadata",
+      "instances": [
+        {
+          "name": "/rag-v1-app-1",
+          "id": "700a67f4b7e987de150d3d747ddc60cc3b0bec10a30b9d4641918f61415a7193",
+          "image": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
+          "running": true,
+          "started_at": "2026-09-05T15:27:58.354217506Z",
+          "health": "healthy",
+          "restart_count": 0
+        },
+        {
+          "name": "/rag-v1-qdrant-1",
+          "id": "1bc4088a449c707b8c802d31f4a597362c5d5a1b4ead98c3ae56d3084fd60ab4",
+          "image": "sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
+          "running": true,
+          "started_at": "2026-09-04T11:21:04.784483809Z",
+          "health": "healthy",
+          "restart_count": 0
+        }
+      ],
+      "app_action": "NONE",
+      "qdrant_action": "NONE",
+      "app_restoration_performed": false,
+      "temporary_p11_containers": [],
+      "temporary_p11_volumes": [],
+      "remote_production_validation": false
     },
-    "backup": {
-      "archive": "/data/backups/pre-r4-2081446.tar.gz",
-      "archive_sha256": "1390d339828ac555d455d9039946ff41dcceea485eb0450b3dce2677423b497c",
-      "collection_count": 0,
-      "file_count": 4,
-      "sqlite_integrity": "ok"
-    },
-    "preserved_counts": {
-      "provider_connections": 2,
-      "provider_credentials": 2,
-      "documents": 0,
-      "knowledge_bases": 0
-    },
-    "preserved_validation_count": 7,
-    "protected_refs": {
-      "main": "af30f81fbcbd0577c16fbf59bb9bce8f29a3de91",
-      "Industry": "5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a",
-      "feature/universal-rag": "e7d69f14e5ad293b091f6aef98c91f3a3f76e325"
+    "new_provider_http": 0,
+    "release_path_fix": {
+      "diff": "diff --git a/scripts/release.py b/scripts/release.py\nindex db2a964..338ea30 100644\n--- a/scripts/release.py\n+++ b/scripts/release.py\n@@ -198,7 +198,7 @@ def _artifact_directory(evidence_path: Path) -> Path:\n \n     \"\"\"\n     directory = (\n-        evidence_path.parent\n+        evidence_path.resolve().parent\n         / \"security\"\n         / datetime.now(UTC).strftime(\"%Y%m%dT%H%M%S%fZ\")\n     )\n",
+      "regression": {
+        "path": "artifacts/p11-r5/release-path-regression-execution.json",
+        "sha256": "95437fa7774738b7102dfae4f8207b3091b6d316e64e96f19076d6b86ae03178"
+      },
+      "verification": {
+        "path": "artifacts/p11-r5/candidate-verify-final-execution.json",
+        "sha256": "b7afd534632a47b730319023014e6db39b9dec3cc872b1b6bffa2f1f905c0f31"
+      },
+      "image_rebuild_required": false,
+      "final_merge_ci": "待最终合并SHA；交付前实际核对并另存ci-merge.json"
     }
   },
   "budget": {
-    "source": "read_only_running_product_database",
+    "status": "BLOCKED",
+    "reason": "CAMPAIGN_BINDING_REQUIRED",
     "campaign_bound": false,
-    "campaign_status": "BLOCKED_CONFIGURATION_CONFIRMATION_REQUIRED",
-    "request_limit": 25,
-    "estimated_token_limit": 1000,
-    "provider_token_limits": {
-      "jina": 600,
-      "aliyun": 600
-    },
-    "prior": {
-      "forwarded_http": 6,
-      "estimated_input_tokens": 157,
-      "observed_tokens_known_sum": 242,
-      "observed_usage_unknown_attempts": 3,
+    "cumulative": {
+      "total": 7,
+      "reserved": 6,
+      "forwarded": 6,
       "locally_blocked": 1,
-      "locally_blocked_estimated_tokens": 19
+      "estimated_input_tokens": 157,
+      "observed_tokens": 242,
+      "observed_usage_status": "unknown",
+      "unknown_usage_attempts": 3,
+      "unknown_forwarding_attempts": 0,
+      "locally_blocked_estimated_tokens": 19,
+      "source": "provider_operation_events_read_only_deduplicated",
+      "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
+      "unmatched_validation_attempts": 0,
+      "providers": {
+        "aliyun": {
+          "total": 3,
+          "reserved": 2,
+          "forwarded": 2,
+          "locally_blocked": 1,
+          "estimated_input_tokens": 38,
+          "observed_tokens": null,
+          "observed_usage_status": "unknown",
+          "unknown_usage_attempts": 2,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 19
+        },
+        "jina": {
+          "total": 4,
+          "reserved": 4,
+          "forwarded": 4,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 119,
+          "observed_tokens": 242,
+          "observed_usage_status": "unknown",
+          "unknown_usage_attempts": 1,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        }
+      },
+      "request_limit": 25,
+      "estimated_token_limit": 1000,
+      "provider_token_limits": {
+        "jina": 600,
+        "aliyun": 600
+      }
     },
     "this_run": {
-      "forwarded_http": 0,
+      "total": 0,
+      "reserved": 0,
+      "forwarded": 0,
+      "locally_blocked": 0,
       "estimated_input_tokens": 0,
       "observed_tokens": null,
-      "observed_usage_status": "NO_PROVIDER_REQUEST",
-      "private_documents_sent": false
-    },
-    "cumulative": {
-      "forwarded_http": 6,
-      "estimated_input_tokens": 157,
-      "observed_tokens_known_sum": 242,
-      "observed_usage_unknown_attempts": 3,
-      "locally_blocked": 1,
-      "locally_blocked_estimated_tokens": 19
+      "observed_usage_status": "unknown",
+      "unknown_usage_attempts": 0,
+      "unknown_forwarding_attempts": 0,
+      "locally_blocked_estimated_tokens": 0
     },
     "remaining": {
       "requests": 19,
       "estimated_input_tokens": 843
-    },
-    "quality_query_only_lower_bound": {
-      "requests": 60,
-      "estimated_input_tokens": 3590
-    },
-    "quality_minimum_additional_lower_bound": {
-      "requests": 41,
-      "estimated_input_tokens": 2747
-    },
-    "note": "estimated 与 observed 分列；历史缺 usage 保留 unknown；新增预算未经批准。"
+    }
   },
   "checks": {
-    "doctor": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "doctor"
-      ],
-      "started_at": "2026-09-05T15:02:47.322033+00:00",
-      "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:02:48.634532+00:00",
-      "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/doctor-execution.json"
-    },
     "check": {
       "command": [
         "/home/jerry/work/RAG/.venv/bin/python",
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "authorization_tests": {
       "command": [
@@ -271,20 +445,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "endpoint_tests": {
       "command": [
@@ -292,45 +465,40 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "connection_tests": {
       "command": [
         "/home/jerry/work/RAG/.venv/bin/python",
-        "-m",
-        "pytest",
-        "-q",
-        "tests/application/test_p11_r1_connections.py",
-        "tests/api/test_model_services.py"
+        "scripts/dev.py",
+        "check"
       ],
-      "started_at": "2026-09-05T15:23:38.696236+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:43.022823+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/connection_tests-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "conformance_tests": {
       "command": [
@@ -338,20 +506,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "publication_tests": {
       "command": [
@@ -359,20 +526,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "security_matrix": {
       "command": [
@@ -380,20 +546,39 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T15:02:48.637375+00:00",
+      "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:23.049877+00:00",
+      "finished_at": "2026-09-05T19:26:45.804700+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
+      "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "doctor": {
+      "command": [
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/dev.py",
+        "doctor"
+      ],
+      "started_at": "2026-09-05T19:20:13.491376+00:00",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:20:14.594714+00:00",
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/doctor-execution.json",
+      "sha256": "f1811a2b7df62bd8f4a6be854b70ca3259e6e53c46f7145ee3259ecede97bd32",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "smoke": {
       "command": [
@@ -401,20 +586,19 @@
         "scripts/dev.py",
         "smoke"
       ],
-      "started_at": "2026-09-05T15:09:23.050690+00:00",
+      "started_at": "2026-09-05T19:26:46.851512+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:09:35.805150+00:00",
+      "finished_at": "2026-09-05T19:26:57.917368+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/smoke-execution.json",
+      "sha256": "0da6cd2294b3093d43af89fa3188f6eebf8ee4af57da676f0ad4fdfe9a0569c5",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/smoke-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "product_check": {
       "command": [
@@ -422,20 +606,19 @@
         "scripts/dev.py",
         "product-check"
       ],
-      "started_at": "2026-09-05T15:09:35.807385+00:00",
+      "started_at": "2026-09-05T19:26:58.941303+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:10:18.750387+00:00",
+      "finished_at": "2026-09-05T19:27:38.674501+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/product_check-execution.json",
+      "sha256": "ec8b4d03607b28d62d6a5077b0416450aa9058af984cceba4bfba2abae9c5ee5",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/product_check-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "product_smoke": {
       "command": [
@@ -443,20 +626,19 @@
         "scripts/dev.py",
         "product-smoke"
       ],
-      "started_at": "2026-09-05T15:10:18.751120+00:00",
+      "started_at": "2026-09-05T19:27:39.692057+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:10:25.626078+00:00",
+      "finished_at": "2026-09-05T19:27:45.573821+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/product_smoke-execution.json",
+      "sha256": "c40b3c946d606ee85b922582bad0b5486a70cf88eeae06811b3b064c2641fe93",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/product_smoke-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "web_lint": {
       "command": [
@@ -464,21 +646,20 @@
         "scripts/dev.py",
         "web-lint"
       ],
-      "started_at": "2026-09-05T15:23:43.023875+00:00",
+      "started_at": "2026-09-05T19:27:46.618670+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:49.046110+00:00",
+      "finished_at": "2026-09-05T19:27:51.796153+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_lint-execution.json",
+      "sha256": "950575d3e1b8dea68fdb0e192e22b4ddcb179e083065fa78f18de70acaa27be0",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/web_lint-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "web_typecheck": {
       "command": [
@@ -486,21 +667,20 @@
         "scripts/dev.py",
         "web-typecheck"
       ],
-      "started_at": "2026-09-05T15:23:49.047577+00:00",
+      "started_at": "2026-09-05T19:27:52.839396+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:52.380240+00:00",
+      "finished_at": "2026-09-05T19:27:55.669064+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_typecheck-execution.json",
+      "sha256": "6cb07b58ea149e9db97bbddda7aac51dc808e05d7ee915ff80b5c3945ce40ee4",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/web_typecheck-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "web_test": {
       "command": [
@@ -508,43 +688,41 @@
         "scripts/dev.py",
         "web-test"
       ],
-      "started_at": "2026-09-05T15:23:52.381399+00:00",
+      "started_at": "2026-09-05T19:27:56.679272+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:56.025110+00:00",
+      "finished_at": "2026-09-05T19:28:00.195506+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_test-execution.json",
+      "sha256": "0233b8bfde606f980caa55ad5552b6ab2787727e1cc83833b2ca7bfe5021bba6",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/web_test-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "web_e2e": {
       "command": [
-        "scripts/release.py",
-        "acceptance",
-        "--candidate"
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/dev.py",
+        "web-e2e"
       ],
-      "started_at": "2026-09-05T15:20:41.712614+00:00",
+      "started_at": "2026-09-05T19:28:01.419203+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:21:35.533612+00:00",
+      "finished_at": "2026-09-05T19:28:28.081938+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_e2e-execution.json",
+      "sha256": "b160c51573bb2bd60c9512b24c8cebc329966869fec9ec7c1acf510005c7b192",
       "status": "PASS",
-      "reason": "FINAL_CANDIDATE_WEB_E2E_PASSED_5_SKIPPED_3",
-      "original_evidence": "artifacts/p11-r4/candidate/candidate_startup-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "upgrade_tests": {
       "command": [
@@ -554,20 +732,19 @@
         "-q",
         "tests/upgrade/test_p11_upgrade.py"
       ],
-      "started_at": "2026-09-05T15:11:09.208477+00:00",
+      "started_at": "2026-09-05T19:28:29.134246+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:11:12.658734+00:00",
+      "finished_at": "2026-09-05T19:28:32.132010+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/upgrade_tests-execution.json",
+      "sha256": "fac27ae303bcbb222b3ba6715d8db1137a7387c42bcc2b43f91ac7de682b72df",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/upgrade_tests-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "qdrant": {
       "command": [
@@ -575,21 +752,20 @@
         "acceptance",
         "internal:qdrant"
       ],
-      "started_at": "2026-09-05T15:11:12.659492+00:00",
+      "started_at": "2026-09-05T19:19:57.906260+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:11:29.588549+00:00",
+      "finished_at": "2026-09-05T19:20:12.471617+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/qdrant-execution.json",
+      "sha256": "35f730b087437059df3727acae7378e9887c533f8993dabf54a7391a3adb0384",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/qdrant-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "backup_restore": {
       "command": [
@@ -597,201 +773,472 @@
         "acceptance",
         "internal:qdrant"
       ],
-      "started_at": "2026-09-05T15:11:12.659492+00:00",
+      "started_at": "2026-09-05T19:19:57.906260+00:00",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T15:11:29.588549+00:00",
+      "finished_at": "2026-09-05T19:20:12.471617+00:00",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/qdrant-execution.json",
+      "sha256": "35f730b087437059df3727acae7378e9887c533f8993dabf54a7391a3adb0384",
       "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/qdrant-execution.json"
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "candidate_startup": {
+      "command": [
+        "scripts/release.py",
+        "acceptance",
+        "--candidate"
+      ],
+      "started_at": "2026-09-05T19:33:45.885397+00:00",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:34:37.804261+00:00",
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate_startup-execution.json",
+      "sha256": "c7c031be2a03a4cff73a4f46fcde72a14a00f26835de22e991da17c800f93d8f",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "candidate_browser": {
+      "command": [
+        "scripts/release.py",
+        "acceptance",
+        "--candidate"
+      ],
+      "started_at": "2026-09-05T19:33:45.885397+00:00",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:34:37.804261+00:00",
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate_startup-execution.json",
+      "sha256": "c7c031be2a03a4cff73a4f46fcde72a14a00f26835de22e991da17c800f93d8f",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "python_dependency_audit": {
+      "command": [
+        "scripts/release.py",
+        "verify",
+        "internal:python-audit"
+      ],
+      "started_at": "2026-09-05T19:37:55.688866+00:00",
+      "identity": {
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:38:07.951266+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-r5/python_dependency_audit-execution.json",
+      "sha256": "76242327a78e2562284bf9ba2023f66718d492b03293e73dbf8a87325e7a2db0",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "npm_dependency_audit": {
+      "command": [
+        "scripts/release.py",
+        "verify",
+        "internal:npm-audit"
+      ],
+      "started_at": "2026-09-05T19:38:07.952746+00:00",
+      "identity": {
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:38:08.871717+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-r5/npm_dependency_audit-execution.json",
+      "sha256": "62a124a4058456659a13c28f824b9df6a7bd8f7b5cf2b325d14f468654d8f9ad",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "secret_scan": {
+      "command": [
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/secret_scan.py",
+        "--docker-image",
+        "docx-rag:v1-candidate",
+        "--path",
+        "src",
+        "--path",
+        "frontend/dist"
+      ],
+      "started_at": "2026-09-05T19:38:09.516305+00:00",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:38:09.945345+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-r5/secret_scan-execution.json",
+      "sha256": "3e554e817bc18894e837a7c0a7df76086ebf8564a55e58f6025d5dde82faccd7",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "image_secret_scan": {
+      "command": [
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/secret_scan.py",
+        "--docker-image",
+        "docx-rag:v1-candidate",
+        "--path",
+        "src",
+        "--path",
+        "frontend/dist"
+      ],
+      "started_at": "2026-09-05T19:38:09.516305+00:00",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+      },
+      "exit_code": 0,
+      "finished_at": "2026-09-05T19:38:09.945345+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-r5/secret_scan-execution.json",
+      "sha256": "3e554e817bc18894e837a7c0a7df76086ebf8564a55e58f6025d5dde82faccd7",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
+    },
+    "os_risk": {
+      "status": "BLOCKED",
+      "reason": "RISK_REVIEW_REQUIRED",
+      "identity": {
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+      },
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/security/final-risk-aggregation.json",
+      "sha256": "536c2428ee49b10ac36a20b01ed8125211d3094473701c69463378826b217e09",
+      "exit_code": 0,
+      "details": {
+        "raw_scan": {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-all.json",
+          "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b"
+        },
+        "review_overlay": {
+          "path": "release/p11-os-risk-review.json",
+          "sha256": "0d3bb2b133c80c77d08df5d24c47c9ba0094259c62a5c16dc9e0dd0f1ae3f035"
+        },
+        "risk_summary": {
+          "status": "BLOCKED",
+          "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+          "os": {
+            "Family": "debian",
+            "Name": "13.6"
+          },
+          "scanned_at": "2026-09-05T19:38:29.683633895Z",
+          "scanner": {
+            "Version": "0.74.0"
+          },
+          "reason": "RISK_REVIEW_REQUIRED",
+          "all_high_critical": 54,
+          "raw_high_critical": 54,
+          "raw_findings": 179,
+          "unique_cves": 18,
+          "unique_cve_package_versions": 54,
+          "fixable_high_critical": 0,
+          "without_fix": 54,
+          "scan_identity": {
+            "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+            "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b",
+            "scanned_at": "2026-09-05T19:38:29.683633895Z",
+            "scanner_version": "0.74.0",
+            "db_updated_at": "2026-09-05T13:02:41.107875606Z"
+          },
+          "under_investigation": 54,
+          "mitigated": 0,
+          "approved_dispositions": 0,
+          "objective_dispositions": 0,
+          "accepted_risk_remaining": false,
+          "review_errors": []
+        }
+      }
+    },
+    "ci": {
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "release": "759490bc3891dab30ff0f2eb038b3951573d73b06ebed12a7ddc54551e37ab71"
+      },
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/ci-code.json",
+      "sha256": "9dd321ecb556b9ef5d23bd38f92b56021545f5ce609f24f92fd9c92c3cb0c73f",
+      "exit_code": 0,
+      "details": {
+        "head_sha": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/33987373352",
+        "reuse_contract": "该Run验证候选业务代码SHA；最终提交另含发布脚本相对路径修复，release身份变化，聚合应保持CI待新合并SHA验证。不得把旧Run冒充最终合并CI。"
+      }
+    },
+    "candidate_capabilities": {
+      "status": "PASS",
+      "reason": "PUBLIC_DOCX_FTS5_DOC_PROCESS_AND_LOOPBACK_TLS_PASSED",
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+      },
+      "origin": "本次执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate-capabilities.json",
+      "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a",
+      "exit_code": 0
     },
     "campaign_config": {
       "status": "BLOCKED",
-      "reason": "CONNECTION_OR_PROFILE_INVALID",
+      "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {
+        "status": "BLOCKED",
+        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "endpoint_contract": "BLOCKED",
+        "connection_configuration": "BLOCKED",
+        "campaign_binding": "BLOCKED",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": false,
+          "campaign_authorization_matches": null,
+          "campaign_binding_status": "BLOCKED"
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": true,
+            "api_host_present": false,
+            "api_host_shape_valid": false,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": null,
+            "status": "BLOCKED"
+          }
+        },
+        "issues": [
+          {
+            "field": "aliyun_connection_id.endpoint_mode",
+            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+            "message": "端点模式缺失或不受支持。",
+            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "aliyun_connection_id.api_host",
+            "reason_code": "ALIYUN_API_HOST_REQUIRED",
+            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "campaign",
+            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+            "message": "原产品尚未绑定指定的持久预算授权。",
+            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+            "blocking_scope": "campaign_binding"
+          }
+        ],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     },
     "aliyun_document_canary": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2"
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
       },
-      "step_identity": "sha256:855bfedc112c9511db69cd8fb4755a2c5585d8ff77b7ca19ac23c5846f8730f6",
+      "step_identity": "sha256:7a2487a12e8efe48a4a5595442326dbb5fb11160552cda30bea74f95fc6a654e",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "aliyun_query_canary": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2"
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
       },
-      "step_identity": "sha256:fb448e99a08f03401d8b0346b77a94fa050538a7ee9f42c4c56cac9cbc5f7f92",
+      "step_identity": "sha256:0262ba4779d187eaa4768039eee1891b86007c7e6e24196514bb8f1cbc2f2bd8",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "jina_connection": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b"
       },
-      "step_identity": "sha256:bd50a6f9df7d3c49f847a67e09d1486f62cac0558ce1ec78bdd672451eaa259f",
+      "step_identity": "sha256:1f5b8f7109d90e9b2a09eee0a2d853d86d04164eb849d7625ab432e2c1b81ad5",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "dual_index": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:201f30dc4ab29109e9e1aa776a03fbb714efcf72db07997695e607b7659f288e",
+      "step_identity": "sha256:25496abbc06ad69e323ca04651fe2713c184a4496767b80ee74b37eea626b403",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "primary_query": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:ec9a6109930f4422927b1ee6ba0a99bb1ffce840f23e0d09e6b03f8cb4cd3cbd",
+      "step_identity": "sha256:4e25a2dd743a5b9bd32dd15f8a399968d6bf723f59ef9e11ba13682af4658b7c",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "standby_failover": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:6289df32b394d18c148dc4ac4482e1a728a18c55380de9763ed0f5f888843b32",
+      "step_identity": "sha256:183777d1ba3ecee5eed54132bfbf45eca1d8038b1cbc29ff389a957e68749107",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "recovery": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:533c701d106f8918cb6613909e1a91383b7089ed4d05807afd37911196cf24c7",
+      "step_identity": "sha256:b864d289c1dd21719d87148a84dd913a57ee63d1dfb75ecbf82f9d792f441cb7",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {},
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "citation_quality": {
-      "status": "BLOCKED",
-      "reason": "BLOCKED_BUDGET_AND_UNCONFIRMED_ENDPOINT",
+      "status": "NOT_RUN",
+      "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:c2113f933a7a53664992e89d77e32cc8310cccda530cfd827c1f2888d92b1ade",
+      "step_identity": "sha256:ffdfb8969eba41f74f7323bb1066d71a847f4275eaa96b7f89197a87ddd74182",
       "origin": "未执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
-      "details": {
-        "pilot": true,
-        "sample_count": 30,
-        "lanes": [
-          "primary",
-          "standby"
-        ],
-        "query_only_lower_bound": {
-          "requests": 60,
-          "estimated_input_tokens": 3590
-        },
-        "available": {
-          "requests": 19,
-          "estimated_input_tokens": 843
-        },
-        "minimum_additional_lower_bound": {
-          "requests": 41,
-          "estimated_input_tokens": 2747
-        },
-        "excludes": [
-          "document_embedding",
-          "reranking",
-          "retry"
-        ],
-        "real_model_evaluation": "NOT_RUN"
-      },
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      "details": {}
     },
     "final_report": {
       "status": "BLOCKED",
       "reason": "REQUIRED_STEPS_INCOMPLETE",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:eadc7f1f801a676dc5c2273f94abe93cf834769cfb2f1749e2f383042be02db8",
+      "step_identity": "sha256:fe4266603e3aceffca1187cd92ef9171a43978204d60282559d09fc0a8a617b9",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
       "exit_code": null,
       "details": {
         "required_steps": [
@@ -805,231 +1252,346 @@
           "recovery",
           "citation_quality"
         ]
-      },
-      "original_evidence": "artifacts/p11-r4/runtime/live-result.json"
+      }
     },
-    "python_dependency_audit": {
-      "command": [
-        "scripts/release.py",
-        "verify",
-        "internal:python-audit"
-      ],
-      "started_at": "2026-09-05T15:13:55.189014+00:00",
-      "identity": {
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:14:20.690262+00:00",
-      "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/python_dependency_audit-execution.json"
-    },
-    "npm_dependency_audit": {
-      "command": [
-        "scripts/release.py",
-        "verify",
-        "internal:npm-audit"
-      ],
-      "started_at": "2026-09-05T15:23:56.026603+00:00",
-      "identity": {
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:57.026312+00:00",
-      "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/npm_dependency_audit-execution.json"
-    },
-    "secret_scan": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/secret_scan.py",
-        "--docker-image",
-        "docx-rag:v1-candidate",
-        "--path",
-        "src",
-        "--path",
-        "frontend/dist"
-      ],
-      "started_at": "2026-09-05T15:23:57.027321+00:00",
-      "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
-        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:57.453090+00:00",
-      "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/secret_scan-execution.json"
-    },
-    "image_secret_scan": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/secret_scan.py",
-        "--docker-image",
-        "docx-rag:v1-candidate",
-        "--path",
-        "src",
-        "--path",
-        "frontend/dist"
-      ],
-      "started_at": "2026-09-05T15:23:57.027321+00:00",
-      "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:23:57.453090+00:00",
-      "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11-r4/secret_scan-execution.json"
-    },
-    "os_risk": {
+    "endpoint_contract": {
       "status": "BLOCKED",
-      "reason": "RISK_REVIEW_REQUIRED",
+      "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED,ALIYUN_API_HOST_REQUIRED",
       "identity": {
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "exit_code": 0,
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "original_evidence": "/home/jerry/work/RAG/artifacts/p11/security/os-risk-review.json"
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
+      "exit_code": null,
+      "details": {
+        "status": "BLOCKED",
+        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "endpoint_contract": "BLOCKED",
+        "connection_configuration": "BLOCKED",
+        "campaign_binding": "BLOCKED",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": false,
+          "campaign_authorization_matches": null,
+          "campaign_binding_status": "BLOCKED"
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": true,
+            "api_host_present": false,
+            "api_host_shape_valid": false,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": null,
+            "status": "BLOCKED"
+          }
+        },
+        "issues": [
+          {
+            "field": "aliyun_connection_id.endpoint_mode",
+            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+            "message": "端点模式缺失或不受支持。",
+            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "aliyun_connection_id.api_host",
+            "reason_code": "ALIYUN_API_HOST_REQUIRED",
+            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "campaign",
+            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+            "message": "原产品尚未绑定指定的持久预算授权。",
+            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+            "blocking_scope": "campaign_binding"
+          }
+        ],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     },
-    "candidate_startup": {
-      "command": [
-        "scripts/release.py",
-        "acceptance",
-        "--candidate"
-      ],
-      "started_at": "2026-09-05T15:20:41.712614+00:00",
+    "connection_configuration": {
+      "status": "BLOCKED",
+      "reason": "DIAGNOSTIC_REQUIRED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:21:35.533612+00:00",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "artifacts/p11-r4/candidate/candidate_startup-execution.json"
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
+      "exit_code": null,
+      "details": {
+        "status": "BLOCKED",
+        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "endpoint_contract": "BLOCKED",
+        "connection_configuration": "BLOCKED",
+        "campaign_binding": "BLOCKED",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": false,
+          "campaign_authorization_matches": null,
+          "campaign_binding_status": "BLOCKED"
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": true,
+            "api_host_present": false,
+            "api_host_shape_valid": false,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": null,
+            "status": "BLOCKED"
+          }
+        },
+        "issues": [
+          {
+            "field": "aliyun_connection_id.endpoint_mode",
+            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+            "message": "端点模式缺失或不受支持。",
+            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "aliyun_connection_id.api_host",
+            "reason_code": "ALIYUN_API_HOST_REQUIRED",
+            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "campaign",
+            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+            "message": "原产品尚未绑定指定的持久预算授权。",
+            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+            "blocking_scope": "campaign_binding"
+          }
+        ],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     },
-    "candidate_browser": {
-      "command": [
-        "scripts/release.py",
-        "acceptance",
-        "--candidate"
-      ],
-      "started_at": "2026-09-05T15:20:41.712614+00:00",
+    "campaign_binding": {
+      "status": "BLOCKED",
+      "reason": "CAMPAIGN_BINDING_REQUIRED",
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece"
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-05T15:21:35.533612+00:00",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
       "origin": "本次执行",
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO",
-      "original_evidence": "artifacts/p11-r4/candidate/candidate_startup-execution.json"
-    },
-    "ci": {
-      "status": "PASS",
-      "reason": "FINAL_CODE_CI_ALL_7_JOBS_SUCCEEDED",
-      "origin": "本次执行",
-      "command": [
-        "gh",
-        "run",
-        "view",
-        "33975025319",
-        "--repo",
-        "taoyifei/RAG_TEST"
-      ],
-      "exit_code": 0,
-      "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
-        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c"
-      },
-      "evidence": "release/p11-r4-evidence.json",
-      "sha256": "ad85866e7cbf656c4537e101e388d88824e6cd0e26aeaa81c1001b3a732139f3",
-      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/33975025319",
-      "original_evidence": "artifacts/p11-r4/ci.json"
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/live-result.json",
+      "sha256": "046860a11919ad98d540cff66b6ecd90ee80a6a602a279a20583f78f6fac4dcb",
+      "exit_code": null,
+      "details": {
+        "status": "BLOCKED",
+        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "endpoint_contract": "BLOCKED",
+        "connection_configuration": "BLOCKED",
+        "campaign_binding": "BLOCKED",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": false,
+          "campaign_authorization_matches": null,
+          "campaign_binding_status": "BLOCKED"
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": true,
+            "api_host_present": false,
+            "api_host_shape_valid": false,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": null,
+            "status": "BLOCKED"
+          }
+        },
+        "issues": [
+          {
+            "field": "aliyun_connection_id.endpoint_mode",
+            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+            "message": "端点模式缺失或不受支持。",
+            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "aliyun_connection_id.api_host",
+            "reason_code": "ALIYUN_API_HOST_REQUIRED",
+            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+            "blocking_scope": "endpoint_contract"
+          },
+          {
+            "field": "campaign",
+            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+            "message": "原产品尚未绑定指定的持久预算授权。",
+            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+            "blocking_scope": "campaign_binding"
+          }
+        ],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     }
   },
   "gates": {
     "AUTHORIZATION_BOUNDARY_READY": {
-      "status": "BLOCKED",
-      "reason": "campaign_config",
+      "status": "PASS",
+      "reason": "ALL_REQUIRED_PASSED",
       "evidence": [
-        "authorization_tests",
-        "campaign_config"
+        "authorization_tests"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "ALIYUN_ENDPOINT_CONTRACT_READY": {
       "status": "BLOCKED",
-      "reason": "campaign_config",
+      "reason": "endpoint_contract",
       "evidence": [
         "endpoint_tests",
-        "campaign_config"
+        "endpoint_contract"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+      }
+    },
+    "CONNECTION_CONFIGURATION_READY": {
+      "status": "BLOCKED",
+      "reason": "connection_configuration",
+      "evidence": [
+        "connection_configuration"
+      ],
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+      }
+    },
+    "CAMPAIGN_BINDING_READY": {
+      "status": "BLOCKED",
+      "reason": "campaign_binding",
+      "evidence": [
+        "campaign_binding"
+      ],
+      "identity": {
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
+        "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "CONNECTION_EDIT_READY": {
@@ -1040,16 +1602,16 @@
         "web_e2e"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "RESOLVED_POLICY_CONFORMANCE_READY": {
@@ -1059,16 +1621,16 @@
         "conformance_tests"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "PROFILE_INDEX_SWITCH_READY": {
@@ -1079,16 +1641,16 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "PROVIDER_CONNECTIVITY_READY": {
@@ -1100,16 +1662,16 @@
         "jina_connection"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "DUAL_SLOT_FUNCTION_READY": {
@@ -1121,16 +1683,16 @@
         "qdrant"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "FAILOVER_RECOVERY_READY": {
@@ -1141,35 +1703,35 @@
         "recovery"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "RETRIEVAL_QUALITY_READY": {
-      "status": "BLOCKED",
+      "status": "NOT_RUN",
       "reason": "citation_quality",
       "evidence": [
         "citation_quality"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "PRODUCT_BROWSER_READY": {
@@ -1180,16 +1742,16 @@
         "candidate_browser"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "BACKUP_RESTORE_READY": {
@@ -1200,16 +1762,16 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "SECURITY_READY": {
@@ -1224,35 +1786,35 @@
         "os_risk"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "CI_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "ci",
       "evidence": [
         "ci"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "REMOTE_PRODUCTION_PROFILE_READY": {
@@ -1268,24 +1830,26 @@
         "RETRIEVAL_QUALITY_READY"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "RELEASE_CANDIDATE_READY": {
       "status": "BLOCKED",
-      "reason": "AUTHORIZATION_BOUNDARY_READY, ALIYUN_ENDPOINT_CONTRACT_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
+      "reason": "ALIYUN_ENDPOINT_CONTRACT_READY, CONNECTION_CONFIGURATION_READY, CAMPAIGN_BINDING_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, CI_READY, REMOTE_PRODUCTION_PROFILE_READY",
       "evidence": [
         "AUTHORIZATION_BOUNDARY_READY",
         "ALIYUN_ENDPOINT_CONTRACT_READY",
+        "CONNECTION_CONFIGURATION_READY",
+        "CAMPAIGN_BINDING_READY",
         "CONNECTION_EDIT_READY",
         "RESOLVED_POLICY_CONFORMANCE_READY",
         "PROFILE_INDEX_SWITCH_READY",
@@ -1310,16 +1874,16 @@
         "candidate_startup"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     },
     "P11_READY": {
@@ -1329,31 +1893,36 @@
         "RELEASE_CANDIDATE_READY"
       ],
       "identity": {
-        "runtime": "bc71d8f0fe02797fe1201be91b976a4130a3d010d416ec229fe679f3e4dc9a40",
-        "tests": "6f61ca639ce63b11f20207413379e74a37888e3c776064f8c539ecd4b3bb98da",
-        "frontend": "d43771348b45435a124957943394be7578099257647d430a0e73ef9f98188ece",
+        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
+        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "5c05e61f1634b075e57fa68f81ac34fbb079f9307612caf779f24086b701bf4c",
+        "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "provider_jina": "2da9992def928c9025647fc9ed0ed6f6019497a0c7ef09abcdacd1f962395cef",
-        "provider_aliyun": "0bb7e8e51cd601a2a0b53bfc88d109c03b9a368034df8a9214379b69621c26c2",
-        "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1"
+        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
+        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
       }
     }
   },
   "P11_READY": false,
+  "CODE_FIXES_READY": true,
+  "overall_release_status": "BLOCKED",
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
-    "代码和报告保存不需要用户手工点击；此前收尾延误由执行安排和验收入口问题造成，非等待 CI 或用户审批。",
-    "真实 Live 未执行：页面尚需确认百炼 endpoint_mode、对应可信 API Host 和北京地域；当前 config_check 为 CONNECTION_OR_PROFILE_INVALID。",
-    "持久账本代码已实现并验证，但当前实例 campaign 尚未首绑；页面保存连接后由续跑命令在停止 app 的维护窗口导入全部旧账并绑定，不能把旧账清零。",
-    "主/备真实模型、故障恢复和质量验收未执行；历史 Jina 200 仅保留为历史记录，相关请求策略已变，不能代替本候选证据。",
-    "质量 pilot 为 30 个问题、主/备各一轮；仅查询下限为 60 请求 / 3590 估算 Token，现余 19 / 843；至少差 41 / 2747，且尚未计文档、重排和重试。没有扩大授权预算。",
-    "SECURITY_READY=BLOCKED：最终镜像全部 High/Critical 54、可修复 0、无修复版本 54；逐项可达性和缓解尚未评估，无风险接受人或期限，不能用于生产放行。",
-    "最终镜像浏览器为 5 passed / 3 skipped；3 项为既有平台范围，详细命令及范围保留。Mock/离线证据不证明真实模型质量。",
-    "CI 7 个 job 在代码合并 SHA 成功；证据/Markdown 提交复用相同业务资产，不重建镜像、不重做备份、不重复模型调用。",
-    "P11_READY=false，禁止合入 feature/universal-rag；MERGE_TO_MAIN_AUTHORIZED=false，main/Industry 保持原引用。"
+    "本轮新增 Provider HTTP=0；另有官方公告、依赖/镜像仓库与GitHub访问，不把所有联网写成0。",
+    "当前非秘密配置缺显式百炼端点模式；业务空间模式还需真实控制台API Host。凭据元数据有效不等于供应商可用。",
+    "原实例未更新、未停止或重启；只读挂载/data，不挂Secret卷。首绑尚未执行，原Qdrant未改动。",
+    "累计原账6次转发、estimated157；known observed242、3次usage未知；本地拦截1次/estimated19，未知转发0。",
+    "预算434 HTTP/145703 estimated累计cap为PROPOSED、未批准、未激活；实际Profile确定后应重新生成。",
+    "真实Provider、双槽故障恢复与原30问Live质量未运行；离线Mock、候选容器和本地Qdrant不能证明Live质量或远程生产就绪。",
+    "完整OS发现和逐项未决结论保留，未形成任何人工风险接受；Python/npm audit不能代替OS安全门。",
+    "最初check的未暂存/静态环与恢复集成回归已修复并重跑原门，旧失败日志保留；未放宽断言或新增skip/noqa/xfail。",
+    "浏览器3个skip为已有desktop/mobile互斥用例；未跳过对应场景。",
+    "R4原始扫描保留作为历史；当前候选独立完整扫描。最终报告提交不改变业务资产，因此不重复构建本地候选。",
+    "直接目录构建在载入上下文时被历史Trivy缓存权限阻断，未生成候选；改用同一已提交SHA的git archive输入完成唯一成功构建，未改动旧缓存或Dockerfile。",
+    "扫描入口的相对证据路径已修复为绝对路径；28项CLI回归、Ruff/mypy和原verify重跑。仅release脚本变化，运行时/测试/前端/镜像依赖身份未变，无需重建或重跑未受影响门。候选代码CI7项通过；本报告生成时最终合并CI待执行，旧CI不伪装为新脚本CI。"
   ],
   "private_documents_sent": false,
   "live_runner": {
@@ -1362,66 +1931,139 @@
     "steps": {
       "config_check": {
         "status": "BLOCKED",
-        "reason": "CONNECTION_OR_PROFILE_INVALID",
-        "evidence": {},
+        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "evidence": {
+          "status": "BLOCKED",
+          "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+          "endpoint_contract": "BLOCKED",
+          "connection_configuration": "BLOCKED",
+          "campaign_binding": "BLOCKED",
+          "live_allowed": false,
+          "checks": {
+            "source_profile_present_or_not_required": true,
+            "profile_policy_valid": true,
+            "ledger_path_valid": true,
+            "campaign_exists": false,
+            "campaign_authorization_matches": null,
+            "campaign_binding_status": "BLOCKED"
+          },
+          "connections": {
+            "jina_connection_id": {
+              "connection_exists": true,
+              "connection_enabled": true,
+              "endpoint_mode": null,
+              "workspace_shape_valid": null,
+              "api_host_present": null,
+              "api_host_shape_valid": null,
+              "region_supported": null,
+              "credential_metadata_present": true,
+              "credential_version_valid": true,
+              "source_profile_present_or_not_required": true,
+              "profile_connection_match": true,
+              "profile_policy_valid": true,
+              "status": "PASS"
+            },
+            "aliyun_connection_id": {
+              "connection_exists": true,
+              "connection_enabled": true,
+              "endpoint_mode": null,
+              "workspace_shape_valid": true,
+              "api_host_present": false,
+              "api_host_shape_valid": false,
+              "region_supported": true,
+              "credential_metadata_present": true,
+              "credential_version_valid": true,
+              "source_profile_present_or_not_required": true,
+              "profile_connection_match": true,
+              "profile_policy_valid": null,
+              "status": "BLOCKED"
+            }
+          },
+          "issues": [
+            {
+              "field": "aliyun_connection_id.endpoint_mode",
+              "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+              "message": "端点模式缺失或不受支持。",
+              "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+              "blocking_scope": "endpoint_contract"
+            },
+            {
+              "field": "aliyun_connection_id.api_host",
+              "reason_code": "ALIYUN_API_HOST_REQUIRED",
+              "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+              "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+              "blocking_scope": "endpoint_contract"
+            },
+            {
+              "field": "campaign",
+              "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+              "message": "原产品尚未绑定指定的持久预算授权。",
+              "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+              "blocking_scope": "campaign_binding"
+            }
+          ],
+          "http_requests": 0,
+          "secret_decryption": false,
+          "migrations": false
+        },
         "identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-        "timestamp": "2026-09-05T17:44:56.633215+00:00",
+        "timestamp": "2026-09-05T19:35:07.517140+00:00",
         "provenance": "本次执行"
       },
       "aliyun_document_canary": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:855bfedc112c9511db69cd8fb4755a2c5585d8ff77b7ca19ac23c5846f8730f6",
+        "identity": "sha256:7a2487a12e8efe48a4a5595442326dbb5fb11160552cda30bea74f95fc6a654e",
         "provenance": "未执行"
       },
       "aliyun_query_canary": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:fb448e99a08f03401d8b0346b77a94fa050538a7ee9f42c4c56cac9cbc5f7f92",
+        "identity": "sha256:0262ba4779d187eaa4768039eee1891b86007c7e6e24196514bb8f1cbc2f2bd8",
         "provenance": "未执行"
       },
       "jina_connection": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:bd50a6f9df7d3c49f847a67e09d1486f62cac0558ce1ec78bdd672451eaa259f",
+        "identity": "sha256:1f5b8f7109d90e9b2a09eee0a2d853d86d04164eb849d7625ab432e2c1b81ad5",
         "provenance": "未执行"
       },
       "dual_index": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:201f30dc4ab29109e9e1aa776a03fbb714efcf72db07997695e607b7659f288e",
+        "identity": "sha256:25496abbc06ad69e323ca04651fe2713c184a4496767b80ee74b37eea626b403",
         "provenance": "未执行"
       },
       "primary_query": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:ec9a6109930f4422927b1ee6ba0a99bb1ffce840f23e0d09e6b03f8cb4cd3cbd",
+        "identity": "sha256:4e25a2dd743a5b9bd32dd15f8a399968d6bf723f59ef9e11ba13682af4658b7c",
         "provenance": "未执行"
       },
       "standby_failover": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:6289df32b394d18c148dc4ac4482e1a728a18c55380de9763ed0f5f888843b32",
+        "identity": "sha256:183777d1ba3ecee5eed54132bfbf45eca1d8038b1cbc29ff389a957e68749107",
         "provenance": "未执行"
       },
       "recovery": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:533c701d106f8918cb6613909e1a91383b7089ed4d05807afd37911196cf24c7",
+        "identity": "sha256:b864d289c1dd21719d87148a84dd913a57ee63d1dfb75ecbf82f9d792f441cb7",
         "provenance": "未执行"
       },
       "citation_quality": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:c2113f933a7a53664992e89d77e32cc8310cccda530cfd827c1f2888d92b1ade",
+        "identity": "sha256:ffdfb8969eba41f74f7323bb1066d71a847f4275eaa96b7f89197a87ddd74182",
         "provenance": "未执行"
       },
       "final_report": {
@@ -1440,20 +2082,89 @@
             "citation_quality"
           ]
         },
-        "identity": "sha256:eadc7f1f801a676dc5c2273f94abe93cf834769cfb2f1749e2f383042be02db8",
-        "timestamp": "2026-09-05T17:44:56.659408+00:00",
+        "identity": "sha256:fe4266603e3aceffca1187cd92ef9171a43978204d60282559d09fc0a8a617b9",
+        "timestamp": "2026-09-05T19:35:07.536620+00:00",
         "provenance": "本次执行"
       }
     },
     "budget": {
       "status": "BLOCKED",
-      "reason": "PERSISTENT_CAMPAIGN_REQUIRED"
+      "reason": "CAMPAIGN_BINDING_REQUIRED",
+      "campaign_bound": false,
+      "cumulative": {
+        "total": 7,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 1,
+        "estimated_input_tokens": 157,
+        "observed_tokens": 242,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 3,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 19,
+        "source": "provider_operation_events_read_only_deduplicated",
+        "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
+        "unmatched_validation_attempts": 0,
+        "providers": {
+          "aliyun": {
+            "total": 3,
+            "reserved": 2,
+            "forwarded": 2,
+            "locally_blocked": 1,
+            "estimated_input_tokens": 38,
+            "observed_tokens": null,
+            "observed_usage_status": "unknown",
+            "unknown_usage_attempts": 2,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 19
+          },
+          "jina": {
+            "total": 4,
+            "reserved": 4,
+            "forwarded": 4,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 119,
+            "observed_tokens": 242,
+            "observed_usage_status": "unknown",
+            "unknown_usage_attempts": 1,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          }
+        },
+        "request_limit": 25,
+        "estimated_token_limit": 1000,
+        "provider_token_limits": {
+          "jina": 600,
+          "aliyun": 600
+        }
+      },
+      "this_run": {
+        "total": 0,
+        "reserved": 0,
+        "forwarded": 0,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 0,
+        "observed_tokens": null,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "remaining": {
+        "requests": 19,
+        "estimated_input_tokens": 843
+      }
     },
     "campaign_binding": {
       "status": "NOT_RUN",
       "reason": "CAMPAIGN_BINDING_NOT_REQUESTED",
       "evidence": {}
     },
+    "selected_steps": [
+      "config_check"
+    ],
+    "selected_steps_status": "BLOCKED",
+    "overall_release_status": "BLOCKED",
     "CONNECTIVITY_READY": false,
     "QUALITY_READY": "NOT_RUN",
     "LIVE_ACCEPTANCE_READY": false,
@@ -1462,718 +2173,6 @@
     "MERGE_TO_MAIN_AUTHORIZED": false,
     "private_documents_sent": false
   },
-  "os_risk": {
-    "status": "BLOCKED",
-    "image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
-    "reason": "RISK_REVIEW_REQUIRED",
-    "all_high_critical": 54,
-    "fixable_high_critical": 0,
-    "without_fix": 54,
-    "findings": [
-      {
-        "id": "CVE-2026-76642",
-        "package": "bsdutils",
-        "installed_version": "1:2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "bsdutils",
-        "installed_version": "1:2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "bsdutils",
-        "installed_version": "1:2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "bsdutils",
-        "installed_version": "1:2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-41992",
-        "package": "gzip",
-        "installed_version": "1.13-1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-54369",
-        "package": "libacl1",
-        "installed_version": "2.3.2-2+b1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "libblkid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "libblkid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "libblkid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "libblkid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "liblastlog2-2",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "liblastlog2-2",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "liblastlog2-2",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "liblastlog2-2",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "libmount1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "libmount1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "libmount1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "libmount1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2025-69720",
-        "package": "libncursesw6",
-        "installed_version": "6.5+20250216-2",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "libsmartcols1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "libsmartcols1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "libsmartcols1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "libsmartcols1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-11822",
-        "package": "libsqlite3-0",
-        "installed_version": "3.46.1-7+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-11824",
-        "package": "libsqlite3-0",
-        "installed_version": "3.46.1-7+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-16742",
-        "package": "libsystemd0",
-        "installed_version": "257.13-1~deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2025-69720",
-        "package": "libtinfo6",
-        "installed_version": "6.5+20250216-2",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-16742",
-        "package": "libudev1",
-        "installed_version": "257.13-1~deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "libuuid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "libuuid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "libuuid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "libuuid1",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "login",
-        "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "login",
-        "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "login",
-        "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "login",
-        "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "mount",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "mount",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "mount",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "mount",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2025-69720",
-        "package": "ncurses-base",
-        "installed_version": "6.5+20250216-2",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2025-69720",
-        "package": "ncurses-bin",
-        "installed_version": "6.5+20250216-2",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-13221",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "CRITICAL",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-42496",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "CRITICAL",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-8376",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "CRITICAL",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-42497",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-48962",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-57432",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-57433",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-9538",
-        "package": "perl-base",
-        "installed_version": "5.40.1-6",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-76642",
-        "package": "util-linux",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78408",
-        "package": "util-linux",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78409",
-        "package": "util-linux",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      },
-      {
-        "id": "CVE-2026-78410",
-        "package": "util-linux",
-        "installed_version": "2.41.5-0+deb13u1",
-        "fixed_version": null,
-        "severity": "HIGH",
-        "target": "docx-rag:v1-candidate (debian 13.6)",
-        "reachability": "NOT_ASSESSED",
-        "mitigation": "NOT_ASSESSED",
-        "risk_accepted": false,
-        "owner": null,
-        "expires_at": null
-      }
-    ]
-  },
-  "CONNECTIVITY_READY": false,
-  "QUALITY_READY": "BLOCKED_BUDGET"
+  "selected_steps_status": "BLOCKED",
+  "live_allowed": false
 }

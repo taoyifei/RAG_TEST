@@ -1,0 +1,136 @@
+{
+  "status": "BLOCKED",
+  "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+  "endpoint_contract": "BLOCKED",
+  "connection_configuration": "BLOCKED",
+  "campaign_binding": "BLOCKED",
+  "live_allowed": false,
+  "checks": {
+    "source_profile_present_or_not_required": true,
+    "profile_policy_valid": true,
+    "ledger_path_valid": true,
+    "campaign_exists": false,
+    "campaign_authorization_matches": null,
+    "campaign_binding_status": "BLOCKED"
+  },
+  "connections": {
+    "jina_connection_id": {
+      "connection_exists": true,
+      "connection_enabled": true,
+      "endpoint_mode": null,
+      "workspace_shape_valid": null,
+      "api_host_present": null,
+      "api_host_shape_valid": null,
+      "region_supported": null,
+      "credential_metadata_present": true,
+      "credential_version_valid": true,
+      "source_profile_present_or_not_required": true,
+      "profile_connection_match": true,
+      "profile_policy_valid": true,
+      "status": "PASS"
+    },
+    "aliyun_connection_id": {
+      "connection_exists": true,
+      "connection_enabled": true,
+      "endpoint_mode": null,
+      "workspace_shape_valid": true,
+      "api_host_present": false,
+      "api_host_shape_valid": false,
+      "region_supported": true,
+      "credential_metadata_present": true,
+      "credential_version_valid": true,
+      "source_profile_present_or_not_required": true,
+      "profile_connection_match": true,
+      "profile_policy_valid": null,
+      "status": "BLOCKED"
+    }
+  },
+  "issues": [
+    {
+      "field": "aliyun_connection_id.endpoint_mode",
+      "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+      "message": "端点模式缺失或不受支持。",
+      "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
+      "blocking_scope": "endpoint_contract"
+    },
+    {
+      "field": "aliyun_connection_id.api_host",
+      "reason_code": "ALIYUN_API_HOST_REQUIRED",
+      "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
+      "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
+      "blocking_scope": "endpoint_contract"
+    },
+    {
+      "field": "campaign",
+      "reason_code": "CAMPAIGN_BINDING_REQUIRED",
+      "message": "原产品尚未绑定指定的持久预算授权。",
+      "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
+      "blocking_scope": "campaign_binding"
+    }
+  ],
+  "http_requests": 0,
+  "secret_decryption": false,
+  "migrations": false,
+  "schema_version": 1,
+  "generated_at": "2026-09-05T19:35:07.796453+00:00",
+  "source": "read_only_local_instance_with_current_source_network_none",
+  "original_image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
+  "diagnostic_image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+  "app_was_running": true,
+  "app_action": "NONE",
+  "qdrant_action": "NONE",
+  "historical_budget": {
+    "total": 7,
+    "reserved": 6,
+    "forwarded": 6,
+    "locally_blocked": 1,
+    "estimated_input_tokens": 157,
+    "observed_tokens": 242,
+    "observed_usage_status": "unknown",
+    "unknown_usage_attempts": 3,
+    "unknown_forwarding_attempts": 0,
+    "locally_blocked_estimated_tokens": 19,
+    "source": "provider_operation_events_read_only_deduplicated",
+    "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
+    "unmatched_validation_attempts": 0,
+    "providers": {
+      "aliyun": {
+        "total": 3,
+        "reserved": 2,
+        "forwarded": 2,
+        "locally_blocked": 1,
+        "estimated_input_tokens": 38,
+        "observed_tokens": null,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 2,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 19
+      },
+      "jina": {
+        "total": 4,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 119,
+        "observed_tokens": 242,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 1,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      }
+    }
+  },
+  "source_sha256": {
+    "src/rag_app/product/connection_diagnostics.py": "20593022bcbd4d6e7ccfe6b5fae2d72eac15635fad4217be98ae9aa650bec0a5",
+    "src/rag_app/adapters/providers/aliyun_endpoint.py": "a466de611c4165004f57d91a3a59453b847621765d5e979230aeb9d69f6d57a3",
+    "src/rag_app/adapters/providers/budget_authorization.py": "e22442379958dccfe99cf768391a2e3c36c039ac94bc43b73b52b2c9837236c2",
+    "src/rag_app/adapters/providers/budget_ledger.py": "65756a748802a559d8317a8f586405d4927a870d4c112035c9a9a69e81884f27",
+    "src/rag_app/adapters/providers/budget_models.py": "fb4a3d24aeda0b74b6a7833609e9fb808ed6d85d3c8761962ff1e8f6d316b820",
+    "src/rag_app/adapters/providers/budget_revision.py": "f12b0834812d6074b8ff6c0db8242555b0b4496f60cfac2a585f93ec3e288617",
+    "src/rag_app/adapters/providers/budget_transport.py": "9d20155303355e2d166fd16b50fea1c13e546310074ebd2c0d45660344ff6150",
+    "src/rag_app/adapters/providers/offline_mock_transport.py": "16b1000ec9795b11917595d98a7e23fb7b8353686a925ff24fd9d2d99999fc36",
+    "src/rag_app/product/provider_runtime.py": "4a6b5f3900e58d40300d2e84f8af0492780d79909ff2b6ffd09f926c1ae3f32a",
+    "src/rag_app/product/live_acceptance.py": "06935cd1f001e3726551019083a97dce4f5d2ff6074aba47fa4ed5bab47c3677",
+    "src/rag_app/product/live_acceptance_backend.py": "c7adcb74ff3abbf946e1e085d401a97432c3ef22e5f640fcaffa67d1df7fbaf8"
+  }
+}
