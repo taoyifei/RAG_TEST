@@ -20,56 +20,66 @@
   "estimate_semantics": "estimated 是仓库 Unicode code point 启发式输入估算，不是账单 usage，也不保证供应商 Token 严格上界。planned 重排按作用域全部可能候选（受原候选上限约束），不读取标准答案；capped_max 另计候选重复 query 余量。",
   "lower_bound_semantics": "仅保留必须实际 HTTP 的 canary 和两路查询；未证实文档缓存与候选命中时允许文档/重排为零下限，不作为完整扩额建议。",
   "history": {
-    "total": 17,
-    "reserved": 16,
-    "forwarded": 16,
-    "locally_blocked": 1,
-    "estimated_input_tokens": 501,
-    "observed_tokens": 709,
+    "total": 419,
+    "reserved": 226,
+    "forwarded": 226,
+    "locally_blocked": 193,
+    "estimated_input_tokens": 64311,
+    "observed_tokens": 64510,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
-    "locally_blocked_estimated_tokens": 19,
+    "locally_blocked_estimated_tokens": 3169,
     "campaign_id": "p11-20260905-public-synthetic",
     "authorization_id": "p11-20260904-existing-25-1000",
-    "request_limit": 25,
-    "estimated_token_limit": 1000,
-    "provider_request_limits": {},
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
+    "provider_request_limits": {
+      "aliyun": 123,
+      "jina": 316
+    },
     "provider_token_limits": {
-      "aliyun": 600,
-      "jina": 600
+      "aliyun": 13719,
+      "jina": 132142
     },
     "step_request_limits": {
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_document_retest_20260906": 1,
-      "aliyun_query_canary": 1
+      "aliyun_query_canary": 1,
+      "citation_quality": 396,
+      "dual_index": 6,
+      "historical": 6,
+      "jina_connection": 3,
+      "primary_query": 6,
+      "recovery": 9,
+      "standby_failover": 6
     },
     "providers": {
       "aliyun": {
-        "total": 9,
-        "reserved": 8,
-        "forwarded": 8,
-        "locally_blocked": 1,
-        "estimated_input_tokens": 248,
-        "observed_tokens": 196,
+        "total": 56,
+        "reserved": 49,
+        "forwarded": 49,
+        "locally_blocked": 7,
+        "estimated_input_tokens": 5092,
+        "observed_tokens": 3001,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
-        "locally_blocked_estimated_tokens": 19
+        "locally_blocked_estimated_tokens": 679
       },
       "jina": {
-        "total": 8,
-        "reserved": 8,
-        "forwarded": 8,
-        "locally_blocked": 0,
-        "estimated_input_tokens": 253,
-        "observed_tokens": 513,
+        "total": 363,
+        "reserved": 177,
+        "forwarded": 177,
+        "locally_blocked": 186,
+        "estimated_input_tokens": 59219,
+        "observed_tokens": 61509,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 1,
         "unknown_forwarding_attempts": 0,
-        "locally_blocked_estimated_tokens": 0
+        "locally_blocked_estimated_tokens": 2490
       }
     },
     "steps": {
@@ -133,6 +143,18 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "citation_quality": {
+        "total": 378,
+        "reserved": 198,
+        "forwarded": 198,
+        "locally_blocked": 180,
+        "estimated_input_tokens": 63308,
+        "observed_tokens": 62551,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 2400
+      },
       "dual_index": {
         "total": 2,
         "reserved": 2,
@@ -168,20 +190,56 @@
         "unknown_usage_attempts": 0,
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
+      },
+      "primary_query": {
+        "total": 4,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 96,
+        "observed_tokens": 378,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "recovery": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 108,
+        "observed_tokens": 390,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 660
+      },
+      "standby_failover": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 298,
+        "observed_tokens": 482,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 90
       }
     }
   },
   "current_authorization": {
-    "request_limit": 25,
-    "estimated_token_limit": 1000,
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
     "provider_token_limits": {
-      "aliyun": 600,
-      "jina": 600
+      "aliyun": 13719,
+      "jina": 132142
     },
-    "used_requests": 16,
-    "used_estimated_tokens": 501,
-    "remaining_requests": 9,
-    "remaining_estimated_tokens": 499
+    "used_requests": 226,
+    "used_estimated_tokens": 64311,
+    "remaining_requests": 213,
+    "remaining_estimated_tokens": 81550
   },
   "operations": [
     {
@@ -740,11 +798,11 @@
           "estimated_input_tokens": 132023
         }
       },
-      "current_token_limit": 600,
-      "used_estimated_tokens": 253,
-      "remaining_estimated_tokens": 347,
-      "cumulative_capped_requests": 320,
-      "cumulative_capped_estimated_tokens": 132276
+      "current_token_limit": 132142,
+      "used_estimated_tokens": 59219,
+      "remaining_estimated_tokens": 72923,
+      "cumulative_capped_requests": 489,
+      "cumulative_capped_estimated_tokens": 191242
     },
     "aliyun": {
       "additional_work": {
@@ -761,23 +819,23 @@
           "estimated_input_tokens": 13523
         }
       },
-      "current_token_limit": 600,
-      "used_estimated_tokens": 248,
-      "remaining_estimated_tokens": 352,
-      "cumulative_capped_requests": 124,
-      "cumulative_capped_estimated_tokens": 13771
+      "current_token_limit": 13719,
+      "used_estimated_tokens": 5092,
+      "remaining_estimated_tokens": 8627,
+      "cumulative_capped_requests": 165,
+      "cumulative_capped_estimated_tokens": 18615
     }
   },
   "proposed_cumulative_limits": {
-    "request_limit": 444,
-    "estimated_token_limit": 146047,
+    "request_limit": 654,
+    "estimated_token_limit": 209857,
     "provider_request_limits": {
-      "jina": 320,
-      "aliyun": 124
+      "jina": 489,
+      "aliyun": 165
     },
     "provider_token_limits": {
-      "jina": 132276,
-      "aliyun": 13771
+      "jina": 191242,
+      "aliyun": 18615
     },
     "step_request_limits": {
       "aliyun_document_canary": 2,
@@ -785,13 +843,13 @@
       "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_document_retest_20260906": 1,
       "aliyun_query_canary": 2,
+      "citation_quality": 594,
       "dual_index": 8,
       "historical": 6,
       "jina_connection": 6,
-      "citation_quality": 396,
-      "primary_query": 6,
-      "standby_failover": 6,
-      "recovery": 9
+      "primary_query": 10,
+      "recovery": 13,
+      "standby_failover": 10
     }
   },
   "local_fault_injection": {
@@ -988,6 +1046,6 @@
   "profile_revalidation": "审批前与执行前重跑同一命令并核对身份；变化即失效，历史不清零。",
   "history_evidence": {
     "path": "release/p11-blocker-diagnosis.json",
-    "sha256": "be1d332e532790e6304288143592f13ddb0f3b5a4ae3aaf4c5f5722ac9a6a900"
+    "sha256": "b62726ef8d0529535187f690770e9c3012dd3851e1b3e57969d03faab751211d"
   }
 }

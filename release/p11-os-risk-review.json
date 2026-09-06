@@ -3,17 +3,17 @@
   "review_status": "UNDER_INVESTIGATION",
   "generated_at": "2026-09-05T19:41:47.170091+00:00",
   "scan": {
-    "image_id": "sha256:6531486ec9387c5631c9d8242e9c9d02e494f49cf04ffeec6ecc77e03b6a1c2d",
-    "sha256": "0d9e5cb193a7d3b6370ba811f5643ffe7835552ed32d736f660c663df7ab5ab4",
-    "scanned_at": "2026-09-06T07:42:43.483047026Z",
+    "image_id": "sha256:1a0fe6cffebb844bb1274ee34546a63f126b41906cbd5c3a9150973404c9be25",
+    "sha256": "23271873eaa1d4c90efa5d7774fbe409ba6b3df69e0968483961c6606e46b656",
+    "scanned_at": "2026-09-06T09:11:06.540024974Z",
     "scanner_version": "0.74.0",
     "db_updated_at": "2026-09-06T07:00:11.537152697Z",
     "db_metadata": {
-      "path": "artifacts/p11-final/quality-record-fix/security/20260906T074152601560Z/trivy-db-metadata.json",
-      "sha256": "dcf10297d5e4fb68cdeb33f4dd097abecb585954fce97b5cd2a0d71bbe3027c1"
+      "path": "artifacts/p11-final/pilot-fix/security/20260906T090951576253Z/trivy-db-metadata.json",
+      "sha256": "de930f1d22a07e58de5af6630ebdc21c5205ff5e03ea8ce8ee4a6080e5c07258"
     }
   },
-  "scan_path": "artifacts/p11-final/quality-record-fix/security/20260906T074152601560Z/trivy-all.json",
+  "scan_path": "artifacts/p11-final/pilot-fix/security/20260906T090951576253Z/trivy-all.json",
   "summary": {
     "raw_findings": 179,
     "raw_high_critical": 54,
@@ -134,6 +134,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -222,6 +246,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -310,6 +358,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -398,6 +470,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -486,6 +582,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -574,6 +694,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -662,6 +806,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -750,6 +918,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -838,6 +1030,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -926,6 +1142,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1014,6 +1254,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1102,6 +1366,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1190,6 +1478,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1278,6 +1590,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1366,6 +1702,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1454,6 +1814,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1542,6 +1926,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1630,6 +2038,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1718,6 +2150,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1806,6 +2262,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1894,6 +2374,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -1982,6 +2486,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2070,6 +2598,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2158,6 +2710,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2246,6 +2822,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2334,6 +2934,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 systemd-homed 与 homectl 均不存在；libsystemd0/libudev1 的源包扫描记录仍保留，组件缺失未转换为自动豁免。"
@@ -2423,6 +3047,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2511,6 +3159,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 systemd-homed 与 homectl 均不存在；libsystemd0/libudev1 的源包扫描记录仍保留，组件缺失未转换为自动豁免。"
@@ -2600,6 +3272,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2688,6 +3384,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2776,6 +3496,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2864,6 +3608,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -2952,6 +3720,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3040,6 +3832,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3128,6 +3944,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3216,6 +4056,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3304,6 +4168,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3392,6 +4280,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3480,6 +4392,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3568,6 +4504,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3656,6 +4616,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3744,6 +4728,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -3832,6 +4840,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -3921,6 +4953,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4010,6 +5066,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "additional_evidence": "被检查镜像是 amd64、Python 指针 64 位；尚未独立核验 Perl 构建 SSize_t，不能仅凭 Python 位宽形成 Perl 豁免。",
@@ -4100,6 +5180,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4189,6 +5293,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4278,6 +5406,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4367,6 +5519,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4456,6 +5632,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ],
       "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
@@ -4545,6 +5745,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -4633,6 +5857,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -4721,6 +5969,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     },
@@ -4809,6 +6081,30 @@
         {
           "path": "artifacts/p11-final/security-probe-current-2a.json",
           "sha256": "19ae30279c77a7d130cefb31da37a06eefc76a63df5fb6659b6cb7f63b1e12c3"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+          "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+          "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+        },
+        {
+          "path": "artifacts/p11-final/kb-identity-fix/candidate-capabilities.json",
+          "sha256": "721975066b458c59b6d296865839ee1bba577a595d56173405b52ffc35e0ce16"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+          "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+          "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+        },
+        {
+          "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+          "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
         }
       ]
     }
@@ -4834,8 +6130,8 @@
     "sha256": "0932c1699a5b5751b421de8656f1f2751f9f9da73c75ac7da1af3a160e802dfb"
   },
   "candidate_capabilities": {
-    "path": "artifacts/p11-r5/candidate-capabilities.json",
-    "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a"
+    "path": "artifacts/p11-final/pilot-fix/candidate-capabilities.json",
+    "sha256": "bb7d169fdc5ea063073c31041940872127eb93c0b081cae1390c3b5a1235a83a"
   },
   "advisory_evidence_reuse": {
     "reason": "本轮同日下载的18份官方公告快照逐项复核；新候选CVE/包/安装版本集合与原扫描一致，源包版本全部匹配公告中trixie或trixie-security的vulnerable行。未沿用任何风险接受。",
@@ -4920,9 +6216,65 @@
         "objective_dispositions": 0,
         "status": "BLOCKED"
       }
+    },
+    {
+      "scan": {
+        "image_id": "sha256:6531486ec9387c5631c9d8242e9c9d02e494f49cf04ffeec6ecc77e03b6a1c2d",
+        "sha256": "0d9e5cb193a7d3b6370ba811f5643ffe7835552ed32d736f660c663df7ab5ab4",
+        "scanned_at": "2026-09-06T07:42:43.483047026Z",
+        "scanner_version": "0.74.0",
+        "db_updated_at": "2026-09-06T07:00:11.537152697Z",
+        "db_metadata": {
+          "path": "artifacts/p11-final/quality-record-fix/security/20260906T074152601560Z/trivy-db-metadata.json",
+          "sha256": "dcf10297d5e4fb68cdeb33f4dd097abecb585954fce97b5cd2a0d71bbe3027c1"
+        }
+      },
+      "scan_path": "artifacts/p11-final/quality-record-fix/security/20260906T074152601560Z/trivy-all.json",
+      "summary": {
+        "raw_findings": 179,
+        "raw_high_critical": 54,
+        "unique_cves": 18,
+        "unique_cve_package_versions": 54,
+        "fixable_high_critical": 0,
+        "without_fix": 54,
+        "reviewed_findings": 54,
+        "under_investigation": 54,
+        "mitigated": 0,
+        "approved_dispositions": 0,
+        "objective_dispositions": 0,
+        "status": "BLOCKED"
+      }
+    },
+    {
+      "scan": {
+        "image_id": "sha256:f9ac67be775282ac780b9a5df6001229ef66dbf5b6b37098398eb7ddf7597fd1",
+        "sha256": "39136a2598b17de0049e624454847b8f6229ea7afef3a92a36eaf2cdf6874e40",
+        "scanned_at": "2026-09-06T08:38:47.855251747Z",
+        "scanner_version": "0.74.0",
+        "db_updated_at": "2026-09-06T07:00:11.537152697Z",
+        "db_metadata": {
+          "path": "artifacts/p11-final/kb-identity-fix/security/20260906T083802288314Z/trivy-db-metadata.json",
+          "sha256": "925bd73b244869e6406d9a450a767c74e2220298f1a46ebc606f36e95de056bf"
+        }
+      },
+      "scan_path": "artifacts/p11-final/kb-identity-fix/security/20260906T083802288314Z/trivy-all.json",
+      "summary": {
+        "raw_findings": 179,
+        "raw_high_critical": 54,
+        "unique_cves": 18,
+        "unique_cve_package_versions": 54,
+        "fixable_high_critical": 0,
+        "without_fix": 54,
+        "reviewed_findings": 54,
+        "under_investigation": 54,
+        "mitigated": 0,
+        "approved_dispositions": 0,
+        "objective_dispositions": 0,
+        "status": "BLOCKED"
+      }
     }
   ],
-  "updated_at": "2026-09-06T07:48:43.532493+00:00",
+  "updated_at": "2026-09-06T09:13:02.668328+00:00",
   "native_response_fix_recheck": {
     "code_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
     "package_version_tuples_unchanged": true,
@@ -4939,5 +6291,35 @@
     },
     "runtime_probe_image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
     "probe_boundary": "补证对应当前仍运行的2a镜像；新653候选另有完整扫描及兼容性验证。二者包版本相同，未据此自动作出不受影响或风险接受结论。"
+  },
+  "kb_identity_fix_recheck": {
+    "code_sha": "096f598392b9abcad4429090d5e94ba5590ad4af",
+    "package_version_tuples_unchanged": true,
+    "all_os_package_versions_unchanged": true,
+    "review_count": 54,
+    "current_candidate_runtime_probe": {
+      "path": "artifacts/p11-final/kb-identity-fix/runtime-risk-probe.json",
+      "sha256": "4e83d23c10895f4f773bacf140b43ea2f33f605458fd41455d2fad9d86b07152"
+    },
+    "comparison": {
+      "path": "artifacts/p11-final/kb-identity-fix/security-comparison.json",
+      "sha256": "2e6ed52f3792e3481cea6624c7f0dbd8f71ea1dc5774b92f24e9b1deea556c31"
+    },
+    "conclusion": "新候选完整扫描及独立DOC/DOCX/FTS5/TLS探查完成；逐项复核原54包版本与全部88OS包，风险未自动接受。"
+  },
+  "pilot_fix_recheck": {
+    "code_sha": "887276aa06751d27d74ba89fc5301c8d62dc60bc",
+    "package_version_tuples_unchanged": true,
+    "all_os_package_versions_unchanged": true,
+    "review_count": 54,
+    "comparison": {
+      "path": "artifacts/p11-final/pilot-fix/security-comparison.json",
+      "sha256": "016ad1e1d3192f23e4dbfc60357d969358f2c7fb657afe13ddf8e248a9316407"
+    },
+    "current_candidate_runtime_probe": {
+      "path": "artifacts/p11-final/pilot-fix/runtime-risk-probe.json",
+      "sha256": "ab8173552de7ae26480d6607952fe66762a584f656eae63eabfe2506c88aff34"
+    },
+    "conclusion": "新候选重新执行全量扫描和隔离能力探查，54个HC元组及88OS包版本与f9精确一致；人工批准未提供，未自动接受。"
   }
 }

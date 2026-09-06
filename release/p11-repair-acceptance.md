@@ -13,15 +13,15 @@ CODE_FIXES_READY=True
 | RESOLVED_POLICY_CONFORMANCE_READY | PASS | ALL_REQUIRED_PASSED |
 | PROFILE_INDEX_SWITCH_READY | PASS | ALL_REQUIRED_PASSED |
 | PROVIDER_CONNECTIVITY_READY | PASS | ALL_REQUIRED_PASSED |
-| DUAL_SLOT_FUNCTION_READY | FAIL | dual_index, primary_query |
-| FAILOVER_RECOVERY_READY | BLOCKED | standby_failover, recovery |
-| RETRIEVAL_QUALITY_READY | NOT_RUN | citation_quality |
+| DUAL_SLOT_FUNCTION_READY | PASS | ALL_REQUIRED_PASSED |
+| FAILOVER_RECOVERY_READY | PASS | ALL_REQUIRED_PASSED |
+| RETRIEVAL_QUALITY_READY | FAIL | citation_quality |
 | PRODUCT_BROWSER_READY | PASS | ALL_REQUIRED_PASSED |
 | BACKUP_RESTORE_READY | PASS | ALL_REQUIRED_PASSED |
 | SECURITY_READY | BLOCKED | os_risk |
 | CI_READY | PASS | ALL_REQUIRED_PASSED |
-| REMOTE_PRODUCTION_PROFILE_READY | FAIL | DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY |
-| RELEASE_CANDIDATE_READY | FAIL | DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY |
+| REMOTE_PRODUCTION_PROFILE_READY | FAIL | RETRIEVAL_QUALITY_READY |
+| RELEASE_CANDIDATE_READY | FAIL | RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY |
 | P11_READY | FAIL | RELEASE_CANDIDATE_READY |
 
 预算与用量：
@@ -30,56 +30,66 @@ CODE_FIXES_READY=True
 {
   "status": "PASS",
   "cumulative": {
-    "total": 17,
-    "reserved": 16,
-    "forwarded": 16,
-    "locally_blocked": 1,
-    "estimated_input_tokens": 501,
-    "observed_tokens": 709,
+    "total": 419,
+    "reserved": 226,
+    "forwarded": 226,
+    "locally_blocked": 193,
+    "estimated_input_tokens": 64311,
+    "observed_tokens": 64510,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
-    "locally_blocked_estimated_tokens": 19,
+    "locally_blocked_estimated_tokens": 3169,
     "campaign_id": "p11-20260905-public-synthetic",
     "authorization_id": "p11-20260904-existing-25-1000",
-    "request_limit": 25,
-    "estimated_token_limit": 1000,
-    "provider_request_limits": {},
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
+    "provider_request_limits": {
+      "aliyun": 123,
+      "jina": 316
+    },
     "provider_token_limits": {
-      "aliyun": 600,
-      "jina": 600
+      "aliyun": 13719,
+      "jina": 132142
     },
     "step_request_limits": {
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_document_retest_20260906": 1,
-      "aliyun_query_canary": 1
+      "aliyun_query_canary": 1,
+      "citation_quality": 396,
+      "dual_index": 6,
+      "historical": 6,
+      "jina_connection": 3,
+      "primary_query": 6,
+      "recovery": 9,
+      "standby_failover": 6
     },
     "providers": {
       "aliyun": {
-        "total": 9,
-        "reserved": 8,
-        "forwarded": 8,
-        "locally_blocked": 1,
-        "estimated_input_tokens": 248,
-        "observed_tokens": 196,
+        "total": 56,
+        "reserved": 49,
+        "forwarded": 49,
+        "locally_blocked": 7,
+        "estimated_input_tokens": 5092,
+        "observed_tokens": 3001,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
-        "locally_blocked_estimated_tokens": 19
+        "locally_blocked_estimated_tokens": 679
       },
       "jina": {
-        "total": 8,
-        "reserved": 8,
-        "forwarded": 8,
-        "locally_blocked": 0,
-        "estimated_input_tokens": 253,
-        "observed_tokens": 513,
+        "total": 363,
+        "reserved": 177,
+        "forwarded": 177,
+        "locally_blocked": 186,
+        "estimated_input_tokens": 59219,
+        "observed_tokens": 61509,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 1,
         "unknown_forwarding_attempts": 0,
-        "locally_blocked_estimated_tokens": 0
+        "locally_blocked_estimated_tokens": 2490
       }
     },
     "steps": {
@@ -143,6 +153,18 @@ CODE_FIXES_READY=True
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "citation_quality": {
+        "total": 378,
+        "reserved": 198,
+        "forwarded": 198,
+        "locally_blocked": 180,
+        "estimated_input_tokens": 63308,
+        "observed_tokens": 62551,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 2400
+      },
       "dual_index": {
         "total": 2,
         "reserved": 2,
@@ -178,20 +200,56 @@ CODE_FIXES_READY=True
         "unknown_usage_attempts": 0,
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
+      },
+      "primary_query": {
+        "total": 4,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 96,
+        "observed_tokens": 378,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "recovery": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 108,
+        "observed_tokens": 390,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 660
+      },
+      "standby_failover": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 298,
+        "observed_tokens": 482,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 90
       }
     }
   },
   "this_run": {
-    "total": 2,
-    "reserved": 2,
-    "forwarded": 2,
-    "locally_blocked": 0,
-    "estimated_input_tokens": 104,
-    "observed_tokens": 85,
+    "total": 210,
+    "reserved": 120,
+    "forwarded": 120,
+    "locally_blocked": 90,
+    "estimated_input_tokens": 40210,
+    "observed_tokens": 39725,
     "observed_usage_status": "known",
     "unknown_usage_attempts": 0,
     "unknown_forwarding_attempts": 0,
-    "locally_blocked_estimated_tokens": 0
+    "locally_blocked_estimated_tokens": 1200
   },
   "imported_history": {
     "total": 0,
@@ -206,58 +264,285 @@ CODE_FIXES_READY=True
     "locally_blocked_estimated_tokens": 0
   },
   "attempt_ids": [
-    "attempt-8f67222768654383af9584561dc6c844",
-    "attempt-0a9267140d3245c0b9c14b089878a5ee"
+    "attempt-e16ccdba50414893bb0c31354b088615",
+    "attempt-ae55d5f0073149adac85f762e3270ee3",
+    "attempt-16264663450a419da910a3a8db896b3d",
+    "attempt-ee31cb6cfa9e4c24aa73e9709189899c",
+    "attempt-73075d76b3264914b6f2c406ba84f204",
+    "attempt-422636fab1fc43a8a2a49e3240a1a538",
+    "attempt-f585762dafc9409980b536e23b7ce9c6",
+    "attempt-bd2feb8520ce41a991df10c1ade70158",
+    "attempt-8687c2ffa05a410d8caac3e447351e9a",
+    "attempt-117326219157401cbd545f09095dd190",
+    "attempt-31ff7098688c4fd2b0ad7dba73eab7c4",
+    "attempt-cbc5d21d6d814fd394a9e62aa583433f",
+    "attempt-ab0619da7a264126bbd8b828e529bb99",
+    "attempt-b375e43042294aa480c0b129cec2d29f",
+    "attempt-fab8b854297c49f480aa5fa6c55b4ba6",
+    "attempt-445b17a9c17d45d69a757a566d4e55cf",
+    "attempt-4ecbd135e2c747168758b47205994729",
+    "attempt-43df1c91f2344cd3aa81e25ebf1cc024",
+    "attempt-0f6fb340dc5a40d7acc7aac647a7a008",
+    "attempt-f30771e91b8b41908357f19815ba85f6",
+    "attempt-40ea62c8f3bf43c0b5432edc94bc5871",
+    "attempt-4e8507a13297418a98a7e88383a57d3f",
+    "attempt-1cff3265558b40a2b4a92b5e75a6c505",
+    "attempt-6a330efb79274ef8945d2e6ab7369053",
+    "attempt-82ce930272ef46af812e4697dcd14953",
+    "attempt-7fdf3b2574b1492ba3a009f9cee306ad",
+    "attempt-bdf84989cd724c1aa66d515a68ecda8d",
+    "attempt-381bf68cb4614ab38df57c0a567cf736",
+    "attempt-d7c7889190944abbb6e2308f7df861f5",
+    "attempt-998f2eb0a0604ee1a5c3807806b20132",
+    "attempt-ca5d9044d9cd4dc6966fd76542476be6",
+    "attempt-f336e5d65efb4497a81001bc50a25a10",
+    "attempt-9f9ca25a4da041aeb4257971e1cb6919",
+    "attempt-fe268a46e475416a9a530480bb5af839",
+    "attempt-47bafb31a07441328c78b1d3be7d90c7",
+    "attempt-bd7ff487426a482fab71db693525d603",
+    "attempt-6dbcda7f26c542648ffd36bdd3c209fd",
+    "attempt-0138449c2eef48cfa546fe934dae1227",
+    "attempt-f1150b9bca9c4788ace0578f7b0e5502",
+    "attempt-ae6dc8cb9c814ac1914f0229e58ab528",
+    "attempt-e0896ad7e8dc4844b5cb6d6004f908a0",
+    "attempt-b45c3370412b4a82b981f7b8b4542ff6",
+    "attempt-702a97a9e3304bb2aa6664e536bf7590",
+    "attempt-6119a20f5b904006bdb1f4511040879f",
+    "attempt-52cbf9e451fa41ae9bc2e363064b28ba",
+    "attempt-1e533893e316474d8cddc1685e68853c",
+    "attempt-6cee14da6b3541d1920aa4a4f5089010",
+    "attempt-d90e097910e2493fb4614250db7a3bbb",
+    "attempt-0f69e03d74bf4e8d9dc9f2707b6177db",
+    "attempt-bcb6b3d6b7d4498d9d58a4bb2a0579b6",
+    "attempt-6a893c6e85894d928dc004ce441a5fda",
+    "attempt-d4344968df004b31b865d19a109f769e",
+    "attempt-d3f3d2555ffb46818f2a1214ee058c2c",
+    "attempt-2092d4cfc98c4865b227e26b8c959eb8",
+    "attempt-59ae0e7e6c974c0aa937b1998d5e6cbb",
+    "attempt-6126948005dd4f9c9cd3589d8a120ad7",
+    "attempt-0447438e74344071a8975f2c4a46bf37",
+    "attempt-97154a5a96f64ab6a34d5a54e846dd3b",
+    "attempt-877f4b55d483435d99f89a7d67d63005",
+    "attempt-58de5ef8cd3b438e9fedf302c53de365",
+    "attempt-674cba457b2a4e2295cff88657133097",
+    "attempt-61dab5d5b2734d4a8f5d191b206ebeab",
+    "attempt-65e9b2d440514509880e49e6a79beacb",
+    "attempt-d72740a042894e589e80e204bd840d63",
+    "attempt-6cdceffd39c2463e99cd211705f066ca",
+    "attempt-b50d3de6a7d44b6486ecb0c4f25f2f9a",
+    "attempt-3ff1c8c061584be281bac88c03c1f42b",
+    "attempt-c8260c3b4cb94c02976362d530b8e802",
+    "attempt-35374ce38e7c42209bdec6e236fdd6b8",
+    "attempt-406e52d97b684877a2d234210cbcff45",
+    "attempt-9c6809fefc854dbfa13f1d90eccc5eaf",
+    "attempt-74235d94452b497782f7b26450bcdfea",
+    "attempt-a781911a2c4e407dae9473df8df8d2f8",
+    "attempt-b0fc61787fe44019a24c8816e1ec9a84",
+    "attempt-e6bdc6a097e44ba998253d5231ca261c",
+    "attempt-48bf56450de74f4e87df25dbb03ca3f6",
+    "attempt-9355e17c39a8441981afb80fc0528f5e",
+    "attempt-562c5290455543b0ba51ee3121594bdc",
+    "attempt-6aa94b0f31a34550a0ecc5d5df3c8f94",
+    "attempt-ca102ac1b07c4d45bdaf03106aead4dc",
+    "attempt-cd4a2f39eb0947fba8d3aed55cf2c0ff",
+    "attempt-8a25f0faded64a6f84f077b359b9876c",
+    "attempt-d77a13ffa5004cf7977103edb09fbe59",
+    "attempt-99402071d8bd4816a01c0ccd5c743a9f",
+    "attempt-a828ff69ef154bf19aa7cc3dcff253c7",
+    "attempt-1899b1a10f444634b30e7dd91192867e",
+    "attempt-ddbca6caf5074f308905cc63916f2437",
+    "attempt-946fd5291f3e4f99946a3f32c1ae7e77",
+    "attempt-cfa236e64b93406a96b3cf115d1f9dd0",
+    "attempt-4f239c82e1164efb95a0368071334935",
+    "attempt-ae577192b91741fea1138cad0891007d",
+    "attempt-47a596974aa74df0823fd3565c7381e2",
+    "attempt-8ba8e6d5ca1a46918b03db9d01b47f43",
+    "attempt-680bf5c04d574aeeb80b055b3b5e0884",
+    "attempt-19e2c16681054effabd92322d75a0042",
+    "attempt-eac516fcfb084e8da3834c8d9ad0e50c",
+    "attempt-34fb4c499b554700aacd755ae6b8662a",
+    "attempt-d117901e8f424500a79b81f863ba3a6e",
+    "attempt-9a8b882d6e744789bb39db4e39f6715b",
+    "attempt-6ca44b6d190e434ebe08bc0f2829c919",
+    "attempt-8f2f628c591044388b582586e512ac7c",
+    "attempt-2bb01555d31545dfa9c96d23d0a693ae",
+    "attempt-450a34fd6e624ef0b302f217210430ee",
+    "attempt-9b356a787a894617a79a15faea8bb05e",
+    "attempt-d037f337bf064d449c694d2366e1bc51",
+    "attempt-bd6f4fe9f5ed4dfda9660a469aad1c5d",
+    "attempt-e231b1e217b14ce3b009a0429580f9f5",
+    "attempt-901305f3ffdb4e5fb06228e6b6709670",
+    "attempt-dc78d6cfd3aa4a55bfead159777c9c19",
+    "attempt-fcd7325bbf21493eb6645eeeabec3be6",
+    "attempt-5d12267fe5b048749797b041087bbfd5",
+    "attempt-e52c8ba1de814f2a960fc92d51dec3e6",
+    "attempt-cdf247f10798426aa32bc9e3e4ba1346",
+    "attempt-f9e19e43450b465397c6c7c361fe2d14",
+    "attempt-57d2f0bc4f974d71b83c99a689aedd71",
+    "attempt-43cdf5368f5b4c24966661114a514c7d",
+    "attempt-cf3a5fb631ec4935ad87c8943f501ed6",
+    "attempt-b35fbc0d4dfd4c5b86a5f6393ad2b026",
+    "attempt-c552c0e6d8c4461c934227965871fc24",
+    "attempt-fb909f2e5f3d462e93c90341a964c944",
+    "attempt-492d72b7b6ee4e06a4043a5322f8addb",
+    "attempt-a74152292cdd47ca9aecdf39f1b46dc8",
+    "attempt-3de24d1fd84b4cf7a8fe7c5201d21717",
+    "attempt-dca3725542d64ba9bac1ede0cb718a96",
+    "attempt-dfbaa27971394d7785545add618c7eba",
+    "attempt-a6436d10efcf4f06b1645b5932dc8377",
+    "attempt-3e293b51629d47f7a9b43b6962f34043",
+    "attempt-32c162923a6440a79f040bc7e9da4fef",
+    "attempt-85caab32607b486fbf34873aca0d5150",
+    "attempt-40d8b08b38774d6d9b7776ebbefc4400",
+    "attempt-d45119ccbec54936ad3d7151a982b0ed",
+    "attempt-63740af9db53486098c1524a25507644",
+    "attempt-8ec6df6ac32543af9cba3b3acccd742c",
+    "attempt-cce165254ecd4758887cc956e539ea23",
+    "attempt-f73916a6afda441983444cac94efa41c",
+    "attempt-2a0ef6d3b69942e9ad7377eca00cab09",
+    "attempt-bce2bf004b024f30bfc2bb778e27fd64",
+    "attempt-b6f234f53f784fd382b4eff09aeb7408",
+    "attempt-639f8d3f03cd41bd9ba42a30a514c616",
+    "attempt-14c4f17c93fc4f7eb40d8b5f50d0fd0c",
+    "attempt-79d17c32da024a3e8d4bd16e77cb6ec6",
+    "attempt-3a27b523f1d64e1fa6c838aa98b7c1eb",
+    "attempt-0999f16dcc89448d9217083c16389379",
+    "attempt-4c58b384e26a4e50b011ae03af60410f",
+    "attempt-a52273f963de465baa8f3bc1b251f744",
+    "attempt-29a946dc99cf4ded9c7ffdb097425644",
+    "attempt-d4a537e17fca4163b2000c97377ce379",
+    "attempt-4a929879b99142058c000aa1db8e3cb1",
+    "attempt-9148185bfb2e49d48c6cf7b5dbf7c8b5",
+    "attempt-e3d2b12f1277408687a266a067372a1d",
+    "attempt-69154bfe524b43e0a773d6600e3c452a",
+    "attempt-eb0f28b4ba814d2d8e9138953b3721a9",
+    "attempt-46d0affc0a004439b189729213bcfaf7",
+    "attempt-c7e294d3c0274dda80316d93e3d28644",
+    "attempt-667c87f9fcde4400ae570f39fcd2486e",
+    "attempt-23b3ee91efc84054a6bc45a99194e2a9",
+    "attempt-2d50eff8f33149a48fc3cd38d1885432",
+    "attempt-c94ddb76b11c409e911ec8d24a5c8528",
+    "attempt-a75402502f5f49caaf5725a714304228",
+    "attempt-5cb353659d8140b08dabbb0be67677a0",
+    "attempt-d631e7586e104488925bbfe8027e5c84",
+    "attempt-b2d722d67c9842c5b2679ed20daa17e8",
+    "attempt-277ec377452149278f67f8375f7f5137",
+    "attempt-f44c523115c74c5fa14b9fca00eb5eca",
+    "attempt-594e2afa82004493b5a484fb1c21e158",
+    "attempt-c4d254292fd94a28be3b98c42c657260",
+    "attempt-4594c6250a844f31b7ea5d7bb2e8df3d",
+    "attempt-013222a38be24a2ea9fcc8cd1d07e9ea",
+    "attempt-afd89fed40d84141bd3bf224e8740384",
+    "attempt-4c5a914db1b442b28b840a7244b1ebf4",
+    "attempt-5359f9aaeb574872972af6e2715328d3",
+    "attempt-27d06b13490d447fb3ca674024eafba3",
+    "attempt-e812ea05f9a14b4bbc059ea47f08cb2b",
+    "attempt-c8cd356372154eb5b0ef042cd18e329d",
+    "attempt-8b22727ecc6c4aa7a98cea718e78a8e6",
+    "attempt-b00970451c6444e79ca270183b98a4fb",
+    "attempt-7f0f083d4219462fa4af0cf6e63845bc",
+    "attempt-19986b0ac90b46aea60e333050a82d12",
+    "attempt-8739a55de6814f9a8f5cb97f43d6a88c",
+    "attempt-36bc23c7e179495b98ef763b888bf700",
+    "attempt-e2acaae77e0e4041b1071cfd7046411c",
+    "attempt-018a320f9ad849a5be0936009b3244bc",
+    "attempt-9e52ce506d744e818701d4c0d5474a4f",
+    "attempt-8a7a1d3cb1bc4884ab32f4ba120c616a",
+    "attempt-7bc513f527654146a0b382478ca319d2",
+    "attempt-d7eb4024d2ff449cb965f113721253e9",
+    "attempt-958bfc663f384322867591884e2bbf67",
+    "attempt-ecd1124dd5b646aa8169d56ff68f14c9",
+    "attempt-533dc05fe2cb4147b389e596863f62f1",
+    "attempt-77b3027397fa4f5eb52c6d2c530b7657",
+    "attempt-b430b56ebb8f4492b4ccf06fae7633df",
+    "attempt-9d33c9b05d9740449b9e159a92f177ba",
+    "attempt-48be1b2624f3447daf26a82c0facc872",
+    "attempt-52e8188dad0c402d86eef003932ab0f0",
+    "attempt-1a1f637866be40e1936b9d279b953c68",
+    "attempt-c82f85fcbe9b4d79bd67a7b4c0f6535b",
+    "attempt-6c4ee19d50434ab4be841f86b445dbda",
+    "attempt-81b02c0d2ea5435dbbeb4341e31194b4",
+    "attempt-44dc9cd4dc094e5ea9696b04bc48da92",
+    "attempt-3f38bff503af4eb18ca07a1c5a574387",
+    "attempt-7d2e549b610349789c57a05273702878",
+    "attempt-affa8124a8794d36beb4744676de6c3a",
+    "attempt-b58d69bdc3614c74b0853dba67f77fea",
+    "attempt-c51003e3049f407fb009a19a597cbafb",
+    "attempt-e023c951b39846fa98cdb87dda9faff5",
+    "attempt-0e439e1affd64c7283c3aa04448ffb42",
+    "attempt-745a59fd6fec47e8b32d7707b8297d4f",
+    "attempt-453c1302389147a1b6df2bdaf4c421b7",
+    "attempt-2e578fda5c8a40eb897a93ad3a791a4e",
+    "attempt-0b8347f72fba47eab6b90aaaf66b8dca"
   ],
   "providers_this_run": {
     "aliyun": {
-      "total": 1,
-      "reserved": 1,
-      "forwarded": 1,
+      "total": 30,
+      "reserved": 30,
+      "forwarded": 30,
       "locally_blocked": 0,
-      "estimated_input_tokens": 52,
-      "observed_tokens": 48,
+      "estimated_input_tokens": 3190,
+      "observed_tokens": 1692,
       "observed_usage_status": "known",
       "unknown_usage_attempts": 0,
       "unknown_forwarding_attempts": 0,
       "locally_blocked_estimated_tokens": 0
     },
     "jina": {
-      "total": 1,
-      "reserved": 1,
-      "forwarded": 1,
-      "locally_blocked": 0,
-      "estimated_input_tokens": 52,
-      "observed_tokens": 37,
+      "total": 180,
+      "reserved": 90,
+      "forwarded": 90,
+      "locally_blocked": 90,
+      "estimated_input_tokens": 37020,
+      "observed_tokens": 38033,
       "observed_usage_status": "known",
       "unknown_usage_attempts": 0,
       "unknown_forwarding_attempts": 0,
-      "locally_blocked_estimated_tokens": 0
+      "locally_blocked_estimated_tokens": 1200
     }
   },
   "this_turn": {
-    "forwarded": 5,
-    "estimated_input_tokens": 186,
-    "observed_tokens": 319
+    "baseline_forwarded": 16,
+    "baseline_estimated_input_tokens": 501,
+    "baseline_known_observed_tokens": 709,
+    "forwarded": 210,
+    "estimated_input_tokens": 63810,
+    "known_observed_tokens": 63801,
+    "boundary": "用户2026-09-06 08:18明确继续授权后的累计增量，包含失败与重跑"
   },
   "final_acceptance_total_new": {
-    "forwarded": 10,
-    "estimated_input_tokens": 344,
-    "observed_tokens": 467,
     "baseline_forwarded": 6,
-    "baseline_estimated_input_tokens": 157
+    "baseline_estimated_input_tokens": 157,
+    "baseline_known_observed_tokens": 242,
+    "forwarded": 220,
+    "estimated_input_tokens": 64154,
+    "known_observed_tokens": 64268
+  },
+  "latest_repair_rerun": {
+    "baseline_forwarded": 100,
+    "baseline_estimated_input_tokens": 23850,
+    "baseline_known_observed_tokens": 24160,
+    "forwarded": 126,
+    "estimated_input_tokens": 40461,
+    "known_observed_tokens": 40350,
+    "functional_forwarded": 6,
+    "quality_forwarded": 120
   }
 }
 ```
 
 限制：
 
-- 百炼文档/query与Jina文档/query/重排的真实连接验证均PASS；连接证据按当前操作身份复用。
-- 双槽两Provider文档向量和索引任务完成，随后质量记录摘要ValidationError导致步骤FAIL；原失败保留，不能记为双槽PASS。
-- 该两字段代码修复已通过1776项检查/7个CI作业及新653候选镜像门；当前运行App仍2a，待具体目标更新授权。
-- 完整质量预算数值确认仍待回复；本轮仅在原25/1000、每Provider600上限内执行，累计16HTTP/501estimated。
-- 新候选54High/Critical元组18CVE未有效处置，实际责任/期限/附件未提供。
-- 主路、failover/recovery及原30问两路质量未执行；没有release/feature合并。
+- 当前代码887276aa、实际App/候选1a0fe6一致；1825项完整检查和精确SHA 7/7 CI通过，工程门不能替代P11质量。
+- 配置、持久授权与campaign绑定有效；百炼document/query及Jina三操作通过当前身份/24h TTL核对有效复用。
+- 新候选双槽/primary/failover/recovery真实验证PASS；文档向量按原完整项目/模型/slot/策略缓存合同实际复用，查询均真实HTTP。
+- 原30个问题(20正10负)两路60观测完整执行，质量FAIL：两路均positive08漏证据，negative03/05/06误判ANSWERABLE。
+- 两路Recall@5=1不能覆盖拒答缺陷；negative_leakage_at_10=0是禁入文档隔离指标，不表示三个错误准入负例通过。
+- 本次使用已暴露holdout作回归验收，未改标签/阈值，未声称新独立holdout或行业SLA。
+- 累计226HTTP/64311estimated/64510known observed；旧3次usage未知、本地193次/3169estimated单列、unknown forwarding=0；累计上限439/145861及Provider子限额保持不变。
+- 新镜像完整未过滤扫描179发现、54个High/Critical包版本元组、18CVE；无有效客观处置或人工批准，风险仍BLOCKED。
+- 更新前原镜像内容层缺失，commit恢复尝试失败但App未停；export/import回滚镜像逐项验证代码/manifest一致，数据与Secret另备份；最终app-only更新成功，Qdrant未动。
+- 本轮没有release/feature合并，main/Industry未改；没有追加Provider重试或变更范围制造质量通过。
 
 详细证据来源、命令退出码、资产身份见同名 JSON。
 MERGE_TO_MAIN_AUTHORIZED=false。
