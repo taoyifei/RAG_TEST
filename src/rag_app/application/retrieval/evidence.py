@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 
 from rag_app.core.models import (
     Chunk,
@@ -16,6 +16,9 @@ from rag_app.core.models import (
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 
 _RELATIVE_RELEVANCE_FLOOR = 0.98
+_MIN_TABLE_LABEL_LENGTH = 2
+_TableKey = tuple[str, str, str, str, str, tuple[str, ...]]
+_SpanKey = tuple[object, ...]
 
 
 class EvidenceAssembler:
@@ -42,6 +45,7 @@ class EvidenceAssembler:
         unique_chunks = tuple(
             {item.hydrated.chunk.chunk_id: item for item in candidates}.values()
         )
+        table_spans = _table_intersections(unique_chunks, context)
         ordered = unique_chunks
         documents: Counter[str] = Counter()
         sections: Counter[tuple[str, str]] = Counter()
@@ -52,6 +56,7 @@ class EvidenceAssembler:
             policy.dense_semantic_enabled
             and context is not None
             and context.selected_slot is not None
+            and not context.rerank_mode.casefold().startswith("rerank_")
             and unique_chunks
             and all(
                 candidate.contributions
@@ -85,7 +90,10 @@ class EvidenceAssembler:
                 used_spans,
                 context=context,
                 minimum_overlap=relevance_floor,
-                allow_semantic=semantic_only_result,
+                allow_semantic=(
+                    semantic_only_result and candidate.rerank_rank is not None
+                ),
+                table_spans=table_spans.get(chunk.chunk_id),
             ):
                 if len(evidence) >= policy.max_evidence_items:
                     break
@@ -110,38 +118,37 @@ class EvidenceAssembler:
         return tuple(evidence)
 
 
-def _ranked_citable_spans(
+def _ranked_citable_spans(  # noqa: PLR0913
     chunk: Chunk,
     used: set[tuple[object, ...]],
     *,
     context: EvidenceSelectionContext | None,
     minimum_overlap: float,
     allow_semantic: bool,
+    table_spans: set[_SpanKey] | None = None,
 ) -> tuple[tuple[SourceSpan, str, tuple[object, ...]], ...]:
-    selected: list[
-        tuple[float, int, SourceSpan, str, tuple[object, ...]]
-    ] = []
+    selected: list[tuple[float, int, SourceSpan, str, tuple[object, ...]]] = []
     for span in chunk.source_spans:
         if not span.is_citable or span.span_type is SourceSpanKind.SEPARATOR:
             continue
-        key = (
-            chunk.version.document_version_id,
-            span.node_id,
-            span.source_start_char,
-            span.source_end_char,
-            span.span_type.value,
-        )
+        key = _span_key(chunk, span)
         if key in used:
+            continue
+        if table_spans is not None and key not in table_spans:
             continue
         quote = chunk.citation_text[span.chunk_start_char : span.chunk_end_char]
         if not quote.strip():
             continue
         relevance = _span_relevance(quote, context, chunk.role.value)
-        if context is not None and not _span_is_eligible(
-            relevance,
-            context,
-            minimum_overlap,
-            allow_semantic=allow_semantic,
+        if (
+            table_spans is None
+            and context is not None
+            and not _span_is_eligible(
+                relevance,
+                context,
+                minimum_overlap,
+                allow_semantic=allow_semantic,
+            )
         ):
             continue
         selected.append(
@@ -159,6 +166,132 @@ def _ranked_citable_spans(
     return tuple((span, quote, key) for _, _, span, quote, key in selected)
 
 
+def _span_key(chunk: Chunk, span: SourceSpan) -> _SpanKey:
+    return (
+        chunk.version.document_version_id,
+        span.node_id,
+        span.source_start_char,
+        span.source_end_char,
+        span.span_type.value,
+    )
+
+
+def _table_intersections(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext | None,
+) -> dict[str, set[_SpanKey]]:
+    """在同表候选中用唯一行名和列头定位原始单元格。
+
+    只识别具有第零行表头和第零列行名的规则表。标签必须完整出现在
+    查询中，缺失、重复或多坐标请求继续使用原有保守选择。跨 chunk
+    仅共享结构信息，不拼接或重写引用；输出仍受现有 cap 和预算约束。
+    """
+    if context is None or context.query_kind is QueryKind.AMBIGUOUS:
+        return {}
+    tables: dict[_TableKey, dict[tuple[int, int], dict[_SpanKey, str]]] = (
+        defaultdict(lambda: defaultdict(dict))
+    )
+    members: dict[_TableKey, set[str]] = defaultdict(set)
+    invalid: set[_TableKey] = set()
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        if chunk.role.value != "table":
+            continue
+        for span in chunk.source_spans:
+            location = _table_location(chunk, span)
+            if location is None:
+                continue
+            table_key, row, column = location
+            members[table_key].add(chunk.chunk_id)
+            if not _regular_table_grid(chunk):
+                invalid.add(table_key)
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if quote:
+                tables[table_key][row, column][_span_key(chunk, span)] = quote
+    query = context.analysis.normalized_query.casefold()
+    selected: dict[str, set[_SpanKey]] = {}
+    for table_key, cells in tables.items():
+        if table_key in invalid:
+            continue
+        rows = {
+            row
+            for (row, column), values in cells.items()
+            if row > 0 and column == 0 and _label_matches(values, query)
+        }
+        columns = {
+            column
+            for (row, column), values in cells.items()
+            if row == 0 and column > 0 and _label_matches(values, query)
+        }
+        if len(rows) != 1 or len(columns) != 1:
+            continue
+        values = cells.get((next(iter(rows)), next(iter(columns))), {})
+        if not values or len(set(values.values())) != 1:
+            continue
+        for chunk_id in members[table_key]:
+            selected.setdefault(chunk_id, set()).update(values)
+    return selected
+
+
+def _label_matches(values: dict[_SpanKey, str], query: str) -> bool:
+    labels = {value.casefold() for value in values.values()}
+    return len(labels) == 1 and any(
+        len(label) >= _MIN_TABLE_LABEL_LENGTH and label in query
+        for label in labels
+    )
+
+
+def _table_location(
+    chunk: Chunk, span: SourceSpan
+) -> tuple[_TableKey, int, int] | None:
+    if not span.is_citable or span.source_anchor is None:
+        return None
+    path = span.structural_path
+    for index in range(len(path) - 2):
+        if not path[index].startswith("tbl:"):
+            continue
+        row = re.fullmatch(r"tr:(\d+)", path[index + 1])
+        column = re.fullmatch(r"tc:(\d+)", path[index + 2])
+        if row is None or column is None:
+            continue
+        # 嵌套表有独立 group；不能把子表来源投射到外层单元格。
+        if any(part.startswith("tbl:") for part in path[index + 1 :]):
+            continue
+        table_key = (
+            chunk.version.document_id,
+            chunk.version.document_version_id,
+            chunk.neighbor_group_id,
+            chunk.section_id,
+            span.source_anchor.part_uri,
+            path[: index + 1],
+        )
+        return table_key, int(row[1]), int(column[1])
+    return None
+
+
+def _regular_table_grid(chunk: Chunk) -> bool:
+    """物理 tc 位置只用于无合并、无省略列的规则逻辑网格。"""
+    atoms = dict(chunk.metadata).get("atoms", [])
+    if not isinstance(atoms, list):
+        return False
+    for atom in atoms:
+        if not isinstance(atom, dict):
+            return False
+        metadata = atom.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+        coordinates = metadata.get("cell_coordinates", [])
+        if not isinstance(coordinates, list):
+            return False
+        for physical_column, coordinate in enumerate(coordinates):
+            match = re.fullmatch(r"r\d+:c(\d+):rs1:cs1", str(coordinate))
+            if match is None or int(match[1]) != physical_column:
+                return False
+    return True
+
+
 def _span_is_eligible(
     relevance: float,
     context: EvidenceSelectionContext,
@@ -166,7 +299,7 @@ def _span_is_eligible(
     *,
     allow_semantic: bool,
 ) -> bool:
-    if allow_semantic and relevance == 0.0:
+    if allow_semantic:
         return True
     if context.query_kind is QueryKind.AMBIGUOUS:
         return relevance > 0.0
@@ -275,18 +408,12 @@ def _evidence_item(
             chunk.neighbor_group_id if chunk.role.value == "table" else None
         ),
         table_context=chunk.role.value == "table",
-        selection_reason=(
-            candidate.expansion_reason or "retrieval_candidate"
-        ),
+        selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
         retrieval_origins=tuple(
             contribution.channel for contribution in candidate.contributions
         )
-        + (
-            (candidate.expansion_reason,)
-            if candidate.expansion_reason
-            else ()
-        ),
+        + ((candidate.expansion_reason,) if candidate.expansion_reason else ()),
         fusion_rank=candidate.fusion_rank,
         rerank_rank=candidate.rerank_rank,
         quality_flags=(
