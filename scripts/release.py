@@ -36,9 +36,10 @@ _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 _build_budget_plan = cast(
-    Callable[[dict[str, object]], dict[str, object]],
+    Callable[..., dict[str, object]],
     import_module("rag_app.product.budget_plan").build_p11_budget_plan,
 )
+_budget_metadata = import_module("scripts.release_budget")
 _IMAGE = "docx-rag:v1-candidate"
 _QDRANT_IMAGE = "qdrant/qdrant:v1.18.3"
 _QDRANT_TEST_KEY = "test-only-qdrant-key"
@@ -1833,13 +1834,96 @@ def _write_budget_plan(args: argparse.Namespace) -> None:
         <= history.keys()
     ):
         raise ValueError("BUDGET_HISTORY_REQUIRED: 必须提供已核对的累计账。")
-    plan = _build_budget_plan(history)
+    config = {} if args.config is None else _load_evidence(args.config)
+    binding: dict[str, object] = {"actual_profile_bound": False}
+    if config.get("source_profile_revision_id"):
+        instruct, policy, binding = _budget_metadata.resolve_budget_profile(
+            _budget_profile_metadata(args, config), config
+        )
+        plan = _build_budget_plan(
+            history, query_instruct=instruct, retrieval_policy=policy
+        )
+    else:
+        plan = _build_budget_plan(history)
+    plan.update(binding)
     plan["history_evidence"] = {
         "path": str(args.budget_history),
         "sha256": hashlib.sha256(args.budget_history.read_bytes()).hexdigest(),
     }
     _save_evidence(args.plan_output, plan)
     print(f"PROPOSED budget-plan {args.plan_output} activated=false")
+
+
+def _budget_profile_metadata(
+    args: argparse.Namespace, config: dict[str, object]
+) -> dict[str, object]:
+    """原数据库只读快照；容器 /data 只挂已存在数据卷，不碰 Secret。"""
+    payload = _budget_metadata.metadata_request(config)
+    command: tuple[str, ...]
+    if args.container:
+        if config.get("data_dir") != "/data":
+            raise ValueError("BUDGET_DATA_PATH: 容器模式必须引用原 /data。")
+        docker = _required_executable("docker")
+        target = _campaign_container_metadata(docker, args.container)
+        mounts = [
+            item
+            for item in cast(list[dict[str, object]], target["mounts"])
+            if item["Destination"] == "/data"
+        ]
+        if len(mounts) != 1 or mounts[0]["Type"] != "volume":
+            raise ValueError(
+                "BUDGET_DATA_VOLUME: 无唯一已存在的 /data 命名卷。"
+            )
+        reader_image = _capture(
+            (docker, "image", "inspect", "--format", "{{.Id}}", _IMAGE)
+        )
+        command = (
+            docker,
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "--no-healthcheck",
+            "--mount",
+            f"type=volume,src={mounts[0]['Name']},dst=/data,readonly",
+            "--entrypoint",
+            "python",
+            reader_image,
+        )
+    else:
+        data = Path(str(config["data_dir"])).resolve()
+        if data == Path("/data") or Path("/data") in data.parents:
+            raise ValueError(
+                "BUDGET_CONTAINER_REQUIRED: /data 必须指定原容器。"
+            )
+        if not (data / "universal-rag.sqlite3").is_file():
+            raise ValueError("PRODUCT_DATABASE_NOT_FOUND: 原产品数据库不存在。")
+        command = (sys.executable,)
+    try:
+        output = _capture(
+            (*command, "-c", _budget_metadata.METADATA_PROGRAM),
+            input_text=json.dumps(payload),
+        )
+    except subprocess.CalledProcessError as error:
+        detail = str(error.stderr or "")
+        if detail.startswith("BUDGET_READONLY_WAL:"):
+            raise ValueError(
+                "BUDGET_READONLY_WAL: 活动 WAL 需原数据卷的只读容器挂载。"
+            ) from error
+        if detail.startswith("BUDGET_METADATA_CHANGED:"):
+            raise ValueError(
+                "BUDGET_METADATA_CHANGED: 读取期间数据变化，请重新生成计划。"
+            ) from error
+        raise ValueError(
+            "BUDGET_METADATA_READ_FAILED: 无法只读访问原数据库，未生成计划。"
+        ) from error
+    return cast(dict[str, object], json.loads(output))
 
 
 if __name__ == "__main__":
