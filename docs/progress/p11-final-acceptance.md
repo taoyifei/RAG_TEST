@@ -3,7 +3,69 @@
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。
 本轮完成预算 CLI、README/Legacy 与证据接线，并最小修复真实测试暴露的维护比较和百炼响应兼容缺陷。不是 R6，不重做 R1—R5。
 
-## 百炼响应根因与修复（2026-09-06，当前状态）
+## 已授权更新与真实复测（2026-09-06，当前状态）
+
+用户明确回复“允许”后，完成了 app-only 更新和文档 1 次、成功后 query 1 次的真实复测。
+运行实例 `rag-v1-app-1` 与已验证候选现已一致：
+`sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e`。
+App healthy，首页和 /live 均 HTTP 200，没有 RAG_TEST/Mock 环境注入。
+Qdrant 容器、启动时间及重启计数未变；连接、Credential、草稿、migration 与账本在更新前后相同。
+
+旧 App 的 d98a8d 镜像已不在 Docker 本地镜像库；初次检查在停机前停止。
+先 export/import 保留独立回退镜像并离线验证运行时导入，再停止 App 执行现有 Product 一致性备份、
+完整数据卷和独立 Secret 卷归档验证。恢复镜像为
+`docx-rag:p11-native-rollback-20260906t071055z`；
+备份和更新收据在 `artifacts/p11-final/app-update-20260906T071140Z/`，
+根文件系统恢复归档在 `app-update-recovery-20260906T071055Z/`。
+没有覆盖旧备份或清理用户卷，没有产品 SQL migration 变化。
+
+两项真实结果：
+
+| 操作 | HTTP / 维度 | estimated / observed | 请求标识 |
+| --- | --- | --- | --- |
+| embedding.document | 200 / 1024 | 13 / 23 | cda03f57-fa40-9d10-ad17-e4157c88dffd |
+| embedding.query | 200 / 1024 | 106 / 56 | 62ce5101-9bb0-9d2a-8300-56ad7845d7cf |
+
+两项均为 `LIVE_VALIDATION_PASSED`，没有重试；用户密钥、Workspace 和 endpoint_mode 没有改变。
+原文档步骤累计单次额度已经耗尽，因此通过现有 Session/CSRF 预算修订接口，在同一个 campaign
+追加 `aliyun_document_retest_20260906: 1`，没有扩大 25/1000 和每 Provider 600 的累计上限。
+在该单次预算作用域内调用原 `ProductAcceptanceBackend._canary`，
+核对活动授权、开始/结束身份与真实单次 HTTP 收据，再由原 AcceptanceState 追加 canonical 记录。
+没有修改、patch 或注入 Provider、解码器和预算模块，也没有抹去旧失败。
+query 使用原 `scripts/release.py acceptance --resume --live --steps config_check,aliyun_query_canary`；
+原 evidence_is_current 校验通过后复用文档结果，真实执行 query。
+原失败和新成功已从持久 acceptance_steps 中只读核对。
+
+本次授权实际消耗 **2 HTTP / 119 estimated / 79 observed**；
+更新前 9 / 196，当前累计 **11 HTTP / 315 estimated**，
+known observed=390，旧账 3 次 usage 未知、本地拦截 1 次 / estimated 19 单列。
+从本次 P11 最终验收最初的 6 / 157 起算，共新增 5 HTTP / 158 estimated / 148 observed。
+两个获准调用均已完成，不继续未授权收费步骤。
+
+实际草稿仍绑定、未激活；原 30 问两路、标签和阈值不变。
+现有预算入口按最新账本零调用重算，完整计划仍 `PROPOSED`：
+新增 planned=154 / 47653，capped_max=428 / 145546；
+提议累计=439 / 145861，Jina 316 / 132142、百炼 123 / 13719。
+该保守计划尚未扣除刚通过 canary 的可复用工作，不能据此自动重跑；
+后续执行继续按身份/TTL复用有效操作证据，所需累计预算须单独批准。
+
+有效复用修复代码 `b8b2f37bd3e7556fd7088699940300eb099c9a32` 的
+1774 项完整检查、[CI 34017539887](https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887)
+7/7、同一 2a726c 候选的浏览器/重启/Qdrant/恢复/升级与安全扫描结果；
+本轮只改变部署、授权及验收记录，没有源码修改、重建或重复完整测试。
+安全仍有 54 个 High/Critical 包版本元组、18 CVE 待有效处置。
+Jina 本轮未重测，真实双槽、主路、failover/recovery、原 30 问两路质量未执行。
+
+`CODE_FIXES_READY=true`、`P11_READY=false`、`CI_READY=PASS`；
+`FEATURE_MERGE_DONE=false`、`MERGE_TO_MAIN_AUTHORIZED=false`。
+Start SHA 保持 7e46cd9c，工作分支 codex/p11-final-acceptance；
+release/feature 未合并，无本轮 merge SHA，main/Industry 不变。
+当前只剩完整 Live 预算（或明确的下一连续阶段）、OS 风险实际责任人处置和下游真实验收；
+不再要求用户改端点、重复批准已完成更新或重复文档/query 测试。
+
+以下是此前诊断、修复和更新前的历史记录；其中待更新/待复测的描述已由本节完成结果取代。
+
+## 百炼响应根因与修复（2026-09-06，修复阶段记录）
 
 **已确认是代码兼容问题，用户 API 有返回。** 用户授权补一次结构诊断后，
 真实 HTTP 200 响应包含 `output/request_id/usage`，没有 SDK 外包字段 `status_code/code`。

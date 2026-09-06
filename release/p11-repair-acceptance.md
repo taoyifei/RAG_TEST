@@ -12,7 +12,7 @@ CODE_FIXES_READY=True
 | CONNECTION_EDIT_READY | PASS | ALL_REQUIRED_PASSED |
 | RESOLVED_POLICY_CONFORMANCE_READY | PASS | ALL_REQUIRED_PASSED |
 | PROFILE_INDEX_SWITCH_READY | PASS | ALL_REQUIRED_PASSED |
-| PROVIDER_CONNECTIVITY_READY | FAIL | aliyun_document_canary, aliyun_query_canary, jina_connection |
+| PROVIDER_CONNECTIVITY_READY | NOT_RUN | jina_connection |
 | DUAL_SLOT_FUNCTION_READY | NOT_RUN | dual_index, primary_query |
 | FAILOVER_RECOVERY_READY | NOT_RUN | standby_failover, recovery |
 | RETRIEVAL_QUALITY_READY | NOT_RUN | citation_quality |
@@ -20,9 +20,9 @@ CODE_FIXES_READY=True
 | BACKUP_RESTORE_READY | PASS | ALL_REQUIRED_PASSED |
 | SECURITY_READY | BLOCKED | os_risk |
 | CI_READY | PASS | ALL_REQUIRED_PASSED |
-| REMOTE_PRODUCTION_PROFILE_READY | FAIL | PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY |
-| RELEASE_CANDIDATE_READY | FAIL | PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY |
-| P11_READY | FAIL | RELEASE_CANDIDATE_READY |
+| REMOTE_PRODUCTION_PROFILE_READY | NOT_RUN | PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY |
+| RELEASE_CANDIDATE_READY | BLOCKED | PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY |
+| P11_READY | BLOCKED | RELEASE_CANDIDATE_READY |
 
 预算与用量：
 
@@ -30,12 +30,12 @@ CODE_FIXES_READY=True
 {
   "status": "PASS",
   "cumulative": {
-    "total": 10,
-    "reserved": 9,
-    "forwarded": 9,
+    "total": 12,
+    "reserved": 11,
+    "forwarded": 11,
     "locally_blocked": 1,
-    "estimated_input_tokens": 196,
-    "observed_tokens": 311,
+    "estimated_input_tokens": 315,
+    "observed_tokens": 390,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -53,16 +53,17 @@ CODE_FIXES_READY=True
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 6,
-        "reserved": 5,
-        "forwarded": 5,
+        "total": 8,
+        "reserved": 7,
+        "forwarded": 7,
         "locally_blocked": 1,
-        "estimated_input_tokens": 77,
-        "observed_tokens": 69,
+        "estimated_input_tokens": 196,
+        "observed_tokens": 148,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -118,6 +119,30 @@ CODE_FIXES_READY=True
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "aliyun_document_retest_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_query_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -137,8 +162,8 @@ CODE_FIXES_READY=True
     "reserved": 1,
     "forwarded": 1,
     "locally_blocked": 0,
-    "estimated_input_tokens": 13,
-    "observed_tokens": 23,
+    "estimated_input_tokens": 106,
+    "observed_tokens": 56,
     "observed_usage_status": "known",
     "unknown_usage_attempts": 0,
     "unknown_forwarding_attempts": 0,
@@ -157,7 +182,7 @@ CODE_FIXES_READY=True
     "locally_blocked_estimated_tokens": 0
   },
   "attempt_ids": [
-    "attempt-cb15305ef7114f1db7923e715f71a907"
+    "attempt-2cdbb956fc9c4b62b4ec264cd325dc00"
   ],
   "providers_this_run": {
     "aliyun": {
@@ -165,8 +190,8 @@ CODE_FIXES_READY=True
       "reserved": 1,
       "forwarded": 1,
       "locally_blocked": 0,
-      "estimated_input_tokens": 13,
-      "observed_tokens": 23,
+      "estimated_input_tokens": 106,
+      "observed_tokens": 56,
       "observed_usage_status": "known",
       "unknown_usage_attempts": 0,
       "unknown_forwarding_attempts": 0,
@@ -174,25 +199,27 @@ CODE_FIXES_READY=True
     }
   },
   "this_turn": {
-    "forwarded": 3,
-    "estimated_input_tokens": 39,
-    "observed_tokens": 69
+    "forwarded": 2,
+    "estimated_input_tokens": 119,
+    "observed_tokens": 79
   },
-  "latest_diagnostic": {
-    "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
-    "sha256": "3eb2abc66a0fb251bb131058010b2c35e1f89880d69e2ea61eec44cdca549bec"
-  },
-  "latest_operation": "aliyun_document_diagnostic_20260906_2"
+  "final_acceptance_total_new": {
+    "forwarded": 5,
+    "estimated_input_tokens": 158,
+    "observed_tokens": 148,
+    "baseline_forwarded": 6,
+    "baseline_estimated_input_tokens": 157
+  }
 }
 ```
 
 限制：
 
-- 真实百炼返回已证明为有效1024维向量；原canary失败因SDK外包字段误判，修复后的目标实例尚未更新/实测。
-- 当前App与新候选镜像不同；不能用隔离Mock或CI宣称Live通过。
-- 完整实际方案预算仍PROPOSED；累计25/1000及每Provider600不变。原canary单次额度和两次诊断额度已耗尽。
-- 新镜像179条全等级发现，54个High/Critical元组、18CVE全部UNDER_INVESTIGATION。
-- 双槽、failover/recovery、原30问两路真实质量未执行；没有release/feature合并。
+- 运行实例已更新至2a726c，百炼document/query两项真实canary均PASS；原失败和诊断记录仍保留。
+- 本次追加授权仅涵盖文档1次及成功后query1次，恰好2HTTP、零重试；不构成完整质量预算批准。
+- 实际绑定完整预算保持PROPOSED，累计25/1000和每Provider600不变。
+- 同一实际镜像的完整扫描仍有54个High/Critical元组、18CVE待有效处置。
+- Jina本轮未重测；真实双槽、主路、failover/recovery及原30问两路质量未执行。release/feature均未合并。
 
 详细证据来源、命令退出码、资产身份见同名 JSON。
 MERGE_TO_MAIN_AUTHORIZED=false。

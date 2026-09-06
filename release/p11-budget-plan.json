@@ -20,12 +20,12 @@
   "estimate_semantics": "estimated 是仓库 Unicode code point 启发式输入估算，不是账单 usage，也不保证供应商 Token 严格上界。planned 重排按作用域全部可能候选（受原候选上限约束），不读取标准答案；capped_max 另计候选重复 query 余量。",
   "lower_bound_semantics": "仅保留必须实际 HTTP 的 canary 和两路查询；未证实文档缓存与候选命中时允许文档/重排为零下限，不作为完整扩额建议。",
   "history": {
-    "total": 10,
-    "reserved": 9,
-    "forwarded": 9,
+    "total": 12,
+    "reserved": 11,
+    "forwarded": 11,
     "locally_blocked": 1,
-    "estimated_input_tokens": 196,
-    "observed_tokens": 311,
+    "estimated_input_tokens": 315,
+    "observed_tokens": 390,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -43,16 +43,17 @@
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 6,
-        "reserved": 5,
-        "forwarded": 5,
+        "total": 8,
+        "reserved": 7,
+        "forwarded": 7,
         "locally_blocked": 1,
-        "estimated_input_tokens": 77,
-        "observed_tokens": 69,
+        "estimated_input_tokens": 196,
+        "observed_tokens": 148,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -108,6 +109,30 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "aliyun_document_retest_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_query_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -129,10 +154,10 @@
       "aliyun": 600,
       "jina": 600
     },
-    "used_requests": 9,
-    "used_estimated_tokens": 196,
-    "remaining_requests": 16,
-    "remaining_estimated_tokens": 804
+    "used_requests": 11,
+    "used_estimated_tokens": 315,
+    "remaining_requests": 14,
+    "remaining_estimated_tokens": 685
   },
   "operations": [
     {
@@ -713,30 +738,31 @@
         }
       },
       "current_token_limit": 600,
-      "used_estimated_tokens": 77,
-      "remaining_estimated_tokens": 523,
-      "cumulative_capped_requests": 121,
-      "cumulative_capped_estimated_tokens": 13600
+      "used_estimated_tokens": 196,
+      "remaining_estimated_tokens": 404,
+      "cumulative_capped_requests": 123,
+      "cumulative_capped_estimated_tokens": 13719
     }
   },
   "proposed_cumulative_limits": {
-    "request_limit": 437,
-    "estimated_token_limit": 145742,
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
     "provider_request_limits": {
       "jina": 316,
-      "aliyun": 121
+      "aliyun": 123
     },
     "provider_token_limits": {
       "jina": 132142,
-      "aliyun": 13600
+      "aliyun": 13719
     },
     "step_request_limits": {
       "aliyun_document_canary": 2,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
+      "aliyun_query_canary": 2,
       "historical": 6,
       "jina_connection": 3,
-      "aliyun_query_canary": 1,
       "dual_index": 6,
       "citation_quality": 396,
       "primary_query": 6,
@@ -938,6 +964,6 @@
   "profile_revalidation": "审批前与执行前重跑同一命令并核对身份；变化即失效，历史不清零。",
   "history_evidence": {
     "path": "release/p11-blocker-diagnosis.json",
-    "sha256": "3bb992a0bbf668fc7c6dea9715d3adfcdf31e23b158ec22880ccf460740de7f3"
+    "sha256": "3fcef90af152ba04a5e50149332ff5e1dd8d1406b3576278a111f3cd4b57bb7a"
   }
 }

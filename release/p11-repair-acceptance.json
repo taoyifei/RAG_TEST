@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T07:04:44.131489+00:00",
+  "generated_at": "2026-09-06T07:16:25.584149+00:00",
   "identity": {
     "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
     "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
@@ -208,11 +208,11 @@
     },
     "configuration_diagnosis": {
       "path": "release/p11-blocker-diagnosis.json",
-      "sha256": "3bb992a0bbf668fc7c6dea9715d3adfcdf31e23b158ec22880ccf460740de7f3"
+      "sha256": "3fcef90af152ba04a5e50149332ff5e1dd8d1406b3576278a111f3cd4b57bb7a"
     },
     "budget_plan": {
       "path": "release/p11-budget-plan.json",
-      "sha256": "43c954d6ddded1cac9682387437b12671d0049ecf075e38a38c0c9a054d1c3a5"
+      "sha256": "79bab7cfe2e4a8e32d27051cbeedb910cebab6ca947087a87c5d0cafde45e119"
     },
     "os_review": {
       "path": "release/p11-os-risk-review.json",
@@ -298,7 +298,7 @@
       "temporary_p11_volumes": [],
       "remote_production_validation": false
     },
-    "new_provider_http": 3,
+    "new_provider_http": 5,
     "release_path_fix": {
       "diff": "diff --git a/scripts/release.py b/scripts/release.py\nindex db2a964..338ea30 100644\n--- a/scripts/release.py\n+++ b/scripts/release.py\n@@ -198,7 +198,7 @@ def _artifact_directory(evidence_path: Path) -> Path:\n \n     \"\"\"\n     directory = (\n-        evidence_path.parent\n+        evidence_path.resolve().parent\n         / \"security\"\n         / datetime.now(UTC).strftime(\"%Y%m%dT%H%M%S%fZ\")\n     )\n",
       "regression": {
@@ -336,8 +336,8 @@
     },
     "current_runtime": {
       "app": {
-        "id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
-        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "id": "6379163ee729c9fb623c930752d7afa41b16366e1e0cedb75b1d0458acea9894",
+        "image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "running": true,
         "flags": [
           "RAG_PORT=8088",
@@ -351,7 +351,8 @@
               "HostPort": "8088"
             }
           ]
-        }
+        },
+        "health": "healthy"
       },
       "qdrant": {
         "image": "sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
@@ -364,7 +365,7 @@
         }
       },
       "actions": {
-        "app": "NONE",
+        "app": "AUTHORIZED_APP_ONLY_UPDATE",
         "qdrant": "NONE"
       }
     },
@@ -377,8 +378,8 @@
       "sha256": "591ead892399206be9dd24e93bc5059aeefcbb493c1cd4e67ae5fdee37893383"
     },
     "reuse_assessment": {
-      "path": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d"
+      "path": "artifacts/p11-final/native-reuse-assessment.json",
+      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70"
     },
     "feature_merge_done": false,
     "release_merge_done": false,
@@ -414,14 +415,10 @@
       ]
     },
     "authorized_app_update": {
-      "path": "artifacts/p11-final/app-update-20260906T060543Z/update-receipt.json",
-      "sha256": "6e7c765efcb46999927c807e71479a44deddb5c5a5a1ab5358b900a02d18c4a8",
-      "actual_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-      "container_id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
-      "health": "healthy",
-      "backup_directory": "/home/jerry/work/RAG/artifacts/p11-final/app-update-20260906T060543Z/backups",
-      "provider_http": 0,
-      "qdrant_unchanged": true
+      "path": "artifacts/p11-final/app-update-20260906T071140Z/update-receipt.json",
+      "sha256": "6701b963024ec7cdd2e4f6a6644edc0bb5cafe5bd10367c0409477c7999ab332",
+      "actual_image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
+      "status": "UPDATED_AND_VERIFIED"
     },
     "campaign_binding_receipt": {
       "path": "artifacts/p11-final/campaign-binding-receipt.json",
@@ -516,14 +513,6 @@
         "sha256": "c65dfef95e0fc511d180b04fb44fc0af4cd2b9839ae81b27f607d868a1658af3"
       }
     ],
-    "pending_runtime_update": {
-      "container": "rag-v1-app-1",
-      "current_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-      "target_image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
-      "status": "PENDING_TARGET_SPECIFIC_APPROVAL",
-      "sql_migrations_changed": false,
-      "required_backup": "current product and secret volumes; app-only update; Qdrant untouched"
-    },
     "native_validation": {
       "targeted": "131 passed",
       "full_check": "1774 passed, 88 deselected, 4 warnings",
@@ -532,7 +521,7 @@
       "candidate_browser": "5 passed, 3 viewport-exclusive skipped",
       "qdrant_tls_snapshot_restore": "3 passed",
       "upgrade": "7 passed",
-      "provider_http_after_fix": 0,
+      "provider_http_after_fix": 2,
       "check_log": {
         "path": "artifacts/p11-final/check-aliyun-contract-final.log",
         "sha256": "870d9792898b20e826420c6fcdef402351e46d72766b24fdc0a58c620afd2339"
@@ -541,17 +530,54 @@
         "path": "artifacts/p11-final/native-image-compatibility.log",
         "sha256": "0bf3b1d810aefda006fbb2d4345eb12fb8b33edae1bf0c9fbc685141ee310e04"
       }
+    },
+    "previous_authorized_app_update": {
+      "path": "artifacts/p11-final/app-update-20260906T060543Z/update-receipt.json",
+      "sha256": "6e7c765efcb46999927c807e71479a44deddb5c5a5a1ab5358b900a02d18c4a8",
+      "actual_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "container_id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
+      "health": "healthy",
+      "backup_directory": "/home/jerry/work/RAG/artifacts/p11-final/app-update-20260906T060543Z/backups",
+      "provider_http": 0,
+      "qdrant_unchanged": true
+    },
+    "postfix_canary_authorization": {
+      "path": "artifacts/p11-final/postfix-canary-approval.json",
+      "sha256": "dd3a9367983f338ed059538e86b4144c2fc9335c1e27ac0706bd7492c426303b"
+    },
+    "postfix_document_retest": {
+      "path": "artifacts/p11-final/postfix-document-canary.json",
+      "sha256": "7a3d61d8264465536ebbbf10721cf55dea00b77691d3dcc2e5dd76d41ee1647c"
+    },
+    "postfix_query_retest": {
+      "path": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
+      "provider_request_id": "62ce5101-9bb0-9d2a-8300-56ad7845d7cf"
+    },
+    "postfix_retest_execution": {
+      "document_http": 1,
+      "query_http": 1,
+      "retries": 0,
+      "document_budget_step": "aliyun_document_retest_20260906",
+      "query_budget_step": "aliyun_query_canary",
+      "explanation": "原文档step累计单次额度已耗尽。用户明确追加1次后，以同campaign独立额度1的步骤作用域直接调用原ProductAcceptanceBackend._canary；核对活动授权、操作身份、真实单HTTP收据后由原AcceptanceState追加canonical记录。没有修改、patch或注入Provider/解码器/预算模块。query通过原release acceptance续跑，原evidence_is_current校验并复用新文档记录。",
+      "default_canary_limit_unchanged": true,
+      "original_failures_preserved": true
+    },
+    "prior_full_reuse_assessment": {
+      "path": "artifacts/p11-final/reuse-assessment.json",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d"
     }
   },
   "budget": {
     "status": "PASS",
     "cumulative": {
-      "total": 10,
-      "reserved": 9,
-      "forwarded": 9,
+      "total": 12,
+      "reserved": 11,
+      "forwarded": 11,
       "locally_blocked": 1,
-      "estimated_input_tokens": 196,
-      "observed_tokens": 311,
+      "estimated_input_tokens": 315,
+      "observed_tokens": 390,
       "observed_usage_status": "unknown",
       "unknown_usage_attempts": 3,
       "unknown_forwarding_attempts": 0,
@@ -569,16 +595,17 @@
         "aliyun_document_canary": 1,
         "aliyun_document_diagnostic_20260906": 1,
         "aliyun_document_diagnostic_20260906_2": 1,
+        "aliyun_document_retest_20260906": 1,
         "aliyun_query_canary": 1
       },
       "providers": {
         "aliyun": {
-          "total": 6,
-          "reserved": 5,
-          "forwarded": 5,
+          "total": 8,
+          "reserved": 7,
+          "forwarded": 7,
           "locally_blocked": 1,
-          "estimated_input_tokens": 77,
-          "observed_tokens": 69,
+          "estimated_input_tokens": 196,
+          "observed_tokens": 148,
           "observed_usage_status": "unknown",
           "unknown_usage_attempts": 2,
           "unknown_forwarding_attempts": 0,
@@ -634,6 +661,30 @@
           "unknown_forwarding_attempts": 0,
           "locally_blocked_estimated_tokens": 0
         },
+        "aliyun_document_retest_20260906": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 13,
+          "observed_tokens": 23,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        },
+        "aliyun_query_canary": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 106,
+          "observed_tokens": 56,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        },
         "historical": {
           "total": 7,
           "reserved": 6,
@@ -653,8 +704,8 @@
       "reserved": 1,
       "forwarded": 1,
       "locally_blocked": 0,
-      "estimated_input_tokens": 13,
-      "observed_tokens": 23,
+      "estimated_input_tokens": 106,
+      "observed_tokens": 56,
       "observed_usage_status": "known",
       "unknown_usage_attempts": 0,
       "unknown_forwarding_attempts": 0,
@@ -673,7 +724,7 @@
       "locally_blocked_estimated_tokens": 0
     },
     "attempt_ids": [
-      "attempt-cb15305ef7114f1db7923e715f71a907"
+      "attempt-2cdbb956fc9c4b62b4ec264cd325dc00"
     ],
     "providers_this_run": {
       "aliyun": {
@@ -681,8 +732,8 @@
         "reserved": 1,
         "forwarded": 1,
         "locally_blocked": 0,
-        "estimated_input_tokens": 13,
-        "observed_tokens": 23,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
         "observed_usage_status": "known",
         "unknown_usage_attempts": 0,
         "unknown_forwarding_attempts": 0,
@@ -690,15 +741,17 @@
       }
     },
     "this_turn": {
-      "forwarded": 3,
-      "estimated_input_tokens": 39,
-      "observed_tokens": 69
+      "forwarded": 2,
+      "estimated_input_tokens": 119,
+      "observed_tokens": 79
     },
-    "latest_diagnostic": {
-      "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
-      "sha256": "3eb2abc66a0fb251bb131058010b2c35e1f89880d69e2ea61eec44cdca549bec"
-    },
-    "latest_operation": "aliyun_document_diagnostic_20260906_2"
+    "final_acceptance_total_new": {
+      "forwarded": 5,
+      "estimated_input_tokens": 158,
+      "observed_tokens": 148,
+      "baseline_forwarded": 6,
+      "baseline_estimated_input_tokens": 157
+    }
   },
   "checks": {
     "check": {
@@ -1291,51 +1344,104 @@
     },
     "campaign_config": {
       "status": "PASS",
-      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
+      "reason": "LOCAL_CONFIGURATION_VALID",
       "identity": {
         "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
-      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
-      "exit_code": 0,
-      "details": {}
-    },
-    "aliyun_document_canary": {
-      "status": "FAIL",
-      "reason": "INVALID_RESPONSE_CONTRACT",
-      "identity": {
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
-      },
-      "step_identity": "sha256:24fc1b5a7a7bebcd0cd7fa587625a694947ee6860e483c075520e1fcfe0ac5ec",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
-      "exit_code": null,
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
+      "exit_code": 0,
       "details": {
-        "validation_id": "val_93f2091fb2be8c1c9842a6929e3874c0",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": "beijing_dashscope",
+            "workspace_shape_valid": true,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          }
+        },
+        "issues": [],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
+    },
+    "aliyun_document_canary": {
+      "status": "PASS",
+      "reason": "LIVE_VALIDATION_PASSED",
+      "identity": {
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9"
+      },
+      "step_identity": "sha256:537fdaf699f6bbb57b9bd3d57f68dfa529eecd5ce77fdce3f3c8356ac4b38a06",
+      "origin": "有效复用",
+      "evidence": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
+      "exit_code": 0,
+      "details": {
+        "validation_id": "val_8d6a0adb4767d5bb1d8bb464867eebd7",
         "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
         "catalog_version": "2026-09-04.1",
         "operation": "embedding.document",
         "provider_model": "qwen3.7-text-embedding",
         "credential_key_version": 1,
         "request_policy_identity": "sha256:27c9ca9eed8fc924c0c18dd31f7363a8f4687feb9f0b265580411daf10365de4",
-        "started_at": "2026-09-06T06:28:08.227212+00:00",
-        "finished_at": "2026-09-06T06:28:08.655882+00:00",
-        "status": "failed",
-        "http_category": "invalid_contract",
-        "dimension": null,
+        "started_at": "2026-09-06T07:14:30.835136+00:00",
+        "finished_at": "2026-09-06T07:14:31.490965+00:00",
+        "status": "succeeded",
+        "http_category": "live_200",
+        "dimension": 1024,
         "estimated_tokens": 13,
-        "observed_tokens": null,
-        "latency_ms": 428,
-        "safe_error_code": "INVALID_RESPONSE_CONTRACT",
+        "observed_tokens": 23,
+        "latency_ms": 655,
+        "safe_error_code": null,
         "configuration_version": 3,
         "stage": "response_contract",
         "request_dispatched": true,
         "http_status": 200,
         "provider_code": null,
-        "provider_request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+        "provider_request_id": "cda03f57-fa40-9d10-ad17-e4157c88dffd",
         "endpoint_mode": "beijing_dashscope",
         "synthetic_payload_hash": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
         "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
@@ -1347,9 +1453,9 @@
         },
         "attempts": [
           {
-            "attempt_id": "attempt-f089252f53094dec8b5327528268d62a",
+            "attempt_id": "attempt-e5f8bb3afd17492a9c3b2d3c8b61d51a",
             "campaign_id": "p11-20260905-public-synthetic",
-            "step_id": "aliyun_document_canary",
+            "step_id": "aliyun_document_retest_20260906",
             "provider": "aliyun",
             "operation": "embedding.document",
             "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
@@ -1361,20 +1467,20 @@
             "status": "HTTP_SUCCESS",
             "estimated_input_tokens": 13,
             "observed_tokens": 23,
-            "request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+            "request_id": "cda03f57-fa40-9d10-ad17-e4157c88dffd",
             "http_status": 200,
             "safe_code": "HTTP_200",
-            "timestamp": "2026-09-06T06:28:08.269688+00:00",
+            "timestamp": "2026-09-06T07:14:30.872449+00:00",
             "source_identity": null
           }
         ],
         "budget": {
-          "total": 8,
-          "reserved": 7,
-          "forwarded": 7,
+          "total": 11,
+          "reserved": 10,
+          "forwarded": 10,
           "locally_blocked": 1,
-          "estimated_input_tokens": 170,
-          "observed_tokens": 265,
+          "estimated_input_tokens": 209,
+          "observed_tokens": 334,
           "observed_usage_status": "unknown",
           "unknown_usage_attempts": 3,
           "unknown_forwarding_attempts": 0,
@@ -1390,16 +1496,19 @@
           },
           "step_request_limits": {
             "aliyun_document_canary": 1,
+            "aliyun_document_diagnostic_20260906": 1,
+            "aliyun_document_diagnostic_20260906_2": 1,
+            "aliyun_document_retest_20260906": 1,
             "aliyun_query_canary": 1
           },
           "providers": {
             "aliyun": {
-              "total": 4,
-              "reserved": 3,
-              "forwarded": 3,
+              "total": 7,
+              "reserved": 6,
+              "forwarded": 6,
               "locally_blocked": 1,
-              "estimated_input_tokens": 51,
-              "observed_tokens": 23,
+              "estimated_input_tokens": 90,
+              "observed_tokens": 92,
               "observed_usage_status": "unknown",
               "unknown_usage_attempts": 2,
               "unknown_forwarding_attempts": 0,
@@ -1431,6 +1540,247 @@
               "unknown_forwarding_attempts": 0,
               "locally_blocked_estimated_tokens": 0
             },
+            "aliyun_document_diagnostic_20260906": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_document_diagnostic_20260906_2": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_document_retest_20260906": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "historical": {
+              "total": 7,
+              "reserved": 6,
+              "forwarded": 6,
+              "locally_blocked": 1,
+              "estimated_input_tokens": 157,
+              "observed_tokens": 242,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 3,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 19
+            }
+          }
+        },
+        "new_forwarded_http": 1,
+        "new_locally_blocked": 0,
+        "authorized_retest": {
+          "budget_step": "aliyun_document_retest_20260906",
+          "canonical_step": "aliyun_document_canary",
+          "max_http": 1,
+          "prior_failure_retained": true,
+          "approval_revision": "p11-20260906-native-fix-canary"
+        }
+      }
+    },
+    "aliyun_query_canary": {
+      "status": "PASS",
+      "reason": "LIVE_VALIDATION_PASSED",
+      "identity": {
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9"
+      },
+      "step_identity": "sha256:9209250a061d3f2d0c99b42af0909b0d8d9aba3022ca0b37aaf6583c071b87a0",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
+      "exit_code": 0,
+      "details": {
+        "validation_id": "val_de6d12d773e89973400a9a1d71b06c55",
+        "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
+        "catalog_version": "2026-09-04.1",
+        "operation": "embedding.query",
+        "provider_model": "qwen3.7-text-embedding",
+        "credential_key_version": 1,
+        "request_policy_identity": "sha256:22b4302b3445c941f391b6283072212b23a4d199dbdb35b81ab541bd6832af7b",
+        "started_at": "2026-09-06T07:14:42.984290+00:00",
+        "finished_at": "2026-09-06T07:14:43.391631+00:00",
+        "status": "succeeded",
+        "http_category": "live_200",
+        "dimension": 1024,
+        "estimated_tokens": 106,
+        "observed_tokens": 56,
+        "latency_ms": 407,
+        "safe_error_code": null,
+        "configuration_version": 3,
+        "stage": "response_contract",
+        "request_dispatched": true,
+        "http_status": 200,
+        "provider_code": null,
+        "provider_request_id": "62ce5101-9bb0-9d2a-8300-56ad7845d7cf",
+        "endpoint_mode": "beijing_dashscope",
+        "synthetic_payload_hash": "sha256:ad2805c103dccb452b5c0b2c20d8ef52f7c056a83bb2aa67378b94e6f61a24ff",
+        "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
+        "validation_mode": "live",
+        "authorization": {
+          "campaign_id": "p11-20260905-public-synthetic",
+          "authorization_id": "p11-20260904-existing-25-1000",
+          "scope": "p11-public-synthetic-v1"
+        },
+        "attempts": [
+          {
+            "attempt_id": "attempt-2cdbb956fc9c4b62b4ec264cd325dc00",
+            "campaign_id": "p11-20260905-public-synthetic",
+            "step_id": "aliyun_query_canary",
+            "provider": "aliyun",
+            "operation": "embedding.query",
+            "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
+            "payload_identity": "sha256:ad2805c103dccb452b5c0b2c20d8ef52f7c056a83bb2aa67378b94e6f61a24ff",
+            "retry_index": 0,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "status": "HTTP_SUCCESS",
+            "estimated_input_tokens": 106,
+            "observed_tokens": 56,
+            "request_id": "62ce5101-9bb0-9d2a-8300-56ad7845d7cf",
+            "http_status": 200,
+            "safe_code": "HTTP_200",
+            "timestamp": "2026-09-06T07:14:43.024346+00:00",
+            "source_identity": null
+          }
+        ],
+        "budget": {
+          "total": 12,
+          "reserved": 11,
+          "forwarded": 11,
+          "locally_blocked": 1,
+          "estimated_input_tokens": 315,
+          "observed_tokens": 390,
+          "observed_usage_status": "unknown",
+          "unknown_usage_attempts": 3,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 19,
+          "campaign_id": "p11-20260905-public-synthetic",
+          "authorization_id": "p11-20260904-existing-25-1000",
+          "request_limit": 25,
+          "estimated_token_limit": 1000,
+          "provider_request_limits": {},
+          "provider_token_limits": {
+            "aliyun": 600,
+            "jina": 600
+          },
+          "step_request_limits": {
+            "aliyun_document_canary": 1,
+            "aliyun_document_diagnostic_20260906": 1,
+            "aliyun_document_diagnostic_20260906_2": 1,
+            "aliyun_document_retest_20260906": 1,
+            "aliyun_query_canary": 1
+          },
+          "providers": {
+            "aliyun": {
+              "total": 8,
+              "reserved": 7,
+              "forwarded": 7,
+              "locally_blocked": 1,
+              "estimated_input_tokens": 196,
+              "observed_tokens": 148,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 2,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 19
+            },
+            "jina": {
+              "total": 4,
+              "reserved": 4,
+              "forwarded": 4,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 119,
+              "observed_tokens": 242,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 1,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            }
+          },
+          "steps": {
+            "aliyun_document_canary": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_document_diagnostic_20260906": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_document_diagnostic_20260906_2": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_document_retest_20260906": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "aliyun_query_canary": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 106,
+              "observed_tokens": 56,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
             "historical": {
               "total": 7,
               "reserved": 6,
@@ -1449,19 +1799,6 @@
         "new_locally_blocked": 0
       }
     },
-    "aliyun_query_canary": {
-      "status": "BLOCKED",
-      "reason": "BLOCKED_DEPENDENCY",
-      "identity": {
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
-      },
-      "step_identity": "sha256:bb459cceeb80af8eb086aa322bf3753a102853dc59a11b96a3a2327e6bc98484",
-      "origin": "本次执行",
-      "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
-      "exit_code": null,
-      "details": {}
-    },
     "jina_connection": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
@@ -1471,7 +1808,7 @@
       "step_identity": "sha256:1f5b8f7109d90e9b2a09eee0a2d853d86d04164eb849d7625ab432e2c1b81ad5",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1479,15 +1816,15 @@
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:f23c557ced6c92cd5bbd540afd05038c2f689ef6ca987fbcec36a2dc314d4c34",
+      "step_identity": "sha256:cd544f930be6200b9ecf7e916366c9c2902deb7e0df3b88675034874e1717b87",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1495,15 +1832,15 @@
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:a7f0b9c8cccb14283a60fab36f17f983b9f951b526d1670d1212fd3d96036893",
+      "step_identity": "sha256:8ff1ff485a3432e0701dccf4ff737d81efaa3dd3cafda95abb5b0676faf92f86",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1511,15 +1848,15 @@
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:a13d116ce231a93a3c74942a78c74fb7e39d2b14237bcabb5390852b69376034",
+      "step_identity": "sha256:417a6df86cc4484ecc0f2c4e9b4dfbbfa697697f14a4c779055b77b05cbbaa7f",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1527,15 +1864,15 @@
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:b8891f897ce4a318f88ee861f3c6bea7c4b97496379944ed027325c3cae3ea3e",
+      "step_identity": "sha256:c29a95dd34be3a5be1b689d0d037865c582c22298e9d2220ec684c8992202100",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1543,15 +1880,15 @@
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
-      "step_identity": "sha256:4862f325997ce8849441d2b0e9137c851683df759ddc197ddb84a980ef0d51c7",
+      "step_identity": "sha256:cbb97815dd6d2c1b8593a18b88cfd7b580edb040d30bf20a1a635ec3aa418529",
       "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {}
     },
@@ -1559,14 +1896,14 @@
       "status": "BLOCKED",
       "reason": "REQUIRED_STEPS_INCOMPLETE",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:18b665cb41c4c7edc4e25f19278e9cb12bae6c73ef1dbfac256574c15846874c",
+      "step_identity": "sha256:54fc2a8a740815f4ac846d66393357a6c795496a1b66fbe0932a066ffdcc624f",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": null,
       "details": {
         "required_steps": [
@@ -1584,42 +1921,201 @@
     },
     "endpoint_contract": {
       "status": "PASS",
-      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
-      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": 0,
-      "details": {}
+      "details": {
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": "beijing_dashscope",
+            "workspace_shape_valid": true,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          }
+        },
+        "issues": [],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     },
     "connection_configuration": {
       "status": "PASS",
-      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
-      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": 0,
-      "details": {}
+      "details": {
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": "beijing_dashscope",
+            "workspace_shape_valid": true,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          }
+        },
+        "issues": [],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     },
     "campaign_binding": {
       "status": "PASS",
-      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
-      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/live-result.json",
+      "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
       "exit_code": 0,
-      "details": {}
+      "details": {
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
+        "live_allowed": false,
+        "checks": {
+          "source_profile_present_or_not_required": true,
+          "profile_policy_valid": true,
+          "ledger_path_valid": true,
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
+        },
+        "connections": {
+          "jina_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": null,
+            "workspace_shape_valid": null,
+            "api_host_present": null,
+            "api_host_shape_valid": null,
+            "region_supported": null,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          },
+          "aliyun_connection_id": {
+            "connection_exists": true,
+            "connection_enabled": true,
+            "endpoint_mode": "beijing_dashscope",
+            "workspace_shape_valid": true,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
+            "region_supported": true,
+            "credential_metadata_present": true,
+            "credential_version_valid": true,
+            "source_profile_present_or_not_required": true,
+            "profile_connection_match": true,
+            "profile_policy_valid": true,
+            "status": "PASS"
+          }
+        },
+        "issues": [],
+        "http_requests": 0,
+        "secret_decryption": false,
+        "migrations": false
+      }
     }
   },
   "gates": {
@@ -1760,8 +2256,8 @@
       }
     },
     "PROVIDER_CONNECTIVITY_READY": {
-      "status": "FAIL",
-      "reason": "aliyun_document_canary, aliyun_query_canary, jina_connection",
+      "status": "NOT_RUN",
+      "reason": "jina_connection",
       "evidence": [
         "aliyun_document_canary",
         "aliyun_query_canary",
@@ -1924,7 +2420,7 @@
       }
     },
     "REMOTE_PRODUCTION_PROFILE_READY": {
-      "status": "FAIL",
+      "status": "NOT_RUN",
       "reason": "PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY",
       "evidence": [
         "ALIYUN_ENDPOINT_CONTRACT_READY",
@@ -1949,7 +2445,7 @@
       }
     },
     "RELEASE_CANDIDATE_READY": {
-      "status": "FAIL",
+      "status": "BLOCKED",
       "reason": "PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
       "evidence": [
         "AUTHORIZATION_BOUNDARY_READY",
@@ -1993,7 +2489,7 @@
       }
     },
     "P11_READY": {
-      "status": "FAIL",
+      "status": "BLOCKED",
       "reason": "RELEASE_CANDIDATE_READY",
       "evidence": [
         "RELEASE_CANDIDATE_READY"
@@ -2014,14 +2510,14 @@
   },
   "P11_READY": false,
   "CODE_FIXES_READY": true,
-  "overall_release_status": "FAIL",
+  "overall_release_status": "BLOCKED",
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
-    "真实百炼返回已证明为有效1024维向量；原canary失败因SDK外包字段误判，修复后的目标实例尚未更新/实测。",
-    "当前App与新候选镜像不同；不能用隔离Mock或CI宣称Live通过。",
-    "完整实际方案预算仍PROPOSED；累计25/1000及每Provider600不变。原canary单次额度和两次诊断额度已耗尽。",
-    "新镜像179条全等级发现，54个High/Critical元组、18CVE全部UNDER_INVESTIGATION。",
-    "双槽、failover/recovery、原30问两路真实质量未执行；没有release/feature合并。"
+    "运行实例已更新至2a726c，百炼document/query两项真实canary均PASS；原失败和诊断记录仍保留。",
+    "本次追加授权仅涵盖文档1次及成功后query1次，恰好2HTTP、零重试；不构成完整质量预算批准。",
+    "实际绑定完整预算保持PROPOSED，累计25/1000和每Provider600不变。",
+    "同一实际镜像的完整扫描仍有54个High/Critical元组、18CVE待有效处置。",
+    "Jina本轮未重测；真实双槽、主路、failover/recovery及原30问两路质量未执行。release/feature均未合并。"
   ],
   "private_documents_sent": false,
   "live_runner": {
@@ -2085,35 +2581,35 @@
           "migrations": false
         },
         "identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-        "timestamp": "2026-09-06T06:28:08.200979+00:00",
+        "timestamp": "2026-09-06T07:14:42.952216+00:00",
         "provenance": "本次执行"
       },
       "aliyun_document_canary": {
-        "status": "FAIL",
-        "reason": "INVALID_RESPONSE_CONTRACT",
+        "status": "PASS",
+        "reason": "LIVE_VALIDATION_PASSED",
         "evidence": {
-          "validation_id": "val_93f2091fb2be8c1c9842a6929e3874c0",
+          "validation_id": "val_8d6a0adb4767d5bb1d8bb464867eebd7",
           "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
           "catalog_version": "2026-09-04.1",
           "operation": "embedding.document",
           "provider_model": "qwen3.7-text-embedding",
           "credential_key_version": 1,
           "request_policy_identity": "sha256:27c9ca9eed8fc924c0c18dd31f7363a8f4687feb9f0b265580411daf10365de4",
-          "started_at": "2026-09-06T06:28:08.227212+00:00",
-          "finished_at": "2026-09-06T06:28:08.655882+00:00",
-          "status": "failed",
-          "http_category": "invalid_contract",
-          "dimension": null,
+          "started_at": "2026-09-06T07:14:30.835136+00:00",
+          "finished_at": "2026-09-06T07:14:31.490965+00:00",
+          "status": "succeeded",
+          "http_category": "live_200",
+          "dimension": 1024,
           "estimated_tokens": 13,
-          "observed_tokens": null,
-          "latency_ms": 428,
-          "safe_error_code": "INVALID_RESPONSE_CONTRACT",
+          "observed_tokens": 23,
+          "latency_ms": 655,
+          "safe_error_code": null,
           "configuration_version": 3,
           "stage": "response_contract",
           "request_dispatched": true,
           "http_status": 200,
           "provider_code": null,
-          "provider_request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+          "provider_request_id": "cda03f57-fa40-9d10-ad17-e4157c88dffd",
           "endpoint_mode": "beijing_dashscope",
           "synthetic_payload_hash": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
           "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
@@ -2125,9 +2621,9 @@
           },
           "attempts": [
             {
-              "attempt_id": "attempt-f089252f53094dec8b5327528268d62a",
+              "attempt_id": "attempt-e5f8bb3afd17492a9c3b2d3c8b61d51a",
               "campaign_id": "p11-20260905-public-synthetic",
-              "step_id": "aliyun_document_canary",
+              "step_id": "aliyun_document_retest_20260906",
               "provider": "aliyun",
               "operation": "embedding.document",
               "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
@@ -2139,20 +2635,20 @@
               "status": "HTTP_SUCCESS",
               "estimated_input_tokens": 13,
               "observed_tokens": 23,
-              "request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+              "request_id": "cda03f57-fa40-9d10-ad17-e4157c88dffd",
               "http_status": 200,
               "safe_code": "HTTP_200",
-              "timestamp": "2026-09-06T06:28:08.269688+00:00",
+              "timestamp": "2026-09-06T07:14:30.872449+00:00",
               "source_identity": null
             }
           ],
           "budget": {
-            "total": 8,
-            "reserved": 7,
-            "forwarded": 7,
+            "total": 11,
+            "reserved": 10,
+            "forwarded": 10,
             "locally_blocked": 1,
-            "estimated_input_tokens": 170,
-            "observed_tokens": 265,
+            "estimated_input_tokens": 209,
+            "observed_tokens": 334,
             "observed_usage_status": "unknown",
             "unknown_usage_attempts": 3,
             "unknown_forwarding_attempts": 0,
@@ -2168,16 +2664,19 @@
             },
             "step_request_limits": {
               "aliyun_document_canary": 1,
+              "aliyun_document_diagnostic_20260906": 1,
+              "aliyun_document_diagnostic_20260906_2": 1,
+              "aliyun_document_retest_20260906": 1,
               "aliyun_query_canary": 1
             },
             "providers": {
               "aliyun": {
-                "total": 4,
-                "reserved": 3,
-                "forwarded": 3,
+                "total": 7,
+                "reserved": 6,
+                "forwarded": 6,
                 "locally_blocked": 1,
-                "estimated_input_tokens": 51,
-                "observed_tokens": 23,
+                "estimated_input_tokens": 90,
+                "observed_tokens": 92,
                 "observed_usage_status": "unknown",
                 "unknown_usage_attempts": 2,
                 "unknown_forwarding_attempts": 0,
@@ -2209,6 +2708,242 @@
                 "unknown_forwarding_attempts": 0,
                 "locally_blocked_estimated_tokens": 0
               },
+              "aliyun_document_diagnostic_20260906": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_document_diagnostic_20260906_2": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_document_retest_20260906": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "historical": {
+                "total": 7,
+                "reserved": 6,
+                "forwarded": 6,
+                "locally_blocked": 1,
+                "estimated_input_tokens": 157,
+                "observed_tokens": 242,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 3,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 19
+              }
+            }
+          },
+          "new_forwarded_http": 1,
+          "new_locally_blocked": 0,
+          "authorized_retest": {
+            "budget_step": "aliyun_document_retest_20260906",
+            "canonical_step": "aliyun_document_canary",
+            "max_http": 1,
+            "prior_failure_retained": true,
+            "approval_revision": "p11-20260906-native-fix-canary"
+          }
+        },
+        "identity": "sha256:537fdaf699f6bbb57b9bd3d57f68dfa529eecd5ce77fdce3f3c8356ac4b38a06",
+        "timestamp": "2026-09-06T07:14:31.518485+00:00",
+        "provenance": "有效复用"
+      },
+      "aliyun_query_canary": {
+        "status": "PASS",
+        "reason": "LIVE_VALIDATION_PASSED",
+        "evidence": {
+          "validation_id": "val_de6d12d773e89973400a9a1d71b06c55",
+          "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
+          "catalog_version": "2026-09-04.1",
+          "operation": "embedding.query",
+          "provider_model": "qwen3.7-text-embedding",
+          "credential_key_version": 1,
+          "request_policy_identity": "sha256:22b4302b3445c941f391b6283072212b23a4d199dbdb35b81ab541bd6832af7b",
+          "started_at": "2026-09-06T07:14:42.984290+00:00",
+          "finished_at": "2026-09-06T07:14:43.391631+00:00",
+          "status": "succeeded",
+          "http_category": "live_200",
+          "dimension": 1024,
+          "estimated_tokens": 106,
+          "observed_tokens": 56,
+          "latency_ms": 407,
+          "safe_error_code": null,
+          "configuration_version": 3,
+          "stage": "response_contract",
+          "request_dispatched": true,
+          "http_status": 200,
+          "provider_code": null,
+          "provider_request_id": "62ce5101-9bb0-9d2a-8300-56ad7845d7cf",
+          "endpoint_mode": "beijing_dashscope",
+          "synthetic_payload_hash": "sha256:ad2805c103dccb452b5c0b2c20d8ef52f7c056a83bb2aa67378b94e6f61a24ff",
+          "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
+          "validation_mode": "live",
+          "authorization": {
+            "campaign_id": "p11-20260905-public-synthetic",
+            "authorization_id": "p11-20260904-existing-25-1000",
+            "scope": "p11-public-synthetic-v1"
+          },
+          "attempts": [
+            {
+              "attempt_id": "attempt-2cdbb956fc9c4b62b4ec264cd325dc00",
+              "campaign_id": "p11-20260905-public-synthetic",
+              "step_id": "aliyun_query_canary",
+              "provider": "aliyun",
+              "operation": "embedding.query",
+              "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
+              "payload_identity": "sha256:ad2805c103dccb452b5c0b2c20d8ef52f7c056a83bb2aa67378b94e6f61a24ff",
+              "retry_index": 0,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "status": "HTTP_SUCCESS",
+              "estimated_input_tokens": 106,
+              "observed_tokens": 56,
+              "request_id": "62ce5101-9bb0-9d2a-8300-56ad7845d7cf",
+              "http_status": 200,
+              "safe_code": "HTTP_200",
+              "timestamp": "2026-09-06T07:14:43.024346+00:00",
+              "source_identity": null
+            }
+          ],
+          "budget": {
+            "total": 12,
+            "reserved": 11,
+            "forwarded": 11,
+            "locally_blocked": 1,
+            "estimated_input_tokens": 315,
+            "observed_tokens": 390,
+            "observed_usage_status": "unknown",
+            "unknown_usage_attempts": 3,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 19,
+            "campaign_id": "p11-20260905-public-synthetic",
+            "authorization_id": "p11-20260904-existing-25-1000",
+            "request_limit": 25,
+            "estimated_token_limit": 1000,
+            "provider_request_limits": {},
+            "provider_token_limits": {
+              "aliyun": 600,
+              "jina": 600
+            },
+            "step_request_limits": {
+              "aliyun_document_canary": 1,
+              "aliyun_document_diagnostic_20260906": 1,
+              "aliyun_document_diagnostic_20260906_2": 1,
+              "aliyun_document_retest_20260906": 1,
+              "aliyun_query_canary": 1
+            },
+            "providers": {
+              "aliyun": {
+                "total": 8,
+                "reserved": 7,
+                "forwarded": 7,
+                "locally_blocked": 1,
+                "estimated_input_tokens": 196,
+                "observed_tokens": 148,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 2,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 19
+              },
+              "jina": {
+                "total": 4,
+                "reserved": 4,
+                "forwarded": 4,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 119,
+                "observed_tokens": 242,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 1,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              }
+            },
+            "steps": {
+              "aliyun_document_canary": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_document_diagnostic_20260906": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_document_diagnostic_20260906_2": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_document_retest_20260906": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "aliyun_query_canary": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 106,
+                "observed_tokens": 56,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
               "historical": {
                 "total": 7,
                 "reserved": 6,
@@ -2226,16 +2961,8 @@
           "new_forwarded_http": 1,
           "new_locally_blocked": 0
         },
-        "identity": "sha256:24fc1b5a7a7bebcd0cd7fa587625a694947ee6860e483c075520e1fcfe0ac5ec",
-        "timestamp": "2026-09-06T06:28:08.684206+00:00",
-        "provenance": "本次执行"
-      },
-      "aliyun_query_canary": {
-        "status": "BLOCKED",
-        "reason": "BLOCKED_DEPENDENCY",
-        "evidence": {},
-        "identity": "sha256:bb459cceeb80af8eb086aa322bf3753a102853dc59a11b96a3a2327e6bc98484",
-        "timestamp": "2026-09-06T06:28:08.698064+00:00",
+        "identity": "sha256:9209250a061d3f2d0c99b42af0909b0d8d9aba3022ca0b37aaf6583c071b87a0",
+        "timestamp": "2026-09-06T07:14:43.419097+00:00",
         "provenance": "本次执行"
       },
       "jina_connection": {
@@ -2249,35 +2976,35 @@
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:f23c557ced6c92cd5bbd540afd05038c2f689ef6ca987fbcec36a2dc314d4c34",
+        "identity": "sha256:cd544f930be6200b9ecf7e916366c9c2902deb7e0df3b88675034874e1717b87",
         "provenance": "未执行"
       },
       "primary_query": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:a7f0b9c8cccb14283a60fab36f17f983b9f951b526d1670d1212fd3d96036893",
+        "identity": "sha256:8ff1ff485a3432e0701dccf4ff737d81efaa3dd3cafda95abb5b0676faf92f86",
         "provenance": "未执行"
       },
       "standby_failover": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:a13d116ce231a93a3c74942a78c74fb7e39d2b14237bcabb5390852b69376034",
+        "identity": "sha256:417a6df86cc4484ecc0f2c4e9b4dfbbfa697697f14a4c779055b77b05cbbaa7f",
         "provenance": "未执行"
       },
       "recovery": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:b8891f897ce4a318f88ee861f3c6bea7c4b97496379944ed027325c3cae3ea3e",
+        "identity": "sha256:c29a95dd34be3a5be1b689d0d037865c582c22298e9d2220ec684c8992202100",
         "provenance": "未执行"
       },
       "citation_quality": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:4862f325997ce8849441d2b0e9137c851683df759ddc197ddb84a980ef0d51c7",
+        "identity": "sha256:cbb97815dd6d2c1b8593a18b88cfd7b580edb040d30bf20a1a635ec3aa418529",
         "provenance": "未执行"
       },
       "final_report": {
@@ -2296,20 +3023,20 @@
             "citation_quality"
           ]
         },
-        "identity": "sha256:18b665cb41c4c7edc4e25f19278e9cb12bae6c73ef1dbfac256574c15846874c",
-        "timestamp": "2026-09-06T06:28:08.743409+00:00",
+        "identity": "sha256:54fc2a8a740815f4ac846d66393357a6c795496a1b66fbe0932a066ffdcc624f",
+        "timestamp": "2026-09-06T07:14:43.461924+00:00",
         "provenance": "本次执行"
       }
     },
     "budget": {
       "status": "PASS",
       "cumulative": {
-        "total": 8,
-        "reserved": 7,
-        "forwarded": 7,
+        "total": 12,
+        "reserved": 11,
+        "forwarded": 11,
         "locally_blocked": 1,
-        "estimated_input_tokens": 170,
-        "observed_tokens": 265,
+        "estimated_input_tokens": 315,
+        "observed_tokens": 390,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 3,
         "unknown_forwarding_attempts": 0,
@@ -2325,16 +3052,19 @@
         },
         "step_request_limits": {
           "aliyun_document_canary": 1,
+          "aliyun_document_diagnostic_20260906": 1,
+          "aliyun_document_diagnostic_20260906_2": 1,
+          "aliyun_document_retest_20260906": 1,
           "aliyun_query_canary": 1
         },
         "providers": {
           "aliyun": {
-            "total": 4,
-            "reserved": 3,
-            "forwarded": 3,
+            "total": 8,
+            "reserved": 7,
+            "forwarded": 7,
             "locally_blocked": 1,
-            "estimated_input_tokens": 51,
-            "observed_tokens": 23,
+            "estimated_input_tokens": 196,
+            "observed_tokens": 148,
             "observed_usage_status": "unknown",
             "unknown_usage_attempts": 2,
             "unknown_forwarding_attempts": 0,
@@ -2366,6 +3096,54 @@
             "unknown_forwarding_attempts": 0,
             "locally_blocked_estimated_tokens": 0
           },
+          "aliyun_document_diagnostic_20260906": {
+            "total": 1,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 13,
+            "observed_tokens": 23,
+            "observed_usage_status": "known",
+            "unknown_usage_attempts": 0,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          },
+          "aliyun_document_diagnostic_20260906_2": {
+            "total": 1,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 13,
+            "observed_tokens": 23,
+            "observed_usage_status": "known",
+            "unknown_usage_attempts": 0,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          },
+          "aliyun_document_retest_20260906": {
+            "total": 1,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 13,
+            "observed_tokens": 23,
+            "observed_usage_status": "known",
+            "unknown_usage_attempts": 0,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          },
+          "aliyun_query_canary": {
+            "total": 1,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 106,
+            "observed_tokens": 56,
+            "observed_usage_status": "known",
+            "unknown_usage_attempts": 0,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          },
           "historical": {
             "total": 7,
             "reserved": 6,
@@ -2385,8 +3163,8 @@
         "reserved": 1,
         "forwarded": 1,
         "locally_blocked": 0,
-        "estimated_input_tokens": 13,
-        "observed_tokens": 23,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
         "observed_usage_status": "known",
         "unknown_usage_attempts": 0,
         "unknown_forwarding_attempts": 0,
@@ -2405,7 +3183,7 @@
         "locally_blocked_estimated_tokens": 0
       },
       "attempt_ids": [
-        "attempt-f089252f53094dec8b5327528268d62a"
+        "attempt-2cdbb956fc9c4b62b4ec264cd325dc00"
       ],
       "providers_this_run": {
         "aliyun": {
@@ -2413,8 +3191,8 @@
           "reserved": 1,
           "forwarded": 1,
           "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
+          "estimated_input_tokens": 106,
+          "observed_tokens": 56,
           "observed_usage_status": "known",
           "unknown_usage_attempts": 0,
           "unknown_forwarding_attempts": 0,
@@ -2428,10 +3206,10 @@
       "evidence": {}
     },
     "selected_steps": [
-      "aliyun_document_canary",
-      "aliyun_query_canary"
+      "aliyun_query_canary",
+      "config_check"
     ],
-    "selected_steps_status": "FAIL",
+    "selected_steps_status": "PASS",
     "overall_release_status": "BLOCKED",
     "CONNECTIVITY_READY": false,
     "QUALITY_READY": "NOT_RUN",
@@ -2441,5 +3219,6 @@
     "MERGE_TO_MAIN_AUTHORIZED": false,
     "private_documents_sent": false
   },
+  "selected_steps_status": "PASS",
   "live_allowed": false
 }

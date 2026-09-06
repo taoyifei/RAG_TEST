@@ -51,20 +51,20 @@
   "secret_decryption": false,
   "migrations": false,
   "schema_version": 1,
-  "generated_at": "2026-09-06T06:40:28.050044+00:00",
-  "source": "current_app_read_only_metadata_and_existing_ledger",
+  "generated_at": "2026-09-06T07:15:26.905842+00:00",
+  "source": "current_candidate_configuration_and_persistent_ledger",
   "original_image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-  "diagnostic_image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+  "diagnostic_image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
   "app_was_running": true,
-  "app_action": "READ_ONLY_DIAGNOSIS",
+  "app_action": "AUTHORIZED_APP_ONLY_UPDATE_COMPLETED",
   "qdrant_action": "NONE",
   "historical_budget": {
-    "total": 10,
-    "reserved": 9,
-    "forwarded": 9,
+    "total": 12,
+    "reserved": 11,
+    "forwarded": 11,
     "locally_blocked": 1,
-    "estimated_input_tokens": 196,
-    "observed_tokens": 311,
+    "estimated_input_tokens": 315,
+    "observed_tokens": 390,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -82,16 +82,17 @@
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
       "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 6,
-        "reserved": 5,
-        "forwarded": 5,
+        "total": 8,
+        "reserved": 7,
+        "forwarded": 7,
         "locally_blocked": 1,
-        "estimated_input_tokens": 77,
-        "observed_tokens": 69,
+        "estimated_input_tokens": 196,
+        "observed_tokens": 148,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -147,6 +148,30 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "aliyun_document_retest_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_query_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -163,8 +188,9 @@
   },
   "source_sha256": "20593022bcbd4d6e7ccfe6b5fae2d72eac15635fad4217be98ae9aa650bec0a5",
   "budget_source": {
-    "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
-    "recorded_at": "2026-09-06T06:44:41.333108+00:00",
-    "no_further_provider_calls": true
-  }
+    "path": "artifacts/p11-final/live-result.json",
+    "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
+    "recorded_at": "2026-09-06T07:14:43.419097+00:00"
+  },
+  "actual_image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
 }
