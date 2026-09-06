@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -22,16 +24,26 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
 )
 from rag_app.composition.product_runtime import build_product_runtime
+from rag_app.core.identifiers import canonical_json
 from rag_app.core.models import RetrievalPolicy
 from rag_app.core.tokenization import estimate_tokens
-from rag_app.product.live_acceptance import AcceptanceState, run_acceptance
+from rag_app.product.live_acceptance import (
+    AcceptanceState,
+    StepResult,
+    run_acceptance,
+)
 from rag_app.product.live_acceptance_backend import (
     ProductAcceptanceBackend,
     _p11_limits,
 )
-from rag_app.product.live_acceptance_payloads import approved_payload_contracts
+from rag_app.product.live_acceptance_payloads import (
+    DOCUMENT_NAME,
+    QUERIES,
+    approved_payload_contracts,
+)
 from rag_app.product.models import ProviderConnection
 from rag_app.product.provider_runtime import build_offline_mock_transport
+from rag_app.product.quality import QualityValidationRecord
 from tests.product_support import (
     ProductHarness,
     activate_hot_standby_profile,
@@ -165,6 +177,95 @@ def test_dual_index_uses_its_own_kb_and_actual_inventory(
     )
     rerun = backend._dual_index()
     assert rerun.evidence["revision_id"] == result.evidence["revision_id"]
+
+
+@pytest.mark.parametrize("step", ["dual_index", "recovery"])
+def test_functional_quality_hashes_validate_and_persist_with_original_gates(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+    step: str,
+) -> None:
+    """真实质量模型及 SQLite 接受裸摘要，Mock 连接不能成为 Live 成功。"""
+    harness, config = configured_product
+    state = AcceptanceState(
+        Path(str(config["state_path"])), "synthetic-campaign"
+    )
+    profile_id = str(config["source_profile_revision_id"])
+    state.resource("profile_revision_id", profile_id)
+    state.resource("revision_id", "synthetic-functional-revision")
+    state.record("primary_query", "synthetic", StepResult("PASS", "TEST"))
+    state.record("standby_failover", "synthetic", StepResult("PASS", "TEST"))
+    backend = ProductAcceptanceBackend(config, state)
+    backend.runtime = harness.runtime
+    backend.observed_half_open = True
+    evidence: dict[str, object] = {
+        "active_index_revision_id": "synthetic-functional-revision",
+        "scope": "public-synthetic-only",
+    }
+
+    backend._record_functional_quality(
+        step, StepResult("PASS", "SYNTHETIC_RESULT"), evidence
+    )
+
+    with sqlite3.connect(
+        harness.runtime.data_dir / "universal-rag.sqlite3"
+    ) as db:
+        rows = db.execute(
+            "SELECT accepted, record_json FROM quality_validation_records "
+            "WHERE profile_revision_id=? ORDER BY rowid",
+            (profile_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    accepted, payload = rows[0]
+    record = QualityValidationRecord.model_validate_json(payload)
+    assert (
+        record.dataset_sha256
+        == hashlib.sha256(
+            canonical_json(
+                {"document": DOCUMENT_NAME, "queries": QUERIES}
+            ).encode()
+        ).hexdigest()
+    )
+    assert (
+        record.artifact_sha256
+        == hashlib.sha256(canonical_json(evidence).encode()).hexdigest()
+    )
+    profile = harness.runtime.control.get_profile(profile_id)
+    assert record.index_fingerprint == profile.index_semantic_fingerprint
+    assert record.serving_fingerprint == profile.serving_fingerprint
+    assert record.run_id == "synthetic-campaign:" + step
+    states = harness.runtime.control.quality.states(profile_id)
+    if step == "dual_index":
+        assert record.kind == "provider_connectivity_verified"
+        assert record.gates == {"required_operations": False}
+        assert accepted == 0
+        assert record.kind not in states
+        return
+    assert record.kind == "dual_slot_function_verified"
+    assert accepted == 1
+    assert states[record.kind] == "live"
+
+    # 摘要格式修复不能把后续失败保留为通过，也不能丢掉历史记录。
+    backend.observed_half_open = False
+    backend._record_functional_quality(
+        step, StepResult("FAIL", "SYNTHETIC_RECOVERY_FAILURE"), evidence
+    )
+    assert record.kind not in harness.runtime.control.quality.states(profile_id)
+    with sqlite3.connect(
+        harness.runtime.data_dir / "universal-rag.sqlite3"
+    ) as db:
+        history = db.execute(
+            "SELECT accepted, record_json FROM quality_validation_records "
+            "WHERE profile_revision_id=? ORDER BY rowid",
+            (profile_id,),
+        ).fetchall()
+    assert [row[0] for row in history] == [1, 0]
+    failed = QualityValidationRecord.model_validate_json(history[-1][1])
+    assert failed.gates == {
+        "primary": True,
+        "standby": True,
+        "failover": False,
+        "isolation": False,
+    }
 
 
 def test_token_estimator_preserves_chinese_and_rerank_fields():

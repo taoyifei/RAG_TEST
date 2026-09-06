@@ -560,8 +560,10 @@ class ProductAcceptanceBackend:
                 run_id=self.state.campaign_id + ":" + step,
                 dataset_sha256=canonical_sha256(
                     {"document": DOCUMENT_NAME, "queries": QUERIES}
+                ).removeprefix("sha256:"),
+                artifact_sha256=canonical_sha256(evidence).removeprefix(
+                    "sha256:"
                 ),
-                artifact_sha256=canonical_sha256(evidence),
                 index_fingerprint=profile.index_semantic_fingerprint,
                 serving_fingerprint=profile.serving_fingerprint,
                 gates=gates,
