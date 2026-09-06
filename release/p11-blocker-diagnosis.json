@@ -59,12 +59,12 @@
   "app_action": "AUTHORIZED_APP_ONLY_UPDATE_COMPLETED",
   "qdrant_action": "NONE",
   "historical_budget": {
-    "total": 12,
-    "reserved": 11,
-    "forwarded": 11,
+    "total": 17,
+    "reserved": 16,
+    "forwarded": 16,
     "locally_blocked": 1,
-    "estimated_input_tokens": 315,
-    "observed_tokens": 390,
+    "estimated_input_tokens": 501,
+    "observed_tokens": 709,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -87,24 +87,24 @@
     },
     "providers": {
       "aliyun": {
-        "total": 8,
-        "reserved": 7,
-        "forwarded": 7,
+        "total": 9,
+        "reserved": 8,
+        "forwarded": 8,
         "locally_blocked": 1,
-        "estimated_input_tokens": 196,
-        "observed_tokens": 148,
+        "estimated_input_tokens": 248,
+        "observed_tokens": 196,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 19
       },
       "jina": {
-        "total": 4,
-        "reserved": 4,
-        "forwarded": 4,
+        "total": 8,
+        "reserved": 8,
+        "forwarded": 8,
         "locally_blocked": 0,
-        "estimated_input_tokens": 119,
-        "observed_tokens": 242,
+        "estimated_input_tokens": 253,
+        "observed_tokens": 513,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 1,
         "unknown_forwarding_attempts": 0,
@@ -172,6 +172,18 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "dual_index": {
+        "total": 2,
+        "reserved": 2,
+        "forwarded": 2,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 104,
+        "observed_tokens": 85,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -183,14 +195,26 @@
         "unknown_usage_attempts": 3,
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 19
+      },
+      "jina_connection": {
+        "total": 3,
+        "reserved": 3,
+        "forwarded": 3,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 82,
+        "observed_tokens": 234,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
       }
     }
   },
   "source_sha256": "20593022bcbd4d6e7ccfe6b5fae2d72eac15635fad4217be98ae9aa650bec0a5",
   "budget_source": {
-    "path": "artifacts/p11-final/live-result.json",
-    "sha256": "24fb251b9b619ef23bc55a42f327acfb2b062c3d36861ea9cafea51a6cf9a61e",
-    "recorded_at": "2026-09-06T07:14:43.419097+00:00"
+    "path": "artifacts/p11-final/dual-index-failure-live.json",
+    "sha256": "24461cc0242080baee161f9a8f2eb7615c7d973c8e639ab5e2a8c9e6974e7acd",
+    "recorded_at": "2026-09-06T07:32:44.420549+00:00"
   },
   "actual_image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
 }

@@ -3,7 +3,82 @@
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。
 本轮完成预算 CLI、README/Legacy 与证据接线，并最小修复真实测试暴露的维护比较和百炼响应兼容缺陷。不是 R6，不重做 R1—R5。
 
-## 已授权更新与真实复测（2026-09-06，当前状态）
+## Jina、双槽及验收记录修复（2026-09-06，当前状态）
+
+用户授权继续后，先在原累计 25 HTTP / 1000 estimated、每 Provider 600 内执行。
+旧 Jina 三项成功记录已超过有效期且 validation_mode=unknown、缺少当前 HTTP 元数据，
+因此按原规则重新验证。Jina 文档向量、查询向量和重排均实际 HTTP 200、PASS；
+百炼 document/query 仍通过现有身份/TTL校验复用，不重复调用。
+当前 `PROVIDER_CONNECTIVITY_READY=PASS`。
+
+随后双槽阶段实际取得两 Provider 的文档向量（各一次 HTTP 200）。
+任务 `job_eeb8916d240dbd057f92da6626f19a59` 完成并激活，
+索引 `irev_fd1953131b0d3f8cddbe525d0313b099` 已建立；
+但验收记录的 dataset_sha256/artifact_sha256 传入了带 `sha256:` 的值，
+与严格裸64位摘要字段不符，触发 ValidationError。
+原步骤仍为 FAIL，primary_query、standby_failover、recovery 按依赖 BLOCKED，
+没有继续真实查询或质量集。
+
+仅修复 `ProductAcceptanceBackend._record_functional_quality` 的两个摘要格式，
+沿用既有 pilot 代码去除前缀的做法；没有放宽 QualityValidationRecord。
+新回归先在 dual_index/recovery 分支实际复现 2 failed / 19 deselected，
+失败日志保留在执行记录，没有伪造磁盘日志路径。
+修复后四个相关测试文件 45 passed；
+完整 `scripts/dev.py check` 为 **1776 passed / 88 deselected / 4 warnings**，
+Ruff、mypy、Google docstrings 通过。
+提交 `cb4f29908ba88d56928d394e7664e419d7d70df4` 已推送，
+[CI 34019734782](https://github.com/taoyifei/RAG_TEST/actions/runs/34019734782)
+精确对应该提交，7/7 jobs 成功。
+
+新候选为 `sha256:6531486ec9387c5631c9d8242e9c9d02e494f49cf04ffeec6ecc77e03b6a1c2d`；
+隔离浏览器、重启持久性、Qdrant/备份恢复、升级、公开 DOCX/受限 DOC/FTS5/loopback TLS 均通过。
+完整未过滤扫描仍为 179 项发现、54 个 High/Critical 包版本元组、18 CVE，
+与前次元组完全相同；原风险 overlay 已绑定本次扫描，人工批准字段未填写。
+实际运行 App 仍为 2a726c、healthy，原 Qdrant 未重启。
+旧镜像另保留 `docx-rag:p11-before-quality-record-fix` 标签；
+没有在未确认新目标前停止或更新 App，也没有再调用 Provider。
+
+主/备用两条成功向量缓存已通过只读元数据检查确认存在，
+文本、项目、slot、模型、维度和策略身份均与本次修复无关。
+源码 AST 核对证明其余 backend 方法没有变化。
+运行身份变化会产生新的验收 KB/索引，现有项目级缓存会严格验证后决定复用；
+这不等于已经实际命中，不能强行改 state 映射、伪造旧身份或用缓存代替真实查询路径。
+证据见 `artifacts/p11-final/quality-record-fix/cache-metadata-before.json`
+及 `reuse-assessment.json`。
+
+本轮新增 **5 HTTP / 186 estimated / 319 observed**（Jina 3 次、双槽 2 次），
+当前累计 **16 HTTP / 501 estimated**，known observed=709，旧账 3 次 usage 未知。
+本地拦截 1 次 / estimated 19 单列；从 Start 前旧账 6 / 157 起共新增 10 / 344，
+known observed 增量为 467。
+实际草稿仍绑定，完整预算仍 PROPOSED，没有扩大累计上限。
+完整30问两路仅查询下限已超过现有总预算，不能缩小样本或阈值完成。
+
+已向用户提出两项具体待决：
+- 完整累计上限 439 HTTP / 145861 estimated，Jina 316 / 132142、百炼 123 / 13719；
+  该数值问题尚未收到明确答复。提议时预算文件保存在
+  `quality-record-fix/budget-proposal-presented-439.json`。
+  后续原 CLI 按16/501重算的保守完整计划为444/146047，仍包含可复用的已通过连接和文档工作；
+  不会把对439方案的批准自动扩大到新数值。执行前依实际身份、缓存及剩余额度决定可执行部分。
+- 按任务书5.1，允许将当前2a726c更新到上述653148候选；先备份当前产品/Secret，
+  仅App短暂停机，Qdrant不重启，没有SQL migration变化，随后在已批准预算内续跑。
+
+安全客观复核已经完成可执行部分。当前实际2a镜像补证文件为
+`artifacts/p11-final/security-probe-current-2a.json`，包含精确程序、原始脱敏stdout、
+哈希及UTC记录区间；它不是新653镜像的运行探查。
+Perl四模块及homed/homectl缺失、64位Perl、当前内核等条件仅用于分组风险评审；
+现有契约要求的官方已修复/不受影响结论未提供，不能自动豁免。
+仍需实际责任人按Perl、util-linux、systemd、SQLite、ncurses、gzip、acl分组，
+审阅覆盖全部54元组的原overlay并给出具体环境、责任、期限和批准附件；
+不要求笼统接受全部风险，不代填人工批准。
+
+当前权威聚合 `CODE_FIXES_READY=true`、`P11_READY=false`，
+连接、CI、浏览器和恢复门PASS；双槽门FAIL，切换/恢复BLOCKED，质量NOT_RUN，安全BLOCKED。
+Start SHA仍7e46cd9c，工作分支codex/p11-final-acceptance；
+release/feature未合并，无本轮merge SHA，main/Industry不变，
+`FEATURE_MERGE_DONE=false`、`MERGE_TO_MAIN_AUTHORIZED=false`。
+以下为此前阶段历史，旧“当前状态/未完成”描述以本节为准。
+
+## 已授权更新与真实复测（2026-09-06，上一阶段记录）
 
 用户明确回复“允许”后，完成了 app-only 更新和文档 1 次、成功后 query 1 次的真实复测。
 运行实例 `rag-v1-app-1` 与已验证候选现已一致：
