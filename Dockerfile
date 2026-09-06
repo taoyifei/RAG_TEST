@@ -43,6 +43,7 @@ COPY requirements.runtime.lock ./
 COPY --from=python-build /wheels /wheels
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends antiword=0.37-17 \
+    && apt-get purge --yes mount \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install \
     --disable-pip-version-check \
