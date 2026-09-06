@@ -24,7 +24,12 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
 )
 from rag_app.composition.product_runtime import build_product_runtime
-from rag_app.core.identifiers import canonical_json
+from rag_app.core.errors import Conflict, NotFound
+from rag_app.core.identifiers import (
+    canonical_json,
+    canonical_sha256,
+    deterministic_id,
+)
 from rag_app.core.models import RetrievalPolicy
 from rag_app.core.tokenization import estimate_tokens
 from rag_app.product.live_acceptance import (
@@ -177,6 +182,179 @@ def test_dual_index_uses_its_own_kb_and_actual_inventory(
     )
     rerun = backend._dual_index()
     assert rerun.evidence["revision_id"] == result.evidence["revision_id"]
+
+
+def test_changed_dual_index_identity_keeps_project_and_resumes_distinct_kb(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+) -> None:
+    """候选身份变化允许新 KB，同身份重跑仍复用已成功的索引任务。"""
+    harness, config = configured_product
+    state = AcceptanceState(
+        Path(str(config["state_path"])), "synthetic-campaign"
+    )
+    backend = ProductAcceptanceBackend(config, state)
+    backend.runtime = harness.runtime
+    first = backend._dual_index()
+    assert first.status == "PASS", first.evidence
+    project_id = str(state.resource("project_id"))
+    old_kb_id = str(state.resource("knowledge_base_id"))
+    old_job_id = str(state.resource("index_job_id"))
+
+    backend.config["candidate_identity"] = "synthetic-new-candidate"
+    second = backend._dual_index()
+    assert second.status == "PASS", second.evidence
+    new_kb_id = str(state.resource("knowledge_base_id"))
+    new_job_id = str(state.resource("index_job_id"))
+    assert state.resource("project_id") == project_id
+    assert new_kb_id != old_kb_id
+    assert new_job_id != old_job_id
+    assert (
+        harness.runtime.sdk.get_knowledge_base(
+            project_id, old_kb_id
+        ).knowledge_base_id
+        == old_kb_id
+    )
+
+    resumed = backend._dual_index()
+    assert resumed.status == "PASS", resumed.evidence
+    assert state.resource("knowledge_base_id") == new_kb_id
+    assert state.resource("index_job_id") == new_job_id
+    assert resumed.evidence["revision_id"] == second.evidence["revision_id"]
+    with sqlite3.connect(
+        harness.runtime.data_dir / "universal-rag.sqlite3"
+    ) as db:
+        assert (
+            db.execute(
+                "SELECT count(*) FROM knowledge_bases WHERE project_id=?",
+                (project_id,),
+            ).fetchone()[0]
+            == 2
+        )
+
+
+def test_dual_index_recovers_knowledge_base_created_with_legacy_identity(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+) -> None:
+    """兼容原 p11-kb 键创建的 KB，不迁移、不改名或另建替代资源。"""
+    harness, config = configured_product
+    state = AcceptanceState(
+        Path(str(config["state_path"])), "synthetic-campaign"
+    )
+    backend = ProductAcceptanceBackend(config, state)
+    backend.runtime = harness.runtime
+    source = harness.runtime.control.get_profile(
+        str(config["source_profile_revision_id"])
+    )
+    identity = canonical_sha256(
+        {
+            "campaign": state.campaign_id,
+            "index": source.index_semantic_fingerprint,
+            "serving": source.serving_fingerprint,
+            "connections": backend.identity("dual_index"),
+        }
+    )
+    project = harness.runtime.sdk.create_project(
+        "P11 公开合成验收",
+        idempotency_key="p11:" + canonical_sha256(state.campaign_id),
+    )
+    legacy_key = "p11-kb:" + identity
+    old_kb = harness.runtime.sdk.create_knowledge_base(
+        project.project_id,
+        "P11 独立验收知识库",
+        description="仅包含仓库内公开合成数据。",
+        idempotency_key=legacy_key,
+    )
+    assert old_kb.knowledge_base_id == deterministic_id(
+        "kb",
+        project.project_id,
+        legacy_key,
+    )
+
+    result = backend._dual_index()
+    assert result.status == "PASS", result.evidence
+    assert state.resource("knowledge_base_id") == old_kb.knowledge_base_id
+    assert (
+        harness.runtime.sdk.get_knowledge_base(
+            project.project_id,
+            old_kb.knowledge_base_id,
+        ).name
+        == "P11 独立验收知识库"
+    )
+
+
+def test_claimed_legacy_key_without_kb_uses_new_key_and_preserves_old_claim(
+    configured_product: tuple[ProductHarness, dict[str, object]],
+) -> None:
+    """重现先认领旧键再名称冲突，恢复不能覆盖认领记录或伪造旧 KB。"""
+    harness, config = configured_product
+    state = AcceptanceState(
+        Path(str(config["state_path"])), "synthetic-campaign"
+    )
+    backend = ProductAcceptanceBackend(config, state)
+    runtime = harness.runtime
+    project = runtime.sdk.create_project(
+        "P11 公开合成验收",
+        idempotency_key="p11:" + canonical_sha256(state.campaign_id),
+    )
+    occupied = runtime.sdk.create_knowledge_base(
+        project.project_id,
+        "P11 独立验收知识库",
+        description="仅包含仓库内公开合成数据。",
+        idempotency_key="synthetic-previous-candidate",
+    )
+    identity = canonical_sha256("synthetic-next-candidate")
+    legacy_key = "p11-kb:" + identity
+    legacy_id = deterministic_id("kb", project.project_id, legacy_key)
+    with pytest.raises(Conflict, match="知识库名称或 ID"):
+        runtime.sdk.create_knowledge_base(
+            project.project_id,
+            "P11 独立验收知识库",
+            description="仅包含仓库内公开合成数据。",
+            idempotency_key=legacy_key,
+        )
+    with pytest.raises(NotFound):
+        runtime.sdk.get_knowledge_base(project.project_id, legacy_id)
+
+    def old_claim() -> tuple[str, str]:
+        with sqlite3.connect(runtime.data_dir / "universal-rag.sqlite3") as db:
+            row = db.execute(
+                "SELECT request_hash, result_id FROM idempotency_records "
+                "WHERE scope_id=? AND operation='knowledge_base.create' "
+                "AND idempotency_key=?",
+                (project.project_id, legacy_key),
+            ).fetchone()
+        assert row is not None
+        return str(row[0]), str(row[1])
+
+    before = old_claim()
+    assert before[1] == legacy_id
+    created = backend._functional_knowledge_base(
+        runtime,
+        project.project_id,
+        identity,
+    )
+    assert created.knowledge_base_id == deterministic_id(
+        "kb",
+        project.project_id,
+        "p11-kb-v2:" + identity,
+    )
+    assert created.name == "P11 独立验收知识库 " + identity
+    assert old_claim() == before
+    assert (
+        runtime.sdk.get_knowledge_base(
+            project.project_id,
+            occupied.knowledge_base_id,
+        )
+        == occupied
+    )
+    assert (
+        backend._functional_knowledge_base(
+            runtime,
+            project.project_id,
+            identity,
+        )
+        == created
+    )
 
 
 @pytest.mark.parametrize("step", ["dual_index", "recovery"])

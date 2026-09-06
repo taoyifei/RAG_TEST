@@ -38,11 +38,12 @@ from rag_app.composition.product_runtime import (
     ProductRuntimeSettings,
     build_product_runtime,
 )
-from rag_app.core.errors import RagError
-from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.errors import NotFound, RagError
+from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
     CircuitKey,
     CircuitState,
+    KnowledgeBase,
     RetrievalPolicy,
     SearchAnswerResult,
 )
@@ -956,11 +957,8 @@ class ProductAcceptanceBackend:
             "P11 公开合成验收",
             idempotency_key="p11:" + canonical_sha256(self.state.campaign_id),
         )
-        kb = runtime.sdk.create_knowledge_base(
-            project.project_id,
-            "P11 独立验收知识库",
-            description="仅包含仓库内公开合成数据。",
-            idempotency_key="p11-kb:" + input_identity,
+        kb = self._functional_knowledge_base(
+            runtime, project.project_id, input_identity
         )
         self.state.resource("project_id", project.project_id)
         self.state.resource("knowledge_base_id", kb.knowledge_base_id)
@@ -1061,6 +1059,35 @@ class ProductAcceptanceBackend:
             "DUAL_SLOT_VERIFIED" if complete else "DUAL_SLOT_INCOMPLETE",
             inspection.model_dump(mode="json"),
         )
+
+    def _functional_knowledge_base(
+        self, runtime: ProductRuntime, project_id: str, input_identity: str
+    ) -> KnowledgeBase:
+        """按验收身份隔离知识库，并保留旧键已创建的资源。
+
+        Args:
+            runtime: 当前产品运行时。
+            project_id: 原 campaign 的项目。
+            input_identity: 当前配置、候选与索引语义的完整身份。
+
+        Returns:
+            可重复续跑的独立验收知识库。
+
+        """
+        legacy_id = deterministic_id(
+            "kb", project_id, "p11-kb:" + input_identity
+        )
+        try:
+            return runtime.sdk.get_knowledge_base(project_id, legacy_id)
+        except NotFound:
+            # 旧固定名称可能已被其他候选占用，且失败创建已认领旧幂等键。
+            # 新名称与新键一起绑定完整身份，避免覆盖旧资源或复用错误请求。
+            return runtime.sdk.create_knowledge_base(
+                project_id,
+                "P11 独立验收知识库 " + input_identity,
+                description="仅包含仓库内公开合成数据。",
+                idempotency_key="p11-kb-v2:" + input_identity,
+            )
 
     def _default_profile(self) -> dict[str, object]:
         primary = self._spec("jina_connection_id")
