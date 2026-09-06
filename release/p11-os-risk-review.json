@@ -3,17 +3,17 @@
   "review_status": "UNDER_INVESTIGATION",
   "generated_at": "2026-09-05T19:41:47.170091+00:00",
   "scan": {
-    "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-    "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b",
-    "scanned_at": "2026-09-05T19:38:29.683633895Z",
+    "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
+    "sha256": "6a0ff64cd5f051ea2a7d30e9467194d16aec72f064238f0d6474827d233b9d0a",
+    "scanned_at": "2026-09-06T06:55:35.084703497Z",
     "scanner_version": "0.74.0",
-    "db_updated_at": "2026-09-05T13:02:41.107875606Z",
+    "db_updated_at": "2026-09-06T01:00:31.976900695Z",
     "db_metadata": {
-      "path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-db-metadata.json",
-      "sha256": "c0ea13d82051131242a4d12e863d0c5e64509878e1b2c94590a10f575bd5726b"
+      "path": "artifacts/p11-final/security/20260906T065413050153Z/trivy-db-metadata.json",
+      "sha256": "4bb04b2c675c5f33801fe03d1ffdeaa268a4d81441cadd4b8e2d3470f7cfc30a"
     }
   },
-  "scan_path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-all.json",
+  "scan_path": "artifacts/p11-final/security/20260906T065413050153Z/trivy-all.json",
   "summary": {
     "raw_findings": 179,
     "raw_high_critical": 54,
@@ -4647,5 +4647,42 @@
     },
     "automatic_dispositions_created": 0,
     "conclusion": "本次基础标签摘要未变；官方 Trixie 条目仍全部 open。候选 Perl 架构及模块、homed 缺失补证已完成，安全门仍为 BLOCKED。"
+  },
+  "scan_history": [
+    {
+      "scan": {
+        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b",
+        "scanned_at": "2026-09-05T19:38:29.683633895Z",
+        "scanner_version": "0.74.0",
+        "db_updated_at": "2026-09-05T13:02:41.107875606Z",
+        "db_metadata": {
+          "path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-db-metadata.json",
+          "sha256": "c0ea13d82051131242a4d12e863d0c5e64509878e1b2c94590a10f575bd5726b"
+        }
+      },
+      "scan_path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-all.json",
+      "summary": {
+        "raw_findings": 179,
+        "raw_high_critical": 54,
+        "unique_cves": 18,
+        "unique_cve_package_versions": 54,
+        "fixable_high_critical": 0,
+        "without_fix": 54,
+        "reviewed_findings": 54,
+        "under_investigation": 54,
+        "mitigated": 0,
+        "approved_dispositions": 0,
+        "objective_dispositions": 0,
+        "status": "BLOCKED"
+      }
+    }
+  ],
+  "updated_at": "2026-09-06T07:01:03.905060+00:00",
+  "native_response_fix_recheck": {
+    "code_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+    "package_version_tuples_unchanged": true,
+    "review_count": 54,
+    "conclusion": "新镜像全量扫描核对54个元组完全相同；仅百炼HTTP响应解析变化，人工批准仍未提供。原镜像运行探查仅作为带镜像身份的历史证据。"
   }
 }

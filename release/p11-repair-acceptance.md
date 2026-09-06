@@ -30,12 +30,12 @@ CODE_FIXES_READY=True
 {
   "status": "PASS",
   "cumulative": {
-    "total": 9,
-    "reserved": 8,
-    "forwarded": 8,
+    "total": 10,
+    "reserved": 9,
+    "forwarded": 9,
     "locally_blocked": 1,
-    "estimated_input_tokens": 183,
-    "observed_tokens": 288,
+    "estimated_input_tokens": 196,
+    "observed_tokens": 311,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -52,16 +52,17 @@ CODE_FIXES_READY=True
     "step_request_limits": {
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 5,
-        "reserved": 4,
-        "forwarded": 4,
+        "total": 6,
+        "reserved": 5,
+        "forwarded": 5,
         "locally_blocked": 1,
-        "estimated_input_tokens": 64,
-        "observed_tokens": 46,
+        "estimated_input_tokens": 77,
+        "observed_tokens": 69,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -94,6 +95,18 @@ CODE_FIXES_READY=True
         "locally_blocked_estimated_tokens": 0
       },
       "aliyun_document_diagnostic_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_diagnostic_20260906_2": {
         "total": 1,
         "reserved": 1,
         "forwarded": 1,
@@ -144,7 +157,7 @@ CODE_FIXES_READY=True
     "locally_blocked_estimated_tokens": 0
   },
   "attempt_ids": [
-    "attempt-f089252f53094dec8b5327528268d62a"
+    "attempt-cb15305ef7114f1db7923e715f71a907"
   ],
   "providers_this_run": {
     "aliyun": {
@@ -161,27 +174,25 @@ CODE_FIXES_READY=True
     }
   },
   "this_turn": {
-    "forwarded": 2,
-    "estimated_input_tokens": 26,
-    "observed_tokens": 46
-  }
+    "forwarded": 3,
+    "estimated_input_tokens": 39,
+    "observed_tokens": 69
+  },
+  "latest_diagnostic": {
+    "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
+    "sha256": "3eb2abc66a0fb251bb131058010b2c35e1f89880d69e2ea61eec44cdca549bec"
+  },
+  "latest_operation": "aliyun_document_diagnostic_20260906_2"
 }
 ```
 
 限制：
 
-- 本轮Provider HTTP=0、estimated=0，未发送私有DOC/DOCX；官方公告、镜像仓库和GitHub访问另计。
-- 原库无任何已保存或草稿方案；实际计划actual_profile_bound=false、PROPOSED且未批准，默认434HTTP/145703estimated不可直接批准。
-- 最新旧账6次转发/157estimated；known observed242、3次usage未知；本地拦截1次/estimated19、未知转发0。原累计授权25/1000与每Provider600未修改，campaign未首绑。
-- 百炼缺显式endpoint_mode；workspace_host模式还需控制台真实API Host。凭据元数据有效不证明真实连接可用；Jina连接新Live证据未执行。
-- 真实Provider、双槽、failover/recovery与冻结30问两路质量未执行；候选Mock、本地Qdrant与离线测试只证明各自工程合同。
-- 预算/CLI/resolved-policy定向57通过；冻结后原check1751通过、88deselected，Ruff/mypy/docstrings通过。预算回归曾发现sidecar写入与WAL错误不可见，均修复且原严格断言保留，旧失败日志仍在artifacts/p11-final。
-- 原有已测业务/测试/前端/镜像/迁移资产逐文件及release函数核对后复用，26份原PASS证据哈希已核验；复用记录保留reused_from。新增CLI仅影响预算函数，新check与CI单独绑定当前代码。
-- 浏览器3个skip为原desktop/mobile互斥用例，未增加跳过；R5最初check、恢复回归、直接目录构建缓存权限和verify相对路径失败保留于原R5日志，不冒称本轮重新执行。
-- 当前镜像完整未过滤扫描有效复用；54个High/Critical元组、18CVE仍待处置。基础标签和官方Trixie状态重新核查，Perl位数/模块缺失补证不等于风险豁免，未代填任何人工批准。
-- CI33987948399对应旧合并7e46cd9已成功；本轮CI34014470636对应6c011c3七项成功。后续文档提交不改变被测业务资产，不重复本地重建、向量化或收费验证。
-- 本轮未合回release或feature/universal-rag；main/Industry未改。CODE_FIXES_READY不替代P11_READY，也不构成预算、风险或运行实例更新授权。
-- 用户已明确授权并完成App-only更新到d98a8d16；数据/独立Secret备份与旧根文件系统恢复副本已验证，原连接和凭据元数据、Secret文件与调用事件数未变。Qdrant未重启，未绑定campaign或调用Provider；暂停等待用户配置百炼。
+- 真实百炼返回已证明为有效1024维向量；原canary失败因SDK外包字段误判，修复后的目标实例尚未更新/实测。
+- 当前App与新候选镜像不同；不能用隔离Mock或CI宣称Live通过。
+- 完整实际方案预算仍PROPOSED；累计25/1000及每Provider600不变。原canary单次额度和两次诊断额度已耗尽。
+- 新镜像179条全等级发现，54个High/Critical元组、18CVE全部UNDER_INVESTIGATION。
+- 双槽、failover/recovery、原30问两路真实质量未执行；没有release/feature合并。
 
 详细证据来源、命令退出码、资产身份见同名 JSON。
 MERGE_TO_MAIN_AUTHORIZED=false。

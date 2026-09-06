@@ -20,12 +20,12 @@
   "estimate_semantics": "estimated 是仓库 Unicode code point 启发式输入估算，不是账单 usage，也不保证供应商 Token 严格上界。planned 重排按作用域全部可能候选（受原候选上限约束），不读取标准答案；capped_max 另计候选重复 query 余量。",
   "lower_bound_semantics": "仅保留必须实际 HTTP 的 canary 和两路查询；未证实文档缓存与候选命中时允许文档/重排为零下限，不作为完整扩额建议。",
   "history": {
-    "total": 9,
-    "reserved": 8,
-    "forwarded": 8,
+    "total": 10,
+    "reserved": 9,
+    "forwarded": 9,
     "locally_blocked": 1,
-    "estimated_input_tokens": 183,
-    "observed_tokens": 288,
+    "estimated_input_tokens": 196,
+    "observed_tokens": 311,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -42,16 +42,17 @@
     "step_request_limits": {
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 5,
-        "reserved": 4,
-        "forwarded": 4,
+        "total": 6,
+        "reserved": 5,
+        "forwarded": 5,
         "locally_blocked": 1,
-        "estimated_input_tokens": 64,
-        "observed_tokens": 46,
+        "estimated_input_tokens": 77,
+        "observed_tokens": 69,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -95,6 +96,18 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "aliyun_document_diagnostic_20260906_2": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -116,10 +129,10 @@
       "aliyun": 600,
       "jina": 600
     },
-    "used_requests": 8,
-    "used_estimated_tokens": 183,
-    "remaining_requests": 17,
-    "remaining_estimated_tokens": 817
+    "used_requests": 9,
+    "used_estimated_tokens": 196,
+    "remaining_requests": 16,
+    "remaining_estimated_tokens": 804
   },
   "operations": [
     {
@@ -700,26 +713,27 @@
         }
       },
       "current_token_limit": 600,
-      "used_estimated_tokens": 64,
-      "remaining_estimated_tokens": 536,
-      "cumulative_capped_requests": 120,
-      "cumulative_capped_estimated_tokens": 13587
+      "used_estimated_tokens": 77,
+      "remaining_estimated_tokens": 523,
+      "cumulative_capped_requests": 121,
+      "cumulative_capped_estimated_tokens": 13600
     }
   },
   "proposed_cumulative_limits": {
-    "request_limit": 436,
-    "estimated_token_limit": 145729,
+    "request_limit": 437,
+    "estimated_token_limit": 145742,
     "provider_request_limits": {
       "jina": 316,
-      "aliyun": 120
+      "aliyun": 121
     },
     "provider_token_limits": {
       "jina": 132142,
-      "aliyun": 13587
+      "aliyun": 13600
     },
     "step_request_limits": {
       "aliyun_document_canary": 2,
       "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
       "historical": 6,
       "jina_connection": 3,
       "aliyun_query_canary": 1,
@@ -924,6 +938,6 @@
   "profile_revalidation": "审批前与执行前重跑同一命令并核对身份；变化即失效，历史不清零。",
   "history_evidence": {
     "path": "release/p11-blocker-diagnosis.json",
-    "sha256": "4b9514f88d19f8a2db14b00b64b3cac29e7fa99901a43a4f7b68cd6e25a2290b"
+    "sha256": "3bb992a0bbf668fc7c6dea9715d3adfcdf31e23b158ec22880ccf460740de7f3"
   }
 }

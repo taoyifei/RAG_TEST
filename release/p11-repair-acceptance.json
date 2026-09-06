@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T06:41:00.992499+00:00",
+  "generated_at": "2026-09-06T07:04:44.131489+00:00",
   "identity": {
-    "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-    "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+    "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+    "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
     "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
     "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
     "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
     "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
     "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
     "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-    "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-    "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+    "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+    "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
   },
   "assets": {
     "start_sha": "7e46cd9c989b8f00bd740588b3a53408235bf50a",
@@ -33,17 +33,86 @@
           "scripts/release.py",
           "tests/test_release_cli.py"
         ]
+      },
+      {
+        "sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "title": "fix(aliyun): accept native HTTP embedding responses",
+        "paths": [
+          "src/rag_app/adapters/providers/aliyun_contract.py",
+          "tests/adapters/providers/test_aliyun_qwen37.py",
+          "tests/application/test_provider_runtime_registry.py"
+        ]
       }
     ],
-    "candidate_code_sha": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
+    "candidate_code_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
     "candidate": {
-      "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
       "entrypoint": "rag-app serve",
       "provider_mode": "offline_mock",
       "external_provider_http": 0,
       "inventory": {
         "collections": {
-          "irev_444d048af0bace0fc6f3e2a0f86e4302": {
+          "irev_20df900ade074856bbce1944b1f1e71c": {
+            "points": 1,
+            "vectors": {
+              "dense_primary": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
+              },
+              "dense_standby": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
+              }
+            }
+          },
+          "irev_30c6e872e951dc7b483707205a2654b3": {
+            "points": 3,
+            "vectors": {
+              "dense_primary": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
+              },
+              "dense_standby": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 1024
+              }
+            }
+          },
+          "irev_6f82b1022c2f34bd361b4965d7604117": {
+            "points": 1,
+            "vectors": {
+              "dense_primary": {
+                "datatype": null,
+                "distance": "Cosine",
+                "hnsw_config": null,
+                "multivector_config": null,
+                "on_disk": null,
+                "quantization_config": null,
+                "size": 8
+              }
+            }
+          },
+          "irev_98d43a4108ede41bbc005fe59e987acb": {
             "points": 2,
             "vectors": {
               "dense_primary": {
@@ -66,68 +135,8 @@
               }
             }
           },
-          "irev_4c52930e11eb759885110c5c4e7c1120": {
+          "irev_ba459dda9fd8e930fe115772bdec6630": {
             "points": 1,
-            "vectors": {
-              "dense_primary": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              },
-              "dense_standby": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              }
-            }
-          },
-          "irev_55b3eb22e8601d536add20b1ae286019": {
-            "points": 1,
-            "vectors": {
-              "dense_primary": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              },
-              "dense_standby": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 1024
-              }
-            }
-          },
-          "irev_576848b6b310b1395940689e97c6ca95": {
-            "points": 1,
-            "vectors": {
-              "dense_primary": {
-                "datatype": null,
-                "distance": "Cosine",
-                "hnsw_config": null,
-                "multivector_config": null,
-                "on_disk": null,
-                "quantization_config": null,
-                "size": 8
-              }
-            }
-          },
-          "irev_58003adcecbb09cc5776220076f80a29": {
-            "points": 3,
             "vectors": {
               "dense_primary": {
                 "datatype": null,
@@ -172,7 +181,7 @@
       "provider_http": 0,
       "mounted_product_data": false,
       "mounted_secret": false,
-      "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
       "command": [
         "docker",
         "run",
@@ -190,24 +199,24 @@
         "--no-healthcheck",
         "--entrypoint",
         "python",
-        "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "-"
       ],
       "exit_code": 0,
-      "executed_at": "2026-09-05T19:33:57.092257+00:00",
+      "executed_at": "2026-09-06T07:01:02.910018+00:00",
       "program_sha256": "d295fedc449d54d4ea48ccc2b227aceadc984094410af4dcd30aa20a339f6b4c"
     },
     "configuration_diagnosis": {
       "path": "release/p11-blocker-diagnosis.json",
-      "sha256": "4b9514f88d19f8a2db14b00b64b3cac29e7fa99901a43a4f7b68cd6e25a2290b"
+      "sha256": "3bb992a0bbf668fc7c6dea9715d3adfcdf31e23b158ec22880ccf460740de7f3"
     },
     "budget_plan": {
       "path": "release/p11-budget-plan.json",
-      "sha256": "27b538991f2cfc4a0ef28d443d87c242480d549d368859e0f38017a5c2d921be"
+      "sha256": "43c954d6ddded1cac9682387437b12671d0049ecf075e38a38c0c9a054d1c3a5"
     },
     "os_review": {
       "path": "release/p11-os-risk-review.json",
-      "sha256": "58e405024956f65cf2532c772e1bebfbe1ad4a885fede7a607be8dda0c299444"
+      "sha256": "f07bbc09b27393882f7f3a4ebda263c9a79f80112db885f53c79f315f9de69b7"
     },
     "ci_code_run": {
       "path": "artifacts/p11-r5/ci-code.json",
@@ -289,7 +298,7 @@
       "temporary_p11_volumes": [],
       "remote_production_validation": false
     },
-    "new_provider_http": 2,
+    "new_provider_http": 3,
     "release_path_fix": {
       "diff": "diff --git a/scripts/release.py b/scripts/release.py\nindex db2a964..338ea30 100644\n--- a/scripts/release.py\n+++ b/scripts/release.py\n@@ -198,7 +198,7 @@ def _artifact_directory(evidence_path: Path) -> Path:\n \n     \"\"\"\n     directory = (\n-        evidence_path.parent\n+        evidence_path.resolve().parent\n         / \"security\"\n         / datetime.now(UTC).strftime(\"%Y%m%dT%H%M%S%fZ\")\n     )\n",
       "regression": {
@@ -313,12 +322,12 @@
       "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
       "report": "artifacts/p11-r5/post-merge-aggregation.json"
     },
-    "business_code_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+    "business_code_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
     "final_acceptance_ci": {
-      "path": "artifacts/p11-final/ci-maintenance.json",
-      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
-      "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
-      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580"
+      "path": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
+      "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887"
     },
     "baseline_merge_ci": {
       "path": "artifacts/p11-final/ci-baseline.json",
@@ -349,9 +358,9 @@
         "running": true
       },
       "candidate": {
-        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "labels": {
-          "org.opencontainers.image.revision": "ae38b086217f2d186e3c7693df447ce4e580f4a1"
+          "org.opencontainers.image.revision": "b8b2f37bd3e7556fd7088699940300eb099c9a32"
         }
       },
       "actions": {
@@ -471,27 +480,78 @@
       "scope": "one additional diagnostic, original cumulative limits unchanged"
     },
     "diagnostic_only": {
+      "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
+      "sha256": "3eb2abc66a0fb251bb131058010b2c35e1f89880d69e2ea61eec44cdca549bec",
+      "capture_status": "CAPTURED",
+      "http_status": 200,
+      "strict_vector_contract_pass": true,
+      "embedding_count": 1,
+      "dimension": 1024,
+      "root_cause": "SDK_ENVELOPE_REQUIRED_FOR_NATIVE_HTTP",
+      "not_acceptance_pass": true
+    },
+    "previous_maintenance_ci": {
+      "path": "artifacts/p11-final/ci-maintenance.json",
+      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
+      "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580"
+    },
+    "runtime_after_native_fix": {
+      "path": "artifacts/p11-final/runtime-after-native-fix.json",
+      "sha256": "e2e7e6cec53a220f2a4cc1d11faf0df32d885d4826f7aca38a5c0684f2c13566"
+    },
+    "previous_failed_capture": {
       "path": "artifacts/p11-final/aliyun-response-diagnostic.json",
       "capture_status": "MISSED_HOOK",
       "http_status": 200,
       "not_acceptance_pass": true
     },
-    "pending_diagnostic_approval": {
-      "requests": 1,
-      "same_campaign": true,
-      "cumulative_limits_unchanged": true,
-      "status": "PENDING_USER_REPLY"
+    "diagnostic_authorizations": [
+      {
+        "path": "artifacts/p11-final/diagnostic-approval.json",
+        "sha256": "8c26a2ab0541415b7bcdd478428ceeef9410deb71257b2e4ab5c5efb0688c92d"
+      },
+      {
+        "path": "artifacts/p11-final/diagnostic-approval-2.json",
+        "sha256": "c65dfef95e0fc511d180b04fb44fc0af4cd2b9839ae81b27f607d868a1658af3"
+      }
+    ],
+    "pending_runtime_update": {
+      "container": "rag-v1-app-1",
+      "current_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "target_image": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
+      "status": "PENDING_TARGET_SPECIFIC_APPROVAL",
+      "sql_migrations_changed": false,
+      "required_backup": "current product and secret volumes; app-only update; Qdrant untouched"
+    },
+    "native_validation": {
+      "targeted": "131 passed",
+      "full_check": "1774 passed, 88 deselected, 4 warnings",
+      "product_check": "74 passed",
+      "product_smoke": "6 passed",
+      "candidate_browser": "5 passed, 3 viewport-exclusive skipped",
+      "qdrant_tls_snapshot_restore": "3 passed",
+      "upgrade": "7 passed",
+      "provider_http_after_fix": 0,
+      "check_log": {
+        "path": "artifacts/p11-final/check-aliyun-contract-final.log",
+        "sha256": "870d9792898b20e826420c6fcdef402351e46d72766b24fdc0a58c620afd2339"
+      },
+      "compatibility_log": {
+        "path": "artifacts/p11-final/native-image-compatibility.log",
+        "sha256": "0bf3b1d810aefda006fbb2d4345eb12fb8b33edae1bf0c9fbc685141ee310e04"
+      }
     }
   },
   "budget": {
     "status": "PASS",
     "cumulative": {
-      "total": 9,
-      "reserved": 8,
-      "forwarded": 8,
+      "total": 10,
+      "reserved": 9,
+      "forwarded": 9,
       "locally_blocked": 1,
-      "estimated_input_tokens": 183,
-      "observed_tokens": 288,
+      "estimated_input_tokens": 196,
+      "observed_tokens": 311,
       "observed_usage_status": "unknown",
       "unknown_usage_attempts": 3,
       "unknown_forwarding_attempts": 0,
@@ -508,16 +568,17 @@
       "step_request_limits": {
         "aliyun_document_canary": 1,
         "aliyun_document_diagnostic_20260906": 1,
+        "aliyun_document_diagnostic_20260906_2": 1,
         "aliyun_query_canary": 1
       },
       "providers": {
         "aliyun": {
-          "total": 5,
-          "reserved": 4,
-          "forwarded": 4,
+          "total": 6,
+          "reserved": 5,
+          "forwarded": 5,
           "locally_blocked": 1,
-          "estimated_input_tokens": 64,
-          "observed_tokens": 46,
+          "estimated_input_tokens": 77,
+          "observed_tokens": 69,
           "observed_usage_status": "unknown",
           "unknown_usage_attempts": 2,
           "unknown_forwarding_attempts": 0,
@@ -550,6 +611,18 @@
           "locally_blocked_estimated_tokens": 0
         },
         "aliyun_document_diagnostic_20260906": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 13,
+          "observed_tokens": 23,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        },
+        "aliyun_document_diagnostic_20260906_2": {
           "total": 1,
           "reserved": 1,
           "forwarded": 1,
@@ -600,7 +673,7 @@
       "locally_blocked_estimated_tokens": 0
     },
     "attempt_ids": [
-      "attempt-f089252f53094dec8b5327528268d62a"
+      "attempt-cb15305ef7114f1db7923e715f71a907"
     ],
     "providers_this_run": {
       "aliyun": {
@@ -617,24 +690,36 @@
       }
     },
     "this_turn": {
-      "forwarded": 2,
-      "estimated_input_tokens": 26,
-      "observed_tokens": 46
-    }
+      "forwarded": 3,
+      "estimated_input_tokens": 39,
+      "observed_tokens": 69
+    },
+    "latest_diagnostic": {
+      "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
+      "sha256": "3eb2abc66a0fb251bb131058010b2c35e1f89880d69e2ea61eec44cdca549bec"
+    },
+    "latest_operation": "aliyun_document_diagnostic_20260906_2"
   },
   "checks": {
     "check": {
-      "status": "PASS",
-      "origin": "本次执行",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
+      "command": [
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/dev.py",
+        "check"
+      ],
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "exit_code": 0,
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
-      "exit_code": 0
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "authorization_tests": {
       "command": [
@@ -642,39 +727,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "endpoint_tests": {
       "command": [
@@ -682,39 +747,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "connection_tests": {
       "command": [
@@ -722,41 +767,20 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "conformance_tests": {
       "command": [
@@ -764,39 +788,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "publication_tests": {
       "command": [
@@ -804,39 +808,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "security_matrix": {
       "command": [
@@ -844,39 +828,19 @@
         "scripts/dev.py",
         "check"
       ],
-      "started_at": "2026-09-05T19:20:15.587463+00:00",
+      "started_at": "2026-09-06T06:49:17.239719+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:45.804700+00:00",
+      "finished_at": "2026-09-06T06:56:39.063991+00:00",
       "origin": "本次执行",
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "sha256": "314379c83b4255595bcc0b8fa01aa9902e4e737fe9e104b4560bfaaf61bb1060",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "check"
-        ],
-        "started_at": "2026-09-05T19:20:15.587463+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:45.804700+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/check-execution.json",
-        "sha256": "2080d919ae72e0fc72a4f23c46f69231e24a10d20b9d188b645d2b7a7c1a0190",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "doctor": {
       "command": [
@@ -884,39 +848,19 @@
         "scripts/dev.py",
         "doctor"
       ],
-      "started_at": "2026-09-05T19:20:13.491376+00:00",
+      "started_at": "2026-09-06T07:00:06.634570+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:20:14.594714+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T07:00:07.871406+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/doctor-execution.json",
+      "sha256": "0ad5526fe03de501a6d404bf4059b4b539efde9774c81308ba666297760ae37f",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "doctor"
-        ],
-        "started_at": "2026-09-05T19:20:13.491376+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:20:14.594714+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/doctor-execution.json",
-        "sha256": "f1811a2b7df62bd8f4a6be854b70ca3259e6e53c46f7145ee3259ecede97bd32",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "smoke": {
       "command": [
@@ -924,39 +868,19 @@
         "scripts/dev.py",
         "smoke"
       ],
-      "started_at": "2026-09-05T19:26:46.851512+00:00",
+      "started_at": "2026-09-06T07:00:07.871918+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:26:57.917368+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T07:00:20.051665+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/smoke-execution.json",
+      "sha256": "f6be70da8ccd26435b333e1312bc841ba5a701588adc5ddbdf143c0a239166e0",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "smoke"
-        ],
-        "started_at": "2026-09-05T19:26:46.851512+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:26:57.917368+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/smoke-execution.json",
-        "sha256": "0da6cd2294b3093d43af89fa3188f6eebf8ee4af57da676f0ad4fdfe9a0569c5",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "product_check": {
       "command": [
@@ -964,39 +888,19 @@
         "scripts/dev.py",
         "product-check"
       ],
-      "started_at": "2026-09-05T19:26:58.941303+00:00",
+      "started_at": "2026-09-06T07:00:20.052255+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:27:38.674501+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T07:01:03.630254+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/product_check-execution.json",
+      "sha256": "4a95f8b7297ce0cc5d1132c7ec3b12bddd20bc42086218e118c4ef3facc7077e",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "product-check"
-        ],
-        "started_at": "2026-09-05T19:26:58.941303+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:27:38.674501+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/product_check-execution.json",
-        "sha256": "ec8b4d03607b28d62d6a5077b0416450aa9058af984cceba4bfba2abae9c5ee5",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "product_smoke": {
       "command": [
@@ -1004,206 +908,94 @@
         "scripts/dev.py",
         "product-smoke"
       ],
-      "started_at": "2026-09-05T19:27:39.692057+00:00",
+      "started_at": "2026-09-06T07:01:03.630891+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:27:45.573821+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T07:01:09.743175+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/product_smoke-execution.json",
+      "sha256": "317d9c5191821b9a494bb0998328220c126e83b574def022198a04b25b2a8d10",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "product-smoke"
-        ],
-        "started_at": "2026-09-05T19:27:39.692057+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:27:45.573821+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/product_smoke-execution.json",
-        "sha256": "c40b3c946d606ee85b922582bad0b5486a70cf88eeae06811b3b064c2641fe93",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "web_lint": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-lint"
-      ],
-      "started_at": "2026-09-05T19:27:46.618670+00:00",
+      "status": "PASS",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:27:51.796153+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
-      "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "web-lint"
-        ],
-        "started_at": "2026-09-05T19:27:46.618670+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:27:51.796153+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_lint-execution.json",
-        "sha256": "950575d3e1b8dea68fdb0e192e22b4ddcb179e083065fa78f18de70acaa27be0",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
+      "details": {
+        "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887",
+        "job": "frontend-quality"
       }
     },
     "web_typecheck": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-typecheck"
-      ],
-      "started_at": "2026-09-05T19:27:52.839396+00:00",
+      "status": "PASS",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:27:55.669064+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
-      "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "web-typecheck"
-        ],
-        "started_at": "2026-09-05T19:27:52.839396+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:27:55.669064+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_typecheck-execution.json",
-        "sha256": "6cb07b58ea149e9db97bbddda7aac51dc808e05d7ee915ff80b5c3945ce40ee4",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
+      "details": {
+        "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887",
+        "job": "frontend-quality"
       }
     },
     "web_test": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-test"
-      ],
-      "started_at": "2026-09-05T19:27:56.679272+00:00",
+      "status": "PASS",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:28:00.195506+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
-      "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "web-test"
-        ],
-        "started_at": "2026-09-05T19:27:56.679272+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:28:00.195506+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_test-execution.json",
-        "sha256": "0233b8bfde606f980caa55ad5552b6ab2787727e1cc83833b2ca7bfe5021bba6",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
+      "details": {
+        "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887",
+        "job": "frontend-quality"
       }
     },
     "web_e2e": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-e2e"
-      ],
-      "started_at": "2026-09-05T19:28:01.419203+00:00",
+      "status": "PASS",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:28:28.081938+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
-      "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/dev.py",
-          "web-e2e"
-        ],
-        "started_at": "2026-09-05T19:28:01.419203+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:28:28.081938+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/web_e2e-execution.json",
-        "sha256": "b160c51573bb2bd60c9512b24c8cebc329966869fec9ec7c1acf510005c7b192",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
+      "details": {
+        "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887",
+        "job": "offline-product-e2e"
       }
     },
     "upgrade_tests": {
@@ -1214,41 +1006,19 @@
         "-q",
         "tests/upgrade/test_p11_upgrade.py"
       ],
-      "started_at": "2026-09-05T19:28:29.134246+00:00",
+      "started_at": "2026-09-06T06:55:01.904341+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:28:32.132010+00:00",
+      "finished_at": "2026-09-06T06:55:05.976276+00:00",
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
+      "evidence": "artifacts/p11-final/upgrade_tests-execution.json",
+      "sha256": "0c98b78ded3e4b0144056724401b9ddaf792f8024c9fe77ca898e9491111ab45",
       "status": "PASS",
-      "reason": "FULL_OFFLINE_CHECK_PASSED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "-m",
-          "pytest",
-          "-q",
-          "tests/upgrade/test_p11_upgrade.py"
-        ],
-        "started_at": "2026-09-05T19:28:29.134246+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:28:32.132010+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/upgrade_tests-execution.json",
-        "sha256": "fac27ae303bcbb222b3ba6715d8db1137a7387c42bcc2b43f91ac7de682b72df",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "qdrant": {
       "command": [
@@ -1256,41 +1026,20 @@
         "acceptance",
         "internal:qdrant"
       ],
-      "started_at": "2026-09-05T19:19:57.906260+00:00",
+      "started_at": "2026-09-06T06:54:42.379185+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:20:12.471617+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:55:01.903466+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/qdrant-execution.json",
+      "sha256": "800665cac2b77f27e3dd2b72eed11329a5aaf161edb7f0b43d328dfaad25787c",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "acceptance",
-          "internal:qdrant"
-        ],
-        "started_at": "2026-09-05T19:19:57.906260+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:20:12.471617+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/qdrant-execution.json",
-        "sha256": "35f730b087437059df3727acae7378e9887c533f8993dabf54a7391a3adb0384",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "backup_restore": {
       "command": [
@@ -1298,41 +1047,20 @@
         "acceptance",
         "internal:qdrant"
       ],
-      "started_at": "2026-09-05T19:19:57.906260+00:00",
+      "started_at": "2026-09-06T06:54:42.379185+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:20:12.471617+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:55:01.903466+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/qdrant-execution.json",
+      "sha256": "800665cac2b77f27e3dd2b72eed11329a5aaf161edb7f0b43d328dfaad25787c",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "acceptance",
-          "internal:qdrant"
-        ],
-        "started_at": "2026-09-05T19:19:57.906260+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:20:12.471617+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/qdrant-execution.json",
-        "sha256": "35f730b087437059df3727acae7378e9887c533f8993dabf54a7391a3adb0384",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "candidate_startup": {
       "command": [
@@ -1340,45 +1068,22 @@
         "acceptance",
         "--candidate"
       ],
-      "started_at": "2026-09-05T19:33:45.885397+00:00",
+      "started_at": "2026-09-06T06:53:44.114472+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:34:37.804261+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:54:42.378775+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/candidate_startup-execution.json",
+      "sha256": "97b5216551d02989f768a101ea47f738ec0600d2fdedad05db1fc5dba7ec7990",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "acceptance",
-          "--candidate"
-        ],
-        "started_at": "2026-09-05T19:33:45.885397+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-          "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-          "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:34:37.804261+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate_startup-execution.json",
-        "sha256": "c7c031be2a03a4cff73a4f46fcde72a14a00f26835de22e991da17c800f93d8f",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "candidate_browser": {
       "command": [
@@ -1386,45 +1091,22 @@
         "acceptance",
         "--candidate"
       ],
-      "started_at": "2026-09-05T19:33:45.885397+00:00",
+      "started_at": "2026-09-06T06:53:44.114472+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:34:37.804261+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:54:42.378775+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/candidate_startup-execution.json",
+      "sha256": "97b5216551d02989f768a101ea47f738ec0600d2fdedad05db1fc5dba7ec7990",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "acceptance",
-          "--candidate"
-        ],
-        "started_at": "2026-09-05T19:33:45.885397+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-          "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-          "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:34:37.804261+00:00",
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate_startup-execution.json",
-        "sha256": "c7c031be2a03a4cff73a4f46fcde72a14a00f26835de22e991da17c800f93d8f",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "python_dependency_audit": {
       "command": [
@@ -1432,35 +1114,17 @@
         "verify",
         "internal:python-audit"
       ],
-      "started_at": "2026-09-05T19:37:55.688866+00:00",
+      "started_at": "2026-09-06T06:54:13.050573+00:00",
       "identity": {
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:38:07.951266+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:54:41.963044+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/python_dependency_audit-execution.json",
+      "sha256": "fc38ac1d10946f053466b0bd2446bc475493d217cfce352b292d707027e09898",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "verify",
-          "internal:python-audit"
-        ],
-        "started_at": "2026-09-05T19:37:55.688866+00:00",
-        "identity": {
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:38:07.951266+00:00",
-        "origin": "本次执行",
-        "evidence": "artifacts/p11-r5/python_dependency_audit-execution.json",
-        "sha256": "76242327a78e2562284bf9ba2023f66718d492b03293e73dbf8a87325e7a2db0",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "npm_dependency_audit": {
       "command": [
@@ -1468,54 +1132,43 @@
         "verify",
         "internal:npm-audit"
       ],
-      "started_at": "2026-09-05T19:38:07.952746+00:00",
+      "started_at": "2026-09-06T06:54:41.963495+00:00",
       "identity": {
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:38:08.871717+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:54:43.308736+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/npm_dependency_audit-execution.json",
+      "sha256": "89a1bb020a70afb0cd7bf1a194043f2b110144695d52acc1d3103b2e26887fbe",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "scripts/release.py",
-          "verify",
-          "internal:npm-audit"
-        ],
-        "started_at": "2026-09-05T19:38:07.952746+00:00",
-        "identity": {
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:38:08.871717+00:00",
-        "origin": "本次执行",
-        "evidence": "artifacts/p11-r5/npm_dependency_audit-execution.json",
-        "sha256": "62a124a4058456659a13c28f824b9df6a7bd8f7b5cf2b325d14f468654d8f9ad",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "secret_scan": {
-      "status": "PASS",
-      "origin": "本次执行",
-      "reason": "CURRENT_CODE_CI_SUCCEEDED",
+      "command": [
+        "/home/jerry/work/RAG/.venv/bin/python",
+        "scripts/secret_scan.py",
+        "--docker-image",
+        "docx-rag:v1-candidate",
+        "--path",
+        "src",
+        "--path",
+        "frontend/dist"
+      ],
+      "started_at": "2026-09-06T06:54:44.398560+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "evidence": "artifacts/p11-final/ci-maintenance.json",
-      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
       "exit_code": 0,
-      "details": {
-        "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580",
-        "job": "secret-scan"
-      }
+      "finished_at": "2026-09-06T06:54:44.908552+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/secret_scan-execution.json",
+      "sha256": "b3fcdb7f6a099a0dcb8ae2e79085c871c98947c43c993f52bd0ad81683f9e3e8",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "image_secret_scan": {
       "command": [
@@ -1528,198 +1181,126 @@
         "--path",
         "frontend/dist"
       ],
-      "started_at": "2026-09-05T19:38:09.516305+00:00",
+      "started_at": "2026-09-06T06:54:44.398560+00:00",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-05T19:38:09.945345+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "finished_at": "2026-09-06T06:54:44.908552+00:00",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/secret_scan-execution.json",
+      "sha256": "b3fcdb7f6a099a0dcb8ae2e79085c871c98947c43c993f52bd0ad81683f9e3e8",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
-      "reused_from": {
-        "command": [
-          "/home/jerry/work/RAG/.venv/bin/python",
-          "scripts/secret_scan.py",
-          "--docker-image",
-          "docx-rag:v1-candidate",
-          "--path",
-          "src",
-          "--path",
-          "frontend/dist"
-        ],
-        "started_at": "2026-09-05T19:38:09.516305+00:00",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-          "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-          "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-        },
-        "exit_code": 0,
-        "finished_at": "2026-09-05T19:38:09.945345+00:00",
-        "origin": "本次执行",
-        "evidence": "artifacts/p11-r5/secret_scan-execution.json",
-        "sha256": "3e554e817bc18894e837a7c0a7df76086ebf8564a55e58f6025d5dde82faccd7",
-        "status": "PASS",
-        "reason": "COMMAND_EXIT_ZERO"
-      }
+      "reason": "COMMAND_EXIT_ZERO"
     },
     "os_risk": {
       "status": "BLOCKED",
       "reason": "RISK_REVIEW_REQUIRED",
       "identity": {
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/os-risk-aggregation.json",
-      "sha256": "536c2428ee49b10ac36a20b01ed8125211d3094473701c69463378826b217e09",
+      "evidence": "artifacts/p11-final/os-risk-aggregation-native.json",
+      "sha256": "b559cd09e9c012bc99c1f59df8b630b72f628ce09e50c5ddbcc40e37de420845",
       "exit_code": 0,
       "details": {
-        "scan_execution": "有效复用",
         "raw_scan": {
-          "path": "artifacts/p11-r5/security/20260905T193755688409Z/trivy-all.json",
-          "sha256": "8491fefad534eca248b0b3821c7b7cf365764a7e34b22b440256c65144ca823b"
+          "path": "artifacts/p11-final/security/20260906T065413050153Z/trivy-all.json",
+          "sha256": "6a0ff64cd5f051ea2a7d30e9467194d16aec72f064238f0d6474827d233b9d0a"
         },
         "review_overlay": {
           "path": "release/p11-os-risk-review.json",
-          "sha256": "58e405024956f65cf2532c772e1bebfbe1ad4a885fede7a607be8dda0c299444"
+          "sha256": "f07bbc09b27393882f7f3a4ebda263c9a79f80112db885f53c79f315f9de69b7"
         },
-        "investigation": {
-          "path": "artifacts/p11-final/security-probe.json",
-          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+        "risk_summary": {
+          "status": "BLOCKED",
+          "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
+          "os": {
+            "Family": "debian",
+            "Name": "13.6"
+          },
+          "scanned_at": "2026-09-06T06:55:35.084703497Z",
+          "scanner": {
+            "Version": "0.74.0"
+          },
+          "reason": "RISK_REVIEW_REQUIRED",
+          "all_high_critical": 54,
+          "raw_high_critical": 54,
+          "raw_findings": 179,
+          "unique_cves": 18,
+          "unique_cve_package_versions": 54,
+          "fixable_high_critical": 0,
+          "without_fix": 54,
+          "scan_identity": {
+            "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e",
+            "sha256": "6a0ff64cd5f051ea2a7d30e9467194d16aec72f064238f0d6474827d233b9d0a",
+            "scanned_at": "2026-09-06T06:55:35.084703497Z",
+            "scanner_version": "0.74.0",
+            "db_updated_at": "2026-09-06T01:00:31.976900695Z"
+          },
+          "under_investigation": 54,
+          "mitigated": 0,
+          "approved_dispositions": 0,
+          "objective_dispositions": 0,
+          "accepted_risk_remaining": false,
+          "review_errors": []
         }
       }
     },
     "ci": {
       "status": "PASS",
-      "origin": "本次执行",
-      "reason": "CURRENT_CODE_CI_SUCCEEDED",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "evidence": "artifacts/p11-final/ci-maintenance.json",
-      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/ci-native.json",
+      "sha256": "23b15652dbdd19f535c4c627449cc01eb06340193b3897a68327684d9ee1373a",
       "exit_code": 0,
       "details": {
-        "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580",
-        "job": "all required jobs"
+        "head_sha": "b8b2f37bd3e7556fd7088699940300eb099c9a32",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887",
+        "job": "all 7 jobs"
       }
     },
     "candidate_capabilities": {
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "CURRENT_ASSETS_EXECUTED",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/native-candidate-capabilities.json",
+      "sha256": "ca179bd7b740ec9b1b406ea3a6f26b45942324e0c82c186c3d603d7764e0022e",
       "exit_code": 0,
-      "reused_from": {
-        "status": "PASS",
-        "reason": "PUBLIC_DOCX_FTS5_DOC_PROCESS_AND_LOOPBACK_TLS_PASSED",
-        "identity": {
-          "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-          "tests": "2420f0771c0f74df291eb67eb43a84f3fb265b8bf227fec8f87617ba5fab66a9",
-          "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
-          "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
-          "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-          "release": "75d04d10876109aacfef2a36ac50e77228efb5b7afebac133ed60e44cd23d614",
-          "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-          "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-          "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-          "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
-        },
-        "origin": "本次执行",
-        "evidence": "/home/jerry/work/RAG/artifacts/p11-r5/candidate-capabilities.json",
-        "sha256": "639262c11094437f4dc4abf678c995a85a743485c10553d3e138c995351ad19a",
-        "exit_code": 0
-      }
+      "details": {}
     },
     "campaign_config": {
       "status": "PASS",
-      "reason": "LOCAL_CONFIGURATION_VALID",
+      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-      "origin": "本次执行",
-      "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "origin": "有效复用",
+      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
+      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
       "exit_code": 0,
-      "details": {
-        "status": "PASS",
-        "reason": "LOCAL_CONFIGURATION_VALID",
-        "endpoint_contract": "PASS",
-        "connection_configuration": "PASS",
-        "campaign_binding": "PASS",
-        "live_allowed": false,
-        "checks": {
-          "source_profile_present_or_not_required": true,
-          "profile_policy_valid": true,
-          "ledger_path_valid": true,
-          "campaign_exists": true,
-          "campaign_authorization_matches": true,
-          "campaign_binding_status": "PASS",
-          "campaign_revision_valid": true
-        },
-        "connections": {
-          "jina_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": null,
-            "workspace_shape_valid": null,
-            "api_host_present": null,
-            "api_host_shape_valid": null,
-            "region_supported": null,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          },
-          "aliyun_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": "beijing_dashscope",
-            "workspace_shape_valid": true,
-            "api_host_present": true,
-            "api_host_shape_valid": true,
-            "region_supported": true,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          }
-        },
-        "issues": [],
-        "http_requests": 0,
-        "secret_decryption": false,
-        "migrations": false
-      }
+      "details": {}
     },
     "aliyun_document_canary": {
       "status": "FAIL",
@@ -2003,201 +1584,42 @@
     },
     "endpoint_contract": {
       "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
       "identity": {
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-      "origin": "本次执行",
-      "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "origin": "有效复用",
+      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
+      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
       "exit_code": 0,
-      "details": {
-        "status": "PASS",
-        "reason": "LOCAL_CONFIGURATION_VALID",
-        "endpoint_contract": "PASS",
-        "connection_configuration": "PASS",
-        "campaign_binding": "PASS",
-        "live_allowed": false,
-        "checks": {
-          "source_profile_present_or_not_required": true,
-          "profile_policy_valid": true,
-          "ledger_path_valid": true,
-          "campaign_exists": true,
-          "campaign_authorization_matches": true,
-          "campaign_binding_status": "PASS",
-          "campaign_revision_valid": true
-        },
-        "connections": {
-          "jina_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": null,
-            "workspace_shape_valid": null,
-            "api_host_present": null,
-            "api_host_shape_valid": null,
-            "region_supported": null,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          },
-          "aliyun_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": "beijing_dashscope",
-            "workspace_shape_valid": true,
-            "api_host_present": true,
-            "api_host_shape_valid": true,
-            "region_supported": true,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          }
-        },
-        "issues": [],
-        "http_requests": 0,
-        "secret_decryption": false,
-        "migrations": false
-      }
+      "details": {}
     },
     "connection_configuration": {
       "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-      "origin": "本次执行",
-      "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "origin": "有效复用",
+      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
+      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
       "exit_code": 0,
-      "details": {
-        "status": "PASS",
-        "reason": "LOCAL_CONFIGURATION_VALID",
-        "endpoint_contract": "PASS",
-        "connection_configuration": "PASS",
-        "campaign_binding": "PASS",
-        "live_allowed": false,
-        "checks": {
-          "source_profile_present_or_not_required": true,
-          "profile_policy_valid": true,
-          "ledger_path_valid": true,
-          "campaign_exists": true,
-          "campaign_authorization_matches": true,
-          "campaign_binding_status": "PASS",
-          "campaign_revision_valid": true
-        },
-        "connections": {
-          "jina_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": null,
-            "workspace_shape_valid": null,
-            "api_host_present": null,
-            "api_host_shape_valid": null,
-            "region_supported": null,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          },
-          "aliyun_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": "beijing_dashscope",
-            "workspace_shape_valid": true,
-            "api_host_present": true,
-            "api_host_shape_valid": true,
-            "region_supported": true,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          }
-        },
-        "issues": [],
-        "http_requests": 0,
-        "secret_decryption": false,
-        "migrations": false
-      }
+      "details": {}
     },
     "campaign_binding": {
       "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "reason": "UNCHANGED_CONFIGURATION_AND_CAMPAIGN_CONTRACT",
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-      "origin": "本次执行",
-      "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "origin": "有效复用",
+      "evidence": "artifacts/p11-final/native-reuse-assessment.json",
+      "sha256": "00e34321ee1c76f2685d4078be7dcb3364b16c7b41142f9a063fcffe2333af70",
       "exit_code": 0,
-      "details": {
-        "status": "PASS",
-        "reason": "LOCAL_CONFIGURATION_VALID",
-        "endpoint_contract": "PASS",
-        "connection_configuration": "PASS",
-        "campaign_binding": "PASS",
-        "live_allowed": false,
-        "checks": {
-          "source_profile_present_or_not_required": true,
-          "profile_policy_valid": true,
-          "ledger_path_valid": true,
-          "campaign_exists": true,
-          "campaign_authorization_matches": true,
-          "campaign_binding_status": "PASS",
-          "campaign_revision_valid": true
-        },
-        "connections": {
-          "jina_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": null,
-            "workspace_shape_valid": null,
-            "api_host_present": null,
-            "api_host_shape_valid": null,
-            "region_supported": null,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          },
-          "aliyun_connection_id": {
-            "connection_exists": true,
-            "connection_enabled": true,
-            "endpoint_mode": "beijing_dashscope",
-            "workspace_shape_valid": true,
-            "api_host_present": true,
-            "api_host_shape_valid": true,
-            "region_supported": true,
-            "credential_metadata_present": true,
-            "credential_version_valid": true,
-            "source_profile_present_or_not_required": true,
-            "profile_connection_match": true,
-            "profile_policy_valid": true,
-            "status": "PASS"
-          }
-        },
-        "issues": [],
-        "http_requests": 0,
-        "secret_decryption": false,
-        "migrations": false
-      }
+      "details": {}
     }
   },
   "gates": {
@@ -2208,16 +1630,16 @@
         "authorization_tests"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "ALIYUN_ENDPOINT_CONTRACT_READY": {
@@ -2228,16 +1650,16 @@
         "endpoint_contract"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "CONNECTION_CONFIGURATION_READY": {
@@ -2247,16 +1669,16 @@
         "connection_configuration"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "CAMPAIGN_BINDING_READY": {
@@ -2266,16 +1688,16 @@
         "campaign_binding"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "CONNECTION_EDIT_READY": {
@@ -2286,16 +1708,16 @@
         "web_e2e"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "RESOLVED_POLICY_CONFORMANCE_READY": {
@@ -2305,16 +1727,16 @@
         "conformance_tests"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "PROFILE_INDEX_SWITCH_READY": {
@@ -2325,16 +1747,16 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "PROVIDER_CONNECTIVITY_READY": {
@@ -2346,16 +1768,16 @@
         "jina_connection"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "DUAL_SLOT_FUNCTION_READY": {
@@ -2367,16 +1789,16 @@
         "qdrant"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "FAILOVER_RECOVERY_READY": {
@@ -2387,16 +1809,16 @@
         "recovery"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "RETRIEVAL_QUALITY_READY": {
@@ -2406,16 +1828,16 @@
         "citation_quality"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "PRODUCT_BROWSER_READY": {
@@ -2426,16 +1848,16 @@
         "candidate_browser"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "BACKUP_RESTORE_READY": {
@@ -2446,16 +1868,16 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "SECURITY_READY": {
@@ -2470,16 +1892,16 @@
         "os_risk"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "CI_READY": {
@@ -2489,16 +1911,16 @@
         "ci"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "REMOTE_PRODUCTION_PROFILE_READY": {
@@ -2514,16 +1936,16 @@
         "RETRIEVAL_QUALITY_READY"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "RELEASE_CANDIDATE_READY": {
@@ -2558,16 +1980,16 @@
         "candidate_startup"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     },
     "P11_READY": {
@@ -2577,16 +1999,16 @@
         "RELEASE_CANDIDATE_READY"
       ],
       "identity": {
-        "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
+        "runtime": "1d3e1f4ed61192a6735954a91eed543406f348609c89bbf502bbf379fd39a98a",
+        "tests": "010716ff1fe01c0639c86eed37482fee8f66429526c701ae3e4b70db523d076d",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
-        "image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245"
+        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
+        "image_id": "sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e"
       }
     }
   },
@@ -2595,18 +2017,11 @@
   "overall_release_status": "FAIL",
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
-    "本轮Provider HTTP=0、estimated=0，未发送私有DOC/DOCX；官方公告、镜像仓库和GitHub访问另计。",
-    "原库无任何已保存或草稿方案；实际计划actual_profile_bound=false、PROPOSED且未批准，默认434HTTP/145703estimated不可直接批准。",
-    "最新旧账6次转发/157estimated；known observed242、3次usage未知；本地拦截1次/estimated19、未知转发0。原累计授权25/1000与每Provider600未修改，campaign未首绑。",
-    "百炼缺显式endpoint_mode；workspace_host模式还需控制台真实API Host。凭据元数据有效不证明真实连接可用；Jina连接新Live证据未执行。",
-    "真实Provider、双槽、failover/recovery与冻结30问两路质量未执行；候选Mock、本地Qdrant与离线测试只证明各自工程合同。",
-    "预算/CLI/resolved-policy定向57通过；冻结后原check1751通过、88deselected，Ruff/mypy/docstrings通过。预算回归曾发现sidecar写入与WAL错误不可见，均修复且原严格断言保留，旧失败日志仍在artifacts/p11-final。",
-    "原有已测业务/测试/前端/镜像/迁移资产逐文件及release函数核对后复用，26份原PASS证据哈希已核验；复用记录保留reused_from。新增CLI仅影响预算函数，新check与CI单独绑定当前代码。",
-    "浏览器3个skip为原desktop/mobile互斥用例，未增加跳过；R5最初check、恢复回归、直接目录构建缓存权限和verify相对路径失败保留于原R5日志，不冒称本轮重新执行。",
-    "当前镜像完整未过滤扫描有效复用；54个High/Critical元组、18CVE仍待处置。基础标签和官方Trixie状态重新核查，Perl位数/模块缺失补证不等于风险豁免，未代填任何人工批准。",
-    "CI33987948399对应旧合并7e46cd9已成功；本轮CI34014470636对应6c011c3七项成功。后续文档提交不改变被测业务资产，不重复本地重建、向量化或收费验证。",
-    "本轮未合回release或feature/universal-rag；main/Industry未改。CODE_FIXES_READY不替代P11_READY，也不构成预算、风险或运行实例更新授权。",
-    "用户已明确授权并完成App-only更新到d98a8d16；数据/独立Secret备份与旧根文件系统恢复副本已验证，原连接和凭据元数据、Secret文件与调用事件数未变。Qdrant未重启，未绑定campaign或调用Provider；暂停等待用户配置百炼。"
+    "真实百炼返回已证明为有效1024维向量；原canary失败因SDK外包字段误判，修复后的目标实例尚未更新/实测。",
+    "当前App与新候选镜像不同；不能用隔离Mock或CI宣称Live通过。",
+    "完整实际方案预算仍PROPOSED；累计25/1000及每Provider600不变。原canary单次额度和两次诊断额度已耗尽。",
+    "新镜像179条全等级发现，54个High/Critical元组、18CVE全部UNDER_INVESTIGATION。",
+    "双槽、failover/recovery、原30问两路真实质量未执行；没有release/feature合并。"
   ],
   "private_documents_sent": false,
   "live_runner": {
@@ -3025,5 +2440,6 @@
     "P11_READY_reason": "REQUIRES_RELEASE_GATE_AGGREGATION",
     "MERGE_TO_MAIN_AUTHORIZED": false,
     "private_documents_sent": false
-  }
+  },
+  "live_allowed": false
 }

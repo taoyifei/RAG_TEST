@@ -1,7 +1,80 @@
 # P11 最终验收与有条件合并
 
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。
-本轮只修预算 CLI 接线、README/Legacy 与证据引用，不是 R6，不重做 R1—R5。
+本轮完成预算 CLI、README/Legacy 与证据接线，并最小修复真实测试暴露的维护比较和百炼响应兼容缺陷。不是 R6，不重做 R1—R5。
+
+## 百炼响应根因与修复（2026-09-06，当前状态）
+
+**已确认是代码兼容问题，用户 API 有返回。** 用户授权补一次结构诊断后，
+真实 HTTP 200 响应包含 `output/request_id/usage`，没有 SDK 外包字段 `status_code/code`。
+其中 1 条向量为 1024 维，text_index=0，未经放宽的 ordered_vectors 严格校验通过，usage=23。
+请求标识为 `2be215aa-e437-9958-908e-420747346edf`；结构证据在
+`artifacts/p11-final/aliyun-response-diagnostic-2.json`。
+原代码错误地要求 SDK 字段，因而拒绝有效 HTTP 结果。用户密钥、Workspace、北京端点无需修改。
+
+修复提交 `b8b2f37bd3e7556fd7088699940300eb099c9a32` 已推送至
+`codex/p11-final-acceptance`。仅当存在 SDK 状态字段时校验完整状态对；
+原生 HTTP 的向量数量、维度、有限数值、非零向量、索引顺序与 usage 校验保持原合同。
+显式业务错误和缺一半的 SDK 状态字段仍拒绝。修复前复现为 4 failed / 4 passed；
+修复后定向 131 passed。保留了复现、两次静态检查失败及修正记录，
+最终完整 `scripts/dev.py check` 为 **1774 passed / 88 deselected / 4 warnings**，
+Ruff、mypy（341 源文件）、Google docstrings 通过。
+[CI 34017539887](https://github.com/taoyifei/RAG_TEST/actions/runs/34017539887)
+精确测试该代码提交，7/7 jobs 成功；报告文档不改变被测业务资产。
+
+新候选为 `sha256:2a726c2b24dbf01fe1069ca19e93c463b67978250a75ab9c87609d8820598b2e`。
+原工作区构建因历史 root-owned Trivy cache 无读取权限而在上传上下文前失败；
+在同一提交的临时 detached worktree 完成一次构建，临时 worktree 已清理，
+没有改动或删除历史 cache。隔离候选浏览器 5 passed / 3 个既有视口互斥 skip、
+重启持久性、Qdrant TLS/快照恢复 3 passed、升级 7 passed、
+公开 DOCX/受限 DOC/FTS5/真实 loopback TLS 均通过。
+doctor、smoke、product-check（74 passed）、product-smoke（6 passed）本次通过。
+新镜像安全检查取得完整未过滤 179 项发现，其中 54 个 High/Critical 包版本元组、
+18 CVE，无已提供修复版本；Python/NPM 依赖与源代码/镜像 secret scan 通过。
+现有风险 overlay 已绑定新扫描，54 个元组与前次完全相同，人工批准字段仍未填写，
+`SECURITY_READY=BLOCKED`，不把可修复 0 解释为无风险。
+
+运行实例 `rag-v1-app-1` 仍为
+`sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245`，
+healthy，无测试注入；原 Qdrant 未重启。修复新候选尚未更新到该实例，
+修复后没有真实 Provider 调用，诊断不能代替 canary 通过。
+原文档 canary 失败和采集点错误完整保留；query 按依赖阻断。
+Jina 本轮未重测，原有 Jina 历史调用不是本轮全部操作通过的替代证据。
+真实双槽、主路、failover/recovery、30 问 primary/standby 质量尚未执行。
+
+本次授权诊断共新增 **3 HTTP / 39 estimated / 69 observed**；
+原已用 6 / 157，当前累计 **9 HTTP / 196 estimated**，
+known observed=311，旧账 3 次 usage 未知、本地拦截 1 次 / estimated 19 单列。
+同一 campaign 原累计 25 / 1000、每 Provider 600 不变；
+文档 canary 和两次诊断的单次额度均已用完。
+没有未答复的结构诊断请求，也没有继续自动收费调用。
+
+实际草稿 `pfr_4f107e6baec846a9abf31b816fe8c8d8` 已绑定，未激活。
+原 30 问两路、标签和阈值不变。按当前账本零调用重算：
+新增 planned=154 HTTP / 47653 estimated；
+capped_max=428 / 145546（含限定重试）；
+提议累计=437 / 145742，Jina 316 / 132142、百炼 121 / 13600。
+这是 `PROPOSED`，未批准。审批和执行前还需核对实际方案身份，
+并按原失败保留/单次续跑合同处理已耗尽的 canary 步骤额度，不直接复制计划当批准。
+
+当前权威聚合 `CODE_FIXES_READY=true`、`P11_READY=false`、`CI_READY=PASS`。
+Start SHA 仍为 `7e46cd9c989b8f00bd740588b3a53408235bf50a`；
+release/feature 未合并，无本轮 merge SHA，main/Industry 未改，
+`FEATURE_MERGE_DONE=false`、`MERGE_TO_MAIN_AUTHORIZED=false`。
+本次执行证据见 `native-*-evidence.json`、`check-aliyun-contract-final.log`
+和 `ci-native.json`；有效复用仅保留未变的配置/首绑合同及其原始收据，
+不复用旧镜像的扫描或功能检查来证明新候选。
+
+当前需要用户决定的最小集合：
+1. 按任务书 5.1，是否允许将上述 App 从 d98a8d 更新至已验证的 2a726c 候选。
+   产品 SQL migration 未变；先备份当前产品与 Secret 数据并保留回退镜像，
+   仅 App 短暂停机，Qdrant 与数据卷不清理。
+2. 按任务书 6，失败即停后的复测需明确追加授权：先文档 1 次，成功才 query 1 次，
+   同一 campaign 继续累计；或另行批准实际绑定的完整预算。此前诊断授权已消耗。
+3. 剩余 OS 风险由实际责任人按 CVE/源包审阅覆盖全部 54 元组的原 overlay；
+   不要求直接接受全部风险，不代填批准人或期限。
+
+以下各节为此前的时间顺序记录，旧“等待诊断/无草稿/未首绑”等描述仅表示当时状态。
 
 ## 配置完成后的续跑（2026-09-06）
 

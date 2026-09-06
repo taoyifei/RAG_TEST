@@ -59,12 +59,12 @@
   "app_action": "READ_ONLY_DIAGNOSIS",
   "qdrant_action": "NONE",
   "historical_budget": {
-    "total": 9,
-    "reserved": 8,
-    "forwarded": 8,
+    "total": 10,
+    "reserved": 9,
+    "forwarded": 9,
     "locally_blocked": 1,
-    "estimated_input_tokens": 183,
-    "observed_tokens": 288,
+    "estimated_input_tokens": 196,
+    "observed_tokens": 311,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
@@ -81,16 +81,17 @@
     "step_request_limits": {
       "aliyun_document_canary": 1,
       "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
       "aliyun_query_canary": 1
     },
     "providers": {
       "aliyun": {
-        "total": 5,
-        "reserved": 4,
-        "forwarded": 4,
+        "total": 6,
+        "reserved": 5,
+        "forwarded": 5,
         "locally_blocked": 1,
-        "estimated_input_tokens": 64,
-        "observed_tokens": 46,
+        "estimated_input_tokens": 77,
+        "observed_tokens": 69,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -134,6 +135,18 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
+      "aliyun_document_diagnostic_20260906_2": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
       "historical": {
         "total": 7,
         "reserved": 6,
@@ -148,5 +161,10 @@
       }
     }
   },
-  "source_sha256": "20593022bcbd4d6e7ccfe6b5fae2d72eac15635fad4217be98ae9aa650bec0a5"
+  "source_sha256": "20593022bcbd4d6e7ccfe6b5fae2d72eac15635fad4217be98ae9aa650bec0a5",
+  "budget_source": {
+    "path": "artifacts/p11-final/aliyun-response-diagnostic-2.json",
+    "recorded_at": "2026-09-06T06:44:41.333108+00:00",
+    "no_further_provider_calls": true
+  }
 }
