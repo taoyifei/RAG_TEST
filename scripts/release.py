@@ -1385,12 +1385,18 @@ def _campaign_container_metadata(
         '"running":{{json .State.Running}},"pid":{{json .State.Pid}},'
         '"mounts":{{json .Mounts}}}'
     )
-    return cast(
+    metadata = cast(
         dict[str, object],
         json.loads(
             _capture((docker, "inspect", "--format", template, container))
         ),
     )
+    # Docker 不保证挂载列表顺序；规范顺序后仍比较每个挂载的全部字段。
+    metadata["mounts"] = sorted(
+        cast(list[dict[str, object]], metadata["mounts"]),
+        key=lambda mount: json.dumps(mount, sort_keys=True),
+    )
+    return metadata
 
 
 def _stopped_campaign_volume(

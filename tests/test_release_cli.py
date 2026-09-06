@@ -314,6 +314,54 @@ def test_campaign_binding_uses_only_offline_data_volume(
     assert campaign_docker["verifications"] == ["docker"]
 
 
+@pytest.mark.usefixtures("campaign_docker")
+@pytest.mark.parametrize(
+    "change", [None, "Source", "RW", "Name", "running", "id", "image"]
+)
+def test_campaign_maintenance_ignores_only_mount_order(
+    monkeypatch: pytest.MonkeyPatch,
+    change: str | None,
+) -> None:
+    original = release._capture
+    reads = 0
+
+    def capture(
+        command: Sequence[str], *, input_text: str | None = None
+    ) -> str:
+        nonlocal reads
+        output = original(command, input_text=input_text)
+        if command[1] != "inspect":
+            return output
+        reads += 1
+        metadata = json.loads(output)
+        if reads == 2:
+            metadata["mounts"].reverse()
+            if change in {"Source", "RW", "Name"}:
+                mount = next(
+                    item
+                    for item in metadata["mounts"]
+                    if item["Destination"] == "/data"
+                )
+                mount[change] = False if change == "RW" else "changed"
+            elif change is not None:
+                metadata[change] = True if change == "running" else "changed"
+        return json.dumps(metadata)
+
+    monkeypatch.setattr(release, "_capture", capture)
+    if change is None:
+        assert (
+            release._stopped_campaign_volume(
+                "docker", "target-id", "sha256:candidate"
+            )
+            == "rag-data"
+        )
+    else:
+        with pytest.raises(RuntimeError, match="BLOCKED_MAINTENANCE_CHANGED"):
+            release._stopped_campaign_volume(
+                "docker", "target-id", "sha256:candidate"
+            )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [
