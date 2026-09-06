@@ -158,13 +158,19 @@ def run_pilot(
     ):
         return StepResult("BLOCKED", "QUALITY_BINDING_CHANGED_BEFORE_QUERIES")
     ledger = ProviderBudgetLedger(Path(str(config["ledger_path"])))
-    observations, attempts, source_ranges = _query_cases(
-        context,
-        cases,
-        _PilotInventory(documents, chunks, revisions),
-        search_callback,
-        ledger,
-    )
+    # 在独立索引内测量待校准发布路径；普通产品准入和持久质量状态不变。
+    with runtime.profiles._controlled_pilot(
+        source_profile_id=source.profile_revision_id,
+        project_id=documents[0].project_id,
+        profile_ids=profile_ids,
+    ):
+        observations, attempts, source_ranges = _query_cases(
+            context,
+            cases,
+            _PilotInventory(documents, chunks, revisions),
+            search_callback,
+            ledger,
+        )
     if (
         runtime.control.quality.binding_identity(source.profile_revision_id)
         != binding_identity
@@ -204,6 +210,12 @@ def run_pilot(
     }
     evidence["quality_record_ids"] = record_ids
     evidence["source_ranges"] = source_ranges
+    evidence["controlled_semantic_admission"] = {
+        "calibration_state": "CONTROLLED_TEST_ONLY",
+        "source_profile_revision_id": source.profile_revision_id,
+        "pilot_profile_revision_ids": list(profile_ids),
+        "persisted_before_evaluation": False,
+    }
     return StepResult(report.status, report.reason, evidence)
 
 

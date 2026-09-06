@@ -47,7 +47,7 @@ from rag_app.core.models import (
     RetrievalPolicy,
     SearchAnswerResult,
 )
-from rag_app.core.policies import CircuitBreakerPolicy
+from rag_app.core.policies import CircuitBreakerPolicy, EgressPolicy
 from rag_app.product.connection_diagnostics import diagnose_configuration
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
@@ -64,6 +64,7 @@ from rag_app.product.models import (
     CredentialSummary,
     ImpactKind,
     RetrievalProfileDraft,
+    RetrievalProfileRevision,
 )
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
 from rag_app.product.quality import QualityKind, QualityValidationRecord
@@ -822,9 +823,72 @@ class ProductAcceptanceBackend:
             ):
                 raise ValueError("Runtime 数据目录与验收身份不一致。")
             self.runtime = build_product_runtime(
-                options, circuit_factory=self._circuit, recover_jobs=False
+                options,
+                circuit_factory=self._circuit,
+                acceptance_egress_resolver=self._acceptance_egress,
+                recover_jobs=False,
             )
         return self.runtime
+
+    def _acceptance_egress(
+        self, profile: RetrievalProfileRevision, egress: EgressPolicy
+    ) -> EgressPolicy:
+        """仅验收自有 Runtime 使用当前持久授权的备用预算。
+
+        Args:
+            profile: 与实际批准源方案相同语义的验收方案。
+            egress: 原产品出网权限，除预算外保持原值。
+
+        Returns:
+            由同 campaign 累计上限约束的日预算；每日旧账仍保留。
+
+        """
+        source_id = self.config.get("source_profile_revision_id")
+        if source_id is None:
+            return egress
+        if self.control is None:
+            raise BudgetBlockedError("ACCEPTANCE_PROFILE_NOT_BOUND")
+        source = self.control.get_profile(str(source_id))
+        if (
+            profile.primary_connection_id != self.config["jina_connection_id"]
+            or profile.standby_connection_id
+            != self.config["aliyun_connection_id"]
+            or profile.reranker_connection_id != source.reranker_connection_id
+            or profile.index_semantic_fingerprint
+            != source.index_semantic_fingerprint
+            or profile.serving_fingerprint != source.serving_fingerprint
+        ):
+            raise BudgetBlockedError("ACCEPTANCE_PROFILE_SCOPE_MISMATCH")
+        ledger = ProviderBudgetLedger(
+            Path(str(self.config["ledger_path"])), read_only=True
+        )
+        campaign = ledger.active_campaign()
+        if (
+            campaign is None
+            or campaign.campaign_id != self.config["campaign_id"]
+            or campaign.authorization_id != self.config["authorization_id"]
+            or campaign.scope != "p11-public-synthetic-v1"
+            or campaign.scope
+            != self.config.get("scope", "p11-public-synthetic-v1")
+        ):
+            raise BudgetBlockedError("ACCEPTANCE_CAMPAIGN_SCOPE_MISMATCH")
+        # 不改连接或不可变 Profile，也不清零每日账；发送前仍受原累计账本约束。
+        return egress.model_copy(
+            update={
+                "aliyun_daily_request_budget": min(
+                    campaign.request_limit,
+                    campaign.provider_request_limits.get(
+                        "aliyun", campaign.request_limit
+                    ),
+                ),
+                "aliyun_daily_token_budget": min(
+                    campaign.estimated_token_limit,
+                    campaign.provider_token_limits.get(
+                        "aliyun", campaign.estimated_token_limit
+                    ),
+                ),
+            }
+        )
 
     def _providers(self) -> ProviderRuntimeRegistry:
         if self.provider_registry is None:

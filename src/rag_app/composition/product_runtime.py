@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
@@ -51,6 +53,7 @@ from rag_app.core.models import (
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
+    KnowledgeBaseScope,
     RetrievalPolicy,
     SystemStatus,
 )
@@ -196,6 +199,29 @@ class _ResolvedProductServices:
                 closer()
 
 
+@dataclass(frozen=True, slots=True)
+class _PilotProfileBinding:
+    """仅当前验收上下文使用的实际方案、索引和向量空间快照。"""
+
+    project_id: str
+    knowledge_base_id: str
+    profile_revision_id: str
+    index_fingerprint: str
+    serving_fingerprint: str
+    binding_identity: str
+    index_revision_id: str
+    vector_spaces: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _ControlledPilotScope:
+    """不持久化、不向普通 API 暴露的 pilot 查询准入。"""
+
+    source_profile_id: str
+    source_binding_identity: str
+    profiles: tuple[_PilotProfileBinding, ...]
+
+
 class _PersistentUsageBudget(LocalUsageBudget):
     """把备用查询预算预留写入 Product SQLite。"""
 
@@ -248,6 +274,10 @@ class ProductProfileResolver:
         providers: ProviderRuntimeRegistry,
         *,
         circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
+        acceptance_egress_resolver: Callable[
+            [RetrievalProfileRevision, EgressPolicy], EgressPolicy
+        ]
+        | None = None,
     ) -> None:
         """保存产品控制面。
 
@@ -255,6 +285,7 @@ class ProductProfileResolver:
             control: Retrieval Profile Store。
             providers: 页面托管 Credential 的 Provider 工厂。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
+            acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
 
         Returns:
             无返回值。
@@ -263,6 +294,10 @@ class ProductProfileResolver:
         self._control = control
         self._providers = providers
         self._circuit_factory = circuit_factory
+        self._acceptance_egress_resolver = acceptance_egress_resolver
+        self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
+            ContextVar("product_controlled_pilot", default=None)
+        )
         self._last_profile: dict[str, str | None] = {}
         self._runtime: P09Runtime | None = None
         self._services: dict[str, _ResolvedProductServices] = {}
@@ -444,12 +479,131 @@ class ProductProfileResolver:
             cache_key += canonical_sha256(
                 self._control.quality.states(profile.profile_revision_id)
             )
+            # 临时校准和有效授权都属于实际服务合同，不能复用普通请求缓存。
+            cache_key += self.serving_contract(profile)[2]
             existing = self._services.get(cache_key)
             if existing is not None:
                 return existing
             resolved = self._build(profile)
             self._services[cache_key] = resolved
             return resolved
+
+    @contextmanager
+    def _controlled_pilot(
+        self,
+        *,
+        source_profile_id: str,
+        project_id: str,
+        profile_ids: tuple[str, ...],
+    ) -> Iterator[None]:
+        """仅对独立 pilot 索引临时启用待测语义，不写质量通过记录。
+
+        Args:
+            source_profile_id: 已授权验收的源方案。
+            project_id: 本次 pilot 独立项目。
+            profile_ids: 已完成库存检查的独立 pilot 方案。
+
+        Yields:
+            当前调用上下文中的待测准入；退出和异常都会恢复。
+
+        Raises:
+            ValueError: 范围不独立、方案不符或嵌套准入。
+
+        """
+        if self._controlled_scope.get() is not None:
+            raise ValueError("PILOT_SCOPE_NESTED")
+        source = self._control.get_profile(source_profile_id)
+        if not profile_ids or len(set(profile_ids)) != len(profile_ids):
+            raise ValueError("PILOT_SCOPE_INVALID")
+        profiles = tuple(self._control.get_profile(key) for key in profile_ids)
+        if any(
+            profile.knowledge_base_id == source.knowledge_base_id
+            or profile.index_semantic_fingerprint
+            != source.index_semantic_fingerprint
+            or profile.serving_fingerprint != source.serving_fingerprint
+            for profile in profiles
+        ):
+            raise ValueError("PILOT_SCOPE_PROFILE_MISMATCH")
+        scope = _ControlledPilotScope(
+            source_profile_id=source_profile_id,
+            source_binding_identity=self._control.quality.binding_identity(
+                source_profile_id
+            ),
+            profiles=tuple(
+                self._pilot_profile_binding(profile, project_id)
+                for profile in profiles
+            ),
+        )
+        token = self._controlled_scope.set(scope)
+        try:
+            yield
+        finally:
+            self._controlled_scope.reset(token)
+
+    def _pilot_profile_binding(
+        self, profile: RetrievalProfileRevision, project_id: str
+    ) -> _PilotProfileBinding:
+        """从实际 Active Revision 校验方案、scope 与完整向量空间。"""
+        persistence = self._require_runtime().retrieval_runtime.persistence
+        snapshot = persistence.control.active_query_snapshot(
+            KnowledgeBaseScope(
+                project_id=project_id,
+                knowledge_base_id=profile.knowledge_base_id,
+            ),
+            serving_fingerprint=profile.serving_fingerprint,
+            retrieval_policy=RetrievalPolicy.model_validate(
+                dict(profile.retrieval_policy)
+            ),
+        )
+        topology = _product_topology(
+            profile_specs(profile, self._control.get_connection)
+        )
+        if (
+            snapshot.profile_revision_id != profile.profile_revision_id
+            or snapshot.revision.index_fingerprint
+            != profile.index_semantic_fingerprint
+            or snapshot.topology != topology
+        ):
+            raise ValueError("PILOT_SCOPE_INDEX_MISMATCH")
+        return _PilotProfileBinding(
+            project_id=project_id,
+            knowledge_base_id=profile.knowledge_base_id,
+            profile_revision_id=profile.profile_revision_id,
+            index_fingerprint=profile.index_semantic_fingerprint,
+            serving_fingerprint=profile.serving_fingerprint,
+            binding_identity=self._control.quality.binding_identity(
+                profile.profile_revision_id
+            ),
+            index_revision_id=snapshot.revision.index_revision_id,
+            vector_spaces=tuple(
+                slot.vector_space_identity for slot in snapshot.topology.slots
+            ),
+        )
+
+    def _controlled_vector_spaces(
+        self, profile: RetrievalProfileRevision
+    ) -> tuple[str, ...] | None:
+        """每次查询复核临时准入；其它方案保持普通生产门。"""
+        scope = self._controlled_scope.get()
+        if scope is None:
+            return None
+        target = next(
+            (
+                item
+                for item in scope.profiles
+                if item.profile_revision_id == profile.profile_revision_id
+            ),
+            None,
+        )
+        if target is None:
+            return None
+        if (
+            self._control.quality.binding_identity(scope.source_profile_id)
+            != scope.source_binding_identity
+            or self._pilot_profile_binding(profile, target.project_id) != target
+        ):
+            raise ValueError("PILOT_SCOPE_CHANGED")
+        return target.vector_spaces
 
     def serving_contract(
         self,
@@ -469,16 +623,25 @@ class ProductProfileResolver:
             profile.profile_revision_id
         )
         calibrated = bool(spaces) and not self._providers.test_only_transport
+        controlled = self._controlled_vector_spaces(profile)
         policy = policy.model_copy(
             update={
-                "dense_semantic_enabled": calibrated,
-                "dense_semantic_calibration_state": "LIVE_CALIBRATED"
+                "dense_semantic_enabled": calibrated or controlled is not None,
+                "dense_semantic_calibration_state": "CONTROLLED_TEST_ONLY"
+                if controlled is not None
+                else "LIVE_CALIBRATED"
                 if calibrated
                 else "UNCALIBRATED",
-                "dense_calibrated_vector_spaces": spaces if calibrated else (),
+                "dense_calibrated_vector_spaces": controlled
+                if controlled is not None
+                else spaces
+                if calibrated
+                else (),
             }
         )
         egress = _product_egress(profile, self._control)
+        if self._acceptance_egress_resolver is not None:
+            egress = self._acceptance_egress_resolver(profile, egress)
         identity = canonical_sha256(
             {
                 "profile_serving": profile.serving_fingerprint,
@@ -746,6 +909,10 @@ def build_product_runtime(
     *,
     transport_factory: TransportFactory | None = None,
     circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
+    acceptance_egress_resolver: Callable[
+        [RetrievalProfileRevision, EgressPolicy], EgressPolicy
+    ]
+    | None = None,
     recover_jobs: bool = True,
 ) -> ProductRuntime:
     """迁移 SQLite 并构造完整 Product Runtime。
@@ -754,6 +921,7 @@ def build_product_runtime(
         settings: P10.5 最小启动配置。
         transport_factory: 测试用 Provider MockTransport 工厂。
         circuit_factory: 测试用可控时钟 Circuit 工厂。
+        acceptance_egress_resolver: 仅受信任验收入口注入的累计授权解析器。
         recover_jobs: 是否恢复已有持久作业；验收入口只运行自己的新作业。
 
     Returns:
@@ -800,6 +968,7 @@ def build_product_runtime(
         control,
         providers,
         circuit_factory=circuit_factory,
+        acceptance_egress_resolver=acceptance_egress_resolver,
     )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:
