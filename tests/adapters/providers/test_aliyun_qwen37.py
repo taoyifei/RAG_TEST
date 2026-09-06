@@ -8,6 +8,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from rag_app.adapters.providers.aliyun_contract import decode_embeddings
 from rag_app.adapters.providers.aliyun_qwen37 import (
     AliyunQwen37EmbeddingAdapter,
     AliyunQwen37EmbeddingConfig,
@@ -67,6 +68,7 @@ def _config(**updates: object) -> AliyunQwen37EmbeddingConfig:
     return config.model_copy(update=updates)
 
 
+@pytest.mark.parametrize("sdk_envelope", (False, True))
 @pytest.mark.parametrize(
     ("role", "text_type", "has_instruct"),
     (
@@ -79,6 +81,7 @@ def test_native_request_role_endpoint_and_reordering(
     role: EmbeddingRequestRole,
     text_type: str,
     has_instruct: bool,
+    sdk_envelope: bool,
 ) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     observed: dict[str, object] = {}
@@ -91,9 +94,11 @@ def test_native_request_role_endpoint_and_reordering(
         return httpx.Response(
             200,
             json={
-                "status_code": 200,
-                "code": "",
-                "message": "",
+                **(
+                    {"status_code": 200, "code": "", "message": ""}
+                    if sdk_envelope
+                    else {}
+                ),
                 "output": {
                     "embeddings": [
                         {"text_index": 1, "embedding": _unit(1)},
@@ -190,6 +195,51 @@ def test_native_request_uses_configured_env_names_and_query_instruct(
     parameters = observed["parameters"]
     assert isinstance(parameters, dict)
     assert parameters["instruct"] == "custom retrieval instruction"
+
+
+@pytest.mark.parametrize(
+    "status_fields",
+    (
+        {"code": "InvalidApiKey"},
+        {"status_code": 500, "code": ""},
+        {"status_code": 200, "code": "BusinessError"},
+        {"status_code": 200},
+        {"code": ""},
+        {"status_code": None, "code": None},
+    ),
+)
+def test_valid_vector_cannot_mask_explicit_or_partial_business_error(
+    status_fields: dict[str, object],
+) -> None:
+    payload = {
+        **status_fields,
+        "output": {"embeddings": [{"text_index": 0, "embedding": _unit()}]},
+        "usage": {"total_tokens": 23},
+    }
+    with pytest.raises(ValueError, match="业务状态"):
+        decode_embeddings(payload, expected_count=1, dimension=_DIMENSION)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    (
+        [],
+        [{"text_index": 0, "embedding": [1.0]}],
+        [{"text_index": 0, "embedding": [0.0] * _DIMENSION}],
+        [{"text_index": 0, "embedding": [float("nan")] * _DIMENSION}],
+        [{"text_index": 1, "embedding": _unit()}],
+        [
+            {"text_index": 0, "embedding": _unit()},
+            {"text_index": 0, "embedding": _unit()},
+        ],
+    ),
+)
+def test_raw_http_response_still_requires_valid_vector_contract(
+    entries: list[dict[str, object]],
+) -> None:
+    payload = {"output": {"embeddings": entries}, "usage": {"total_tokens": 23}}
+    with pytest.raises(ValueError):
+        decode_embeddings(payload, expected_count=1, dimension=_DIMENSION)
 
 
 @pytest.mark.parametrize(

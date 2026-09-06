@@ -61,6 +61,8 @@ def test_provider_client_is_cached_and_rotation_closes_old_client(
     (
         ("embedding.document", "document", False, 200),
         ("embedding.query", "query", True, "200"),
+        ("embedding.document", "document", False, None),
+        ("embedding.query", "query", True, None),
     ),
 )
 def test_aliyun_validation_uses_native_workspace_contract(
@@ -68,7 +70,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
     operation: str,
     text_type: str,
     has_instruct: bool,
-    status_code: int | str,
+    status_code: int | str | None,
 ) -> None:
     requests: list[httpx.Request] = []
 
@@ -78,8 +80,11 @@ def test_aliyun_validation_uses_native_workspace_contract(
             return httpx.Response(
                 200,
                 json={
-                    "code": "",
-                    "status_code": status_code,
+                    **(
+                        {"code": "", "status_code": status_code}
+                        if status_code is not None
+                        else {}
+                    ),
                     "output": {
                         "embeddings": [
                             {
@@ -130,9 +135,7 @@ def test_aliyun_validation_uses_native_workspace_contract(
         body = json.loads(request.content)
         assert set(body) == {"input", "model", "parameters"}
         assert result.synthetic_payload_hash == canonical_sha256(body)
-        assert body["input"] == {
-            "texts": ["验收示例：审批完成后归档。"]
-        }
+        assert body["input"] == {"texts": ["验收示例：审批完成后归档。"]}
         assert body["model"] == "qwen3.7-text-embedding"
         parameters = body["parameters"]
         assert isinstance(parameters, dict)

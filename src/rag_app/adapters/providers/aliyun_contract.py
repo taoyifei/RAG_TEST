@@ -46,7 +46,7 @@ def decode_embeddings(
     expected_count: int,
     dimension: int,
 ) -> tuple[tuple[tuple[float, ...], ...], int | None]:
-    """按官方带业务状态的成功示例验证向量，不推测未实测形态。
+    """校验原生 HTTP 响应及带业务状态的 SDK 封装响应。
 
     Args:
         payload: 已通过 HTTP 层检查的 JSON。
@@ -63,7 +63,9 @@ def decode_embeddings(
     """
     if not isinstance(payload, Mapping):
         raise TypeError("百炼响应必须为 object。")
-    if (
+    # HTTP 状态已由调用方验证。实测原生成功体不带 SDK 的状态字段；
+    # 出现任一业务状态字段时仍要求完整且成功，不能吞掉显式业务错误。
+    if ("status_code" in payload or "code" in payload) and (
         payload.get("status_code") not in (200, "200")
         or payload.get("code") != ""
     ):
