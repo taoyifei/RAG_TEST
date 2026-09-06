@@ -6,7 +6,6 @@
 
 | blocker_id | 当前证据与直接原因 | 根因已验证 | 解除责任与下一步 | 外部请求 |
 | --- | --- | --- | --- | --- |
-| RUNTIME_TARGET | 原 App 仍为 20864e7e 镜像；已验收候选为 d98a8d16，未获目标更新授权。原镜像已不在本地镜像库，需先保留原实例恢复材料 | 是；原库 1—17 migration checksum 已核对，无待执行产品 SQL migration | 用户明确允许 app-only 更新；先备份与保存恢复路径，只短暂停目标 App，不动 Qdrant/卷。更新后核查测试注入 | 否 |
 | ALIYUN_CONFIGURATION | 只读非秘密配置显示 endpoint_mode 缺失；API Host 未保存，Workspace 形状与北京地域有效 | 是，配置级；未验证供应商可用性 | 用户编辑原百炼连接，选择模式；业务空间模式从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制主机。保留原 Credential，保存但不测试 | 否 |
 | ACTUAL_PROFILE | 原库已保存/草稿方案数量为 0；当前配置没有 source_profile_revision_id。预算 CLI 接线已补齐，但实际计划 actual_profile_bound=false | 是，原数据卷零调用核对 | 原连接配置完成后保存合法 Jina 主向量/Qwen 备用/Jina v3.5 重排草稿，保留实际 instruct 与检索策略；不激活、不提前建索引。执行者重算实际绑定预算 | 否 |
 | CAMPAIGN_BINDING | 产品数据卷尚无持久 ledger，旧账已核对但未导入 | 是 | 获准更新运行实例后，用既有维护入口仅停目标 App、断网首绑全量旧账、finally 恢复；不动 Qdrant | 否 |

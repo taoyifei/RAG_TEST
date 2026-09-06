@@ -100,7 +100,6 @@ CODE_FIXES_READY=True
 限制：
 
 - 本轮Provider HTTP=0、estimated=0，未发送私有DOC/DOCX；官方公告、镜像仓库和GitHub访问另计。
-- 原App仍为20864e7e，候选仍为d98a8d16；未更新/停止/重启原实例，Qdrant未操作。原库17项migration checksum相符，无待执行产品SQL migration。
 - 原库无任何已保存或草稿方案；实际计划actual_profile_bound=false、PROPOSED且未批准，默认434HTTP/145703estimated不可直接批准。
 - 最新旧账6次转发/157estimated；known observed242、3次usage未知；本地拦截1次/estimated19、未知转发0。原累计授权25/1000与每Provider600未修改，campaign未首绑。
 - 百炼缺显式endpoint_mode；workspace_host模式还需控制台真实API Host。凭据元数据有效不证明真实连接可用；Jina连接新Live证据未执行。
@@ -111,6 +110,7 @@ CODE_FIXES_READY=True
 - 当前镜像完整未过滤扫描有效复用；54个High/Critical元组、18CVE仍待处置。基础标签和官方Trixie状态重新核查，Perl位数/模块缺失补证不等于风险豁免，未代填任何人工批准。
 - CI33987948399对应旧合并7e46cd9已成功；本轮CI34014470636对应6c011c3七项成功。后续文档提交不改变被测业务资产，不重复本地重建、向量化或收费验证。
 - 本轮未合回release或feature/universal-rag；main/Industry未改。CODE_FIXES_READY不替代P11_READY，也不构成预算、风险或运行实例更新授权。
+- 用户已明确授权并完成App-only更新到d98a8d16；数据/独立Secret备份与旧根文件系统恢复副本已验证，原连接和凭据元数据、Secret文件与调用事件数未变。Qdrant未重启，未绑定campaign或调用Provider；暂停等待用户配置百炼。
 
 详细证据来源、命令退出码、资产身份见同名 JSON。
 MERGE_TO_MAIN_AUTHORIZED=false。

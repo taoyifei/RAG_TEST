@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T05:46:52.941216+00:00",
+  "generated_at": "2026-09-06T06:07:11.464786+00:00",
   "identity": {
     "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
     "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
@@ -361,8 +361,8 @@
     },
     "current_runtime": {
       "app": {
-        "id": "700a67f4b7e987de150d3d747ddc60cc3b0bec10a30b9d4641918f61415a7193",
-        "image": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
+        "id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
+        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
         "running": true,
         "flags": [
           "RAG_PORT=8088",
@@ -437,6 +437,16 @@
         "ae38b086217f2d186e3c7693df447ce4e580f4a1 fix(security): evaluate complete scans with scoped dispositions",
         "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c fix(acceptance): finalize blocker evidence and scan paths"
       ]
+    },
+    "authorized_app_update": {
+      "path": "artifacts/p11-final/app-update-20260906T060543Z/update-receipt.json",
+      "sha256": "6e7c765efcb46999927c807e71479a44deddb5c5a5a1ab5358b900a02d18c4a8",
+      "actual_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "container_id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
+      "health": "healthy",
+      "backup_directory": "/home/jerry/work/RAG/artifacts/p11-final/app-update-20260906T060543Z/backups",
+      "provider_http": 0,
+      "qdrant_unchanged": true
     }
   },
   "budget": {
@@ -2418,7 +2428,6 @@
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
     "本轮Provider HTTP=0、estimated=0，未发送私有DOC/DOCX；官方公告、镜像仓库和GitHub访问另计。",
-    "原App仍为20864e7e，候选仍为d98a8d16；未更新/停止/重启原实例，Qdrant未操作。原库17项migration checksum相符，无待执行产品SQL migration。",
     "原库无任何已保存或草稿方案；实际计划actual_profile_bound=false、PROPOSED且未批准，默认434HTTP/145703estimated不可直接批准。",
     "最新旧账6次转发/157estimated；known observed242、3次usage未知；本地拦截1次/estimated19、未知转发0。原累计授权25/1000与每Provider600未修改，campaign未首绑。",
     "百炼缺显式endpoint_mode；workspace_host模式还需控制台真实API Host。凭据元数据有效不证明真实连接可用；Jina连接新Live证据未执行。",
@@ -2428,7 +2437,8 @@
     "浏览器3个skip为原desktop/mobile互斥用例，未增加跳过；R5最初check、恢复回归、直接目录构建缓存权限和verify相对路径失败保留于原R5日志，不冒称本轮重新执行。",
     "当前镜像完整未过滤扫描有效复用；54个High/Critical元组、18CVE仍待处置。基础标签和官方Trixie状态重新核查，Perl位数/模块缺失补证不等于风险豁免，未代填任何人工批准。",
     "CI33987948399对应旧合并7e46cd9已成功；本轮CI34014470636对应6c011c3七项成功。后续文档提交不改变被测业务资产，不重复本地重建、向量化或收费验证。",
-    "本轮未合回release或feature/universal-rag；main/Industry未改。CODE_FIXES_READY不替代P11_READY，也不构成预算、风险或运行实例更新授权。"
+    "本轮未合回release或feature/universal-rag；main/Industry未改。CODE_FIXES_READY不替代P11_READY，也不构成预算、风险或运行实例更新授权。",
+    "用户已明确授权并完成App-only更新到d98a8d16；数据/独立Secret备份与旧根文件系统恢复副本已验证，原连接和凭据元数据、Secret文件与调用事件数未变。Qdrant未重启，未绑定campaign或调用Provider；暂停等待用户配置百炼。"
   ],
   "private_documents_sent": false,
   "live_runner": {

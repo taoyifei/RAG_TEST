@@ -3,6 +3,26 @@
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。
 本轮只修预算 CLI 接线、README/Legacy 与证据引用，不是 R6，不重做 R1—R5。
 
+## 已授权 App 更新（2026-09-06）
+
+用户明确允许更新并要求更新后暂停。目标 `rag-v1-app-1` 已更新至候选
+`sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245`，
+健康状态 healthy，`/live` 与首页均为 HTTP 200。两条连接、Credential 元数据、
+Secret 卷文件身份、17 项 migration、调用事件数保持一致；Qdrant 容器 ID、启动时间
+与重启次数未变。未发现测试注入，Provider HTTP=0，未首绑 campaign。
+
+原镜像缺失内容层导致 commit 失败，已恢复原 App；随后从容器根文件系统
+export/import 保存本地恢复镜像 `docx-rag:p11-rollback-20260906t055842z` 并验证离线加载。
+一次备份目录 UID 权限失败也已恢复 App；修正并验证目录写权限后，正式完成备份及更新。
+旧失败收据保留，没有覆盖唯一数据。已验证 Product 一致性备份、完整数据卷归档及独立
+Secret 卷归档，文件为 0600、目录受限，保存在
+`artifacts/p11-final/app-update-20260906T060543Z/backups/`。
+实际更新收据在同目录上级 `update-receipt.json`；恢复根文件系统归档在
+`artifacts/p11-final/app-update-20260906T055842Z/`。
+
+当前暂停等待用户在本地页面配置原百炼连接，只保存、不测试。预算、风险、Live 和
+feature 合并条件仍未满足；下文原实例镜像与待授权更新描述保留为更新前的历史基线。
+
 ## 基线与运行目标
 
 - Start / origin/codex/p11-release：`7e46cd9c989b8f00bd740588b3a53408235bf50a`。
