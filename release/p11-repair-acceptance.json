@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T06:07:11.464786+00:00",
+  "generated_at": "2026-09-06T06:41:00.992499+00:00",
   "identity": {
     "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-    "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+    "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
     "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
     "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
     "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-    "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+    "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
     "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
     "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
     "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -24,6 +24,14 @@
           "scripts/release.py",
           "scripts/release_budget.py",
           "tests/test_release_budget_profile.py"
+        ]
+      },
+      {
+        "sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+        "title": "fix(release): stabilize maintenance mount comparison",
+        "paths": [
+          "scripts/release.py",
+          "tests/test_release_cli.py"
         ]
       }
     ],
@@ -191,11 +199,11 @@
     },
     "configuration_diagnosis": {
       "path": "release/p11-blocker-diagnosis.json",
-      "sha256": "32323e1f97539cb3f4716caa0e53adf30a552e4572184e05dc705f8bb8af6aa7"
+      "sha256": "4b9514f88d19f8a2db14b00b64b3cac29e7fa99901a43a4f7b68cd6e25a2290b"
     },
     "budget_plan": {
       "path": "release/p11-budget-plan.json",
-      "sha256": "32e62ed858e86eef9c11754eb65664074b21269a96a0915cf18ae64400b5f4e3"
+      "sha256": "27b538991f2cfc4a0ef28d443d87c242480d549d368859e0f38017a5c2d921be"
     },
     "os_review": {
       "path": "release/p11-os-risk-review.json",
@@ -281,7 +289,7 @@
       "temporary_p11_volumes": [],
       "remote_production_validation": false
     },
-    "new_provider_http": 0,
+    "new_provider_http": 2,
     "release_path_fix": {
       "diff": "diff --git a/scripts/release.py b/scripts/release.py\nindex db2a964..338ea30 100644\n--- a/scripts/release.py\n+++ b/scripts/release.py\n@@ -198,7 +198,7 @@ def _artifact_directory(evidence_path: Path) -> Path:\n \n     \"\"\"\n     directory = (\n-        evidence_path.parent\n+        evidence_path.resolve().parent\n         / \"security\"\n         / datetime.now(UTC).strftime(\"%Y%m%dT%H%M%S%fZ\")\n     )\n",
       "regression": {
@@ -305,8 +313,112 @@
       "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
       "report": "artifacts/p11-r5/post-merge-aggregation.json"
     },
-    "business_code_sha": "6c011c342f5ed2f86fd10d64b6ef0fdd0f416243",
+    "business_code_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
     "final_acceptance_ci": {
+      "path": "artifacts/p11-final/ci-maintenance.json",
+      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
+      "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580"
+    },
+    "baseline_merge_ci": {
+      "path": "artifacts/p11-final/ci-baseline.json",
+      "sha256": "bcad1c588b0256c99cbd5590965c9d3eb2e8841aa2785f85d1857f3a8f79f6f4",
+      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/33987948399"
+    },
+    "current_runtime": {
+      "app": {
+        "id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
+        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "running": true,
+        "flags": [
+          "RAG_PORT=8088",
+          "RAG_TRUSTED_ORIGINS=http://127.0.0.1:8088,http://localhost:8088",
+          "RAG_QDRANT_MODE=url"
+        ],
+        "ports": {
+          "8088/tcp": [
+            {
+              "HostIp": "127.0.0.1",
+              "HostPort": "8088"
+            }
+          ]
+        }
+      },
+      "qdrant": {
+        "image": "sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
+        "running": true
+      },
+      "candidate": {
+        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+        "labels": {
+          "org.opencontainers.image.revision": "ae38b086217f2d186e3c7693df447ce4e580f4a1"
+        }
+      },
+      "actions": {
+        "app": "NONE",
+        "qdrant": "NONE"
+      }
+    },
+    "migration_inventory": {
+      "path": "artifacts/p11-final/migration-inventory.json",
+      "sha256": "4aaf674631bf0f36d984d0a5dbf3886f3ee2b168a8fb90092d1c7b13af491b6f"
+    },
+    "actual_profile_inventory": {
+      "path": "artifacts/p11-final/profile-inventory.json",
+      "sha256": "591ead892399206be9dd24e93bc5059aeefcbb493c1cd4e67ae5fdee37893383"
+    },
+    "reuse_assessment": {
+      "path": "artifacts/p11-final/reuse-assessment.json",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d"
+    },
+    "feature_merge_done": false,
+    "release_merge_done": false,
+    "prior_release_git_delivery": {
+      "start_sha": "816d6be3404466cbe11f4285ec2ee124ba9d1559",
+      "r5_branch": "codex/p11-r5-blocker-closure",
+      "r5_sha": "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c",
+      "release_branch": "codex/p11-release",
+      "merge_sha": "7e46cd9c989b8f00bd740588b3a53408235bf50a",
+      "remote_before": {
+        "Industry": "5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a",
+        "codex/p11-r5-blocker-closure": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
+        "codex/p11-release": "816d6be3404466cbe11f4285ec2ee124ba9d1559",
+        "feature/universal-rag": "e7d69f14e5ad293b091f6aef98c91f3a3f76e325",
+        "main": "af30f81fbcbd0577c16fbf59bb9bce8f29a3de91"
+      },
+      "remote_after": {
+        "Industry": "5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a",
+        "codex/p11-r5-blocker-closure": "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c",
+        "codex/p11-release": "7e46cd9c989b8f00bd740588b3a53408235bf50a",
+        "feature/universal-rag": "e7d69f14e5ad293b091f6aef98c91f3a3f76e325",
+        "main": "af30f81fbcbd0577c16fbf59bb9bce8f29a3de91"
+      },
+      "merge_strategy": "--no-ff",
+      "push": "--atomic non-force",
+      "working_tree_clean": true,
+      "protected_refs_unchanged": true,
+      "commits": [
+        "103e2f75b7d129fe21aecc1541d73de1116c1921 feat(budget): apply explicit cumulative authorization revisions",
+        "60f6c88b40db04799a9566212a8d203a45b545c1 fix(release): diagnose blockers and resume acceptance safely",
+        "ae38b086217f2d186e3c7693df447ce4e580f4a1 fix(security): evaluate complete scans with scoped dispositions",
+        "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c fix(acceptance): finalize blocker evidence and scan paths"
+      ]
+    },
+    "authorized_app_update": {
+      "path": "artifacts/p11-final/app-update-20260906T060543Z/update-receipt.json",
+      "sha256": "6e7c765efcb46999927c807e71479a44deddb5c5a5a1ab5358b900a02d18c4a8",
+      "actual_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
+      "container_id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
+      "health": "healthy",
+      "backup_directory": "/home/jerry/work/RAG/artifacts/p11-final/app-update-20260906T060543Z/backups",
+      "provider_http": 0,
+      "qdrant_unchanged": true
+    },
+    "campaign_binding_receipt": {
+      "path": "artifacts/p11-final/campaign-binding-receipt.json",
+      "sha256": "3b480bcf80ddf4bab8a071a3c7ce7b5f4d1eff84b11d6d082f81fd4233938785"
+    },
+    "previous_acceptance_ci": {
       "path": "artifacts/p11-final/ci-code.json",
       "sha256": "94fd35e4f484f5a5ad033f563aef68c238f17ca1da61c382c70d015f84c22cb5",
       "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34014470636",
@@ -354,127 +466,58 @@
         }
       ]
     },
-    "baseline_merge_ci": {
-      "path": "artifacts/p11-final/ci-baseline.json",
-      "sha256": "bcad1c588b0256c99cbd5590965c9d3eb2e8841aa2785f85d1857f3a8f79f6f4",
-      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/33987948399"
+    "diagnostic_authorization": {
+      "path": "artifacts/p11-final/diagnostic-approval.json",
+      "scope": "one additional diagnostic, original cumulative limits unchanged"
     },
-    "current_runtime": {
-      "app": {
-        "id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
-        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-        "running": true,
-        "flags": [
-          "RAG_PORT=8088",
-          "RAG_TRUSTED_ORIGINS=http://127.0.0.1:8088,http://localhost:8088",
-          "RAG_QDRANT_MODE=url"
-        ],
-        "ports": {
-          "8088/tcp": [
-            {
-              "HostIp": "127.0.0.1",
-              "HostPort": "8088"
-            }
-          ]
-        }
-      },
-      "qdrant": {
-        "image": "sha256:0bd98fa7977f1e75694779359ca4e212822e5a71334e28421182f72f209d5286",
-        "running": true
-      },
-      "candidate": {
-        "image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-        "labels": {
-          "org.opencontainers.image.revision": "ae38b086217f2d186e3c7693df447ce4e580f4a1"
-        }
-      },
-      "actions": {
-        "app": "NONE",
-        "qdrant": "NONE"
-      }
+    "diagnostic_only": {
+      "path": "artifacts/p11-final/aliyun-response-diagnostic.json",
+      "capture_status": "MISSED_HOOK",
+      "http_status": 200,
+      "not_acceptance_pass": true
     },
-    "migration_inventory": {
-      "path": "artifacts/p11-final/migration-inventory.json",
-      "sha256": "4aaf674631bf0f36d984d0a5dbf3886f3ee2b168a8fb90092d1c7b13af491b6f"
-    },
-    "actual_profile_inventory": {
-      "path": "artifacts/p11-final/profile-inventory.json",
-      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
-    },
-    "reuse_assessment": {
-      "path": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e"
-    },
-    "feature_merge_done": false,
-    "release_merge_done": false,
-    "prior_release_git_delivery": {
-      "start_sha": "816d6be3404466cbe11f4285ec2ee124ba9d1559",
-      "r5_branch": "codex/p11-r5-blocker-closure",
-      "r5_sha": "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c",
-      "release_branch": "codex/p11-release",
-      "merge_sha": "7e46cd9c989b8f00bd740588b3a53408235bf50a",
-      "remote_before": {
-        "Industry": "5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a",
-        "codex/p11-r5-blocker-closure": "ae38b086217f2d186e3c7693df447ce4e580f4a1",
-        "codex/p11-release": "816d6be3404466cbe11f4285ec2ee124ba9d1559",
-        "feature/universal-rag": "e7d69f14e5ad293b091f6aef98c91f3a3f76e325",
-        "main": "af30f81fbcbd0577c16fbf59bb9bce8f29a3de91"
-      },
-      "remote_after": {
-        "Industry": "5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a",
-        "codex/p11-r5-blocker-closure": "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c",
-        "codex/p11-release": "7e46cd9c989b8f00bd740588b3a53408235bf50a",
-        "feature/universal-rag": "e7d69f14e5ad293b091f6aef98c91f3a3f76e325",
-        "main": "af30f81fbcbd0577c16fbf59bb9bce8f29a3de91"
-      },
-      "merge_strategy": "--no-ff",
-      "push": "--atomic non-force",
-      "working_tree_clean": true,
-      "protected_refs_unchanged": true,
-      "commits": [
-        "103e2f75b7d129fe21aecc1541d73de1116c1921 feat(budget): apply explicit cumulative authorization revisions",
-        "60f6c88b40db04799a9566212a8d203a45b545c1 fix(release): diagnose blockers and resume acceptance safely",
-        "ae38b086217f2d186e3c7693df447ce4e580f4a1 fix(security): evaluate complete scans with scoped dispositions",
-        "57fbd7efbfed6ed4b943035d23f3430f57ef4d3c fix(acceptance): finalize blocker evidence and scan paths"
-      ]
-    },
-    "authorized_app_update": {
-      "path": "artifacts/p11-final/app-update-20260906T060543Z/update-receipt.json",
-      "sha256": "6e7c765efcb46999927c807e71479a44deddb5c5a5a1ab5358b900a02d18c4a8",
-      "actual_image": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",
-      "container_id": "d80220214c5f3325381868678834f33adc1743b84cd25e76fcc5e637429f8446",
-      "health": "healthy",
-      "backup_directory": "/home/jerry/work/RAG/artifacts/p11-final/app-update-20260906T060543Z/backups",
-      "provider_http": 0,
-      "qdrant_unchanged": true
+    "pending_diagnostic_approval": {
+      "requests": 1,
+      "same_campaign": true,
+      "cumulative_limits_unchanged": true,
+      "status": "PENDING_USER_REPLY"
     }
   },
   "budget": {
-    "status": "BLOCKED",
-    "reason": "CAMPAIGN_BINDING_REQUIRED",
-    "campaign_bound": false,
+    "status": "PASS",
     "cumulative": {
-      "total": 7,
-      "reserved": 6,
-      "forwarded": 6,
+      "total": 9,
+      "reserved": 8,
+      "forwarded": 8,
       "locally_blocked": 1,
-      "estimated_input_tokens": 157,
-      "observed_tokens": 242,
+      "estimated_input_tokens": 183,
+      "observed_tokens": 288,
       "observed_usage_status": "unknown",
       "unknown_usage_attempts": 3,
       "unknown_forwarding_attempts": 0,
       "locally_blocked_estimated_tokens": 19,
-      "source": "provider_operation_events_read_only_deduplicated",
-      "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
-      "unmatched_validation_attempts": 0,
+      "campaign_id": "p11-20260905-public-synthetic",
+      "authorization_id": "p11-20260904-existing-25-1000",
+      "request_limit": 25,
+      "estimated_token_limit": 1000,
+      "provider_request_limits": {},
+      "provider_token_limits": {
+        "aliyun": 600,
+        "jina": 600
+      },
+      "step_request_limits": {
+        "aliyun_document_canary": 1,
+        "aliyun_document_diagnostic_20260906": 1,
+        "aliyun_query_canary": 1
+      },
       "providers": {
         "aliyun": {
-          "total": 3,
-          "reserved": 2,
-          "forwarded": 2,
+          "total": 5,
+          "reserved": 4,
+          "forwarded": 4,
           "locally_blocked": 1,
-          "estimated_input_tokens": 38,
-          "observed_tokens": null,
+          "estimated_input_tokens": 64,
+          "observed_tokens": 46,
           "observed_usage_status": "unknown",
           "unknown_usage_attempts": 2,
           "unknown_forwarding_attempts": 0,
@@ -493,14 +536,58 @@
           "locally_blocked_estimated_tokens": 0
         }
       },
-      "request_limit": 25,
-      "estimated_token_limit": 1000,
-      "provider_token_limits": {
-        "jina": 600,
-        "aliyun": 600
+      "steps": {
+        "aliyun_document_canary": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 13,
+          "observed_tokens": 23,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        },
+        "aliyun_document_diagnostic_20260906": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 13,
+          "observed_tokens": 23,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        },
+        "historical": {
+          "total": 7,
+          "reserved": 6,
+          "forwarded": 6,
+          "locally_blocked": 1,
+          "estimated_input_tokens": 157,
+          "observed_tokens": 242,
+          "observed_usage_status": "unknown",
+          "unknown_usage_attempts": 3,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 19
+        }
       }
     },
     "this_run": {
+      "total": 1,
+      "reserved": 1,
+      "forwarded": 1,
+      "locally_blocked": 0,
+      "estimated_input_tokens": 13,
+      "observed_tokens": 23,
+      "observed_usage_status": "known",
+      "unknown_usage_attempts": 0,
+      "unknown_forwarding_attempts": 0,
+      "locally_blocked_estimated_tokens": 0
+    },
+    "imported_history": {
       "total": 0,
       "reserved": 0,
       "forwarded": 0,
@@ -512,23 +599,41 @@
       "unknown_forwarding_attempts": 0,
       "locally_blocked_estimated_tokens": 0
     },
-    "remaining": {
-      "requests": 19,
-      "estimated_input_tokens": 843
+    "attempt_ids": [
+      "attempt-f089252f53094dec8b5327528268d62a"
+    ],
+    "providers_this_run": {
+      "aliyun": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      }
+    },
+    "this_turn": {
+      "forwarded": 2,
+      "estimated_input_tokens": 26,
+      "observed_tokens": 46
     }
   },
   "checks": {
     "check": {
       "status": "PASS",
       "origin": "本次执行",
-      "reason": "COMMAND_EXIT_ZERO",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "evidence": "artifacts/p11-final/check-execution.json",
-      "sha256": "297b282f2c58699192b06f3cb3a3c837c03e7988b6ff324af63e972e21b6aba7",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "exit_code": 0
     },
     "authorization_tests": {
@@ -540,16 +645,16 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -580,16 +685,16 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -620,17 +725,17 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -662,16 +767,16 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -702,16 +807,16 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -742,16 +847,16 @@
       "started_at": "2026-09-05T19:20:15.587463+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:45.804700+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -782,14 +887,14 @@
       "started_at": "2026-09-05T19:20:13.491376+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:20:14.594714+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -822,14 +927,14 @@
       "started_at": "2026-09-05T19:26:46.851512+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:26:57.917368+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -862,14 +967,14 @@
       "started_at": "2026-09-05T19:26:58.941303+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:27:38.674501+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -902,14 +1007,14 @@
       "started_at": "2026-09-05T19:27:39.692057+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:27:45.573821+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -942,7 +1047,7 @@
       "started_at": "2026-09-05T19:27:46.618670+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
@@ -950,7 +1055,7 @@
       "finished_at": "2026-09-05T19:27:51.796153+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -984,7 +1089,7 @@
       "started_at": "2026-09-05T19:27:52.839396+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
@@ -992,7 +1097,7 @@
       "finished_at": "2026-09-05T19:27:55.669064+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1026,7 +1131,7 @@
       "started_at": "2026-09-05T19:27:56.679272+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
@@ -1034,7 +1139,7 @@
       "finished_at": "2026-09-05T19:28:00.195506+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1068,7 +1173,7 @@
       "started_at": "2026-09-05T19:28:01.419203+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
       },
@@ -1076,7 +1181,7 @@
       "finished_at": "2026-09-05T19:28:28.081938+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1112,16 +1217,16 @@
       "started_at": "2026-09-05T19:28:29.134246+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "exit_code": 0,
       "finished_at": "2026-09-05T19:28:32.132010+00:00",
-      "origin": "有效复用",
-      "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/check-execution.json",
+      "sha256": "76653a52fda3a07060d015ca8eb37a7bc9cbd1a6b8a60d5ac245cc59532cb995",
       "status": "PASS",
-      "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
+      "reason": "FULL_OFFLINE_CHECK_PASSED",
       "reused_from": {
         "command": [
           "/home/jerry/work/RAG/.venv/bin/python",
@@ -1154,7 +1259,7 @@
       "started_at": "2026-09-05T19:19:57.906260+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
@@ -1162,7 +1267,7 @@
       "finished_at": "2026-09-05T19:20:12.471617+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1196,7 +1301,7 @@
       "started_at": "2026-09-05T19:19:57.906260+00:00",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e"
       },
@@ -1204,7 +1309,7 @@
       "finished_at": "2026-09-05T19:20:12.471617+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1248,7 +1353,7 @@
       "finished_at": "2026-09-05T19:34:37.804261+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1294,7 +1399,7 @@
       "finished_at": "2026-09-05T19:34:37.804261+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1335,7 +1440,7 @@
       "finished_at": "2026-09-05T19:38:07.951266+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1371,7 +1476,7 @@
       "finished_at": "2026-09-05T19:38:08.871717+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1401,14 +1506,14 @@
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0"
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "evidence": "artifacts/p11-final/ci-code.json",
-      "sha256": "94fd35e4f484f5a5ad033f563aef68c238f17ca1da61c382c70d015f84c22cb5",
+      "evidence": "artifacts/p11-final/ci-maintenance.json",
+      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
       "exit_code": 0,
       "details": {
-        "head_sha": "6c011c342f5ed2f86fd10d64b6ef0fdd0f416243",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34014470636",
+        "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580",
         "job": "secret-scan"
       }
     },
@@ -1436,7 +1541,7 @@
       "finished_at": "2026-09-05T19:38:09.945345+00:00",
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "status": "PASS",
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "reused_from": {
@@ -1501,19 +1606,19 @@
       "reason": "CURRENT_CODE_CI_SUCCEEDED",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0"
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "evidence": "artifacts/p11-final/ci-code.json",
-      "sha256": "94fd35e4f484f5a5ad033f563aef68c238f17ca1da61c382c70d015f84c22cb5",
+      "evidence": "artifacts/p11-final/ci-maintenance.json",
+      "sha256": "a7f56ee483bbcb91338b8c150e19fad50e93ddd9db0a1f0a04fe13a1b970a90c",
       "exit_code": 0,
       "details": {
-        "head_sha": "6c011c342f5ed2f86fd10d64b6ef0fdd0f416243",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34014470636",
+        "head_sha": "c224f2bc5a5aa0e669e7d7a711d68796aecafb40",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580",
         "job": "all required jobs"
       }
     },
@@ -1522,12 +1627,12 @@
       "reason": "UNCHANGED_TESTED_ASSETS_VERIFIED",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
       "origin": "有效复用",
       "evidence": "artifacts/p11-final/reuse-assessment.json",
-      "sha256": "1245ebd1ce88172e2c27034f1ceaa846fe1089128aa7b29bdb8d5a606bac580e",
+      "sha256": "2fc43d62eb920e6d44f5f6a75a049e89e577639c4eefb2e5129e3d77c4e0878d",
       "exit_code": 0,
       "reused_from": {
         "status": "PASS",
@@ -1551,30 +1656,32 @@
       }
     },
     "campaign_config": {
-      "status": "BLOCKED",
-      "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-      "origin": "本次执行",
+      "status": "PASS",
+      "reason": "LOCAL_CONFIGURATION_VALID",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
-      "exit_code": null,
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "exit_code": 0,
       "details": {
-        "status": "BLOCKED",
-        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-        "endpoint_contract": "BLOCKED",
-        "connection_configuration": "BLOCKED",
-        "campaign_binding": "BLOCKED",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
         "live_allowed": false,
         "checks": {
           "source_profile_present_or_not_required": true,
           "profile_policy_valid": true,
           "ledger_path_valid": true,
-          "campaign_exists": false,
-          "campaign_authorization_matches": null,
-          "campaign_binding_status": "BLOCKED"
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
         },
         "connections": {
           "jina_connection_id": {
@@ -1595,169 +1702,290 @@
           "aliyun_connection_id": {
             "connection_exists": true,
             "connection_enabled": true,
-            "endpoint_mode": null,
+            "endpoint_mode": "beijing_dashscope",
             "workspace_shape_valid": true,
-            "api_host_present": false,
-            "api_host_shape_valid": false,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
             "region_supported": true,
             "credential_metadata_present": true,
             "credential_version_valid": true,
             "source_profile_present_or_not_required": true,
             "profile_connection_match": true,
-            "profile_policy_valid": null,
-            "status": "BLOCKED"
+            "profile_policy_valid": true,
+            "status": "PASS"
           }
         },
-        "issues": [
-          {
-            "field": "aliyun_connection_id.endpoint_mode",
-            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-            "message": "端点模式缺失或不受支持。",
-            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "aliyun_connection_id.api_host",
-            "reason_code": "ALIYUN_API_HOST_REQUIRED",
-            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
-            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "campaign",
-            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
-            "message": "原产品尚未绑定指定的持久预算授权。",
-            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
-            "blocking_scope": "campaign_binding"
-          }
-        ],
+        "issues": [],
         "http_requests": 0,
         "secret_decryption": false,
         "migrations": false
       }
     },
     "aliyun_document_canary": {
-      "status": "NOT_RUN",
-      "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
+      "status": "FAIL",
+      "reason": "INVALID_RESPONSE_CONTRACT",
       "identity": {
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
       },
+      "step_identity": "sha256:24fc1b5a7a7bebcd0cd7fa587625a694947ee6860e483c075520e1fcfe0ac5ec",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
-      "details": {}
+      "details": {
+        "validation_id": "val_93f2091fb2be8c1c9842a6929e3874c0",
+        "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
+        "catalog_version": "2026-09-04.1",
+        "operation": "embedding.document",
+        "provider_model": "qwen3.7-text-embedding",
+        "credential_key_version": 1,
+        "request_policy_identity": "sha256:27c9ca9eed8fc924c0c18dd31f7363a8f4687feb9f0b265580411daf10365de4",
+        "started_at": "2026-09-06T06:28:08.227212+00:00",
+        "finished_at": "2026-09-06T06:28:08.655882+00:00",
+        "status": "failed",
+        "http_category": "invalid_contract",
+        "dimension": null,
+        "estimated_tokens": 13,
+        "observed_tokens": null,
+        "latency_ms": 428,
+        "safe_error_code": "INVALID_RESPONSE_CONTRACT",
+        "configuration_version": 3,
+        "stage": "response_contract",
+        "request_dispatched": true,
+        "http_status": 200,
+        "provider_code": null,
+        "provider_request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+        "endpoint_mode": "beijing_dashscope",
+        "synthetic_payload_hash": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
+        "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
+        "validation_mode": "live",
+        "authorization": {
+          "campaign_id": "p11-20260905-public-synthetic",
+          "authorization_id": "p11-20260904-existing-25-1000",
+          "scope": "p11-public-synthetic-v1"
+        },
+        "attempts": [
+          {
+            "attempt_id": "attempt-f089252f53094dec8b5327528268d62a",
+            "campaign_id": "p11-20260905-public-synthetic",
+            "step_id": "aliyun_document_canary",
+            "provider": "aliyun",
+            "operation": "embedding.document",
+            "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
+            "payload_identity": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
+            "retry_index": 0,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "status": "HTTP_SUCCESS",
+            "estimated_input_tokens": 13,
+            "observed_tokens": 23,
+            "request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+            "http_status": 200,
+            "safe_code": "HTTP_200",
+            "timestamp": "2026-09-06T06:28:08.269688+00:00",
+            "source_identity": null
+          }
+        ],
+        "budget": {
+          "total": 8,
+          "reserved": 7,
+          "forwarded": 7,
+          "locally_blocked": 1,
+          "estimated_input_tokens": 170,
+          "observed_tokens": 265,
+          "observed_usage_status": "unknown",
+          "unknown_usage_attempts": 3,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 19,
+          "campaign_id": "p11-20260905-public-synthetic",
+          "authorization_id": "p11-20260904-existing-25-1000",
+          "request_limit": 25,
+          "estimated_token_limit": 1000,
+          "provider_request_limits": {},
+          "provider_token_limits": {
+            "aliyun": 600,
+            "jina": 600
+          },
+          "step_request_limits": {
+            "aliyun_document_canary": 1,
+            "aliyun_query_canary": 1
+          },
+          "providers": {
+            "aliyun": {
+              "total": 4,
+              "reserved": 3,
+              "forwarded": 3,
+              "locally_blocked": 1,
+              "estimated_input_tokens": 51,
+              "observed_tokens": 23,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 2,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 19
+            },
+            "jina": {
+              "total": 4,
+              "reserved": 4,
+              "forwarded": 4,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 119,
+              "observed_tokens": 242,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 1,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            }
+          },
+          "steps": {
+            "aliyun_document_canary": {
+              "total": 1,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "observed_usage_status": "known",
+              "unknown_usage_attempts": 0,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 0
+            },
+            "historical": {
+              "total": 7,
+              "reserved": 6,
+              "forwarded": 6,
+              "locally_blocked": 1,
+              "estimated_input_tokens": 157,
+              "observed_tokens": 242,
+              "observed_usage_status": "unknown",
+              "unknown_usage_attempts": 3,
+              "unknown_forwarding_attempts": 0,
+              "locally_blocked_estimated_tokens": 19
+            }
+          }
+        },
+        "new_forwarded_http": 1,
+        "new_locally_blocked": 0
+      }
     },
     "aliyun_query_canary": {
-      "status": "NOT_RUN",
-      "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
+      "status": "BLOCKED",
+      "reason": "BLOCKED_DEPENDENCY",
       "identity": {
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d"
       },
+      "step_identity": "sha256:bb459cceeb80af8eb086aa322bf3753a102853dc59a11b96a3a2327e6bc98484",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "jina_connection": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b"
       },
+      "step_identity": "sha256:1f5b8f7109d90e9b2a09eee0a2d853d86d04164eb849d7625ab432e2c1b81ad5",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "dual_index": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
+      "step_identity": "sha256:f23c557ced6c92cd5bbd540afd05038c2f689ef6ca987fbcec36a2dc314d4c34",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "primary_query": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
+      "step_identity": "sha256:a7f0b9c8cccb14283a60fab36f17f983b9f951b526d1670d1212fd3d96036893",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "standby_failover": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
+      "step_identity": "sha256:a13d116ce231a93a3c74942a78c74fb7e39d2b14237bcabb5390852b69376034",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "recovery": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
+      "step_identity": "sha256:b8891f897ce4a318f88ee861f3c6bea7c4b97496379944ed027325c3cae3ea3e",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "citation_quality": {
       "status": "NOT_RUN",
       "reason": "STEP_NOT_SELECTED",
-      "origin": "未执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba"
       },
+      "step_identity": "sha256:4862f325997ce8849441d2b0e9137c851683df759ddc197ddb84a980ef0d51c7",
+      "origin": "未执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {}
     },
     "final_report": {
       "status": "BLOCKED",
       "reason": "REQUIRED_STEPS_INCOMPLETE",
-      "origin": "本次执行",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:18b665cb41c4c7edc4e25f19278e9cb12bae6c73ef1dbfac256574c15846874c",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
       "exit_code": null,
       "details": {
         "required_steps": [
@@ -1774,30 +2002,32 @@
       }
     },
     "endpoint_contract": {
-      "status": "BLOCKED",
-      "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED,ALIYUN_API_HOST_REQUIRED",
-      "origin": "本次执行",
+      "status": "PASS",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
-      "exit_code": null,
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "exit_code": 0,
       "details": {
-        "status": "BLOCKED",
-        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-        "endpoint_contract": "BLOCKED",
-        "connection_configuration": "BLOCKED",
-        "campaign_binding": "BLOCKED",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
         "live_allowed": false,
         "checks": {
           "source_profile_present_or_not_required": true,
           "profile_policy_valid": true,
           "ledger_path_valid": true,
-          "campaign_exists": false,
-          "campaign_authorization_matches": null,
-          "campaign_binding_status": "BLOCKED"
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
         },
         "connections": {
           "jina_connection_id": {
@@ -1818,72 +2048,52 @@
           "aliyun_connection_id": {
             "connection_exists": true,
             "connection_enabled": true,
-            "endpoint_mode": null,
+            "endpoint_mode": "beijing_dashscope",
             "workspace_shape_valid": true,
-            "api_host_present": false,
-            "api_host_shape_valid": false,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
             "region_supported": true,
             "credential_metadata_present": true,
             "credential_version_valid": true,
             "source_profile_present_or_not_required": true,
             "profile_connection_match": true,
-            "profile_policy_valid": null,
-            "status": "BLOCKED"
+            "profile_policy_valid": true,
+            "status": "PASS"
           }
         },
-        "issues": [
-          {
-            "field": "aliyun_connection_id.endpoint_mode",
-            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-            "message": "端点模式缺失或不受支持。",
-            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "aliyun_connection_id.api_host",
-            "reason_code": "ALIYUN_API_HOST_REQUIRED",
-            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
-            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "campaign",
-            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
-            "message": "原产品尚未绑定指定的持久预算授权。",
-            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
-            "blocking_scope": "campaign_binding"
-          }
-        ],
+        "issues": [],
         "http_requests": 0,
         "secret_decryption": false,
         "migrations": false
       }
     },
     "connection_configuration": {
-      "status": "BLOCKED",
-      "reason": "DIAGNOSTIC_REQUIRED",
-      "origin": "本次执行",
+      "status": "PASS",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
-      "exit_code": null,
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "exit_code": 0,
       "details": {
-        "status": "BLOCKED",
-        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-        "endpoint_contract": "BLOCKED",
-        "connection_configuration": "BLOCKED",
-        "campaign_binding": "BLOCKED",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
         "live_allowed": false,
         "checks": {
           "source_profile_present_or_not_required": true,
           "profile_policy_valid": true,
           "ledger_path_valid": true,
-          "campaign_exists": false,
-          "campaign_authorization_matches": null,
-          "campaign_binding_status": "BLOCKED"
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
         },
         "connections": {
           "jina_connection_id": {
@@ -1904,72 +2114,52 @@
           "aliyun_connection_id": {
             "connection_exists": true,
             "connection_enabled": true,
-            "endpoint_mode": null,
+            "endpoint_mode": "beijing_dashscope",
             "workspace_shape_valid": true,
-            "api_host_present": false,
-            "api_host_shape_valid": false,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
             "region_supported": true,
             "credential_metadata_present": true,
             "credential_version_valid": true,
             "source_profile_present_or_not_required": true,
             "profile_connection_match": true,
-            "profile_policy_valid": null,
-            "status": "BLOCKED"
+            "profile_policy_valid": true,
+            "status": "PASS"
           }
         },
-        "issues": [
-          {
-            "field": "aliyun_connection_id.endpoint_mode",
-            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-            "message": "端点模式缺失或不受支持。",
-            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "aliyun_connection_id.api_host",
-            "reason_code": "ALIYUN_API_HOST_REQUIRED",
-            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
-            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "campaign",
-            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
-            "message": "原产品尚未绑定指定的持久预算授权。",
-            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
-            "blocking_scope": "campaign_binding"
-          }
-        ],
+        "issues": [],
         "http_requests": 0,
         "secret_decryption": false,
         "migrations": false
       }
     },
     "campaign_binding": {
-      "status": "BLOCKED",
-      "reason": "CAMPAIGN_BINDING_REQUIRED",
-      "origin": "本次执行",
+      "status": "PASS",
+      "reason": "LOCAL_DIAGNOSTIC_PASSED",
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
+      "step_identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
+      "origin": "本次执行",
       "evidence": "artifacts/p11-final/live-result.json",
-      "sha256": "753cee66ec89f98078cfce0cd1cd12767f04aae2fea403c6184608e742017aa3",
-      "exit_code": null,
+      "sha256": "ee7220fdb51daabd38aeab51aae705afe9049b694ae3b6d4fbbbc10b466911ef",
+      "exit_code": 0,
       "details": {
-        "status": "BLOCKED",
-        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-        "endpoint_contract": "BLOCKED",
-        "connection_configuration": "BLOCKED",
-        "campaign_binding": "BLOCKED",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
+        "endpoint_contract": "PASS",
+        "connection_configuration": "PASS",
+        "campaign_binding": "PASS",
         "live_allowed": false,
         "checks": {
           "source_profile_present_or_not_required": true,
           "profile_policy_valid": true,
           "ledger_path_valid": true,
-          "campaign_exists": false,
-          "campaign_authorization_matches": null,
-          "campaign_binding_status": "BLOCKED"
+          "campaign_exists": true,
+          "campaign_authorization_matches": true,
+          "campaign_binding_status": "PASS",
+          "campaign_revision_valid": true
         },
         "connections": {
           "jina_connection_id": {
@@ -1990,42 +2180,20 @@
           "aliyun_connection_id": {
             "connection_exists": true,
             "connection_enabled": true,
-            "endpoint_mode": null,
+            "endpoint_mode": "beijing_dashscope",
             "workspace_shape_valid": true,
-            "api_host_present": false,
-            "api_host_shape_valid": false,
+            "api_host_present": true,
+            "api_host_shape_valid": true,
             "region_supported": true,
             "credential_metadata_present": true,
             "credential_version_valid": true,
             "source_profile_present_or_not_required": true,
             "profile_connection_match": true,
-            "profile_policy_valid": null,
-            "status": "BLOCKED"
+            "profile_policy_valid": true,
+            "status": "PASS"
           }
         },
-        "issues": [
-          {
-            "field": "aliyun_connection_id.endpoint_mode",
-            "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-            "message": "端点模式缺失或不受支持。",
-            "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "aliyun_connection_id.api_host",
-            "reason_code": "ALIYUN_API_HOST_REQUIRED",
-            "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
-            "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
-            "blocking_scope": "endpoint_contract"
-          },
-          {
-            "field": "campaign",
-            "reason_code": "CAMPAIGN_BINDING_REQUIRED",
-            "message": "原产品尚未绑定指定的持久预算授权。",
-            "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
-            "blocking_scope": "campaign_binding"
-          }
-        ],
+        "issues": [],
         "http_requests": 0,
         "secret_decryption": false,
         "migrations": false
@@ -2041,11 +2209,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2053,19 +2221,19 @@
       }
     },
     "ALIYUN_ENDPOINT_CONTRACT_READY": {
-      "status": "BLOCKED",
-      "reason": "endpoint_contract",
+      "status": "PASS",
+      "reason": "ALL_REQUIRED_PASSED",
       "evidence": [
         "endpoint_tests",
         "endpoint_contract"
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2073,18 +2241,18 @@
       }
     },
     "CONNECTION_CONFIGURATION_READY": {
-      "status": "BLOCKED",
-      "reason": "connection_configuration",
+      "status": "PASS",
+      "reason": "ALL_REQUIRED_PASSED",
       "evidence": [
         "connection_configuration"
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2092,18 +2260,18 @@
       }
     },
     "CAMPAIGN_BINDING_READY": {
-      "status": "BLOCKED",
-      "reason": "campaign_binding",
+      "status": "PASS",
+      "reason": "ALL_REQUIRED_PASSED",
       "evidence": [
         "campaign_binding"
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2119,11 +2287,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2138,11 +2306,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2158,11 +2326,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2170,7 +2338,7 @@
       }
     },
     "PROVIDER_CONNECTIVITY_READY": {
-      "status": "NOT_RUN",
+      "status": "FAIL",
       "reason": "aliyun_document_canary, aliyun_query_canary, jina_connection",
       "evidence": [
         "aliyun_document_canary",
@@ -2179,11 +2347,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2200,11 +2368,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2220,11 +2388,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2239,11 +2407,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2259,11 +2427,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2279,11 +2447,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2303,11 +2471,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2322,11 +2490,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2334,8 +2502,8 @@
       }
     },
     "REMOTE_PRODUCTION_PROFILE_READY": {
-      "status": "BLOCKED",
-      "reason": "ALIYUN_ENDPOINT_CONTRACT_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY",
+      "status": "FAIL",
+      "reason": "PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY",
       "evidence": [
         "ALIYUN_ENDPOINT_CONTRACT_READY",
         "RESOLVED_POLICY_CONFORMANCE_READY",
@@ -2347,11 +2515,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2359,8 +2527,8 @@
       }
     },
     "RELEASE_CANDIDATE_READY": {
-      "status": "BLOCKED",
-      "reason": "ALIYUN_ENDPOINT_CONTRACT_READY, CONNECTION_CONFIGURATION_READY, CAMPAIGN_BINDING_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
+      "status": "FAIL",
+      "reason": "PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
       "evidence": [
         "AUTHORIZATION_BOUNDARY_READY",
         "ALIYUN_ENDPOINT_CONTRACT_READY",
@@ -2391,11 +2559,11 @@
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2403,18 +2571,18 @@
       }
     },
     "P11_READY": {
-      "status": "BLOCKED",
+      "status": "FAIL",
       "reason": "RELEASE_CANDIDATE_READY",
       "evidence": [
         "RELEASE_CANDIDATE_READY"
       ],
       "identity": {
         "runtime": "8f1b3387ba98c4a444a3dca92599a8e56714d5fdd791fea7f135118fa94c1f91",
-        "tests": "66e6cac79b33f91413326cd990ebb4d92fe9d3b5c2fea5eb1b0540d50f746d56",
+        "tests": "fd5b917c80acfe3fd9244623b5d62d793e194940b314e440c5e5c0f2ea43609a",
         "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
         "image": "15fdb34bea94c88915bbea70316f98baf39783678ae0f0cfba39c0263b988f3e",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "release": "93a3e69a5e770b892f36088131ef77646ec5f12c18c9474873b6c3a8d51c57d0",
+        "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "ba26d51351d29c7f5f3fca931887d3e0723763819c817a16217559880aa423ba",
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
         "provider_aliyun": "98d623244a147b665d75daa4c90eec1a331e295cf693b9df74c408d2fcb4608d",
@@ -2424,7 +2592,7 @@
   },
   "P11_READY": false,
   "CODE_FIXES_READY": true,
-  "overall_release_status": "BLOCKED",
+  "overall_release_status": "FAIL",
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
     "本轮Provider HTTP=0、estimated=0，未发送私有DOC/DOCX；官方公告、镜像仓库和GitHub访问另计。",
@@ -2446,22 +2614,23 @@
     "campaign_id": "p11-20260905-public-synthetic",
     "steps": {
       "config_check": {
-        "status": "BLOCKED",
-        "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
+        "status": "PASS",
+        "reason": "LOCAL_CONFIGURATION_VALID",
         "evidence": {
-          "status": "BLOCKED",
-          "reason": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-          "endpoint_contract": "BLOCKED",
-          "connection_configuration": "BLOCKED",
-          "campaign_binding": "BLOCKED",
+          "status": "PASS",
+          "reason": "LOCAL_CONFIGURATION_VALID",
+          "endpoint_contract": "PASS",
+          "connection_configuration": "PASS",
+          "campaign_binding": "PASS",
           "live_allowed": false,
           "checks": {
             "source_profile_present_or_not_required": true,
             "profile_policy_valid": true,
             "ledger_path_valid": true,
-            "campaign_exists": false,
-            "campaign_authorization_matches": null,
-            "campaign_binding_status": "BLOCKED"
+            "campaign_exists": true,
+            "campaign_authorization_matches": true,
+            "campaign_binding_status": "PASS",
+            "campaign_revision_valid": true
           },
           "connections": {
             "jina_connection_id": {
@@ -2482,63 +2651,177 @@
             "aliyun_connection_id": {
               "connection_exists": true,
               "connection_enabled": true,
-              "endpoint_mode": null,
+              "endpoint_mode": "beijing_dashscope",
               "workspace_shape_valid": true,
-              "api_host_present": false,
-              "api_host_shape_valid": false,
+              "api_host_present": true,
+              "api_host_shape_valid": true,
               "region_supported": true,
               "credential_metadata_present": true,
               "credential_version_valid": true,
               "source_profile_present_or_not_required": true,
               "profile_connection_match": true,
-              "profile_policy_valid": null,
-              "status": "BLOCKED"
+              "profile_policy_valid": true,
+              "status": "PASS"
             }
           },
-          "issues": [
-            {
-              "field": "aliyun_connection_id.endpoint_mode",
-              "reason_code": "ALIYUN_ENDPOINT_MODE_REQUIRED",
-              "message": "端点模式缺失或不受支持。",
-              "next_action": "编辑原连接，明确选择北京业务空间或北京 DashScope 并保存。",
-              "blocking_scope": "endpoint_contract"
-            },
-            {
-              "field": "aliyun_connection_id.api_host",
-              "reason_code": "ALIYUN_API_HOST_REQUIRED",
-              "message": "未保存业务空间 API Host，当前端点模式也尚未明确。",
-              "next_action": "编辑原连接：若选业务空间模式，从北京控制台 API Key 弹窗或业务空间管理 API Host 列复制；保存但不立即测试，保留原凭据。",
-              "blocking_scope": "endpoint_contract"
-            },
-            {
-              "field": "campaign",
-              "reason_code": "CAMPAIGN_BINDING_REQUIRED",
-              "message": "原产品尚未绑定指定的持久预算授权。",
-              "next_action": "使用既有离线维护首绑入口导入全部历史消费后绑定；不发起测试。",
-              "blocking_scope": "campaign_binding"
-            }
-          ],
+          "issues": [],
           "http_requests": 0,
           "secret_decryption": false,
           "migrations": false
         },
         "identity": "sha256:dc5fced713a0e328dfc8c2feceb2ecac399f110e74d2cc5db028a50ae0c2719c",
-        "timestamp": "2026-09-06T05:26:32.719264+00:00",
+        "timestamp": "2026-09-06T06:28:08.200979+00:00",
         "provenance": "本次执行"
       },
       "aliyun_document_canary": {
-        "status": "NOT_RUN",
-        "reason": "STEP_NOT_SELECTED",
-        "evidence": {},
-        "identity": "sha256:7a2487a12e8efe48a4a5595442326dbb5fb11160552cda30bea74f95fc6a654e",
-        "provenance": "未执行"
+        "status": "FAIL",
+        "reason": "INVALID_RESPONSE_CONTRACT",
+        "evidence": {
+          "validation_id": "val_93f2091fb2be8c1c9842a6929e3874c0",
+          "connection_id": "conn_4252d8147724a9d556517a57e6324a53",
+          "catalog_version": "2026-09-04.1",
+          "operation": "embedding.document",
+          "provider_model": "qwen3.7-text-embedding",
+          "credential_key_version": 1,
+          "request_policy_identity": "sha256:27c9ca9eed8fc924c0c18dd31f7363a8f4687feb9f0b265580411daf10365de4",
+          "started_at": "2026-09-06T06:28:08.227212+00:00",
+          "finished_at": "2026-09-06T06:28:08.655882+00:00",
+          "status": "failed",
+          "http_category": "invalid_contract",
+          "dimension": null,
+          "estimated_tokens": 13,
+          "observed_tokens": null,
+          "latency_ms": 428,
+          "safe_error_code": "INVALID_RESPONSE_CONTRACT",
+          "configuration_version": 3,
+          "stage": "response_contract",
+          "request_dispatched": true,
+          "http_status": 200,
+          "provider_code": null,
+          "provider_request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+          "endpoint_mode": "beijing_dashscope",
+          "synthetic_payload_hash": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
+          "endpoint_identity": "sha256:3b4753d54cca6768a22343d06deb63a970e280930c25fb54430385e8363f2e9e",
+          "validation_mode": "live",
+          "authorization": {
+            "campaign_id": "p11-20260905-public-synthetic",
+            "authorization_id": "p11-20260904-existing-25-1000",
+            "scope": "p11-public-synthetic-v1"
+          },
+          "attempts": [
+            {
+              "attempt_id": "attempt-f089252f53094dec8b5327528268d62a",
+              "campaign_id": "p11-20260905-public-synthetic",
+              "step_id": "aliyun_document_canary",
+              "provider": "aliyun",
+              "operation": "embedding.document",
+              "request_identity": "sha256:98acd5f99b737f8ad44bd01b30a6b184a2e5763ec7162e46b12a5f48dfaeac70",
+              "payload_identity": "sha256:9892f260cf53e377a93235f8038741910ff1c7a6dc4cbf4d5d807d7ea7c676d8",
+              "retry_index": 0,
+              "reserved": 1,
+              "forwarded": 1,
+              "locally_blocked": 0,
+              "status": "HTTP_SUCCESS",
+              "estimated_input_tokens": 13,
+              "observed_tokens": 23,
+              "request_id": "e2c07c49-2e02-975a-8594-50d864ea2af3",
+              "http_status": 200,
+              "safe_code": "HTTP_200",
+              "timestamp": "2026-09-06T06:28:08.269688+00:00",
+              "source_identity": null
+            }
+          ],
+          "budget": {
+            "total": 8,
+            "reserved": 7,
+            "forwarded": 7,
+            "locally_blocked": 1,
+            "estimated_input_tokens": 170,
+            "observed_tokens": 265,
+            "observed_usage_status": "unknown",
+            "unknown_usage_attempts": 3,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 19,
+            "campaign_id": "p11-20260905-public-synthetic",
+            "authorization_id": "p11-20260904-existing-25-1000",
+            "request_limit": 25,
+            "estimated_token_limit": 1000,
+            "provider_request_limits": {},
+            "provider_token_limits": {
+              "aliyun": 600,
+              "jina": 600
+            },
+            "step_request_limits": {
+              "aliyun_document_canary": 1,
+              "aliyun_query_canary": 1
+            },
+            "providers": {
+              "aliyun": {
+                "total": 4,
+                "reserved": 3,
+                "forwarded": 3,
+                "locally_blocked": 1,
+                "estimated_input_tokens": 51,
+                "observed_tokens": 23,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 2,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 19
+              },
+              "jina": {
+                "total": 4,
+                "reserved": 4,
+                "forwarded": 4,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 119,
+                "observed_tokens": 242,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 1,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              }
+            },
+            "steps": {
+              "aliyun_document_canary": {
+                "total": 1,
+                "reserved": 1,
+                "forwarded": 1,
+                "locally_blocked": 0,
+                "estimated_input_tokens": 13,
+                "observed_tokens": 23,
+                "observed_usage_status": "known",
+                "unknown_usage_attempts": 0,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 0
+              },
+              "historical": {
+                "total": 7,
+                "reserved": 6,
+                "forwarded": 6,
+                "locally_blocked": 1,
+                "estimated_input_tokens": 157,
+                "observed_tokens": 242,
+                "observed_usage_status": "unknown",
+                "unknown_usage_attempts": 3,
+                "unknown_forwarding_attempts": 0,
+                "locally_blocked_estimated_tokens": 19
+              }
+            }
+          },
+          "new_forwarded_http": 1,
+          "new_locally_blocked": 0
+        },
+        "identity": "sha256:24fc1b5a7a7bebcd0cd7fa587625a694947ee6860e483c075520e1fcfe0ac5ec",
+        "timestamp": "2026-09-06T06:28:08.684206+00:00",
+        "provenance": "本次执行"
       },
       "aliyun_query_canary": {
-        "status": "NOT_RUN",
-        "reason": "STEP_NOT_SELECTED",
+        "status": "BLOCKED",
+        "reason": "BLOCKED_DEPENDENCY",
         "evidence": {},
-        "identity": "sha256:0262ba4779d187eaa4768039eee1891b86007c7e6e24196514bb8f1cbc2f2bd8",
-        "provenance": "未执行"
+        "identity": "sha256:bb459cceeb80af8eb086aa322bf3753a102853dc59a11b96a3a2327e6bc98484",
+        "timestamp": "2026-09-06T06:28:08.698064+00:00",
+        "provenance": "本次执行"
       },
       "jina_connection": {
         "status": "NOT_RUN",
@@ -2551,35 +2834,35 @@
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:a077f1fd09fd496e555dee72bcf374506882e512a2862903c7d9a86856e5278d",
+        "identity": "sha256:f23c557ced6c92cd5bbd540afd05038c2f689ef6ca987fbcec36a2dc314d4c34",
         "provenance": "未执行"
       },
       "primary_query": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:a9252a4cde47b3470487901416c5cad1bac741c8849481b70b265d01e8416827",
+        "identity": "sha256:a7f0b9c8cccb14283a60fab36f17f983b9f951b526d1670d1212fd3d96036893",
         "provenance": "未执行"
       },
       "standby_failover": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:97ff9511dad21c901bc961677e00ffd760bf2067039e6ff0003cc97d19740273",
+        "identity": "sha256:a13d116ce231a93a3c74942a78c74fb7e39d2b14237bcabb5390852b69376034",
         "provenance": "未执行"
       },
       "recovery": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:ecceef4167dc8d2ece525c021fcacadb0d2105fa8cdfdf4a5a9cbf112f34f2f2",
+        "identity": "sha256:b8891f897ce4a318f88ee861f3c6bea7c4b97496379944ed027325c3cae3ea3e",
         "provenance": "未执行"
       },
       "citation_quality": {
         "status": "NOT_RUN",
         "reason": "STEP_NOT_SELECTED",
         "evidence": {},
-        "identity": "sha256:d8264d43d4e6088b3419ae6e2a97a8a81700fdfc5e0cc913fb1a2e78d1514c47",
+        "identity": "sha256:4862f325997ce8849441d2b0e9137c851683df759ddc197ddb84a980ef0d51c7",
         "provenance": "未执行"
       },
       "final_report": {
@@ -2598,37 +2881,45 @@
             "citation_quality"
           ]
         },
-        "identity": "sha256:f320d38214413bab3bad885117fa8c89a31873757a79a3a583b510a17052742b",
-        "timestamp": "2026-09-06T05:26:32.739083+00:00",
+        "identity": "sha256:18b665cb41c4c7edc4e25f19278e9cb12bae6c73ef1dbfac256574c15846874c",
+        "timestamp": "2026-09-06T06:28:08.743409+00:00",
         "provenance": "本次执行"
       }
     },
     "budget": {
-      "status": "BLOCKED",
-      "reason": "CAMPAIGN_BINDING_REQUIRED",
-      "campaign_bound": false,
+      "status": "PASS",
       "cumulative": {
-        "total": 7,
-        "reserved": 6,
-        "forwarded": 6,
+        "total": 8,
+        "reserved": 7,
+        "forwarded": 7,
         "locally_blocked": 1,
-        "estimated_input_tokens": 157,
-        "observed_tokens": 242,
+        "estimated_input_tokens": 170,
+        "observed_tokens": 265,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 3,
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 19,
-        "source": "provider_operation_events_read_only_deduplicated",
-        "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
-        "unmatched_validation_attempts": 0,
+        "campaign_id": "p11-20260905-public-synthetic",
+        "authorization_id": "p11-20260904-existing-25-1000",
+        "request_limit": 25,
+        "estimated_token_limit": 1000,
+        "provider_request_limits": {},
+        "provider_token_limits": {
+          "aliyun": 600,
+          "jina": 600
+        },
+        "step_request_limits": {
+          "aliyun_document_canary": 1,
+          "aliyun_query_canary": 1
+        },
         "providers": {
           "aliyun": {
-            "total": 3,
-            "reserved": 2,
-            "forwarded": 2,
+            "total": 4,
+            "reserved": 3,
+            "forwarded": 3,
             "locally_blocked": 1,
-            "estimated_input_tokens": 38,
-            "observed_tokens": null,
+            "estimated_input_tokens": 51,
+            "observed_tokens": 23,
             "observed_usage_status": "unknown",
             "unknown_usage_attempts": 2,
             "unknown_forwarding_attempts": 0,
@@ -2647,14 +2938,46 @@
             "locally_blocked_estimated_tokens": 0
           }
         },
-        "request_limit": 25,
-        "estimated_token_limit": 1000,
-        "provider_token_limits": {
-          "jina": 600,
-          "aliyun": 600
+        "steps": {
+          "aliyun_document_canary": {
+            "total": 1,
+            "reserved": 1,
+            "forwarded": 1,
+            "locally_blocked": 0,
+            "estimated_input_tokens": 13,
+            "observed_tokens": 23,
+            "observed_usage_status": "known",
+            "unknown_usage_attempts": 0,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 0
+          },
+          "historical": {
+            "total": 7,
+            "reserved": 6,
+            "forwarded": 6,
+            "locally_blocked": 1,
+            "estimated_input_tokens": 157,
+            "observed_tokens": 242,
+            "observed_usage_status": "unknown",
+            "unknown_usage_attempts": 3,
+            "unknown_forwarding_attempts": 0,
+            "locally_blocked_estimated_tokens": 19
+          }
         }
       },
       "this_run": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "imported_history": {
         "total": 0,
         "reserved": 0,
         "forwarded": 0,
@@ -2666,9 +2989,22 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       },
-      "remaining": {
-        "requests": 19,
-        "estimated_input_tokens": 843
+      "attempt_ids": [
+        "attempt-f089252f53094dec8b5327528268d62a"
+      ],
+      "providers_this_run": {
+        "aliyun": {
+          "total": 1,
+          "reserved": 1,
+          "forwarded": 1,
+          "locally_blocked": 0,
+          "estimated_input_tokens": 13,
+          "observed_tokens": 23,
+          "observed_usage_status": "known",
+          "unknown_usage_attempts": 0,
+          "unknown_forwarding_attempts": 0,
+          "locally_blocked_estimated_tokens": 0
+        }
       }
     },
     "campaign_binding": {
@@ -2677,9 +3013,10 @@
       "evidence": {}
     },
     "selected_steps": [
-      "config_check"
+      "aliyun_document_canary",
+      "aliyun_query_canary"
     ],
-    "selected_steps_status": "BLOCKED",
+    "selected_steps_status": "FAIL",
     "overall_release_status": "BLOCKED",
     "CONNECTIVITY_READY": false,
     "QUALITY_READY": "NOT_RUN",
@@ -2688,6 +3025,5 @@
     "P11_READY_reason": "REQUIRES_RELEASE_GATE_AGGREGATION",
     "MERGE_TO_MAIN_AUTHORIZED": false,
     "private_documents_sent": false
-  },
-  "FEATURE_MERGE_DONE": false
+  }
 }

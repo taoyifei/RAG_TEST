@@ -16,31 +16,42 @@
     "estimated_input_tokens": 3590
   },
   "query_instruct_identity": "sha256:3a86db8acf84c670333c3a56b17a11bb59a9691ec4c16475fc57ab3d8daf63e2",
-  "configuration_assumption": "当前未提供 Profile，按产品默认 query_instruct 和 RetrievalPolicy；实际方案确定后必须重新生成，不能直接激活本计划。",
+  "configuration_assumption": "按调用方已读取的当前非秘密 Profile 策略。",
   "estimate_semantics": "estimated 是仓库 Unicode code point 启发式输入估算，不是账单 usage，也不保证供应商 Token 严格上界。planned 重排按作用域全部可能候选（受原候选上限约束），不读取标准答案；capped_max 另计候选重复 query 余量。",
   "lower_bound_semantics": "仅保留必须实际 HTTP 的 canary 和两路查询；未证实文档缓存与候选命中时允许文档/重排为零下限，不作为完整扩额建议。",
   "history": {
-    "total": 7,
-    "reserved": 6,
-    "forwarded": 6,
+    "total": 9,
+    "reserved": 8,
+    "forwarded": 8,
     "locally_blocked": 1,
-    "estimated_input_tokens": 157,
-    "observed_tokens": 242,
+    "estimated_input_tokens": 183,
+    "observed_tokens": 288,
     "observed_usage_status": "unknown",
     "unknown_usage_attempts": 3,
     "unknown_forwarding_attempts": 0,
     "locally_blocked_estimated_tokens": 19,
-    "source": "provider_operation_events_read_only_deduplicated",
-    "validation_coverage": "RECONCILED_OR_RESERVED_UNKNOWN",
-    "unmatched_validation_attempts": 0,
+    "campaign_id": "p11-20260905-public-synthetic",
+    "authorization_id": "p11-20260904-existing-25-1000",
+    "request_limit": 25,
+    "estimated_token_limit": 1000,
+    "provider_request_limits": {},
+    "provider_token_limits": {
+      "aliyun": 600,
+      "jina": 600
+    },
+    "step_request_limits": {
+      "aliyun_document_canary": 1,
+      "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_query_canary": 1
+    },
     "providers": {
       "aliyun": {
-        "total": 3,
-        "reserved": 2,
-        "forwarded": 2,
+        "total": 5,
+        "reserved": 4,
+        "forwarded": 4,
         "locally_blocked": 1,
-        "estimated_input_tokens": 38,
-        "observed_tokens": null,
+        "estimated_input_tokens": 64,
+        "observed_tokens": 46,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 2,
         "unknown_forwarding_attempts": 0,
@@ -58,19 +69,57 @@
         "unknown_forwarding_attempts": 0,
         "locally_blocked_estimated_tokens": 0
       }
+    },
+    "steps": {
+      "aliyun_document_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_diagnostic_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "historical": {
+        "total": 7,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 1,
+        "estimated_input_tokens": 157,
+        "observed_tokens": 242,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 3,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 19
+      }
     }
   },
   "current_authorization": {
     "request_limit": 25,
     "estimated_token_limit": 1000,
     "provider_token_limits": {
-      "jina": 600,
-      "aliyun": 600
+      "aliyun": 600,
+      "jina": 600
     },
-    "used_requests": 6,
-    "used_estimated_tokens": 157,
-    "remaining_requests": 19,
-    "remaining_estimated_tokens": 843
+    "used_requests": 8,
+    "used_estimated_tokens": 183,
+    "remaining_requests": 17,
+    "remaining_estimated_tokens": 817
   },
   "operations": [
     {
@@ -651,27 +700,28 @@
         }
       },
       "current_token_limit": 600,
-      "used_estimated_tokens": 38,
-      "remaining_estimated_tokens": 562,
-      "cumulative_capped_requests": 118,
-      "cumulative_capped_estimated_tokens": 13561
+      "used_estimated_tokens": 64,
+      "remaining_estimated_tokens": 536,
+      "cumulative_capped_requests": 120,
+      "cumulative_capped_estimated_tokens": 13587
     }
   },
   "proposed_cumulative_limits": {
-    "request_limit": 434,
-    "estimated_token_limit": 145703,
+    "request_limit": 436,
+    "estimated_token_limit": 145729,
     "provider_request_limits": {
       "jina": 316,
-      "aliyun": 118
+      "aliyun": 120
     },
     "provider_token_limits": {
       "jina": 132142,
-      "aliyun": 13561
+      "aliyun": 13587
     },
     "step_request_limits": {
+      "aliyun_document_canary": 2,
+      "aliyun_document_diagnostic_20260906": 1,
       "historical": 6,
       "jina_connection": 3,
-      "aliyun_document_canary": 1,
       "aliyun_query_canary": 1,
       "dual_index": 6,
       "citation_quality": 396,
@@ -695,9 +745,185 @@
     "canary_max_attempts_including_initial": 1,
     "unbounded_or_repeated_runs_included": false
   },
-  "actual_profile_bound": false,
+  "actual_profile_bound": true,
+  "source_profile_revision_id": "pfr_4f107e6baec846a9abf31b816fe8c8d8",
+  "resolved_profile": {
+    "source_profile_revision_id": "pfr_4f107e6baec846a9abf31b816fe8c8d8",
+    "profile_status": "draft",
+    "index_semantic_fingerprint": "sha256:879b0f69be14ea3fa9a500bc65a6bcdf3255de89d76f8c845be1742e0e9630da",
+    "serving_fingerprint": "sha256:853ea9569e339f002e6c796036c3e8e7f57b0d2b02c26202712293ea85f08856",
+    "embedding_roles": {
+      "primary": {
+        "provider": "jina",
+        "provider_id": "jina-embedding",
+        "model": "jina-embeddings-v5-text-small",
+        "dimension": 1024,
+        "normalization": "l2-v1",
+        "adapter_revision": "1",
+        "max_input_tokens": 32768,
+        "document_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "task",
+            "retrieval.passage"
+          ]
+        ],
+        "query_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "task",
+            "retrieval.query"
+          ]
+        ],
+        "catalog_version": "2026-09-04.1"
+      },
+      "standby": {
+        "provider": "aliyun-model-studio",
+        "provider_id": "aliyun-qwen37-embedding",
+        "model": "qwen3.7-text-embedding",
+        "dimension": 1024,
+        "normalization": "l2-v1",
+        "adapter_revision": "1",
+        "max_input_tokens": 128000,
+        "document_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "text_type",
+            "document"
+          ]
+        ],
+        "query_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "query_instruct",
+            "Given a user query, retrieve the most relevant passages from enterprise DOCX knowledge bases."
+          ],
+          [
+            "text_type",
+            "query"
+          ]
+        ],
+        "catalog_version": "2026-09-04.1"
+      }
+    },
+    "reranker": {
+      "provider": "jina",
+      "model": "jina-reranker-v3.5"
+    },
+    "retrieval_policy": {
+      "schema_version": "1",
+      "max_variants": 2,
+      "max_channels": 6,
+      "channel_top_k": 24,
+      "fusion_candidate_limit": 48,
+      "rrf_k": 60,
+      "rerank_candidate_limit": 24,
+      "neighbor_count": 1,
+      "section_chunk_limit": 2,
+      "evidence_token_budget": 1024,
+      "max_evidence_items": 8,
+      "max_evidence_items_per_chunk": 1,
+      "minimum_support_items": 1,
+      "minimum_span_overlap": 0.2,
+      "per_document_cap": 4,
+      "per_section_cap": 3,
+      "must_keep_limit": 3,
+      "rerank_text_char_limit": 2400,
+      "cache_schema_version": 1,
+      "dense_semantic_enabled": false,
+      "dense_semantic_calibration_state": "UNCALIBRATED",
+      "dense_calibrated_vector_spaces": [],
+      "bypass_policy_denied": true,
+      "enabled_channels": [
+        "exact",
+        "lexical",
+        "dense"
+      ],
+      "rerank_enabled": true,
+      "neighbor_expansion_enabled": true,
+      "provisional": true
+    },
+    "parsing_chunking_contract": {
+      "mode": "fixed_product_v1",
+      "parser": "word-document-v1",
+      "parsing_policy": {
+        "schema_version": "1",
+        "policy_id": "docx-safe-v1",
+        "mode": "strict",
+        "tracked_changes": "final_view",
+        "comments": "metadata_only",
+        "hidden_text": "exclude",
+        "headers_footers": "metadata_only",
+        "footnotes_endnotes": "metadata_only",
+        "images": "metadata",
+        "external_relationships": "metadata_only",
+        "unknown_indexable_content": "reject",
+        "max_file_bytes": 134217728,
+        "max_uncompressed_bytes": 536870912,
+        "max_entry_bytes": 67108864,
+        "max_entries": 10000,
+        "max_compression_ratio": 200.0,
+        "parse_timeout_seconds": 30.0,
+        "max_xml_depth": 256,
+        "max_xml_nodes": 1000000,
+        "max_table_depth": 32,
+        "max_field_depth": 32,
+        "custom_heading_styles": [],
+        "preserve_soft_hyphen": false
+      },
+      "chunker": "docx-structural-v3",
+      "chunking_policy": {
+        "schema_version": "3",
+        "chunker_id": "docx-structural-v3",
+        "target_tokens": 384,
+        "hard_max_tokens": 512,
+        "overlap_cap_tokens": 64,
+        "min_tail_tokens": 64,
+        "include_document_title": true,
+        "include_heading_path": true,
+        "include_list_path": true,
+        "include_table_header": true,
+        "header_footer_policy": "metadata_only",
+        "notes_policy": "separate_child",
+        "image_policy": "metadata_only",
+        "comments_policy": "metadata_only",
+        "contextual_prefix": "deterministic",
+        "estimated_token_safety_margin": 0.15,
+        "provisional": true,
+        "required_embedding_slots": [
+          "primary",
+          "standby"
+        ],
+        "max_embedding_tokens_by_slot": [
+          [
+            "primary",
+            32768
+          ],
+          [
+            "standby",
+            131072
+          ]
+        ],
+        "profile_hard_cap": 512
+      }
+    }
+  },
+  "budget_policy_identity": "sha256:a28cd776e137583de40f87d7a7b542764644945842a3b94be4f7da66285634a1",
+  "profile_revalidation": "审批前与执行前重跑同一命令并核对身份；变化即失效，历史不清零。",
   "history_evidence": {
     "path": "release/p11-blocker-diagnosis.json",
-    "sha256": "32323e1f97539cb3f4716caa0e53adf30a552e4572184e05dc705f8bb8af6aa7"
+    "sha256": "4b9514f88d19f8a2db14b00b64b3cac29e7fa99901a43a4f7b68cd6e25a2290b"
   }
 }

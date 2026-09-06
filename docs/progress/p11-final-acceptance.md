@@ -3,6 +3,55 @@
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。
 本轮只修预算 CLI 接线、README/Legacy 与证据引用，不是 R6，不重做 R1—R5。
 
+## 配置完成后的续跑（2026-09-06）
+
+用户已在原百炼连接选择 `beijing_dashscope`，配置版本为 3，Credential 版本仍为 1。
+原 Workspace/Credential 未替换；端点、连接和实际方案的本地诊断通过。
+本地页面创建了空的公开合成验收项目和知识库，保存草稿
+`pfr_4f107e6baec846a9abf31b816fe8c8d8`，未激活、未上传文档、未建立索引。
+草稿使用 Jina v5 主向量、Qwen3.7 备用向量、Jina v3.5 重排及产品默认解析指令与检索策略。
+实际预算已绑定该草稿，`actual_profile_bound=true`；完整预算仍为 `PROPOSED`，没有扩大累计授权。
+
+首绑第一次因 Docker inspect 挂载列表顺序不稳定，被误判为维护状态变化，App 已自动恢复。
+在同一容器连续 12 次读取中复现：容器状态及挂载字段完全相同，只有列表顺序变化。
+`_campaign_container_metadata` 仅规范挂载顺序，保留全部字段比较。
+新增回归同时验证挂载来源、权限、名称、容器 ID、镜像和运行状态变化仍被拒绝。
+修复提交 `c224f2bc5a5aa0e669e7d7a711d68796aecafb40` 已推送并核对远端。
+两次 HTTP 408 推送失败后，确认远端未前进，使用 HTTP/1.1 成功推送；没有强推。
+
+本次定向测试 48 passed；首次完整检查在 Ruff 发现测试 fixture 参数未显式使用，修正后重跑
+原完整命令为 **1758 passed / 88 deselected**，Ruff、mypy、Google docstrings 通过。
+日志为 `artifacts/p11-final/check-maintenance-fix.log`（保留失败）和
+`check-maintenance-fix-rerun.log`。
+[CI 34016592580](https://github.com/taoyifei/RAG_TEST/actions/runs/34016592580)
+精确测试上述修复提交，7 个 jobs 全成功。Provider、产品镜像和请求语义未修改，未重建本地候选。
+
+原 campaign 已通过既有断网首绑入口导入全部旧账（6 次转发、157 estimated，另有 1 次本地拦截），
+App 已恢复、Qdrant 未操作。原累计上限仍为 25 次 / 1000 estimated，每 Provider 600。
+首绑收据见 `artifacts/p11-final/campaign-binding-receipt.json`。
+
+百炼文档 canary 实际返回 HTTP 200、供应商 usage=23，却在响应合同校验中失败：
+`INVALID_RESPONSE_CONTRACT`，请求标识 `e2c07c49-2e02-975a-8594-50d864ea2af3`。
+查询 canary 按依赖阻断，未继续 Jina、双槽、failover/recovery 或 30 问两路质量。
+不能据此声称向量可用，也不能认定用户配置错误。
+
+用户随后明确授权排查配置与代码；通过原管理员 Session/CSRF 预算修订入口增加一个
+单次诊断步骤，保留同一 campaign、原累计上限、批准文本和全部旧账。
+该诊断也返回 HTTP 200、usage=23，但执行者将采集点放在 Adapter，实际连接测试走 Product
+校验，导致未采到响应结构。此采集失误已如实保留，不将其计为成功验收。
+采集点已修正，并以真实 Product 校验函数执行离线回归：缺少业务状态字段会被拒绝、
+带状态字段且向量合法的样例通过；两种样例均能采到结构，HTTP=0。
+这只证明一个兼容性疑点，尚不能确认真实响应字段形态。原 canary 失败记录未覆盖。
+
+截至本段，本轮真实调用 2 次 / 26 estimated / 46 observed；累计为 8 次 / 183 estimated，
+已知 observed=288，旧账仍有 3 次 usage 未知。新增诊断单次额度已用尽，已请求用户允许
+补 1 次结构诊断；在收到明确回复前不再调用。请求正文、密钥、完整向量均未写入诊断证据。
+证据位于 `artifacts/p11-final/diagnostic-approval.json`、`aliyun-response-diagnostic.json`
+及 `diagnostic-collector-offline.json`。
+
+当前 `CODE_FIXES_READY=true`、`P11_READY=false`、`CI_READY=PASS`；完整预算和镜像风险
+尚未批准，release/feature 均未合并，main/Industry 未改。下文为此前基线与操作历史。
+
 ## 已授权 App 更新（2026-09-06）
 
 用户明确允许更新并要求更新后暂停。目标 `rag-v1-app-1` 已更新至候选
@@ -20,7 +69,7 @@ Secret 卷归档，文件为 0600、目录受限，保存在
 实际更新收据在同目录上级 `update-receipt.json`；恢复根文件系统归档在
 `artifacts/p11-final/app-update-20260906T055842Z/`。
 
-当前暂停等待用户在本地页面配置原百炼连接，只保存、不测试。预算、风险、Live 和
+更新完成时暂停等待用户在本地页面配置原百炼连接，只保存、不测试。预算、风险、Live 和
 feature 合并条件仍未满足；下文原实例镜像与待授权更新描述保留为更新前的历史基线。
 
 ## 基线与运行目标
