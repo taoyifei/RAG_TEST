@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    HydratedChunk,
     RankedChunk,
     RetrievalPolicy,
 )
@@ -47,9 +48,17 @@ class NeighborExpander:
             扩展候选及可审计的安全降级原因。
 
         """
-        if mode == "none" or not candidates:
+        if not candidates:
             return ExpansionOutcome(candidates)
         try:
+            originals = _original_candidates(candidates)
+        except IndexCorrupt:
+            # 原命中自身冲突时不能把不一致对象交给后续去重器任选其一。
+            return ExpansionOutcome((), ("NEIGHBOR_INDEX_CORRUPT",))
+        candidates = tuple(originals.values())
+        try:
+            if mode == "none":
+                return ExpansionOutcome(candidates)
             if mode == "section":
                 return ExpansionOutcome(
                     self._expand_sections(snapshot, candidates, policy)
@@ -82,38 +91,30 @@ class NeighborExpander:
         hydrated = self._source.hydrate_chunks(
             snapshot, tuple(dict.fromkeys(ids))
         )
-        by_id = {item.chunk.chunk_id: item for item in hydrated}
-        output: list[RankedChunk] = []
-        seen: set[str] = set()
+        originals = _original_candidates(candidates)
+        by_id = _hydrated_candidates(hydrated, originals)
+        context: dict[str, RankedChunk] = {}
         for candidate in candidates:
             chunk = candidate.hydrated.chunk
-            sequence = []
-            if chunk.previous_chunk_id in by_id:
-                sequence.append(by_id[chunk.previous_chunk_id])
-            sequence.append(candidate.hydrated)
-            if chunk.next_chunk_id in by_id:
-                sequence.append(by_id[chunk.next_chunk_id])
-            for hydrated_item in sequence[: 1 + 2 * policy.neighbor_count]:
-                neighbor = hydrated_item.chunk
-                if neighbor.chunk_id in seen:
+            if mode == "table" and chunk.role.value != "table":
+                continue
+            for neighbor_id in (chunk.previous_chunk_id, chunk.next_chunk_id):
+                if neighbor_id not in by_id:
                     continue
-                if neighbor.chunk_id != chunk.chunk_id:
-                    _validate_neighbor(chunk, neighbor)
-                seen.add(neighbor.chunk_id)
-                output.append(
-                    candidate
-                    if neighbor.chunk_id == chunk.chunk_id
-                    else RankedChunk(
-                        hydrated=hydrated_item,
-                        fusion_rank=candidate.fusion_rank,
-                        expansion_reason=(
-                            "TABLE_CONTINUITY"
-                            if mode == "table"
-                            else "SAME_GROUP_NEIGHBOR"
-                        ),
-                    )
+                hydrated_item = by_id[neighbor_id]
+                _validate_neighbor(chunk, hydrated_item.chunk)
+                _add_context(
+                    originals,
+                    context,
+                    hydrated_item,
+                    seed_id=chunk.chunk_id,
+                    reason=(
+                        "TABLE_CONTINUITY"
+                        if mode == "table"
+                        else "SAME_GROUP_NEIGHBOR"
+                    ),
                 )
-        return tuple(output)
+        return (*candidates, *context.values())
 
     def _expand_sections(
         self,
@@ -121,8 +122,10 @@ class NeighborExpander:
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
     ) -> tuple[RankedChunk, ...]:
-        output = list(candidates)
-        seen = {item.hydrated.chunk.chunk_id for item in candidates}
+        if policy.section_chunk_limit == 0:
+            return candidates
+        originals = _original_candidates(candidates)
+        context: dict[str, RankedChunk] = {}
         for candidate in candidates:
             chunk = candidate.hydrated.chunk
             ids = self._source.section_chunk_ids(
@@ -131,30 +134,99 @@ class NeighborExpander:
                 section_id=chunk.section_id,
                 limit=policy.section_chunk_limit,
             )
-            for item in self._source.hydrate_chunks(snapshot, ids):
-                if item.chunk.chunk_id in seen:
-                    continue
-                seen.add(item.chunk.chunk_id)
-                output.append(
-                    RankedChunk(
-                        hydrated=item,
-                        fusion_rank=candidate.fusion_rank,
-                        expansion_reason="SECTION_SIBLING",
-                    )
+            hydrated = self._source.hydrate_chunks(
+                snapshot, ids[: policy.section_chunk_limit]
+            )
+            for item in _hydrated_candidates(hydrated, originals).values():
+                _validate_boundary(chunk, item.chunk)
+                _add_context(
+                    originals,
+                    context,
+                    item,
+                    seed_id=chunk.chunk_id,
+                    reason="SECTION_SIBLING",
                 )
-        return tuple(output)
+        return (*candidates, *context.values())
+
+
+def _original_candidates(
+    candidates: tuple[RankedChunk, ...],
+) -> dict[str, RankedChunk]:
+    """在任何扩展之前冻结原命中；冲突身份或评分不静默选取。"""
+    originals: dict[str, RankedChunk] = {}
+    for candidate in candidates:
+        chunk_id = candidate.hydrated.chunk.chunk_id
+        existing = originals.get(chunk_id)
+        if existing is not None and existing != candidate:
+            raise IndexCorrupt(
+                "同 ID 的原始候选身份或排名不一致。",
+                stage="retrieval.neighbors",
+            )
+        if existing is None:
+            originals[chunk_id] = candidate
+    return originals
+
+
+def _hydrated_candidates(
+    hydrated: tuple[HydratedChunk, ...],
+    originals: dict[str, RankedChunk],
+) -> dict[str, HydratedChunk]:
+    result: dict[str, HydratedChunk] = {}
+    for item in hydrated:
+        chunk_id = item.chunk.chunk_id
+        existing = result.get(chunk_id)
+        original = originals.get(chunk_id)
+        if (existing is not None and existing.chunk != item.chunk) or (
+            original is not None and original.hydrated.chunk != item.chunk
+        ):
+            raise IndexCorrupt(
+                "Hydration 返回同 ID 的不一致 canonical Chunk。",
+                stage="retrieval.neighbors",
+            )
+        result[chunk_id] = item
+    return result
+
+
+def _add_context(
+    originals: dict[str, RankedChunk],
+    context: dict[str, RankedChunk],
+    item: HydratedChunk,
+    *,
+    seed_id: str,
+    reason: str,
+) -> None:
+    """原命中优先；纯上下文只记录扩展来源，不继承召回身份。"""
+    chunk_id = item.chunk.chunk_id
+    if chunk_id in originals:
+        return
+    existing = context.get(chunk_id)
+    if existing is not None:
+        if existing.hydrated.chunk != item.chunk:
+            raise IndexCorrupt(
+                "不同种子扩展出的同 ID canonical Chunk 不一致。",
+                stage="retrieval.neighbors",
+            )
+        context[chunk_id] = existing.model_copy(
+            update={
+                "expansion_seed_ids": tuple(
+                    sorted({*existing.expansion_seed_ids, seed_id})
+                )
+            }
+        )
+        return
+    # 兼容必填正整数：纯上下文序号位于全部融合名次之后，非种子分数。
+    context[chunk_id] = RankedChunk(
+        hydrated=item,
+        fusion_rank=max(seed.fusion_rank for seed in originals.values())
+        + len(context)
+        + 1,
+        expansion_reason=reason,
+        expansion_seed_ids=(seed_id,),
+    )
 
 
 def _validate_neighbor(origin_chunk: Chunk, neighbor_chunk: Chunk) -> None:
-    if (
-        neighbor_chunk.version != origin_chunk.version
-        or neighbor_chunk.section_id != origin_chunk.section_id
-        or neighbor_chunk.neighbor_group_id != origin_chunk.neighbor_group_id
-    ):
-        raise IndexCorrupt(
-            "Neighbor 跨越 canonical 结构边界。",
-            stage="retrieval.neighbors",
-        )
+    _validate_boundary(origin_chunk, neighbor_chunk)
     linked = (
         origin_chunk.previous_chunk_id == neighbor_chunk.chunk_id
         and neighbor_chunk.next_chunk_id == origin_chunk.chunk_id
@@ -165,6 +237,21 @@ def _validate_neighbor(origin_chunk: Chunk, neighbor_chunk: Chunk) -> None:
     if not linked:
         raise IndexCorrupt(
             "Neighbor 双向链接不一致。", stage="retrieval.neighbors"
+        )
+
+
+def _validate_boundary(origin_chunk: Chunk, neighbor_chunk: Chunk) -> None:
+    if (
+        neighbor_chunk.version != origin_chunk.version
+        or neighbor_chunk.project_id != origin_chunk.project_id
+        or neighbor_chunk.knowledge_base_id != origin_chunk.knowledge_base_id
+        or neighbor_chunk.index_revision_id != origin_chunk.index_revision_id
+        or neighbor_chunk.section_id != origin_chunk.section_id
+        or neighbor_chunk.neighbor_group_id != origin_chunk.neighbor_group_id
+    ):
+        raise IndexCorrupt(
+            "Neighbor 跨越 canonical 结构边界。",
+            stage="retrieval.neighbors",
         )
 
 

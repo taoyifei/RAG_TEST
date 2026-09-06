@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from rag_app.application.retrieval.answer_support import (
+    SupportStatus,
+    evaluate_span_support,
+)
+from rag_app.application.retrieval.evidence import semantic_candidate_allowed
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    EvidenceSelectionContext,
     QueryAnalysis,
     QueryKind,
     RankedChunk,
@@ -15,7 +21,6 @@ from rag_app.core.query_text import normalize_identifier
 
 _MIN_AMBIGUOUS_EVIDENCE = 2
 _MIN_RERANK_MARGIN_ITEMS = 2
-_MAX_DENSE_EVIDENCE_RANK = 10
 
 
 class ConfidenceEvaluator:
@@ -95,11 +100,38 @@ class ConfidenceEvaluator:
             "METADATA_ONLY" in item.quality_flags for item in evidence
         )
         dense_only = bool(supported_candidates) and not (exact or lexical)
-        dense_allowed = _dense_semantic_allowed(
-            resolved_policy,
-            supported_candidates,
-            rerank_mode=rerank_mode,
+        semantic_context = EvidenceSelectionContext(
+            analysis=analysis,
+            query_kind=query_kind,
+            rerank_mode=rerank_mode or "RERANK_NOT_EXECUTED",
+            selected_slot=selected_vector_space.split(":", 1)[0]
+            if selected_vector_space is not None
+            else None,
             selected_vector_space=selected_vector_space,
+        )
+        semantic_ids = {
+            item.hydrated.chunk.chunk_id
+            for item in supported_candidates
+            if semantic_candidate_allowed(
+                item, resolved_policy, semantic_context
+            )
+        }
+        dense_allowed = bool(semantic_ids)
+        qualified_ids = semantic_ids | {
+            item.hydrated.chunk.chunk_id
+            for item in supported_candidates
+            if any(
+                contribution.channel == "exact"
+                or contribution.channel.startswith("lexical")
+                for contribution in item.contributions
+            )
+        }
+        qualified_support = _qualified_support(evidence, qualified_ids)
+        support_states = tuple(
+            _support_status(analysis, item) for item in evidence
+        )
+        answer_supported = bool(support_states) and all(
+            state == SupportStatus.SUPPORTED.value for state in support_states
         )
         independent_supports = len(evidence_chunk_ids)
         if not evidence:
@@ -111,16 +143,19 @@ class ConfidenceEvaluator:
         elif dense_only and not dense_allowed:
             status = ConfidenceStatus.INSUFFICIENT_EVIDENCE
             score = 0.15
-        elif (
-            query_kind is QueryKind.AMBIGUOUS
-            and independent_supports
-            < max(
-                _MIN_AMBIGUOUS_EVIDENCE,
-                resolved_policy.minimum_support_items,
-            )
+        elif query_kind is QueryKind.AMBIGUOUS and independent_supports < max(
+            _MIN_AMBIGUOUS_EVIDENCE,
+            resolved_policy.minimum_support_items,
         ):
             status = ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION
             score = 0.25
+        elif (
+            not citable_coverage
+            or not answer_supported
+            or not qualified_support
+        ):
+            status = ConfidenceStatus.INSUFFICIENT_EVIDENCE
+            score = 0.1
         else:
             status = ConfidenceStatus.ANSWERABLE
             score = min(
@@ -145,6 +180,9 @@ class ConfidenceEvaluator:
             reason_codes=(
                 "P07_RULE_CONFIDENCE",
                 "EVIDENCE_BOUND_CONFIDENCE_V2",
+                "ANSWER_RELATION_SUPPORTED"
+                if answer_supported
+                else "ANSWER_RELATION_UNSUPPORTED",
                 *(
                     (resolved_policy.dense_semantic_calibration_state,)
                     if dense_only and dense_allowed
@@ -165,33 +203,43 @@ class ConfidenceEvaluator:
                 ("degraded_count", float(len(degraded))),
                 ("independent_support_count", float(independent_supports)),
                 ("dense_semantic_allowed", float(dense_allowed)),
+                ("answer_relation_supported", float(answer_supported)),
+                ("qualified_source_support", float(qualified_support)),
             ),
         )
 
 
-def _dense_semantic_allowed(
-    policy: RetrievalPolicy,
-    candidates: tuple[RankedChunk, ...],
-    *,
-    rerank_mode: str,
-    selected_vector_space: str | None,
+def _support_status(analysis: QueryAnalysis, evidence: EvidenceItem) -> str:
+    support = dict(evidence.metadata).get("answer_support")
+    if isinstance(support, dict):
+        return str(support.get("status", "UNCERTAIN"))
+    return evaluate_span_support(analysis, evidence.citation_text).status.value
+
+
+def _qualified_support(
+    evidence: tuple[EvidenceItem, ...], direct_ids: set[str]
 ) -> bool:
-    if (
-        not policy.dense_semantic_enabled
-        or selected_vector_space is None
-        or selected_vector_space not in policy.dense_calibrated_vector_spaces
-        or rerank_mode.casefold().startswith("rerank_")
-    ):
-        return False
-    return all(
-        item.rerank_rank is not None
-        and item.rerank_rank <= _MAX_DENSE_EVIDENCE_RANK
-        and any(
-            contribution.channel.startswith("dense:")
-            for contribution in item.contributions
-        )
-        for item in candidates
-    )
+    qualified_nodes = {
+        span.node_id
+        for item in evidence
+        if item.chunk_id in direct_ids
+        for span in item.source_spans
+    }
+    for item in evidence:
+        if item.chunk_id in direct_ids:
+            continue
+        support = dict(item.metadata).get("answer_support")
+        if (
+            not isinstance(support, dict)
+            or support.get("support_reason") != "LINKED_SUBJECT_ATTRIBUTE"
+        ):
+            return False
+        nodes = support.get("supporting_span_ids", [])
+        if not isinstance(nodes, list) or not any(
+            node in qualified_nodes for node in nodes
+        ):
+            return False
+    return bool(evidence)
 
 
 def _identifier_coverage(

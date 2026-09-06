@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from dataclasses import asdict
 
+from rag_app.application.retrieval.answer_support import (
+    AnswerSupport,
+    SupportStatus,
+    evaluate_linked_support,
+    evaluate_span_support,
+)
 from rag_app.core.models import (
     Chunk,
     EvidenceItem,
@@ -14,11 +21,13 @@ from rag_app.core.models import (
     RetrievalPolicy,
 )
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
+from rag_app.core.models.common import freeze_json_object
 
-_RELATIVE_RELEVANCE_FLOOR = 0.98
 _MIN_TABLE_LABEL_LENGTH = 2
-_TableKey = tuple[str, str, str, str, str, tuple[str, ...]]
+_MAX_SEMANTIC_RANK = 10
+_TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
+_TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
 
 
 class EvidenceAssembler:
@@ -46,38 +55,17 @@ class EvidenceAssembler:
             {item.hydrated.chunk.chunk_id: item for item in candidates}.values()
         )
         table_spans = _table_intersections(unique_chunks, context)
+        support_overrides = _context_supports(
+            unique_chunks, context, table_spans
+        )
         ordered = unique_chunks
         documents: Counter[str] = Counter()
         sections: Counter[tuple[str, str]] = Counter()
         used_spans: set[tuple[object, ...]] = set()
         remaining = policy.evidence_token_budget
         evidence: list[EvidenceItem] = []
-        semantic_only_result = bool(
-            policy.dense_semantic_enabled
-            and context is not None
-            and context.selected_slot is not None
-            and not context.rerank_mode.casefold().startswith("rerank_")
-            and unique_chunks
-            and all(
-                candidate.contributions
-                and all(
-                    contribution.channel.startswith("dense:")
-                    for contribution in candidate.contributions
-                )
-                for candidate in unique_chunks
-            )
-        )
-        best_relevance = max(
-            (
-                _best_candidate_relevance(candidate, context)
-                for candidate in unique_chunks
-            ),
-            default=0.0,
-        )
-        relevance_floor = max(
-            policy.minimum_span_overlap,
-            best_relevance * _RELATIVE_RELEVANCE_FLOOR,
-        )
+        # 字面得分仅在候选内部排列，不让别的表格单位淘汰当前段落。
+        relevance_floor = policy.minimum_span_overlap
         for candidate in ordered:
             if len(evidence) >= policy.max_evidence_items:
                 break
@@ -90,10 +78,11 @@ class EvidenceAssembler:
                 used_spans,
                 context=context,
                 minimum_overlap=relevance_floor,
-                allow_semantic=(
-                    semantic_only_result and candidate.rerank_rank is not None
+                allow_semantic=semantic_candidate_allowed(
+                    candidate, policy, context
                 ),
                 table_spans=table_spans.get(chunk.chunk_id),
+                support_overrides=support_overrides,
             ):
                 if len(evidence) >= policy.max_evidence_items:
                     break
@@ -112,10 +101,32 @@ class EvidenceAssembler:
                 sections[section_key] += 1
                 selected_for_chunk += 1
                 support_id = f"S{len(evidence) + 1}"
-                evidence.append(
-                    _evidence_item(candidate, span, quote, support_id)
-                )
-        return tuple(evidence)
+                item = _evidence_item(candidate, span, quote, support_id)
+                if context is not None:
+                    support = support_overrides.get(
+                        span_key
+                    ) or evaluate_span_support(
+                        context.analysis,
+                        quote,
+                        span_id=span.node_id or "",
+                        table_relation=table_spans.get(chunk.chunk_id)
+                        is not None,
+                    )
+                    support_metadata = asdict(support)
+                    support_metadata["status"] = support.status.value
+                    support_metadata["supporting_span_ids"] = list(
+                        support.supporting_span_ids
+                    )
+                    item = item.model_copy(
+                        update={
+                            "metadata": freeze_json_object(
+                                {"answer_support": support_metadata}
+                            )
+                        }
+                    )
+                evidence.append(item)
+        # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
+        return _complete_supports(tuple(evidence))
 
 
 def _ranked_citable_spans(  # noqa: PLR0913
@@ -126,6 +137,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
     minimum_overlap: float,
     allow_semantic: bool,
     table_spans: set[_SpanKey] | None = None,
+    support_overrides: dict[_SpanKey, AnswerSupport] | None = None,
 ) -> tuple[tuple[SourceSpan, str, tuple[object, ...]], ...]:
     selected: list[tuple[float, int, SourceSpan, str, tuple[object, ...]]] = []
     for span in chunk.source_spans:
@@ -140,8 +152,19 @@ def _ranked_citable_spans(  # noqa: PLR0913
         if not quote.strip():
             continue
         relevance = _span_relevance(quote, context, chunk.role.value)
+        if context is not None:
+            support = (support_overrides or {}).get(
+                key
+            ) or evaluate_span_support(
+                context.analysis,
+                quote,
+                table_relation=table_spans is not None,
+            )
+            if support.status is not SupportStatus.SUPPORTED:
+                continue
         if (
             table_spans is None
+            and key not in (support_overrides or {})
             and context is not None
             and not _span_is_eligible(
                 relevance,
@@ -164,6 +187,47 @@ def _ranked_citable_spans(  # noqa: PLR0913
         key=lambda item: (-item[0], item[1], item[2].chunk_start_char)
     )
     return tuple((span, quote, key) for _, _, span, quote, key in selected)
+
+
+def semantic_candidate_allowed(
+    candidate: RankedChunk,
+    policy: RetrievalPolicy,
+    context: EvidenceSelectionContext | None,
+) -> bool:
+    """只检查当前直接候选的真实通道、重排和向量校准身份。
+
+    Args:
+        candidate: 当前 canonical 候选，扩展项不能继承种子身份。
+        policy: 当前隔离验收或已校准策略。
+        context: 当前实际路由与重排上下文。
+
+    Returns:
+        是否具备独立语义准入资格，不代表事实支持已经成立。
+
+    """
+    if (
+        context is None
+        or context.selected_slot is None
+        or not policy.dense_semantic_enabled
+        or policy.dense_semantic_calibration_state == "UNCALIBRATED"
+        or context.rerank_mode.casefold().startswith("rerank_")
+        or candidate.rerank_rank is None
+        or candidate.rerank_rank > _MAX_SEMANTIC_RANK
+        or candidate.expansion_reason is not None
+    ):
+        return False
+    spaces = tuple(
+        space
+        for space in policy.dense_calibrated_vector_spaces
+        if space.startswith(f"{context.selected_slot}:")
+    )
+    actual_space = context.selected_vector_space
+    if actual_space is None and len(spaces) == 1:
+        actual_space = spaces[0]
+    return actual_space in spaces and any(
+        contribution.channel == f"dense:{context.selected_slot}"
+        for contribution in candidate.contributions
+    )
 
 
 def _span_key(chunk: Chunk, span: SourceSpan) -> _SpanKey:
@@ -220,11 +284,7 @@ def _table_intersections(
             for (row, column), values in cells.items()
             if row > 0 and column == 0 and _label_matches(values, query)
         }
-        columns = {
-            column
-            for (row, column), values in cells.items()
-            if row == 0 and column > 0 and _label_matches(values, query)
-        }
+        columns = _requested_columns(cells, rows, context)
         if len(rows) != 1 or len(columns) != 1:
             continue
         values = cells.get((next(iter(rows)), next(iter(columns))), {})
@@ -235,8 +295,164 @@ def _table_intersections(
     return selected
 
 
+def _requested_columns(
+    cells: _TableCells, rows: set[int], context: EvidenceSelectionContext
+) -> set[int]:
+    query = context.analysis.normalized_query.casefold()
+    columns = {
+        column
+        for (row, column), values in cells.items()
+        if row == 0 and column > 0 and _header_matches(values, query)
+    }
+    if (
+        len(rows) != 1
+        or columns
+        or not re.search(r"数值.*单位|单位.*数值", query)
+    ):
+        return columns
+    # 无指定列名时，只接受所选行内唯一带物理单位的值。
+    return {
+        column
+        for (row, column), values in cells.items()
+        if row in rows
+        and len(set(values.values())) == 1
+        and evaluate_span_support(
+            context.analysis,
+            next(iter(values.values())),
+            table_relation=True,
+        ).status
+        is SupportStatus.SUPPORTED
+    }
+
+
+def _header_matches(values: dict[_SpanKey, str], query: str) -> bool:
+    if _label_matches(values, query):
+        return True
+    return (
+        len(set(values.values())) == 1
+        and re.search(r"谁(?!的)|哪位", query) is not None
+        and re.search(
+            r"受理角色|负责人员|责任人|审核人员|复核人员",
+            next(iter(values.values())),
+        )
+        is not None
+    )
+
+
+def _context_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext | None,
+    table_spans: dict[str, set[_SpanKey]],
+) -> dict[_SpanKey, AnswerSupport]:
+    if context is None:
+        return {}
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    headers: dict[tuple[_TableKey, int], set[str]] = defaultdict(set)
+    chunks = {
+        item.hydrated.chunk.chunk_id: item.hydrated.chunk for item in candidates
+    }
+    for chunk in chunks.values():
+        for span in chunk.source_spans:
+            location = _table_location(chunk, span)
+            if location is not None and location[1] == 0:
+                headers[location[0], location[2]].add(
+                    chunk.citation_text[
+                        span.chunk_start_char : span.chunk_end_char
+                    ]
+                )
+    for chunk in chunks.values():
+        for span in chunk.source_spans:
+            key = _span_key(chunk, span)
+            location = _table_location(chunk, span)
+            if (
+                key in table_spans.get(chunk.chunk_id, set())
+                and location is not None
+            ):
+                labels = headers[location[0], location[2]]
+                if len(labels) == 1:
+                    supports[key] = evaluate_span_support(
+                        context.analysis,
+                        chunk.citation_text[
+                            span.chunk_start_char : span.chunk_end_char
+                        ],
+                        span_id=span.node_id or "",
+                        table_relation=True,
+                        table_header=next(iter(labels)),
+                    )
+        neighbor = chunks.get(chunk.next_chunk_id or "")
+        if neighbor is not None:
+            supports.update(_linked_span_supports(context, chunk, neighbor))
+    return supports
+
+
+def _linked_span_supports(
+    context: EvidenceSelectionContext, first: Chunk, second: Chunk
+) -> dict[_SpanKey, AnswerSupport]:
+    if (
+        first.role.value == "table"
+        or second.role.value == "table"
+        or first.next_chunk_id != second.chunk_id
+        or second.previous_chunk_id != first.chunk_id
+        or any(
+            getattr(first, field) != getattr(second, field)
+            for field in (
+                "project_id",
+                "knowledge_base_id",
+                "index_revision_id",
+                "version",
+                "section_id",
+                "neighbor_group_id",
+            )
+        )
+    ):
+        return {}
+    first_spans = [
+        span for span in first.source_spans if span.is_citable and span.node_id
+    ]
+    second_spans = [
+        span for span in second.source_spans if span.is_citable and span.node_id
+    ]
+    if not first_spans or not second_spans:
+        return {}
+    left, right = first_spans[-1], second_spans[0]
+    support = evaluate_linked_support(
+        context.analysis,
+        first.citation_text[left.chunk_start_char : left.chunk_end_char],
+        second.citation_text[right.chunk_start_char : right.chunk_end_char],
+        (left.node_id or "", right.node_id or ""),
+    )
+    if support is None:
+        return {}
+    return {_span_key(first, left): support, _span_key(second, right): support}
+
+
+def _complete_supports(
+    evidence: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    present = {span.node_id for item in evidence for span in item.source_spans}
+    complete: list[EvidenceItem] = []
+    for item in evidence:
+        support = dict(item.metadata).get("answer_support")
+        if (
+            isinstance(support, dict)
+            and support.get("support_reason") == "LINKED_SUBJECT_ATTRIBUTE"
+        ):
+            nodes = support.get("supporting_span_ids", [])
+            if not isinstance(nodes, list) or any(
+                node not in present for node in nodes
+            ):
+                continue
+        complete.append(
+            item.model_copy(update={"evidence_id": f"S{len(complete) + 1}"})
+        )
+    return tuple(complete)
+
+
 def _label_matches(values: dict[_SpanKey, str], query: str) -> bool:
-    labels = {value.casefold() for value in values.values()}
+    labels = {
+        re.sub(r"[（(][^()（）]*[）)]", "", value.casefold())
+        for value in values.values()
+    }
     return len(labels) == 1 and any(
         len(label) >= _MIN_TABLE_LABEL_LENGTH and label in query
         for label in labels
@@ -260,6 +476,9 @@ def _table_location(
         if any(part.startswith("tbl:") for part in path[index + 1 :]):
             continue
         table_key = (
+            chunk.project_id,
+            chunk.knowledge_base_id,
+            chunk.index_revision_id,
             chunk.version.document_id,
             chunk.version.document_version_id,
             chunk.neighbor_group_id,

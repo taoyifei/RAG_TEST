@@ -101,7 +101,13 @@ class RetrievalService:
         self._answering = ExtractiveAnsweringService(generator)
         self._trace = trace
         self._cache = cache
-        self._serving_fingerprint = serving_fingerprint
+        # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
+        self._serving_fingerprint = canonical_sha256(
+            {
+                "configured_serving": serving_fingerprint,
+                "retrieval_implementation": "p11-evidence-support-v1",
+            }
+        )
         self._egress = egress_policy
         self._policy = policy or RetrievalPolicy()
         self._analyzer = QueryAnalyzer()
@@ -433,6 +439,11 @@ class RetrievalService:
                 query_kind=plan.query_kind,
                 rerank_mode=reranked.mode,
                 selected_slot=selected_slot,
+                selected_vector_space=(
+                    snapshot.topology.slot(selected_slot).vector_space_identity
+                    if selected_slot is not None
+                    else None
+                ),
             ),
         )
         self._record(

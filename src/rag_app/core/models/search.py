@@ -221,7 +221,11 @@ class HydratedChunk(FrozenModel):
 
 
 class RankedChunk(FrozenModel):
-    """融合、重排及结构扩展共享的 canonical 候选。"""
+    """融合、重排及结构扩展共享的 canonical 候选。
+
+    纯扩展项的 fusion_rank 仅为原始融合名次之后的稳定展示序号；
+    expansion_seed_ids 记录上下文来源，不赋予通道或重排身份。
+    """
 
     hydrated: HydratedChunk
     fusion_rank: StrictInt = Field(gt=0)
@@ -230,6 +234,7 @@ class RankedChunk(FrozenModel):
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = ()
     expansion_reason: str | None = None
+    expansion_seed_ids: tuple[str, ...] = ()
 
     @field_validator("rerank_score")
     @classmethod
@@ -246,6 +251,7 @@ class EvidenceSelectionContext(FrozenModel):
     query_kind: QueryKind
     rerank_mode: str = Field(min_length=1)
     selected_slot: str | None = None
+    selected_vector_space: str | None = None
 
 
 class DiagnosticRerankItem(FrozenModel):
