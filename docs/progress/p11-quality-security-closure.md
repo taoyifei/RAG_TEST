@@ -96,3 +96,13 @@ SourceRange指标按原程序计算组装器选中span，拒答时仍可存在�
 `CODE_FIXES_READY=true`、`RETRIEVAL_QUALITY_READY=BLOCKED`、`SECURITY_READY=BLOCKED`、`P11_READY=false`、`FEATURE_MERGE_DONE=false`、`MERGE_TO_MAIN_AUTHORIZED=false`。
 
 所有本轮日志和收据位于 `artifacts/p11-final/quality-security-closure/`；根因root-cause-audit.json、逐题per-case-before-after.json、唯一Live live-result.json、失败分析live-failure-analysis.json、预算budget-final.json、冻结freeze.json。原失败、失败门及回滚材料均保留；本轮未执行生产release、私文出网或独立泛化质量验收。
+
+## 已核对的工作线交付
+
+修复分支远端 `a610296a68d4d9548574c967e4b078d1d502dd5e` 已保存；正常 `--no-ff` 合入 `codex/p11-final-acceptance`，实际合并SHA `029d674c19b3d61f31ad0da84228d54af0535ed1` 已推送。该精确合并SHA的 [CI 34031731094](https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094) 七项全部success；业务资产与d1f8d8d及运行05d6镜像完全一致。本段及验收JSON的后续记录提交只更新文档，不另构建或用新的文档SHA冒称CI已执行。
+
+前后远端核对：main=`af30f81fbcbd0577c16fbf59bb9bce8f29a3de91`，Industry=`5cc5d7bcc28a2ebd8e61dbc511930b99cfbe324a`，codex/p11-release=`7e46cd9c989b8f00bd740588b3a53408235bf50a`，feature/universal-rag=`e7d69f14e5ad293b091f6aef98c91f3a3f76e325`，均未推进。工程工作线合并没有解除质量/安全门。
+
+事后断网、无Secret、只读账本与唯一Live收据完全一致，App healthy、Qdrant启动时间与ID不变，本轮临时构建worktree已删除，原有worktree未动。事后预算预检exit1/BLOCKED表示原计划已消费、余额不能覆盖再次完整执行，并非本轮事前预算或授权失败；此检查新增Provider=0。若机械重复原最坏计划159HTTP/49505estimated，当前全局缺74HTTP/8630estimated，Jina缺52HTTP/7046estimated、Aliyun缺22HTTP/1584estimated，citation_quality步骤缺74HTTP，主路及切换功能步骤各剩0。这里只披露实际缺口，没有提出或写入新限额，也不自动开始第二轮。
+
+最终Git、合并CI、清理和运行核对收据：`git-delivery.json`、`ci-merge.json`、`runtime-final.json`、`budget-post-live.json`。质量与安全仍BLOCKED，Provider追加已停止。

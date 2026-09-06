@@ -18,3 +18,5 @@
 - [18CVE及54→50元组处置](artifacts/p11-final/quality-security-closure/security/cve-summary.md)
 - [既有风险入口](release/p11-os-risk-review.json)
 - [原轮历史记录](docs/progress/p11-final-acceptance.md)
+
+修复分支已推送，工作线正常合并 `029d674c19b3d61f31ad0da84228d54af0535ed1` 已推送；[实际合并CI](https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094) 7/7 success。业务资产与已测候选一致，release/feature/main/Industry未推进。

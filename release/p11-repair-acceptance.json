@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T11:56:30.461491+00:00",
+  "generated_at": "2026-09-06T12:06:26.359485+00:00",
   "identity": {
     "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
     "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
@@ -103,6 +103,22 @@
       "rollback-recovery-20260906T113322Z/recovery-receipt.json": {
         "path": "artifacts/p11-final/quality-security-closure/rollback-recovery-20260906T113322Z/recovery-receipt.json",
         "sha256": "20746f2bf457511f0ee7d173c655849c2b741a67a5107173ea258ca1bce4b114"
+      },
+      "ci-merge.json": {
+        "path": "artifacts/p11-final/quality-security-closure/ci-merge.json",
+        "sha256": "8f281be97f2ae32f743262fc73c477b06bacf0bb492df8853cf3acf3551e7827"
+      },
+      "git-delivery.json": {
+        "path": "artifacts/p11-final/quality-security-closure/git-delivery.json",
+        "sha256": "f5f75a86e71441fbcce4dd4d9dfb00fb7705a7b596737771662a6a2a56183431"
+      },
+      "runtime-final.json": {
+        "path": "artifacts/p11-final/quality-security-closure/runtime-final.json",
+        "sha256": "12884cfa5ce34d543d8ce15822897a89a42be9bfbcdeb8a0a6af340341e2cabc"
+      },
+      "budget-post-live.json": {
+        "path": "artifacts/p11-final/quality-security-closure/budget-post-live.json",
+        "sha256": "3e2d8709e8fc05b94f8cb64075454454872534d25f7919c39c74f25a699dc084"
       }
     },
     "os_review": {
@@ -182,7 +198,8 @@
         "path": "artifacts/p11-final/quality-security-closure/web_typecheck-execution.json",
         "sha256": "2dca53f36fa0277aa0be38e99e2d4bce1d57cd1e882bc855de12ab4622286c61"
       }
-    ]
+    ],
+    "workline_merge_sha": "029d674c19b3d61f31ad0da84228d54af0535ed1"
   },
   "budget": {
     "status": "PASS",
@@ -2163,8 +2180,8 @@
       }
     },
     "ci": {
-      "status": "PASS",
-      "reason": "EXACT_FROZEN_SHA_SEVEN_JOBS_SUCCESS",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_ORIGIN_UNVERIFIED",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
@@ -2174,682 +2191,682 @@
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/ci.json",
-      "sha256": "6758d75423d3769c8fdcec52fb6a833577dfef0e3185b79d19b544413f4b2f15",
+      "origin": "本次合并结果执行",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/ci-merge.json",
+      "sha256": "8f281be97f2ae32f743262fc73c477b06bacf0bb492df8853cf3acf3551e7827",
       "details": {
         "conclusion": "success",
-        "createdAt": "2026-09-06T11:10:53Z",
-        "databaseId": 34029496428,
-        "headSha": "d1f8d8de04bad3ab1d65ed84943d84cb5c1bc58e",
+        "createdAt": "2026-09-06T11:58:12Z",
+        "databaseId": 34031731094,
+        "headSha": "029d674c19b3d61f31ad0da84228d54af0535ed1",
         "jobs": [
           {
-            "completedAt": "2026-09-06T11:11:21Z",
+            "completedAt": "2026-09-06T11:58:31Z",
             "conclusion": "success",
-            "databaseId": 101476300740,
+            "databaseId": 101482378760,
             "name": "secret-scan",
-            "startedAt": "2026-09-06T11:10:58Z",
+            "startedAt": "2026-09-06T11:58:15Z",
             "status": "completed",
             "steps": [
               {
-                "completedAt": "2026-09-06T11:10:59Z",
+                "completedAt": "2026-09-06T11:58:17Z",
                 "conclusion": "success",
                 "name": "Set up job",
                 "number": 1,
-                "startedAt": "2026-09-06T11:10:59Z",
+                "startedAt": "2026-09-06T11:58:16Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:01Z",
+                "completedAt": "2026-09-06T11:58:18Z",
                 "conclusion": "success",
                 "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 2,
-                "startedAt": "2026-09-06T11:10:59Z",
+                "startedAt": "2026-09-06T11:58:17Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:02Z",
+                "completedAt": "2026-09-06T11:58:20Z",
                 "conclusion": "success",
                 "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
                 "number": 3,
-                "startedAt": "2026-09-06T11:11:01Z",
+                "startedAt": "2026-09-06T11:58:18Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:11Z",
+                "completedAt": "2026-09-06T11:58:24Z",
                 "conclusion": "success",
                 "name": "Run npm ci",
                 "number": 4,
-                "startedAt": "2026-09-06T11:11:02Z",
+                "startedAt": "2026-09-06T11:58:20Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:15Z",
+                "completedAt": "2026-09-06T11:58:28Z",
                 "conclusion": "success",
                 "name": "Run npm run build",
                 "number": 5,
-                "startedAt": "2026-09-06T11:11:11Z",
+                "startedAt": "2026-09-06T11:58:24Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:16Z",
+                "completedAt": "2026-09-06T11:58:29Z",
                 "conclusion": "success",
                 "name": "Run python scripts/secret_scan.py --path src --path frontend/dist",
                 "number": 6,
-                "startedAt": "2026-09-06T11:11:15Z",
+                "startedAt": "2026-09-06T11:58:28Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:19Z",
+                "completedAt": "2026-09-06T11:58:29Z",
                 "conclusion": "success",
                 "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
                 "number": 11,
-                "startedAt": "2026-09-06T11:11:16Z",
+                "startedAt": "2026-09-06T11:58:29Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:19Z",
+                "completedAt": "2026-09-06T11:58:30Z",
                 "conclusion": "success",
                 "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 12,
-                "startedAt": "2026-09-06T11:11:19Z",
+                "startedAt": "2026-09-06T11:58:29Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:19Z",
+                "completedAt": "2026-09-06T11:58:30Z",
                 "conclusion": "success",
                 "name": "Complete job",
                 "number": 13,
-                "startedAt": "2026-09-06T11:11:19Z",
+                "startedAt": "2026-09-06T11:58:30Z",
                 "status": "completed"
               }
             ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476300740"
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378760"
           },
           {
-            "completedAt": "2026-09-06T11:12:04Z",
+            "completedAt": "2026-09-06T11:58:48Z",
             "conclusion": "success",
-            "databaseId": 101476300838,
+            "databaseId": 101482378803,
             "name": "qdrant-integration",
-            "startedAt": "2026-09-06T11:11:33Z",
+            "startedAt": "2026-09-06T11:58:16Z",
             "status": "completed",
             "steps": [
               {
-                "completedAt": "2026-09-06T11:11:35Z",
+                "completedAt": "2026-09-06T11:58:17Z",
                 "conclusion": "success",
                 "name": "Set up job",
                 "number": 1,
-                "startedAt": "2026-09-06T11:11:34Z",
+                "startedAt": "2026-09-06T11:58:16Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:38Z",
+                "completedAt": "2026-09-06T11:58:23Z",
                 "conclusion": "success",
                 "name": "Initialize containers",
                 "number": 2,
-                "startedAt": "2026-09-06T11:11:35Z",
+                "startedAt": "2026-09-06T11:58:17Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:39Z",
+                "completedAt": "2026-09-06T11:58:25Z",
                 "conclusion": "success",
                 "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 3,
-                "startedAt": "2026-09-06T11:11:38Z",
+                "startedAt": "2026-09-06T11:58:23Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:40Z",
+                "completedAt": "2026-09-06T11:58:26Z",
                 "conclusion": "success",
                 "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
                 "number": 4,
-                "startedAt": "2026-09-06T11:11:39Z",
+                "startedAt": "2026-09-06T11:58:25Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:53Z",
+                "completedAt": "2026-09-06T11:58:38Z",
                 "conclusion": "success",
                 "name": "Run python -m pip install --requirement requirements.lock",
                 "number": 5,
-                "startedAt": "2026-09-06T11:11:40Z",
+                "startedAt": "2026-09-06T11:58:26Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:55Z",
+                "completedAt": "2026-09-06T11:58:40Z",
                 "conclusion": "success",
                 "name": "Run python -m pip install --no-deps --editable .",
                 "number": 6,
-                "startedAt": "2026-09-06T11:11:53Z",
+                "startedAt": "2026-09-06T11:58:38Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:55Z",
+                "completedAt": "2026-09-06T11:58:40Z",
                 "conclusion": "success",
                 "name": "Prepare synthetic Qdrant key file",
                 "number": 7,
-                "startedAt": "2026-09-06T11:11:55Z",
+                "startedAt": "2026-09-06T11:58:40Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:12:01Z",
+                "completedAt": "2026-09-06T11:58:45Z",
                 "conclusion": "success",
                 "name": "Run server, snapshot and restore acceptance",
                 "number": 8,
-                "startedAt": "2026-09-06T11:11:55Z",
+                "startedAt": "2026-09-06T11:58:40Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:12:03Z",
+                "completedAt": "2026-09-06T11:58:45Z",
                 "conclusion": "success",
                 "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
                 "number": 14,
-                "startedAt": "2026-09-06T11:12:01Z",
+                "startedAt": "2026-09-06T11:58:45Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:12:03Z",
+                "completedAt": "2026-09-06T11:58:45Z",
                 "conclusion": "success",
                 "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 15,
-                "startedAt": "2026-09-06T11:12:03Z",
+                "startedAt": "2026-09-06T11:58:45Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:12:04Z",
+                "completedAt": "2026-09-06T11:58:45Z",
                 "conclusion": "success",
                 "name": "Stop containers",
                 "number": 16,
-                "startedAt": "2026-09-06T11:12:03Z",
+                "startedAt": "2026-09-06T11:58:45Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:12:04Z",
+                "completedAt": "2026-09-06T11:58:45Z",
                 "conclusion": "success",
                 "name": "Complete job",
                 "number": 17,
-                "startedAt": "2026-09-06T11:12:04Z",
+                "startedAt": "2026-09-06T11:58:45Z",
                 "status": "completed"
               }
             ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476300838"
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378803"
           },
           {
-            "completedAt": "2026-09-06T11:17:10Z",
+            "completedAt": "2026-09-06T11:58:57Z",
             "conclusion": "success",
-            "databaseId": 101476300844,
-            "name": "python-quality",
-            "startedAt": "2026-09-06T11:10:58Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:10:59Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:10:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:01Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:10:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:01Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 3,
-                "startedAt": "2026-09-06T11:11:01Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:02Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 4,
-                "startedAt": "2026-09-06T11:11:01Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:19Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --requirement requirements.lock",
-                "number": 5,
-                "startedAt": "2026-09-06T11:11:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:22Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --no-deps --editable .",
-                "number": 6,
-                "startedAt": "2026-09-06T11:11:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:17:07Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py check",
-                "number": 7,
-                "startedAt": "2026-09-06T11:11:22Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:17:07Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 12,
-                "startedAt": "2026-09-06T11:17:07Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:17:08Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 13,
-                "startedAt": "2026-09-06T11:17:07Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:17:08Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 14,
-                "startedAt": "2026-09-06T11:17:08Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:17:08Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 15,
-                "startedAt": "2026-09-06T11:17:08Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476300844"
-          },
-          {
-            "completedAt": "2026-09-06T11:11:09Z",
-            "conclusion": "success",
-            "databaseId": 101476300897,
-            "name": "sbom",
-            "startedAt": "2026-09-06T11:10:57Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:10:59Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:10:58Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:00Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:10:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:06Z",
-                "conclusion": "success",
-                "name": "Run docker run --rm -v \"$PWD:/src:ro\" -v \"$RUNNER_TEMP:/output\" anchore/syft@sha256:95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c dir:/src -o cyclonedx-json=/output/p11-source.cdx.json",
-                "number": 3,
-                "startedAt": "2026-09-06T11:11:00Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:07Z",
-                "conclusion": "success",
-                "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
-                "number": 4,
-                "startedAt": "2026-09-06T11:11:06Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:07Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 8,
-                "startedAt": "2026-09-06T11:11:07Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:07Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 9,
-                "startedAt": "2026-09-06T11:11:07Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476300897"
-          },
-          {
-            "completedAt": "2026-09-06T11:13:05Z",
-            "conclusion": "success",
-            "databaseId": 101476300902,
-            "name": "offline-product-e2e",
-            "startedAt": "2026-09-06T11:10:58Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:11:00Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:10:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:01Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:11:00Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:02Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 3,
-                "startedAt": "2026-09-06T11:11:01Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:02Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 4,
-                "startedAt": "2026-09-06T11:11:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:19Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --requirement requirements.lock",
-                "number": 5,
-                "startedAt": "2026-09-06T11:11:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:21Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --no-deps --editable .",
-                "number": 6,
-                "startedAt": "2026-09-06T11:11:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:29Z",
-                "conclusion": "success",
-                "name": "Run npm ci",
-                "number": 7,
-                "startedAt": "2026-09-06T11:11:21Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:51Z",
-                "conclusion": "success",
-                "name": "Run npx playwright install --with-deps chromium",
-                "number": 8,
-                "startedAt": "2026-09-06T11:11:29Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:22Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py product-check",
-                "number": 9,
-                "startedAt": "2026-09-06T11:11:51Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:29Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py product-smoke",
-                "number": 10,
-                "startedAt": "2026-09-06T11:12:22Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:13:02Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py web-e2e",
-                "number": 11,
-                "startedAt": "2026-09-06T11:12:29Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:13:02Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 20,
-                "startedAt": "2026-09-06T11:13:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:13:03Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 21,
-                "startedAt": "2026-09-06T11:13:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:13:03Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 22,
-                "startedAt": "2026-09-06T11:13:03Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:13:03Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 23,
-                "startedAt": "2026-09-06T11:13:03Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476300902"
-          },
-          {
-            "completedAt": "2026-09-06T11:12:04Z",
-            "conclusion": "success",
-            "databaseId": 101476301049,
-            "name": "container-build",
-            "startedAt": "2026-09-06T11:10:58Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:11:00Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:10:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:02Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:11:00Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:45Z",
-                "conclusion": "success",
-                "name": "Run docker build --build-arg VCS_REF=\"$GITHUB_SHA\" --tag docx-rag:v1-candidate .",
-                "number": 3,
-                "startedAt": "2026-09-06T11:11:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:11:45Z",
-                "conclusion": "success",
-                "name": "Run docker run --rm --entrypoint sh docx-rag:v1-candidate -c 'test \"$(id -u)\" = 10001 && test ! -e /usr/local/bin/node && test ! -e /usr/local/bin/pip'",
-                "number": 4,
-                "startedAt": "2026-09-06T11:11:45Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:00Z",
-                "conclusion": "success",
-                "name": "Archive complete vulnerability scan including unfixed findings",
-                "number": 5,
-                "startedAt": "2026-09-06T11:11:45Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:01Z",
-                "conclusion": "success",
-                "name": "Retain complete scan and vulnerability database identity",
-                "number": 6,
-                "startedAt": "2026-09-06T11:12:00Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:02Z",
-                "conclusion": "success",
-                "name": "Block fixable High or Critical vulnerabilities only",
-                "number": 7,
-                "startedAt": "2026-09-06T11:12:01Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:02Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 14,
-                "startedAt": "2026-09-06T11:12:02Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:12:02Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 15,
-                "startedAt": "2026-09-06T11:12:02Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476301049"
-          },
-          {
-            "completedAt": "2026-09-06T11:11:46Z",
-            "conclusion": "success",
-            "databaseId": 101476301053,
+            "databaseId": 101482378805,
             "name": "frontend-quality",
-            "startedAt": "2026-09-06T11:10:58Z",
+            "startedAt": "2026-09-06T11:58:17Z",
             "status": "completed",
             "steps": [
               {
-                "completedAt": "2026-09-06T11:11:02Z",
+                "completedAt": "2026-09-06T11:58:19Z",
                 "conclusion": "success",
                 "name": "Set up job",
                 "number": 1,
-                "startedAt": "2026-09-06T11:10:59Z",
+                "startedAt": "2026-09-06T11:58:18Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:06Z",
+                "completedAt": "2026-09-06T11:58:20Z",
                 "conclusion": "success",
                 "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 2,
-                "startedAt": "2026-09-06T11:11:02Z",
+                "startedAt": "2026-09-06T11:58:19Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:18Z",
+                "completedAt": "2026-09-06T11:58:23Z",
                 "conclusion": "success",
                 "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
                 "number": 3,
-                "startedAt": "2026-09-06T11:11:06Z",
+                "startedAt": "2026-09-06T11:58:20Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:27Z",
+                "completedAt": "2026-09-06T11:58:30Z",
                 "conclusion": "success",
                 "name": "Run npm ci",
                 "number": 4,
-                "startedAt": "2026-09-06T11:11:18Z",
+                "startedAt": "2026-09-06T11:58:23Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:33Z",
+                "completedAt": "2026-09-06T11:58:38Z",
                 "conclusion": "success",
                 "name": "Run npm run lint",
                 "number": 5,
-                "startedAt": "2026-09-06T11:11:27Z",
+                "startedAt": "2026-09-06T11:58:30Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:35Z",
+                "completedAt": "2026-09-06T11:58:42Z",
                 "conclusion": "success",
                 "name": "Run npm run typecheck",
                 "number": 6,
-                "startedAt": "2026-09-06T11:11:33Z",
+                "startedAt": "2026-09-06T11:58:38Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:40Z",
+                "completedAt": "2026-09-06T11:58:50Z",
                 "conclusion": "success",
                 "name": "Run npm test",
                 "number": 7,
-                "startedAt": "2026-09-06T11:11:35Z",
+                "startedAt": "2026-09-06T11:58:42Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:43Z",
+                "completedAt": "2026-09-06T11:58:54Z",
                 "conclusion": "success",
                 "name": "Run npm run build",
                 "number": 8,
-                "startedAt": "2026-09-06T11:11:40Z",
+                "startedAt": "2026-09-06T11:58:50Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:44Z",
+                "completedAt": "2026-09-06T11:58:54Z",
                 "conclusion": "success",
                 "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
                 "number": 15,
-                "startedAt": "2026-09-06T11:11:43Z",
+                "startedAt": "2026-09-06T11:58:54Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:44Z",
+                "completedAt": "2026-09-06T11:58:55Z",
                 "conclusion": "success",
                 "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
                 "number": 16,
-                "startedAt": "2026-09-06T11:11:44Z",
+                "startedAt": "2026-09-06T11:58:54Z",
                 "status": "completed"
               },
               {
-                "completedAt": "2026-09-06T11:11:44Z",
+                "completedAt": "2026-09-06T11:58:55Z",
                 "conclusion": "success",
                 "name": "Complete job",
                 "number": 17,
-                "startedAt": "2026-09-06T11:11:44Z",
+                "startedAt": "2026-09-06T11:58:55Z",
                 "status": "completed"
               }
             ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428/job/101476301053"
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378805"
+          },
+          {
+            "completedAt": "2026-09-06T12:04:18Z",
+            "conclusion": "success",
+            "databaseId": 101482378830,
+            "name": "python-quality",
+            "startedAt": "2026-09-06T11:58:16Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-09-06T11:58:17Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:19Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 2,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:19Z",
+                "conclusion": "success",
+                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 3,
+                "startedAt": "2026-09-06T11:58:19Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:22Z",
+                "conclusion": "success",
+                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 4,
+                "startedAt": "2026-09-06T11:58:19Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:34Z",
+                "conclusion": "success",
+                "name": "Run python -m pip install --requirement requirements.lock",
+                "number": 5,
+                "startedAt": "2026-09-06T11:58:22Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:36Z",
+                "conclusion": "success",
+                "name": "Run python -m pip install --no-deps --editable .",
+                "number": 6,
+                "startedAt": "2026-09-06T11:58:34Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:04:15Z",
+                "conclusion": "success",
+                "name": "Run python scripts/dev.py check",
+                "number": 7,
+                "startedAt": "2026-09-06T11:58:36Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:04:16Z",
+                "conclusion": "success",
+                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 12,
+                "startedAt": "2026-09-06T12:04:15Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:04:16Z",
+                "conclusion": "success",
+                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 13,
+                "startedAt": "2026-09-06T12:04:16Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:04:16Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 14,
+                "startedAt": "2026-09-06T12:04:16Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:04:16Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 15,
+                "startedAt": "2026-09-06T12:04:16Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378830"
+          },
+          {
+            "completedAt": "2026-09-06T11:59:11Z",
+            "conclusion": "success",
+            "databaseId": 101482378872,
+            "name": "container-build",
+            "startedAt": "2026-09-06T11:58:16Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-09-06T11:58:17Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-09-06T11:58:16Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:18Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 2,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:57Z",
+                "conclusion": "success",
+                "name": "Run docker build --build-arg VCS_REF=\"$GITHUB_SHA\" --tag docx-rag:v1-candidate .",
+                "number": 3,
+                "startedAt": "2026-09-06T11:58:18Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:57Z",
+                "conclusion": "success",
+                "name": "Run docker run --rm --entrypoint sh docx-rag:v1-candidate -c 'test \"$(id -u)\" = 10001 && test ! -e /usr/local/bin/node && test ! -e /usr/local/bin/pip'",
+                "number": 4,
+                "startedAt": "2026-09-06T11:58:57Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:09Z",
+                "conclusion": "success",
+                "name": "Archive complete vulnerability scan including unfixed findings",
+                "number": 5,
+                "startedAt": "2026-09-06T11:58:57Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:10Z",
+                "conclusion": "success",
+                "name": "Retain complete scan and vulnerability database identity",
+                "number": 6,
+                "startedAt": "2026-09-06T11:59:09Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:10Z",
+                "conclusion": "success",
+                "name": "Block fixable High or Critical vulnerabilities only",
+                "number": 7,
+                "startedAt": "2026-09-06T11:59:10Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:10Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 14,
+                "startedAt": "2026-09-06T11:59:10Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:10Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 15,
+                "startedAt": "2026-09-06T11:59:10Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378872"
+          },
+          {
+            "completedAt": "2026-09-06T11:58:31Z",
+            "conclusion": "success",
+            "databaseId": 101482378938,
+            "name": "sbom",
+            "startedAt": "2026-09-06T11:58:16Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-09-06T11:58:17Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:19Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 2,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:28Z",
+                "conclusion": "success",
+                "name": "Run docker run --rm -v \"$PWD:/src:ro\" -v \"$RUNNER_TEMP:/output\" anchore/syft@sha256:95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c dir:/src -o cyclonedx-json=/output/p11-source.cdx.json",
+                "number": 3,
+                "startedAt": "2026-09-06T11:58:19Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:29Z",
+                "conclusion": "success",
+                "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+                "number": 4,
+                "startedAt": "2026-09-06T11:58:28Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:29Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 8,
+                "startedAt": "2026-09-06T11:58:29Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:29Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 9,
+                "startedAt": "2026-09-06T11:58:29Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378938"
+          },
+          {
+            "completedAt": "2026-09-06T12:00:38Z",
+            "conclusion": "success",
+            "databaseId": 101482378951,
+            "name": "offline-product-e2e",
+            "startedAt": "2026-09-06T11:58:16Z",
+            "status": "completed",
+            "steps": [
+              {
+                "completedAt": "2026-09-06T11:58:18Z",
+                "conclusion": "success",
+                "name": "Set up job",
+                "number": 1,
+                "startedAt": "2026-09-06T11:58:17Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:19Z",
+                "conclusion": "success",
+                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 2,
+                "startedAt": "2026-09-06T11:58:18Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:23Z",
+                "conclusion": "success",
+                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 3,
+                "startedAt": "2026-09-06T11:58:19Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:27Z",
+                "conclusion": "success",
+                "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+                "number": 4,
+                "startedAt": "2026-09-06T11:58:23Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:41Z",
+                "conclusion": "success",
+                "name": "Run python -m pip install --requirement requirements.lock",
+                "number": 5,
+                "startedAt": "2026-09-06T11:58:27Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:44Z",
+                "conclusion": "success",
+                "name": "Run python -m pip install --no-deps --editable .",
+                "number": 6,
+                "startedAt": "2026-09-06T11:58:41Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:58:52Z",
+                "conclusion": "success",
+                "name": "Run npm ci",
+                "number": 7,
+                "startedAt": "2026-09-06T11:58:44Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:19Z",
+                "conclusion": "success",
+                "name": "Run npx playwright install --with-deps chromium",
+                "number": 8,
+                "startedAt": "2026-09-06T11:58:52Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:52Z",
+                "conclusion": "success",
+                "name": "Run python scripts/dev.py product-check",
+                "number": 9,
+                "startedAt": "2026-09-06T11:59:19Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T11:59:59Z",
+                "conclusion": "success",
+                "name": "Run python scripts/dev.py product-smoke",
+                "number": 10,
+                "startedAt": "2026-09-06T11:59:52Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:00:34Z",
+                "conclusion": "success",
+                "name": "Run python scripts/dev.py web-e2e",
+                "number": 11,
+                "startedAt": "2026-09-06T11:59:59Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:00:34Z",
+                "conclusion": "success",
+                "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+                "number": 20,
+                "startedAt": "2026-09-06T12:00:34Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:00:34Z",
+                "conclusion": "success",
+                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+                "number": 21,
+                "startedAt": "2026-09-06T12:00:34Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:00:34Z",
+                "conclusion": "success",
+                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
+                "number": 22,
+                "startedAt": "2026-09-06T12:00:34Z",
+                "status": "completed"
+              },
+              {
+                "completedAt": "2026-09-06T12:00:34Z",
+                "conclusion": "success",
+                "name": "Complete job",
+                "number": 23,
+                "startedAt": "2026-09-06T12:00:34Z",
+                "status": "completed"
+              }
+            ],
+            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378951"
           }
         ],
         "status": "completed",
-        "updatedAt": "2026-09-06T11:17:11Z",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34029496428",
+        "updatedAt": "2026-09-06T12:04:19Z",
+        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094",
         "workflowName": "P11 CI"
       },
-      "origin": "本次执行",
       "exit_code": 0
     },
     "candidate_capabilities": {
@@ -53140,8 +53157,8 @@
       }
     },
     "CI_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "ci",
       "evidence": [
         "ci"
       ],
@@ -53185,7 +53202,7 @@
     },
     "RELEASE_CANDIDATE_READY": {
       "status": "BLOCKED",
-      "reason": "RETRIEVAL_QUALITY_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
+      "reason": "RETRIEVAL_QUALITY_READY, SECURITY_READY, CI_READY, REMOTE_PRODUCTION_PROFILE_READY",
       "evidence": [
         "AUTHORIZATION_BOUNDARY_READY",
         "ALIYUN_ENDPOINT_CONTRACT_READY",
