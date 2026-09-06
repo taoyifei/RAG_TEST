@@ -42,6 +42,7 @@ class PilotReport(BaseModel):
     status: Literal["PASS", "FAIL", "BLOCKED", "NOT_RUN"]
     reason: str
     pilot: Literal[True] = True
+    evaluation_kind: quality_contract.EvaluationKind = "independent_holdout"
     sample_count: int
     positive_samples: int
     negative_samples: int
@@ -55,6 +56,8 @@ def evaluate_pilot(
     cases: tuple[EvaluationCase, ...],
     observations: dict[str, tuple[CaseObservation, ...]],
     identity: PilotLiveEvidence | None = None,
+    *,
+    evaluation_kind: quality_contract.EvaluationKind = "independent_holdout",
 ) -> PilotReport:
     """以同一固定标签分别评估主路和备用路，不合并伪增样本量。
 
@@ -62,6 +65,7 @@ def evaluate_pilot(
         cases: 查询前绑定的独立 holdout 标签。
         observations: 实际 V3 观测，键必须为 primary 和 standby。
         identity: 受信任 Runner 从持久 HTTP 账本取得的逐 Case 证明。
+        evaluation_kind: 本次测量是否为已暴露集回归，不改原标签或指标。
 
     Returns:
         每路指标、未降低的门禁和失败 Case；离线只能为 NOT_RUN。
@@ -104,13 +108,19 @@ def evaluate_pilot(
     elif not _live_provenance(cases, observations, identity):
         status, reason = "BLOCKED", "MISSING_CASE_BOUND_LIVE_ATTEMPTS_OR_ROUTE"
     elif all(item.passed for item in gates.values()):
-        status, reason = "PASS", "INDEPENDENT_PILOT_ACCEPTED"
+        status = "PASS"
+        reason = (
+            "EXPOSED_REGRESSION_ACCEPTED"
+            if evaluation_kind == "exposed_regression"
+            else "INDEPENDENT_PILOT_ACCEPTED"
+        )
     else:
         status, reason = "FAIL", "ACCEPTED_QUALITY_THRESHOLDS_NOT_MET"
     positive = sum(case.expected.answerable for case in cases)
     return PilotReport(
         status=status,
         reason=reason,
+        evaluation_kind=evaluation_kind,
         sample_count=len(cases),
         positive_samples=positive,
         negative_samples=len(cases) - positive,

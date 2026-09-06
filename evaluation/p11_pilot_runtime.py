@@ -201,6 +201,7 @@ def run_pilot(
                 f"{spec.provider_id}:{spec.model}" for spec in specs
             ),
         ),
+        evaluation_kind="exposed_regression",
     )
     record_ids = _record_quality(context, report, profile_ids)
     evidence = report.model_dump(mode="json")
@@ -545,6 +546,28 @@ def _query_cases(
                     for item in result.evidence
                     for span in item.source_spans
                 ],
+                # 固定公开 pilot 的实际回包；不能由标签补造分数或答案。
+                "actual_result": {
+                    "diagnostics": (
+                        result.diagnostics.model_dump(mode="json")
+                        if result.diagnostics is not None
+                        else None
+                    ),
+                    "confidence": result.confidence.model_dump(mode="json"),
+                    "evidence": [
+                        item.model_dump(mode="json") for item in result.evidence
+                    ],
+                    "answer": result.answer,
+                    "status": result.status.value,
+                    "active_index_revision_id": result.active_index_revision_id,
+                    "index_fingerprint": result.index_fingerprint,
+                    "serving_fingerprint": result.serving_fingerprint,
+                    "selected_embedding_slot": result.selected_embedding_slot,
+                    "selected_vector_name": result.selected_vector_name,
+                    "route_reason_code": result.route_reason_code,
+                    "rerank_execution_mode": result.rerank_execution_mode,
+                    "cache_hit": result.cache_hit,
+                },
             }
             current = ledger.attempts(context.state.campaign_id)
             attempts[f"{lane}:{case.case_id}"] = tuple(
@@ -591,7 +614,11 @@ def _query_cases(
 def _record_quality(
     context: _PilotRuntime, report: PilotReport, profile_ids: tuple[str, ...]
 ) -> list[str]:
-    if report.status not in {"PASS", "FAIL"}:
+    if (
+        report.status not in {"PASS", "FAIL"}
+        or report.identity is None
+        or report.identity.validation_mode != "live"
+    ):
         return []
     control = context.runtime.control
     source_id = str(context.config["source_profile_revision_id"])
@@ -614,6 +641,7 @@ def _record_quality(
         gates.update(
             dict.fromkeys(
                 (
+                    # 保留原预标注来源门名；样本是否已暴露由分类单独记录。
                     "independent_labels",
                     "source_precision",
                     "recall",
@@ -639,7 +667,10 @@ def _record_quality(
                     index_fingerprint=profile.index_semantic_fingerprint,
                     serving_fingerprint=profile.serving_fingerprint,
                     gates=gates,
-                    independent_holdout=True,
+                    evaluation_kind=report.evaluation_kind,
+                    independent_holdout=(
+                        report.evaluation_kind == "independent_holdout"
+                    ),
                     labeled_queries=report.positive_samples,
                     negative_queries=report.negative_samples,
                     citation_source_precision=min(

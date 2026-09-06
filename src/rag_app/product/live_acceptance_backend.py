@@ -88,6 +88,7 @@ _DIMENSION = 1024
 _AUTHORIZED_REQUEST_LIMIT = 25
 _AUTHORIZED_TOKEN_LIMIT = 1000
 _AUTHORIZED_PROVIDER_TOKEN_LIMIT = 600
+_MAX_FORWARDED_ATTEMPTS = 3
 
 
 class _MetadataConnections(SqliteConnectionFactory):
@@ -143,6 +144,13 @@ class ProductAcceptanceBackend:
     def __init__(
         self, config: dict[str, object], state: AcceptanceState
     ) -> None:
+        attempts = config.get("max_forwarded_attempts", _MAX_FORWARDED_ATTEMPTS)
+        if (
+            type(attempts) is not int
+            or not 1 <= attempts <= _MAX_FORWARDED_ATTEMPTS
+        ):
+            raise ValueError("MAX_FORWARDED_ATTEMPTS_INVALID")
+        self._max_forwarded_attempts = attempts
         self.config = config
         if config.get("data_dir") and not config.get("ledger_path"):
             config["ledger_path"] = str(
@@ -216,6 +224,14 @@ class ProductAcceptanceBackend:
             "payload_set": "p11-public-synthetic-v1",
             "step": step,
         }
+        if "max_forwarded_attempts" in self.config and step in {
+            "dual_index",
+            "primary_query",
+            "standby_failover",
+            "recovery",
+            "citation_quality",
+        }:
+            identity["max_forwarded_attempts"] = self._max_forwarded_attempts
         if self.control is None or step == "config_check":
             identity["configuration_error"] = self.configuration_error
             return canonical_sha256(identity)
@@ -483,6 +499,13 @@ class ProductAcceptanceBackend:
             ),
             "new_locally_blocked": sum(
                 int(item["locally_blocked"]) for item in attempts
+            ),
+            "max_forwarded_attempts": self._max_forwarded_attempts,
+            "sdk_retry_loop_unchanged": True,
+            "new_locally_blocked_at_retry_limit": sum(
+                int(item["locally_blocked"])
+                for item in attempts
+                if int(item["retry_index"]) >= self._max_forwarded_attempts
             ),
         }
         denied = [
@@ -1181,6 +1204,15 @@ class ProductAcceptanceBackend:
         }
 
     def _local_blocker(self, request: httpx.Request) -> bool:
+        # 只约束当前验收调用链的真实出站；SDK 的后续尝试由现有账本
+        # 记为本地阻断，首个真实 HTTP 或传输失败记录不会被覆盖。
+        retry_index = request.extensions.get("rag_provider_retry_index", 0)
+        if (
+            type(retry_index) is not int
+            or retry_index < 0
+            or retry_index >= self._max_forwarded_attempts
+        ):
+            return True
         payload = json.loads(request.content)
         jina_query = (
             request.url.host == "api.jina.ai"

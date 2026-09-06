@@ -78,10 +78,10 @@ def test_neighbor_and_table_expansion_require_bidirectional_links(
     )
 
     assert [item.hydrated.chunk.chunk_id for item in outcome.candidates] == [
-        previous.hydrated.chunk.chunk_id,
         origin.hydrated.chunk.chunk_id,
+        previous.hydrated.chunk.chunk_id,
     ]
-    assert outcome.candidates[0].expansion_reason == reason
+    assert outcome.candidates[1].expansion_reason == reason
 
 
 def test_section_expansion_is_bounded() -> None:

@@ -5,7 +5,10 @@ from __future__ import annotations
 import pytest
 
 from rag_app.application.retrieval import QueryAnalyzer
-from rag_app.application.retrieval.evidence import EvidenceAssembler
+from rag_app.application.retrieval.evidence import (
+    EvidenceAssembler,
+    semantic_candidate_allowed,
+)
 from rag_app.core.models import (
     EvidenceSelectionContext,
     KnowledgeBaseScope,
@@ -51,7 +54,9 @@ def test_calibrated_dense_evidence_is_monotonic_in_lexical_overlap(
     )
 
     assert policy.minimum_span_overlap == 0.2
-    assert [item.citation_text for item in evidence] == [quote]
+    # unit_synthetic：少量字符重叠不改变候选资格，但无关原文不支持事实。
+    assert semantic_candidate_allowed(candidate, policy, context)
+    assert not evidence
 
 
 @pytest.mark.parametrize(

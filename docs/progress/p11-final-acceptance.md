@@ -1,3 +1,5 @@
+> 当前状态已由 [P11质量与安全收尾](p11-quality-security-closure.md) 和 [权威验收](../../release/p11-repair-acceptance.md) 接续；下文为原轮历史记录，1825项、旧镜像、226次累计及四题原失败均不是本轮最终状态。
+
 # P11 最终验收与有条件合并
 
 唯一总体状态为 [当前验收](../../release/p11-repair-acceptance.md) 及同名 JSON。

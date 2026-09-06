@@ -1,4 +1,4 @@
-"""持久质量记录与配置绑定；连接成功不能替代独立质量验证。"""
+"""持久质量记录与配置绑定；连接成功不能替代相应用途的真实质量验证。"""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ QualityKind = Literal[
     "retrieval_quality_verified",
     "release_candidate_verified",
 ]
+EvaluationKind = Literal["independent_holdout", "exposed_regression"]
 _MIN_LABELED_QUERIES = 20
 _MIN_NEGATIVE_QUERIES = 10
 _MIN_SOURCE_PRECISION = 0.9
@@ -44,6 +45,7 @@ class QualityValidationRecord(FrozenModel):
     index_fingerprint: str
     serving_fingerprint: str
     gates: dict[str, bool]
+    evaluation_kind: EvaluationKind = "independent_holdout"
     independent_holdout: bool = False
     labeled_queries: int = Field(default=0, ge=0)
     negative_queries: int = Field(default=0, ge=0)
@@ -149,7 +151,16 @@ class ProductQualityStore:
         if record.kind == "retrieval_quality_verified":
             accepted = accepted and (
                 record.validation_mode == "live"
-                and record.independent_holdout
+                and (
+                    (
+                        record.evaluation_kind == "independent_holdout"
+                        and record.independent_holdout
+                    )
+                    or (
+                        record.evaluation_kind == "exposed_regression"
+                        and not record.independent_holdout
+                    )
+                )
                 and record.labeled_queries >= _MIN_LABELED_QUERIES
                 and record.negative_queries >= _MIN_NEGATIVE_QUERIES
                 and record.citation_source_precision >= _MIN_SOURCE_PRECISION
@@ -204,7 +215,7 @@ class ProductQualityStore:
         }
 
     def calibrated_spaces(self, profile_id: str) -> tuple[str, ...]:
-        """从独立 Live 质量记录取得当前方案允许的真实向量空间。
+        """从已接受的 Live 质量记录取得当前方案允许的真实向量空间。
 
         Args:
             profile_id: 精确方案。
