@@ -72,7 +72,7 @@
   "secret_decryption": false,
   "migrations": false,
   "schema_version": 1,
-  "generated_at": "2026-09-05T19:35:07.796453+00:00",
+  "generated_at": "2026-09-06T05:26:33.022067+00:00",
   "source": "read_only_local_instance_with_current_source_network_none",
   "original_image_id": "sha256:20864e7e232c03af74e4ef9f7ea48569d40fc2a2821429b423167e99e6c691e1",
   "diagnostic_image_id": "sha256:d98a8d168e71d3662f0d55aa8c3954c93d28f0ca33650d3d263e631cecabe245",

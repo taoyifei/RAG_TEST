@@ -695,8 +695,9 @@
     "canary_max_attempts_including_initial": 1,
     "unbounded_or_repeated_runs_included": false
   },
+  "actual_profile_bound": false,
   "history_evidence": {
-    "path": "/home/jerry/work/RAG/release/p11-blocker-diagnosis.json",
-    "sha256": "a4e2aa7896cddba6c3c08c23b78e6ae2b57b9ad4d956dba934aacf2064afccf7"
+    "path": "release/p11-blocker-diagnosis.json",
+    "sha256": "32323e1f97539cb3f4716caa0e53adf30a552e4572184e05dc705f8bb8af6aa7"
   }
 }

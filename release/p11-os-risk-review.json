@@ -37,7 +37,16 @@
       "path": "artifacts/p11-r5/security/base-image-inspect.log",
       "sha256": "ab7649d8cd810697d9e23d402bec427b7ed5db60df0a64d1cc74a541247c8e73"
     },
-    "decision": "当前可信受支持标签与已钉摘要一致；不切换旧发行版、sid 或卸载 Essential 包。antiword/prlimit、FTS5、TLS 能力保留。"
+    "decision": "当前可信受支持标签与已钉摘要一致；不切换旧发行版、sid 或卸载 Essential 包。antiword/prlimit、FTS5、TLS 能力保留。",
+    "final_acceptance_recheck": {
+      "checked_at": "2026-09-06T05:29:15.036244+00:00",
+      "verified_digest": "sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534",
+      "changed": false,
+      "evidence": {
+        "path": "artifacts/p11-final/security-probe.json",
+        "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+      }
+    }
   },
   "reviews": [
     {
@@ -61,7 +70,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -107,6 +126,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -131,7 +154,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -177,6 +210,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -201,7 +238,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -247,6 +294,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -271,7 +322,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -317,6 +378,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -341,7 +406,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "gzip",
         "matched_source_version": "1.13-1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "1.13-1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "避免将上传交给任意 shell/解压命令；本次未把 Python gzip 与 GNU gzip 的漏洞混为一谈。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -387,6 +462,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -411,7 +490,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "acl",
         "matched_source_version": "2.3.2-2",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.3.2-2",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、无新增权限、只读根目录；不能统一证明符号链接漏洞不可利用。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -457,6 +546,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -481,7 +574,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -527,6 +630,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -551,7 +658,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -597,6 +714,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -621,7 +742,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -667,6 +798,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -691,7 +826,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -737,6 +882,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -761,7 +910,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -807,6 +966,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -831,7 +994,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -877,6 +1050,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -901,7 +1078,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -947,6 +1134,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -971,7 +1162,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1017,6 +1218,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1041,7 +1246,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1087,6 +1302,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1111,7 +1330,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1157,6 +1386,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1181,7 +1414,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1227,6 +1470,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1251,7 +1498,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1297,6 +1554,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1321,7 +1582,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "ncurses",
         "matched_source_version": "6.5+20250216-2",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "6.5+20250216-2",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1367,6 +1638,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1391,7 +1666,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1437,6 +1722,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1461,7 +1750,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1507,6 +1806,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1531,7 +1834,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1577,6 +1890,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1601,7 +1918,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1647,6 +1974,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1671,7 +2002,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "sqlite3",
         "matched_source_version": "3.46.1-7+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "3.46.1-7+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "不接受任意上传 SQLite 作为文档；恢复需受控管理员与可信备份。未运行该 CVE exploit，未知保持阻断。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1717,6 +2058,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1741,7 +2086,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "sqlite3",
         "matched_source_version": "3.46.1-7+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "3.46.1-7+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "不接受任意上传 SQLite 作为文档；恢复需受控管理员与可信备份。未运行该 CVE exploit，未知保持阻断。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1787,6 +2142,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1811,7 +2170,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "systemd",
         "matched_source_version": "257.13-1~deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "257.13-1~deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留组件缺失证据供正式不受影响审查；不以主机 loopback 代替漏洞触发分析。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1857,8 +2226,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 systemd-homed 与 homectl 均不存在；libsystemd0/libudev1 的源包扫描记录仍保留，组件缺失未转换为自动豁免。"
     },
     {
       "id": "CVE-2025-69720",
@@ -1881,7 +2255,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "ncurses",
         "matched_source_version": "6.5+20250216-2",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "6.5+20250216-2",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1927,6 +2311,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -1951,7 +2339,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "systemd",
         "matched_source_version": "257.13-1~deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "257.13-1~deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留组件缺失证据供正式不受影响审查；不以主机 loopback 代替漏洞触发分析。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -1997,8 +2395,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 systemd-homed 与 homectl 均不存在；libsystemd0/libudev1 的源包扫描记录仍保留，组件缺失未转换为自动豁免。"
     },
     {
       "id": "CVE-2026-76642",
@@ -2021,7 +2424,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2067,6 +2480,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2091,7 +2508,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2137,6 +2564,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2161,7 +2592,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2207,6 +2648,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2231,7 +2676,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2277,6 +2732,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2301,7 +2760,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2347,6 +2816,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2371,7 +2844,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2417,6 +2900,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2441,7 +2928,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2487,6 +2984,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2511,7 +3012,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2557,6 +3068,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2581,7 +3096,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2627,6 +3152,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2651,7 +3180,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2697,6 +3236,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2721,7 +3264,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2767,6 +3320,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2791,7 +3348,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2837,6 +3404,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2861,7 +3432,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "ncurses",
         "matched_source_version": "6.5+20250216-2",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "6.5+20250216-2",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2907,6 +3488,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -2931,7 +3516,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "ncurses",
         "matched_source_version": "6.5+20250216-2",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "6.5+20250216-2",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "受控固定子进程、非 root；保留发行版必要包和扫描记录。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -2977,6 +3572,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -3001,7 +3600,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3047,8 +3656,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-42496",
@@ -3071,7 +3685,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3117,8 +3741,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-8376",
@@ -3141,7 +3770,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3187,9 +3826,14 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ],
-      "additional_evidence": "被检查镜像是 amd64、Python 指针 64 位；尚未独立核验 Perl 构建 SSize_t，不能仅凭 Python 位宽形成 Perl 豁免。"
+      "additional_evidence": "被检查镜像是 amd64、Python 指针 64 位；尚未独立核验 Perl 构建 SSize_t，不能仅凭 Python 位宽形成 Perl 豁免。",
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-42497",
@@ -3212,7 +3856,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3258,8 +3912,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-48962",
@@ -3282,7 +3941,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3328,8 +3997,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-57432",
@@ -3352,7 +4026,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3398,8 +4082,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-57433",
@@ -3422,7 +4111,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3468,8 +4167,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-9538",
@@ -3492,7 +4196,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "perl",
         "matched_source_version": "5.40.1-6",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "5.40.1-6",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "保留必要发行版包；不通过卸载 Essential 或删除 dpkg 记录消除 finding。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3538,8 +4252,13 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
-      ]
+      ],
+      "final_acceptance_runtime_observation": "同一候选断网只读实测 Perl ptrsize=8、ivsize=8；Archive::Tar、IO::Compress、File::GlobMapper、Storable 均因模块文件不存在而无法加载。CVE-2026-8376 的 32 位前提及模块特定漏洞的组件存在前提得到补证；Perl 核心正则/pack 仍存在，未自动豁免任何元组。"
     },
     {
       "id": "CVE-2026-76642",
@@ -3562,7 +4281,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3608,6 +4337,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -3632,7 +4365,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3678,6 +4421,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -3702,7 +4449,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3748,6 +4505,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     },
@@ -3772,7 +4533,17 @@
         "conclusion": "发行版当前仍列 vulnerable；no-dsa/postponed 是发行版优先级或延迟决定，不是本产品风险接受。",
         "source_package": "util-linux",
         "matched_source_version": "2.41.5-0+deb13u1",
-        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00"
+        "snapshot_rechecked_at": "2026-09-05T19:41:47.170091+00:00",
+        "final_acceptance_recheck": {
+          "checked_at": "2026-09-06T05:29:15.036244+00:00",
+          "source_url": "https://security-tracker.debian.org/tracker/data/json",
+          "trixie_status": "open",
+          "installed_source_version": "2.41.5-0+deb13u1",
+          "evidence": {
+            "path": "artifacts/p11-final/security-probe.json",
+            "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+          }
+        }
       },
       "mitigation": "非 root、cap_drop ALL、no-new-privileges 和固定 DOC 命令提供缓解；不构成全部 CVE 不受影响证明。",
       "conclusion": "UNDER_INVESTIGATION",
@@ -3818,6 +4589,10 @@
         {
           "path": "artifacts/p11-r5/security/20260905T193755688409Z/runtime-package-inspection-command.json",
           "sha256": "0601db7979916755bcc4970d7aa55d9adda1bf2ac434ee05f35f92181de23952"
+        },
+        {
+          "path": "artifacts/p11-final/security-probe.json",
+          "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
         }
       ]
     }
@@ -3857,5 +4632,20 @@
       "path": "artifacts/p11-r5/security/20260905T193755688409Z/official-advisory-row-verification.json",
       "sha256": "81e7f6e72e999732b9f3fb6ffd90191fec4c9fd3b703e4f7d1c3f224a3ffe8ab"
     }
+  },
+  "final_acceptance_investigation": {
+    "rechecked_at": "2026-09-06T05:29:15.036244+00:00",
+    "evidence": {
+      "path": "artifacts/p11-final/security-probe.json",
+      "sha256": "1260bb3fa731a61b7465d7b66e8c8974ea2267bceaa387e97fadd6f1820250cb"
+    },
+    "base_digest_changed": false,
+    "unique_cves": 18,
+    "reviewed_tuples": 54,
+    "debian_trixie_status_counts": {
+      "open": 18
+    },
+    "automatic_dispositions_created": 0,
+    "conclusion": "本次基础标签摘要未变；官方 Trixie 条目仍全部 open。候选 Perl 架构及模块、homed 缺失补证已完成，安全门仍为 BLOCKED。"
   }
 }

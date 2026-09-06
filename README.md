@@ -29,7 +29,7 @@ docker compose run --rm --no-deps --entrypoint sh app \
 ```
 
 打开 `http://127.0.0.1:8088/`，输入 Bootstrap Token。随后在“模型服务”依次
-保存并测试 Jina 与阿里云百炼连接，创建项目和知识库，激活主备检索方案，上传
+保存 Jina 与阿里云百炼连接。百炼须显式选择端点模式，业务空间模式使用控制台实际 API Host。完成出网与预算授权后测试连接，创建项目和知识库、激活主备检索方案，上传
 DOC 或 DOCX 后即可问答。DOCX 保留结构化解析；旧版 DOC 以受限纯文本模式解析，
 并明确记录结构降级。发送到远程 Provider 的只有管理员明确授权的查询、文档切片
 和重排候选；页面会显示操作、Token 与切换用量。没有凭据时仍可完成本地 Exact/FTS
@@ -53,10 +53,24 @@ python scripts/release.py verify
 python scripts/release.py acceptance
 ```
 
-默认验证离线且无 Key。真实 Provider 验收只能由受保护的
-`P11 Live Provider` 工作流手工触发，必须输入授权短语、预算并通过 Environment
-审批。历史 Industry/OCR 七文件部署保留在 `deployment/`，全部标记为 Legacy，
-不再是默认入口；迁移说明见 `docs/migration/from-industry.md`。
+默认验证离线且无 Key。真实验收支持既有本地有界续跑与受保护的
+`P11 Live Provider` Workflow；两者都要求明确授权、持久 campaign、累计预算
+和公开合成语料边界。Workflow 的授权短语与 Environment 审批不代替预算批准。
+先执行零调用配置诊断，前置条件具备后才运行获准的 Live 步骤：
+
+```bash
+python scripts/release.py acceptance --resume --steps config_check \
+  --container <目标App> --config <本地非秘密配置> --exit-scope selected
+python scripts/release.py budget-plan --config <本地非秘密配置> \
+  --container <目标App> --budget-history <已核对的累计账> \
+  --plan-output release/p11-budget-plan.json
+```
+
+预算配置复用 `source_profile_revision_id`，允许合法未激活草稿；无方案时仅输出
+`actual_profile_bound=false` 的默认假设，不能直接批准。审批前与执行前重新生成并
+核对方案身份，变化则计划失效、历史用量保留。所选步骤退出码为 0 不等于 P11_READY。
+完整步骤与当前未决条件见 [P11 最终验收](docs/progress/p11-final-acceptance.md)
+和 [当前验收](release/p11-repair-acceptance.md)。
 
 ## 主要组成
 
@@ -66,83 +80,26 @@ python scripts/release.py acceptance
 - `evaluation/`：独立评测 schema、证据校验和指标计算。
 - `deployment/`：只为迁移保留的旧 Industry/OCR 部署资产。
 
-## 索引垃圾回收
+## 备份与数据生命周期
 
-`index-gc` 默认只生成无副作用计划，只有显式传入 `--apply` 才删除已证明不再被
-alias、manifest、回滚窗口或任务引用的 collection、state 和 snapshot：
-
-```bash
-rag-app index-gc
-rag-app index-gc --apply
-```
-
-存在 pending/running 索引任务或执行期间控制面发生漂移时，命令拒绝继续。
-输出仅含稳定对象标识、原因和状态，不含正文、文件路径或配置内容。失败项可在
-故障排除后重跑；collection 删除失败时不会先删除对应 state。
-
-GC 在读取 pipeline、连接 Qdrant 或打开 SQLite 前先核对安装 wheel 与
-`RAG_RELEASE_REVISION`。control 和 manifest 主库必须预先存在且不能是
-symlink。规划会把主库与已提交 WAL 复制到临时隔离目录，再以
-`mode=ro + query_only` 查询，并复核源 control、manifest、collection state
-主库/WAL/SHM 的文件集与 SHA256 均未变化。`--apply` 会在删除前再次核对
-Qdrant staging identity 和 state identity；state 主库、WAL、SHM 作为一个
-逻辑集合删除，任一 sidecar symlink 或不完整删除都会返回失败状态。
-
-section-aware chunking 的规则和定参边界见
-`design/public/chunking-strategy.md`。在只读 DOCX 上执行四候选结构审计：
+停止写流量和索引任务后，使用已有 Product 命令创建并校验备份：
 
 ```bash
-.venv/bin/python evaluation/chunking_ablation.py docs \
-  --mode structural \
-  --tokenizer deployment/assets/tokenizers/embedding/tokenizer.json \
-  --pipeline deployment/config/pipeline.json \
-  --corpus-policy deployment/config/corpus-policy.json
+docker compose exec app rag-app backup create --data-dir /data \
+  --output /data/backups/p11-backup.tar.gz \
+  --compatibility-manifest /app/compatibility-manifest.json
+docker compose exec app rag-app backup verify \
+  --archive /data/backups/p11-backup.tar.gz
 ```
 
-真实模型环境中的 retrieval 消融只允许读取 tuning 标签，并为每个候选创建独立
-临时 collection/state；不得切 active alias。`tuning-document-map.json` 只能
-包含文档键到相对路径，不能包含问题或 expected：
+备份不包含主密钥等 Secret，需独立保存。恢复使用新的空数据目录与独立 Qdrant，
+具体参数见 [备份与恢复](docs/public/backup-restore.md)。当前 Product 没有独立
+GC CLI；旧 `index-gc` 面向 Legacy 数据库，不能用于产品数据卷。
 
-```bash
-.venv/bin/python evaluation/chunking_ablation.py docs \
-  --mode retrieval \
-  --tokenizer deployment/assets/tokenizers/embedding/tokenizer.json \
-  --pipeline deployment/config/pipeline.json \
-  --corpus-policy deployment/config/corpus-policy.json \
-  --retrieval-config deployment/config/retrieval.json \
-  --dataset evaluation/frozen/questions.json \
-  --document-map tuning-document-map.json \
-  --qdrant-url "$RAG_QDRANT_URL" \
-  --embedding-endpoint "$RAG_EMBEDDING_URL" \
-  --reranker-endpoint "$RAG_RERANKER_URL"
-```
+登录与权限见 [产品安全](docs/public/security.md)；DOCX 支持边界见
+[结构支持矩阵](docs/public/docx-support-matrix.md)。旧 DOC 使用受限纯文本解析，
+不保证原二进制文档的表格、图片、页眉页脚、批注或修订结构。
 
-当前 pipeline 和 retrieval 均保持 `provisional`。没有真实 embedding/reranker
-tuning 结果时不得选择候选、声称准确率提高或读取 holdout expected。
-
-发布安全检查必须使用临时 Git index，禁止教程或审查流程修改真实 index：
-
-```bash
-temporary_index="$(mktemp)"
-rm -f "$temporary_index"
-GIT_INDEX_FILE="$temporary_index" git read-tree HEAD
-GIT_INDEX_FILE="$temporary_index" git add -A
-GIT_INDEX_FILE="$temporary_index" \
-  .venv/bin/python scripts/check_release_safety.py
-rm -f "$temporary_index"
-```
-
-不得把含 `__pycache__/`、`.pyc` 或 `.pyo` 的审查 ZIP 当作发布源码包；
-Git 候选、Docker build context 和发布源码清单也必须排除这些文件。
-
-普通问答继续使用 query token；`/debug/`、`/api/admin/debug/chat` 和
-`/api/admin/traces*` 只使用 admin token。Trace 使用
-`RAG_TRACE_DATABASE` 独立 SQLite，普通模式由 `RAG_TRACE_MODE=SAFE` 或
-`DIAGNOSTIC` 配置，query token 不能开启 FULL。内容边界、TTL、失败语义和
-OTLP/Phoenix 预留见 `design/public/trace-observability.md`。
-
-资产装配见 `design/public/asset-assembly.md`，联网 WSL 到服务器回滚的
-完整流程见 `design/public/offline-build-and-server-deployment.md`；
-PaddleOCR 兼容入口保留在
-`design/public/paddleocr-offline-deployment.md`。当前生产阻塞项以
-`BLOCKED.md` 为准。
+旧 `RAG_RELEASE_REVISION`、tokenizer/pipeline/retrieval JSON、debug/admin token、
+GC 与七文件部署说明完整保留于 [Legacy 运行指引](docs/public/legacy-runtime.md)，
+迁移见 [Industry 迁移](docs/migration/from-industry.md)。

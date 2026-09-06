@@ -31,10 +31,10 @@ docker compose run --rm --no-deps --entrypoint sh app \
 命令会在当前终端显示 Secret，不要复制到工单、聊天、日志或 shell 参数。打开
 `http://127.0.0.1:8088/` 登录后按顺序执行：
 
-1. 在“模型服务”保存并测试 Jina 连接。
-2. 保存并测试阿里云百炼连接，区域为 `cn-beijing`。
+1. 在“模型服务”保存 Jina 连接；完成出网与预算授权后才测试。
+2. 编辑原百炼连接，保留 Workspace ID 与 Credential，显式选择 `endpoint_mode`。`workspace_host` 使用北京控制台实际 API Host；`beijing_dashscope` 必须明确选择。先保存并做配置诊断，获准后才测试。
 3. 创建项目与知识库，选择 Jina Primary、Qwen Standby 和 Jina Reranker。
-4. 预览影响并确认激活；模型或维度变化会要求新索引 Revision。
+4. 可先保存未激活草稿用于零调用预算估算；完成授权和连接验证后预览影响并激活。模型或维度变化会要求新索引 Revision。
 5. 上传 DOC 或 DOCX，等待 Primary/Standby 覆盖率均为 100% 后问答。旧版 DOC
    只保留段落纯文本，不保证表格、图片、页眉页脚、批注或修订结构。
 6. 在“接口访问”按最小 scope 创建外部 API Token；完整值只显示一次。
