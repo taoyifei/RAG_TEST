@@ -207,6 +207,11 @@ def test_legacy_result_defaults_and_cache_rechecks_deleted_document(
     assert second.cache_hit
     legacy = first.model_dump(exclude={"related_contents", "display_message"})
     assert SearchAnswerResult.model_validate(legacy).related_contents == ()
+    old_snapshot = runtime.persistence.control.active_query_snapshot(
+        request.scope,
+        serving_fingerprint=runtime.retrieval._serving_fingerprint,
+        retrieval_policy=runtime.retrieval._policy,
+    )
     with runtime.persistence.control._connections.transaction(
         write=True
     ) as connection:
@@ -215,8 +220,43 @@ def test_legacy_result_defaults_and_cache_rechecks_deleted_document(
             "WHERE document_id=?",
             (first.related_contents[0].document_id,),
         )
-    with pytest.raises(IndexCorrupt):
+    current = runtime.retrieval.search_and_answer(request)
+    assert not current.cache_hit and current.cache_key != first.cache_key
+    assert first.related_contents[0].document_id not in {
+        item.document_id for item in current.related_contents
+    }
+    # 若删除发生在快照之后，旧缓存回读仍必须失败关闭，不能泄漏旧正文。
+    with (
+        patch.object(
+            runtime.persistence.control,
+            "active_query_snapshot",
+            return_value=old_snapshot,
+        ),
+        pytest.raises(IndexCorrupt),
+    ):
         runtime.retrieval.search_and_answer(request)
+
+
+@pytest.mark.usefixtures("lexical_candidates")
+def test_deleted_candidate_does_not_block_other_current_document(
+    runtime: P07Runtime,
+) -> None:
+    with runtime.persistence.control._connections.transaction(
+        write=True
+    ) as connection:
+        connection.execute(
+            "UPDATE documents SET status='deleted', deleted_at='synthetic' "
+            "WHERE document_id=?",
+            (deterministic_id("doc", "0"),),
+        )
+    result = runtime.retrieval.search_and_answer(
+        _request("个人信息更正申请由谁受理？", related=True)
+    )
+    assert result.answer and result.status is ConfidenceStatus.ANSWERABLE
+    assert all(
+        item.document_id != deterministic_id("doc", "0")
+        for item in (*result.evidence, *result.related_contents)
+    )
 
 
 @pytest.mark.usefixtures("lexical_candidates")

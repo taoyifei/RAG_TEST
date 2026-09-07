@@ -1617,6 +1617,13 @@ class SqliteControlStore:
                 "ORDER BY s.role, s.slot_id",
                 (revision_id,),
             ).fetchall()
+            excluded_documents = connection.execute(
+                "SELECT document_id FROM documents "
+                "WHERE project_id=? AND knowledge_base_id=? "
+                "AND (deleted_at IS NOT NULL OR status!='active' "
+                "OR lifecycle_status!='active') ORDER BY document_id",
+                (scope.project_id, scope.knowledge_base_id),
+            ).fetchall()
         try:
             topology = EmbeddingTopology.model_validate_json(
                 str(row["embedding_topology_json"])
@@ -1685,6 +1692,9 @@ class SqliteControlStore:
             exact_namespace=f"sqlite:{revision_id}",
             chunk_payload_schema=payload_schema,
             retrieval_policy=retrieval_policy,
+            excluded_document_ids=tuple(
+                str(item[0]) for item in excluded_documents
+            ),
         )
 
     def hydrate_chunks(

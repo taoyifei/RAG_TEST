@@ -235,7 +235,9 @@ class RetrievalService:
                 request.text.encode("utf-8")
             ).hexdigest(),
             metadata_filter_hash=canonical_sha256(request.metadata_filters),
-            access_filter_hash=canonical_sha256(request.access_filters),
+            access_filter_hash=canonical_sha256(
+                (request.access_filters, snapshot.excluded_document_ids)
+            ),
             conversation_identity=analysis.conversation_fingerprint,
             rewrite_policy_identity=rewrite_identity,
             cache_schema=self._policy.cache_schema_version,
@@ -386,6 +388,15 @@ class RetrievalService:
             _finish_timing(stage_timings, "vector_channel", channel_started)
         if len(channel_hits) > self._policy.max_channels:
             raise ValueError("检索实际通道数超过 P07 policy。")
+        # 软删除可先于索引回收；读取正文前排除已知撤销身份。
+        # 无删除记录却缺失或损坏的候选仍失败关闭。
+        excluded_documents = frozenset(snapshot.excluded_document_ids)
+        channel_hits = {
+            name: tuple(
+                hit for hit in hits if hit.document_id not in excluded_documents
+            )
+            for name, hits in channel_hits.items()
+        }
         fused = reciprocal_rank_fusion(
             channel_hits,
             expected_revision_id=snapshot.revision.index_revision_id,

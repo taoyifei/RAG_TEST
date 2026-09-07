@@ -141,6 +141,7 @@ class ActiveRevisionQuerySnapshot(FrozenModel):
     chunk_payload_schema: str = Field(min_length=1)
     retrieval_policy: RetrievalPolicy
     profile_revision_id: str | None = None
+    excluded_document_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _validate_snapshot(self) -> ActiveRevisionQuerySnapshot:
