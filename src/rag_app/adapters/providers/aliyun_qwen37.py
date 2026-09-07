@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import os
-import re
-from collections.abc import Mapping
+from collections.abc import Callable
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
+from rag_app.adapters.providers.aliyun_contract import (
+    decode_embeddings,
+    embedding_payload,
+)
+from rag_app.adapters.providers.aliyun_endpoint import (
+    AliyunEndpointConfig,
+    resolve_endpoint,
+)
 from rag_app.adapters.providers.batching import (
     BatchLimits,
     batch_texts,
@@ -19,7 +26,6 @@ from rag_app.adapters.providers.http_common import (
     invalid_response_error,
     provider_error,
 )
-from rag_app.adapters.providers.validation import ordered_vectors
 from rag_app.core.capabilities import (
     ComponentCapabilities,
     ComponentDescriptor,
@@ -45,7 +51,6 @@ _MODEL = "qwen3.7-text-embedding"
 _REGION = "cn-beijing"
 _DIMENSION = 1024
 _PATH = "/api/v1/services/embeddings/text-embedding/text-embedding"
-_HOST = re.compile(r"^[a-z0-9-]+\.cn-beijing\.maas\.aliyuncs\.com$")
 _QUERY_INSTRUCTION = (
     "Given a user query, retrieve the most relevant passages from enterprise "
     "DOCX knowledge bases."
@@ -69,6 +74,9 @@ class AliyunQwen37EmbeddingConfig(BaseModel):
     workspace_id_env: str = "ALIYUN_MODEL_STUDIO_WORKSPACE_ID"
     region_env: str = "ALIYUN_MODEL_STUDIO_REGION"
     region: str = _REGION
+    endpoint_mode: str = "workspace_host"
+    api_host: str | None = None
+    api_host_env: str = "ALIYUN_MODEL_STUDIO_API_HOST"
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
     max_input_tokens: StrictInt = Field(default=128000, gt=0)
@@ -88,12 +96,18 @@ class AliyunQwen37EmbeddingAdapter:
         config: AliyunQwen37EmbeddingConfig,
         *,
         http_client: ProviderHttpClient | None = None,
+        api_key_resolver: Callable[[], str] | None = None,
+        workspace_id: str | None = None,
+        region: str | None = None,
     ) -> None:
         """保存配置并延迟构造受控业务空间连接池。
 
         Args:
             config: slot、模型、环境变量名和出网授权。
             http_client: 可注入 MockTransport 的固定 endpoint 客户端。
+            api_key_resolver: 可选页面托管密钥的调用时解析器。
+            workspace_id: 可选页面托管连接的业务空间 ID。
+            region: 可选页面托管连接的区域。
 
         Returns:
             无返回值。
@@ -113,6 +127,9 @@ class AliyunQwen37EmbeddingAdapter:
             raise ValueError("Qwen3.7 adapter 配置偏离已支持请求合同。")
         self._config = config
         self._http = http_client
+        self._api_key_resolver = api_key_resolver
+        self._workspace_id = workspace_id
+        self._region = region
         self._closed = False
         self.descriptor = ComponentDescriptor(
             kind=ComponentKind.EMBEDDING,
@@ -172,81 +189,74 @@ class AliyunQwen37EmbeddingAdapter:
         if request.slot_id != self._config.slot_id:
             raise ValueError("Qwen3.7 Embedding slot 不匹配。")
         self._check_egress(request.role)
-        api_key = os.environ.get(self._config.api_key_env)
-        if not api_key:
-            raise ProviderAuthenticationError(
-                "阿里百炼 API Key 环境变量未配置。",
-                stage="provider.aliyun.embedding",
-                details={"api_key_env": self._config.api_key_env},
-            )
+        api_key = self._resolve_api_key()
         client = self._client()
         limits = BatchLimits(
             max_items=16,
             max_input_tokens=self._config.max_input_tokens,
         )
         batches = batch_texts(request.texts, limits)
+        instruction_tokens = (
+            estimate_tokens(self._config.query_instruct)
+            if request.role is EmbeddingRequestRole.QUERY
+            else 0
+        )
         vectors: list[tuple[float, ...]] = []
         calls: list[ProviderCall] = []
         for batch in batches:
-            parameters: dict[str, object] = {
-                "text_type": (
-                    self._config.document_text_type
-                    if request.role is EmbeddingRequestRole.DOCUMENT
-                    else self._config.query_text_type
-                ),
-                "dimension": self._config.dimension,
-                "output_type": self._config.output_type,
-            }
-            if request.role is EmbeddingRequestRole.QUERY:
-                parameters["instruct"] = self._config.query_instruct
             try:
                 response = client.request_json(
                     "POST",
                     _PATH,
-                    payload={
-                        "model": self._config.model,
-                        "input": {"texts": list(batch)},
-                        "parameters": parameters,
-                    },
+                    payload=embedding_payload(
+                        batch,
+                        model=self._config.model,
+                        dimension=self._config.dimension,
+                        text_type=request.role.value,
+                        instruct=self._config.query_instruct,
+                    ),
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     provider_id="aliyun-qwen37",
-                    operation="embedding",
+                    operation=f"embedding.{request.role.value}",
                     model=self._config.model,
                     input_count=len(batch),
                     estimated_tokens=sum(
-                        estimate_tokens(text) for text in batch
+                        estimate_tokens(text) + instruction_tokens
+                        for text in batch
                     ),
                 )
             except ProviderHttpError as failure:
                 raise provider_error(
                     failure, stage="provider.aliyun.embedding"
                 ) from None
+            observed_tokens: int | None = None
             try:
-                payload = _mapping(response.payload)
-                status_code = payload.get("status_code")
-                if status_code not in (200, "200"):
-                    raise ValueError("Qwen3.7 status_code 不是 200。")
-                if payload.get("code") not in (None, ""):
-                    raise ValueError("Qwen3.7 成功响应包含错误 code。")
-                output = _mapping(payload.get("output"))
-                batch_vectors = ordered_vectors(
-                    output.get("embeddings"),
+                batch_vectors, observed_tokens = decode_embeddings(
+                    response.payload,
                     expected_count=len(batch),
                     dimension=self._config.dimension,
-                    index_field="text_index",
-                    vector_field="embedding",
                 )
-            except (TypeError, ValueError) as error:
-                raise invalid_response_error(
-                    type(error).__name__,
+            except (TypeError, ValueError):
+                reason_code = "INVALID_RESPONSE_CONTRACT"
+                failed_call = client.complete_call(
                     response.call,
+                    observed_tokens=observed_tokens,
+                    failure_reason_code=reason_code,
+                )
+                raise invalid_response_error(
+                    reason_code,
+                    failed_call,
                     stage="provider.aliyun.embedding",
                 ) from None
+            completed_call = client.complete_call(
+                response.call,
+                observed_tokens=observed_tokens,
+            )
             vectors.extend(batch_vectors)
-            calls.append(response.call)
+            calls.append(completed_call)
         if len(vectors) != len(request.texts):
             raise ProviderInvalidResponse(
                 "Qwen3.7 跨批向量总数与输入不一致。",
@@ -272,12 +282,15 @@ class AliyunQwen37EmbeddingAdapter:
 
         """
         del network
-        configured = all(
-            (
-                os.environ.get(self._config.api_key_env),
-                os.environ.get(self._config.workspace_id_env),
+        configured = (
+            all(
+                (
+                    self._resolve_api_key(required=False),
+                    self._resolved_workspace_id(),
+                )
             )
-        ) and self._resolved_region() == _REGION
+            and self._resolved_region() == _REGION
+        )
         return ProviderHealth(
             status=(
                 ProviderHealthStatus.UNKNOWN
@@ -335,28 +348,47 @@ class AliyunQwen37EmbeddingAdapter:
             raise RuntimeError("Qwen3.7 adapter 已关闭。")
         if self._http is not None:
             return self._http
-        region = self._resolved_region()
-        workspace_id = os.environ.get(self._config.workspace_id_env, "")
-        if (
-            not workspace_id
-            or re.fullmatch(r"[a-z0-9-]+", workspace_id) is None
-        ):
-            raise ConfigurationError(
-                "阿里 Workspace ID 缺失或格式无效。",
-                stage="provider.aliyun.config",
-                details={"workspace_id_env": self._config.workspace_id_env},
+        try:
+            endpoint = resolve_endpoint(
+                AliyunEndpointConfig.model_validate(
+                    {
+                        "region": self._resolved_region(),
+                        "workspace_id": self._resolved_workspace_id(),
+                        "endpoint_mode": self._config.endpoint_mode,
+                        "api_host": self._config.api_host
+                        or os.environ.get(self._config.api_host_env),
+                    }
+                )
             )
-        host = f"{workspace_id}.{region}.maas.aliyuncs.com"
-        if _HOST.fullmatch(host) is None:
+        except ValueError:
             raise ConfigurationError(
-                "阿里业务空间 host 不在 V1 allowlist。",
-                stage="provider.aliyun.config",
-            )
-        self._http = ProviderHttpClient(f"https://{host}")
+                "百炼端点配置未通过。", stage="provider.aliyun.config"
+            ) from None
+        self._http = ProviderHttpClient(endpoint)
         return self._http
 
+    def _resolve_api_key(self, *, required: bool = True) -> str:
+        value = (
+            self._api_key_resolver()
+            if self._api_key_resolver is not None
+            else os.environ.get(self._config.api_key_env, "")
+        )
+        if required and not value:
+            raise ProviderAuthenticationError(
+                "阿里百炼 API Key 未配置。",
+                stage="provider.aliyun.embedding",
+            )
+        return value
+
+    def _resolved_workspace_id(self) -> str:
+        return self._workspace_id or os.environ.get(
+            self._config.workspace_id_env, ""
+        )
+
     def _resolved_region(self) -> str:
-        region = os.environ.get(self._config.region_env, self._config.region)
+        region = self._region or os.environ.get(
+            self._config.region_env, self._config.region
+        )
         if region != _REGION:
             raise ConfigurationError(
                 "Qwen3.7 V1 只允许 cn-beijing。",
@@ -364,12 +396,6 @@ class AliyunQwen37EmbeddingAdapter:
                 details={"region_env": self._config.region_env},
             )
         return region
-
-
-def _mapping(value: object) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise TypeError("Provider response 必须是 object。")
-    return value
 
 
 __all__ = [

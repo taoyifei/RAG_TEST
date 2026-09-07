@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, field_serializer, field_validator
 
 from rag_app.core.models.common import FrozenModel, JsonObject
+from rag_app.core.models.search import RetrievalPolicy
 
 
 class ImpactKind(StrEnum):
@@ -38,6 +39,8 @@ class ProviderConnectionDraft(FrozenModel):
     provider_type: str
     credential_id: str
     endpoint_profile: str = "default"
+    endpoint_mode: str = "workspace_host"
+    api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=20)
@@ -52,9 +55,12 @@ class ProviderConnection(FrozenModel):
     provider_type: str
     credential_id: str
     endpoint_profile: str
+    configuration_version: StrictInt = Field(default=1, gt=0)
     enabled: bool
     status: str
     last_validation_id: str | None = None
+    endpoint_mode: str = "workspace_host"
+    api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=20)
@@ -82,7 +88,35 @@ class ProviderValidationRun(FrozenModel):
     observed_tokens: StrictInt | None = Field(default=None, ge=0)
     latency_ms: StrictInt = Field(ge=0)
     safe_error_code: str | None = None
+    configuration_version: StrictInt = Field(default=1, gt=0)
+    stage: str = "legacy"
+    request_dispatched: bool | None = None
+    http_status: int | None = None
+    provider_code: str | None = None
+    provider_request_id: str | None = None
+    endpoint_mode: str | None = None
+    endpoint_host: str | None = None
     synthetic_payload_hash: str
+    endpoint_identity: str | None = None
+    validation_mode: str = "unknown"
+
+
+class ProviderUsageDaily(FrozenModel):
+    """按 UTC 日、连接与操作聚合的脱敏 Provider 用量。"""
+
+    usage_date: str
+    connection_id: str
+    operation: str
+    request_count: StrictInt = Field(ge=0)
+    successful_requests: StrictInt = Field(ge=0)
+    failed_requests: StrictInt = Field(ge=0)
+    estimated_tokens: StrictInt = Field(ge=0)
+    observed_tokens: StrictInt = Field(ge=0)
+    retry_count: StrictInt = Field(ge=0)
+    rate_limit_count: StrictInt = Field(ge=0)
+    failover_count: StrictInt = Field(ge=0)
+    cache_hit_count: StrictInt = Field(ge=0)
+    average_latency_ms: StrictInt = Field(ge=0)
 
 
 class RetrievalProfileRevision(FrozenModel):
@@ -111,6 +145,23 @@ class RetrievalProfileRevision(FrozenModel):
     serving_fingerprint: str
     created_at: str
     activated_at: str | None = None
+    primary_resolved: JsonObject = ()
+    standby_resolved: JsonObject = ()
+    activation_job_id: str | None = None
+
+    @field_serializer(
+        "primary_document_policy",
+        "primary_query_policy",
+        "standby_document_policy",
+        "standby_query_policy",
+        "standby_budget",
+        "retrieval_policy",
+        "evidence_policy",
+        "primary_resolved",
+        "standby_resolved",
+    )
+    def _serialize_policy(self, value: JsonObject) -> dict[str, object]:
+        return dict(value)
 
 
 class RetrievalProfileDraft(FrozenModel):
@@ -133,6 +184,15 @@ class RetrievalProfileDraft(FrozenModel):
     standby_budget: dict[str, object] = Field(default_factory=dict)
     retrieval_policy: dict[str, object] = Field(default_factory=dict)
     evidence_policy: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("retrieval_policy")
+    @classmethod
+    def _validate_retrieval_policy(
+        cls, value: dict[str, object]
+    ) -> dict[str, object]:
+        """在保存和激活前拒绝运行时不支持的检索参数。"""
+        RetrievalPolicy.model_validate(value)
+        return value
 
 
 class ImpactPreview(FrozenModel):
@@ -173,6 +233,7 @@ __all__ = [
     "ImpactPreview",
     "ProviderConnection",
     "ProviderConnectionDraft",
+    "ProviderUsageDaily",
     "ProviderValidationRun",
     "RetrievalProfileDraft",
     "RetrievalProfileRevision",

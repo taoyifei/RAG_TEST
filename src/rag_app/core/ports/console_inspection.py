@@ -43,6 +43,7 @@ class ConsoleRevisionStorePort(Protocol):
         revision_id: str,
         *,
         document_id: str | None,
+        chunk_id: str | None = None,
         role: str | None,
         section_id: str | None,
         neighbor_group_id: str | None,
@@ -56,6 +57,7 @@ class ConsoleRevisionStorePort(Protocol):
             knowledge_base_id: Revision 所属知识库。
             revision_id: 待读取的 IndexRevision。
             document_id: 可选逻辑文档过滤。
+            chunk_id: 可选原文定位，仅允许活动文档。
             role: 可选 Chunk role 过滤。
             section_id: 可选 section 过滤。
             neighbor_group_id: 可选结构邻居组过滤。

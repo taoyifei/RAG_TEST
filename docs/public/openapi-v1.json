@@ -415,18 +415,174 @@
         "title": "ConfidenceStatus",
         "type": "string"
       },
+      "ConnectionPatchRequest": {
+        "additionalProperties": false,
+        "description": "版本受控的非 Secret 连接编辑，未知字段一律拒绝。",
+        "properties": {
+          "api_host": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Host"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "endpoint_mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "workspace_host",
+                  "beijing_dashscope"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint Mode"
+          },
+          "expected_version": {
+            "exclusiveMinimum": 0.0,
+            "title": "Expected Version",
+            "type": "integer"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "const": "cn-beijing",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "request_budget": {
+            "anyOf": [
+              {
+                "maximum": 20.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Budget"
+          },
+          "token_budget": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Budget"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "expected_version"
+        ],
+        "title": "ConnectionPatchRequest",
+        "type": "object"
+      },
       "ConnectionRequest": {
         "additionalProperties": false,
         "description": "Provider Connection 非 Secret 配置。",
         "properties": {
+          "api_host": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Host"
+          },
+          "credential": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CredentialRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "credential_id": {
-            "title": "Credential Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Id"
           },
           "display_name": {
             "maxLength": 200,
             "minLength": 1,
             "title": "Display Name",
+            "type": "string"
+          },
+          "endpoint_mode": {
+            "default": "workspace_host",
+            "enum": [
+              "workspace_host",
+              "beijing_dashscope"
+            ],
+            "title": "Endpoint Mode",
             "type": "string"
           },
           "endpoint_profile": {
@@ -485,8 +641,7 @@
         },
         "required": [
           "display_name",
-          "provider_type",
-          "credential_id"
+          "provider_type"
         ],
         "title": "ConnectionRequest",
         "type": "object"
@@ -1480,6 +1635,11 @@
         "additionalProperties": false,
         "description": "有界 Search/Answer 请求。",
         "properties": {
+          "include_related_content": {
+            "default": false,
+            "title": "Include Related Content",
+            "type": "boolean"
+          },
           "limit": {
             "default": 10,
             "maximum": 50.0,
@@ -1560,6 +1720,17 @@
               }
             ]
           },
+          "display_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Message"
+          },
           "evidence": {
             "default": [],
             "items": {
@@ -1618,6 +1789,15 @@
             "minLength": 1,
             "title": "Reason Code",
             "type": "string"
+          },
+          "related_contents": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RelatedContent"
+            },
+            "maxItems": 3,
+            "title": "Related Contents",
+            "type": "array"
           },
           "rerank_execution_mode": {
             "title": "Rerank Execution Mode",
@@ -1711,6 +1891,96 @@
           "quality_profile_status"
         ],
         "title": "QueryResponse",
+        "type": "object"
+      },
+      "RelatedContent": {
+        "additionalProperties": false,
+        "description": "本次未获得答案资格的独立原文预览；不能送入生成器。",
+        "properties": {
+          "chunk_id": {
+            "pattern": "^chunk_[0-9a-f]{32}$",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_id": {
+            "pattern": "^doc_[0-9a-f]{32}$",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "excerpt": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "heading_path": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Heading Path",
+            "type": "array"
+          },
+          "index_revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Index Revision Id",
+            "type": "string"
+          },
+          "is_answer_evidence": {
+            "const": false,
+            "default": false,
+            "title": "Is Answer Evidence",
+            "type": "boolean"
+          },
+          "related_id": {
+            "pattern": "^related_[0-9a-f]{32}$",
+            "title": "Related Id",
+            "type": "string"
+          },
+          "relevance_reason": {
+            "enum": [
+              "KEYWORD_RELATED",
+              "SEMANTIC_CANDIDATE",
+              "RELEVANCE_UNVERIFIED"
+            ],
+            "title": "Relevance Reason",
+            "type": "string"
+          },
+          "rerank_verified": {
+            "default": false,
+            "title": "Rerank Verified",
+            "type": "boolean"
+          },
+          "source_spans": {
+            "items": {
+              "$ref": "#/components/schemas/SourceSpan"
+            },
+            "minItems": 1,
+            "title": "Source Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "related_id",
+          "document_id",
+          "document_version_id",
+          "index_revision_id",
+          "chunk_id",
+          "document_name",
+          "excerpt",
+          "source_spans",
+          "relevance_reason"
+        ],
+        "title": "RelatedContent",
         "type": "object"
       },
       "RenameDocumentRequest": {
@@ -3064,6 +3334,11 @@
             ],
             "title": "Operation",
             "type": "string"
+          },
+          "request_policy": {
+            "additionalProperties": true,
+            "title": "Request Policy",
+            "type": "object"
           }
         },
         "required": [
@@ -7202,7 +7477,7 @@
         ]
       },
       "post": {
-        "description": "受控接收 DOCX 并创建新逻辑文档。",
+        "description": "受控接收 DOC 或 DOCX 并创建新逻辑文档。",
         "operationId": "_create_document_api_v1_projects__project_id__knowledge_bases__kb_id__documents_post",
         "parameters": [
           {
@@ -8799,6 +9074,22 @@
           },
           {
             "in": "query",
+            "name": "chunk_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chunk Id"
+            }
+          },
+          {
+            "in": "query",
             "name": "role",
             "required": false,
             "schema": {
@@ -9506,6 +9797,377 @@
         ]
       }
     },
+    "/api/v1/provider-budget/campaign": {
+      "get": {
+        "operationId": "_campaign_api_v1_provider_budget_campaign_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Campaign Api V1 Provider Budget Campaign Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Campaign",
+        "tags": [
+          "provider-budget"
+        ]
+      }
+    },
+    "/api/v1/provider-budget/revisions": {
+      "post": {
+        "description": "必须使用现有管理员 Session Cookie 和 X-CSRF-Token；受限 API Token 与计划文件不能扩额。approver 必须由实际授权人明确填写；全部数值是保留历史消费的累计总上限。",
+        "operationId": "_approve_api_v1_provider_budget_revisions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "description": "实际管理员确认的累计总上限，保持同一 campaign 与批准数据集。",
+                "properties": {
+                  "approval_reference": {
+                    "title": "Approval Reference",
+                    "type": "string"
+                  },
+                  "approved_at": {
+                    "title": "Approved At",
+                    "type": "string"
+                  },
+                  "approver": {
+                    "title": "Approver",
+                    "type": "string"
+                  },
+                  "authorization_id": {
+                    "title": "Authorization Id",
+                    "type": "string"
+                  },
+                  "campaign_id": {
+                    "title": "Campaign Id",
+                    "type": "string"
+                  },
+                  "estimated_token_limit": {
+                    "title": "Estimated Token Limit",
+                    "type": "integer"
+                  },
+                  "expires_at": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Expires At"
+                  },
+                  "payload_set_identity": {
+                    "title": "Payload Set Identity",
+                    "type": "string"
+                  },
+                  "previous_revision_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "title": "Previous Revision Id"
+                  },
+                  "provider_request_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Provider Request Limits",
+                    "type": "object"
+                  },
+                  "provider_token_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Provider Token Limits",
+                    "type": "object"
+                  },
+                  "reason": {
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "request_limit": {
+                    "title": "Request Limit",
+                    "type": "integer"
+                  },
+                  "revision_id": {
+                    "title": "Revision Id",
+                    "type": "string"
+                  },
+                  "scope": {
+                    "title": "Scope",
+                    "type": "string"
+                  },
+                  "status": {
+                    "default": "PROPOSED",
+                    "enum": [
+                      "APPROVED"
+                    ],
+                    "title": "Status",
+                    "type": "string"
+                  },
+                  "step_request_limits": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "title": "Step Request Limits",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "revision_id",
+                  "campaign_id",
+                  "previous_revision_id",
+                  "authorization_id",
+                  "approval_reference",
+                  "approver",
+                  "approved_at",
+                  "scope",
+                  "payload_set_identity",
+                  "request_limit",
+                  "estimated_token_limit",
+                  "reason"
+                ],
+                "title": "BudgetAuthorizationRevision",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Approve Api V1 Provider Budget Revisions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": "由已登录管理员明确批准累计预算修订",
+        "tags": [
+          "provider-budget"
+        ]
+      }
+    },
     "/api/v1/provider-catalog": {
       "get": {
         "operationId": "_catalog_api_v1_provider_catalog_get",
@@ -9878,6 +10540,150 @@
           }
         },
         "summary": " Create Connection",
+        "tags": [
+          "model-services"
+        ]
+      }
+    },
+    "/api/v1/provider-connections/{connection_id}": {
+      "patch": {
+        "operationId": "_update_connection_api_v1_provider_connections__connection_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectionPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Update Connection Api V1 Provider Connections  Connection Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Update Connection",
         "tags": [
           "model-services"
         ]
@@ -10554,6 +11360,129 @@
           }
         },
         "summary": " Rotate Credential",
+        "tags": [
+          "model-services"
+        ]
+      }
+    },
+    "/api/v1/provider-usage/daily": {
+      "get": {
+        "operationId": "_daily_provider_usage_api_v1_provider_usage_daily_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Daily Provider Usage Api V1 Provider Usage Daily Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Daily Provider Usage",
         "tags": [
           "model-services"
         ]

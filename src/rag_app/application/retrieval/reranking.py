@@ -32,6 +32,7 @@ class RerankingOutcome:
     mode: str
     reason_code: str
     provider_calls: tuple[ProviderCall, ...] = ()
+    failure_category: ProviderFailureCategory | None = None
 
 
 class CircuitAwareReranker:
@@ -87,7 +88,11 @@ class CircuitAwareReranker:
                 )
         if not self._circuit.allow_call(key):
             return _bypass(
-                limited[:output_limit], "RERANK_BYPASSED_CIRCUIT_OPEN"
+                limited[:output_limit],
+                "RERANK_BYPASSED_CIRCUIT_OPEN",
+                category=_circuit_failure_category(
+                    self._circuit.snapshot(key).reason_code
+                ),
             )
         request = RerankRequest(
             query=query,
@@ -113,6 +118,7 @@ class CircuitAwareReranker:
             return _bypass(
                 limited[:output_limit],
                 "RERANK_BYPASSED_PROVIDER_UNAVAILABLE",
+                category=category,
             )
         self._circuit.record_success(key)
         protected = _restore_must_keep(
@@ -220,14 +226,27 @@ def _restore_must_keep(
 
 
 def _bypass(
-    candidates: tuple[RankedChunk, ...], reason_code: str
+    candidates: tuple[RankedChunk, ...],
+    reason_code: str,
+    *,
+    category: ProviderFailureCategory | None = None,
 ) -> RerankingOutcome:
     return RerankingOutcome(
         candidates=candidates,
         mode=reason_code.casefold(),
         reason_code=reason_code,
         provider_calls=(),
+        failure_category=category,
     )
+
+
+def _circuit_failure_category(
+    reason_code: str,
+) -> ProviderFailureCategory | None:
+    try:
+        return ProviderFailureCategory(reason_code.casefold())
+    except ValueError:
+        return None
 
 
 __all__ = ["CircuitAwareReranker", "RerankingOutcome"]

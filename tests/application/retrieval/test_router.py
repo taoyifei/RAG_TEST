@@ -69,6 +69,10 @@ class _Embedding:
 def _slot(
     slot_id: str, role: EmbeddingSlotRole, provider: str, vector_name: str
 ) -> EmbeddingSlotIdentity:
+    query_policy = {"task": "retrieval.query"}
+    if provider.startswith("aliyun-qwen37"):
+        query_policy["query_instruct"] = "Retrieve relevant passages."
+
     return EmbeddingSlotIdentity(
         slot_id=slot_id,
         role=role,
@@ -77,7 +81,7 @@ def _slot(
         vector_name=vector_name,
         dimension=2,
         normalization="l2-v1",
-        query_request_policy={"task": "retrieval.query"},
+        query_request_policy=query_policy,
     )
 
 

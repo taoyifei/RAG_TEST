@@ -1,0 +1,38 @@
+name: P11 Live Provider
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization_phrase:
+        description: 输入 I_AUTHORIZE_EXISTING_PUBLIC_CAMPAIGN（不扩大既有预算）
+        required: true
+        type: string
+      steps:
+        description: 逗号分隔的阶段；默认只执行本地配置检查
+        required: true
+        default: config_check,final_report
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  live-provider:
+    # 可选手动通道：使用已有安全托管连接与持久账本，不复制 Key 到 GitHub。
+    runs-on: [self-hosted, p11-live-provider]
+    environment: p11-live-provider
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Resume the existing authorized campaign
+        env:
+          AUTHORIZATION_PHRASE: ${{ inputs.authorization_phrase }}
+          P11_ACCEPTANCE_CONFIG: ${{ vars.P11_ACCEPTANCE_CONFIG }}
+          ACCEPTANCE_STEPS: ${{ inputs.steps }}
+          RAG_TEST_NETWORK: live
+        run: |
+          test "$AUTHORIZATION_PHRASE" = I_AUTHORIZE_EXISTING_PUBLIC_CAMPAIGN
+          test -n "$P11_ACCEPTANCE_CONFIG"
+          test -f "$P11_ACCEPTANCE_CONFIG"
+          .venv/bin/python scripts/release.py acceptance \
+            --config "$P11_ACCEPTANCE_CONFIG" --steps "$ACCEPTANCE_STEPS" \
+            --resume --live

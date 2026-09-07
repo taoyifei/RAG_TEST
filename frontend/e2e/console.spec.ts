@@ -1,6 +1,182 @@
+async function navigate(page: Page, name: string) {
+  const nav = page.getByRole("navigation", { name: "主导航" });
+  const button = nav.getByRole("button", { name, exact: true });
+  if (!(await button.isVisible())) {
+    const menu = page.getByRole("button", { name: "打开导航" });
+    if (
+      (await menu.isVisible()) &&
+      !(await page
+        .locator(".sidebar")
+        .evaluate((element) => element.classList.contains("open")))
+    )
+      await menu.click();
+    if (!(await button.isVisible())) await nav.locator("summary").click();
+  }
+  await button.click();
+}
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
+import type { ChunkPage, QueryResponse } from "../src/api/client";
+
+test("相关内容 unit_synthetic 提示与真实授权原文入口", async ({
+  page,
+}, testInfo) => {
+  await authenticate(page);
+  await createScope(page, `related-${testInfo.project.name}`);
+  await uploadAndWait(
+    page,
+    "隐私手册.docx",
+    "隐私专员负责处理数据访问请求与投诉。",
+  );
+  const scopeUrl = new URL(page.url());
+  const project = scopeUrl.searchParams.get("project")!;
+  const kb = scopeUrl.searchParams.get("knowledgeBase")!;
+  const base = `/api/v1/projects/${project}/knowledge-bases/${kb}`;
+  const session = (await (
+    await page.request.get("/api/v1/console/session")
+  ).json()) as { csrf_token: string };
+  const headers = {
+    "X-CSRF-Token": session.csrf_token,
+    Origin: scopeUrl.origin,
+  };
+  const kbResponse = (await (await page.request.get(base)).json()) as {
+    active_index_revision_id: string;
+  };
+  const revision = kbResponse.active_index_revision_id;
+  const chunkResponse = await page.request.get(
+    `${base}/revisions/${revision}/chunks`,
+  );
+  expect(chunkResponse.ok(), await chunkResponse.text()).toBeTruthy();
+  const chunk = ((await chunkResponse.json()) as ChunkPage).items[0];
+  const baselineResponse = await page.request.post(`${base}:answer`, {
+    headers,
+    data: { query: "隐私专员" },
+  });
+  expect(baselineResponse.ok(), await baselineResponse.text()).toBeTruthy();
+  const baseline = (await baselineResponse.json()) as QueryResponse;
+  const related = {
+    related_id: "related_unit_synthetic",
+    document_id: chunk.version.document_id,
+    document_version_id: chunk.version.document_version_id,
+    index_revision_id: revision,
+    chunk_id: chunk.chunk_id,
+    document_name: "隐私手册.docx",
+    heading_path: chunk.heading_path,
+    excerpt: chunk.citation_text,
+    source_spans: chunk.source_spans,
+    is_answer_evidence: false as const,
+    relevance_reason: "RELEVANCE_UNVERIFIED" as const,
+    rerank_verified: false,
+  };
+  const notice =
+    "本次检索未找到足以直接回答这个问题的依据。下面这些内容可能相关，供你查阅。";
+  const dependency =
+    "重排服务暂时不可用，这次未能可靠确认答案。你可以先查看下面检索到的内容。";
+  const empty =
+    "本次检索未找到足够相关的内容。可以补充关键词，或检查当前知识库是否包含所需资料。";
+  const outcomes: Partial<QueryResponse>[] = [
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: notice,
+    },
+    {
+      status: "PROVIDER_UNAVAILABLE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: dependency,
+    },
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [],
+      display_message: empty,
+    },
+    {
+      status: "ANSWERABLE",
+      answer: "隐私专员负责处理数据访问请求与投诉。",
+      related_contents: [],
+      display_message: null,
+    },
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: notice,
+    },
+  ];
+  let answerRequests = 0;
+  await page.route(`**${base}:answer`, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      include_related_content: true,
+    });
+    const outcome = outcomes[answerRequests++];
+    expect(outcome).toBeDefined();
+    await route.fulfill({
+      json: {
+        ...baseline,
+        ...outcome,
+        evidence_count: outcome.evidence?.length ?? baseline.evidence_count,
+      },
+    });
+  });
+  await navigate(page, "问答");
+  const submit = async () => {
+    await page.getByLabel("查询文本").fill("隐私专员电话");
+    await page.getByRole("button", { name: "执行", exact: true }).click();
+  };
+  await submit();
+  await expect(page.getByText(notice)).toBeVisible();
+  await testInfo.attach("related-content-preview", {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  await expect(
+    page.getByRole("region", { name: "正式答案", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "查看原文" }).click();
+  await expect(
+    page.getByRole("region", { name: "相关原文详情" }),
+  ).toContainText(chunk.citation_text);
+  await page.getByRole("button", { name: "关闭原文" }).click();
+  await submit();
+  await expect(page.getByText(dependency)).toBeVisible();
+  await expect(page.getByText("未完成相关性复核，仅供查阅。")).toBeVisible();
+  await submit();
+  await expect(page.getByText(empty)).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toHaveCount(0);
+  await submit();
+  await expect(
+    page.getByRole("region", { name: "正式答案", exact: true }),
+  ).toHaveAttribute("data-raw-answer", "隐私专员负责处理数据访问请求与投诉。");
+  await submit();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toBeVisible();
+  const deleted = await page.request.delete(
+    `${base}/documents/${chunk.version.document_id}`,
+    { headers },
+  );
+  expect(deleted.ok(), await deleted.text()).toBeTruthy();
+  await page.getByRole("button", { name: "查看原文" }).click();
+  await expect(page.getByText("原文当前不可读取。")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toHaveCount(0);
+  expect(answerRequests).toBe(5);
+  const persisted = await page.evaluate(() =>
+    JSON.stringify({ ...localStorage, ...sessionStorage }),
+  );
+  expect(persisted).not.toContain(chunk.citation_text);
+});
 
 const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -40,10 +216,11 @@ async function authenticate(page: Page) {
   await page.goto("/");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
 }
 
 async function createScope(page: Page, suffix: string) {
-  await page.getByRole("button", { name: "知识库", exact: true }).click();
+  await page.getByRole("button", { name: "管理项目", exact: true }).click();
   await page.getByLabel("项目名称").fill(`离线项目 ${suffix}`);
   await page.getByRole("button", { name: "创建" }).click();
   const projectCard = page.getByRole("article").filter({
@@ -72,40 +249,59 @@ async function uploadAndWait(page: Page, name: string, content: string) {
   });
 }
 
+async function validateConnection(
+  page: Page,
+  connection: Locator,
+  buttonName: string,
+) {
+  const validationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/api/v1/provider-connections/") &&
+      response.url().endsWith(":validate"),
+  );
+  await connection.getByRole("button", { name: buttonName }).click();
+  await page.getByRole("button", { name: "开始测试", exact: true }).click();
+  const response = await validationResponse;
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { status: string };
+  expect(payload.status).toBe("succeeded");
+}
+
 async function configureModelServices(page: Page) {
   await page.getByRole("button", { name: "模型服务" }).click();
+  await page.getByRole("button", { name: "新增连接" }).click();
   await page
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-jina-browser-value");
   await page.getByRole("button", { name: "保存连接" }).click();
   const jina = page.getByRole("article").filter({ hasText: "Jina 主连接" });
-  await jina.getByRole("button", { name: "测试文档向量" }).click();
-  await jina.getByRole("button", { name: "测试查询向量" }).click();
-  await jina.getByRole("button", { name: "测试结果重排" }).click();
+  await validateConnection(page, jina, "测试文档向量");
+  await validateConnection(page, jina, "测试查询向量");
+  await validateConnection(page, jina, "测试结果重排");
 
+  await page.getByRole("button", { name: "新增连接" }).click();
   await page.getByLabel("服务商").selectOption("aliyun-model-studio");
   await page
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-aliyun-browser-value");
-  await page.getByLabel("工作空间标识").fill("synthetic-workspace");
+  await page.getByLabel("工作空间标识").fill("llm-syntheticworkspace");
+  await page
+    .getByLabel("API Host", { exact: true })
+    .fill("https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com");
   await page.getByRole("button", { name: "保存连接" }).click();
-  const aliyun = page
-    .getByRole("article")
-    .filter({ hasText: "百炼备用连接" });
-  await aliyun.getByRole("button", { name: "测试文档向量" }).click();
-  await aliyun.getByRole("button", { name: "测试查询向量" }).click();
+  const aliyun = page.getByRole("article").filter({ hasText: "百炼备用连接" });
+  await validateConnection(page, aliyun, "测试文档向量");
+  await validateConnection(page, aliyun, "测试查询向量");
 }
 
-async function createRetrievalProfile(
-  page: Page,
-  instruction = "为检索查询生成准确表示",
-) {
-  await page.getByRole("button", { name: "检索方案" }).click();
+async function createRetrievalProfile(page: Page, instruction = "") {
+  await navigate(page, "检索方案");
   await page.getByLabel("主向量连接").selectOption({ label: "Jina 主连接" });
-  await page
-    .getByLabel("备用向量连接")
-    .selectOption({ label: "百炼备用连接" });
-  await page.getByLabel("查询指令").fill(instruction);
+  await page.getByLabel("备用向量连接").selectOption({ label: "百炼备用连接" });
+  if (!(await page.getByLabel("Qwen 查询指令").isVisible()))
+    await page.getByText("高级设置", { exact: true }).click();
+  await page.getByLabel("Qwen 查询指令").fill(instruction);
   await page.getByRole("button", { name: "创建并预览影响" }).click();
 }
 
@@ -127,6 +323,7 @@ async function sourceArtifact(page: Page): Promise<string> {
 
 test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   page,
+  request,
 }, testInfo) => {
   if (testInfo.project.name !== "chromium-desktop") test.skip();
   await authenticate(page);
@@ -134,14 +331,23 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await createScope(page, `${testInfo.project.name}-${Date.now()}`);
   await createRetrievalProfile(page);
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
-  await page.getByRole("button", { name: "确认应用" }).click();
-  await page.getByRole("button", { name: "文档管理" }).click();
+  const applied = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith(":activate"),
+  );
+  await page.getByRole("button", { name: "建立新索引并切换" }).click();
+  expect((await applied).ok()).toBeTruthy();
+  await expect(
+    page.getByRole("heading", { name: "当前方案", exact: true }),
+  ).toBeVisible();
+  await navigate(page, "文档管理");
   await uploadAndWait(
     page,
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
 
   const originalRow = documentRow(page, "青岛啤酒采购流程.docx");
   const documentId = await originalRow.locator("td").nth(1).innerText();
@@ -175,7 +381,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     .getByRole("button", { name: "检查版本" })
     .click();
   await expect(page.getByText("使用中", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
   await expect(
     documentRow(page, "青岛啤酒采购制度.docx").locator("td").nth(2),
   ).not.toHaveText(originalVersion);
@@ -185,7 +391,7 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "青岛啤酒采购流程.docx",
     "青岛啤酒采购流程需要采购申请审批，并由采购部门归档。 ",
   );
-  await page.getByRole("button", { name: "文档管理" }).click();
+  await navigate(page, "文档管理");
   const duplicateRow = documentRow(page, "青岛啤酒采购流程.docx");
   await expect(duplicateRow.locator("td").nth(1)).not.toHaveText(documentId);
   await duplicateRow.getByRole("button", { name: "详情" }).click();
@@ -200,16 +406,25 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "设备巡检记录包含空调滤芯更换和机房温度检查。 ",
   );
 
-  await page.getByRole("button", { name: "检索调试" }).click();
+  await navigate(page, "检索调试");
   await page.getByLabel("查询文本").fill("青岛啤酒");
   await page.getByRole("button", { name: "执行" }).click();
 
-  const evidence = page
+  const candidates = page.getByRole("region", { name: "检索候选" });
+  await expect(candidates).toHaveAttribute(
+    "data-content-role",
+    "diagnostic-evidence",
+  );
+  await expect(page.getByRole("region", { name: "引用依据" })).toHaveCount(0);
+  const evidence = candidates
     .getByRole("button", { name: /青岛啤酒采购流程/ })
     .first();
   await expect(evidence).toBeVisible();
   await expect(page.getByText("无关噪声.docx")).toHaveCount(0);
   await evidence.click();
+  await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
+    "检索候选（未发布）",
+  );
   await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
     "青岛啤酒采购流程",
   );
@@ -223,13 +438,69 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await expect(page.getByRole("heading", { name: "检索调试" })).toBeVisible();
   await expect(page.locator(".scope-card")).toContainText("kb_");
   await page.getByRole("button", { name: "模型服务" }).click();
-  await page.getByLabel("待轮换凭据").selectOption({ index: 1 });
+  await page
+    .getByRole("article")
+    .filter({ hasText: "Jina 主连接" })
+    .getByRole("button", { name: "编辑连接" })
+    .click();
+  await page.getByRole("button", { name: "更换密钥", exact: true }).click();
   await page.getByLabel("新服务密钥").fill("rotated-jina-browser-value");
-  await page.getByRole("button", { name: "轮换密钥" }).click();
+  const rotationResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/api/v1/provider-credentials/") &&
+      response.url().endsWith(":rotate"),
+  );
+  await page.getByRole("button", { name: "确认更换密钥" }).click();
+  expect((await rotationResponse).ok()).toBeTruthy();
+  await expect(page.getByText("密钥已更换，请重新测试。")).toBeVisible();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
   await createRetrievalProfile(page);
   await expect(page.getByText("无需重建索引")).toBeVisible();
   await createRetrievalProfile(page, "为新版业务检索查询生成准确表示");
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+
+  if (await page.getByRole("dialog", { name: "编辑 Jina 连接" }).isVisible())
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+  await navigate(page, "接口访问");
+  await page.getByLabel("令牌名称").fill("浏览器验收令牌");
+  await page.getByRole("button", { name: "创建令牌" }).click();
+  const token =
+    (await page.getByRole("alert").locator("code").textContent()) ?? "";
+  const projectId =
+    (await page.locator(".scope-card code").nth(1).textContent()) ?? "";
+  const knowledgeBaseId =
+    (await page.locator(".scope-card code").nth(2).textContent()) ?? "";
+  expect(token).toMatch(/^ragk_/);
+  const tokenQuery = await request.post(
+    `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { query: "青岛啤酒", limit: 1 },
+    },
+  );
+  expect(tokenQuery.ok()).toBeTruthy();
+  const tokenCard = page
+    .getByRole("article")
+    .filter({ hasText: "浏览器验收令牌" });
+  const [revokeResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith(":revoke"),
+    ),
+    tokenCard.getByRole("button", { name: "吊销" }).click(),
+  ]);
+  expect(revokeResponse.ok()).toBeTruthy();
+  await expect(tokenCard).toContainText("已吊销");
+  const deniedQuery = await request.post(
+    `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}:search`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      data: { query: "青岛啤酒", limit: 1 },
+    },
+  );
+  expect(deniedQuery.status()).toBe(403);
 
   const storageContainsSecret = await page.evaluate(() =>
     JSON.stringify({ ...localStorage, ...sessionStorage }),
@@ -244,7 +515,7 @@ test("375px 视口可通过导航进入系统状态", async ({ page }) => {
   await authenticate(page);
   if (page.viewportSize()?.width !== 375) test.skip();
   await page.getByRole("button", { name: "打开导航" }).click();
-  await page.getByRole("button", { name: "系统状态" }).click();
+  await navigate(page, "系统状态");
   await expect(
     page.getByRole("heading", { name: "系统状态", exact: true, level: 1 }),
   ).toBeVisible();

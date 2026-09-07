@@ -25,6 +25,7 @@ from rag_app.core.errors import (
 from rag_app.core.models import (
     EmbeddingRequest,
     EmbeddingRequestRole,
+    ProviderCall,
     RerankRequest,
 )
 
@@ -42,6 +43,7 @@ def _http(
     *,
     max_attempts: int = 3,
     sleeps: list[float] | None = None,
+    observer: Callable[[ProviderCall], None] | None = None,
 ) -> ProviderHttpClient:
     observed_sleeps = sleeps if sleeps is not None else []
     return ProviderHttpClient(
@@ -50,6 +52,8 @@ def _http(
         max_attempts=max_attempts,
         sleeper=observed_sleeps.append,
         random_value=lambda: 0.0,
+        observer=observer,
+        defer_success_observation=True,
     )
 
 
@@ -85,6 +89,7 @@ def test_embedding_maps_role_and_restores_shuffled_indices(
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     observed: dict[str, object] = {}
+    events: list[ProviderCall] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed.update(json.loads(request.content))
@@ -96,11 +101,13 @@ def test_embedding_maps_role_and_restores_shuffled_indices(
                     {"index": 1, "embedding": _unit(1)},
                     {"index": 0, "embedding": _unit(0)},
                 ],
+                "usage": {"total_tokens": 7},
             },
         )
 
     adapter = JinaV5TextEmbeddingAdapter(
-        _embedding_config(), http_client=_http(handler)
+        _embedding_config(),
+        http_client=_http(handler, observer=events.append),
     )
     result = adapter.embed(
         EmbeddingRequest(
@@ -127,6 +134,8 @@ def test_embedding_maps_role_and_restores_shuffled_indices(
         for vector in result.vectors
     )
     assert result.calls[0].endpoint == "api.jina.ai/v1/embeddings"
+    assert result.calls[0].observed_tokens == 7
+    assert events == [result.calls[0]]
 
 
 def test_embedding_uses_configured_environment_and_request_fields(
@@ -144,6 +153,7 @@ def test_embedding_uses_configured_environment_and_request_fields(
             json={
                 "model": "jina-embeddings-v5-text-small",
                 "data": [{"index": 0, "embedding": _unit()}],
+                "usage": {"total_tokens": 3},
             },
         )
 
@@ -187,6 +197,10 @@ def test_embedding_uses_configured_environment_and_request_fields(
             {"index": 1, "embedding": _unit(1)},
         ],
         [
+            {"index": 0, "embedding": [1 << 4096] + [0.0] * 1023},
+            {"index": 1, "embedding": _unit(1)},
+        ],
+        [
             {"index": 0, "embedding": [0.0] * 1024},
             {"index": 1, "embedding": _unit(1)},
         ],
@@ -197,6 +211,7 @@ def test_embedding_rejects_incomplete_duplicate_or_bad_vectors(
     data: list[dict[str, object]],
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
+    events: list[ProviderCall] = []
     adapter = JinaV5TextEmbeddingAdapter(
         _embedding_config(),
         http_client=_http(
@@ -204,11 +219,13 @@ def test_embedding_rejects_incomplete_duplicate_or_bad_vectors(
                 {
                     "model": "jina-embeddings-v5-text-small",
                     "data": data,
+                    "usage": {"total_tokens": 5},
                 }
-            )
+            ),
+            observer=events.append,
         ),
     )
-    with pytest.raises(ProviderInvalidResponse):
+    with pytest.raises(ProviderInvalidResponse) as captured:
         adapter.embed(
             EmbeddingRequest(
                 slot_id="primary",
@@ -217,10 +234,15 @@ def test_embedding_rejects_incomplete_duplicate_or_bad_vectors(
             )
         )
     adapter.close()
+    assert events == [captured.value.provider_call]
+    assert events[0].status_category == "RESPONSE_CONTRACT"
+    assert events[0].observed_tokens == 5
 
 
-def test_embedding_rejects_wrong_response_model(
+@pytest.mark.parametrize("response_model", (None, "wrong"))
+def test_embedding_rejects_missing_or_wrong_response_model(
     monkeypatch: pytest.MonkeyPatch,
+    response_model: str | None,
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     adapter = JinaV5TextEmbeddingAdapter(
@@ -228,7 +250,11 @@ def test_embedding_rejects_wrong_response_model(
         http_client=_http(
             lambda _: httpx.Response(
                 200,
-                json={"model": "wrong", "data": []},
+                json={
+                    "model": response_model,
+                    "data": [],
+                    "usage": {"total_tokens": 2},
+                },
             )
         ),
     )
@@ -241,6 +267,53 @@ def test_embedding_rejects_wrong_response_model(
             )
         )
     adapter.close()
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        None,
+        {},
+        {"total_tokens": None},
+        {"total_tokens": True},
+        {"total_tokens": 0},
+        {"total_tokens": 1.5},
+        {"total_tokens": 1 << 63},
+    ),
+)
+def test_embedding_rejects_missing_or_invalid_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    usage: object,
+) -> None:
+    monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
+    events: list[ProviderCall] = []
+    adapter = JinaV5TextEmbeddingAdapter(
+        _embedding_config(),
+        http_client=_http(
+            lambda _: _json_response(
+                {
+                    "model": "jina-embeddings-v5-text-small",
+                    "data": [{"index": 0, "embedding": _unit()}],
+                    "usage": usage,
+                }
+            ),
+            observer=events.append,
+        ),
+    )
+
+    with pytest.raises(ProviderInvalidResponse) as captured:
+        adapter.embed(
+            EmbeddingRequest(
+                slot_id="primary",
+                role=EmbeddingRequestRole.QUERY,
+                texts=("query",),
+            )
+        )
+    adapter.close()
+
+    assert events == [captured.value.provider_call]
+    assert events[0].status_category == "RESPONSE_CONTRACT"
+    assert events[0].observed_tokens is None
 
 
 def test_embedding_rejects_oversize_before_transport(
@@ -303,6 +376,7 @@ def test_embedding_auth_or_model_status_is_not_retried(
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     calls = 0
+    events: list[ProviderCall] = []
 
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -310,9 +384,10 @@ def test_embedding_auth_or_model_status_is_not_retried(
         return httpx.Response(status, json={"detail": "hidden"})
 
     adapter = JinaV5TextEmbeddingAdapter(
-        _embedding_config(), http_client=_http(handler)
+        _embedding_config(),
+        http_client=_http(handler, observer=events.append),
     )
-    with pytest.raises(ProviderAuthenticationError):
+    with pytest.raises(ProviderAuthenticationError) as captured:
         adapter.embed(
             EmbeddingRequest(
                 slot_id="primary",
@@ -322,6 +397,7 @@ def test_embedding_auth_or_model_status_is_not_retried(
         )
     adapter.close()
     assert calls == 1
+    assert events == [captured.value.provider_call]
 
 
 def test_embedding_429_honors_retry_after_and_is_bounded(
@@ -330,6 +406,7 @@ def test_embedding_429_honors_retry_after_and_is_bounded(
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     calls = 0
     sleeps: list[float] = []
+    events: list[ProviderCall] = []
 
     def handler(_: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -342,7 +419,11 @@ def test_embedding_429_honors_retry_after_and_is_bounded(
 
     adapter = JinaV5TextEmbeddingAdapter(
         _embedding_config(),
-        http_client=_http(handler, sleeps=sleeps),
+        http_client=_http(
+            handler,
+            sleeps=sleeps,
+            observer=events.append,
+        ),
     )
     with pytest.raises(ProviderRateLimited) as captured:
         adapter.embed(
@@ -357,6 +438,9 @@ def test_embedding_429_honors_retry_after_and_is_bounded(
     assert sleeps == [2.0, 2.0]
     assert captured.value.provider_call is not None
     assert captured.value.provider_call.retry_after_ms == 2000
+    assert captured.value.provider_call.retry_count == 2
+    assert captured.value.provider_call.rate_limited is True
+    assert events == [captured.value.provider_call]
     assert "private text" not in str(captured.value)
     assert "test-jina-key" not in str(captured.value)
 
@@ -367,6 +451,7 @@ def test_embedding_retries_transient_then_succeeds(
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     calls = 0
+    events: list[ProviderCall] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
@@ -380,11 +465,13 @@ def test_embedding_retries_transient_then_succeeds(
             json={
                 "model": "jina-embeddings-v5-text-small",
                 "data": [{"index": 0, "embedding": _unit()}],
+                "usage": {"total_tokens": 3},
             },
         )
 
     adapter = JinaV5TextEmbeddingAdapter(
-        _embedding_config(), http_client=_http(handler)
+        _embedding_config(),
+        http_client=_http(handler, observer=events.append),
     )
     result = adapter.embed(
         EmbeddingRequest(
@@ -396,6 +483,9 @@ def test_embedding_retries_transient_then_succeeds(
     adapter.close()
     assert calls == 2
     assert result.calls[0].attempt_count == 2
+    assert result.calls[0].retry_count == 1
+    assert result.calls[0].observed_tokens == 3
+    assert events == [result.calls[0]]
 
 
 def test_reranker_requests_complete_top_n_and_restores_scores(
@@ -403,6 +493,7 @@ def test_reranker_requests_complete_top_n_and_restores_scores(
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
     observed: dict[str, object] = {}
+    events: list[ProviderCall] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed.update(json.loads(request.content))
@@ -416,13 +507,15 @@ def test_reranker_requests_complete_top_n_and_restores_scores(
                         "relevance_score": 0.2,
                         "document": "first",
                     },
-                ]
+                ],
+                "model": "jina-reranker-v3.5",
+                "usage": {"total_tokens": 11},
             },
         )
 
     adapter = JinaRerankerV35Adapter(
         JinaRerankerConfig(egress_allowed=True),
-        http_client=_http(handler),
+        http_client=_http(handler, observer=events.append),
     )
     result = adapter.rerank(
         RerankRequest(
@@ -434,7 +527,10 @@ def test_reranker_requests_complete_top_n_and_restores_scores(
     adapter.close()
     assert observed["model"] == "jina-reranker-v3.5"
     assert observed["top_n"] == 2
+    assert observed["return_documents"] is False
     assert tuple(item.candidate_id for item in result.items) == ("b",)
+    assert result.calls[0].observed_tokens == 11
+    assert events == [result.calls[0]]
 
 
 def test_reranker_limit_and_ties_preserve_input_rrf_order(
@@ -451,7 +547,13 @@ def test_reranker_limit_and_ties_preserve_input_rrf_order(
     adapter = JinaRerankerV35Adapter(
         JinaRerankerConfig(egress_allowed=True),
         http_client=_http(
-            lambda _: _json_response({"results": results})
+            lambda _: _json_response(
+                {
+                    "model": "jina-reranker-v3.5",
+                    "results": results,
+                    "usage": {"total_tokens": 13},
+                }
+            )
         ),
     )
 
@@ -483,6 +585,10 @@ def test_reranker_limit_and_ties_preserve_input_rrf_order(
             {"index": 1, "relevance_score": 0.2},
         ],
         [
+            {"index": 0, "relevance_score": 1 << 4096},
+            {"index": 1, "relevance_score": 0.2},
+        ],
+        [
             {"index": 0, "relevance_score": 0.5},
             {"index": 0, "relevance_score": 0.4},
         ],
@@ -497,13 +603,21 @@ def test_reranker_rejects_missing_candidate_or_bad_score(
     results: list[dict[str, object]],
 ) -> None:
     monkeypatch.setenv("JINA_API_KEY", "test-jina-key")
+    events: list[ProviderCall] = []
     adapter = JinaRerankerV35Adapter(
         JinaRerankerConfig(egress_allowed=True),
         http_client=_http(
-            lambda _: _json_response({"results": results})
+            lambda _: _json_response(
+                {
+                    "model": "jina-reranker-v3.5",
+                    "results": results,
+                    "usage": {"total_tokens": 11},
+                }
+            ),
+            observer=events.append,
         ),
     )
-    with pytest.raises(ProviderInvalidResponse):
+    with pytest.raises(ProviderInvalidResponse) as captured:
         adapter.rerank(
             RerankRequest(
                 query="query",
@@ -512,6 +626,9 @@ def test_reranker_rejects_missing_candidate_or_bad_score(
             )
         )
     adapter.close()
+    assert events == [captured.value.provider_call]
+    assert events[0].status_category == "RESPONSE_CONTRACT"
+    assert events[0].observed_tokens == 11
 
 
 def test_reranker_rejects_local_total_token_budget(

@@ -82,13 +82,20 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
   });
   const [scope, setScopeState] = useState<Scope>(readScope);
   const resumed = useRef(false);
+  const sessionGeneration = useRef(0);
   useEffect(() => {
     if (resumed.current) return;
     resumed.current = true;
+    const generation = ++sessionGeneration.current;
     void api
       .resumeSession()
-      .then(() => setSession({ authenticated: true, ready: true }))
+      .then(() => {
+        if (generation === sessionGeneration.current) {
+          setSession({ authenticated: true, ready: true });
+        }
+      })
       .catch((error: unknown) => {
+        if (generation !== sessionGeneration.current) return;
         if (!(error instanceof ApiError) || error.status !== 401) {
           console.warn("会话恢复失败", error);
         }
@@ -106,10 +113,12 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         : { admin: "", query: "" },
       session,
       login: async (bootstrapToken) => {
+        sessionGeneration.current += 1;
         await api.login(bootstrapToken);
         setSession({ authenticated: true, ready: true });
       },
       logout: async () => {
+        sessionGeneration.current += 1;
         await api.logout();
         setSession({ authenticated: false, ready: true });
       },

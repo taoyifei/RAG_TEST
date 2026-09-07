@@ -205,6 +205,7 @@ class QueuedIngestionDocument(FrozenModel):
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: StrictInt = Field(ge=0)
     media_type: str = Field(min_length=1, max_length=200)
+    extension: str = Field(default=".docx", pattern=r"^\.[a-z0-9]{1,16}$")
 
 
 class QueuedIngestion(FrozenModel):
@@ -214,7 +215,15 @@ class QueuedIngestion(FrozenModel):
     revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     target_document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
     target_document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    retrieval_profile_revision_id: str | None = Field(
+        default=None,
+        pattern=r"^pfr_[0-9a-f]{32}$",
+    )
     documents: tuple[QueuedIngestionDocument, ...] = Field(min_length=1)
+    activate_profile: bool = False
+    expected_profile_revision_id: str | None = None
+    expected_index_revision_id: str | None = None
+    activation_validation_ids: tuple[str, ...] = ()
 
 
 __all__ = [

@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  ApiError,
-  api,
-  readSseResponse,
-  setBrowserCsrfToken,
-} from "./client";
+import { ApiError, api, readSseResponse, setBrowserCsrfToken } from "./client";
 
 afterEach(() => {
   setBrowserCsrfToken("");
@@ -13,6 +8,29 @@ afterEach(() => {
 });
 
 describe("API 客户端契约", () => {
+  it("相关内容开关保留旧请求形状，每次调用只发送一次请求", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(
+          new Response(JSON.stringify({ answer: null, evidence: [] })),
+        ),
+      );
+    await api.answer("query", "prj", "kb", "测试");
+    await api.answer("query", "prj", "kb", "测试", undefined, true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string)).toEqual({
+      query: "测试",
+      limit: 10,
+      stream: false,
+    });
+    expect(JSON.parse(fetchMock.mock.calls[1][1]?.body as string)).toEqual({
+      query: "测试",
+      limit: 10,
+      stream: false,
+      include_related_content: true,
+    });
+  });
   it("新文档与新版本使用不同端点", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(

@@ -293,8 +293,8 @@ class RagSdk:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             display_name: 文档显示名。
-            content: DOCX 字节。
-            media_type: DOCX 媒体类型。
+            content: DOC 或 DOCX 字节。
+            media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
 
         Returns:
@@ -330,8 +330,8 @@ class RagSdk:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             document_id: 保持不变的逻辑文档 ID。
-            content: DOCX 字节。
-            media_type: DOCX 媒体类型。
+            content: DOC 或 DOCX 字节。
+            media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
 
         Returns:
@@ -643,6 +643,7 @@ class RagSdk:
         revision_id: str,
         *,
         document_id: str | None = None,
+        chunk_id: str | None = None,
         role: str | None = None,
         section_id: str | None = None,
         neighbor_group_id: str | None = None,
@@ -656,6 +657,7 @@ class RagSdk:
             knowledge_base_id: 知识库 ID。
             revision_id: Revision ID。
             document_id: 可选逻辑文档过滤。
+            chunk_id: 可选原文定位；重新检查活动版本与删除状态。
             role: 可选 Chunk role 过滤。
             section_id: 可选 Section 过滤。
             neighbor_group_id: 可选相邻组过滤。
@@ -672,6 +674,7 @@ class RagSdk:
             knowledge_base_id,
             revision_id,
             document_id=document_id,
+            chunk_id=chunk_id,
             role=role,
             section_id=section_id,
             neighbor_group_id=neighbor_group_id,
@@ -705,6 +708,7 @@ class RagSdk:
         text: str,
         *,
         limit: int = 10,
+        include_related_content: bool = False,
     ) -> SearchAnswerResult:
         """执行 revision-sticky 检索并保存安全诊断。
 
@@ -713,6 +717,7 @@ class RagSdk:
             knowledge_base_id: 目标知识库 ID。
             text: 查询文本。
             limit: 最大结果数。
+            include_related_content: 是否返回独立的相关原文预览。
 
         Returns:
             P08.5 实际路由与最小证据结果。
@@ -733,6 +738,7 @@ class RagSdk:
                 ),
                 text=text,
                 limit=limit,
+                include_related_content=include_related_content,
             )
         )
         if result.diagnostics is not None:
@@ -754,6 +760,7 @@ class RagSdk:
         text: str,
         *,
         limit: int = 10,
+        include_related_content: bool = False,
     ) -> SearchAnswerResult:
         """执行与 Search 共用的检索和受控回答链。
 
@@ -762,12 +769,19 @@ class RagSdk:
             knowledge_base_id: 目标知识库 ID。
             text: 用户问题。
             limit: 最大候选数。
+            include_related_content: 是否返回独立的相关原文预览。
 
         Returns:
             含回答或明确拒答的结果。
 
         """
-        return self.search(project_id, knowledge_base_id, text, limit=limit)
+        return self.search(
+            project_id,
+            knowledge_base_id,
+            text,
+            limit=limit,
+            include_related_content=include_related_content,
+        )
 
     def retrieval_diagnostics(self, trace_id: str) -> RetrievalDiagnostics:
         """读取进程内完整安全诊断。

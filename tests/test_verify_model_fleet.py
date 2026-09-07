@@ -14,6 +14,7 @@ from scripts.verify_model_contracts import (
     ModelContractOptions,
     build_deployment_manifest_v2,
 )
+from tests.synthetic_evaluation import write_synthetic_tokenizer
 
 _SOURCE_REVISION = "a" * 40
 _ATTEMPT_ID = "b" * 32
@@ -136,12 +137,11 @@ def _environment() -> dict[str, str]:
 
 def _options(tmp_path: Path, manifests: Path) -> fleet.FleetVerificationOptions:
     root = _project_root()
+    tokenizer_path = write_synthetic_tokenizer(tmp_path / "tokenizer.json")
     return fleet.FleetVerificationOptions(
         pipeline_path=root / "deployment/config/pipeline.json",
         retrieval_path=root / "deployment/config/retrieval.json",
-        llm_tokenizer_path=(
-            root / "deployment/assets/tokenizers/llm/tokenizer.json"
-        ),
+        llm_tokenizer_path=tokenizer_path,
         deployment_manifest_directory=manifests,
         output_directory=tmp_path / "attempt",
         source_revision=_SOURCE_REVISION,

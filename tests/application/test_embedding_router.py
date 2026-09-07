@@ -49,6 +49,7 @@ from rag_app.core.models import (
     ProviderHealthStatus,
 )
 from rag_app.core.policies import EgressPolicy
+from rag_app.core.tokenization import estimate_tokens
 
 
 class _EmbeddingFake:
@@ -355,9 +356,7 @@ def test_request_is_sticky_and_cache_keys_include_slot_and_mode() -> None:
     ]
     assert embedding_cache_key(
         primary_slot, EmbeddingRequestRole.QUERY, "query"
-    ) != embedding_cache_key(
-        standby_slot, EmbeddingRequestRole.QUERY, "query"
-    )
+    ) != embedding_cache_key(standby_slot, EmbeddingRequestRole.QUERY, "query")
     common_cache_identity = {
         "project_id": "project_a",
         "knowledge_base_id": "kb_a",
@@ -392,8 +391,7 @@ def test_dual_coordinator_keeps_slots_separate_and_uses_cache() -> None:
     assert validate_required_slot_coverage(first, _topology(), chunk_count=2)
     assert validate_required_slot_coverage(second, _topology(), chunk_count=2)
     assert (
-        first.outcome("primary").vectors
-        is not first.outcome("standby").vectors
+        first.outcome("primary").vectors is not first.outcome("standby").vectors
     )
     assert second.outcome("primary").reason_code == "CACHE_HIT"
     assert primary.calls == standby.calls == 1
@@ -460,9 +458,7 @@ def test_embedding_cache_key_is_role_policy_and_revision_sensitive() -> None:
     )
     assert embedding_cache_key(
         primary, EmbeddingRequestRole.QUERY, "same"
-    ) == embedding_cache_key(
-        primary, EmbeddingRequestRole.QUERY, "same"
-    )
+    ) == embedding_cache_key(primary, EmbeddingRequestRole.QUERY, "same")
     assert embedding_cache_key(
         primary, EmbeddingRequestRole.QUERY, "same"
     ) != embedding_cache_key(
@@ -555,3 +551,31 @@ def test_open_standby_circuit_does_not_consume_budget() -> None:
     )
     assert result.selected_slot_id == "standby"
     assert standby.calls == 1
+
+
+def test_aliyun_standby_budget_counts_query_instruct() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _EmbeddingFake(
+        primary_slot,
+        (ProviderUnavailable("first", stage="test.primary"),),
+    )
+    standby = _EmbeddingFake(standby_slot)
+    query = "query"
+    router = EmbeddingFailoverRouter(
+        primary,
+        standby,
+        usage_budget=LocalUsageBudget(),
+    )
+
+    with pytest.raises(PolicyDenied, match="预算"):
+        router.embed_query_with_failover(
+            QueryEmbeddingRequest(query),
+            _revision(),
+            _egress(
+                aliyun_daily_request_budget=1,
+                aliyun_daily_token_budget=estimate_tokens(query),
+            ),
+        )
+
+    assert primary.calls == 1
+    assert standby.calls == 0

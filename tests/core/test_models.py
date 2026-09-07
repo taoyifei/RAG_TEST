@@ -5,11 +5,13 @@ from pydantic import ValidationError
 
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import (
+    DocumentRef,
     EmbeddingRequestRole,
     EmbeddingResult,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
+    QueuedIngestionDocument,
     SecretRef,
 )
 
@@ -135,3 +137,26 @@ def test_schema_round_trip_preserves_tuple_collections() -> None:
     restored = EmbeddingSlotIdentity.model_validate_json(slot.model_dump_json())
     assert restored == slot
     assert isinstance(restored.query_request_policy, tuple)
+
+
+def test_queued_ingestion_document_defaults_missing_extension_to_docx() -> None:
+    queued = QueuedIngestionDocument.model_validate(
+        {
+            "document": {
+                "project_id": f"prj_{'a' * 32}",
+                "knowledge_base_id": f"kb_{'b' * 32}",
+                "document_id": f"doc_{'c' * 32}",
+                "display_name": "历史队列文档.docx",
+            },
+            "artifact_id": f"sha256:{'d' * 64}",
+            "content_sha256": "d" * 64,
+            "size_bytes": 128,
+            "media_type": (
+                "application/vnd.openxmlformats-officedocument."
+                "wordprocessingml.document"
+            ),
+        }
+    )
+
+    assert queued.extension == ".docx"
+    assert isinstance(queued.document, DocumentRef)

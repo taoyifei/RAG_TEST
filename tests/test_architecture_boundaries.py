@@ -22,6 +22,7 @@ _FORBIDDEN_INNER_IMPORTS = (
     "rag_app.ocr",
 )
 _FORBIDDEN_TRACKED_SUFFIXES = (
+    ".doc",
     ".docx",
     ".pdf",
     ".pfx",
@@ -177,6 +178,16 @@ def test_tracked_tree_excludes_sensitive_and_industry_payloads() -> None:
 
     assert sorted(set(violations)) == []
     assert allowed_docx.issubset(set(tracked))
+
+
+def test_runtime_python_sources_are_tracked() -> None:
+    runtime_root = _ROOT / "src/rag_app"
+    local_sources = {
+        PurePosixPath(path.relative_to(_ROOT).as_posix())
+        for path in runtime_root.rglob("*.py")
+    }
+
+    assert sorted(local_sources.difference(_tracked_paths())) == []
 
 
 def test_tracked_text_excludes_obvious_live_secrets() -> None:

@@ -7,6 +7,9 @@ from pathlib import Path
 
 from docx import Document
 from PIL import Image
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
 
 from evaluation.dataset import EvaluationDataset
 
@@ -124,3 +127,24 @@ def write_synthetic_evidence_docx(path: Path) -> None:
     document.add_paragraph("公开合成证据")
     document.add_picture(io.BytesIO(image_stream.getvalue()))
     document.save(str(path))
+
+
+def write_synthetic_tokenizer(path: Path) -> Path:
+    """创建不依赖模型资产的最小 Hugging Face Tokenizer。
+
+    Args:
+        path: 测试临时 tokenizer.json 路径。
+
+    Returns:
+        已写入的 tokenizer 路径。
+
+    """
+    tokenizer = Tokenizer(
+        WordLevel(
+            vocab={"[UNK]": 0, "公开": 1, "合成": 2, "问题": 3},
+            unk_token="[UNK]",  # noqa: S106
+        )
+    )
+    tokenizer.pre_tokenizer = Whitespace()
+    tokenizer.save(str(path))
+    return path

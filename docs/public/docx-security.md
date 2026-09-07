@@ -1,4 +1,4 @@
-# DOCX 解析安全边界
+# Word 文档解析安全边界
 
 ## 默认限制
 
@@ -15,9 +15,10 @@
 | 嵌套表格深度 | 32 |
 | 嵌套字段深度 | 32 |
 
-Profile 可以显式调小限制。best_effort 不会放宽任何资源或安全限制。
+Profile 可以显式调小限制。best_effort 不会放宽任何资源或安全限制。DOCX 路径使用
+全部 ZIP/XML 限制；旧版 DOC 路径使用文件大小、输出大小和总解析时间限制。
 
-## 在正文前拒绝的输入
+## DOCX 路径在正文前拒绝的输入
 
 - 扩展名不是 `.docx`，包括 `.docm`、`.dotm` 和伪装 ZIP；
 - ZIP 绝对路径、`..`、反斜线逃逸、重复条目或加密条目；
@@ -30,6 +31,24 @@ Profile 可以显式调小限制。best_effort 不会放宽任何资源或安全
 XML parser 固定使用 `load_dtd=False`、`resolve_entities=False`、`no_network=True`、
 `recover=False` 和 `huge_tree=False`。Parser 不执行宏、字段、DDE、OLE、altChunk、HTML
 转换或外部对象。
+
+## 旧版 DOC 路径
+
+- 只接受 `.doc` 扩展名、OLE Compound File 签名与 `application/msword` 或
+  `application/octet-stream`；扩展名、MIME 与签名不一致时先拒绝；
+- Runtime 镜像固定安装 `antiword 0.37-17`。应用以非 root 用户通过固定参数调用，
+  不经过 shell，不解释宏；输入只写入 0400 私有临时文件；
+- 子进程地址空间限制为 256 MiB，输出文件上限取 ParsingPolicy 的单条目与总输出
+  上限较小值，超时沿用 ParsingPolicy，超时后终止整个子进程组；
+- stdout 只写私有临时文件，stderr 丢弃，失败仅返回稳定安全错误；Parser 本身不读取
+  Provider 凭据，也不发起 Provider 请求；
+- 转换器与应用共享容器网络命名空间。安全边界依赖固定本地可执行文件、固定参数和
+  资源限制，不把它描述成独立无网络沙箱。
+
+旧版 DOC 只生成正文纯文本段落。表格、图片、页眉页脚、脚注、编号、批注、修订和
+文本框不保证结构化保留；ParseReport 固定记录
+`LEGACY_DOC_FLATTENED_TEXT`。后续是否将切片发送到远程 Provider 仍由知识库 Profile、
+显式授权和预算门控制。
 
 ## 外部关系与敏感信息
 
@@ -44,7 +63,7 @@ story 计数和 coverage。只有显式 `--include-content` 才会把正文写�
 
 ## Blob 与外部服务
 
-源 DOCX 和媒体按 SHA-256 写入宿主 BlobStore。相同媒体只写一份 Blob，每个显示实例仍有
+源 DOC/DOCX 和媒体按 SHA-256 写入宿主 BlobStore。相同媒体只写一份 Blob，每个显示实例仍有
 独立 ImageNode。写入中途失败会删除本次已经写入的 Blob。Parser 不读取 Provider Key、
 模型名、维度或 query instruction；offline、Jina-only 与 Jina/Qwen hot-standby Profile
 的解析结果必须相同。

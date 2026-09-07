@@ -5,6 +5,36 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 
+_SIGNED_64_BIT_MAX = (1 << 63) - 1
+
+
+def usage_tokens(payload: object) -> int:
+    """读取严格、可安全持久化的 Provider Token 用量。
+
+    Args:
+        payload: 未信任的 Provider JSON 响应。
+
+    Returns:
+        Provider 报告的正整数总 Token 数。
+
+    Raises:
+        ValueError: usage 外壳或 total_tokens 不符合合同。
+
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("Provider usage 响应必须是 object。")
+    usage = payload.get("usage")
+    if not isinstance(usage, Mapping):
+        raise ValueError("Provider usage 必须是 object。")
+    total_tokens = usage.get("total_tokens")
+    if (
+        isinstance(total_tokens, bool)
+        or not isinstance(total_tokens, int)
+        or not 1 <= total_tokens <= _SIGNED_64_BIT_MAX
+    ):
+        raise ValueError("Provider total_tokens 必须是可持久化的正整数。")
+    return total_tokens
+
 
 def ordered_vectors(  # noqa: PLR0913
     items: object,
@@ -64,7 +94,10 @@ def l2_normalize(vector: Sequence[float]) -> tuple[float, ...]:
         ValueError: 向量为空、含非有限值或全零。
 
     """
-    converted = tuple(float(value) for value in vector)
+    try:
+        converted = tuple(float(value) for value in vector)
+    except (OverflowError, ValueError):
+        raise ValueError("embedding 向量必须可转换为有限浮点数。") from None
     if not converted or any(not math.isfinite(value) for value in converted):
         raise ValueError("embedding 向量必须非空且全部有限。")
     norm = math.sqrt(sum(value * value for value in converted))
@@ -92,7 +125,10 @@ def finite_score(value: object) -> float:
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("reranker score 必须是数字。")
-    score = float(value)
+    try:
+        score = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError("reranker score 必须可转换为有限浮点数。") from None
     if not math.isfinite(score):
         raise ValueError("reranker score 必须有限。")
     return score
@@ -105,7 +141,12 @@ def _finite_vector(values: object, dimension: int) -> tuple[float, ...]:
     for value in values:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("embedding 向量元素必须是数字。")
-        converted.append(float(value))
+        try:
+            converted.append(float(value))
+        except (OverflowError, ValueError):
+            raise ValueError(
+                "embedding 向量元素必须可转换为有限浮点数。"
+            ) from None
     if any(not math.isfinite(value) for value in converted):
         raise ValueError("embedding 向量禁止包含 NaN 或 Inf。")
     if not any(value != 0 for value in converted):

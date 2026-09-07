@@ -1,0 +1,152 @@
+# P11 阿里云百炼真实验证请求错误
+
+状态：`WAITING_FOR_CORRECT_WORKSPACE_ID`。
+
+发现日期：2026-09-05。
+
+## 触发条件
+
+页面已保存一个 `database_encrypted` 的百炼连接，Region 为 `cn-beijing`，
+Workspace ID 已配置。任务书要求验证 `qwen3.7-text-embedding`、
+`text_type=document|query`、1024 维、`output_type=dense` 和 usage。
+
+当前实现使用官方原生 Endpoint：
+
+```text
+POST https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/
+api/v1/services/embeddings/text-embedding/text-embedding
+```
+
+请求体只含固定公开合成文本、model、`input.texts` 和
+`parameters.text_type/dimension/output_type`，没有企业文档、Secret、向量或
+真实知识库。当前参考为阿里云官方
+[文本向量同步 API](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api)
+和[错误码](https://help.aliyun.com/en/model-studio/error-code)。
+
+## 第一次失败与分类修复
+
+候选 `358f7560eb621f8b2a8736640fc36b558f51462b` 的首次 document 验证为
+HTTP 4xx、19 估算输入 Token、无 observed usage、266 ms；旧安全错误为
+`REGION_OR_WORKSPACE_INVALID`。审计发现旧逻辑把百炼所有 HTTP 400 都无条件映射
+为 Workspace/Region 错误，可能把参数或鉴权问题错误归因。
+
+提交 `c4e68dfa1ba61fef8ac590e81b663682bb0c1a2b` 改为只读取 4 MiB 内 JSON
+的白名单 `code`，支持官方 `InvalidApiKey`、`NOT AUTHORIZED`、
+`WorkSpaceNotFound` 和访问拒绝类别；未知 code 与原始 message 不持久化。
+
+```text
+targeted provider tests: 46 passed, 1 warning
+Ruff / format / mypy: passed
+full offline gate: 1471 passed, 79 deselected, 4 warnings
+```
+
+部署前备份 `pre-c4e68df.tar.gz` 已通过校验，SHA-256 为
+`22e9e3323ced776490815f3ab58e698d3e466455f61e97aacbe9d85f0a96f62a`。
+候选镜像 digest 为
+`sha256:0a67aa625aa05bf9b01a0ddc899cd4d19106fa9c59a03b05c36a9022376271ad`，
+OCI revision 与提交一致。只重建 app，Qdrant 容器 `1bc4088a449c` 未变。
+
+## 新候选真实重试
+
+通过正式控制台 Session/API 只执行一次 document 重试，没有自动重试：
+
+```text
+HTTP attempts: 1
+Estimated input tokens: 19
+Observed provider tokens: unavailable
+Status: failed
+HTTP category: http_4xx
+Safe error: PROVIDER_REQUEST_INVALID
+Latency: 270 ms
+```
+
+旧 Workspace 结论已被推翻，但正式请求仍被真实服务拒绝。百炼 query、双槽索引、
+产品查询、故障切换与恢复均未运行；`GM-03 质量管理制度.doc` 未出网。
+
+当前总账为 6/25 次 Provider HTTP、157/1,000 估算输入 Token；Jina
+4 次、119/600，百炼 2 次、38/600。成功响应观察用量只有 Jina 的 242 Token。
+
+## 决策
+
+1. 按任务书“真实模型 ID/API Schema 与官方当前合同不一致”条款暂停后续
+   Provider 请求。
+2. `LIVE_QWEN_STANDBY_READY`、`AUTOMATIC_FAILOVER_READY`、
+   `PRODUCT_E2E_READY`、`REMOTE_PRODUCTION_PROFILE_READY` 与 `P11_READY`
+   保持 `false`。
+3. 不删除任务书要求的 `text_type=document|query` 来制造表面成功，不用 Mock
+   替代百炼 Live。
+4. 只有确认同一北京 Workspace/API Key 已开通 `qwen3.7-text-embedding`，或批准
+   一次有界的官方最小请求对照诊断后，才恢复 Live Gate；不得在聊天中粘贴 API Key。
+
+## 零调用根因核验与生产护栏
+
+对已保存连接只做形状核验，没有输出 Workspace ID、API Key、哈希或正文。结果为：
+Region 是 `cn-beijing`，凭据仍是页面加密托管且 Key 形状正常，但 Workspace ID
+不以阿里云官方要求的 `llm-` 开头。官方控制台应复制 Workspace ID，而不是 App ID、
+Workspace 名称或 API Host 片段；参考
+[获取 Workspace ID](https://help.aliyun.com/zh/model-studio/obtain-the-app-id-and-workspace-id)
+与[地域和 Workspace](https://help.aliyun.com/zh/model-studio/regions/)。
+
+提交 `224ac930be701cfd6d53ecede8501071cf9129da` 在创建 HTTP Client 前要求
+`llm-` 前缀，避免无效配置继续出网消耗预算。验证证据：
+
+```text
+provider runtime tests: 47 passed, 1 warning
+previously failing product tests: 5 passed, 1 warning
+full offline gate: 1472 passed, 79 deselected, 4 warnings
+```
+
+部署前备份 `pre-224ac93.tar.gz` 校验通过，SHA-256 为
+`2fcd5a2d4b9c9e9bc6506796122cce34d229a198298362347f2faae0a4ab0ed5`；
+候选镜像 digest 为
+`sha256:f82968df74884c80008fb698aa3f55bea6128ffca68b93d22266ce53ceed731f`，
+120,069,668 bytes，OCI revision 与提交一致。只替换 app 后健康；Qdrant 容器
+`1bc4088a449c` 与创建时间未变，2 个 Connection、2 个 Credential 和 6 条历史
+验证记录均保留。
+
+通过正式 Session/API 执行一次生产护栏验收，3 ms 即以
+`PROVIDER_CONFIGURATION_INVALID` / `invalid_configuration` 本地失败；Provider HTTP
+为 0，observed usage 为空。验证记录从 6 增至 7，其中 19 Token 只是未发送的本地
+估算，不计入真实 Provider 消耗；真实总账仍为 6/25 次 HTTP、157/1,000 估算输入
+Token。下一次真实百炼请求须等用户在页面保存以 `llm-` 开头的正确 Workspace ID
+并确认后再运行。
+
+## 浏览器回归与已验证候选刷新
+
+统一 Acceptance 首轮在桌面 Chromium 的凭据轮换后 Profile 影响断言失败并停止，
+升级与 Qdrant 子门禁未继续。失败快照显示 E2E 仍使用旧
+`synthetic-workspace`，且五次 Provider 验证与凭据轮换只等待按钮点击，没有等待
+对应写请求完成，因而错误状态延迟到后续“无需重建索引”断言才暴露。
+
+提交 `94b5cfcbb0bd847c89c3d812b6b7d40c383be683` 改用合同合法的合成 Workspace，
+逐次等待并断言五次验证成功，同时等待凭据轮换响应。浏览器门禁随后为 3 passed、
+3 skipped；从头重跑统一 Acceptance 全部通过，最终明确
+`live_provider=NOT_RUN`。
+
+当前候选镜像 digest 为
+`sha256:b096f14495660529f6c7317995dc3c10572ecdfeb5f83e4573423375bae1d17f`，
+120,068,787 bytes，OCI revision 与提交一致。统一 Verify 结果为 pip-audit 无已知
+漏洞、npm audit 0、Secret scan 1205 files、Trivy 可修复 High/Critical 0、SBOM
+与许可证清单各 2914 components。
+
+部署前备份 `pre-94b5cfc.tar.gz` 校验通过，SHA-256 为
+`e7201aab045a63768afd8d4902069fdd81d6a7414434031155445de0638d0f07`。
+只替换 app 后健康，Qdrant 容器 `1bc4088a449c` 未重启；2 个 Connection、2 个
+Credential 和 7 条验证记录保留。以上操作没有新增 Provider HTTP，真实总账仍为
+6/25 次 HTTP、157/1,000 估算输入 Token，指定私有 DOC 仍未出网。
+
+## 2026-09-05 P11-R1 定向纠正
+
+以上关于“Workspace 必须以 llm- 开头”以及“非 llm- 就是真实 4xx 根因”的
+判断依据不足，现予纠正。历史请求、失败状态、用量、部署与测试记录保持原样，
+不能据此推断 ws- 或 llm- 标识对应的账户有效性。Key 非空等形状检查也不代表鉴权通过。
+
+P11-R1 使用显式 `workspace_host` / `beijing_dashscope` 两种北京 Native 端点模式。
+业务空间模式须从当前北京控制台复制受信任 API Host；北京 DashScope 模式须由
+管理员主动选择，仍须验证 Key 与目标业务空间资源权限。旧连接不自动改域名或前缀，
+无需新建 llm- 空间。未提供 Host 的旧连接保留数据并等待原地编辑。
+
+当前[官方同步向量接口文档](https://help.aliyun.com/zh/model-studio/text-embedding-synchronous-api)
+成功示例包含 `status_code`、空 `code`、`output.embeddings` 与 `usage`。
+Probe 和 Adapter 共用严格编解码；未声称真实接口必定缺字段，尚未采集新真实响应。
+本轮 Provider 外部 HTTP=0，`ALIYUN_LIVE_READY=false`；阶段证据见 [P11-R1](../progress/p11-r1.md)。

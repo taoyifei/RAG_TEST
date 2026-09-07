@@ -352,7 +352,7 @@ export interface paths {
         put?: never;
         /**
          * Create Document
-         * @description 受控接收 DOCX 并创建新逻辑文档。
+         * @description 受控接收 DOC 或 DOCX 并创建新逻辑文档。
          */
         post: operations["_create_document_api_v1_projects__project_id__knowledge_bases__kb_id__documents_post"];
         delete?: never;
@@ -553,6 +553,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/provider-budget/campaign": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Campaign */
+        get: operations["_campaign_api_v1_provider_budget_campaign_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-budget/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 由已登录管理员明确批准累计预算修订
+         * @description 必须使用现有管理员 Session Cookie 和 X-CSRF-Token；受限 API Token 与计划文件不能扩额。approver 必须由实际授权人明确填写；全部数值是保留历史消费的累计总上限。
+         */
+        post: operations["_approve_api_v1_provider_budget_revisions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/provider-catalog": {
         parameters: {
             query?: never;
@@ -586,6 +623,23 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-connections/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Connection */
+        patch: operations["_update_connection_api_v1_provider_connections__connection_id__patch"];
         trace?: never;
     };
     "/api/v1/provider-connections/{connection_id}/validations": {
@@ -651,6 +705,23 @@ export interface paths {
         put?: never;
         /** Rotate Credential */
         post: operations["_rotate_credential_api_v1_provider_credentials__credential_id__rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/provider-usage/daily": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Daily Provider Usage */
+        get: operations["_daily_provider_usage_api_v1_provider_usage_daily_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -947,14 +1018,47 @@ export interface components {
          */
         ConfidenceStatus: "ANSWERABLE" | "INSUFFICIENT_EVIDENCE" | "PROVIDER_UNAVAILABLE" | "POLICY_DENIED" | "INDEX_NOT_READY" | "INDEX_CORRUPT" | "AMBIGUOUS_NEEDS_CLARIFICATION";
         /**
+         * ConnectionPatchRequest
+         * @description 版本受控的非 Secret 连接编辑，未知字段一律拒绝。
+         */
+        ConnectionPatchRequest: {
+            /** Api Host */
+            api_host?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Endpoint Mode */
+            endpoint_mode?: ("workspace_host" | "beijing_dashscope") | null;
+            /** Expected Version */
+            expected_version: number;
+            /** Region */
+            region?: "cn-beijing" | null;
+            /** Request Budget */
+            request_budget?: number | null;
+            /** Token Budget */
+            token_budget?: number | null;
+            /** Workspace Id */
+            workspace_id?: string | null;
+        };
+        /**
          * ConnectionRequest
          * @description Provider Connection 非 Secret 配置。
          */
         ConnectionRequest: {
+            /** Api Host */
+            api_host?: string | null;
+            credential?: components["schemas"]["CredentialRequest"] | null;
             /** Credential Id */
-            credential_id: string;
+            credential_id?: string | null;
             /** Display Name */
             display_name: string;
+            /**
+             * Endpoint Mode
+             * @default workspace_host
+             * @enum {string}
+             */
+            endpoint_mode: "workspace_host" | "beijing_dashscope";
             /**
              * Endpoint Profile
              * @default default
@@ -1384,6 +1488,11 @@ export interface components {
          */
         QueryRequest: {
             /**
+             * Include Related Content
+             * @default false
+             */
+            include_related_content: boolean;
+            /**
              * Limit
              * @default 10
              */
@@ -1421,6 +1530,8 @@ export interface components {
             /** Dense Available */
             dense_available: boolean;
             diagnostics_summary?: components["schemas"]["RetrievalDiagnosticsSummary"] | null;
+            /** Display Message */
+            display_message?: string | null;
             /**
              * Evidence
              * @default []
@@ -1448,6 +1559,11 @@ export interface components {
             query_kind: components["schemas"]["QueryKind"];
             /** Reason Code */
             reason_code: string;
+            /**
+             * Related Contents
+             * @default []
+             */
+            related_contents: components["schemas"]["RelatedContent"][];
             /** Rerank Execution Mode */
             rerank_execution_mode: string;
             /** Rerank Mode */
@@ -1466,6 +1582,49 @@ export interface components {
             trace_summary?: components["schemas"]["RetrievalDiagnosticsSummary"] | null;
             /** Vector Name */
             vector_name?: string | null;
+        };
+        /**
+         * RelatedContent
+         * @description 本次未获得答案资格的独立原文预览；不能送入生成器。
+         */
+        RelatedContent: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Excerpt */
+            excerpt: string;
+            /**
+             * Heading Path
+             * @default []
+             */
+            heading_path: string[];
+            /** Index Revision Id */
+            index_revision_id: string;
+            /**
+             * Is Answer Evidence
+             * @default false
+             * @constant
+             */
+            is_answer_evidence: false;
+            /** Related Id */
+            related_id: string;
+            /**
+             * Relevance Reason
+             * @enum {string}
+             */
+            relevance_reason: "KEYWORD_RELATED" | "SEMANTIC_CANDIDATE" | "RELEVANCE_UNVERIFIED";
+            /**
+             * Rerank Verified
+             * @default false
+             */
+            rerank_verified: boolean;
+            /** Source Spans */
+            source_spans: components["schemas"]["SourceSpan"][];
         };
         /**
          * RenameDocumentRequest
@@ -2000,6 +2159,10 @@ export interface components {
              * @enum {string}
              */
             operation: "embedding.document" | "embedding.query" | "reranking";
+            /** Request Policy */
+            request_policy?: {
+                [key: string]: unknown;
+            };
         };
     };
     responses: never;
@@ -6195,6 +6358,7 @@ export interface operations {
         parameters: {
             query?: {
                 document_id?: string | null;
+                chunk_id?: string | null;
                 role?: string | null;
                 section_id?: string | null;
                 neighbor_group_id?: string | null;
@@ -6668,6 +6832,279 @@ export interface operations {
             };
         };
     };
+    _campaign_api_v1_provider_budget_campaign_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _approve_api_v1_provider_budget_revisions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Approval Reference */
+                    approval_reference: string;
+                    /** Approved At */
+                    approved_at: string;
+                    /** Approver */
+                    approver: string;
+                    /** Authorization Id */
+                    authorization_id: string;
+                    /** Campaign Id */
+                    campaign_id: string;
+                    /** Estimated Token Limit */
+                    estimated_token_limit: number;
+                    /** Expires At */
+                    expires_at?: string | null;
+                    /** Payload Set Identity */
+                    payload_set_identity: string;
+                    /** Previous Revision Id */
+                    previous_revision_id: string | null;
+                    /** Provider Request Limits */
+                    provider_request_limits?: {
+                        [key: string]: number;
+                    };
+                    /** Provider Token Limits */
+                    provider_token_limits?: {
+                        [key: string]: number;
+                    };
+                    /** Reason */
+                    reason: string;
+                    /** Request Limit */
+                    request_limit: number;
+                    /** Revision Id */
+                    revision_id: string;
+                    /** Scope */
+                    scope: string;
+                    /**
+                     * Status
+                     * @default PROPOSED
+                     * @enum {string}
+                     */
+                    status?: "APPROVED";
+                    /** Step Request Limits */
+                    step_request_limits?: {
+                        [key: string]: number;
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     _catalog_api_v1_provider_catalog_get: {
         parameters: {
             query?: never;
@@ -6907,6 +7344,124 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _update_connection_api_v1_provider_connections__connection_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectionPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7482,6 +8037,118 @@ export interface operations {
                 "application/json": components["schemas"]["RotateCredentialRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _daily_provider_usage_api_v1_provider_usage_daily_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

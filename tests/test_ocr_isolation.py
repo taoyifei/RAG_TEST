@@ -5,7 +5,9 @@ from pathlib import Path
 
 
 def _python310() -> Path:
-    return Path(".venv-ocr310/bin/python").resolve(strict=True)
+    configured = os.environ.get("P11_TEST_PYTHON310")
+    path = Path(configured) if configured else Path(".venv-ocr310/bin/python")
+    return path.resolve(strict=True)
 
 
 def _run_import(

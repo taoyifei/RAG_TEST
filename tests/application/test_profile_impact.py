@@ -20,7 +20,7 @@ def _draft(
     jina_connection: str,
     aliyun_connection: str,
     *,
-    instruction: str = "默认查询指令",
+    instruction: str = "",
     rrf_k: int = 60,
 ) -> RetrievalProfileDraft:
     return RetrievalProfileDraft.model_validate(
@@ -32,13 +32,15 @@ def _draft(
             "primary_document_policy": {"task": "retrieval.passage"},
             "primary_query_policy": {
                 "task": "retrieval.query",
-                "instruction": instruction,
             },
             "standby_connection_id": aliyun_connection,
             "standby_embedding_model": "qwen3.7-text-embedding",
             "standby_dimension": 1024,
             "standby_document_policy": {"text_type": "document"},
-            "standby_query_policy": {"text_type": "query"},
+            "standby_query_policy": {
+                "text_type": "query",
+                **({"query_instruct": instruction} if instruction else {}),
+            },
             "reranker_connection_id": jina_connection,
             "reranker_model": "jina-reranker-v3.5",
             "failover_enabled": True,
@@ -113,3 +115,18 @@ def test_profile_fingerprint_impact_and_credential_rotation(
         assert first.index_semantic_fingerprint == before_rotation
     finally:
         harness.close()
+
+
+def test_profile_draft_rejects_unsupported_retrieval_policy() -> None:
+    with pytest.raises(ValueError, match="cache"):
+        RetrievalProfileDraft.model_validate(
+            {
+                "knowledge_base_id": "kb_test",
+                "primary_connection_id": "conn_test",
+                "primary_embedding_model": "embedding-test",
+                "primary_dimension": 1024,
+                "primary_document_policy": {},
+                "primary_query_policy": {},
+                "retrieval_policy": {"cache": "revision-bound"},
+            }
+        )

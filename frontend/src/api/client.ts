@@ -13,10 +13,12 @@ export type RetrievalDiagnostics =
   components["schemas"]["RetrievalDiagnostics"];
 export type SystemStatus = components["schemas"]["SystemStatus"];
 export type Evidence = components["schemas"]["EvidenceItem"];
+export type RelatedContent = components["schemas"]["RelatedContent"];
+export type SourceChunk = components["schemas"]["Chunk"];
 
 export interface Page<T> {
   items: T[];
-  total: number;
+  total?: number;
   offset: number;
   page_size: number;
   next_offset?: number | null;
@@ -52,6 +54,12 @@ export interface ProviderConnection {
   status: string;
   workspace_id?: string | null;
   region?: string | null;
+  configuration_version: number;
+  endpoint_mode?: "workspace_host" | "beijing_dashscope" | "";
+  api_host?: string | null;
+  request_budget?: number;
+  token_budget?: number;
+  enabled?: boolean;
 }
 
 export interface CatalogProvider {
@@ -61,6 +69,7 @@ export interface CatalogProvider {
   models: string[];
   regions: string[];
   endpoint_profiles: string[];
+  operation_models: Record<string, string[]>;
 }
 
 export interface ProviderCatalog {
@@ -78,13 +87,37 @@ export interface ProviderValidation {
   safe_error_code?: string | null;
   dimension?: number | null;
   finished_at: string;
+  stage?: string;
+  request_dispatched?: boolean | null;
+  http_status?: number | null;
+  provider_code?: string | null;
+  provider_request_id?: string | null;
+  configuration_version: number;
+  credential_key_version: number;
+  catalog_version: string;
+  validation_mode: string;
+  request_policy_identity: string;
+  is_current?: boolean;
+}
+
+export interface ProviderUsageDaily {
+  usage_date: string;
+  connection_id: string;
+  operation: string;
+  request_count: number;
+  successful_requests: number;
+  failed_requests: number;
+  estimated_tokens: number;
+  observed_tokens: number;
+  retry_count: number;
+  rate_limit_count: number;
+  failover_count: number;
+  cache_hit_count: number;
+  average_latency_ms: number;
 }
 
 export interface ImpactPreview {
-  impact:
-    | "NO_REINDEX"
-    | "SERVING_RELOAD"
-    | "NEW_INDEX_REVISION_REQUIRED";
+  impact: "NO_REINDEX" | "SERVING_RELOAD" | "NEW_INDEX_REVISION_REQUIRED";
   proposed_profile_revision_id: string;
   current_profile_revision_id?: string | null;
   index_fingerprint_changed: boolean;
@@ -103,6 +136,18 @@ export interface RetrievalProfile {
   reranker_model?: string | null;
   index_semantic_fingerprint: string;
   serving_fingerprint: string;
+  primary_dimension: number;
+  standby_dimension?: number | null;
+  primary_document_policy: Record<string, unknown>;
+  primary_query_policy: Record<string, unknown>;
+  standby_document_policy: Record<string, unknown>;
+  standby_query_policy: Record<string, unknown> & { query_instruct?: string };
+  retrieval_policy: Record<string, unknown>;
+  evidence_policy: Record<string, unknown>;
+  standby_budget: { requests?: number; tokens?: number };
+  failover_enabled: boolean;
+  activation_job_id?: string | null;
+  effective_serving_fingerprint?: string;
 }
 
 export interface AccessTokenSummary {
@@ -247,17 +292,17 @@ export const api = {
   },
   providerCatalog: () =>
     request<ProviderCatalog>("/api/v1/provider-catalog", ""),
-  listProjects: (token: string) =>
-    request<Page<Project>>("/api/v1/projects", token),
+  listProjects: (token: string, offset = 0) =>
+    request<Page<Project>>(`/api/v1/projects?offset=${offset}`, token),
   createProject: (token: string, name: string, key: string) =>
     request<Project>(
       "/api/v1/projects",
       token,
       jsonInit("POST", { name }, key),
     ),
-  listKnowledgeBases: (token: string, projectId: string) =>
+  listKnowledgeBases: (token: string, projectId: string, offset = 0) =>
     request<Page<KnowledgeBase>>(
-      `/api/v1/projects/${projectId}/knowledge-bases`,
+      `/api/v1/projects/${projectId}/knowledge-bases?offset=${offset}`,
       token,
     ),
   createKnowledgeBase: (
@@ -271,9 +316,9 @@ export const api = {
       token,
       jsonInit("POST", { name, description: "" }, key),
     ),
-  listDocuments: (token: string, projectId: string, kbId: string) =>
+  listDocuments: (token: string, projectId: string, kbId: string, offset = 0) =>
     request<Page<Document>>(
-      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents`,
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents?offset=${offset}`,
       token,
     ),
   getDocument: (
@@ -388,6 +433,37 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/revisions/${revisionId}/chunks`,
       token,
     ),
+  readRelatedSource: async (
+    token: string,
+    projectId: string,
+    kbId: string,
+    related: RelatedContent,
+    signal?: AbortSignal,
+  ): Promise<SourceChunk> => {
+    const params = new URLSearchParams({
+      chunk_id: related.chunk_id,
+      document_id: related.document_id,
+      page_size: "1",
+    });
+    const page = await request<ChunkPage>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/revisions/${related.index_revision_id}/chunks?${params}`,
+      token,
+      { signal },
+    );
+    const chunk = page.items[0];
+    if (
+      !chunk ||
+      chunk.chunk_id !== related.chunk_id ||
+      chunk.project_id !== projectId ||
+      chunk.knowledge_base_id !== kbId ||
+      chunk.index_revision_id !== related.index_revision_id ||
+      chunk.version.document_id !== related.document_id ||
+      chunk.version.document_version_id !== related.document_version_id
+    ) {
+      throw new Error("原文当前不可读取，请重新查询。");
+    }
+    return chunk;
+  },
   revisionReports: (
     token: string,
     projectId: string,
@@ -404,17 +480,41 @@ export const api = {
     kbId: string,
     query: string,
     signal?: AbortSignal,
+    includeRelatedContent = false,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:search`,
       token,
-      { ...jsonInit("POST", { query, limit: 10, stream: false }), signal },
+      {
+        ...jsonInit("POST", {
+          query,
+          limit: 10,
+          stream: false,
+          ...(includeRelatedContent ? { include_related_content: true } : {}),
+        }),
+        signal,
+      },
     ),
-  answer: (token: string, projectId: string, kbId: string, query: string) =>
+  answer: (
+    token: string,
+    projectId: string,
+    kbId: string,
+    query: string,
+    signal?: AbortSignal,
+    includeRelatedContent = false,
+  ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
       token,
-      jsonInit("POST", { query, limit: 10, stream: false }),
+      {
+        ...jsonInit("POST", {
+          query,
+          limit: 10,
+          stream: false,
+          ...(includeRelatedContent ? { include_related_content: true } : {}),
+        }),
+        signal,
+      },
     ),
   answerStream: async (
     token: string,
@@ -422,9 +522,15 @@ export const api = {
     kbId: string,
     query: string,
     signal?: AbortSignal,
+    includeRelatedContent = false,
   ) => {
     void token;
-    const init = jsonInit("POST", { query, limit: 10, stream: true });
+    const init = jsonInit("POST", {
+      query,
+      limit: 10,
+      stream: true,
+      ...(includeRelatedContent ? { include_related_content: true } : {}),
+    });
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
     const response = await fetch(
@@ -449,10 +555,7 @@ export const api = {
       },
     }),
   listCredentials: () =>
-    request<{ items: CredentialSummary[] }>(
-      "/api/v1/provider-credentials",
-      "",
-    ),
+    request<{ items: CredentialSummary[] }>("/api/v1/provider-credentials", ""),
   createCredential: (body: Record<string, unknown>) =>
     request<CredentialSummary>(
       "/api/v1/provider-credentials",
@@ -476,10 +579,13 @@ export const api = {
       "",
       jsonInit("POST", body),
     ),
-  validateConnection: (
-    connectionId: string,
-    body: Record<string, unknown>,
-  ) =>
+  updateConnection: (connectionId: string, body: Record<string, unknown>) =>
+    request<ProviderConnection>(
+      `/api/v1/provider-connections/${connectionId}`,
+      "",
+      jsonInit("PATCH", body),
+    ),
+  validateConnection: (connectionId: string, body: Record<string, unknown>) =>
     request<ProviderValidation>(
       `/api/v1/provider-connections/${connectionId}:validate`,
       "",
@@ -488,6 +594,11 @@ export const api = {
   listValidations: (connectionId: string) =>
     request<{ items: ProviderValidation[] }>(
       `/api/v1/provider-connections/${connectionId}/validations`,
+      "",
+    ),
+  listDailyProviderUsage: () =>
+    request<{ items: ProviderUsageDaily[] }>(
+      "/api/v1/provider-usage/daily",
       "",
     ),
   listRetrievalProfiles: (knowledgeBaseId: string) =>
@@ -527,11 +638,9 @@ export const api = {
       jsonInit("POST", body),
     ),
   revokeAccessToken: (tokenId: string) =>
-    request<AccessTokenSummary>(
-      `/api/v1/access-tokens/${tokenId}:revoke`,
-      "",
-      { method: "POST" },
-    ),
+    request<AccessTokenSummary>(`/api/v1/access-tokens/${tokenId}:revoke`, "", {
+      method: "POST",
+    }),
 };
 
 export function createIdempotencyKey(prefix: string): string {

@@ -1,0 +1,94 @@
+{
+  "schema_version": "3",
+  "dataset_id": "p11-independent-pilot",
+  "dataset_version": "1.0.0",
+  "description": "独立公开合成 pilot；30个预先标注问题（20正例、10负例）分别测主备。同族仅holdout；未用于连接探针或参数调优；小样本不代表生产SLA。",
+  "split_algorithm": "fixed-independent-holdout-no-tuning",
+  "content_classification": "synthetic_public",
+  "cases_file": "cases.jsonl",
+  "documents": [
+    {
+      "document_id": "doc_00000000000000000000000000000385",
+      "project_id": "prj_91919191919191919191919191919191",
+      "knowledge_base_id": "kb_92929292929292929292929292929292",
+      "family_group_id": "grp_pilot_archive",
+      "coverage_tags": [
+        "identifier_free_fact",
+        "semantic_paraphrase",
+        "active_revision"
+      ],
+      "versions": [
+        {
+          "fixture_id": "pilot-archive-old",
+          "display_name": "公开归档制度.docx"
+        },
+        {
+          "fixture_id": "pilot-archive-current",
+          "display_name": "公开归档制度.docx"
+        }
+      ]
+    },
+    {
+      "document_id": "doc_00000000000000000000000000000386",
+      "project_id": "prj_91919191919191919191919191919191",
+      "knowledge_base_id": "kb_92929292929292929292929292929292",
+      "family_group_id": "grp_pilot_warehouse",
+      "coverage_tags": [
+        "identifier_free_fact",
+        "semantic_paraphrase"
+      ],
+      "versions": [
+        {
+          "fixture_id": "pilot-warehouse",
+          "display_name": "公开仓储规范.docx"
+        }
+      ]
+    },
+    {
+      "document_id": "doc_00000000000000000000000000000387",
+      "project_id": "prj_91919191919191919191919191919191",
+      "knowledge_base_id": "kb_92929292929292929292929292929292",
+      "family_group_id": "grp_pilot_table",
+      "coverage_tags": [
+        "table_middle_empty",
+        "numeric_unit_negative_percent_date"
+      ],
+      "versions": [
+        {
+          "fixture_id": "pilot-table",
+          "display_name": "公开设备表格.docx"
+        }
+      ]
+    },
+    {
+      "document_id": "doc_00000000000000000000000000000388",
+      "project_id": "prj_91919191919191919191919191919191",
+      "knowledge_base_id": "kb_92929292929292929292929292929292",
+      "family_group_id": "grp_pilot_noise",
+      "coverage_tags": [
+        "cjk_noise"
+      ],
+      "versions": [
+        {
+          "fixture_id": "pilot-noise",
+          "display_name": "公开参考草案.docx"
+        }
+      ]
+    },
+    {
+      "document_id": "doc_00000000000000000000000000000389",
+      "project_id": "prj_91919191919191919191919191919191",
+      "knowledge_base_id": "kb_93939393939393939393939393939393",
+      "family_group_id": "grp_pilot_foreign",
+      "coverage_tags": [
+        "similar_document_other_kb"
+      ],
+      "versions": [
+        {
+          "fixture_id": "pilot-foreign",
+          "display_name": "另库公开采购资料.docx"
+        }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     Field,
@@ -103,6 +103,7 @@ class SearchRequest(FrozenModel):
     metadata_filters: JsonObject = ()
     access_filters: JsonObject = ()
     dense_required: bool = False
+    include_related_content: bool = False
 
     @field_validator("text")
     @classmethod
@@ -115,8 +116,7 @@ class SearchRequest(FrozenModel):
     @classmethod
     def _bound_context(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(
-            not item.strip()
-            or len(item) > _MAX_CONVERSATION_TURN_LENGTH
+            not item.strip() or len(item) > _MAX_CONVERSATION_TURN_LENGTH
             for item in value
         ):
             raise ValueError("conversation turn 必须非空且有界。")
@@ -140,6 +140,8 @@ class ActiveRevisionQuerySnapshot(FrozenModel):
     exact_namespace: str = Field(min_length=1)
     chunk_payload_schema: str = Field(min_length=1)
     retrieval_policy: RetrievalPolicy
+    profile_revision_id: str | None = None
+    excluded_document_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _validate_snapshot(self) -> ActiveRevisionQuerySnapshot:
@@ -220,7 +222,11 @@ class HydratedChunk(FrozenModel):
 
 
 class RankedChunk(FrozenModel):
-    """融合、重排及结构扩展共享的 canonical 候选。"""
+    """融合、重排及结构扩展共享的 canonical 候选。
+
+    纯扩展项的 fusion_rank 仅为原始融合名次之后的稳定展示序号；
+    expansion_seed_ids 记录上下文来源，不赋予通道或重排身份。
+    """
 
     hydrated: HydratedChunk
     fusion_rank: StrictInt = Field(gt=0)
@@ -229,6 +235,7 @@ class RankedChunk(FrozenModel):
     must_keep: bool = False
     contributions: tuple[RrfContribution, ...] = ()
     expansion_reason: str | None = None
+    expansion_seed_ids: tuple[str, ...] = ()
 
     @field_validator("rerank_score")
     @classmethod
@@ -245,6 +252,7 @@ class EvidenceSelectionContext(FrozenModel):
     query_kind: QueryKind
     rerank_mode: str = Field(min_length=1)
     selected_slot: str | None = None
+    selected_vector_space: str | None = None
 
 
 class DiagnosticRerankItem(FrozenModel):
@@ -336,6 +344,8 @@ class BaseResultCacheKey(FrozenModel):
     conversation_identity: str = Field(min_length=1)
     rewrite_policy_identity: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_schema: StrictInt = Field(gt=0)
+    include_related_content: bool = False
+    related_policy_version: str = "1"
 
     @property
     def persistent_key(self) -> str:
@@ -351,6 +361,25 @@ class BaseResultCacheKey(FrozenModel):
         return canonical_sha256(self.model_dump(mode="json"))
 
 
+class RelatedContent(FrozenModel):
+    """本次未获得答案资格的独立原文预览；不能送入生成器。"""
+
+    related_id: str = Field(pattern=r"^related_[0-9a-f]{32}$")
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
+    chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
+    document_name: str
+    heading_path: tuple[str, ...] = ()
+    excerpt: str = Field(min_length=1, max_length=240, repr=False)
+    source_spans: tuple[SourceSpan, ...] = Field(min_length=1)
+    is_answer_evidence: Literal[False] = False
+    relevance_reason: Literal[
+        "KEYWORD_RELATED", "SEMANTIC_CANDIDATE", "RELEVANCE_UNVERIFIED"
+    ]
+    rerank_verified: bool = False
+
+
 class SearchAnswerResult(FrozenModel):
     """实际 revision、route、证据、拒答与回答的统一结果。"""
 
@@ -359,6 +388,10 @@ class SearchAnswerResult(FrozenModel):
     reason_code: str = Field(min_length=1)
     answer: str | None = Field(default=None, repr=False)
     evidence: tuple[EvidenceItem, ...] = ()
+    related_contents: tuple[RelatedContent, ...] = Field(
+        default=(), max_length=3
+    )
+    display_message: str | None = None
     confidence: ConfidenceDecision
     query_kind: QueryKind
     active_index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
@@ -392,6 +425,7 @@ __all__ = [
     "HydratedChunk",
     "ProviderCallCount",
     "RankedChunk",
+    "RelatedContent",
     "RetrievalDiagnostics",
     "RetrievalDiagnosticsSummary",
     "RetrievalPolicy",

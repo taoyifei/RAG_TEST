@@ -8,10 +8,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from email.utils import parsedate_to_datetime
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
+from rag_app.adapters.providers.budget_transport import budgeted_client
+from rag_app.adapters.providers.transport_diagnostics import (
+    retryable_transport,
+    transport_diagnostics,
+)
 from rag_app.core.errors import (
     ProviderAuthenticationError,
     ProviderInputTooLarge,
@@ -21,10 +27,12 @@ from rag_app.core.errors import (
     RagError,
 )
 from rag_app.core.models import ProviderCall, ProviderFailureCategory
+from rag_app.core.models.common import freeze_json_object
 
 _DEFAULT_RETRY_STATUSES = frozenset({408, 429, 502, 503, 504})
 _AUTH_OR_MODEL_STATUSES = frozenset({401, 403, 404})
 _INPUT_INVALID_STATUSES = frozenset({400, 422})
+_HTTP_RATE_LIMITED = 429
 _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
@@ -80,6 +88,8 @@ class ProviderHttpClient:
         monotonic: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         random_value: Callable[[], float] = random.random,
+        observer: Callable[[ProviderCall], None] | None = None,
+        defer_success_observation: bool = False,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -93,6 +103,8 @@ class ProviderHttpClient:
             monotonic: 可测试的耗时钟。
             wall_clock: 解析 HTTP-date Retry-After 的墙上时钟。
             random_value: 返回 ``[0, 1]`` 的 full-jitter 随机源。
+            observer: 可选脱敏调用观察器；失败不得覆盖业务结果。
+            defer_success_observation: 是否等待响应语义校验后再观察成功。
 
         Returns:
             无返回值。
@@ -116,8 +128,15 @@ class ProviderHttpClient:
         if max_attempts <= 0 or max_response_bytes <= 0:
             raise ValueError("HTTP 尝试次数和响应上限必须为正数。")
         self._base_url = base_url.rstrip("/")
-        self._client = client or httpx.Client(
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0)
+        self._client = budgeted_client(
+            client
+            or httpx.Client(
+                timeout=httpx.Timeout(
+                    connect=5.0, read=30.0, write=30.0, pool=5.0
+                ),
+                follow_redirects=False,
+                trust_env=False,
+            )
         )
         self._max_attempts = max_attempts
         self._max_response_bytes = max_response_bytes
@@ -126,6 +145,8 @@ class ProviderHttpClient:
         self._monotonic = monotonic
         self._wall_clock = wall_clock
         self._random_value = random_value
+        self._observer = observer
+        self._defer_success_observation = defer_success_observation
         self._closed = False
 
     def request_json(  # noqa: PLR0913
@@ -169,19 +190,24 @@ class ProviderHttpClient:
             raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
         started = self._monotonic()
         last_retry_after_ms: int | None = None
+        encountered_rate_limit = False
         for attempt in range(1, self._max_attempts + 1):
+            attempt_started = self._monotonic()
             try:
                 response = self._client.request(
                     method,
                     self._base_url + path,
                     json=payload,
                     headers=headers,
+                    extensions={
+                        "rag_provider_retry_index": attempt - 1,
+                        "rag_provider_max_attempts": self._max_attempts,
+                    },
                 )
-            except (
-                httpx.ConnectError,
-                httpx.ReadError,
-                httpx.TimeoutException,
-            ):
+            except httpx.TransportError as error:
+                diagnostics, transport_category = self._transport_details(
+                    error, attempt_started
+                )
                 call = self._call(
                     provider_id,
                     operation,
@@ -189,21 +215,34 @@ class ProviderHttpClient:
                     path,
                     attempt,
                     started,
-                    "TRANSIENT",
+                    transport_category.name,
                     "HTTP_TRANSPORT",
                     input_count,
                     estimated_tokens,
                     last_retry_after_ms,
+                    encountered_rate_limit,
                 )
-                if attempt == self._max_attempts:
+                call = call.model_copy(
+                    update={
+                        "transport_diagnostics": freeze_json_object(diagnostics)
+                    }
+                )
+                if (
+                    transport_category is not ProviderFailureCategory.TRANSIENT
+                    or attempt == self._max_attempts
+                ):
+                    self._observe(call)
                     raise ProviderHttpError(
-                        ProviderFailureCategory.TRANSIENT,
+                        transport_category,
                         "HTTP_TRANSPORT",
                         call,
                     ) from None
                 self._sleep_before_retry(attempt, None)
                 continue
             status = response.status_code
+            encountered_rate_limit = (
+                encountered_rate_limit or status == _HTTP_RATE_LIMITED
+            )
             if status in self._retry_statuses:
                 retry_after = _retry_after_seconds(
                     response.headers.get("retry-after"), self._wall_clock()
@@ -223,8 +262,10 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                     last_retry_after_ms,
+                    encountered_rate_limit,
                 )
                 if attempt == self._max_attempts:
+                    self._observe(call)
                     raise ProviderHttpError(
                         ProviderFailureCategory.TRANSIENT,
                         f"HTTP_{status}",
@@ -246,7 +287,9 @@ class ProviderHttpClient:
                     input_count,
                     estimated_tokens,
                     None,
+                    encountered_rate_limit,
                 )
+                self._observe(call)
                 raise ProviderHttpError(category, f"HTTP_{status}", call)
             content = response.content
             if len(content) > self._max_response_bytes:
@@ -260,6 +303,7 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 )
             content_type = response.headers.get("content-type", "")
             if "application/json" not in content_type.casefold():
@@ -273,6 +317,7 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 )
             try:
                 response_payload = response.json()
@@ -287,24 +332,69 @@ class ProviderHttpClient:
                     started,
                     input_count,
                     estimated_tokens,
+                    encountered_rate_limit,
                 ) from None
-            return ProviderHttpResult(
-                payload=response_payload,
-                call=self._call(
-                    provider_id,
-                    operation,
-                    model,
-                    path,
-                    attempt,
-                    started,
-                    "SUCCESS",
-                    "OK",
-                    input_count,
-                    estimated_tokens,
-                    last_retry_after_ms,
-                ),
+            call = self._call(
+                provider_id,
+                operation,
+                model,
+                path,
+                attempt,
+                started,
+                "SUCCESS",
+                "OK",
+                input_count,
+                estimated_tokens,
+                last_retry_after_ms,
+                encountered_rate_limit,
             )
+            if not self._defer_success_observation:
+                self._observe(call)
+            return ProviderHttpResult(payload=response_payload, call=call)
         raise AssertionError("有限尝试循环必须返回或抛出。")
+
+    def _transport_details(
+        self, error: httpx.TransportError, started: float
+    ) -> tuple[dict[str, Any], ProviderFailureCategory]:
+        diagnostics = transport_diagnostics(
+            error,
+            elapsed_ms=round((self._monotonic() - started) * 1000),
+            extensions=error.request.extensions,
+        )
+        category = (
+            ProviderFailureCategory.TRANSIENT
+            if retryable_transport(error, diagnostics)
+            else ProviderFailureCategory.AUTH_OR_MODEL
+        )
+        return diagnostics, category
+
+    def complete_call(
+        self,
+        call: ProviderCall,
+        *,
+        observed_tokens: int | None = None,
+        failure_reason_code: str | None = None,
+    ) -> ProviderCall:
+        """在响应语义校验后生成并观察唯一终态调用。
+
+        Args:
+            call: HTTP 层返回但尚未观察的成功调用。
+            observed_tokens: Provider 返回且已严格校验的 Token 数。
+            failure_reason_code: 可选的稳定响应合同失败码。
+
+        Returns:
+            带最终状态和实际 Token 的脱敏调用。
+
+        """
+        values = call.model_dump()
+        values["observed_tokens"] = observed_tokens
+        if failure_reason_code is not None:
+            values["status_category"] = "RESPONSE_CONTRACT"
+            values["reason_code"] = failure_reason_code
+        completed_call = ProviderCall.model_validate(values)
+        if self._defer_success_observation:
+            self._observe(completed_call)
+        return completed_call
 
     def close(self) -> None:
         """幂等关闭连接池。
@@ -332,6 +422,7 @@ class ProviderHttpClient:
         started: float,
         input_count: int,
         estimated_tokens: int,
+        rate_limited: bool,
     ) -> ProviderHttpError:
         call = self._call(
             provider_id,
@@ -345,7 +436,9 @@ class ProviderHttpClient:
             input_count,
             estimated_tokens,
             None,
+            rate_limited,
         )
+        self._observe(call)
         return ProviderHttpError(
             ProviderFailureCategory.RESPONSE_CONTRACT,
             reason_code,
@@ -365,6 +458,7 @@ class ProviderHttpClient:
         input_count: int,
         estimated_tokens: int,
         retry_after_ms: int | None,
+        rate_limited: bool,
     ) -> ProviderCall:
         parsed = urlparse(self._base_url)
         host = parsed.hostname or "invalid"
@@ -383,9 +477,19 @@ class ProviderHttpClient:
             attempt_count=attempt_count,
             status_category=status_category,
             retry_after_ms=retry_after_ms,
+            rate_limited=rate_limited,
             input_count=input_count,
             estimated_tokens=estimated_tokens,
         )
+
+    def _observe(self, call: ProviderCall) -> None:
+        if self._observer is None:
+            return
+        try:
+            self._observer(call)
+        except Exception:
+            # 可观测持久层故障不能覆盖检索或建索引的业务结果。
+            return
 
     def _sleep_before_retry(
         self, attempt: int, retry_after: float | None

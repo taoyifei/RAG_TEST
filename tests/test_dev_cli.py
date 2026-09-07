@@ -11,6 +11,38 @@ from scripts import dev
 from tests.adapters.parsers.docx_fixtures import HEADING, PARAGRAPH, build_docx
 
 
+def test_wsl_browser_acceptance_uses_requested_candidate_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+
+    def browser_run(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        calls.append(environment)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setenv("P10_EXTERNAL_SERVER", "1")
+    monkeypatch.setenv("P10_BASE_URL", "http://127.0.0.1:38119")
+    monkeypatch.setattr(dev, "_run_web_script", lambda _script: 0)
+    monkeypatch.setattr(dev.shutil, "which", lambda _name: "node.exe")
+    monkeypatch.setattr(Path, "is_file", lambda _path: True)
+    monkeypatch.setattr(dev, "_windows_path", str)
+    monkeypatch.setattr(dev.subprocess, "run", browser_run)
+    monkeypatch.setattr(
+        dev.subprocess,
+        "Popen",
+        lambda *_args, **_kwargs: pytest.fail("已有候选实例不得另起测试服务"),
+    )
+
+    assert dev._web_e2e(None) == 0
+    assert len(calls) == 1
+    assert calls[0]["P10_BASE_URL"] == "http://127.0.0.1:38119"
+    assert "P10_BASE_URL/w" in calls[0]["WSLENV"]
+
+
 def test_check_uses_existing_offline_quality_tools() -> None:
     rendered = [" ".join(command) for command in dev._check_commands()]
 

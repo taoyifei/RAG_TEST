@@ -140,6 +140,24 @@ class CredentialStore:
             )
         return self.get(credential_id)
 
+    def remove_new_orphan(self, credential_id: str) -> None:
+        """补偿组合创建流程刚生成的孤立 Credential。
+
+        Args:
+            credential_id: 仅限当前创建调用刚生成的 ID，不接受外部删除请求。
+
+        Returns:
+            无返回值；已被引用的凭据保持不变。
+
+        """
+        with self._connections.transaction(write=True) as connection:
+            connection.execute(
+                "DELETE FROM provider_credentials WHERE credential_id=? "
+                "AND NOT EXISTS (SELECT 1 FROM provider_connections "
+                "WHERE credential_id=?)",
+                (credential_id, credential_id),
+            )
+
     def rotate(
         self,
         credential_id: str,

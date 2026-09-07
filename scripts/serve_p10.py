@@ -61,6 +61,7 @@ def main() -> None:
             port=args.port,
             qdrant_mode="memory",
             debug_enabled=True,
+            trusted_origins=(f"http://{args.host}:{args.port}",),
         )
         with build_product_runtime(
             settings,

@@ -9,6 +9,7 @@ from rag_app.product.models import (
     ImpactKind,
     ImpactPreview,
     ProviderConnection,
+    ProviderUsageDaily,
     ProviderValidationRun,
     RetrievalProfileRevision,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "ImpactPreview",
     "MasterKey",
     "ProviderConnection",
+    "ProviderUsageDaily",
     "ProviderValidationRun",
     "RetrievalProfileRevision",
     "SecretAad",

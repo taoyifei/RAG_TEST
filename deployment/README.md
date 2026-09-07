@@ -1,7 +1,7 @@
-# DOCX RAG smoke 离线发布 Quickstart
+# Legacy Industry/OCR：DOCX RAG smoke 离线发布 Quickstart
 
-这是唯一的 smoke 操作文档。主路径固定为：本地 preflight → 一键构建和打包 → 上传恰好七个文件 → 服务器 preflight → install → deploy → 冒烟验证。
-生产冻结、故障恢复细节和清理命令见完整参考 `design/public/offline-build-and-server-deployment.md`，不需要从该长文档拼接 smoke 命令。
+本目录只保留历史与迁移价值；V1 新部署使用根 `Dockerfile`、`compose.yaml` 和
+`docs/public/quickstart.md`；旧完整参考为 `design/public/offline-build-and-server-deployment.md`，不得用于声明 P11 Ready。
 
 ## 边界与前置条件
 

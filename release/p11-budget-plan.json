@@ -1,0 +1,1051 @@
+{
+  "status": "PROPOSED",
+  "activated": false,
+  "approver": null,
+  "approved_at": null,
+  "new_provider_http": 0,
+  "dataset_sha256": "sha256:88b40b8c92062cb7a479f9e4f087bd90c705d549cf1f4ab3eb99a96df5db0164",
+  "sample_count": 30,
+  "lanes": [
+    "primary",
+    "standby"
+  ],
+  "quality_thresholds_changed": false,
+  "query_embedding_only_lower_bound": {
+    "requests": 60,
+    "estimated_input_tokens": 3590
+  },
+  "query_instruct_identity": "sha256:3a86db8acf84c670333c3a56b17a11bb59a9691ec4c16475fc57ab3d8daf63e2",
+  "configuration_assumption": "按调用方已读取的当前非秘密 Profile 策略。",
+  "estimate_semantics": "estimated 是仓库 Unicode code point 启发式输入估算，不是账单 usage，也不保证供应商 Token 严格上界。planned 重排按作用域全部可能候选（受原候选上限约束），不读取标准答案；capped_max 另计候选重复 query 余量。",
+  "lower_bound_semantics": "仅保留必须实际 HTTP 的 canary 和两路查询；未证实文档缓存与候选命中时允许文档/重排为零下限，不作为完整扩额建议。",
+  "history": {
+    "total": 419,
+    "reserved": 226,
+    "forwarded": 226,
+    "locally_blocked": 193,
+    "estimated_input_tokens": 64311,
+    "observed_tokens": 64510,
+    "observed_usage_status": "unknown",
+    "unknown_usage_attempts": 3,
+    "unknown_forwarding_attempts": 0,
+    "locally_blocked_estimated_tokens": 3169,
+    "campaign_id": "p11-20260905-public-synthetic",
+    "authorization_id": "p11-20260904-existing-25-1000",
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
+    "provider_request_limits": {
+      "aliyun": 123,
+      "jina": 316
+    },
+    "provider_token_limits": {
+      "aliyun": 13719,
+      "jina": 132142
+    },
+    "step_request_limits": {
+      "aliyun_document_canary": 1,
+      "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
+      "aliyun_query_canary": 1,
+      "citation_quality": 396,
+      "dual_index": 6,
+      "historical": 6,
+      "jina_connection": 3,
+      "primary_query": 6,
+      "recovery": 9,
+      "standby_failover": 6
+    },
+    "providers": {
+      "aliyun": {
+        "total": 56,
+        "reserved": 49,
+        "forwarded": 49,
+        "locally_blocked": 7,
+        "estimated_input_tokens": 5092,
+        "observed_tokens": 3001,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 2,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 679
+      },
+      "jina": {
+        "total": 363,
+        "reserved": 177,
+        "forwarded": 177,
+        "locally_blocked": 186,
+        "estimated_input_tokens": 59219,
+        "observed_tokens": 61509,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 1,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 2490
+      }
+    },
+    "steps": {
+      "aliyun_document_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_diagnostic_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_diagnostic_20260906_2": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_retest_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_query_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "citation_quality": {
+        "total": 378,
+        "reserved": 198,
+        "forwarded": 198,
+        "locally_blocked": 180,
+        "estimated_input_tokens": 63308,
+        "observed_tokens": 62551,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 2400
+      },
+      "dual_index": {
+        "total": 2,
+        "reserved": 2,
+        "forwarded": 2,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 104,
+        "observed_tokens": 85,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "historical": {
+        "total": 7,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 1,
+        "estimated_input_tokens": 157,
+        "observed_tokens": 242,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 3,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 19
+      },
+      "jina_connection": {
+        "total": 3,
+        "reserved": 3,
+        "forwarded": 3,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 82,
+        "observed_tokens": 234,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "primary_query": {
+        "total": 4,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 96,
+        "observed_tokens": 378,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "recovery": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 108,
+        "observed_tokens": 390,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 660
+      },
+      "standby_failover": {
+        "total": 10,
+        "reserved": 4,
+        "forwarded": 4,
+        "locally_blocked": 6,
+        "estimated_input_tokens": 298,
+        "observed_tokens": 482,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 90
+      }
+    }
+  },
+  "current_authorization": {
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
+    "provider_token_limits": {
+      "aliyun": 13719,
+      "jina": 132142
+    },
+    "used_requests": 226,
+    "used_estimated_tokens": 64311,
+    "remaining_requests": 213,
+    "remaining_estimated_tokens": 81550
+  },
+  "operations": [
+    {
+      "operation": "canary.embedding.document",
+      "provider": "jina",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 13,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 1,
+      "assumptions": "过期或未验证 canary 预留一次；若同操作证据仍有效可依法复用。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 13,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      }
+    },
+    {
+      "operation": "canary.embedding.query",
+      "provider": "jina",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 13,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 1,
+      "assumptions": "过期或未验证 canary 预留一次；若同操作证据仍有效可依法复用。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 13,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      }
+    },
+    {
+      "operation": "canary.embedding.document",
+      "provider": "aliyun",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 13,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 1,
+      "assumptions": "过期或未验证 canary 预留一次；若同操作证据仍有效可依法复用。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 13,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 13
+      }
+    },
+    {
+      "operation": "canary.embedding.query",
+      "provider": "aliyun",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 106,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 1,
+      "assumptions": "过期或未验证 canary 预留一次；若同操作证据仍有效可依法复用。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 106,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 106
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 106
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 106
+      }
+    },
+    {
+      "operation": "canary.reranking",
+      "provider": "jina",
+      "input_items": 3,
+      "http_count": 1,
+      "estimated_tokens": 56,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 1,
+      "assumptions": "Jina reranking 有效性未证明时保留原验证操作。",
+      "query_repetition_allowance": 13,
+      "maximum_request_estimated_tokens": 69,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 56
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 56
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 69
+      }
+    },
+    {
+      "operation": "functional.embedding.document",
+      "provider": "jina",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 52,
+      "observed_tokens_if_known": null,
+      "cache_reusable": true,
+      "max_attempts": 3,
+      "assumptions": "实际 Parser/Chunker，全部版本逐 ingestion 分批，冷缓存；不合并不同 job。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 52,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 52
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 52
+      }
+    },
+    {
+      "operation": "functional.embedding.document",
+      "provider": "aliyun",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 52,
+      "observed_tokens_if_known": null,
+      "cache_reusable": true,
+      "max_attempts": 3,
+      "assumptions": "实际 Parser/Chunker，全部版本逐 ingestion 分批，冷缓存；不合并不同 job。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 52,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 52
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 52
+      }
+    },
+    {
+      "operation": "pilot.embedding.document",
+      "provider": "jina",
+      "input_items": 10,
+      "http_count": 6,
+      "estimated_tokens": 1118,
+      "observed_tokens_if_known": null,
+      "cache_reusable": true,
+      "max_attempts": 3,
+      "assumptions": "实际 Parser/Chunker，全部版本逐 ingestion 分批，冷缓存；不合并不同 job。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 387,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 6,
+        "estimated_input_tokens": 1118
+      },
+      "capped_max": {
+        "requests": 6,
+        "estimated_input_tokens": 1118
+      }
+    },
+    {
+      "operation": "pilot.embedding.document",
+      "provider": "aliyun",
+      "input_items": 10,
+      "http_count": 6,
+      "estimated_tokens": 1118,
+      "observed_tokens_if_known": null,
+      "cache_reusable": true,
+      "max_attempts": 3,
+      "assumptions": "实际 Parser/Chunker，全部版本逐 ingestion 分批，冷缓存；不合并不同 job。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 387,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 6,
+        "estimated_input_tokens": 1118
+      },
+      "capped_max": {
+        "requests": 6,
+        "estimated_input_tokens": 1118
+      }
+    },
+    {
+      "operation": "functional.primary_query.embedding.query",
+      "provider": "jina",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 11,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "每次必须有真实路由 HTTP；本地注入另列。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 11,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 11
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 11
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 11
+      }
+    },
+    {
+      "operation": "functional.primary_query.reranking",
+      "provider": "jina",
+      "input_items": 2,
+      "http_count": 1,
+      "estimated_tokens": 37,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "按完整功能语料候选预留，不缩小到标准答案。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 37,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 37
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 37
+      }
+    },
+    {
+      "operation": "functional.standby_failover.embedding.query",
+      "provider": "aliyun",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 108,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "每次必须有真实路由 HTTP；本地注入另列。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 108,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 108
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 108
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 108
+      }
+    },
+    {
+      "operation": "functional.standby_failover.reranking",
+      "provider": "jina",
+      "input_items": 2,
+      "http_count": 1,
+      "estimated_tokens": 41,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "按完整功能语料候选预留，不缩小到标准答案。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 41,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 41
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 41
+      }
+    },
+    {
+      "operation": "functional.recovery.embedding.query",
+      "provider": "jina",
+      "input_items": 1,
+      "http_count": 1,
+      "estimated_tokens": 14,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "每次必须有真实路由 HTTP；本地注入另列。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 14,
+      "lower_bound": {
+        "requests": 1,
+        "estimated_input_tokens": 14
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 14
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 14
+      }
+    },
+    {
+      "operation": "functional.recovery.reranking",
+      "provider": "jina",
+      "input_items": 2,
+      "http_count": 1,
+      "estimated_tokens": 40,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "按完整功能语料候选预留，不缩小到标准答案。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 40,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 40
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 40
+      }
+    },
+    {
+      "operation": "functional.standby_unavailable.reranking",
+      "provider": "jina",
+      "input_items": 2,
+      "http_count": 1,
+      "estimated_tokens": 43,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "按完整功能语料候选预留，不缩小到标准答案。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 43,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 1,
+        "estimated_input_tokens": 43
+      },
+      "capped_max": {
+        "requests": 1,
+        "estimated_input_tokens": 43
+      }
+    },
+    {
+      "operation": "pilot.embedding.query",
+      "provider": "jina",
+      "input_items": 30,
+      "http_count": 30,
+      "estimated_tokens": 400,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "固定30问每题两路；当前逐题执行，不声称供应商不能batch。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 21,
+      "lower_bound": {
+        "requests": 30,
+        "estimated_input_tokens": 400
+      },
+      "planned": {
+        "requests": 30,
+        "estimated_input_tokens": 400
+      },
+      "capped_max": {
+        "requests": 30,
+        "estimated_input_tokens": 400
+      }
+    },
+    {
+      "operation": "pilot.embedding.query",
+      "provider": "aliyun",
+      "input_items": 30,
+      "http_count": 30,
+      "estimated_tokens": 3190,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "固定30问每题两路；当前逐题执行，不声称供应商不能batch。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 114,
+      "lower_bound": {
+        "requests": 30,
+        "estimated_input_tokens": 3190
+      },
+      "planned": {
+        "requests": 30,
+        "estimated_input_tokens": 3190
+      },
+      "capped_max": {
+        "requests": 30,
+        "estimated_input_tokens": 3190
+      }
+    },
+    {
+      "operation": "pilot.reranking",
+      "provider": "jina",
+      "input_items": 540,
+      "http_count": 60,
+      "estimated_tokens": 36620,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "每题每路预留重排；取同KB当前版本全部候选中最长的原上限数量，实际命中待运行。",
+      "query_repetition_allowance": 5600,
+      "maximum_request_estimated_tokens": 765,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 60,
+        "estimated_input_tokens": 36620
+      },
+      "capped_max": {
+        "requests": 60,
+        "estimated_input_tokens": 42220
+      }
+    },
+    {
+      "operation": "retry.allowance",
+      "provider": "jina",
+      "input_items": 0,
+      "http_count": 4,
+      "estimated_tokens": 3060,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "planned每供应商最多4次额外尝试，以最大单HTTP输入估算预留；capped_max包含每次SDK请求最多2次重试；所有canary无重试。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 3060,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 4,
+        "estimated_input_tokens": 3060
+      },
+      "capped_max": {
+        "requests": 206,
+        "estimated_input_tokens": 87952
+      }
+    },
+    {
+      "operation": "retry.allowance",
+      "provider": "aliyun",
+      "input_items": 0,
+      "http_count": 4,
+      "estimated_tokens": 1548,
+      "observed_tokens_if_known": null,
+      "cache_reusable": false,
+      "max_attempts": 3,
+      "assumptions": "planned每供应商最多4次额外尝试，以最大单HTTP输入估算预留；capped_max包含每次SDK请求最多2次重试；所有canary无重试。",
+      "query_repetition_allowance": 0,
+      "maximum_request_estimated_tokens": 1548,
+      "lower_bound": {
+        "requests": 0,
+        "estimated_input_tokens": 0
+      },
+      "planned": {
+        "requests": 4,
+        "estimated_input_tokens": 1548
+      },
+      "capped_max": {
+        "requests": 76,
+        "estimated_input_tokens": 8936
+      }
+    }
+  ],
+  "totals_additional_work": {
+    "lower_bound": {
+      "requests": 68,
+      "estimated_input_tokens": 3924
+    },
+    "planned": {
+      "requests": 154,
+      "estimated_input_tokens": 47653
+    },
+    "capped_max": {
+      "requests": 428,
+      "estimated_input_tokens": 145546
+    }
+  },
+  "per_provider": {
+    "jina": {
+      "additional_work": {
+        "lower_bound": {
+          "requests": 35,
+          "estimated_input_tokens": 507
+        },
+        "planned": {
+          "requests": 110,
+          "estimated_input_tokens": 41518
+        },
+        "capped_max": {
+          "requests": 312,
+          "estimated_input_tokens": 132023
+        }
+      },
+      "current_token_limit": 132142,
+      "used_estimated_tokens": 59219,
+      "remaining_estimated_tokens": 72923,
+      "cumulative_capped_requests": 489,
+      "cumulative_capped_estimated_tokens": 191242
+    },
+    "aliyun": {
+      "additional_work": {
+        "lower_bound": {
+          "requests": 33,
+          "estimated_input_tokens": 3417
+        },
+        "planned": {
+          "requests": 44,
+          "estimated_input_tokens": 6135
+        },
+        "capped_max": {
+          "requests": 116,
+          "estimated_input_tokens": 13523
+        }
+      },
+      "current_token_limit": 13719,
+      "used_estimated_tokens": 5092,
+      "remaining_estimated_tokens": 8627,
+      "cumulative_capped_requests": 165,
+      "cumulative_capped_estimated_tokens": 18615
+    }
+  },
+  "proposed_cumulative_limits": {
+    "request_limit": 654,
+    "estimated_token_limit": 209857,
+    "provider_request_limits": {
+      "jina": 489,
+      "aliyun": 165
+    },
+    "provider_token_limits": {
+      "jina": 191242,
+      "aliyun": 18615
+    },
+    "step_request_limits": {
+      "aliyun_document_canary": 2,
+      "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
+      "aliyun_query_canary": 2,
+      "citation_quality": 594,
+      "dual_index": 8,
+      "historical": 6,
+      "jina_connection": 6,
+      "primary_query": 10,
+      "recovery": 13,
+      "standby_failover": 10
+    }
+  },
+  "local_fault_injection": {
+    "provider_http": 0,
+    "planned_attempts": 33,
+    "capped_attempts": 99,
+    "estimated_tokens_if_intercepted_before_forwarding": 542,
+    "assumptions": "standby每题局部拦主路，功能failover拦主路，双槽不可用拦两路；本地短路/熔断可能减少attempt，不算Provider HTTP，不自动退款未知转发。"
+  },
+  "cache_contract": "文档向量仅在文本/角色/模型/维度/策略/slot 身份全相同时复用；当前未扣除任何未验证命中。真实 canary、failover、recovery 和逐题两路 HTTP 证据不可由缓存替代。",
+  "retry_policy": {
+    "sdk_max_attempts_including_initial": 3,
+    "planned_extra_attempts_per_provider": 4,
+    "capped_max_extra_attempts_per_operation": 2,
+    "canary_max_attempts_including_initial": 1,
+    "unbounded_or_repeated_runs_included": false
+  },
+  "actual_profile_bound": true,
+  "source_profile_revision_id": "pfr_4f107e6baec846a9abf31b816fe8c8d8",
+  "resolved_profile": {
+    "source_profile_revision_id": "pfr_4f107e6baec846a9abf31b816fe8c8d8",
+    "profile_status": "draft",
+    "index_semantic_fingerprint": "sha256:879b0f69be14ea3fa9a500bc65a6bcdf3255de89d76f8c845be1742e0e9630da",
+    "serving_fingerprint": "sha256:853ea9569e339f002e6c796036c3e8e7f57b0d2b02c26202712293ea85f08856",
+    "embedding_roles": {
+      "primary": {
+        "provider": "jina",
+        "provider_id": "jina-embedding",
+        "model": "jina-embeddings-v5-text-small",
+        "dimension": 1024,
+        "normalization": "l2-v1",
+        "adapter_revision": "1",
+        "max_input_tokens": 32768,
+        "document_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "task",
+            "retrieval.passage"
+          ]
+        ],
+        "query_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "task",
+            "retrieval.query"
+          ]
+        ],
+        "catalog_version": "2026-09-04.1"
+      },
+      "standby": {
+        "provider": "aliyun-model-studio",
+        "provider_id": "aliyun-qwen37-embedding",
+        "model": "qwen3.7-text-embedding",
+        "dimension": 1024,
+        "normalization": "l2-v1",
+        "adapter_revision": "1",
+        "max_input_tokens": 128000,
+        "document_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "text_type",
+            "document"
+          ]
+        ],
+        "query_policy": [
+          [
+            "normalized",
+            true
+          ],
+          [
+            "query_instruct",
+            "Given a user query, retrieve the most relevant passages from enterprise DOCX knowledge bases."
+          ],
+          [
+            "text_type",
+            "query"
+          ]
+        ],
+        "catalog_version": "2026-09-04.1"
+      }
+    },
+    "reranker": {
+      "provider": "jina",
+      "model": "jina-reranker-v3.5"
+    },
+    "retrieval_policy": {
+      "schema_version": "1",
+      "max_variants": 2,
+      "max_channels": 6,
+      "channel_top_k": 24,
+      "fusion_candidate_limit": 48,
+      "rrf_k": 60,
+      "rerank_candidate_limit": 24,
+      "neighbor_count": 1,
+      "section_chunk_limit": 2,
+      "evidence_token_budget": 1024,
+      "max_evidence_items": 8,
+      "max_evidence_items_per_chunk": 1,
+      "minimum_support_items": 1,
+      "minimum_span_overlap": 0.2,
+      "per_document_cap": 4,
+      "per_section_cap": 3,
+      "must_keep_limit": 3,
+      "rerank_text_char_limit": 2400,
+      "cache_schema_version": 1,
+      "dense_semantic_enabled": false,
+      "dense_semantic_calibration_state": "UNCALIBRATED",
+      "dense_calibrated_vector_spaces": [],
+      "bypass_policy_denied": true,
+      "enabled_channels": [
+        "exact",
+        "lexical",
+        "dense"
+      ],
+      "rerank_enabled": true,
+      "neighbor_expansion_enabled": true,
+      "provisional": true
+    },
+    "parsing_chunking_contract": {
+      "mode": "fixed_product_v1",
+      "parser": "word-document-v1",
+      "parsing_policy": {
+        "schema_version": "1",
+        "policy_id": "docx-safe-v1",
+        "mode": "strict",
+        "tracked_changes": "final_view",
+        "comments": "metadata_only",
+        "hidden_text": "exclude",
+        "headers_footers": "metadata_only",
+        "footnotes_endnotes": "metadata_only",
+        "images": "metadata",
+        "external_relationships": "metadata_only",
+        "unknown_indexable_content": "reject",
+        "max_file_bytes": 134217728,
+        "max_uncompressed_bytes": 536870912,
+        "max_entry_bytes": 67108864,
+        "max_entries": 10000,
+        "max_compression_ratio": 200.0,
+        "parse_timeout_seconds": 30.0,
+        "max_xml_depth": 256,
+        "max_xml_nodes": 1000000,
+        "max_table_depth": 32,
+        "max_field_depth": 32,
+        "custom_heading_styles": [],
+        "preserve_soft_hyphen": false
+      },
+      "chunker": "docx-structural-v3",
+      "chunking_policy": {
+        "schema_version": "3",
+        "chunker_id": "docx-structural-v3",
+        "target_tokens": 384,
+        "hard_max_tokens": 512,
+        "overlap_cap_tokens": 64,
+        "min_tail_tokens": 64,
+        "include_document_title": true,
+        "include_heading_path": true,
+        "include_list_path": true,
+        "include_table_header": true,
+        "header_footer_policy": "metadata_only",
+        "notes_policy": "separate_child",
+        "image_policy": "metadata_only",
+        "comments_policy": "metadata_only",
+        "contextual_prefix": "deterministic",
+        "estimated_token_safety_margin": 0.15,
+        "provisional": true,
+        "required_embedding_slots": [
+          "primary",
+          "standby"
+        ],
+        "max_embedding_tokens_by_slot": [
+          [
+            "primary",
+            32768
+          ],
+          [
+            "standby",
+            131072
+          ]
+        ],
+        "profile_hard_cap": 512
+      }
+    }
+  },
+  "budget_policy_identity": "sha256:a28cd776e137583de40f87d7a7b542764644945842a3b94be4f7da66285634a1",
+  "profile_revalidation": "审批前与执行前重跑同一命令并核对身份；变化即失效，历史不清零。",
+  "history_evidence": {
+    "path": "release/p11-blocker-diagnosis.json",
+    "sha256": "b62726ef8d0529535187f690770e9c3012dd3851e1b3e57969d03faab751211d"
+  }
+}

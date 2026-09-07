@@ -335,7 +335,7 @@ def _register_document_routes(
         display_name: Annotated[str, Query(min_length=1, max_length=512)],
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        """受控接收 DOCX 并创建新逻辑文档。"""
+        """受控接收 DOC 或 DOCX 并创建新逻辑文档。"""
         require_admin(authorization)
         content = await _spool_upload(
             request, runtime.data_dir, max_upload_bytes=max_upload_bytes
@@ -575,7 +575,12 @@ def _register_query_routes(
     """注册 Search、Answer 和管理员 Diagnostics 路由。"""
     path = "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}"
 
-    @app.post(path + ":search", tags=["query"], response_model=QueryResponse)
+    @app.post(
+        path + ":search",
+        tags=["query"],
+        response_model=QueryResponse,
+        response_model_exclude_unset=True,
+    )
     def _search(
         project_id: str,
         kb_id: str,
@@ -585,9 +590,19 @@ def _register_query_routes(
         """返回 P08.5 实际路由与最小证据。"""
         require_query(authorization)
         result = runtime.sdk.search(
-            project_id, kb_id, body.query, limit=body.limit
+            project_id,
+            kb_id,
+            body.query,
+            limit=body.limit,
+            include_related_content=body.include_related_content,
         )
-        return _query_payload(runtime, result, project_id, kb_id)
+        return _query_payload(
+            runtime,
+            result,
+            project_id,
+            kb_id,
+            include_related_content=body.include_related_content,
+        )
 
     @app.post(
         path + ":answer",
@@ -604,9 +619,19 @@ def _register_query_routes(
         """返回非流式结果或最终一致的 SSE。"""
         require_query(authorization)
         result = runtime.sdk.answer(
-            project_id, kb_id, body.query, limit=body.limit
+            project_id,
+            kb_id,
+            body.query,
+            limit=body.limit,
+            include_related_content=body.include_related_content,
         )
-        payload = _query_payload(runtime, result, project_id, kb_id)
+        payload = _query_payload(
+            runtime,
+            result,
+            project_id,
+            kb_id,
+            include_related_content=body.include_related_content,
+        )
         if not body.stream:
             return payload
         return StreamingResponse(
@@ -873,8 +898,13 @@ def _query_payload(
     result: SearchAnswerResult,
     project_id: str,
     knowledge_base_id: str,
+    *,
+    include_related_content: bool = False,
 ) -> dict[str, object]:
     payload = _model(result)
+    if not include_related_content:
+        payload.pop("related_contents", None)
+        payload.pop("display_message", None)
     payload.update(
         {
             "query_id": result.trace_id,

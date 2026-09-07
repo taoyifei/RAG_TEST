@@ -620,6 +620,7 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
     from rag_app.adapters.parsers import (  # noqa: PLC0415
         DocxOoxmlV4Parser,
         LegacyDocxIrParser,
+        WordDocumentV1Parser,
     )
     from rag_app.adapters.stores import (  # noqa: PLC0415
         FilesystemBlobStore,
@@ -645,6 +646,11 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         "docx-ooxml-v4",
         lambda: DocxOoxmlV4Parser(),  # noqa: PLW0108
         descriptor=DocxOoxmlV4Parser.descriptor,
+    )
+    registry.register_parser(
+        "word-document-v1",
+        lambda: WordDocumentV1Parser(),  # noqa: PLW0108
+        descriptor=WordDocumentV1Parser.descriptor,
     )
     registry.register_parser(
         "legacy-docx-ir",

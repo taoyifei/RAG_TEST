@@ -33,7 +33,7 @@ export default defineConfig({
     ? undefined
     : {
         command:
-          "../.venv/bin/python ../scripts/serve_p10.py --port 8091 --frontend-dir dist",
+          "python ../scripts/serve_p10.py --port 8091 --frontend-dir dist",
         cwd: ".",
         url: "http://127.0.0.1:8091/ready",
         reuseExistingServer: false,

@@ -13,6 +13,9 @@ from rag_app.adapters.stores.sqlite_fts5 import (
     fts_table_for_revision,
     write_chunks_transaction,
 )
+from rag_app.adapters.stores.sqlite_profile_publication import (
+    activate_bound_profile,
+)
 from rag_app.core.capabilities import (
     ComponentDescriptor,
     ComponentKind,
@@ -1446,6 +1449,9 @@ class SqliteControlStore:
             if kb is None:
                 raise NotFound("目标知识库不存在。", stage="revision.activate")
             old_revision_id = kb["active_revision_id"]
+            activate_bound_profile(
+                connection, evidence.revision_id, knowledge_base_id, now
+            )
             connection.execute(
                 "UPDATE index_revisions SET state='active', activated_at=? "
                 "WHERE index_revision_id=? AND state='ready'",
@@ -1497,6 +1503,23 @@ class SqliteControlStore:
             raise NotFound("目标知识库不存在。", stage="revision.active")
         value = row["active_revision_id"]
         return None if value is None else str(value)
+
+    def is_ready_revision(self, revision_id: str) -> bool:
+        """检查是否已有完整 READY 索引等待重试发布。
+
+        Args:
+            revision_id: 不可变索引身份。
+
+        Returns:
+            只有持久状态为 READY 时返回 True。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT state FROM index_revisions WHERE index_revision_id=?",
+                (revision_id,),
+            ).fetchone()
+        return row is not None and row[0] == "ready"
 
     def active_revision_ids(self) -> tuple[str, ...]:
         """返回启动恢复需要的全部 Active Revision ID。
@@ -1564,6 +1587,20 @@ class SqliteControlStore:
                     "Active 指针未指向 ACTIVE revision。",
                     stage="retrieval.snapshot",
                 )
+            profile_row = None
+            if (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE "
+                    "name='retrieval_profile_revisions'"
+                ).fetchone()
+                is not None
+            ):
+                profile_row = connection.execute(
+                    "SELECT profile_revision_id FROM "
+                    "retrieval_profile_revisions WHERE knowledge_base_id=? "
+                    "AND status='active'",
+                    (scope.knowledge_base_id,),
+                ).fetchone()
             slot_rows = connection.execute(
                 "SELECT * FROM embedding_slots WHERE revision_id=? "
                 "ORDER BY role, slot_id",
@@ -1579,6 +1616,13 @@ class SqliteControlStore:
                 "WHERE s.revision_id=? AND s.required_for_activation=1 "
                 "ORDER BY s.role, s.slot_id",
                 (revision_id,),
+            ).fetchall()
+            excluded_documents = connection.execute(
+                "SELECT document_id FROM documents "
+                "WHERE project_id=? AND knowledge_base_id=? "
+                "AND (deleted_at IS NOT NULL OR status!='active' "
+                "OR lifecycle_status!='active') ORDER BY document_id",
+                (scope.project_id, scope.knowledge_base_id),
             ).fetchall()
         try:
             topology = EmbeddingTopology.model_validate_json(
@@ -1632,6 +1676,9 @@ class SqliteControlStore:
             state=IndexRevisionState.ACTIVE,
         )
         return ActiveRevisionQuerySnapshot(
+            profile_revision_id=None
+            if profile_row is None
+            else str(profile_row[0]),
             revision=revision,
             serving_fingerprint=serving_fingerprint,
             topology=topology,
@@ -1645,6 +1692,9 @@ class SqliteControlStore:
             exact_namespace=f"sqlite:{revision_id}",
             chunk_payload_schema=payload_schema,
             retrieval_policy=retrieval_policy,
+            excluded_document_ids=tuple(
+                str(item[0]) for item in excluded_documents
+            ),
         )
 
     def hydrate_chunks(
@@ -1679,7 +1729,9 @@ class SqliteControlStore:
                 "JOIN documents d ON d.document_id=c.document_id "
                 "WHERE c.revision_id=? AND c.chunk_id IN "
                 "(SELECT value FROM json_each(?)) "
-                "AND r.project_id=? AND r.knowledge_base_id=?",
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active'",
                 (
                     revision.index_revision_id,
                     canonical_json(ordered),
@@ -2824,9 +2876,7 @@ class SqliteControlStore:
                     slot_id=str(slot["slot_id"]),
                     vector_name=str(slot["vector_name"]),
                     required=bool(slot["required_for_activation"]),
-                    expected_chunk_count=int(
-                        slot["expected_chunk_count"] or 0
-                    ),
+                    expected_chunk_count=int(slot["expected_chunk_count"] or 0),
                     valid_vector_count=int(slot["valid_vector_count"] or 0),
                     failed_count=int(slot["failed_count"] or 0),
                     coverage_ratio=float(slot["coverage_ratio"] or 0.0),
@@ -2857,6 +2907,7 @@ class SqliteControlStore:
         revision_id: str,
         *,
         document_id: str | None,
+        chunk_id: str | None = None,
         role: str | None,
         section_id: str | None,
         neighbor_group_id: str | None,
@@ -2870,6 +2921,7 @@ class SqliteControlStore:
             knowledge_base_id: 期望知识库 ID。
             revision_id: 目标 Revision ID。
             document_id: 可选逻辑文档过滤。
+            chunk_id: 可选原文定位，仅允许活动文档。
             role: 可选 Chunk role 过滤。
             section_id: 可选 Section 过滤。
             neighbor_group_id: 可选相邻组过滤。
@@ -2886,6 +2938,7 @@ class SqliteControlStore:
         clauses = ["revision_id=?"]
         parameters: list[object] = [revision_id]
         for column, value in (
+            ("chunk_id", chunk_id),
             ("document_id", document_id),
             ("role", role),
             ("section_id", section_id),
@@ -2906,6 +2959,22 @@ class SqliteControlStore:
                 or str(revision["knowledge_base_id"]) != knowledge_base_id
             ):
                 raise NotFound("revision 不存在。", stage="revision.read")
+            if chunk_id is not None:
+                active = connection.execute(
+                    "SELECT 1 FROM knowledge_bases kb "
+                    "JOIN projects p ON p.project_id=kb.project_id "
+                    "JOIN documents d "
+                    "ON d.knowledge_base_id=kb.knowledge_base_id "
+                    "WHERE kb.knowledge_base_id=? AND kb.active_revision_id=? "
+                    "AND kb.deleted_at IS NULL AND p.deleted_at IS NULL "
+                    "AND kb.lifecycle_status='active' "
+                    "AND p.lifecycle_status='active' "
+                    "AND d.document_id=? AND d.deleted_at IS NULL "
+                    "AND d.lifecycle_status='active'",
+                    (knowledge_base_id, revision_id, document_id),
+                ).fetchone()
+                if active is None:
+                    raise NotFound("原文当前不可读取。", stage="revision.read")
             total = int(
                 connection.execute(
                     f"SELECT count(*) AS value FROM chunks WHERE {where}",  # noqa: S608
@@ -2917,13 +2986,27 @@ class SqliteControlStore:
                 "ORDER BY chunk_id LIMIT ? OFFSET ?",
                 (*parameters, limit, offset),
             ).fetchall()
-        return (
-            tuple(
+        try:
+            items = tuple(
                 Chunk.model_validate_json(str(item["chunk_json"]))
                 for item in rows
-            ),
-            total,
-        )
+            )
+        except (TypeError, ValueError) as error:
+            raise IndexCorrupt(
+                "Canonical Chunk 无法验证。", stage="revision.read"
+            ) from error
+        if chunk_id is not None and any(
+            item.project_id != project_id
+            or item.knowledge_base_id != knowledge_base_id
+            or item.index_revision_id != revision_id
+            or item.chunk_id != chunk_id
+            or item.version.document_id != document_id
+            for item in items
+        ):
+            raise IndexCorrupt(
+                "Canonical Chunk 身份漂移。", stage="revision.read"
+            )
+        return items, total
 
     def revision_document_reports(
         self,

@@ -18,6 +18,8 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
 from rag_app.api.p09 import create_p09_app
+from rag_app.api.product_token_policy import resolve_token_route
+from rag_app.api.provider_budget import register_provider_budget_routes
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -26,16 +28,30 @@ from rag_app.composition.product_runtime import (
 from rag_app.core.errors import PolicyDenied
 from rag_app.product.auth import SESSION_COOKIE
 from rag_app.product.catalog import provider_catalog
+from rag_app.product.control_store import validate_connection_metadata
+from rag_app.product.http_security import RequestRateLimiter
 from rag_app.product.models import (
     ImpactKind,
     ProviderConnectionDraft,
     RetrievalProfileDraft,
 )
 from rag_app.product.provider_runtime import TransportFactory
+from rag_app.product.verification import validation_is_current
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _INTERNAL_QUERY_PREFIX = "internal-query-"
 _INTERNAL_ADMIN_PREFIX = "internal-admin-"
+_HTTP_TOO_MANY_REQUESTS = 429
+_RATE_LIMITS = {
+    "provider-test": 5,
+    "query": 60,
+    "upload": 10,
+}
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self'; "
+    "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+    "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,12 +96,31 @@ class ConnectionRequest(_RequestModel):
 
     display_name: str = Field(min_length=1, max_length=200)
     provider_type: Literal["jina", "aliyun-model-studio"]
-    credential_id: str
+    credential_id: str | None = None
+    credential: CredentialRequest | None = None
     endpoint_profile: Literal["default"] = "default"
+    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] = (
+        "workspace_host"
+    )
+    api_host: str | None = Field(default=None, max_length=300)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
     region: Literal["cn-beijing"] | None = None
     request_budget: int = Field(default=5, ge=1, le=20)
     token_budget: int = Field(default=4096, ge=1, le=1_000_000)
+
+
+class ConnectionPatchRequest(_RequestModel):
+    """版本受控的非 Secret 连接编辑，未知字段一律拒绝。"""
+
+    expected_version: int = Field(gt=0)
+    display_name: str | None = Field(default=None, min_length=1, max_length=200)
+    workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
+    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] | None = None
+    api_host: str | None = Field(default=None, max_length=300)
+    region: Literal["cn-beijing"] | None = None
+    request_budget: int | None = Field(default=None, ge=1, le=20)
+    token_budget: int | None = Field(default=None, ge=1, le=1_000_000)
+    enabled: bool | None = None
 
 
 class ValidationRequest(_RequestModel):
@@ -94,6 +129,7 @@ class ValidationRequest(_RequestModel):
     operation: Literal["embedding.document", "embedding.query", "reranking"]
     model: str = Field(min_length=1, max_length=200)
     expected_dimension: int | None = Field(default=None, gt=0)
+    request_policy: dict[str, object] = Field(default_factory=dict)
 
 
 class RetrievalProfileRequest(_RequestModel):
@@ -241,15 +277,94 @@ def _register_auth_middleware(
     runtime: ProductRuntime,
     config: _AuthConfig,
 ) -> None:
+    limiter = RequestRateLimiter()
+
     @app.middleware("http")
     async def _product_auth(
         request: Request,
         call_next: Callable[[Request], Awaitable[StarletteResponse]],
     ) -> StarletteResponse:
+        security_error = _request_security_error(request, runtime, limiter)
+        if security_error is not None:
+            return _apply_security_headers(request, security_error, runtime)
         auth_error = _authenticate_request(request, runtime, config)
         if auth_error is not None:
-            return auth_error
-        return await call_next(request)
+            return _apply_security_headers(request, auth_error, runtime)
+        response = await call_next(request)
+        return _apply_security_headers(request, response, runtime)
+
+
+def _request_security_error(
+    request: Request,
+    runtime: ProductRuntime,
+    limiter: RequestRateLimiter,
+) -> StarletteResponse | None:
+    hostname = request.url.hostname
+    peer = request.client.host if request.client else ""
+    loopback_request = _is_loopback(hostname) and (
+        _is_loopback(peer) or runtime.settings.trust_loopback_host_proxy
+    )
+    if not loopback_request and _effective_scheme(request, runtime) != "https":
+        return _policy_error(400, "TLS_REQUIRED", "非本机访问必须使用 HTTPS。")
+    if request.method not in _SAFE_METHODS:
+        origin = request.headers.get("Origin")
+        if (
+            origin is not None
+            and origin.rstrip("/") not in runtime.settings.trusted_origins
+        ):
+            return _policy_error(403, "ORIGIN_DENIED", "请求来源不受信任。")
+    bucket = _rate_limit_bucket(request.url.path, request.method)
+    if bucket is None:
+        return None
+    if limiter.allow(peer or "unknown", bucket, limit=_RATE_LIMITS[bucket]):
+        return None
+    response = _policy_error(
+        _HTTP_TOO_MANY_REQUESTS,
+        "RATE_LIMITED",
+        "请求过于频繁。",
+    )
+    response.headers["Retry-After"] = "60"
+    return response
+
+
+def _rate_limit_bucket(path: str, method: str) -> str | None:
+    if method == "POST" and path.endswith(":validate"):
+        return "provider-test"
+    if method == "POST" and path.endswith((":search", ":answer")):
+        return "query"
+    if method == "POST" and "/documents" in path:
+        return "upload"
+    return None
+
+
+def _effective_scheme(request: Request, runtime: ProductRuntime) -> str:
+    peer = request.client.host if request.client else ""
+    if peer in runtime.settings.trusted_proxies:
+        forwarded = request.headers.get("X-Forwarded-Proto", "")
+        if forwarded in {"http", "https"}:
+            return forwarded
+    return request.url.scheme
+
+
+def _apply_security_headers(
+    request: Request,
+    response: StarletteResponse,
+    runtime: ProductRuntime,
+) -> StarletteResponse:
+    response.headers["Content-Security-Policy"] = _CONTENT_SECURITY_POLICY
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+    if _effective_scheme(request, runtime) == "https":
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    return response
 
 
 def _authenticate_request(
@@ -276,15 +391,17 @@ def _authenticate_request(
         _replace_authorization(request, expected)
         return None
     try:
-        project_id, knowledge_base_id = _scope_from_path(path)
-        runtime.auth.authorize_access_token(
+        route = resolve_token_route(request, runtime)
+        principal = runtime.auth.authorize_access_token(
             token,
-            required_scope=_required_scope(path, request.method),
-            project_id=project_id,
-            knowledge_base_id=knowledge_base_id,
+            required_scope=route.scope,
+            project_id=route.project_id,
+            knowledge_base_id=route.knowledge_base_id,
         )
     except PolicyDenied:
         return _auth_error(403, "TOKEN_DENIED")
+    request.state.product_principal = "external_token"
+    request.state.access_token_id = principal.token_id
     _replace_authorization(request, expected)
     return None
 
@@ -305,6 +422,7 @@ def _authenticate_session(
         runtime.auth.validate_session(cookie, csrf_token=csrf)
     except PolicyDenied:
         return _auth_error(401, "CONSOLE_SESSION_REQUIRED")
+    request.state.product_principal = "admin_session"
     _replace_authorization(request, expected)
     return None
 
@@ -314,6 +432,7 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     _register_provider_routes(app, runtime)
     _register_profile_routes(app, runtime)
     _register_access_token_routes(app, runtime)
+    register_provider_budget_routes(app, runtime)
 
 
 def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
@@ -449,6 +568,7 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             credential_id, body.secret_value
         )
         runtime.providers.invalidate_credential(credential_id)
+        runtime.profiles.invalidate()
         return credential.model_dump(mode="json")
 
     @app.get("/api/v1/provider-connections", tags=["model-services"])
@@ -466,9 +586,47 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         status_code=201,
     )
     def _create_connection(body: ConnectionRequest) -> dict[str, object]:
-        connection = runtime.control.create_connection(
-            ProviderConnectionDraft(**body.model_dump())
+        if (body.credential_id is None) == (body.credential is None):
+            raise ValueError("请选择已有凭据或提供新凭据。")
+        draft = validate_connection_metadata(
+            ProviderConnectionDraft(
+                **body.model_dump(exclude={"credential", "credential_id"}),
+                credential_id=body.credential_id or "pending-new-credential",
+            )
         )
+        if body.credential is None:
+            return runtime.control.create_connection(draft).model_dump(
+                mode="json"
+            )
+        if body.credential.provider_type != body.provider_type:
+            raise ValueError("Credential 与 Provider 类型不匹配。")
+        credential = _create_credential(body.credential)
+        credential_id = str(credential["credential_id"])
+        try:
+            connection = runtime.control.create_connection(
+                draft.model_copy(update={"credential_id": credential_id})
+            )
+        except Exception:
+            # 只补偿本次调用新建且未被引用的凭据；保留已有共享凭据。
+            runtime.credentials.remove_new_orphan(credential_id)
+            raise
+        return connection.model_dump(mode="json")
+
+    @app.patch(
+        "/api/v1/provider-connections/{connection_id}", tags=["model-services"]
+    )
+    def _update_connection(
+        connection_id: str, body: ConnectionPatchRequest
+    ) -> dict[str, object]:
+        connection = runtime.control.update_connection(
+            connection_id,
+            expected_version=body.expected_version,
+            changes=body.model_dump(
+                exclude_unset=True, exclude={"expected_version"}
+            ),
+        )
+        runtime.providers.invalidate_connection(connection_id)
+        runtime.profiles.invalidate()
         return connection.model_dump(mode="json")
 
     @app.post(
@@ -487,10 +645,26 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         tags=["model-services"],
     )
     def _validations(connection_id: str) -> dict[str, object]:
+        connection = runtime.control.get_connection(connection_id)
+        credential = runtime.credentials.get(connection.credential_id)
+        return {
+            "items": [
+                {
+                    **item.model_dump(mode="json"),
+                    "is_current": validation_is_current(
+                        item, connection, credential.key_version
+                    ),
+                }
+                for item in runtime.control.list_validations(connection_id)
+            ]
+        }
+
+    @app.get("/api/v1/provider-usage/daily", tags=["model-services"])
+    def _daily_provider_usage() -> dict[str, object]:
         return {
             "items": [
                 item.model_dump(mode="json")
-                for item in runtime.control.list_validations(connection_id)
+                for item in runtime.control.list_daily_provider_usage()
             ]
         }
 
@@ -503,7 +677,12 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     def _profiles(knowledge_base_id: str) -> dict[str, object]:
         return {
             "items": [
-                item.model_dump(mode="json")
+                {
+                    **item.model_dump(mode="json"),
+                    "effective_serving_fingerprint": (
+                        runtime.profiles.serving_contract(item)[2]
+                    ),
+                }
                 for item in runtime.control.list_profiles(knowledge_base_id)
             ]
         }
@@ -517,13 +696,20 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         knowledge_base_id: str,
         body: RetrievalProfileRequest,
     ) -> dict[str, object]:
-        profile = runtime.control.create_profile(
-            RetrievalProfileDraft(
-                knowledge_base_id=knowledge_base_id,
-                **body.model_dump(),
+        try:
+            profile = runtime.control.create_profile(
+                RetrievalProfileDraft(
+                    knowledge_base_id=knowledge_base_id, **body.model_dump()
+                )
             )
-        )
-        return profile.model_dump(mode="json")
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return {
+            **profile.model_dump(mode="json"),
+            "effective_serving_fingerprint": runtime.profiles.serving_contract(
+                profile
+            )[2],
+        }
 
     @app.get(
         "/api/v1/retrieval-profiles/{profile_revision_id}:preview",
@@ -546,7 +732,14 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             profile_revision_id,
             confirmed_impact=body.confirmed_impact,
         )
-        return profile.model_dump(mode="json")
+        if profile.activation_job_id is not None and profile.status == "draft":
+            runtime.jobs.submit(profile.activation_job_id)
+        return {
+            **profile.model_dump(mode="json"),
+            "effective_serving_fingerprint": runtime.profiles.serving_contract(
+                profile
+            )[2],
+        }
 
 
 def _register_access_token_routes(
@@ -610,29 +803,6 @@ def _bearer_token(header: str | None) -> str | None:
     return token
 
 
-def _required_scope(path: str, method: str) -> str:
-    if path.endswith((":search", ":answer")):
-        return "query:read"
-    if path.startswith(("/api/v1/system", "/api/v1/provider")):
-        return "system:read"
-    return "knowledge:read" if method in _SAFE_METHODS else "knowledge:write"
-
-
-def _scope_from_path(path: str) -> tuple[str | None, str | None]:
-    parts = path.strip("/").split("/")
-    project_id = None
-    knowledge_base_id = None
-    if "projects" in parts:
-        index = parts.index("projects")
-        if len(parts) > index + 1:
-            project_id = parts[index + 1]
-    if "knowledge-bases" in parts:
-        index = parts.index("knowledge-bases")
-        if len(parts) > index + 1:
-            knowledge_base_id = parts[index + 1].split(":", maxsplit=1)[0]
-    return project_id, knowledge_base_id
-
-
 def _auth_error(status_code: int, code: str) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -649,8 +819,30 @@ def _auth_error(status_code: int, code: str) -> JSONResponse:
     )
 
 
+def _policy_error(status_code: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "code": code,
+                "message": message,
+                "stage": "http.security",
+                "retryable": status_code == _HTTP_TOO_MANY_REQUESTS,
+                "trace_id": "",
+                "details": {},
+            }
+        },
+    )
+
+
 def _is_loopback(hostname: str | None) -> bool:
-    return hostname in {"127.0.0.1", "localhost", "::1", "testserver"}
+    return hostname in {
+        "127.0.0.1",
+        "localhost",
+        "::1",
+        "testclient",
+        "testserver",
+    }
 
 
 __all__ = [

@@ -8,10 +8,12 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
+from rag_app.adapters.providers.aliyun_contract import decode_embeddings
 from rag_app.adapters.providers.aliyun_qwen37 import (
     AliyunQwen37EmbeddingAdapter,
     AliyunQwen37EmbeddingConfig,
 )
+from rag_app.adapters.providers.batching import estimate_tokens
 from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.core.errors import (
     ConfigurationError,
@@ -20,7 +22,11 @@ from rag_app.core.errors import (
     ProviderRateLimited,
     ProviderUnavailable,
 )
-from rag_app.core.models import EmbeddingRequest, EmbeddingRequestRole
+from rag_app.core.models import (
+    EmbeddingRequest,
+    EmbeddingRequestRole,
+    ProviderCall,
+)
 
 _DIMENSION = 1024
 _INSTRUCTION = (
@@ -39,6 +45,7 @@ def _http(
     handler: Callable[[httpx.Request], httpx.Response],
     *,
     max_attempts: int = 3,
+    observer: Callable[[ProviderCall], None] | None = None,
 ) -> ProviderHttpClient:
     return ProviderHttpClient(
         "https://workspace-1.cn-beijing.maas.aliyuncs.com",
@@ -46,6 +53,8 @@ def _http(
         max_attempts=max_attempts,
         sleeper=lambda _: None,
         random_value=lambda: 0.0,
+        observer=observer,
+        defer_success_observation=True,
     )
 
 
@@ -59,6 +68,7 @@ def _config(**updates: object) -> AliyunQwen37EmbeddingConfig:
     return config.model_copy(update=updates)
 
 
+@pytest.mark.parametrize("sdk_envelope", (False, True))
 @pytest.mark.parametrize(
     ("role", "text_type", "has_instruct"),
     (
@@ -71,10 +81,12 @@ def test_native_request_role_endpoint_and_reordering(
     role: EmbeddingRequestRole,
     text_type: str,
     has_instruct: bool,
+    sdk_envelope: bool,
 ) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     observed: dict[str, object] = {}
     urls: list[str] = []
+    events: list[ProviderCall] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed.update(json.loads(request.content))
@@ -82,9 +94,11 @@ def test_native_request_role_endpoint_and_reordering(
         return httpx.Response(
             200,
             json={
-                "status_code": 200,
-                "code": "",
-                "message": "",
+                **(
+                    {"status_code": 200, "code": "", "message": ""}
+                    if sdk_envelope
+                    else {}
+                ),
                 "output": {
                     "embeddings": [
                         {"text_index": 1, "embedding": _unit(1)},
@@ -96,7 +110,7 @@ def test_native_request_role_endpoint_and_reordering(
         )
 
     adapter = AliyunQwen37EmbeddingAdapter(
-        _config(), http_client=_http(handler)
+        _config(), http_client=_http(handler, observer=events.append)
     )
     result = adapter.embed(
         EmbeddingRequest(
@@ -122,6 +136,12 @@ def test_native_request_role_endpoint_and_reordering(
         assert parameters["instruct"] == _INSTRUCTION
     assert result.vectors[0][0] == 1.0
     assert result.vectors[1][1] == 1.0
+    expected_tokens = sum(estimate_tokens(text) for text in ("first", "second"))
+    if has_instruct:
+        expected_tokens += 2 * estimate_tokens(_INSTRUCTION)
+    assert result.calls[0].estimated_tokens == expected_tokens
+    assert result.calls[0].observed_tokens == 2
+    assert events == [result.calls[0]]
     assert all(
         math.isclose(math.sqrt(sum(value * value for value in vector)), 1.0)
         for vector in result.vectors
@@ -147,10 +167,9 @@ def test_native_request_uses_configured_env_names_and_query_instruct(
                 "status_code": 200,
                 "code": "",
                 "output": {
-                    "embeddings": [
-                        {"text_index": 0, "embedding": _unit()}
-                    ]
+                    "embeddings": [{"text_index": 0, "embedding": _unit()}]
                 },
+                "usage": {"total_tokens": 3},
             },
         )
 
@@ -179,19 +198,73 @@ def test_native_request_uses_configured_env_names_and_query_instruct(
 
 
 @pytest.mark.parametrize(
+    "status_fields",
+    (
+        {"code": "InvalidApiKey"},
+        {"status_code": 500, "code": ""},
+        {"status_code": 200, "code": "BusinessError"},
+        {"status_code": 200},
+        {"code": ""},
+        {"status_code": None, "code": None},
+    ),
+)
+def test_valid_vector_cannot_mask_explicit_or_partial_business_error(
+    status_fields: dict[str, object],
+) -> None:
+    payload = {
+        **status_fields,
+        "output": {"embeddings": [{"text_index": 0, "embedding": _unit()}]},
+        "usage": {"total_tokens": 23},
+    }
+    with pytest.raises(ValueError, match="业务状态"):
+        decode_embeddings(payload, expected_count=1, dimension=_DIMENSION)
+
+
+@pytest.mark.parametrize(
+    "entries",
+    (
+        [],
+        [{"text_index": 0, "embedding": [1.0]}],
+        [{"text_index": 0, "embedding": [0.0] * _DIMENSION}],
+        [{"text_index": 0, "embedding": [float("nan")] * _DIMENSION}],
+        [{"text_index": 1, "embedding": _unit()}],
+        [
+            {"text_index": 0, "embedding": _unit()},
+            {"text_index": 0, "embedding": _unit()},
+        ],
+    ),
+)
+def test_raw_http_response_still_requires_valid_vector_contract(
+    entries: list[dict[str, object]],
+) -> None:
+    payload = {"output": {"embeddings": entries}, "usage": {"total_tokens": 23}}
+    with pytest.raises(ValueError):
+        decode_embeddings(payload, expected_count=1, dimension=_DIMENSION)
+
+
+@pytest.mark.parametrize(
     "payload",
     (
         {"status_code": 500, "code": "InternalError", "output": {}},
         {"status_code": 200, "code": "BadCode", "output": {}},
-        {"status_code": 200, "code": "", "output": None},
+        {
+            "status_code": 200,
+            "output": {},
+            "usage": {"total_tokens": 1},
+        },
+        {
+            "status_code": 200,
+            "code": "",
+            "output": None,
+            "usage": {"total_tokens": 1},
+        },
         {
             "status_code": 200,
             "code": "",
             "output": {
-                "embeddings": [
-                    {"text_index": 0, "embedding": [0.0] * 1024}
-                ]
+                "embeddings": [{"text_index": 0, "embedding": [0.0] * 1024}]
             },
+            "usage": {"total_tokens": 1},
         },
     ),
 )
@@ -199,11 +272,15 @@ def test_native_response_rejects_bad_status_code_output_or_vector(
     monkeypatch: pytest.MonkeyPatch, payload: dict[str, object]
 ) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
+    events: list[ProviderCall] = []
     adapter = AliyunQwen37EmbeddingAdapter(
         _config(),
-        http_client=_http(lambda _: httpx.Response(200, json=payload)),
+        http_client=_http(
+            lambda _: httpx.Response(200, json=payload),
+            observer=events.append,
+        ),
     )
-    with pytest.raises(ProviderInvalidResponse):
+    with pytest.raises(ProviderInvalidResponse) as captured:
         adapter.embed(
             EmbeddingRequest(
                 slot_id="standby",
@@ -212,6 +289,8 @@ def test_native_response_rejects_bad_status_code_output_or_vector(
             )
         )
     adapter.close()
+    assert events == [captured.value.provider_call]
+    assert events[0].status_category == "RESPONSE_CONTRACT"
 
 
 def test_native_response_restores_text_index_and_rejects_duplicate(
@@ -232,6 +311,7 @@ def test_native_response_restores_text_index_and_rejects_duplicate(
                             {"text_index": 0, "embedding": _unit(1)},
                         ]
                     },
+                    "usage": {"total_tokens": 2},
                 },
             )
         ),
@@ -245,6 +325,57 @@ def test_native_response_restores_text_index_and_rejects_duplicate(
             )
         )
     adapter.close()
+
+
+@pytest.mark.parametrize(
+    "usage",
+    (
+        None,
+        {},
+        {"total_tokens": None},
+        {"total_tokens": True},
+        {"total_tokens": 0},
+        {"total_tokens": 1.5},
+        {"total_tokens": 1 << 63},
+    ),
+)
+def test_native_response_rejects_missing_or_invalid_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    usage: object,
+) -> None:
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
+    events: list[ProviderCall] = []
+    adapter = AliyunQwen37EmbeddingAdapter(
+        _config(),
+        http_client=_http(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "status_code": 200,
+                    "code": "",
+                    "output": {
+                        "embeddings": [{"text_index": 0, "embedding": _unit()}]
+                    },
+                    "usage": usage,
+                },
+            ),
+            observer=events.append,
+        ),
+    )
+
+    with pytest.raises(ProviderInvalidResponse) as captured:
+        adapter.embed(
+            EmbeddingRequest(
+                slot_id="standby",
+                role=EmbeddingRequestRole.QUERY,
+                texts=("query",),
+            )
+        )
+    adapter.close()
+
+    assert events == [captured.value.provider_call]
+    assert events[0].status_category == "RESPONSE_CONTRACT"
+    assert events[0].observed_tokens is None
 
 
 @pytest.mark.parametrize("status", (401, 429, 503))
