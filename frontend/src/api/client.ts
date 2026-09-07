@@ -13,6 +13,8 @@ export type RetrievalDiagnostics =
   components["schemas"]["RetrievalDiagnostics"];
 export type SystemStatus = components["schemas"]["SystemStatus"];
 export type Evidence = components["schemas"]["EvidenceItem"];
+export type RelatedContent = components["schemas"]["RelatedContent"];
+export type SourceChunk = components["schemas"]["Chunk"];
 
 export interface Page<T> {
   items: T[];
@@ -431,6 +433,37 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/revisions/${revisionId}/chunks`,
       token,
     ),
+  readRelatedSource: async (
+    token: string,
+    projectId: string,
+    kbId: string,
+    related: RelatedContent,
+    signal?: AbortSignal,
+  ): Promise<SourceChunk> => {
+    const params = new URLSearchParams({
+      chunk_id: related.chunk_id,
+      document_id: related.document_id,
+      page_size: "1",
+    });
+    const page = await request<ChunkPage>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/revisions/${related.index_revision_id}/chunks?${params}`,
+      token,
+      { signal },
+    );
+    const chunk = page.items[0];
+    if (
+      !chunk ||
+      chunk.chunk_id !== related.chunk_id ||
+      chunk.project_id !== projectId ||
+      chunk.knowledge_base_id !== kbId ||
+      chunk.index_revision_id !== related.index_revision_id ||
+      chunk.version.document_id !== related.document_id ||
+      chunk.version.document_version_id !== related.document_version_id
+    ) {
+      throw new Error("原文当前不可读取，请重新查询。");
+    }
+    return chunk;
+  },
   revisionReports: (
     token: string,
     projectId: string,
@@ -447,11 +480,20 @@ export const api = {
     kbId: string,
     query: string,
     signal?: AbortSignal,
+    includeRelatedContent = false,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:search`,
       token,
-      { ...jsonInit("POST", { query, limit: 10, stream: false }), signal },
+      {
+        ...jsonInit("POST", {
+          query,
+          limit: 10,
+          stream: false,
+          ...(includeRelatedContent ? { include_related_content: true } : {}),
+        }),
+        signal,
+      },
     ),
   answer: (
     token: string,
@@ -459,11 +501,20 @@ export const api = {
     kbId: string,
     query: string,
     signal?: AbortSignal,
+    includeRelatedContent = false,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
       token,
-      { ...jsonInit("POST", { query, limit: 10, stream: false }), signal },
+      {
+        ...jsonInit("POST", {
+          query,
+          limit: 10,
+          stream: false,
+          ...(includeRelatedContent ? { include_related_content: true } : {}),
+        }),
+        signal,
+      },
     ),
   answerStream: async (
     token: string,
@@ -471,9 +522,15 @@ export const api = {
     kbId: string,
     query: string,
     signal?: AbortSignal,
+    includeRelatedContent = false,
   ) => {
     void token;
-    const init = jsonInit("POST", { query, limit: 10, stream: true });
+    const init = jsonInit("POST", {
+      query,
+      limit: 10,
+      stream: true,
+      ...(includeRelatedContent ? { include_related_content: true } : {}),
+    });
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
     const response = await fetch(

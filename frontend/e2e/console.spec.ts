@@ -17,6 +17,166 @@ async function navigate(page: Page, name: string) {
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
+import type { ChunkPage, QueryResponse } from "../src/api/client";
+
+test("相关内容 unit_synthetic 提示与真实授权原文入口", async ({
+  page,
+}, testInfo) => {
+  await authenticate(page);
+  await createScope(page, `related-${testInfo.project.name}`);
+  await uploadAndWait(
+    page,
+    "隐私手册.docx",
+    "隐私专员负责处理数据访问请求与投诉。",
+  );
+  const scopeUrl = new URL(page.url());
+  const project = scopeUrl.searchParams.get("project")!;
+  const kb = scopeUrl.searchParams.get("knowledgeBase")!;
+  const base = `/api/v1/projects/${project}/knowledge-bases/${kb}`;
+  const session = (await (
+    await page.request.get("/api/v1/console/session")
+  ).json()) as { csrf_token: string };
+  const headers = {
+    "X-CSRF-Token": session.csrf_token,
+    Origin: scopeUrl.origin,
+  };
+  const kbResponse = (await (await page.request.get(base)).json()) as {
+    active_index_revision_id: string;
+  };
+  const revision = kbResponse.active_index_revision_id;
+  const chunkResponse = await page.request.get(
+    `${base}/revisions/${revision}/chunks`,
+  );
+  expect(chunkResponse.ok(), await chunkResponse.text()).toBeTruthy();
+  const chunk = ((await chunkResponse.json()) as ChunkPage).items[0];
+  const baselineResponse = await page.request.post(`${base}:answer`, {
+    headers,
+    data: { query: "隐私专员" },
+  });
+  expect(baselineResponse.ok(), await baselineResponse.text()).toBeTruthy();
+  const baseline = (await baselineResponse.json()) as QueryResponse;
+  const related = {
+    related_id: "related_unit_synthetic",
+    document_id: chunk.version.document_id,
+    document_version_id: chunk.version.document_version_id,
+    index_revision_id: revision,
+    chunk_id: chunk.chunk_id,
+    document_name: "隐私手册.docx",
+    heading_path: chunk.heading_path,
+    excerpt: chunk.citation_text,
+    source_spans: chunk.source_spans,
+    is_answer_evidence: false as const,
+    relevance_reason: "RELEVANCE_UNVERIFIED" as const,
+    rerank_verified: false,
+  };
+  const notice =
+    "本次检索未找到足以直接回答这个问题的依据。下面这些内容可能相关，供你查阅。";
+  const dependency =
+    "重排服务暂时不可用，这次未能可靠确认答案。你可以先查看下面检索到的内容。";
+  const empty =
+    "本次检索未找到足够相关的内容。可以补充关键词，或检查当前知识库是否包含所需资料。";
+  const outcomes: Partial<QueryResponse>[] = [
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: notice,
+    },
+    {
+      status: "PROVIDER_UNAVAILABLE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: dependency,
+    },
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [],
+      display_message: empty,
+    },
+    {
+      status: "ANSWERABLE",
+      answer: "隐私专员负责处理数据访问请求与投诉。",
+      related_contents: [],
+      display_message: null,
+    },
+    {
+      status: "INSUFFICIENT_EVIDENCE",
+      answer: null,
+      evidence: [],
+      related_contents: [related],
+      display_message: notice,
+    },
+  ];
+  let answerRequests = 0;
+  await page.route(`**${base}:answer`, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({
+      include_related_content: true,
+    });
+    const outcome = outcomes[answerRequests++];
+    expect(outcome).toBeDefined();
+    await route.fulfill({
+      json: {
+        ...baseline,
+        ...outcome,
+        evidence_count: outcome.evidence?.length ?? baseline.evidence_count,
+      },
+    });
+  });
+  await navigate(page, "问答");
+  const submit = async () => {
+    await page.getByLabel("查询文本").fill("隐私专员电话");
+    await page.getByRole("button", { name: "执行", exact: true }).click();
+  };
+  await submit();
+  await expect(page.getByText(notice)).toBeVisible();
+  await testInfo.attach("related-content-preview", {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  await expect(
+    page.getByRole("region", { name: "正式答案", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "查看原文" }).click();
+  await expect(
+    page.getByRole("region", { name: "相关原文详情" }),
+  ).toContainText(chunk.citation_text);
+  await page.getByRole("button", { name: "关闭原文" }).click();
+  await submit();
+  await expect(page.getByText(dependency)).toBeVisible();
+  await expect(page.getByText("未完成相关性复核，仅供查阅。")).toBeVisible();
+  await submit();
+  await expect(page.getByText(empty)).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toHaveCount(0);
+  await submit();
+  await expect(
+    page.getByRole("region", { name: "正式答案", exact: true }),
+  ).toHaveAttribute("data-raw-answer", "隐私专员负责处理数据访问请求与投诉。");
+  await submit();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toBeVisible();
+  const deleted = await page.request.delete(
+    `${base}/documents/${chunk.version.document_id}`,
+    { headers },
+  );
+  expect(deleted.ok(), await deleted.text()).toBeTruthy();
+  await page.getByRole("button", { name: "查看原文" }).click();
+  await expect(page.getByText("原文当前不可读取。")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "相关内容", exact: true }),
+  ).toHaveCount(0);
+  expect(answerRequests).toBe(5);
+  const persisted = await page.evaluate(() =>
+    JSON.stringify({ ...localStorage, ...sessionStorage }),
+  );
+  expect(persisted).not.toContain(chunk.citation_text);
+});
 
 const contentTypes = `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -250,12 +410,21 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await page.getByLabel("查询文本").fill("青岛啤酒");
   await page.getByRole("button", { name: "执行" }).click();
 
-  const evidence = page
+  const candidates = page.getByRole("region", { name: "检索候选" });
+  await expect(candidates).toHaveAttribute(
+    "data-content-role",
+    "diagnostic-evidence",
+  );
+  await expect(page.getByRole("region", { name: "引用依据" })).toHaveCount(0);
+  const evidence = candidates
     .getByRole("button", { name: /青岛啤酒采购流程/ })
     .first();
   await expect(evidence).toBeVisible();
   await expect(page.getByText("无关噪声.docx")).toHaveCount(0);
   await evidence.click();
+  await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
+    "检索候选（未发布）",
+  );
   await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
     "青岛啤酒采购流程",
   );

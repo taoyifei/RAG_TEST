@@ -1635,6 +1635,11 @@
         "additionalProperties": false,
         "description": "有界 Search/Answer 请求。",
         "properties": {
+          "include_related_content": {
+            "default": false,
+            "title": "Include Related Content",
+            "type": "boolean"
+          },
           "limit": {
             "default": 10,
             "maximum": 50.0,
@@ -1715,6 +1720,17 @@
               }
             ]
           },
+          "display_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Message"
+          },
           "evidence": {
             "default": [],
             "items": {
@@ -1773,6 +1789,15 @@
             "minLength": 1,
             "title": "Reason Code",
             "type": "string"
+          },
+          "related_contents": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RelatedContent"
+            },
+            "maxItems": 3,
+            "title": "Related Contents",
+            "type": "array"
           },
           "rerank_execution_mode": {
             "title": "Rerank Execution Mode",
@@ -1866,6 +1891,96 @@
           "quality_profile_status"
         ],
         "title": "QueryResponse",
+        "type": "object"
+      },
+      "RelatedContent": {
+        "additionalProperties": false,
+        "description": "本次未获得答案资格的独立原文预览；不能送入生成器。",
+        "properties": {
+          "chunk_id": {
+            "pattern": "^chunk_[0-9a-f]{32}$",
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_id": {
+            "pattern": "^doc_[0-9a-f]{32}$",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_name": {
+            "title": "Document Name",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "excerpt": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Excerpt",
+            "type": "string"
+          },
+          "heading_path": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Heading Path",
+            "type": "array"
+          },
+          "index_revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Index Revision Id",
+            "type": "string"
+          },
+          "is_answer_evidence": {
+            "const": false,
+            "default": false,
+            "title": "Is Answer Evidence",
+            "type": "boolean"
+          },
+          "related_id": {
+            "pattern": "^related_[0-9a-f]{32}$",
+            "title": "Related Id",
+            "type": "string"
+          },
+          "relevance_reason": {
+            "enum": [
+              "KEYWORD_RELATED",
+              "SEMANTIC_CANDIDATE",
+              "RELEVANCE_UNVERIFIED"
+            ],
+            "title": "Relevance Reason",
+            "type": "string"
+          },
+          "rerank_verified": {
+            "default": false,
+            "title": "Rerank Verified",
+            "type": "boolean"
+          },
+          "source_spans": {
+            "items": {
+              "$ref": "#/components/schemas/SourceSpan"
+            },
+            "minItems": 1,
+            "title": "Source Spans",
+            "type": "array"
+          }
+        },
+        "required": [
+          "related_id",
+          "document_id",
+          "document_version_id",
+          "index_revision_id",
+          "chunk_id",
+          "document_name",
+          "excerpt",
+          "source_spans",
+          "relevance_reason"
+        ],
+        "title": "RelatedContent",
         "type": "object"
       },
       "RenameDocumentRequest": {
@@ -8955,6 +9070,22 @@
                 }
               ],
               "title": "Document Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "chunk_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Chunk Id"
             }
           },
           {

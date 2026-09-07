@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import sqlite3
 import stat
 import tarfile
 import tempfile
-from dataclasses import asdict, dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -28,6 +31,9 @@ _MAX_SECRET_LENGTH = 4096
 _BLOB_PATH_PARTS = 3
 _SHA256_HEX_LENGTH = 64
 _CAS_PREFIX_LENGTH = 2
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_RECEIPT_MODE = 0o600
+_MAX_RECEIPT_BYTES = 4096
 _SECRET_NAMES = frozenset(
     {"master-key", "admin-bootstrap-token", "qdrant-api-key", "qdrant.yaml"}
 )
@@ -79,7 +85,8 @@ def create_backup(
     output.parent.mkdir(parents=True, exist_ok=True)
     api_key = _read_private_secret(qdrant_api_key_file)
     with tempfile.TemporaryDirectory(prefix="rag-backup-") as temporary:
-        staging = Path(temporary)
+        staging = Path(temporary) / "payload"
+        staging.mkdir(mode=0o700)
         sqlite_target = staging / "sqlite" / _DATABASE_NAME
         sqlite_target.parent.mkdir()
         _sqlite_snapshot(database, sqlite_target)
@@ -120,18 +127,27 @@ def create_backup(
             ),
             encoding="utf-8",
         )
-        with tarfile.open(output, "x:gz") as archive:
+        created_archive = Path(temporary) / "created.tar.gz"
+        with tarfile.open(created_archive, "x:gz") as archive:
             for path in sorted(staging.rglob("*")):
                 archive.add(
                     path,
                     arcname=path.relative_to(staging).as_posix(),
                     recursive=False,
                 )
+        # 收据只依据本流程私有目录中的产物，不能依据可被替换的输出路径。
+        _verify_archive(created_archive)
+        with (
+            created_archive.open("rb") as archive_source,
+            output.open("xb") as archive_target,
+        ):
+            shutil.copyfileobj(archive_source, archive_target)
+        _record_created_archive(created_archive)
     return verify_backup(output)
 
 
 def verify_backup(archive_path: Path) -> BackupReport:
-    """校验归档成员、SHA、SQLite 完整性和 Secret 排除。
+    """先核验外置信任收据，再校验归档成员与 SQLite 完整性。
 
     Args:
         archive_path: 待验证的统一备份归档。
@@ -140,10 +156,16 @@ def verify_backup(archive_path: Path) -> BackupReport:
         验证通过后的安全报告。
 
     Raises:
-        ValueError: 归档结构、摘要或 SQLite 完整性失败。
+        ValueError: 来源未获信任、归档结构、摘要或 SQLite 完整性失败。
 
     """
-    archive = _safe_file(archive_path, label="备份归档")
+    with _trusted_archive_copy(archive_path) as archive:
+        return replace(
+            _verify_archive(archive), archive=str(archive_path.absolute())
+        )
+
+
+def _verify_archive(archive: Path) -> BackupReport:
     with tempfile.TemporaryDirectory(prefix="rag-verify-") as temporary:
         root = Path(temporary)
         _safe_extract(archive, root)
@@ -215,7 +237,25 @@ def restore_backup(
         ValueError: 目标非空、Collection 已存在或恢复失败。
 
     """
-    report = verify_backup(archive_path)
+    with _trusted_archive_copy(archive_path) as archive:
+        report = _restore_trusted_archive(
+            archive_path=archive,
+            target_data_dir=target_data_dir,
+            qdrant_url=qdrant_url,
+            qdrant_api_key_file=qdrant_api_key_file,
+        )
+        return replace(report, archive=str(archive_path.absolute()))
+
+
+def _restore_trusted_archive(
+    *,
+    archive_path: Path,
+    target_data_dir: Path,
+    qdrant_url: str,
+    qdrant_api_key_file: Path,
+) -> BackupReport:
+    # 校验和恢复读取同一受控副本，原归档被替换也不会改变恢复输入。
+    report = _verify_archive(archive_path)
     target = _empty_target(target_data_dir)
     api_key = _read_private_secret(qdrant_api_key_file)
     with tempfile.TemporaryDirectory(prefix="rag-restore-") as temporary:
@@ -275,6 +315,99 @@ def restore_backup(
             shutil.rmtree(target)
             raise
     return report
+
+
+def _trust_directory(*, create: bool = False) -> Path:
+    """收据位于既有数据根外于归档的私有目录，不接受归档提供的路径。"""
+    data_root = Path(
+        os.environ.get(
+            "RAG_DATA_DIR", str(Path.home() / ".local/share/rag-app")
+        )
+    )
+    directory = data_root / "backup-trust"
+    _reject_symlink_ancestors(directory)
+    if create:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not directory.is_dir():
+        raise ValueError("备份缺少归档外可信来源创建收据。")
+    info = directory.stat()
+    if (
+        stat.S_IMODE(info.st_mode) != _PRIVATE_DIRECTORY_MODE
+        or info.st_uid != os.getuid()
+    ):
+        raise ValueError("备份可信来源目录必须由当前用户持有且权限为 0700。")
+    return directory
+
+
+def _reject_symlink_ancestors(path: Path) -> None:
+    if any(item.is_symlink() for item in (path, *path.parents)):
+        raise ValueError("备份路径及其祖先禁止 symlink。")
+
+
+def _record_created_archive(archive: Path) -> None:
+    """仅由实际创建流程保存归档完整摘要；不提供任意归档信任接口。"""
+    digest = _sha256(archive)
+    directory = _trust_directory(create=True)
+    receipt = directory / f"{digest}.json"
+    payload = {
+        "format_version": 1,
+        "source": "create_backup",
+        "archive_sha256": digest,
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    descriptor = os.open(
+        receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True)
+
+
+def _require_creation_receipt(digest: str) -> None:
+    receipt = _trust_directory() / f"{digest}.json"
+    try:
+        descriptor = os.open(
+            receipt, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        )
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            info = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or stat.S_IMODE(info.st_mode) != _PRIVATE_RECEIPT_MODE
+                or info.st_uid != os.getuid()
+                or info.st_size > _MAX_RECEIPT_BYTES
+            ):
+                raise ValueError("备份可信来源收据的权限或格式无效。")
+            payload = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError("备份缺少有效的归档外可信来源创建收据。") from error
+    if (
+        not isinstance(payload, dict)
+        or payload.get("format_version") != 1
+        or payload.get("source") != "create_backup"
+        or payload.get("archive_sha256") != digest
+    ):
+        raise ValueError("备份可信来源收据与完整归档摘要不一致。")
+
+
+@contextmanager
+def _trusted_archive_copy(archive_path: Path) -> Iterator[Path]:
+    """复制完整字节到私有目录，可信校验后所有数据库操作只读此副本。"""
+    _reject_symlink_ancestors(archive_path)
+    with tempfile.TemporaryDirectory(prefix="rag-trusted-backup-") as temporary:
+        snapshot = Path(temporary) / "archive.tar.gz"
+        try:
+            descriptor = os.open(
+                archive_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            )
+            with os.fdopen(descriptor, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise ValueError("备份归档必须是普通文件。")
+                with snapshot.open("xb") as target:
+                    shutil.copyfileobj(source, target)
+        except OSError as error:
+            raise ValueError("备份归档无法安全读取。") from error
+        _require_creation_receipt(_sha256(snapshot))
+        yield snapshot
 
 
 def _sqlite_snapshot(source: Path, target: Path) -> None:

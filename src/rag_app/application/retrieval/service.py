@@ -21,6 +21,13 @@ from rag_app.application.retrieval.hydration import CandidateHydrator
 from rag_app.application.retrieval.lexical import LexicalChannel
 from rag_app.application.retrieval.neighbors import NeighborExpander
 from rag_app.application.retrieval.planner import QueryPlanner
+from rag_app.application.retrieval.related import (
+    DISPLAY_POLICY,
+    related_display_message,
+    rerank_dependency_failed,
+    select_related_contents,
+    validate_candidate,
+)
 from rag_app.application.retrieval.reranking import CircuitAwareReranker
 from rag_app.core.errors import (
     ChannelRateLimited,
@@ -34,8 +41,10 @@ from rag_app.core.errors import (
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    ActiveRevisionQuerySnapshot,
     BaseResultCacheKey,
     ChannelHit,
+    Chunk,
     CircuitSnapshot,
     ConfidenceStatus,
     DiagnosticEvidenceItem,
@@ -47,12 +56,15 @@ from rag_app.core.models import (
     FusedCandidate,
     ProviderCall,
     ProviderCallCount,
+    ProviderFailureCategory,
     RankedChunk,
+    RelatedContent,
     RetrievalDiagnostics,
     RetrievalDiagnosticsSummary,
     RetrievalPolicy,
     SearchAnswerResult,
     SearchRequest,
+    SourceSpan,
     StageTiming,
 )
 from rag_app.core.models.common import freeze_json_object
@@ -105,7 +117,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "p11-evidence-support-v1",
+                "retrieval_implementation": "p11-related-content-v1",
             }
         )
         self._egress = egress_policy
@@ -223,14 +235,19 @@ class RetrievalService:
                 request.text.encode("utf-8")
             ).hexdigest(),
             metadata_filter_hash=canonical_sha256(request.metadata_filters),
-            access_filter_hash=canonical_sha256(request.access_filters),
+            access_filter_hash=canonical_sha256(
+                (request.access_filters, snapshot.excluded_document_ids)
+            ),
             conversation_identity=analysis.conversation_fingerprint,
             rewrite_policy_identity=rewrite_identity,
             cache_schema=self._policy.cache_schema_version,
+            include_related_content=request.include_related_content,
+            related_policy_version=DISPLAY_POLICY.version,
         )
         cache_key = cache_identity.persistent_key
         cached = self._cache.get(cache_key)
         if cached is not None:
+            self._validate_cached_sources(cached, request, snapshot)
             self._record(trace_id, "cache", {"result": "hit"})
             self._record(trace_id, "complete", {"status": cached.status.value})
             _finish_timing(stage_timings, "cache", stage_started)
@@ -371,6 +388,15 @@ class RetrievalService:
             _finish_timing(stage_timings, "vector_channel", channel_started)
         if len(channel_hits) > self._policy.max_channels:
             raise ValueError("检索实际通道数超过 P07 policy。")
+        # 软删除可先于索引回收；读取正文前排除已知撤销身份。
+        # 无删除记录却缺失或损坏的候选仍失败关闭。
+        excluded_documents = frozenset(snapshot.excluded_document_ids)
+        channel_hits = {
+            name: tuple(
+                hit for hit in hits if hit.document_id not in excluded_documents
+            )
+            for name, hits in channel_hits.items()
+        }
         fused = reciprocal_rank_fusion(
             channel_hits,
             expected_revision_id=snapshot.revision.index_revision_id,
@@ -510,12 +536,41 @@ class RetrievalService:
             stage_timings=tuple(stage_timings),
             degraded=tuple(dict.fromkeys(degraded)),
         )
+        related_contents: tuple[RelatedContent, ...] = ()
+        display_message = None
+        if (
+            request.include_related_content
+            and answer is None
+            and confidence.status
+            in (
+                ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                ConfidenceStatus.PROVIDER_UNAVAILABLE,
+            )
+            and not any("POLICY_DENIED" in reason for reason in degraded)
+            and "policy_denied" not in reranked.mode
+            and reranked.failure_category
+            is not ProviderFailureCategory.POLICY_DENIED
+        ):
+            related_contents = select_related_contents(
+                reranked.candidates,
+                request,
+                analysis,
+                revision_id=snapshot.revision.index_revision_id,
+                rerank_mode=reranked.mode,
+            )
+            display_message = related_display_message(
+                related_contents,
+                reranked.mode,
+                failure_category=reranked.failure_category,
+            )
         result = SearchAnswerResult(
             trace_id=trace_id,
             status=confidence.status,
             reason_code=confidence.status.value,
             answer=answer,
             evidence=evidence,
+            related_contents=related_contents,
+            display_message=display_message,
             confidence=confidence,
             query_kind=plan.query_kind,
             active_index_revision_id=snapshot.revision.index_revision_id,
@@ -531,15 +586,74 @@ class RetrievalService:
             diagnostics_summary=_diagnostics_summary(diagnostics),
             diagnostics=diagnostics,
         )
-        if result.status is ConfidenceStatus.ANSWERABLE:
+        if (
+            result.status is ConfidenceStatus.ANSWERABLE
+            and not rerank_dependency_failed(reranked.mode)
+        ):
             self._cache.put(cache_key, result, ttl_seconds=300)
         elif (
             result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
             and not result.degraded_reason_codes
+            and not rerank_dependency_failed(reranked.mode)
         ):
             self._cache.put(cache_key, result, ttl_seconds=30)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def _validate_cached_sources(
+        self,
+        result: SearchAnswerResult,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+    ) -> None:
+        """缓存正文返回前回读当前 canonical 身份和删除状态。"""
+        items: tuple[EvidenceItem | RelatedContent, ...] = (
+            *result.evidence,
+            *result.related_contents,
+        )
+        rows = self._source.hydrate_chunks(
+            snapshot, tuple(dict.fromkeys(item.chunk_id for item in items))
+        )
+        by_id = {row.chunk.chunk_id: row for row in rows}
+        for item in items:
+            row = by_id.get(item.chunk_id)
+            if row is None:
+                raise IndexCorrupt(
+                    "缓存原文已不可用。", stage="retrieval.cache"
+                )
+            validate_candidate(
+                RankedChunk(hydrated=row, fusion_rank=1),
+                request,
+                snapshot.revision.index_revision_id,
+            )
+            if (item.document_id, item.document_version_id) != (
+                row.chunk.version.document_id,
+                row.chunk.version.document_version_id,
+            ):
+                raise IndexCorrupt(
+                    "缓存文档版本失配。", stage="retrieval.cache"
+                )
+            for span in item.source_spans:
+                if not any(
+                    (
+                        _formal_span_is_current(row.chunk, original, span, item)
+                        if isinstance(item, EvidenceItem)
+                        else _span_is_current(original, span)
+                    )
+                    for original in row.chunk.source_spans
+                ):
+                    raise IndexCorrupt(
+                        "缓存原文范围失配。", stage="retrieval.cache"
+                    )
+            if isinstance(item, RelatedContent) and item.excerpt != "".join(
+                row.chunk.citation_text[
+                    span.chunk_start_char : span.chunk_end_char
+                ]
+                for span in item.source_spans
+            ):
+                raise IndexCorrupt(
+                    "缓存原文内容失配。", stage="retrieval.cache"
+                )
 
     def _record(
         self, trace_id: str, stage: str, attributes: dict[str, object]
@@ -553,6 +667,50 @@ class RetrievalService:
                 attributes=freeze_json_object(normalized),
             )
         )
+
+
+def _formal_span_is_current(
+    chunk: Chunk,
+    original: SourceSpan,
+    span: SourceSpan,
+    item: EvidenceItem,
+) -> bool:
+    """正式引用采用引用片段内偏移，来源身份和原文字节仍必须完全匹配。"""
+    quote = chunk.citation_text[
+        original.chunk_start_char : original.chunk_end_char
+    ]
+    return (
+        span
+        == original.model_copy(
+            update={"chunk_start_char": 0, "chunk_end_char": len(quote)}
+        )
+        and item.citation_text == quote
+    )
+
+
+def _span_is_current(original: SourceSpan, span: SourceSpan) -> bool:
+    if original == span:
+        return True
+    return (
+        original.span_type == span.span_type
+        and original.node_id == span.node_id
+        and original.source_anchor == span.source_anchor
+        and original.is_citable == span.is_citable
+        and original.is_repeated == span.is_repeated
+        and original.chunk_start_char
+        <= span.chunk_start_char
+        < span.chunk_end_char
+        <= original.chunk_end_char
+        and original.source_start_char is not None
+        and span.source_start_char
+        == original.source_start_char
+        + span.chunk_start_char
+        - original.chunk_start_char
+        and span.source_end_char
+        == original.source_start_char
+        + span.chunk_end_char
+        - original.chunk_start_char
+    )
 
 
 def _circuit_trace(

@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -24,6 +26,9 @@ from rag_app.adapters.providers.budget_ledger import (
 )
 from rag_app.adapters.providers.offline_mock_transport import (
     BuiltinOfflineMockTransport,
+)
+from rag_app.adapters.providers.transport_diagnostics import (
+    transport_diagnostics,
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.tokenization import estimate_tokens
@@ -303,6 +308,7 @@ class BudgetedTransport(httpx.BaseTransport):
                 # 恢复标记只限制真实出站；固定内存结果不消耗或重置累计账。
                 blocker = _LOCAL_BLOCKER.get()
                 if blocker is not None and blocker(request):
+                    request.extensions["rag_locally_blocked"] = True
                     raise httpx.ConnectTimeout(
                         "ACCEPTANCE_LOCALLY_BLOCKED", request=request
                     )
@@ -324,26 +330,48 @@ class BudgetedTransport(httpx.BaseTransport):
             step_id=binding.step_id,
             request=descriptor,
         )
+        request.extensions["rag_budget_attempt_id"] = attempt_id
         blocker = _LOCAL_BLOCKER.get() or binding.local_blocker
         if blocker is not None and blocker(request):
             binding.ledger.mark_locally_blocked(attempt_id)
+            request.extensions["rag_locally_blocked"] = True
             raise httpx.ConnectTimeout(
                 "ACCEPTANCE_LOCALLY_BLOCKED", request=request
             )
         binding.ledger.mark_forwarded(attempt_id)
+        started = time.monotonic()
         try:
             response = self._transport.handle_request(request)
             response.read()
-        except httpx.HTTPError:
-            binding.ledger.finish(attempt_id, status="TRANSPORT_ERROR")
+        except httpx.HTTPError as error:
+            _finish_safely(
+                binding.ledger,
+                attempt_id,
+                outcome={"status": "TRANSPORT_ERROR"},
+                diagnostics=transport_diagnostics(
+                    error,
+                    elapsed_ms=round((time.monotonic() - started) * 1000),
+                    extensions=request.extensions,
+                ),
+            )
             raise
         observed, request_id = _response_observation(response)
-        binding.ledger.finish(
+        _finish_safely(
+            binding.ledger,
             attempt_id,
-            status="HTTP_SUCCESS" if response.is_success else "HTTP_ERROR",
-            observed_tokens=observed,
-            request_id=request_id,
-            http_status=response.status_code,
+            outcome={
+                "status": "HTTP_SUCCESS"
+                if response.is_success
+                else "HTTP_ERROR",
+                "observed_tokens": observed,
+                "request_id": request_id,
+                "http_status": response.status_code,
+            },
+            diagnostics=transport_diagnostics(
+                None,
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+                extensions=request.extensions,
+            ),
         )
         return response
 
@@ -358,6 +386,22 @@ class BudgetedTransport(httpx.BaseTransport):
 
         """
         self._transport.close()
+
+
+def _finish_safely(
+    ledger: ProviderBudgetLedger,
+    attempt_id: str,
+    *,
+    outcome: dict[str, Any],
+    diagnostics: dict[str, Any],
+) -> None:
+    try:
+        ledger.finish(attempt_id, **outcome)
+        ledger.record_diagnostics(attempt_id, diagnostics)
+    except Exception:
+        # 预留/转发门禁仍强制执行；终态审计失败不能覆盖已有业务结果。
+        # 未完成记录保持已转发、usage 未知，不能释放已消耗的预算。
+        return
 
 
 def budgeted_client(

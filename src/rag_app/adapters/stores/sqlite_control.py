@@ -1617,6 +1617,13 @@ class SqliteControlStore:
                 "ORDER BY s.role, s.slot_id",
                 (revision_id,),
             ).fetchall()
+            excluded_documents = connection.execute(
+                "SELECT document_id FROM documents "
+                "WHERE project_id=? AND knowledge_base_id=? "
+                "AND (deleted_at IS NOT NULL OR status!='active' "
+                "OR lifecycle_status!='active') ORDER BY document_id",
+                (scope.project_id, scope.knowledge_base_id),
+            ).fetchall()
         try:
             topology = EmbeddingTopology.model_validate_json(
                 str(row["embedding_topology_json"])
@@ -1685,6 +1692,9 @@ class SqliteControlStore:
             exact_namespace=f"sqlite:{revision_id}",
             chunk_payload_schema=payload_schema,
             retrieval_policy=retrieval_policy,
+            excluded_document_ids=tuple(
+                str(item[0]) for item in excluded_documents
+            ),
         )
 
     def hydrate_chunks(
@@ -1719,7 +1729,9 @@ class SqliteControlStore:
                 "JOIN documents d ON d.document_id=c.document_id "
                 "WHERE c.revision_id=? AND c.chunk_id IN "
                 "(SELECT value FROM json_each(?)) "
-                "AND r.project_id=? AND r.knowledge_base_id=?",
+                "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.status='active' "
+                "AND d.lifecycle_status='active'",
                 (
                     revision.index_revision_id,
                     canonical_json(ordered),
@@ -2895,6 +2907,7 @@ class SqliteControlStore:
         revision_id: str,
         *,
         document_id: str | None,
+        chunk_id: str | None = None,
         role: str | None,
         section_id: str | None,
         neighbor_group_id: str | None,
@@ -2908,6 +2921,7 @@ class SqliteControlStore:
             knowledge_base_id: 期望知识库 ID。
             revision_id: 目标 Revision ID。
             document_id: 可选逻辑文档过滤。
+            chunk_id: 可选原文定位，仅允许活动文档。
             role: 可选 Chunk role 过滤。
             section_id: 可选 Section 过滤。
             neighbor_group_id: 可选相邻组过滤。
@@ -2924,6 +2938,7 @@ class SqliteControlStore:
         clauses = ["revision_id=?"]
         parameters: list[object] = [revision_id]
         for column, value in (
+            ("chunk_id", chunk_id),
             ("document_id", document_id),
             ("role", role),
             ("section_id", section_id),
@@ -2944,6 +2959,22 @@ class SqliteControlStore:
                 or str(revision["knowledge_base_id"]) != knowledge_base_id
             ):
                 raise NotFound("revision 不存在。", stage="revision.read")
+            if chunk_id is not None:
+                active = connection.execute(
+                    "SELECT 1 FROM knowledge_bases kb "
+                    "JOIN projects p ON p.project_id=kb.project_id "
+                    "JOIN documents d "
+                    "ON d.knowledge_base_id=kb.knowledge_base_id "
+                    "WHERE kb.knowledge_base_id=? AND kb.active_revision_id=? "
+                    "AND kb.deleted_at IS NULL AND p.deleted_at IS NULL "
+                    "AND kb.lifecycle_status='active' "
+                    "AND p.lifecycle_status='active' "
+                    "AND d.document_id=? AND d.deleted_at IS NULL "
+                    "AND d.lifecycle_status='active'",
+                    (knowledge_base_id, revision_id, document_id),
+                ).fetchone()
+                if active is None:
+                    raise NotFound("原文当前不可读取。", stage="revision.read")
             total = int(
                 connection.execute(
                     f"SELECT count(*) AS value FROM chunks WHERE {where}",  # noqa: S608
@@ -2955,13 +2986,27 @@ class SqliteControlStore:
                 "ORDER BY chunk_id LIMIT ? OFFSET ?",
                 (*parameters, limit, offset),
             ).fetchall()
-        return (
-            tuple(
+        try:
+            items = tuple(
                 Chunk.model_validate_json(str(item["chunk_json"]))
                 for item in rows
-            ),
-            total,
-        )
+            )
+        except (TypeError, ValueError) as error:
+            raise IndexCorrupt(
+                "Canonical Chunk 无法验证。", stage="revision.read"
+            ) from error
+        if chunk_id is not None and any(
+            item.project_id != project_id
+            or item.knowledge_base_id != knowledge_base_id
+            or item.index_revision_id != revision_id
+            or item.chunk_id != chunk_id
+            or item.version.document_id != document_id
+            for item in items
+        ):
+            raise IndexCorrupt(
+                "Canonical Chunk 身份漂移。", stage="revision.read"
+            )
+        return items, total
 
     def revision_document_reports(
         self,

@@ -34,3 +34,9 @@ Document/Version 创建方法返回持久 Job，调用方应通过 `get_job()` �
 默认 `dev-offline.json` 会在 P09 组合根显式提升为 P06—P09 所需的持久化
 Parser、Chunker、SQLite FTS V2、SQLite Control 和 Filesystem Blob 组件，同时保留
 调用方选择的离线 Provider、策略与 Profile ID。该路径不读取远程密钥且不访问公网。
+
+`search()` / `answer()` 支持可选的 `include_related_content=False`。
+显式设为 `True` 时，未能可靠回答的结果可以带有独立的 `related_contents`
+和有限中文 `display_message`；`answer` 仍为 `None`，正式证据和 Confidence
+规则不变。相关内容只是 canonical 原文预览，不能计入正式引用或传给生成器。
+该展示选项不增加 Provider 调用；默认旧 HTTP 请求省略两个新增响应字段。

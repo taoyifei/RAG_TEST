@@ -39,7 +39,10 @@ def apply_candidate_filters(
     allowed_documents = _values(access.get("allowed_document_ids"))
     result = []
     for hit in hits:
-        if allowed_documents and hit.document_id not in allowed_documents:
+        if (
+            "allowed_document_ids" in access
+            and hit.document_id not in allowed_documents
+        ):
             continue
         if not all(
             _matches(hit, name, expected) for name, expected in metadata.items()

@@ -19,6 +19,13 @@ from rag_app.product.live_acceptance import AcceptanceState, StepResult
 from tests.product_support import build_product_harness
 
 
+@pytest.fixture(autouse=True)
+def _isolated_trust_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path / "controlled-data"))
+
+
 def test_backup_keeps_attempts_and_stages_and_blocks_snapshot_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

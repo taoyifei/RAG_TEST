@@ -28,6 +28,7 @@ from rag_app.application.retrieval.answer_support import AnswerSupport
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.neighbors import NeighborExpander
 from rag_app.application.retrieval.planner import QueryPlanner
+from rag_app.application.retrieval.related import select_related_contents
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     Chunk,
@@ -243,21 +244,28 @@ def ranked_inputs(
     )
 
 
-def run_replay(*, baseline: bool = False) -> dict[str, Any]:
+def run_replay(
+    *, baseline: bool = False, include_related_content: bool = False
+) -> dict[str, Any]:
     """运行两路原 30 问，返回原指标计算器结果和完整候选差异。
 
     Args:
         baseline: 使用修复前保存的原始三个应用模块。
+        include_related_content: 仅在原判定完成后附加独立相关预览。
 
     Returns:
         标明离线、分数缺失和零 HTTP 的逐题结果，不声称新 Live。
 
     """
     with no_network():
-        return _run_replay(baseline=baseline)
+        return _run_replay(
+            baseline=baseline, include_related_content=include_related_content
+        )
 
 
-def _run_replay(*, baseline: bool) -> dict[str, Any]:  # noqa: PLR0915
+def _run_replay(  # noqa: PLR0915
+    *, baseline: bool, include_related_content: bool
+) -> dict[str, Any]:
     fixture = json.loads(INPUT.read_text("utf-8"))
     chunks = {
         item["chunk_id"]: Chunk.model_validate(item)
@@ -459,6 +467,17 @@ def _run_replay(*, baseline: bool) -> dict[str, Any]:  # noqa: PLR0915
                 reason_code=confidence.status.value,
                 answer=answer,
                 evidence=evidence,
+                related_contents=(
+                    select_related_contents(
+                        ranked,
+                        SearchRequest(scope=scope, text=case.query),
+                        analysis,
+                        revision_id=old["active_index_revision_id"],
+                        rerank_mode=old["rerank_mode"],
+                    )
+                    if include_related_content and answer is None
+                    else ()
+                ),
                 confidence=confidence,
                 query_kind=plan.query_kind,
                 active_index_revision_id=old["active_index_revision_id"],
@@ -518,6 +537,10 @@ def _run_replay(*, baseline: bool) -> dict[str, Any]:  # noqa: PLR0915
                     "evidence": [e.model_dump(mode="json") for e in evidence],
                     "confidence": confidence.model_dump(mode="json"),
                     "generator_text": answer,
+                    "related_contents": [
+                        item.model_dump(mode="json")
+                        for item in result.related_contents
+                    ],
                     "span_trace": span_trace,
                 }
             )

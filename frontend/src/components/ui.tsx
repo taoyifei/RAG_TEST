@@ -148,9 +148,11 @@ export function ErrorPanel({ error }: { error: unknown }) {
 
 export function EvidenceDrawer({
   evidence,
+  purpose = "citation",
   onClose,
 }: {
   evidence: Evidence | null;
+  purpose?: "citation" | "diagnostic";
   onClose: () => void;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -183,7 +185,9 @@ export function EvidenceDrawer({
       >
         <header>
           <div>
-            <span className="eyebrow">引用依据</span>
+            <span className="eyebrow">
+              {purpose === "diagnostic" ? "检索候选（未发布）" : "引用依据"}
+            </span>
             <h2>{evidence.source_label}</h2>
           </div>
           <button
@@ -197,7 +201,7 @@ export function EvidenceDrawer({
         </header>
         <blockquote>{evidence.citation_text}</blockquote>
         <dl className="detail-grid">
-          <dt>引用编号</dt>
+          <dt>{purpose === "diagnostic" ? "候选编号" : "引用编号"}</dt>
           <dd>{evidence.evidence_id}</dd>
           <dt>片段编号</dt>
           <dd>{evidence.chunk_id}</dd>
@@ -214,7 +218,13 @@ export function EvidenceDrawer({
           <dt>入选原因</dt>
           <dd>{evidence.selection_reason}</dd>
           <dt>发布状态</dt>
-          <dd>{evidence.publishable ? "可发布" : "不可发布"}</dd>
+          <dd>
+            {purpose === "diagnostic"
+              ? "本次未发布为答案引用"
+              : evidence.publishable
+                ? "可发布"
+                : "不可发布"}
+          </dd>
           <dt>表格上下文</dt>
           <dd>
             {evidence.table_context ? (evidence.table_locator ?? "是") : "否"}
