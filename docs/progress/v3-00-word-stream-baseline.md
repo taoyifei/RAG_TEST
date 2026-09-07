@@ -3,8 +3,9 @@
 日期：2026-09-07
 
 状态：`BLOCKED`。V3-00 基线与缺口复现已完成；发布安全验证需要对本次
-候选镜像的 50 个无可用修复版本的 High/Critical OS 发现进行人工风险处置，
-因此 `release acceptance` 按失败即停保持 `NOT_RUN`。
+候选镜像的 50 个 High/Critical OS 包版本元组（18 个唯一 CVE、0 个有可用
+修复版本）进行人工风险处置，因此 `release acceptance` 按失败即停保持
+`NOT_RUN`。
 
 ## 范围与基线
 
@@ -122,7 +123,7 @@ Session/CSRF、预算 Campaign 与真实 TCP 端点，故与当前 Product 的�
 | `.venv/bin/python scripts/dev.py web-e2e` | 0 | 真实 Chromium：7 passed、3 个按项目配置 skipped |
 | `.venv/bin/python scripts/release.py build` | 1 | BuildKit 在发送上下文时错误遍历已忽略的既有 root-only 备份目录；未改该目录 |
 | `DOCKER_BUILDKIT=0 .venv/bin/python scripts/release.py build` | 0 | legacy sender 正确应用相同 ignore；候选镜像与 Compose config 通过，Docker 已提示该 sender 将弃用 |
-| `.venv/bin/python scripts/release.py verify` | 非 0 / BLOCKED | Python 与 npm audit 均 0 漏洞；镜像用户/工具边界、Secret scan、SBOM 通过；Trivy 为 50 个不可修复 High/Critical，缺少绑定本镜像的人工风险处置 |
+| `.venv/bin/python scripts/release.py verify` | 非 0 / BLOCKED | Python 与 npm audit 均 0 漏洞；镜像用户/工具边界、Secret scan、SBOM 通过；Trivy 为 18 个唯一 CVE、50 个不可修复 High/Critical 包版本元组，缺少绑定本镜像的人工风险处置 |
 | `.venv/bin/python scripts/release.py acceptance` | NOT_RUN | `verify` 阻塞后按失败即停未执行 |
 | 真实 OCR、视觉理解、远程模型、生产部署 | NOT_RUN | 没有相应数据出网、费用或生产授权 |
 
