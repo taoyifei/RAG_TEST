@@ -42,7 +42,7 @@ _ATTRIBUTES = (
         r"采购价格|采购价|采购成本|购买价格|售价|销售价格|价格|价钱|费用|工资|薪资|保证金|补助|预付款",
     ),
     ("AREA", r"建筑面积|占地面积|面积"),
-    ("TEMPERATURE", r"储存温度|温度"),
+    ("TEMPERATURE", r"储存温度|温度|(?<![a-z])temperature(?![a-z])"),
     ("PRESSURE", r"额定压力|压力"),
     ("MASS", r"载荷上限|载荷|重量|质量"),
     ("RATIO", r"允许偏差|偏差|比例|百分比"),
@@ -62,7 +62,10 @@ _VALUES = {
         r"|(?:分机(?:号)?\s*(?:为|是|[:：])?\s*\d{2,6})"
         r"|(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})"
     ),
-    "TEMPERATURE": rf"{_NUMBER}(?:至{_NUMBER})?\s*(?:摄氏度|℃|°c|度)",
+    "TEMPERATURE": (
+        rf"{_NUMBER}(?:至{_NUMBER})?\s*"
+        r"(?:摄氏度|℃|°\s*c|度|(?:degrees?\s+)?celsius(?![a-z]))"
+    ),
     "PRESSURE": rf"{_NUMBER}\s*(?:mpa|kpa|pa|bar)",
     "MASS": rf"{_NUMBER}\s*(?:kg|千克|公斤|吨|g|克)",
     "RATIO": rf"{_NUMBER}\s*[%％]|百分之{_NUMBER}",
@@ -276,8 +279,20 @@ def _clause_supports(  # noqa: PLR0911
         # 不从逗号后另一个对象的金额或号码借值。
         return any(
             _target_matches(target, part, strict=True)
+            and (
+                answer_type != "TEMPERATURE"
+                or not re.fullmatch(r"[a-z][a-z0-9_-]*", target)
+                or re.search(
+                    r"(?<![a-z0-9_-])" + re.escape(target) + r"(?![a-z0-9_-])",
+                    part,
+                )
+            )
             and _attribute_matches(relation, answer_type, part)
             and not re.search(r"不是|并非|不等于", part)
+            and not (
+                answer_type == "TEMPERATURE"
+                and re.search(r"\b(?:not|no|never|unknown|unavailable)\b", part)
+            )
             and _typed_value_matches(answer_type, relation, part)
             for part in re.split(r"[，,]", clause)
         )

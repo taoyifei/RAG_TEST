@@ -10,6 +10,7 @@ from rag_app.application.answering.grounded import (
 )
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.errors import ValidationFailed
+from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
     AnswerDraft,
@@ -19,6 +20,10 @@ from rag_app.core.models import (
     EvidenceItem,
     ProviderCall,
     RetrievalPolicy,
+)
+from rag_app.product.model_settings import (
+    KnowledgeBaseModelSettings,
+    ProductModelSettings,
 )
 from tests.application.retrieval.test_descriptive_answers import (
     _candidates,
@@ -159,6 +164,86 @@ def test_grounded_negation_stays_bound_to_its_action_and_keeps_paraphrases(
 ) -> None:
     evidence, draft = _supported_draft(text, claim)
     validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "text,claim",
+    [
+        (
+            "现有协作类型，依据不同业务需求与整理方式，"
+            "分为资料整理、需求分析两类。",
+            "现有协作类型包括资料整理和需求分析。",
+        ),
+        (
+            "质量主管负责不断优化核验流程。",
+            "质量主管负责优化核验流程。",
+        ),
+        (
+            "维护主管负责制定未来设备维护计划。",
+            "维护主管负责制定设备维护计划。",
+        ),
+        (
+            "维护主管负责无线设备的检修。",
+            "维护主管负责检修无线设备。",
+        ),
+        (
+            "质量主管不仅负责核对标准，还负责协调验收。",
+            "质量主管负责核对标准和协调验收。",
+        ),
+    ],
+)
+def test_ordinary_words_do_not_negate_enumerations_or_duties(
+    text: str, claim: str
+) -> None:
+    evidence, draft = _supported_draft(text, claim)
+    validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "text,claim",
+    [
+        ("维护主管不得检修无线设备。", "维护主管负责检修无线设备。"),
+        ("维护主管未批准未来维护计划。", "维护主管批准未来维护计划。"),
+        ("质量主管不负责优化核验流程。", "质量主管负责优化核验流程。"),
+        ("维护主管无设备维护权限。", "维护主管有设备维护权限。"),
+        ("两种维护方式不同。", "两种维护方式相同。"),
+        ("质量主管不同意核验方案。", "质量主管同意核验方案。"),
+        ("两台设备不同步运行。", "两台设备同步运行。"),
+        ("维护主管不断开设备电源。", "维护主管断开设备电源。"),
+        ("核验调查暂无线索。", "核验调查已有线索。"),
+    ],
+)
+def test_actual_negations_and_different_relation_remain_constrained(
+    text: str, claim: str
+) -> None:
+    evidence, draft = _supported_draft(text, claim)
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == "CLAIM_NEGATION_CHANGED"
+
+
+def test_wireless_subject_cannot_be_replaced_by_another_device() -> None:
+    evidence, draft = _supported_draft(
+        "无线设备负责保存维护记录。", "有线设备负责保存维护记录。"
+    )
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_validation_upgrade_does_not_reuse_legacy_fallback_cache() -> None:
+    settings = KnowledgeBaseModelSettings()
+    legacy_identity = canonical_sha256(
+        {
+            "settings": settings.model_dump(),
+            "prompt": "grounded-chat-v1",
+            "rewrite": "bounded-rewrite-v2",
+            "validation": "claim-support-v1",
+        }
+    )
+    models = ProductModelSettings(Mock(), Mock())
+    assert models.serving_identity(settings) != legacy_identity
+    assert settings == KnowledgeBaseModelSettings()
 
 
 def _supported_draft(

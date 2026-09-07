@@ -149,7 +149,7 @@ class ProductModelSettings:
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v1",
             "rewrite": "bounded-rewrite-v2",
-            "validation": "claim-support-v1",
+            "validation": "claim-support-v2",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

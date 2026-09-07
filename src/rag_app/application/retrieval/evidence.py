@@ -165,6 +165,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
         if not quote.strip():
             continue
         relevance = _span_relevance(quote, context, chunk.role.value)
+        temperature_supported = False
         if context is not None:
             support = (support_overrides or {}).get(
                 key
@@ -177,10 +178,16 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 allow_uncertain and support.status is SupportStatus.UNCERTAIN
             ):
                 continue
+            # 精确对象、温度属性与合法量值已逐项证明，中英词面差异不否定该证据。
+            temperature_supported = (
+                support.status is SupportStatus.SUPPORTED
+                and support.answer_type == "TEMPERATURE"
+            )
         if (
             table_spans is None
             and key not in (support_overrides or {})
             and context is not None
+            and not temperature_supported
             and not _span_is_eligible(
                 relevance,
                 context,

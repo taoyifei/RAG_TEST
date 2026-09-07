@@ -27,10 +27,25 @@ _NUMBER = re.compile(
     r"公斤|千克|毫克|克|吨|升|毫升|次|个|台|件|人|℃|"
     r"[A-Za-zμµΩ°]+(?:/[A-Za-z]+)?))?"
 )
+_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9_])(?=[A-Za-z0-9_-]*\d)"
+    r"[A-Za-z][A-Za-z0-9_-]*(?![A-Za-z0-9_])"
+)
+_TEMPERATURE_ATTRIBUTE = re.compile(
+    r"温度|(?<![A-Za-z])temperature(?![A-Za-z])", re.IGNORECASE
+)
+_CELSIUS_QUANTITY = re.compile(
+    r"(?P<value>[+-]?\d+(?:\.\d+)?)\s*"
+    r"(?:摄氏度|℃|°\s*c|(?:degrees?\s+)?celsius)(?![A-Za-z])",
+    re.IGNORECASE,
+)
 _NEGATION = re.compile(
     r"不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
-    r"尚未|没有|并非|不是|未|无|不"
+    r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
+    r"不(?!同(?!意|步)|断(?!开|电|网|水|气)|仅|但)"
 )
+_SAME_RELATION = re.compile(r"相同|一样|一致")
+_DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
 _MIN_QUOTE_CHARS = 2
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.35
@@ -97,6 +112,9 @@ class GroundedOutcome:
 
 
 def _terms(text: str) -> set[str]:
+    # 只统一温度属性与摄氏单位名称，不翻译其他内容或改变词汇支持阈值。
+    text = _TEMPERATURE_ATTRIBUTE.sub("温度", text)
+    text = _CELSIUS_QUANTITY.sub(r"\g<value>℃", text)
     normalized = _STOP.sub("", text.casefold())
     return {
         normalized[index : index + 2] for index in range(len(normalized) - 1)
@@ -116,8 +134,7 @@ def _subject(text: str) -> str | None:
     if value:
         value = (
             re.split(
-                r"应当|必须|可以|自行|独立|直接|擅自|已经|不得|禁止|严禁|不能|不可|"
-                r"不允许|不准|无需|不必|不需要|尚未|没有|未|无|不",
+                r"应当|必须|可以|自行|独立|直接|擅自|已经|" + _NEGATION.pattern,
                 value,
                 maxsplit=1,
             )[0].strip()
@@ -132,7 +149,27 @@ def _predicate(text: str) -> str:
 
 
 def _number_tokens(text: str) -> set[str]:
-    return {re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)}
+    # 标识独立保留，防止尾号吸附后续英文属性，也不能通过改尾号偷换对象。
+    identifiers = {"id:" + value for value in _IDENTIFIER.findall(text)}
+    text = _IDENTIFIER.sub(" ", text)
+    text = _CELSIUS_QUANTITY.sub(r"\g<value>℃", text)
+    return identifiers | {
+        re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)
+    }
+
+
+def _quantity_relation_matches(clause: str, source: str) -> bool:
+    """温度不能借用其他属性的同值数量；表格纯数值片段保留支持资格。"""
+    if not _TEMPERATURE_ATTRIBUTE.search(clause):
+        return True
+    if re.search(
+        r"\b(?:not|no|never|unknown|unavailable)\b", source, re.IGNORECASE
+    ):
+        return False
+    return bool(
+        _TEMPERATURE_ATTRIBUTE.search(source)
+        or _CELSIUS_QUANTITY.fullmatch(source.strip("。:： \t"))
+    )
 
 
 def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
@@ -148,11 +185,16 @@ def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
 
 
 def _negations(text: str) -> set[str]:
+    # 普通词中的字形不代表句子否定；例如“未批准未来计划”只计前一个“未”。
     return {_NEGATION_CLASSES[match] for match in _NEGATION.findall(text)}
 
 
 def _action_terms(text: str) -> set[str]:
-    return _terms(_NEGATION.sub("", _NUMBER.sub("", _predicate(text))))
+    text = _IDENTIFIER.sub(
+        lambda match: re.sub(r"\d", " ", match[0]), _predicate(text)
+    )
+    text = _CELSIUS_QUANTITY.sub(" ", text)
+    return _terms(_NEGATION.sub("", _NUMBER.sub("", text)))
 
 
 def _check_negations(clause: str, source_clauses: list[str]) -> None:
@@ -166,6 +208,15 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
         >= min(_MIN_NEGATION_SHARED_TERMS, len(action))
     ]
     expected = _negations(clause)
+    # “不同需求”不是动作否定，但仍不能把明确的异同关系反转为“相同”。
+    if _SAME_RELATION.search(clause) and any(
+        _DIFFERENT_RELATION.search(source) for source in relevant
+    ):
+        raise ValidationFailed(
+            "事实反转了来源的异同关系。",
+            stage="answer.validate",
+            code="CLAIM_NEGATION_CHANGED",
+        )
     if expected and not any(
         _negations(source) == expected for source in relevant
     ):
@@ -258,6 +309,7 @@ def validate_grounded_draft(
                 text
                 for text in relevant_sources
                 if _action_terms(clause) & _action_terms(text)
+                and _quantity_relation_matches(clause, text)
             ]
             if not _number_tokens(clause) <= _number_tokens(
                 "\n".join(numeric_sources)
