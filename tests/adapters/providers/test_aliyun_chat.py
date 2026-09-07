@@ -26,6 +26,8 @@ from rag_app.core.errors import (
     ProviderUnavailable,
 )
 from rag_app.core.models import EvidenceItem, ProviderCall
+from rag_app.core.models.chunk import SourceSpan
+from rag_app.core.models.document import SourceAnchor, StoryKind
 from rag_app.core.ports.generator import GenerationRequest
 
 
@@ -327,6 +329,75 @@ def test_empty_claims_are_explicit_model_abstention(tmp_path: Path):
         assert draft.reason_code == "GENERATION_ABSTAINED"
         assert not draft.claims and not draft.cited_evidence_ids
         assert draft.provider_calls[0].call_count == 1
+    finally:
+        adapter.close()
+
+
+def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
+    tmp_path: Path,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_response('{"claims":[]}'))
+
+    base = _generation_request().evidence[0]
+    evidence: list[EvidenceItem] = []
+    for index, text in enumerate(
+        ("值班主管", "统一协调现场资源。", "资料专员")
+    ):
+        path = ("body", "tbl:0", f"tr:{index // 2}", f"tc:{index % 2}", "p:0")
+        anchor = SourceAnchor(
+            part_uri="/word/document.xml",
+            story_kind=StoryKind.BODY,
+            structural_path=path,
+            ordinal=index,
+        )
+        span = SourceSpan(
+            node_id="node_" + str(index + 1) * 32,
+            source_anchor=anchor,
+            structural_path=path,
+            chunk_start_char=0,
+            chunk_end_char=len(text),
+            source_start_char=0,
+            source_end_char=len(text),
+        )
+        evidence.append(
+            base.model_copy(
+                update={
+                    "evidence_id": f"S{index + 1}",
+                    "citation_text": text,
+                    "source_spans": (span,),
+                    "table_locator": "public-table",
+                    "document_version_id": "dver_" + "1" * 32,
+                    "section_id": "public-section",
+                }
+            )
+        )
+    adapter = _adapter(tmp_path, handler)
+    try:
+        adapter.generate(
+            _generation_request().model_copy(
+                update={
+                    "evidence": tuple(evidence),
+                    "repair_reason": "CLAIM_OBJECT_CHANGED",
+                }
+            )
+        )
+        messages = json.loads(requests[0].content)["messages"]
+        prompt = messages[0]["content"]
+        assert "每条写明角色或对象的事实" in prompt
+        assert "这两个ID的逐字quote" in prompt
+        content = json.loads(messages[1]["content"])
+        locations = [item["source_structure"] for item in content["evidence"]]
+        assert locations[0]["document_version_id"] == "dver_" + "1" * 32
+        assert locations[0]["table_locator"] == "public-table"
+        assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
+        assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"
+        assert locations[2]["anchors"][0]["structural_path"][2] == "tr:1"
+        assert "CLAIM_OBJECT_CHANGED" in messages[2]["content"]
+        assert len(requests) == 1
     finally:
         adapter.close()
 

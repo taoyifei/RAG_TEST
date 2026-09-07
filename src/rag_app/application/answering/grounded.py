@@ -55,13 +55,18 @@ _NAMED_SUBJECT = re.compile(
     r"(?:负责人|经理|主管|专员|工程师|设备|系统|模式))"
     r"\s*(?:负责|承担|的(?:核心)?职责|的(?:维护)?周期)"
 )
+_ACTION_MODIFIER = r"(?:牵头|主要|直接|统一|共同|定期)"
+_ACTION_VERB = (
+    r"负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
+    r"保存|归档|销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|"
+    r"支持|拥有|具备|配备|完成|启动|停止"
+)
 _GENERAL_SUBJECT = re.compile(
     r"^\s*([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff ]{0,40}?)"
     r"\s*(?=(?:(?:应当|必须|可以|应|须|需|可|已)?"
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
-    r"(?:负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|保存|归档|"
-    r"销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|支持|拥有|具备|"
-    r"配备|完成|启动|停止))|的(?:核心)?职责|的(?:维护)?周期)"
+    rf"(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB}))"
+    r"|的(?:核心)?职责|的(?:维护)?周期)"
 )
 _NOT_SUBJECTS = frozenset(
     {
@@ -123,9 +128,7 @@ def _terms(text: str) -> set[str]:
 
 def _subject(text: str) -> str | None:
     if re.match(
-        r"^\s*(?:负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
-        r"保存|归档|销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|"
-        r"支持|拥有|具备|配备|完成|启动|停止)",
+        rf"^\s*(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB})",
         text,
     ):
         return None
@@ -233,6 +236,32 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
         )
 
 
+def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
+    """表格联合引用按真实行锚点分组，未知行只允许同一个来源节点。"""
+    base = (item.document_version_id, item.section_id, item.table_locator)
+    if not item.table_context and item.table_locator is None:
+        return {base}
+    groups: set[tuple[object, ...]] = set()
+    for span in item.source_spans:
+        anchor = span.source_anchor
+        if anchor is None:
+            groups.add((*base, span.node_id))
+            continue
+        row_ends = [
+            index + 1
+            for index, part in enumerate(anchor.structural_path)
+            if re.fullmatch(r"tr:\d+", part)
+        ]
+        if row_ends:
+            row: object = anchor.structural_path[: row_ends[-1]]
+        elif anchor.table_index is not None and anchor.row_index is not None:
+            row = (anchor.table_index, anchor.row_index)
+        else:
+            row = span.node_id
+        groups.add((*base, anchor.part_uri, anchor.story_kind, row))
+    return groups
+
+
 def validate_grounded_draft(
     draft: AnswerDraft, evidence: tuple[EvidenceItem, ...]
 ) -> None:
@@ -276,8 +305,7 @@ def validate_grounded_draft(
             units.append(item)
         # 同一事实可以联合同一行/段落的多个 span，不能混接不同表格角色。
         source_groups = {
-            (item.document_version_id, item.section_id, item.table_locator)
-            for item in units
+            group for item in units for group in _source_groups(item)
         }
         if len(source_groups) != 1:
             raise ValidationFailed(

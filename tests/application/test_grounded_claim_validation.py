@@ -231,6 +231,141 @@ def test_wireless_subject_cannot_be_replaced_by_another_device() -> None:
     assert error.value.code == "CLAIM_OBJECT_CHANGED"
 
 
+@pytest.mark.parametrize(
+    "action",
+    [
+        "牵头组织验收",
+        "主要负责归档",
+        "直接负责归档",
+        "统一协调资源",
+        "共同承担维护",
+        "定期检查设备",
+    ],
+)
+@pytest.mark.parametrize("subject", ["", "质量主管", "资料专员"])
+def test_action_modifiers_are_not_part_of_the_subject(
+    action: str, subject: str
+) -> None:
+    role = subject or "质量主管"
+    evidence, draft = _supported_draft(
+        f"{role}负责以下事项：{action}。", f"{subject}{action}。"
+    )
+    validate_grounded_draft(draft, evidence)
+
+
+def _table_role_draft(
+    claim: str,
+    *,
+    other_row: bool = False,
+    other_table: bool = False,
+    cite_role: bool = True,
+) -> tuple[tuple[EvidenceItem, ...], AnswerDraft]:
+    texts = (
+        "质量主管",
+        "牵头组织验收，定期检查设备。保存 14 天，不得销毁记录。",
+    )
+    items: list[EvidenceItem] = []
+    for index, text in enumerate(texts):
+        evidence, _ = _supported_draft(text, text)
+        item = evidence[0]
+        path = (
+            "body",
+            f"tbl:{int(other_table and index == 1)}",
+            f"tr:{int(other_row and index == 1)}",
+            f"tc:{index}",
+            "p:0",
+        )
+        span = item.source_spans[0]
+        assert span.source_anchor is not None
+        span = span.model_copy(
+            update={
+                "structural_path": path,
+                "source_anchor": span.source_anchor.model_copy(
+                    update={"structural_path": path}
+                ),
+            }
+        )
+        items.append(
+            item.model_copy(
+                update={
+                    "evidence_id": f"S{index + 1}",
+                    "source_spans": (span,),
+                    "table_context": True,
+                    "table_locator": "public-table",
+                    "document_version_id": "dver_" + "1" * 32,
+                    "section_id": "public-section",
+                }
+            )
+        )
+    supports = tuple(
+        ClaimSupport(support_id=item.support_id, quote=item.citation_text)
+        for item in items
+        if cite_role or item.support_id == "S2"
+    )
+    return tuple(items), AnswerDraft(
+        text=claim,
+        cited_evidence_ids=tuple(support.support_id for support in supports),
+        claims=(AnswerClaim(text=claim, supports=supports),),
+        generation_mode="llm",
+    )
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "质量主管牵头组织验收，定期检查设备。",
+        "质量主管负责组织验收和检查设备。",
+        "牵头组织验收。定期检查设备。",
+    ],
+)
+def test_same_table_row_supports_natural_merged_and_separate_duties(
+    claim: str,
+) -> None:
+    evidence, draft = _table_role_draft(claim)
+    validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "claim,code",
+    [
+        ("王某组织验收。", "CLAIM_OBJECT_CHANGED"),
+        ("王某牵头组织验收。", "CLAIM_OBJECT_CHANGED"),
+        ("其他负责人负责检查设备。", "CLAIM_OBJECT_CHANGED"),
+        ("其他负责人定期检查设备。", "CLAIM_OBJECT_CHANGED"),
+        ("临时主管主要负责组织验收。", "CLAIM_OBJECT_CHANGED"),
+        ("质量主管批准专项采购经费。", "CLAIM_TEXT_UNSUPPORTED"),
+        ("质量主管保存 15 天。", "CLAIM_NUMBER_UNSUPPORTED"),
+        ("质量主管可以销毁记录。", "CLAIM_NEGATION_CHANGED"),
+    ],
+)
+def test_role_duty_join_does_not_authorize_changed_facts(
+    claim: str, code: str
+) -> None:
+    evidence, draft = _table_role_draft(claim)
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == code
+
+
+@pytest.mark.parametrize("location", ["other_row", "other_table"])
+def test_role_and_duty_cannot_join_different_table_rows(location: str) -> None:
+    evidence, draft = _table_role_draft(
+        "质量主管负责组织验收。", **{location: True}
+    )
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
+
+
+def test_uncited_role_is_not_borrowed_from_question_or_other_evidence() -> None:
+    evidence, draft = _table_role_draft(
+        "质量主管负责组织验收。", cite_role=False
+    )
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
 def test_validation_upgrade_does_not_reuse_legacy_fallback_cache() -> None:
     settings = KnowledgeBaseModelSettings()
     legacy_identity = canonical_sha256(
@@ -238,7 +373,7 @@ def test_validation_upgrade_does_not_reuse_legacy_fallback_cache() -> None:
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v1",
             "rewrite": "bounded-rewrite-v2",
-            "validation": "claim-support-v1",
+            "validation": "claim-support-v2",
         }
     )
     models = ProductModelSettings(Mock(), Mock())
