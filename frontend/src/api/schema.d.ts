@@ -1488,6 +1488,11 @@ export interface components {
          */
         QueryRequest: {
             /**
+             * Include Related Content
+             * @default false
+             */
+            include_related_content: boolean;
+            /**
              * Limit
              * @default 10
              */
@@ -1525,6 +1530,8 @@ export interface components {
             /** Dense Available */
             dense_available: boolean;
             diagnostics_summary?: components["schemas"]["RetrievalDiagnosticsSummary"] | null;
+            /** Display Message */
+            display_message?: string | null;
             /**
              * Evidence
              * @default []
@@ -1552,6 +1559,11 @@ export interface components {
             query_kind: components["schemas"]["QueryKind"];
             /** Reason Code */
             reason_code: string;
+            /**
+             * Related Contents
+             * @default []
+             */
+            related_contents: components["schemas"]["RelatedContent"][];
             /** Rerank Execution Mode */
             rerank_execution_mode: string;
             /** Rerank Mode */
@@ -1570,6 +1582,49 @@ export interface components {
             trace_summary?: components["schemas"]["RetrievalDiagnosticsSummary"] | null;
             /** Vector Name */
             vector_name?: string | null;
+        };
+        /**
+         * RelatedContent
+         * @description 本次未获得答案资格的独立原文预览；不能送入生成器。
+         */
+        RelatedContent: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Document Id */
+            document_id: string;
+            /** Document Name */
+            document_name: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Excerpt */
+            excerpt: string;
+            /**
+             * Heading Path
+             * @default []
+             */
+            heading_path: string[];
+            /** Index Revision Id */
+            index_revision_id: string;
+            /**
+             * Is Answer Evidence
+             * @default false
+             * @constant
+             */
+            is_answer_evidence: false;
+            /** Related Id */
+            related_id: string;
+            /**
+             * Relevance Reason
+             * @enum {string}
+             */
+            relevance_reason: "KEYWORD_RELATED" | "SEMANTIC_CANDIDATE" | "RELEVANCE_UNVERIFIED";
+            /**
+             * Rerank Verified
+             * @default false
+             */
+            rerank_verified: boolean;
+            /** Source Spans */
+            source_spans: components["schemas"]["SourceSpan"][];
         };
         /**
          * RenameDocumentRequest
@@ -6303,6 +6358,7 @@ export interface operations {
         parameters: {
             query?: {
                 document_id?: string | null;
+                chunk_id?: string | null;
                 role?: string | null;
                 section_id?: string | null;
                 neighbor_group_id?: string | null;

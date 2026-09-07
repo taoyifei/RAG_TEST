@@ -75,6 +75,34 @@ def test_replay_network_guard_blocks_socket_calls() -> None:
         connection.connect(("127.0.0.1", 1))
 
 
+def test_related_preview_keeps_all_sixty_original_metrics(
+    replay: dict[str, Any],
+) -> None:
+    """原正反例和原指标全量开关对照；相关内容不进入有效引用分子。"""
+    shown = run_replay(include_related_content=True)
+    assert shown["observations"] == replay["observations"]
+    assert shown["report"]["gates"] == replay["report"]["gates"]
+    assert shown["provider_http"] == replay["provider_http"] == 0
+    assert any(row["related_contents"] for row in shown["details"])
+    for plain, row in zip(replay["details"], shown["details"], strict=True):
+        for key in (
+            "status",
+            "confidence",
+            "evidence",
+            "generator_text",
+            "source_count",
+        ):
+            assert plain[key] == row[key]
+        if row["status"] == "ANSWERABLE":
+            assert not row["related_contents"]
+        else:
+            assert row["generator_text"] is None
+            assert all(
+                not item["is_answer_evidence"]
+                for item in row["related_contents"]
+            )
+
+
 def test_original_contract_hashes_are_frozen() -> None:
     """原题目、标签、来源范围、语料和阈值没有为通过而修改。"""
     fixture = json.loads(INPUT.read_text("utf-8"))

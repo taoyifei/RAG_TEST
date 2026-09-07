@@ -106,6 +106,7 @@ class ConsoleInspectionService:
         revision_id: str,
         *,
         document_id: str | None = None,
+        chunk_id: str | None = None,
         role: str | None = None,
         section_id: str | None = None,
         neighbor_group_id: str | None = None,
@@ -119,6 +120,7 @@ class ConsoleInspectionService:
             knowledge_base_id: 知识库 ID。
             revision_id: Revision ID。
             document_id: 可选逻辑文档过滤。
+            chunk_id: 可选原文定位；只允许读取仍然有效的活动文档。
             role: 可选 Chunk role 过滤。
             section_id: 可选 Section 过滤。
             neighbor_group_id: 可选相邻组过滤。
@@ -134,6 +136,7 @@ class ConsoleInspectionService:
             knowledge_base_id,
             revision_id,
             document_id=document_id,
+            chunk_id=chunk_id,
             role=role,
             section_id=section_id,
             neighbor_group_id=neighbor_group_id,
