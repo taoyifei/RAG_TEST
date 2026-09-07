@@ -88,7 +88,12 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
               <h3>{stageLabel(item.stage)}</h3>
               <code>{item.job_id}</code>
               {item.safe_error && (
-                <p role="status" className="error-text">
+                <p
+                  role="status"
+                  className={
+                    item.state === "succeeded" ? undefined : "error-text"
+                  }
+                >
                   {item.safe_error}
                 </p>
               )}
@@ -111,7 +116,9 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
               disabled={busy === item.job_id}
               onClick={() => void details(item)}
             >
-              {item.safe_error ? "查看原因/日志" : "查看任务详情"}
+              {item.safe_error && item.state !== "succeeded"
+                ? "查看原因/日志"
+                : "查看任务详情"}
             </button>
             {item.state === "failed_retryable" && item.retryable && (
               <button
@@ -173,7 +180,7 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
           <p>
             {selected.retryable
               ? "重试会沿用现有文档和作业，不新建同名文档。"
-              : selected.safe_error
+              : selected.safe_error && selected.state !== "succeeded"
                 ? "可在文档管理中为原文档重新上传版本；无需重新登记一个同名文档。"
                 : "完成后可在文档管理核对当前索引收录情况。"}
           </p>
@@ -220,6 +227,7 @@ function stageLabel(stage: string): string {
         indexing: "写入索引",
         validating: "校验索引",
         activated: "索引已启用",
+        unchanged: "已在当前索引，无需重建",
         finalizing: "完成版本登记",
         failed: "处理失败",
         cancelled: "任务已取消",
