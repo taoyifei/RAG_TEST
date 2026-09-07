@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-09-06T12:06:26.359485+00:00",
+  "generated_at": "2026-09-07T02:28:49.691165+00:00",
   "identity": {
-    "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-    "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-    "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+    "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+    "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+    "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
     "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
     "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
     "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
     "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-    "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-    "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-    "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+    "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+    "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+    "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
   },
   "assets": {
     "start_sha": "b7e127b4c5c67714ea628092c45f1a546eedd737",
@@ -199,925 +199,494 @@
         "sha256": "2dca53f36fa0277aa0be38e99e2d4bce1d57cd1e882bc855de12ab4622286c61"
       }
     ],
-    "workline_merge_sha": "029d674c19b3d61f31ad0da84228d54af0535ed1"
+    "workline_merge_sha": "029d674c19b3d61f31ad0da84228d54af0535ed1",
+    "trial_hardening_code_sha": "13c80131ff3612c1e9e3d0fd71cf89cf5547eb4c",
+    "trial_hardening_integration_sha": "8a3cf04f13e1003a1237f08fd4961f85dabaaceb",
+    "trial_hardening_running_image": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
   },
   "budget": {
-    "status": "PASS",
-    "cumulative": {
-      "total": 679,
-      "reserved": 354,
-      "forwarded": 354,
-      "locally_blocked": 325,
-      "estimated_input_tokens": 104986,
-      "observed_tokens": 94902,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 21,
-      "unknown_forwarding_attempts": 18,
-      "locally_blocked_estimated_tokens": 24342,
-      "campaign_id": "p11-20260905-public-synthetic",
-      "authorization_id": "p11-20260904-existing-25-1000",
-      "request_limit": 439,
-      "estimated_token_limit": 145861,
-      "provider_request_limits": {
-        "aliyun": 123,
-        "jina": 316
+    "total": 721,
+    "reserved": 378,
+    "forwarded": 378,
+    "locally_blocked": 343,
+    "estimated_input_tokens": 113028,
+    "observed_tokens": 102846,
+    "observed_usage_status": "unknown",
+    "unknown_usage_attempts": 21,
+    "unknown_forwarding_attempts": 18,
+    "locally_blocked_estimated_tokens": 24582,
+    "campaign_id": "p11-20260905-public-synthetic",
+    "authorization_id": "p11-20260904-existing-25-1000",
+    "request_limit": 439,
+    "estimated_token_limit": 145861,
+    "provider_request_limits": {
+      "aliyun": 123,
+      "jina": 316
+    },
+    "provider_token_limits": {
+      "aliyun": 13719,
+      "jina": 132142
+    },
+    "step_request_limits": {
+      "aliyun_document_canary": 1,
+      "aliyun_document_diagnostic_20260906": 1,
+      "aliyun_document_diagnostic_20260906_2": 1,
+      "aliyun_document_retest_20260906": 1,
+      "aliyun_query_canary": 1,
+      "citation_quality": 396,
+      "dual_index": 6,
+      "historical": 6,
+      "jina_connection": 3,
+      "primary_query": 6,
+      "recovery": 9,
+      "standby_failover": 6
+    },
+    "providers": {
+      "aliyun": {
+        "total": 98,
+        "reserved": 88,
+        "forwarded": 88,
+        "locally_blocked": 10,
+        "estimated_input_tokens": 9242,
+        "observed_tokens": 5202,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 2,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 1009
       },
-      "provider_token_limits": {
-        "aliyun": 13719,
-        "jina": 132142
-      },
-      "step_request_limits": {
-        "aliyun_document_canary": 1,
-        "aliyun_document_diagnostic_20260906": 1,
-        "aliyun_document_diagnostic_20260906_2": 1,
-        "aliyun_document_retest_20260906": 1,
-        "aliyun_query_canary": 1,
-        "citation_quality": 396,
-        "dual_index": 6,
-        "historical": 6,
-        "jina_connection": 3,
-        "primary_query": 6,
-        "recovery": 9,
-        "standby_failover": 6
-      },
-      "providers": {
-        "aliyun": {
-          "total": 92,
-          "reserved": 82,
-          "forwarded": 82,
-          "locally_blocked": 10,
-          "estimated_input_tokens": 8604,
-          "observed_tokens": 4864,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 2,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 1009
-        },
-        "jina": {
-          "total": 587,
-          "reserved": 272,
-          "forwarded": 272,
-          "locally_blocked": 315,
-          "estimated_input_tokens": 96382,
-          "observed_tokens": 90038,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 19,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 23333
-        }
-      },
-      "steps": {
-        "aliyun_document_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_diagnostic_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_diagnostic_20260906_2": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_retest_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_query_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 106,
-          "observed_tokens": 56,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "citation_quality": {
-          "total": 626,
-          "reserved": 320,
-          "forwarded": 320,
-          "locally_blocked": 306,
-          "estimated_input_tokens": 103732,
-          "observed_tokens": 92318,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 18,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 23198
-        },
-        "dual_index": {
-          "total": 2,
-          "reserved": 2,
-          "forwarded": 2,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 104,
-          "observed_tokens": 85,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "historical": {
-          "total": 7,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 1,
-          "estimated_input_tokens": 157,
-          "observed_tokens": 242,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 3,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 19
-        },
-        "jina_connection": {
-          "total": 3,
-          "reserved": 3,
-          "forwarded": 3,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 82,
-          "observed_tokens": 234,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "primary_query": {
-          "total": 6,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 144,
-          "observed_tokens": 567,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "recovery": {
-          "total": 15,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 9,
-          "estimated_input_tokens": 162,
-          "observed_tokens": 585,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 990
-        },
-        "standby_failover": {
-          "total": 15,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 9,
-          "estimated_input_tokens": 447,
-          "observed_tokens": 723,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 135
-        }
+      "jina": {
+        "total": 623,
+        "reserved": 290,
+        "forwarded": 290,
+        "locally_blocked": 333,
+        "estimated_input_tokens": 103786,
+        "observed_tokens": 97644,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 19,
+        "unknown_forwarding_attempts": 18,
+        "locally_blocked_estimated_tokens": 23573
       }
     },
-    "this_run": {
-      "total": 260,
-      "reserved": 128,
-      "forwarded": 128,
-      "locally_blocked": 132,
-      "estimated_input_tokens": 40675,
-      "observed_tokens": 30392,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 18,
-      "unknown_forwarding_attempts": 18,
-      "locally_blocked_estimated_tokens": 21173
-    },
-    "imported_history": {
-      "total": 0,
-      "reserved": 0,
-      "forwarded": 0,
-      "locally_blocked": 0,
-      "estimated_input_tokens": 0,
-      "observed_tokens": null,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 0,
-      "unknown_forwarding_attempts": 0,
-      "locally_blocked_estimated_tokens": 0
-    },
-    "attempt_ids": [
-      "attempt-3cf09f38548d46209702eacf1336c0a5",
-      "attempt-e9760663cfe843e4b09ad2ec585b6b19",
-      "attempt-c6051d106bd74ad0a8e483f2cd3fc73f",
-      "attempt-d85b64829970441b8077999968b1d3a1",
-      "attempt-f1c35403e55b449992bda98bb4a4c0b8",
-      "attempt-4c5721e288934c279763b2ba61a18a38",
-      "attempt-ed68e0f2f32f42a1a1e23c5af64831c9",
-      "attempt-98febb2a7ffa40ebba84d27af11f20b9",
-      "attempt-bf8857d627bf4ac2b08c639760e576e3",
-      "attempt-9c35b86e552a4bd4a2a0aa828f67de48",
-      "attempt-3fe993469934487ab91dff57d2a8c592",
-      "attempt-5ee10fbf25d043168abb338641b59a74",
-      "attempt-859d60e804a54948924fc78d98ff3969",
-      "attempt-4f5adc7ec40843ad99c2d837dcae842f",
-      "attempt-9ce0769c20304ce2882385e9ce51b827",
-      "attempt-2c53ed98493f48c28a6df9ab4fe308b1",
-      "attempt-c2cc2cd58a2d4686a061dfc28bcae960",
-      "attempt-6ab66480168d49479e2efd8d538dafc6",
-      "attempt-17df118fee0c4db8900b2b2196d35bc6",
-      "attempt-300fb3438e8a438da2fd46de2ac21fbc",
-      "attempt-56bf5f5f2571421f8e113d8f65e9d561",
-      "attempt-8b03cb1fa19a4d5f95c394774e55240d",
-      "attempt-3b976e204c194b49a1967531bc15e828",
-      "attempt-78aeb849dd5e47f68d4b9b541402afb4",
-      "attempt-0946ab699c8b4a7880ec609a8564f199",
-      "attempt-818472e5469448d8af3829ab5a8fe80a",
-      "attempt-2449b26f817646d28c9872d97b139c73",
-      "attempt-504df508236e4363b4478a309de09a75",
-      "attempt-0d1e021ee5184a8eb8ecce352435cdda",
-      "attempt-a149bb54f46345da90b3e02a3ad3eab3",
-      "attempt-ec2870572511409d978b20da355bef3f",
-      "attempt-2cc4e474e1da473d88d81358043ea4a6",
-      "attempt-b2df1f63270d4ee88987837d42266edb",
-      "attempt-6331b98631134a959de555670bb64ab4",
-      "attempt-90524a7b4ac04b60ba8a6f5a16f5ca33",
-      "attempt-13ebb0e6c519466bbe8ef2c073983609",
-      "attempt-9231db634b1241e99c2afe39929335ae",
-      "attempt-a1ec3f37539d4ec8a74524e43c13f130",
-      "attempt-1a07c454182b44b5a19beec84a7bd163",
-      "attempt-f4edc519d11d418bacc3cc3061ced670",
-      "attempt-7e0cdc79bab2479eb457800c427551ae",
-      "attempt-3cb5f6f7f0a24563a9314fd2ba1ba91e",
-      "attempt-e54ef7d3db9a4d0f949f059464ec09e3",
-      "attempt-832e37b4db95449194fb511c948b01bc",
-      "attempt-5237b165acb64646a7107135985ae70c",
-      "attempt-9671431890c54671bcb76033a30bedfb",
-      "attempt-24526b75b9ad4662a0e3328194d447bf",
-      "attempt-a79057f0342f4c33bac4fc457c2008ad",
-      "attempt-294b94347aac4a68ad137ffa2c7826b0",
-      "attempt-cd591bf08c404936a6199b538beab380",
-      "attempt-db97dd34c2cb4f0388972c0f9b6ee3d9",
-      "attempt-59100375f2ee4f6c8ad0e043e11deae5",
-      "attempt-ec2bbfa1bc41454eafc9508246e06a16",
-      "attempt-c43830dfb06e4e9198771f32e4d12f92",
-      "attempt-f09feb5e98324d86b2f1b5ca4f178665",
-      "attempt-fddc997eb0014a0da157853c5b49d5d8",
-      "attempt-bda580c7407b43aeadf2a714b187a04d",
-      "attempt-bf9c3ba5a5974483844fab1e5990de9b",
-      "attempt-0825b61825314dfe83bf439d474224d7",
-      "attempt-f5eed9b2c283436baccb5ba7a3c5f276",
-      "attempt-76864b0065154bf798f53c63779f883f",
-      "attempt-fc56b982f51840bc945657fcc516109c",
-      "attempt-4699bf1afb9a415bb867ea5789cc6b93",
-      "attempt-06a16b1077ba4d37bd092cfe046706a4",
-      "attempt-0b53469065c84acf8e3e36fb9182e3f7",
-      "attempt-a3b2b3d9271146a395f9d426631b3931",
-      "attempt-f5912be751124d21a38a7655b8379792",
-      "attempt-04205c809a7246eea718c8ef2a02d322",
-      "attempt-889ea6ceaeb64f958a96b9e5c86384ca",
-      "attempt-df242781d363447e9f335248015b9163",
-      "attempt-1cce5accf3264dc29be0c4624916e785",
-      "attempt-4ad0d5c7870949158564496bc8c7503b",
-      "attempt-deedeca84b83442a9f72321d6f9afaa6",
-      "attempt-0c9d8dcdf8034706842a0e8be0de7b7d",
-      "attempt-34e4cb9a75e84d9a8347396b44823165",
-      "attempt-e372732713a244cd87aa7f75f54529bb",
-      "attempt-746f92e2058b48a4871f05a7abab7d0f",
-      "attempt-f700b51025024c4a99d7b441150a21d0",
-      "attempt-6285a5d1f2f04ae4b301ba1a8ecce54b",
-      "attempt-72f798f2cc6d47778a5b92c0312fb734",
-      "attempt-02306f767334440188a76e2b77a18c30",
-      "attempt-6359010d78b04e31b89d20e3f7364736",
-      "attempt-aeccfaf37632488db88310c156fbcf99",
-      "attempt-65eff0e86d7b43c58864fc32bd01bfa7",
-      "attempt-1a953c08978540a8aba7dc30b715fae6",
-      "attempt-bdfdfdf476334e5ca0432238e8cb276f",
-      "attempt-72a1a5a54d8d4de0afee91af9a658188",
-      "attempt-b628f5f01a514652bf13229321b1fdc7",
-      "attempt-20566cb6a42a47459ac7d07e284c96dd",
-      "attempt-2ad36f23df1d4dd1b8a2f0ee88f68f3e",
-      "attempt-75eec5d4b160415f954dadee34a20426",
-      "attempt-a3af6e74d81a47208be5eda5d93d3e8a",
-      "attempt-22aecc2ce0ba4248a1cc6807502045ba",
-      "attempt-aa848fb462ae411f9772910724a10e6d",
-      "attempt-d05b5dbf26764580bf83eab1a2efbc9f",
-      "attempt-7f6c12adfd714211ae89c40a445cc879",
-      "attempt-9d388990591841feaf6847d75e212a83",
-      "attempt-3da8ba028136415d95aac8f168a58a43",
-      "attempt-a8d7ed8f6efa4a9f9e5be2e23231b098",
-      "attempt-1568a278b4714d10a4a0fb80b7e39526",
-      "attempt-213f467776754a0494ca69098488ac9a",
-      "attempt-bd330ff04de649859e8a427271235e9b",
-      "attempt-047b9444d9ff4484936fb6b857d01c7a",
-      "attempt-f65928e5e7cd4003badb4f51a82ad439",
-      "attempt-252150798f174acd877bea49759a0a91",
-      "attempt-19ec3645803641c8ab7b0d68fb0942f5",
-      "attempt-4ade477a5591481ea76cce5ec10f67cb",
-      "attempt-8525fbc5654e4a58b7c9070cb07c540b",
-      "attempt-aef1625016464942a4c15990b2f771ef",
-      "attempt-9e4299e5e4f44b999caf2849a4191a20",
-      "attempt-e9d87c7781c04b46adda6bc478770ba6",
-      "attempt-c6dc85f0069e4c109f22aa837d765c41",
-      "attempt-09ca779a73654bea923ef563b0fa03cd",
-      "attempt-bb7645b1a67248e198912971e48e22c9",
-      "attempt-aad79f1995934fd7bbd1cd4578bafc1a",
-      "attempt-10a40950ef5c4d2cbd10c2884f4eef3f",
-      "attempt-6dd088574fb54e328714f01c8a15b922",
-      "attempt-8eb12fbe71be4fa7ae8efe2a873a20ae",
-      "attempt-9647b89985874ae1a27fbb80fe95e681",
-      "attempt-a81ba3bff4824cefbf95da2b3b666c98",
-      "attempt-5b2cb9413ff4427d9815c6d17bbc0f60",
-      "attempt-9d402af4f91f46cbb304af0ce4da501e",
-      "attempt-7f0b0955c16d410396af301c99adb2a6",
-      "attempt-84d6666ddb67403d9280e61bd7e715b1",
-      "attempt-bad674cd498d4ba085a67a3cfbda86cf",
-      "attempt-d5abd1fa447b4c97bbacd0a169151fe2",
-      "attempt-77bc33efc81d48d4ab7cb582e9919762",
-      "attempt-231f0e94690b4a3cb0556f50f871a19f",
-      "attempt-b9a6b23b7ebd490a852d7884b6b2dcd3",
-      "attempt-71afe0a911424379a07ab7ee9d6836f1",
-      "attempt-f15598cdfead4f028a2fb33a5518ed27",
-      "attempt-647bac7dc0024cd0ba3e8effca764618",
-      "attempt-fd7751afc65e44c3928f99a9b93dc37b",
-      "attempt-c72e136a0a6e47b0a8a40fbcade6ecb8",
-      "attempt-2a833518ad014affac9e4fe9f1ed3739",
-      "attempt-b50a9f861f854a42bd9b738c85155dce",
-      "attempt-6a31450a46b245389c924e996fb1b1fd",
-      "attempt-9d243612cc3346f78af2b2e47701c60e",
-      "attempt-4714dc5b53a346fdaa6154b3441063c7",
-      "attempt-9de12a3eb2454fe8b12993256debb066",
-      "attempt-471de66f878b4fdebe1f864d96d0fbfd",
-      "attempt-4e557ae920a94c9d8287b1d6a27bdef6",
-      "attempt-002dad3d990c41d3b973e749f100cee2",
-      "attempt-93a05564fac74c1b8d6b73bbeb1b9750",
-      "attempt-89b2d7a069d7493b9629927d4eda665a",
-      "attempt-e5d7c9e347f045c3a8b2c312fe2740bf",
-      "attempt-4f1bfd19f0144dd4b897b10d1ea4b698",
-      "attempt-aab12f3d2d9648deb489ee49430e729d",
-      "attempt-f016e633c5e5429195254188ef4868c7",
-      "attempt-38d5a05e8e3a4702a1118ac8a76f4c89",
-      "attempt-62600fa4f0e640e0b4424527931d584b",
-      "attempt-2b576599ea274a2e95422f6f28112692",
-      "attempt-46ef71ecfcf34cd296eac420a93e0d5e",
-      "attempt-0c056e5c17374df7b927726e59ae5e9d",
-      "attempt-3b64d5de6c844824ab68d176eebb0cbc",
-      "attempt-c2bf3d28188b4b84a42d4e6e627d24ae",
-      "attempt-4b68e13711a04069964c8b14bd1ca1f5",
-      "attempt-e46a5776687f4d109dd13c0b7bc243e4",
-      "attempt-b0354110945446b482be6fe10ae54388",
-      "attempt-18f869348b7445d0bac3f8de4f845337",
-      "attempt-4a910671459d46f28c93e91c9c72bbfd",
-      "attempt-2cdacf29866f428ca8c32a8c85f37591",
-      "attempt-03c446ac533c47548942f0e7600f4575",
-      "attempt-20a5168d807341c1ba6f18072cf8d743",
-      "attempt-7d2787f0d1a74b90b9d4773116e013e8",
-      "attempt-92bae110cc64465d88f4689c388b51e3",
-      "attempt-918ace8a8e4a46dc8da0629882c8d0bf",
-      "attempt-a338b85d81574891bef061f1beef3c16",
-      "attempt-ad34f640ad0a4d729895aaf8f243595c",
-      "attempt-42f0a9009bb74de8af00e3c99597c6d5",
-      "attempt-338760cb0315477e9553b3742b34d07e",
-      "attempt-e65868a4567d4d1db572717313fa9570",
-      "attempt-9140a750295c4e38b8aa0a84fee904a8",
-      "attempt-f57694c07cc64a3bab0377a0bb39d2e4",
-      "attempt-d0d6b3e76eac4e3fa7e2060ca160bd46",
-      "attempt-9bd6ca8096db4bf08efa160cb731f802",
-      "attempt-a744bc2784ee4c5ca9cab689f99d035e",
-      "attempt-c11f470cdd76421ba5697a93a716e614",
-      "attempt-edeb1f587b3347d4b0f4bf748286e7f7",
-      "attempt-209551b1b71c4cd7802bab40cbfa1197",
-      "attempt-a1d4eca4bdbd476a82a3d0e5b0f22a5c",
-      "attempt-a8053245766f46518b461f460aec1af3",
-      "attempt-9098e037dfc54ade9df1f11402cc66eb",
-      "attempt-18cf97de504d44ff8ae750fa5bec34e4",
-      "attempt-a4c8e8359de3473fa2125940fcbb9d3d",
-      "attempt-08d96d16943f402b8001d056cd82affc",
-      "attempt-7ce303138aff421093d92da322b5d582",
-      "attempt-4158e8a019f6453796849f230332d17d",
-      "attempt-3d9c098963c34b2f88c0d22ffc572481",
-      "attempt-dc678ccf118a49dfb82a7f2f414f08a9",
-      "attempt-b54b0b8847d94020b809cb195b735fc9",
-      "attempt-b2492e638f7140d7b19cc72570d3f593",
-      "attempt-2318044abb18466098e43796d3db478b",
-      "attempt-7c223d1dd4724172835cb9d10be5b1c8",
-      "attempt-2f34a7f6990445b996eadb8ec9937e02",
-      "attempt-459c67ae7c5f47e1ade2db408b57db3d",
-      "attempt-0b55844ade3345659d90021f6d5018e8",
-      "attempt-6c16923dae914518a3d98a8657b9d497",
-      "attempt-4b2eba9c5c514485b9a79cde49a6f9b0",
-      "attempt-711c142d8c1e48e7a423043db2cd162b",
-      "attempt-6e0f84a5d92a4c1389b57df3b247a8b4",
-      "attempt-6ba9067f73224e0d9708bb2f927bf04f",
-      "attempt-3faf55b648ce467e83d2621a19b6d31f",
-      "attempt-3affae9d51374d4f90f11c333b13e9f2",
-      "attempt-19498b8052cd40c1bde3693e9145dfbb",
-      "attempt-86d2b8b5db024707a72db9ad668e7424",
-      "attempt-781d6316db6c47379cdf3d3342789308",
-      "attempt-29e2ad82b04c4f0d88b14ae815e2461a",
-      "attempt-4e1ef5cd217144c48da854d43403e93d",
-      "attempt-200327aa0b5e4bd48a06cb8acdfa99b1",
-      "attempt-762c92d229f2409cb2a5d625eb81a928",
-      "attempt-718c1a7f780c4c269676d4af6449db36",
-      "attempt-c03695f7a9c3407f884b2978a3d3f884",
-      "attempt-93f87086586f402e906de615981cd303",
-      "attempt-7747d31bd6dd448ea098115a8e681236",
-      "attempt-ca6a0fa274644b8f88f3046296a0c17d",
-      "attempt-5b62deb980454a0ca9d922884dd4ed6c",
-      "attempt-1c2d5f111348433a999e1e9b8132c32c",
-      "attempt-fa53d0b7d89e4c38bd6e20aa5abc6391",
-      "attempt-f3e9a2d8f49d498e97cdf0920db13211",
-      "attempt-bf2cf16810434fe483340cf347a9b0a4",
-      "attempt-e74dbb7d1ce24508bf4917430b7ebbc3",
-      "attempt-d6bfbc28dd8a40cab3298d878d20ac9d",
-      "attempt-fc7b1ff4e6fe4cf8ac9c4c77040e7264",
-      "attempt-1488a37a73d643448fd864a9beb98131",
-      "attempt-87611bc199534bd0bb5a913bd90a66a7",
-      "attempt-c5aeac9caaf04917b65e09f1d5d45f62",
-      "attempt-2677e698d60249298e3c55f2b3e22148",
-      "attempt-598b53ac488847afb5031ba69b567f18",
-      "attempt-e87bf002a8cf41d08e5a0d844d005a22",
-      "attempt-fe91b01c5b5842e78a2ad073f0527bf9",
-      "attempt-ec3352031eab4cb5a6256585bae5916b",
-      "attempt-569b0715fcc549e68c4907153c49998f",
-      "attempt-f362c9da348441d9860e94e969920197",
-      "attempt-0ac7f169e39c407ab97cec98a4496ab0",
-      "attempt-85072739841b49b6892b7018e3da37e5",
-      "attempt-ebf31e94e4d845a5aed82e78ea8d6ed5",
-      "attempt-d777ecc2cca848008c5ebf7cb47a0f40",
-      "attempt-dbc76865fb0b4d829019acaabd46605d",
-      "attempt-409107b1d26a400c98a07bfb1f949869",
-      "attempt-5b68750c12614501a3b6eefcd2e4685c",
-      "attempt-45f446f68c624e8b9e25a47b421549d0",
-      "attempt-6804b02c049e4fb39df01935f81b68ad",
-      "attempt-40b8453d517a42e2acb32039fe9372fc",
-      "attempt-a0cecab44bfc43c69c5c168208571ef2",
-      "attempt-b0fb3ae177c746e295f086a67f6b5d57",
-      "attempt-66d287588d34432499042e69a77345b6",
-      "attempt-9874fb533ed0417481060400c7685e8d",
-      "attempt-856434f97c8c4f4cbfffa667b08046fa",
-      "attempt-99d491400bae4615b52dd04875057e2f",
-      "attempt-e0d9447a44864e26b3f01f0ea944741f",
-      "attempt-04ead36b8eb04ee8b1f520bb5176a096",
-      "attempt-937a89c116904bb68e128275132c6131",
-      "attempt-542e6fc162954e2788c3a500b1bd480d",
-      "attempt-5d6dca02872841e293a0bd97c1b52334",
-      "attempt-1529ecadc59448b59ebb745b798bb6ee",
-      "attempt-fc250eff54bb4395ae8004a0af0eee56",
-      "attempt-e8fe198ae7bf4715b5068e435bcd2ddf",
-      "attempt-c2d9a942393d49c892c8b1d45b3b3221",
-      "attempt-a8a9f443f07242f8bbb471c65c220626"
-    ],
-    "providers_this_run": {
-      "aliyun": {
-        "total": 36,
-        "reserved": 33,
-        "forwarded": 33,
-        "locally_blocked": 3,
-        "estimated_input_tokens": 3512,
-        "observed_tokens": 1863,
+    "steps": {
+      "aliyun_document_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
         "observed_usage_status": "known",
         "unknown_usage_attempts": 0,
         "unknown_forwarding_attempts": 0,
-        "locally_blocked_estimated_tokens": 330
+        "locally_blocked_estimated_tokens": 0
       },
-      "jina": {
-        "total": 224,
-        "reserved": 95,
-        "forwarded": 95,
-        "locally_blocked": 129,
-        "estimated_input_tokens": 37163,
-        "observed_tokens": 28529,
+      "aliyun_document_diagnostic_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_diagnostic_20260906_2": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_document_retest_20260906": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 13,
+        "observed_tokens": 23,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "aliyun_query_canary": {
+        "total": 1,
+        "reserved": 1,
+        "forwarded": 1,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 106,
+        "observed_tokens": 56,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "citation_quality": {
+        "total": 668,
+        "reserved": 344,
+        "forwarded": 344,
+        "locally_blocked": 324,
+        "estimated_input_tokens": 111774,
+        "observed_tokens": 100262,
         "observed_usage_status": "unknown",
         "unknown_usage_attempts": 18,
         "unknown_forwarding_attempts": 18,
-        "locally_blocked_estimated_tokens": 20843
+        "locally_blocked_estimated_tokens": 23438
+      },
+      "dual_index": {
+        "total": 2,
+        "reserved": 2,
+        "forwarded": 2,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 104,
+        "observed_tokens": 85,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "historical": {
+        "total": 7,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 1,
+        "estimated_input_tokens": 157,
+        "observed_tokens": 242,
+        "observed_usage_status": "unknown",
+        "unknown_usage_attempts": 3,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 19
+      },
+      "jina_connection": {
+        "total": 3,
+        "reserved": 3,
+        "forwarded": 3,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 82,
+        "observed_tokens": 234,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "primary_query": {
+        "total": 6,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 0,
+        "estimated_input_tokens": 144,
+        "observed_tokens": 567,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 0
+      },
+      "recovery": {
+        "total": 15,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 9,
+        "estimated_input_tokens": 162,
+        "observed_tokens": 585,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 990
+      },
+      "standby_failover": {
+        "total": 15,
+        "reserved": 6,
+        "forwarded": 6,
+        "locally_blocked": 9,
+        "estimated_input_tokens": 447,
+        "observed_tokens": 723,
+        "observed_usage_status": "known",
+        "unknown_usage_attempts": 0,
+        "unknown_forwarding_attempts": 0,
+        "locally_blocked_estimated_tokens": 135
       }
     }
   },
   "checks": {
     "check": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "authorization_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "endpoint_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "connection_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "conformance_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "publication_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "security_matrix": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "check"
-      ],
-      "started_at": "2026-09-06T11:00:28.911025+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:37.190002+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/check-execution.json",
-      "sha256": "870e8af04bced33a0e88353f36f535562e684b7b8186093047dfbac371d0ff96"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "doctor": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "doctor"
-      ],
-      "started_at": "2026-09-06T11:08:37.190810+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:38.477438+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py doctor",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/doctor-execution.json",
-      "sha256": "1c6e304fca02bf7efd3c6f2b281e9cce663e9042d5ba7a3460481c48b7afb13b"
+      "evidence": "artifacts/p11-final/trial-hardening/doctor-execution.json",
+      "sha256": "c7c571a3ec7870e7bfe27f06a5fa42fee197f59ec65a7545ed396c4142a2043a"
     },
     "smoke": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "smoke"
-      ],
-      "started_at": "2026-09-06T11:08:38.478294+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:08:51.011604+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py smoke",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/smoke-execution.json",
-      "sha256": "3784b33cf4158083ce6bb870f50510c4182865633856be047df20a091809b046"
+      "evidence": "artifacts/p11-final/trial-hardening/smoke-execution.json",
+      "sha256": "aea662aba4ceb69f7ee64f1555f5b74a0fed01a4cd1826c527acf4d5081a4b83"
     },
     "product_check": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "product-check"
-      ],
-      "started_at": "2026-09-06T11:08:51.012285+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:09:35.059883+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py product-check",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/product_check-execution.json",
-      "sha256": "f66b45acf50c198ac43e6ff19d9222b9e48ef40c5250ad21d607610b85bf5f64"
+      "evidence": "artifacts/p11-final/trial-hardening/product_check-execution.json",
+      "sha256": "652b82af920941abce253ec9c0572617df607a65ab8b3ed33fa5bbca8626f3a0"
     },
     "product_smoke": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "product-smoke"
-      ],
-      "started_at": "2026-09-06T11:09:35.060644+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:09:41.620668+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py product-smoke",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/product_smoke-execution.json",
-      "sha256": "957e7a3381646acae8b4527373f2a48f01a99ab7bd6c6dde9e98cc9f4b5630e5"
+      "evidence": "artifacts/p11-final/trial-hardening/product_smoke-execution.json",
+      "sha256": "f4605a8062056002dabc7ab260b725cfeeb9228b49b3f7fa498cd947372ef98d"
     },
     "web_lint": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-lint"
-      ],
-      "started_at": "2026-09-06T11:01:15.526125+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:01:24.190622+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "npm run lint",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/web_lint-execution.json",
-      "sha256": "531d9b96488e228f25e1fd67fa3d52d0d5d85907c486f77e6f177649ccdc09d6"
+      "evidence": "artifacts/p11-final/trial-hardening/web_lint-execution.json",
+      "sha256": "154c1335e18256995ea0e0ac3535fa1e770084edf4ed8d66cfa3aed7690361ea"
     },
     "web_typecheck": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-typecheck"
-      ],
-      "started_at": "2026-09-06T11:01:24.191151+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:01:27.567114+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "npm run typecheck",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/web_typecheck-execution.json",
-      "sha256": "2dca53f36fa0277aa0be38e99e2d4bce1d57cd1e882bc855de12ab4622286c61"
+      "evidence": "artifacts/p11-final/trial-hardening/web_typecheck-execution.json",
+      "sha256": "10631a4b5a652df36d87b220de6872611ae9fc258e11fefc047452509ad80de7"
     },
     "web_test": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-test"
-      ],
-      "started_at": "2026-09-06T11:01:27.567591+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:01:31.863914+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "npm test",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/web_test-execution.json",
-      "sha256": "948925006abbbea3ab020b2a68d83b20ae4e185490055568453de561427baedb"
+      "evidence": "artifacts/p11-final/trial-hardening/web_test-execution.json",
+      "sha256": "7416d4607fd2b9df5e95cc2fc271bd39deb52b8fb3db8796152ecca556734835"
     },
     "web_e2e": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "scripts/dev.py",
-        "web-e2e"
-      ],
-      "started_at": "2026-09-06T11:01:31.864524+00:00",
-      "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
-      },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:02:04.464187+00:00",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "npm run e2e -- --workers=2",
+      "identity": {
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
+      },
       "origin": "本次执行",
-      "evidence": "artifacts/p11-final/quality-security-closure/web_e2e-execution.json",
-      "sha256": "ae723a36c00c839827419107d01dbc539ec7f7b56e06ef270cb4ee6764f89349"
+      "evidence": "artifacts/p11-final/trial-hardening/web_e2e-execution.json",
+      "sha256": "1f6edfa776492d7af8d142e8398da0c03be687b48c6115e19c9ad971c248feb6"
     },
     "upgrade_tests": {
-      "command": [
-        "/home/jerry/work/RAG/.venv/bin/python",
-        "-m",
-        "pytest",
-        "-q",
-        "tests/upgrade/test_p11_upgrade.py"
-      ],
-      "started_at": "2026-09-06T11:26:05.553634+00:00",
+      "status": "PASS",
+      "reason": "COMMAND_EXIT_ZERO",
+      "exit_code": 0,
+      "command": "scripts/dev.py check",
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:26:08.841712+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/upgrade_tests-execution.json",
-      "sha256": "6f88814408e25482513de57a407c384ee4c6b18f89563fa47c330a38c445d718",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO"
+      "evidence": "artifacts/p11-final/trial-hardening/check-execution.json",
+      "sha256": "48c02f8bdb303b6d0ac7f1c6c75be39155f547d4929b4c71b670516a04d8a9bf"
     },
     "qdrant": {
-      "command": [
-        "scripts/release.py",
-        "acceptance",
-        "internal:qdrant"
-      ],
-      "started_at": "2026-09-06T11:25:49.153161+00:00",
+      "status": "PASS",
+      "reason": "ISOLATED_SIX_COLLECTION_RESTORE_PASSED_ACTIVE_QDRANT_UNCHANGED",
+      "exit_code": 0,
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:26:05.552818+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/qdrant-execution.json",
-      "sha256": "9b0e12b307ead65e339dc205aea7a2fe4f6455953031d00252e707aa25a414d4",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO"
+      "evidence": "artifacts/p11-final/trial-hardening/app-update-20260907T021553Z/update-receipt.json",
+      "sha256": "f7bcfbb3bc887d16cfe8c4bfb3e844dd4ec07838862e7db563eaacfb7e212d7b"
     },
     "backup_restore": {
-      "command": [
-        "scripts/release.py",
-        "acceptance",
-        "internal:qdrant"
-      ],
-      "started_at": "2026-09-06T11:25:49.153161+00:00",
+      "status": "PASS",
+      "reason": "TRUSTED_ARCHIVE_AND_ISOLATED_SQLITE_QDRANT_RESTORE_PASSED",
+      "exit_code": 0,
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:26:05.552818+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/qdrant-execution.json",
-      "sha256": "9b0e12b307ead65e339dc205aea7a2fe4f6455953031d00252e707aa25a414d4",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO"
+      "evidence": "artifacts/p11-final/trial-hardening/app-update-20260907T021553Z/update-receipt.json",
+      "sha256": "f7bcfbb3bc887d16cfe8c4bfb3e844dd4ec07838862e7db563eaacfb7e212d7b"
     },
     "candidate_startup": {
-      "command": [
-        "scripts/release.py",
-        "acceptance",
-        "internal:candidate"
-      ],
-      "started_at": "2026-09-06T11:24:53.967394+00:00",
+      "status": "PASS",
+      "reason": "ACTUAL_CANDIDATE_HEALTHY_HTTP_200",
+      "exit_code": 0,
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
       },
-      "exit_code": 0,
-      "finished_at": "2026-09-06T11:25:49.097936+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/candidate_startup-execution.json",
-      "sha256": "d24c76185b79228774dccf82e6a1225fb15db01b28f889377fe97de68a7794ca",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO"
+      "evidence": "artifacts/p11-final/trial-hardening/app-update-20260907T021553Z/update-receipt.json",
+      "sha256": "f7bcfbb3bc887d16cfe8c4bfb3e844dd4ec07838862e7db563eaacfb7e212d7b"
     },
     "candidate_browser": {
       "command": [
@@ -1139,8 +708,8 @@
       "origin": "本次执行",
       "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/candidate_startup-execution.json",
       "sha256": "d24c76185b79228774dccf82e6a1225fb15db01b28f889377fe97de68a7794ca",
-      "status": "PASS",
-      "reason": "COMMAND_EXIT_ZERO"
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH"
     },
     "python_dependency_audit": {
       "command": [
@@ -1148,15 +717,15 @@
         "verify",
         "internal:python-audit"
       ],
-      "started_at": "2026-09-06T11:22:34.214235+00:00",
+      "started_at": "2026-09-07T01:58:46.314211+00:00",
       "identity": {
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-06T11:22:56.865685+00:00",
+      "finished_at": "2026-09-07T01:59:09.618194+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/python_dependency_audit-execution.json",
-      "sha256": "8c5d5210f312ac0e7403c859e63c7c449e3f83f85ead8ce10be6013293d34b89",
+      "evidence": "artifacts/p11-final/trial-hardening/final-image/python_dependency_audit-execution.json",
+      "sha256": "98848144d02b4416343462dd5f01b859a3ebaf7d452a816060542a1a4fb3276b",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO"
     },
@@ -1166,15 +735,15 @@
         "verify",
         "internal:npm-audit"
       ],
-      "started_at": "2026-09-06T11:22:56.866133+00:00",
+      "started_at": "2026-09-07T01:59:09.618731+00:00",
       "identity": {
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-06T11:22:57.995352+00:00",
+      "finished_at": "2026-09-07T01:59:10.617007+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/npm_dependency_audit-execution.json",
-      "sha256": "818157655182a673eb3c80082c7535c1edc7174f9acfce29fc22bb36300e20cc",
+      "evidence": "artifacts/p11-final/trial-hardening/final-image/npm_dependency_audit-execution.json",
+      "sha256": "b24172a425cc0d2d10039b8cd176d1ba931b8495c1129eb368c40d89063637fb",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO"
     },
@@ -1189,18 +758,18 @@
         "--path",
         "frontend/dist"
       ],
-      "started_at": "2026-09-06T11:22:58.664726+00:00",
+      "started_at": "2026-09-07T01:59:11.430393+00:00",
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-06T11:22:59.149603+00:00",
+      "finished_at": "2026-09-07T01:59:11.951182+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/secret_scan-execution.json",
-      "sha256": "5be33fd9ee9a40d6c168a5c0159bb9fe88921749464d02fee8fbf8b0095650aa",
+      "evidence": "artifacts/p11-final/trial-hardening/final-image/secret_scan-execution.json",
+      "sha256": "329a1abe04e7560fa379d97c964a838483e4d1d5d2338d5ed057c96aba236eaa",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO"
     },
@@ -1215,20 +784,20 @@
         "--path",
         "frontend/dist"
       ],
-      "started_at": "2026-09-06T11:22:58.664726+00:00",
+      "started_at": "2026-09-07T01:59:11.430393+00:00",
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2"
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9"
       },
       "exit_code": 0,
-      "finished_at": "2026-09-06T11:22:59.149603+00:00",
+      "finished_at": "2026-09-07T01:59:11.951182+00:00",
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/secret_scan-execution.json",
-      "sha256": "5be33fd9ee9a40d6c168a5c0159bb9fe88921749464d02fee8fbf8b0095650aa",
+      "evidence": "artifacts/p11-final/trial-hardening/final-image/secret_scan-execution.json",
+      "sha256": "329a1abe04e7560fa379d97c964a838483e4d1d5d2338d5ed057c96aba236eaa",
       "status": "PASS",
       "reason": "COMMAND_EXIT_ZERO"
     },
@@ -1237,1637 +806,67 @@
       "reason": "RISK_REVIEW_REQUIRED",
       "identity": {
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       },
       "origin": "本次执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/security/overlay-validation-final.json",
+      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/trial-hardening/final-image/security/20260907T015846313768Z/os-risk-review.json",
       "exit_code": 0,
-      "sha256": "4ec78e0b5d047abbc4350f3de186c2c93fa957a46e6b8b96ebb98585ee3d8f44",
+      "sha256": "55f440bbfab35bcc8db7f6e74a6e69f0e31f37e241cccc27e758820106f6fe5d",
       "details": {
-        "status": "BLOCKED",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f",
-        "os": {
-          "Family": "debian",
-          "Name": "13.6"
+        "raw_scan": {
+          "path": "/home/jerry/work/RAG/artifacts/p11-final/trial-hardening/final-image/security/20260907T015846313768Z/trivy-all.json",
+          "sha256": "4119be332eff836601cd857e0ebe144a054798a272cff96b36e5a850c902784b"
         },
-        "scanned_at": "2026-09-06T11:23:21.950941798Z",
-        "scanner": {
-          "Version": "0.74.0"
+        "review_overlay": {
+          "path": "/home/jerry/work/RAG/release/p11-os-risk-review.json",
+          "sha256": "52b7b1d00ec5d4597b566d24b7f993f4ee8d03125fa436c37816fae316ef713b"
         },
-        "reason": "RISK_REVIEW_REQUIRED",
-        "all_high_critical": 50,
-        "raw_high_critical": 50,
-        "raw_findings": 173,
-        "unique_cves": 18,
-        "unique_cve_package_versions": 50,
-        "fixable_high_critical": 0,
-        "without_fix": 50,
-        "findings": [
-          {
-            "id": "CVE-2026-76642",
-            "package": "bsdutils",
-            "installed_version": "1:2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
+        "risk_summary": {
+          "status": "BLOCKED",
+          "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82",
+          "os": {
+            "Family": "debian",
+            "Name": "13.6"
           },
-          {
-            "id": "CVE-2026-78408",
-            "package": "bsdutils",
-            "installed_version": "1:2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
+          "scanned_at": "2026-09-07T01:59:41.196125347Z",
+          "scanner": {
+            "Version": "0.74.0"
           },
-          {
-            "id": "CVE-2026-78409",
-            "package": "bsdutils",
-            "installed_version": "1:2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "bsdutils",
-            "installed_version": "1:2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-41992",
-            "package": "gzip",
-            "installed_version": "1.13-1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "gzip",
-            "source_version": "1.13-1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-54369",
-            "package": "libacl1",
-            "installed_version": "2.3.2-2+b1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "acl",
-            "source_version": "2.3.2-2",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "libblkid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "libblkid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "libblkid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "libblkid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "liblastlog2-2",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "liblastlog2-2",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "liblastlog2-2",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "liblastlog2-2",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "libmount1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "libmount1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "libmount1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "libmount1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2025-69720",
-            "package": "libncursesw6",
-            "installed_version": "6.5+20250216-2",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "ncurses",
-            "source_version": "6.5+20250216-2",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "libsmartcols1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "libsmartcols1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "libsmartcols1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "libsmartcols1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-11822",
-            "package": "libsqlite3-0",
-            "installed_version": "3.46.1-7+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "sqlite3",
-            "source_version": "3.46.1-7+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-11824",
-            "package": "libsqlite3-0",
-            "installed_version": "3.46.1-7+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "sqlite3",
-            "source_version": "3.46.1-7+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-16742",
-            "package": "libsystemd0",
-            "installed_version": "257.13-1~deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "systemd",
-            "source_version": "257.13-1~deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2025-69720",
-            "package": "libtinfo6",
-            "installed_version": "6.5+20250216-2",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "ncurses",
-            "source_version": "6.5+20250216-2",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-16742",
-            "package": "libudev1",
-            "installed_version": "257.13-1~deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "systemd",
-            "source_version": "257.13-1~deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "libuuid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "libuuid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "libuuid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "libuuid1",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "login",
-            "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "login",
-            "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "login",
-            "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "login",
-            "installed_version": "1:4.16.0-2+really2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2025-69720",
-            "package": "ncurses-base",
-            "installed_version": "6.5+20250216-2",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "ncurses",
-            "source_version": "6.5+20250216-2",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2025-69720",
-            "package": "ncurses-bin",
-            "installed_version": "6.5+20250216-2",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "ncurses",
-            "source_version": "6.5+20250216-2",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-13221",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "CRITICAL",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-42496",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "CRITICAL",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-8376",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "CRITICAL",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-42497",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-48962",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-57432",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-57433",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-9538",
-            "package": "perl-base",
-            "installed_version": "5.40.1-6",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "perl",
-            "source_version": "5.40.1-6",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-76642",
-            "package": "util-linux",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78408",
-            "package": "util-linux",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78409",
-            "package": "util-linux",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          },
-          {
-            "id": "CVE-2026-78410",
-            "package": "util-linux",
-            "installed_version": "2.41.5-0+deb13u1",
-            "fixed_version": null,
-            "severity": "HIGH",
-            "target": "docx-rag:v1-candidate (debian 13.6)",
-            "source_package": "util-linux",
-            "source_version": "2.41.5-0+deb13u1",
-            "reachability": "NOT_ASSESSED",
-            "mitigation": "NOT_ASSESSED",
-            "risk_accepted": false,
-            "owner": null,
-            "expires_at": null,
-            "disposition": "UNDER_INVESTIGATION",
-            "review_valid": false,
-            "review_reason": "REVIEW_UNDER_INVESTIGATION"
-          }
-        ],
-        "scan_identity": {
-          "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f",
-          "sha256": "68fc1245463f602e0e8456e6b433c9c8cf4ba0fe0d5f401a1ff2f0278f19252c",
-          "scanned_at": "2026-09-06T11:23:21.950941798Z",
-          "scanner_version": "0.74.0",
-          "db_updated_at": "2026-09-06T07:00:11.537152697Z"
-        },
-        "under_investigation": 50,
-        "mitigated": 0,
-        "approved_dispositions": 0,
-        "objective_dispositions": 0,
-        "accepted_risk_remaining": false,
-        "review_errors": []
+          "reason": "RISK_REVIEW_REQUIRED",
+          "all_high_critical": 50,
+          "raw_high_critical": 50,
+          "raw_findings": 173,
+          "unique_cves": 18,
+          "unique_cve_package_versions": 50,
+          "fixable_high_critical": 0,
+          "without_fix": 50,
+          "under_investigation": 50,
+          "mitigated": 0,
+          "approved_dispositions": 0,
+          "objective_dispositions": 0,
+          "accepted_risk_remaining": false,
+          "review_errors": [
+            "REVIEW_SCAN_IDENTITY_MISMATCH"
+          ]
+        }
       }
     },
     "ci": {
-      "status": "BLOCKED",
-      "reason": "EVIDENCE_ORIGIN_UNVERIFIED",
+      "status": "PASS",
+      "reason": "MERGE_SHA_ALL_SEVEN_JOBS_PASSED",
+      "exit_code": 0,
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc"
       },
-      "origin": "本次合并结果执行",
-      "evidence": "/home/jerry/work/RAG/artifacts/p11-final/quality-security-closure/ci-merge.json",
-      "sha256": "8f281be97f2ae32f743262fc73c477b06bacf0bb492df8853cf3acf3551e7827",
-      "details": {
-        "conclusion": "success",
-        "createdAt": "2026-09-06T11:58:12Z",
-        "databaseId": 34031731094,
-        "headSha": "029d674c19b3d61f31ad0da84228d54af0535ed1",
-        "jobs": [
-          {
-            "completedAt": "2026-09-06T11:58:31Z",
-            "conclusion": "success",
-            "databaseId": 101482378760,
-            "name": "secret-scan",
-            "startedAt": "2026-09-06T11:58:15Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:17Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:16Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:18Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:20Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:18Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:24Z",
-                "conclusion": "success",
-                "name": "Run npm ci",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:20Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:28Z",
-                "conclusion": "success",
-                "name": "Run npm run build",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:24Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:29Z",
-                "conclusion": "success",
-                "name": "Run python scripts/secret_scan.py --path src --path frontend/dist",
-                "number": 6,
-                "startedAt": "2026-09-06T11:58:28Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:29Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 11,
-                "startedAt": "2026-09-06T11:58:29Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:30Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 12,
-                "startedAt": "2026-09-06T11:58:29Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:30Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 13,
-                "startedAt": "2026-09-06T11:58:30Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378760"
-          },
-          {
-            "completedAt": "2026-09-06T11:58:48Z",
-            "conclusion": "success",
-            "databaseId": 101482378803,
-            "name": "qdrant-integration",
-            "startedAt": "2026-09-06T11:58:16Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:17Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:16Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:23Z",
-                "conclusion": "success",
-                "name": "Initialize containers",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:25Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:23Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:26Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:25Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:38Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --requirement requirements.lock",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:26Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:40Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --no-deps --editable .",
-                "number": 6,
-                "startedAt": "2026-09-06T11:58:38Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:40Z",
-                "conclusion": "success",
-                "name": "Prepare synthetic Qdrant key file",
-                "number": 7,
-                "startedAt": "2026-09-06T11:58:40Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:45Z",
-                "conclusion": "success",
-                "name": "Run server, snapshot and restore acceptance",
-                "number": 8,
-                "startedAt": "2026-09-06T11:58:40Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:45Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 14,
-                "startedAt": "2026-09-06T11:58:45Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:45Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 15,
-                "startedAt": "2026-09-06T11:58:45Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:45Z",
-                "conclusion": "success",
-                "name": "Stop containers",
-                "number": 16,
-                "startedAt": "2026-09-06T11:58:45Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:45Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 17,
-                "startedAt": "2026-09-06T11:58:45Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378803"
-          },
-          {
-            "completedAt": "2026-09-06T11:58:57Z",
-            "conclusion": "success",
-            "databaseId": 101482378805,
-            "name": "frontend-quality",
-            "startedAt": "2026-09-06T11:58:17Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:19Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:18Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:20Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:23Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:20Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:30Z",
-                "conclusion": "success",
-                "name": "Run npm ci",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:23Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:38Z",
-                "conclusion": "success",
-                "name": "Run npm run lint",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:30Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:42Z",
-                "conclusion": "success",
-                "name": "Run npm run typecheck",
-                "number": 6,
-                "startedAt": "2026-09-06T11:58:38Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:50Z",
-                "conclusion": "success",
-                "name": "Run npm test",
-                "number": 7,
-                "startedAt": "2026-09-06T11:58:42Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:54Z",
-                "conclusion": "success",
-                "name": "Run npm run build",
-                "number": 8,
-                "startedAt": "2026-09-06T11:58:50Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:54Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 15,
-                "startedAt": "2026-09-06T11:58:54Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:55Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 16,
-                "startedAt": "2026-09-06T11:58:54Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:55Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 17,
-                "startedAt": "2026-09-06T11:58:55Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378805"
-          },
-          {
-            "completedAt": "2026-09-06T12:04:18Z",
-            "conclusion": "success",
-            "databaseId": 101482378830,
-            "name": "python-quality",
-            "startedAt": "2026-09-06T11:58:16Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:17Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:19Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:19Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:22Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:34Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --requirement requirements.lock",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:22Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:36Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --no-deps --editable .",
-                "number": 6,
-                "startedAt": "2026-09-06T11:58:34Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:04:15Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py check",
-                "number": 7,
-                "startedAt": "2026-09-06T11:58:36Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:04:16Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 12,
-                "startedAt": "2026-09-06T12:04:15Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:04:16Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 13,
-                "startedAt": "2026-09-06T12:04:16Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:04:16Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 14,
-                "startedAt": "2026-09-06T12:04:16Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:04:16Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 15,
-                "startedAt": "2026-09-06T12:04:16Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378830"
-          },
-          {
-            "completedAt": "2026-09-06T11:59:11Z",
-            "conclusion": "success",
-            "databaseId": 101482378872,
-            "name": "container-build",
-            "startedAt": "2026-09-06T11:58:16Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:17Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:16Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:18Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:57Z",
-                "conclusion": "success",
-                "name": "Run docker build --build-arg VCS_REF=\"$GITHUB_SHA\" --tag docx-rag:v1-candidate .",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:18Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:57Z",
-                "conclusion": "success",
-                "name": "Run docker run --rm --entrypoint sh docx-rag:v1-candidate -c 'test \"$(id -u)\" = 10001 && test ! -e /usr/local/bin/node && test ! -e /usr/local/bin/pip'",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:57Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:09Z",
-                "conclusion": "success",
-                "name": "Archive complete vulnerability scan including unfixed findings",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:57Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:10Z",
-                "conclusion": "success",
-                "name": "Retain complete scan and vulnerability database identity",
-                "number": 6,
-                "startedAt": "2026-09-06T11:59:09Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:10Z",
-                "conclusion": "success",
-                "name": "Block fixable High or Critical vulnerabilities only",
-                "number": 7,
-                "startedAt": "2026-09-06T11:59:10Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:10Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 14,
-                "startedAt": "2026-09-06T11:59:10Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:10Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 15,
-                "startedAt": "2026-09-06T11:59:10Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378872"
-          },
-          {
-            "completedAt": "2026-09-06T11:58:31Z",
-            "conclusion": "success",
-            "databaseId": 101482378938,
-            "name": "sbom",
-            "startedAt": "2026-09-06T11:58:16Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:17Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:19Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:28Z",
-                "conclusion": "success",
-                "name": "Run docker run --rm -v \"$PWD:/src:ro\" -v \"$RUNNER_TEMP:/output\" anchore/syft@sha256:95fe0835e5bebc6f8b1f8acef68d47d63d594ef4c0f25c097ff853b23cbac74c dir:/src -o cyclonedx-json=/output/p11-source.cdx.json",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:29Z",
-                "conclusion": "success",
-                "name": "Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:28Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:29Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 8,
-                "startedAt": "2026-09-06T11:58:29Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:29Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 9,
-                "startedAt": "2026-09-06T11:58:29Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378938"
-          },
-          {
-            "completedAt": "2026-09-06T12:00:38Z",
-            "conclusion": "success",
-            "databaseId": 101482378951,
-            "name": "offline-product-e2e",
-            "startedAt": "2026-09-06T11:58:16Z",
-            "status": "completed",
-            "steps": [
-              {
-                "completedAt": "2026-09-06T11:58:18Z",
-                "conclusion": "success",
-                "name": "Set up job",
-                "number": 1,
-                "startedAt": "2026-09-06T11:58:17Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:19Z",
-                "conclusion": "success",
-                "name": "Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 2,
-                "startedAt": "2026-09-06T11:58:18Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:23Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 3,
-                "startedAt": "2026-09-06T11:58:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:27Z",
-                "conclusion": "success",
-                "name": "Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 4,
-                "startedAt": "2026-09-06T11:58:23Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:41Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --requirement requirements.lock",
-                "number": 5,
-                "startedAt": "2026-09-06T11:58:27Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:44Z",
-                "conclusion": "success",
-                "name": "Run python -m pip install --no-deps --editable .",
-                "number": 6,
-                "startedAt": "2026-09-06T11:58:41Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:58:52Z",
-                "conclusion": "success",
-                "name": "Run npm ci",
-                "number": 7,
-                "startedAt": "2026-09-06T11:58:44Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:19Z",
-                "conclusion": "success",
-                "name": "Run npx playwright install --with-deps chromium",
-                "number": 8,
-                "startedAt": "2026-09-06T11:58:52Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:52Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py product-check",
-                "number": 9,
-                "startedAt": "2026-09-06T11:59:19Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T11:59:59Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py product-smoke",
-                "number": 10,
-                "startedAt": "2026-09-06T11:59:52Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:00:34Z",
-                "conclusion": "success",
-                "name": "Run python scripts/dev.py web-e2e",
-                "number": 11,
-                "startedAt": "2026-09-06T11:59:59Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:00:34Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-                "number": 20,
-                "startedAt": "2026-09-06T12:00:34Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:00:34Z",
-                "conclusion": "success",
-                "name": "Post Run actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
-                "number": 21,
-                "startedAt": "2026-09-06T12:00:34Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:00:34Z",
-                "conclusion": "success",
-                "name": "Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262",
-                "number": 22,
-                "startedAt": "2026-09-06T12:00:34Z",
-                "status": "completed"
-              },
-              {
-                "completedAt": "2026-09-06T12:00:34Z",
-                "conclusion": "success",
-                "name": "Complete job",
-                "number": 23,
-                "startedAt": "2026-09-06T12:00:34Z",
-                "status": "completed"
-              }
-            ],
-            "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094/job/101482378951"
-          }
-        ],
-        "status": "completed",
-        "updatedAt": "2026-09-06T12:04:19Z",
-        "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34031731094",
-        "workflowName": "P11 CI"
-      },
-      "exit_code": 0
+      "origin": "本次执行",
+      "evidence": "artifacts/p11-final/trial-hardening/ci-merge.json",
+      "sha256": "ed6b4cd15396e7999eb97c48868b00a9c0824a0f078794d04a35960844445ea7"
     },
     "candidate_capabilities": {
       "status": "BLOCKED",
@@ -2884,8 +883,8 @@
       "details": {}
     },
     "campaign_config": {
-      "status": "PASS",
-      "reason": "LOCAL_CONFIGURATION_VALID",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
@@ -2950,8 +949,8 @@
       }
     },
     "aliyun_document_canary": {
-      "status": "PASS",
-      "reason": "LIVE_VALIDATION_PASSED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9"
       },
@@ -3143,8 +1142,8 @@
       }
     },
     "aliyun_query_canary": {
-      "status": "PASS",
-      "reason": "LIVE_VALIDATION_PASSED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9"
       },
@@ -3341,8 +1340,8 @@
       }
     },
     "jina_connection": {
-      "status": "PASS",
-      "reason": "JINA_OPERATIONS_CURRENT",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b"
       },
@@ -3651,8 +1650,8 @@
       }
     },
     "dual_index": {
-      "status": "PASS",
-      "reason": "DUAL_SLOT_VERIFIED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
@@ -4099,8 +2098,8 @@
       }
     },
     "primary_query": {
-      "status": "PASS",
-      "reason": "ROUTE_VERIFIED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
@@ -4547,8 +2546,8 @@
       }
     },
     "standby_failover": {
-      "status": "PASS",
-      "reason": "ROUTE_VERIFIED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
@@ -5058,8 +3057,8 @@
       }
     },
     "recovery": {
-      "status": "PASS",
-      "reason": "ROUTE_VERIFIED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
@@ -52676,8 +50675,8 @@
       }
     },
     "endpoint_contract": {
-      "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
@@ -52742,8 +50741,8 @@
       }
     },
     "connection_configuration": {
-      "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
@@ -52808,8 +50807,8 @@
       }
     },
     "campaign_binding": {
-      "status": "PASS",
-      "reason": "LOCAL_DIAGNOSTIC_PASSED",
+      "status": "BLOCKED",
+      "reason": "EVIDENCE_IDENTITY_MISMATCH",
       "identity": {
         "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950"
@@ -52882,74 +50881,74 @@
         "authorization_tests"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "ALIYUN_ENDPOINT_CONTRACT_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "endpoint_contract",
       "evidence": [
         "endpoint_tests",
         "endpoint_contract"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "CONNECTION_CONFIGURATION_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "connection_configuration",
       "evidence": [
         "connection_configuration"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "CAMPAIGN_BINDING_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "campaign_binding",
       "evidence": [
         "campaign_binding"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "CONNECTION_EDIT_READY": {
@@ -52960,16 +50959,16 @@
         "web_e2e"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "RESOLVED_POLICY_CONFORMANCE_READY": {
@@ -52979,16 +50978,16 @@
         "conformance_tests"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "PROFILE_INDEX_SWITCH_READY": {
@@ -52999,78 +50998,78 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "PROVIDER_CONNECTIVITY_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "aliyun_document_canary, aliyun_query_canary, jina_connection",
       "evidence": [
         "aliyun_document_canary",
         "aliyun_query_canary",
         "jina_connection"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "DUAL_SLOT_FUNCTION_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "dual_index, primary_query",
       "evidence": [
         "dual_index",
         "primary_query",
         "qdrant"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "FAILOVER_RECOVERY_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "standby_failover, recovery",
       "evidence": [
         "standby_failover",
         "recovery"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "RETRIEVAL_QUALITY_READY": {
@@ -53080,36 +51079,36 @@
         "citation_quality"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "PRODUCT_BROWSER_READY": {
-      "status": "PASS",
-      "reason": "ALL_REQUIRED_PASSED",
+      "status": "BLOCKED",
+      "reason": "candidate_browser",
       "evidence": [
         "web_e2e",
         "candidate_browser"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "BACKUP_RESTORE_READY": {
@@ -53120,16 +51119,16 @@
         "upgrade_tests"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "SECURITY_READY": {
@@ -53144,40 +51143,40 @@
         "os_risk"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "CI_READY": {
-      "status": "BLOCKED",
-      "reason": "ci",
+      "status": "PASS",
+      "reason": "ALL_REQUIRED_PASSED",
       "evidence": [
         "ci"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "REMOTE_PRODUCTION_PROFILE_READY": {
       "status": "BLOCKED",
-      "reason": "RETRIEVAL_QUALITY_READY",
+      "reason": "ALIYUN_ENDPOINT_CONTRACT_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY",
       "evidence": [
         "ALIYUN_ENDPOINT_CONTRACT_READY",
         "RESOLVED_POLICY_CONFORMANCE_READY",
@@ -53188,21 +51187,21 @@
         "RETRIEVAL_QUALITY_READY"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "RELEASE_CANDIDATE_READY": {
       "status": "BLOCKED",
-      "reason": "RETRIEVAL_QUALITY_READY, SECURITY_READY, CI_READY, REMOTE_PRODUCTION_PROFILE_READY",
+      "reason": "ALIYUN_ENDPOINT_CONTRACT_READY, CONNECTION_CONFIGURATION_READY, CAMPAIGN_BINDING_READY, PROVIDER_CONNECTIVITY_READY, DUAL_SLOT_FUNCTION_READY, FAILOVER_RECOVERY_READY, RETRIEVAL_QUALITY_READY, PRODUCT_BROWSER_READY, SECURITY_READY, REMOTE_PRODUCTION_PROFILE_READY",
       "evidence": [
         "AUTHORIZATION_BOUNDARY_READY",
         "ALIYUN_ENDPOINT_CONTRACT_READY",
@@ -53232,16 +51231,16 @@
         "candidate_startup"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     },
     "P11_READY": {
@@ -53251,16 +51250,16 @@
         "RELEASE_CANDIDATE_READY"
       ],
       "identity": {
-        "runtime": "c467897ea3a7cc329c1a0199883114188e4ad2440b6c4a982e07ee25dec61d69",
-        "tests": "805b844c3d4241bf39954eef4a198d9de45597edb9175f30116f485bd8b13d95",
-        "frontend": "fbc8199e4706c06e03299d80b19e4b3713b8946ac2eb26f1c0f56432dadcfad2",
+        "runtime": "9b1d5197b6954fb68dc064b303ed562b5e3b8277b5ad5ac154761c6e3c76a6c6",
+        "tests": "657788ad5be037655be362a977fa0fc17b48e416bb7cde23bc5a20b07994670b",
+        "frontend": "a65d12a26db0ffb8927c93c6d6d5bac8c901a6fc16991ec392267d6de4dad5a9",
         "image": "33c4718e6b9e7d1f574104379a1a6557405d0e25f9d6742aedcf61d969ccaf40",
         "migrations": "e3c277ede7a829a4cc1a0544cd6e3db646ecb8f8fb32e2dab2596998b5223950",
         "release": "013ad29d81d64bd6b6ed661192dfa30aa3e2fa37ca7f1e4c08633d5986fadedc",
         "evaluation": "9f4f019a7e63338519142202ef9add489fdf283476c7bbd7989aced0f5990a8d",
-        "provider_jina": "742848b5ce2d25a79995a5e10351081d409bfbb8d0f3ab56d0c7dd1ee70d118b",
-        "provider_aliyun": "68bb58696426190350099ca946cdbc98a6ab1722221dbf0ff64c65f334e5d9a9",
-        "image_id": "sha256:05d6f9aa4fec7856683ca6a17b949a0ec08a85eab953d58f479f16a6c4bd866f"
+        "provider_jina": "79317a7558e443a7957158f0f7a975ee3f495833ffb90f1938003bd70a83345c",
+        "provider_aliyun": "c8d8e20b65e542d372e9d1575eac91f8c3c9d7ad493bcce4bca240609b4fd372",
+        "image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82"
       }
     }
   },
@@ -53269,12 +51268,15 @@
   "overall_release_status": "BLOCKED",
   "MERGE_TO_MAIN_AUTHORIZED": false,
   "limitations": [
-    "本轮原30问已暴露，只是回归验收；离线重建缺历史原始分数，Provider HTTP=0，不能代替Live。",
-    "唯一一轮完整60观测已保存；18次Jina传输错误，主路2次自然切换、16次rerank bypass，备用5正例拒答；质量BLOCKED，无有效quality record。",
-    "50个HC元组/18个CVE仍无客观豁免或真实人工批准，安全BLOCKED；不将缓解措施冒充不受影响。",
-    "受限DOC验证实际为prlimit+antiword处理非法DOC的受控拒绝；未声称本轮验证有效旧DOC全格式转换。",
-    "本轮账本保守计128 forwarded；18次传输失败的服务端到达及usage未知。未修改原批准额度，未新建campaign。",
-    "工程工作线保存不等于产品集成或发布；release、feature、main、Industry均不在当前推进范围。"
+    "本轮代码、离线工程检查、合并 CI、可信备份隔离恢复与 App-only 替换已完成。",
+    "RelatedContent 只提供独立原文查阅，不改变回答资格或正式质量指标；新增 Provider HTTP 和模型 Token 为 0。",
+    "原18次真实传输故障具体异常类仍 UNKNOWN；本次定向观察与旧现场分开记录。",
+    "本次少量定向观察不能替代原60条全量质量验收，旧质量失败和实现身份失效均保留。",
+    "SQLite仍为3.46.1 / 3.46.1-7+deb13u1；不可信备份入口缓解不等于漏洞修复。",
+    "18 CVE / 50 High-Critical 元组保持，未伪造人工风险批准；风险决定未通过，14天有效期尚未开始。",
+    "仅完成本机loopback、可信管理员、原允许出网公开资料范围的技术准备；不扩大到团队、客户、公网或外来备份。",
+    "当前仍为RuleBasedNormalizer；无生成式Query Rewrite、新模型调用、重建索引或重新向量化。",
+    "运行代码、合并提交与报告提交分别记录；main、Industry、release和feature线未推进。"
   ],
   "private_documents_sent": false,
   "live_runner": {
@@ -103554,507 +101556,180 @@
     "MERGE_TO_MAIN_AUTHORIZED": false,
     "private_documents_sent": false
   },
-  "selected_steps_status": "BLOCKED",
+  "live_runner_evidence_scope": {
+    "kind": "historical_prior_full_live_unchanged",
+    "current_code_full_acceptance": false,
+    "source": {
+      "path": "artifacts/p11-final/trial-hardening/historical-acceptance.json",
+      "sha256": "f3a599839c3855c0456878d0de4865bb0d65bb9a3d10ed5d78009666dea22229"
+    }
+  },
   "RETRIEVAL_QUALITY_READY": "BLOCKED",
   "SECURITY_READY": "BLOCKED",
   "FEATURE_MERGE_DONE": false,
-  "budget_accounting": {
-    "campaign_id": "p11-20260905-public-synthetic",
-    "start": {
-      "total": 419,
-      "reserved": 226,
-      "forwarded": 226,
-      "locally_blocked": 193,
-      "estimated_input_tokens": 64311,
-      "observed_tokens": 64510,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 3,
-      "unknown_forwarding_attempts": 0,
-      "locally_blocked_estimated_tokens": 3169,
-      "campaign_id": "p11-20260905-public-synthetic",
-      "authorization_id": "p11-20260904-existing-25-1000",
-      "request_limit": 439,
-      "estimated_token_limit": 145861,
-      "provider_request_limits": {
-        "aliyun": 123,
-        "jina": 316
+  "provider_calls_stopped": true,
+  "trial_hardening": {
+    "recorded_at": "2026-09-07T02:28:49.767725+00:00",
+    "code_sha": "13c80131ff3612c1e9e3d0fd71cf89cf5547eb4c",
+    "integration_sha": "8a3cf04f13e1003a1237f08fd4961f85dabaaceb",
+    "running_image_id": "sha256:a3354cc9cc81179b8c13c194e1f2ceff2057b46fcba72f25a08d4a1af4adeb82",
+    "report_commit": "本JSON由随附报告专用提交保存；运行代码不含报告提交。",
+    "technical_conditions": "PASS_WITH_RECORDED_LIMITATIONS",
+    "risk_decision": "NOT_APPROVED",
+    "risk_accepted": false,
+    "trial_scope_expanded": false,
+    "formal_P11_READY": false,
+    "offline_checks": {
+      "pytest_passed": 2260,
+      "existing_marker_deselected": 88,
+      "frontend_passed": 56,
+      "browser_passed": 7,
+      "browser_existing_platform_skips": 3,
+      "smoke_passed": 72,
+      "product_check_passed": 74,
+      "product_smoke_passed": 6
+    },
+    "merge_ci": {
+      "status": "PASS",
+      "jobs_passed": 7,
+      "url": "https://github.com/taoyifei/RAG_TEST/actions/runs/34075257758"
+    },
+    "related_content": {
+      "source": "same-request authorized canonical direct candidates",
+      "max_cards": 3,
+      "max_chars_per_card": 240,
+      "max_total_chars": 720,
+      "answer_contract_unchanged": true,
+      "formal_metrics_unchanged": true,
+      "provider_http_added": 0,
+      "model_input_output_tokens_added": 0,
+      "new_generated_query_rewrite": false
+    },
+    "historical_transport": {
+      "real_failures": 18,
+      "query": 2,
+      "rerank": 16,
+      "specific_exception_type": "UNKNOWN",
+      "historical_failures_rewritten": false
+    },
+    "targeted_transport": {
+      "status": "COMPLETE_OBSERVATION",
+      "stop_reason": null,
+      "observations_completed": 12,
+      "planned_observations": 12,
+      "delta": {
+        "forwarded": 24,
+        "estimated_input_tokens": 8042,
+        "observed_tokens": 7944,
+        "unknown_usage_attempts": 0,
+        "locally_blocked": 18,
+        "locally_blocked_estimated_tokens": 240
       },
-      "provider_token_limits": {
-        "aliyun": 13719,
-        "jina": 132142
-      },
-      "step_request_limits": {
-        "aliyun_document_canary": 1,
-        "aliyun_document_diagnostic_20260906": 1,
-        "aliyun_document_diagnostic_20260906_2": 1,
-        "aliyun_document_retest_20260906": 1,
-        "aliyun_query_canary": 1,
-        "citation_quality": 396,
-        "dual_index": 6,
-        "historical": 6,
-        "jina_connection": 3,
-        "primary_query": 6,
-        "recovery": 9,
-        "standby_failover": 6
-      },
-      "providers": {
-        "aliyun": {
-          "total": 56,
-          "reserved": 49,
-          "forwarded": 49,
-          "locally_blocked": 7,
-          "estimated_input_tokens": 5092,
-          "observed_tokens": 3001,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 2,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 679
-        },
+      "provider_delta": {
         "jina": {
-          "total": 363,
-          "reserved": 177,
-          "forwarded": 177,
-          "locally_blocked": 186,
-          "estimated_input_tokens": 59219,
-          "observed_tokens": 61509,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 1,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 2490
-        }
-      },
-      "steps": {
-        "aliyun_document_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
+          "forwarded": 18,
+          "estimated_input_tokens": 7404,
+          "observed_tokens": 7606,
           "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
+          "locally_blocked": 18,
+          "locally_blocked_estimated_tokens": 240
         },
-        "aliyun_document_diagnostic_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_diagnostic_20260906_2": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_retest_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_query_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 106,
-          "observed_tokens": 56,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "citation_quality": {
-          "total": 378,
-          "reserved": 198,
-          "forwarded": 198,
-          "locally_blocked": 180,
-          "estimated_input_tokens": 63308,
-          "observed_tokens": 62551,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 2400
-        },
-        "dual_index": {
-          "total": 2,
-          "reserved": 2,
-          "forwarded": 2,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 104,
-          "observed_tokens": 85,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "historical": {
-          "total": 7,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 1,
-          "estimated_input_tokens": 157,
-          "observed_tokens": 242,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 3,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 19
-        },
-        "jina_connection": {
-          "total": 3,
-          "reserved": 3,
-          "forwarded": 3,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 82,
-          "observed_tokens": 234,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "primary_query": {
-          "total": 4,
-          "reserved": 4,
-          "forwarded": 4,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 96,
-          "observed_tokens": 378,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "recovery": {
-          "total": 10,
-          "reserved": 4,
-          "forwarded": 4,
-          "locally_blocked": 6,
-          "estimated_input_tokens": 108,
-          "observed_tokens": 390,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 660
-        },
-        "standby_failover": {
-          "total": 10,
-          "reserved": 4,
-          "forwarded": 4,
-          "locally_blocked": 6,
-          "estimated_input_tokens": 298,
-          "observed_tokens": 482,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 90
-        }
-      }
-    },
-    "this_run": {
-      "total": 260,
-      "reserved": 128,
-      "forwarded": 128,
-      "locally_blocked": 132,
-      "estimated_input_tokens": 40675,
-      "observed_tokens": 30392,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 18,
-      "unknown_forwarding_attempts": 18,
-      "locally_blocked_estimated_tokens": 21173
-    },
-    "cumulative": {
-      "total": 679,
-      "reserved": 354,
-      "forwarded": 354,
-      "locally_blocked": 325,
-      "estimated_input_tokens": 104986,
-      "observed_tokens": 94902,
-      "observed_usage_status": "unknown",
-      "unknown_usage_attempts": 21,
-      "unknown_forwarding_attempts": 18,
-      "locally_blocked_estimated_tokens": 24342,
-      "campaign_id": "p11-20260905-public-synthetic",
-      "authorization_id": "p11-20260904-existing-25-1000",
-      "request_limit": 439,
-      "estimated_token_limit": 145861,
-      "provider_request_limits": {
-        "aliyun": 123,
-        "jina": 316
-      },
-      "provider_token_limits": {
-        "aliyun": 13719,
-        "jina": 132142
-      },
-      "step_request_limits": {
-        "aliyun_document_canary": 1,
-        "aliyun_document_diagnostic_20260906": 1,
-        "aliyun_document_diagnostic_20260906_2": 1,
-        "aliyun_document_retest_20260906": 1,
-        "aliyun_query_canary": 1,
-        "citation_quality": 396,
-        "dual_index": 6,
-        "historical": 6,
-        "jina_connection": 3,
-        "primary_query": 6,
-        "recovery": 9,
-        "standby_failover": 6
-      },
-      "providers": {
         "aliyun": {
-          "total": 92,
-          "reserved": 82,
-          "forwarded": 82,
-          "locally_blocked": 10,
-          "estimated_input_tokens": 8604,
-          "observed_tokens": 4864,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 2,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 1009
-        },
-        "jina": {
-          "total": 587,
-          "reserved": 272,
-          "forwarded": 272,
-          "locally_blocked": 315,
-          "estimated_input_tokens": 96382,
-          "observed_tokens": 90038,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 19,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 23333
+          "forwarded": 6,
+          "estimated_input_tokens": 638,
+          "observed_tokens": 338,
+          "unknown_usage_attempts": 0,
+          "locally_blocked": 0,
+          "locally_blocked_estimated_tokens": 0
         }
       },
-      "steps": {
-        "aliyun_document_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_diagnostic_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_diagnostic_20260906_2": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_document_retest_20260906": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 13,
-          "observed_tokens": 23,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "aliyun_query_canary": {
-          "total": 1,
-          "reserved": 1,
-          "forwarded": 1,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 106,
-          "observed_tokens": 56,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "citation_quality": {
-          "total": 626,
-          "reserved": 320,
-          "forwarded": 320,
-          "locally_blocked": 306,
-          "estimated_input_tokens": 103732,
-          "observed_tokens": 92318,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 18,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 23198
-        },
-        "dual_index": {
-          "total": 2,
-          "reserved": 2,
-          "forwarded": 2,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 104,
-          "observed_tokens": 85,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "historical": {
-          "total": 7,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 1,
-          "estimated_input_tokens": 157,
-          "observed_tokens": 242,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 3,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 19
-        },
-        "jina_connection": {
-          "total": 3,
-          "reserved": 3,
-          "forwarded": 3,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 82,
-          "observed_tokens": 234,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "primary_query": {
-          "total": 6,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 0,
-          "estimated_input_tokens": 144,
-          "observed_tokens": 567,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 0
-        },
-        "recovery": {
-          "total": 15,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 9,
-          "estimated_input_tokens": 162,
-          "observed_tokens": 585,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 990
-        },
-        "standby_failover": {
-          "total": 15,
-          "reserved": 6,
-          "forwarded": 6,
-          "locally_blocked": 9,
-          "estimated_input_tokens": 447,
-          "observed_tokens": 723,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 135
-        }
+      "answerable_with_provider_rerank": 12,
+      "real_transport_failures": 0,
+      "full_quality_scoring_executed": false,
+      "evidence": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-live-final.json",
+        "sha256": "5389fb8a5add37813765c8ec1128394f86ce41faf8f65ef7e9cdd37cbef7e54f"
       }
     },
-    "remaining": {
-      "http": 85,
-      "estimated": 40875
+    "backup_restore": {
+      "status": "PASS",
+      "unknown_archive_rejected_before_sqlite": true,
+      "isolated_collection_count": 6,
+      "app_updated": true,
+      "qdrant_restarted": false,
+      "deployment_data_config_secrets_budget_unchanged": true
     },
-    "providers": {
-      "aliyun": {
-        "this_run": {
-          "total": 36,
-          "reserved": 33,
-          "forwarded": 33,
-          "locally_blocked": 3,
-          "estimated_input_tokens": 3512,
-          "observed_tokens": 1863,
-          "observed_usage_status": "known",
-          "unknown_usage_attempts": 0,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 330
-        },
-        "cumulative": {
-          "total": 92,
-          "reserved": 82,
-          "forwarded": 82,
-          "locally_blocked": 10,
-          "estimated_input_tokens": 8604,
-          "observed_tokens": 4864,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 2,
-          "unknown_forwarding_attempts": 0,
-          "locally_blocked_estimated_tokens": 1009
-        },
-        "remaining_http": 41,
-        "remaining_estimated": 5115
+    "security": {
+      "sqlite_runtime": "3.46.1",
+      "sqlite_package": "3.46.1-7+deb13u1",
+      "entry_mitigation_only": true,
+      "scan_findings": 173,
+      "high_critical_tuples": 50,
+      "unique_cves": 18,
+      "same_distribution_fix_available": false,
+      "risk_approval_expiry": null
+    },
+    "evidence": {
+      "freeze.json": {
+        "path": "artifacts/p11-final/trial-hardening/freeze.json",
+        "sha256": "37679e85f47dc50a09c6b817843bd3f82c68498d46b0a95890fe65434ae85786"
       },
-      "jina": {
-        "this_run": {
-          "total": 224,
-          "reserved": 95,
-          "forwarded": 95,
-          "locally_blocked": 129,
-          "estimated_input_tokens": 37163,
-          "observed_tokens": 28529,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 18,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 20843
-        },
-        "cumulative": {
-          "total": 587,
-          "reserved": 272,
-          "forwarded": 272,
-          "locally_blocked": 315,
-          "estimated_input_tokens": 96382,
-          "observed_tokens": 90038,
-          "observed_usage_status": "unknown",
-          "unknown_usage_attempts": 19,
-          "unknown_forwarding_attempts": 18,
-          "locally_blocked_estimated_tokens": 23333
-        },
-        "remaining_http": 44,
-        "remaining_estimated": 35760
+      "ci-merge.json": {
+        "path": "artifacts/p11-final/trial-hardening/ci-merge.json",
+        "sha256": "ed6b4cd15396e7999eb97c48868b00a9c0824a0f078794d04a35960844445ea7"
+      },
+      "transport-historical-18.json": {
+        "path": "artifacts/p11-final/trial-hardening/transport-historical-18.json",
+        "sha256": "cbed1c115c53d551186f93b6ad8687f6aff2aa170d4c6d9f37e53bb17abbc0ac"
+      },
+      "transport-offline-tests.json": {
+        "path": "artifacts/p11-final/trial-hardening/transport-offline-tests.json",
+        "sha256": "248408921be9672bae58d02ea2ce4337b4a1b56c1ad70ef948b71541b2d1890d"
+      },
+      "backup-results.json": {
+        "path": "artifacts/p11-final/trial-hardening/backup-results.json",
+        "sha256": "128b2d6e2de48f96b0cb41c4001d1f33e136bcd42eb455a7540547bc04e521ea"
+      },
+      "related-ui-results.json": {
+        "path": "artifacts/p11-final/trial-hardening/related-ui-results.json",
+        "sha256": "b3e399d6618433046c2c048edcc311428c74b7fa2f2e29fa50810c9321cdaa2e"
+      },
+      "security-summary.json": {
+        "path": "artifacts/p11-final/trial-hardening/security-summary.json",
+        "sha256": "6d6acb09ce0ecad7b2b006f579a3bac071394f909399e2e01eb73208ccfea7d0"
+      },
+      "security-tuple-comparison.json": {
+        "path": "artifacts/p11-final/trial-hardening/security-tuple-comparison.json",
+        "sha256": "b24e811a17f0797214d0d9e5be1a7769d1473f3a8453b233eaf57bc42d2ef54d"
+      },
+      "final-runtime-verification.json": {
+        "path": "artifacts/p11-final/trial-hardening/final-runtime-verification.json",
+        "sha256": "52cca263a6943a6324fd67341494fe4b6a98e8e6ef302b2c7a67bf6cc2d7f11b"
+      },
+      "app-update-20260907T021553Z/update-receipt.json": {
+        "path": "artifacts/p11-final/trial-hardening/app-update-20260907T021553Z/update-receipt.json",
+        "sha256": "f7bcfbb3bc887d16cfe8c4bfb3e844dd4ec07838862e7db563eaacfb7e212d7b"
+      },
+      "targeted-live-result.json": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-live-result.json",
+        "sha256": "09c0f90da8b98d81710d4ff492b653cf6914249c519f1306404ce49e6f13bba1"
+      },
+      "targeted-live-final.json": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-live-final.json",
+        "sha256": "5389fb8a5add37813765c8ec1128394f86ce41faf8f65ef7e9cdd37cbef7e54f"
+      },
+      "targeted-runner-precall-failure-diagnosis.json": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-runner-precall-failure-diagnosis.json",
+        "sha256": "465b405ebba56f61e2d70f606f40f09d3fef59dc76a1b066e1f9254f360e3595"
+      },
+      "targeted-runner-precall-fixed-validation.json": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-runner-precall-fixed-validation.json",
+        "sha256": "5597949874703da5efb8d04470a0e672c89ed1c98c47efcf955e2973f5e1389b"
+      },
+      "targeted-live-reconciliation.json": {
+        "path": "artifacts/p11-final/trial-hardening/targeted-live-reconciliation.json",
+        "sha256": "c8bd67d95f9a300cf1a4808544e8aa2cc6ed499350c99da07e4f7cb87826843b"
       }
-    },
-    "accounting_note": "forwarded按账本保守计入；本轮18次TRANSPORT_ERROR的服务端到达和usage未知。observed与estimated分列，不相加。"
-  },
-  "provider_calls_stopped": true
+    }
+  }
 }
