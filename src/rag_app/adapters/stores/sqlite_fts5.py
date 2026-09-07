@@ -531,7 +531,13 @@ def write_chunks_transaction(
                     chunk.lexical_text,
                 ),
             )
+        normalized_identifiers: set[str] = set()
         for identifier in chunk.identifiers:
+            normalized = normalize_identifier(identifier)
+            # Exact 主键采用规范形式；原文变体仍完整保留在 Chunk 中。
+            if normalized in normalized_identifiers:
+                continue
+            normalized_identifiers.add(normalized)
             connection.execute(
                 "INSERT INTO exact_identifiers("
                 "revision_id, chunk_id, identifier, normalized_identifier) "
@@ -540,7 +546,7 @@ def write_chunks_transaction(
                     chunk.index_revision_id,
                     chunk.chunk_id,
                     identifier,
-                    normalize_identifier(identifier),
+                    normalized,
                 ),
             )
 
@@ -591,9 +597,7 @@ def build_fts_v2_query(analysis: AnalyzedLexicalQuery) -> str:
             if len(token) == _CJK_BIGRAM_LENGTH
         )
         if bigrams and bigrams != (full_phrase,):
-            groups.append(
-                f"({full_phrase} OR ({' AND '.join(bigrams)}))"
-            )
+            groups.append(f"({full_phrase} OR ({' AND '.join(bigrams)}))")
         else:
             groups.append(full_phrase)
     groups.extend(_fts_quote(token) for token in analysis.identifier_tokens)
@@ -632,9 +636,7 @@ def fts_table_for_revision(
             "Lexical schema JSON 已损坏。", stage="fts.schema"
         ) from None
     if not isinstance(schema, dict):
-        raise IndexCorrupt(
-            "Lexical schema 必须为对象。", stage="fts.schema"
-        )
+        raise IndexCorrupt("Lexical schema 必须为对象。", stage="fts.schema")
     version = schema.get("fts_schema_version")
     if version in {"2", _FTS_SCHEMA_VERSION}:
         return "chunks_fts_v2"

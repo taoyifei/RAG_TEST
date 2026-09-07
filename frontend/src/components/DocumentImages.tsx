@@ -35,7 +35,7 @@ export function DocumentImages({
           setSelected(
             value.media
               .filter(
-                (media) => media.approved && media.supported && !media.cached,
+                (media) => media.approved && media.supported && !media.indexed,
               )
               .map((media) => media.media_sha256),
           );
@@ -48,6 +48,10 @@ export function DocumentImages({
       active = false;
     };
   }, [kbId, documentId]);
+  const selectedUncached =
+    scan?.media.filter(
+      (media) => selected.includes(media.media_sha256) && !media.cached,
+    ).length ?? 0;
   async function submit() {
     if (pending || !confirmed || !selected.length) return;
     setPending(true);
@@ -83,6 +87,10 @@ export function DocumentImages({
             张
           </p>
           <p>
+            已进入当前索引 {scan.indexed_count ?? 0} 张 · 缓存待入索引{" "}
+            {scan.rebuild_count ?? 0} 张
+          </p>
+          <p>
             选择需要识别的图片。执行使用知识库已绑定的模型与授权预算，仅处理服务端已授权的图片，不会增加授权范围。
           </p>
           {!scan.media.length && <p>此文档未发现内嵌图片。</p>}
@@ -94,7 +102,7 @@ export function DocumentImages({
                   checked={selected.includes(media.media_sha256)}
                   disabled={
                     pending ||
-                    media.cached ||
+                    media.indexed ||
                     !media.supported ||
                     !media.approved
                   }
@@ -110,13 +118,15 @@ export function DocumentImages({
                   }}
                 />
                 {media.part_uri} ·{" "}
-                {media.cached
-                  ? "已缓存"
-                  : media.supported
-                    ? media.approved
-                      ? "待识别"
-                      : "未授权，暂不能识别"
-                    : "不支持"}
+                {media.indexed
+                  ? "已进入当前索引"
+                  : media.cached
+                    ? "已缓存，尚未进入当前索引"
+                    : media.supported
+                      ? media.approved
+                        ? "待识别"
+                        : "未授权，暂不能识别"
+                      : "不支持"}
               </label>
               <small>
                 {media.media_type} · {Math.ceil(media.size_bytes / 1024)} KB
@@ -141,8 +151,9 @@ export function DocumentImages({
           )}
           {confirmed && (
             <p role="status">
-              确认发送所选 {selected.length}{" "}
-              张图片到已配置的识别服务，可能消耗服务额度。
+              {selectedUncached > 0
+                ? `确认发送 ${selectedUncached} 张未缓存图片到已配置的识别服务，可能消耗服务额度。已缓存图片直接用于重建索引。`
+                : "使用已缓存识别结果重建索引，不再次调用图片识别服务。"}
             </p>
           )}
           <div className="row-actions">
@@ -154,8 +165,12 @@ export function DocumentImages({
               {pending
                 ? "提交中…"
                 : confirmed
-                  ? "确认识别所选图片"
-                  : "识别所选图片"}
+                  ? selectedUncached
+                    ? "确认识别所选图片"
+                    : "确认重建索引"
+                  : selectedUncached
+                    ? "识别所选图片"
+                    : "使用缓存重建索引"}
             </button>
             {confirmed && (
               <button disabled={pending} onClick={() => setConfirmed(false)}>

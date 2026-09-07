@@ -1,5 +1,7 @@
 """本机管理员选择知识库模型的最小接口。"""
 
+from threading import RLock
+
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import Field
 
@@ -61,6 +63,7 @@ def register_model_settings_routes(
         "/api/v1/knowledge-bases/{knowledge_base_id}"
         "/documents/{document_id}/ocr"
     )
+    ocr_submission_lock = RLock()
 
     @app.get(ocr_path, tags=["ocr"])
     def _scan(knowledge_base_id: str, document_id: str) -> dict[str, object]:
@@ -68,6 +71,15 @@ def register_model_settings_routes(
 
     @app.post(ocr_path, tags=["ocr"], status_code=202)
     def _recognize(
+        knowledge_base_id: str, document_id: str, confirmation: OcrConfirmation
+    ) -> dict[str, object]:
+        # 仅串行化设置冻结和入队；实际 OCR 仍由持久队列执行。
+        with ocr_submission_lock:
+            return _recognize_locked(
+                knowledge_base_id, document_id, confirmation
+            )
+
+    def _recognize_locked(
         knowledge_base_id: str, document_id: str, confirmation: OcrConfirmation
     ) -> dict[str, object]:
         settings = runtime.models.get(knowledge_base_id)
@@ -87,10 +99,16 @@ def register_model_settings_routes(
         selected = set(confirmation.confirmed_media_hashes)
         if not selected <= permitted:
             raise HTTPException(403, "所选图片未获批准或不受支持。")
+        if selected <= set(settings.ocr_media_hashes):
+            inflight = _inflight_ocr_job(
+                runtime, knowledge_base_id, document_id
+            )
+            if inflight is not None:
+                return runtime.sdk.get_job(inflight).model_dump(mode="json")
         pending = {
             str(item["media_sha256"])
             for item in media
-            if isinstance(item, dict) and not item.get("cached")
+            if isinstance(item, dict) and not item.get("indexed")
         }
         settings = settings.model_copy(
             update={
@@ -174,3 +192,22 @@ def register_model_settings_routes(
                 "X-Content-Type-Options": "nosniff",
             },
         )
+
+
+def _inflight_ocr_job(
+    runtime: ProductRuntime, knowledge_base_id: str, document_id: str
+) -> str | None:
+    """同一冻结内容配置的重复请求复用未结束 Job，不改变其 fencing。"""
+    identity = runtime.ocr.content_identity(knowledge_base_id)
+    with runtime.connections.transaction() as connection:
+        row = connection.execute(
+            "SELECT j.job_id FROM ingestion_jobs j "
+            "JOIN ingestion_requests r ON r.job_id=j.job_id "
+            "WHERE j.knowledge_base_id=? AND j.document_id=? "
+            "AND j.cancel_requested=0 "
+            "AND r.state IN ('queued', 'running') "
+            "AND json_extract(r.request_json, '$.content_identity')=? "
+            "ORDER BY j.created_at DESC LIMIT 1",
+            (knowledge_base_id, document_id, identity),
+        ).fetchone()
+    return None if row is None else str(row[0])

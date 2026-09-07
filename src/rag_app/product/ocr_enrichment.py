@@ -168,6 +168,14 @@ class ProductOcrEnrichment:
         config = AliyunOcrConfig(model=settings.ocr_model or "qwen3.5-ocr")
         campaign = self._campaign(settings)
         supplied = {item.artifact_id: item.content for item in artifacts}
+        indexed_hashes = {
+            str(metadata["media_sha256"])
+            for node in document.nodes
+            if (metadata := dict(node.metadata)).get("origin") == "ocr"
+            and metadata.get("policy_version") == _POLICY
+            and metadata.get("model") == config.model
+            and node.text
+        }
         media: dict[str, dict[str, object]] = {}
         for node in document.nodes:
             if node.image_attributes is None:
@@ -194,6 +202,7 @@ class ProductOcrEnrichment:
                     document, attributes.content_sha256, config
                 )
                 is not None,
+                "indexed": attributes.content_sha256 in indexed_hashes,
                 "reason_code": "OCR_MEDIA_UNAVAILABLE",
             }
             try:
@@ -525,6 +534,10 @@ def _scan_summary(media: tuple[dict[str, object], ...]) -> dict[str, object]:
         "media_count": len(media),
         "recognized_count": sum(bool(item["cached"]) for item in media),
         "pending_count": sum(not item["cached"] for item in media),
+        "indexed_count": sum(bool(item["indexed"]) for item in media),
+        "rebuild_count": sum(
+            bool(item["cached"]) and not item["indexed"] for item in media
+        ),
     }
 
 

@@ -221,6 +221,8 @@ function stageLabel(stage: string): string {
         queued: "等待处理",
         claimed: "准备文档",
         parsing: "解析文档",
+        document_persistence: "保存文档解析结果",
+        chunk_persistence: "保存分块与检索索引",
         ir_validation: "校验文档结构",
         chunking: "整理检索片段",
         embedding: "构建文档向量",

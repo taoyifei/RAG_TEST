@@ -30,6 +30,7 @@ const scan: DocumentOcrScan = {
       supported: true,
       approved: true,
       cached: true,
+      indexed: true,
     },
     {
       media_sha256: "c".repeat(64),
@@ -59,7 +60,7 @@ beforeEach(() => {
   vi.spyOn(api, "scanDocumentImages").mockResolvedValue(scan);
 });
 
-it("只扫描不调用OCR；缓存和不支持图片禁选，确认只提交所选hash", async () => {
+it("只扫描不调用OCR；已索引和不支持图片禁选，确认只提交所选hash", async () => {
   const user = userEvent.setup();
   const submit = vi
     .spyOn(api, "recognizeDocumentImages")
@@ -119,4 +120,40 @@ it("只有点击查看后读取受控图片，加载失败不保留原图", asyn
     within(screen.getByRole("alert")).getByText(/原图不可访问/),
   ).toBeVisible();
   expect(screen.queryByRole("img")).not.toBeInTheDocument();
+});
+
+it("缓存尚未进入Active时可选择零识别调用的索引恢复", async () => {
+  const user = userEvent.setup();
+  vi.mocked(api.scanDocumentImages).mockResolvedValue({
+    media_count: 1,
+    recognized_count: 1,
+    pending_count: 0,
+    indexed_count: 0,
+    rebuild_count: 1,
+    media: [{ ...scan.media[1], indexed: false }],
+  });
+  const submit = vi
+    .spyOn(api, "recognizeDocumentImages")
+    .mockRejectedValue(new Error("合成队列错误"));
+  render(
+    <DocumentImages
+      projectId="prj_test"
+      kbId="kb_test"
+      documentId="doc_test"
+      onClose={vi.fn()}
+      onSubmitted={vi.fn()}
+    />,
+  );
+  const checkbox = await screen.findByRole("checkbox", { name: /image2/ });
+  expect(checkbox).toBeEnabled();
+  expect(checkbox).toBeChecked();
+  expect(screen.getByText(/已缓存，尚未进入当前索引/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "使用缓存重建索引" }));
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "不再次调用图片识别服务",
+  );
+  expect(submit).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "确认重建索引" }));
+  expect(submit).toHaveBeenCalledWith("kb_test", "doc_test", ["b".repeat(64)]);
+  expect(await screen.findByText("合成队列错误")).toBeVisible();
 });

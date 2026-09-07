@@ -83,8 +83,8 @@ class _DocumentStage:
 
     job_id: str
     revision_id: str
-    document_id: str
-    input_sha256: str
+    document_id: str | None
+    input_sha256: str | None
     attempt: int
 
 
@@ -615,7 +615,11 @@ class RevisionBuilder:
                 job_id,
                 attempt,
             )
-            self._control.write_chunks(revision_id, chunks)
+            with self._document_stage(
+                _DocumentStage(job_id, revision_id, None, None, attempt),
+                "chunk_persistence",
+            ):
+                self._control.write_chunks(revision_id, chunks)
             current_state = self._advance(
                 revision_id,
                 current_state,
@@ -836,19 +840,23 @@ class RevisionBuilder:
                         index_revision_id=revision_id,
                     ),
                 )
-            self._control.add_revision_document(
-                revision_id,
-                result.document_ir,
-                result.report,
-                chunked.report,
-                parsing_policy_fingerprint=canonical_sha256(
-                    self._parsing_policy.model_dump(mode="json")
-                ),
-                part_catalog_identity=canonical_sha256(
-                    tuple(artifact.artifact_id for artifact in result.artifacts)
-                ),
-                chunk_count=len(chunked.chunks),
-            )
+            with self._document_stage(context, "document_persistence"):
+                self._control.add_revision_document(
+                    revision_id,
+                    result.document_ir,
+                    result.report,
+                    chunked.report,
+                    parsing_policy_fingerprint=canonical_sha256(
+                        self._parsing_policy.model_dump(mode="json")
+                    ),
+                    part_catalog_identity=canonical_sha256(
+                        tuple(
+                            artifact.artifact_id
+                            for artifact in result.artifacts
+                        )
+                    ),
+                    chunk_count=len(chunked.chunks),
+                )
             all_chunks.extend(chunked.chunks)
         return tuple(all_chunks)
 
@@ -888,8 +896,12 @@ class RevisionBuilder:
                         include_input=False, include_context=False
                     )[:8]
                 ]
+            stage_label = {
+                "chunk_persistence": "分块与检索索引保存",
+                "document_persistence": "文档解析结果保存",
+            }.get(stage, stage)
             raise RagError(
-                f"{stage} 阶段结构校验失败（{type(error).__name__}），"
+                f"{stage_label}阶段处理失败（{type(error).__name__}），"
                 "请查看任务检索过程中的安全定位信息。",
                 code=f"{stage.upper()}_FAILED",
                 stage=stage,

@@ -109,11 +109,14 @@ export interface DocumentOcrScan {
     supported: boolean;
     approved: boolean;
     cached: boolean;
+    indexed?: boolean;
     reason_code?: string | null;
   }[];
   media_count: number;
   recognized_count: number;
   pending_count: number;
+  indexed_count?: number;
+  rebuild_count?: number;
 }
 
 export interface ConsoleSession {

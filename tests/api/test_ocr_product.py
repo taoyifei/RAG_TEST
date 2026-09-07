@@ -5,14 +5,17 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from time import monotonic, sleep
 from typing import Any
 
 import httpx
+import pytest
 from PIL import Image, ImageDraw
 
 from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
@@ -20,7 +23,7 @@ from rag_app.adapters.providers.budget_models import BudgetCampaign
 from rag_app.adapters.providers.budget_transport import (
     provider_request_identity,
 )
-from rag_app.core.models import DocumentIR, ParseResult
+from rag_app.core.models import Chunk, DocumentIR, ParseResult
 from tests.adapters.parsers.docx_fixtures import IMAGE, build_docx
 from tests.product_support import (
     ProductHarness,
@@ -478,5 +481,93 @@ def test_image_access_requires_the_exact_document_version(
         # 同一逻辑文档的新版本也不能访问仅属于旧版本的图片。
         assert harness.client.get(image_path).status_code == 404
         assert scenario.calls == []
+    finally:
+        harness.close()
+
+
+def test_cached_ocr_recovers_failed_index_without_another_provider_call(  # noqa: PLR0915
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scenario = _prepare(tmp_path)
+    harness = scenario.harness
+    control = harness.runtime.retrieval_runtime.persistence.control
+    write_chunks = control.write_chunks
+    active_before = scenario.answer()["active_index_revision_id"]
+    body = {
+        "confirmed_media_hashes": [hashlib.sha256(scenario.image).hexdigest()]
+    }
+
+    def fail_write(*_args: object) -> None:
+        raise sqlite3.IntegrityError("合成敏感SQL正文不得出现在公开事件中")
+
+    try:
+        monkeypatch.setattr(control, "write_chunks", fail_write)
+        response = harness.client.post(
+            scenario.ocr_path, json=body, headers=harness.write_headers
+        )
+        assert response.status_code == 202, response.text
+        failed = _wait_job(
+            harness, response.json()["job_id"], expected_state="failed_terminal"
+        )
+        assert failed["stage"] == "chunk_persistence"
+        assert failed["error_code"] == "CHUNK_PERSISTENCE_FAILED"
+        assert "IntegrityError" in failed["safe_error"]
+        assert len(scenario.calls) == 1
+        assert scenario.answer()["active_index_revision_id"] == active_before
+        scan = harness.client.get(scenario.ocr_path).json()
+        assert scan["media"][0]["cached"]
+        assert not scan["media"][0]["indexed"]
+        assert scan["rebuild_count"] == 1
+        trace = harness.client.get(
+            "/api/v1/admin/traces", params={"job_id": failed["job_id"]}
+        )
+        assert trace.status_code == 200, trace.text
+        assert "合成敏感SQL" not in trace.text
+        failure = next(
+            item
+            for item in trace.json()["events"]
+            if item["event_name"] == "ingestion.failed"
+        )
+        details = dict(failure["attributes"])["details"]
+        assert details["exception_type"] == "IntegrityError"
+        assert details["source_file"] == "test_ocr_product.py"
+        assert isinstance(details["source_line"], int)
+
+        entered, release = Event(), Event()
+
+        def block_write(revision_id: str, chunks: Sequence[Chunk]) -> None:
+            entered.set()
+            assert release.wait(5)
+            write_chunks(revision_id, chunks)
+
+        monkeypatch.setattr(control, "write_chunks", block_write)
+        restored = harness.client.post(
+            scenario.ocr_path, json=body, headers=harness.write_headers
+        )
+        assert restored.status_code == 202, restored.text
+        assert entered.wait(5)
+        try:
+            repeated = harness.client.post(
+                scenario.ocr_path, json=body, headers=harness.write_headers
+            )
+            assert repeated.status_code == 202, repeated.text
+            assert repeated.json()["job_id"] == restored.json()["job_id"]
+        finally:
+            release.set()
+        complete = _wait_job(harness, restored.json()["job_id"])
+        assert complete["revision_id"] != failed["revision_id"]
+        assert len(scenario.calls) == 1
+        assert scenario.recognize()["job_id"] == complete["job_id"]
+        assert len(scenario.calls) == 1
+        assert (
+            harness.client.get(f"/api/v1/jobs/{failed['job_id']}").json()[
+                "state"
+            ]
+            == "failed_terminal"
+        )
+        scan = harness.client.get(scenario.ocr_path).json()
+        assert scan["media"][0]["indexed"] and scan["rebuild_count"] == 0
+        assert "27" in scenario.answer()["answer"]
     finally:
         harness.close()
