@@ -432,7 +432,23 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
     "retrieval_candidate",
   );
   await page.getByRole("button", { name: "关闭证据详情" }).click();
-  await expect(page.getByText("RRF 融合贡献")).toBeVisible();
+  await page.getByText("本次检索诊断", { exact: true }).click();
+  const fusionHeading = page.getByRole("heading", { name: "融合与证据决定" });
+  await expect(fusionHeading).toBeVisible();
+  const firstFusion = fusionHeading.locator("..").locator("details").first();
+  await firstFusion.locator("summary").click();
+  const contributions: unknown = JSON.parse(
+    (await firstFusion.locator("pre").textContent()) ?? "null",
+  );
+  expect(contributions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        channel: "lexical:fts5",
+        rank: expect.any(Number),
+        contribution: expect.any(Number),
+      }),
+    ]),
+  );
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "检索调试" })).toBeVisible();
