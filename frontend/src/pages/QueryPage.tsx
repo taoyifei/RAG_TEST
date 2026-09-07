@@ -199,19 +199,33 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               <p>{result.answer}</p>
             </section>
           )}
-          {result.answer && (
-            <section aria-label="引用依据" className="evidence-grid">
-              {result.evidence.map((item) => (
-                <button
-                  key={item.evidence_id}
-                  className="evidence-card"
-                  onClick={() => setEvidence(item)}
-                >
-                  <span>{item.source_label}</span>
-                  <p>{item.citation_text}</p>
-                  <small>原文引用 · 排序 {item.fusion_rank ?? "—"}</small>
-                </button>
-              ))}
+          {!!result.evidence.length && (mode === "search" || result.answer) && (
+            <section
+              aria-label={mode === "search" ? "检索候选" : "引用依据"}
+              data-content-role={
+                mode === "search" ? "diagnostic-evidence" : "answer-citations"
+              }
+            >
+              <h3>{mode === "search" ? "检索候选" : "引用依据"}</h3>
+              {mode === "search" && (
+                <p>供管理员检查检索结果，不代表已发布的答案或正式引用。</p>
+              )}
+              <div className="evidence-grid">
+                {result.evidence.map((item) => (
+                  <button
+                    key={item.evidence_id}
+                    className="evidence-card"
+                    onClick={() => setEvidence(item)}
+                  >
+                    <span>{item.source_label}</span>
+                    <p>{item.citation_text}</p>
+                    <small>
+                      {mode === "search" ? "未发布候选" : "原文引用"} · 排序{" "}
+                      {item.fusion_rank ?? "—"}
+                    </small>
+                  </button>
+                ))}
+              </div>
             </section>
           )}
           {!result.answer && result.display_message && (
@@ -256,7 +270,11 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
           )}
         </>
       )}
-      <EvidenceDrawer evidence={evidence} onClose={() => setEvidence(null)} />
+      <EvidenceDrawer
+        evidence={evidence}
+        purpose={mode === "search" ? "diagnostic" : "citation"}
+        onClose={() => setEvidence(null)}
+      />
       {source && (
         <section className="panel" aria-label="相关原文详情">
           <h3>相关原文 · 仅供参考</h3>

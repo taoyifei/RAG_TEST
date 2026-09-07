@@ -1,7 +1,7 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
-import { api, type QueryResponse } from "../api/client";
+import { api, type Evidence, type QueryResponse } from "../api/client";
 import { QueryPage } from "./QueryPage";
 
 const consoleState = vi.hoisted(() => ({
@@ -12,6 +12,20 @@ vi.mock("../state/console-context", () => ({ useConsole: () => consoleState }));
 
 const excerpt =
   "<script>alert(1)</script> [外链](https://evil.example) 隐私专员负责处理请求。";
+const diagnosticEvidence: Evidence = {
+  metadata: [],
+  evidence_id: "synthetic",
+  chunk_id: "chunk_a",
+  citation_text: "未获正式资格的原文",
+  source_label: "采购流程.docx",
+  source_spans: [],
+  retrieval_origins: ["lexical"],
+  selection_reason: "retrieval_candidate",
+  publishable: true,
+  table_context: false,
+  heading_path: [],
+  quality_flags: [],
+};
 function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
   return {
     active_index_revision_id: "irev_a",
@@ -140,23 +154,55 @@ it("知识库切换和晚到响应不能重新显示旧原文", async () => {
   expect(screen.queryByText(excerpt)).toBeNull();
 });
 
-it("管理员身份变化清除相关原文，搜索拒答不显示正式引用", async () => {
+it("搜索拒答保留未发布候选检查，管理员身份变化清除原文", async () => {
   vi.spyOn(api, "search").mockResolvedValue(
     response({
-      evidence: [
-        { evidence_id: "synthetic", citation_text: "未获正式资格的原文" },
-      ] as QueryResponse["evidence"],
+      evidence: [diagnosticEvidence],
     }),
   );
   vi.spyOn(api, "diagnostics").mockRejectedValue(
     new Error("synthetic diagnostics unavailable"),
   );
   const view = render(<QueryPage mode="search" />);
-  await submit();
+  const user = await submit();
   expect(await screen.findByRole("region", { name: "相关内容" })).toBeVisible();
   expect(screen.queryByRole("region", { name: "引用依据" })).toBeNull();
-  expect(screen.queryByText("未获正式资格的原文")).toBeNull();
+  const candidates = screen.getByRole("region", { name: "检索候选" });
+  expect(candidates).toHaveAttribute(
+    "data-content-role",
+    "diagnostic-evidence",
+  );
+  expect(within(candidates).getByText("未发布候选 · 排序 —")).toBeVisible();
+  await user.click(
+    within(candidates).getByRole("button", { name: /采购流程/ }),
+  );
+  const drawer = screen.getByRole("dialog", { name: "证据详情" });
+  expect(within(drawer).getByText("检索候选（未发布）")).toBeVisible();
+  expect(within(drawer).queryByText("引用依据")).toBeNull();
+  expect(within(drawer).getByText("本次未发布为答案引用")).toBeVisible();
   consoleState.tokens.admin = "changed-session";
   view.rerender(<QueryPage mode="search" />);
   expect(screen.queryByRole("region", { name: "相关内容" })).toBeNull();
+  expect(screen.queryByRole("dialog", { name: "证据详情" })).toBeNull();
+});
+
+it("问答拒答不开放诊断候选，正常答案才展示正式引用", async () => {
+  vi.spyOn(api, "answer")
+    .mockResolvedValueOnce(response({ evidence: [diagnosticEvidence] }))
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "已确认内容",
+        evidence: [diagnosticEvidence],
+        related_contents: [],
+      }),
+    );
+  render(<QueryPage mode="answer" />);
+  const user = await submit();
+  expect(await screen.findByRole("region", { name: "相关内容" })).toBeVisible();
+  expect(screen.queryByRole("region", { name: "检索候选" })).toBeNull();
+  expect(screen.queryByText("未获正式资格的原文")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByRole("region", { name: "引用依据" })).toBeVisible();
+  expect(screen.queryByRole("region", { name: "检索候选" })).toBeNull();
 });

@@ -410,12 +410,21 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await page.getByLabel("查询文本").fill("青岛啤酒");
   await page.getByRole("button", { name: "执行" }).click();
 
-  const evidence = page
+  const candidates = page.getByRole("region", { name: "检索候选" });
+  await expect(candidates).toHaveAttribute(
+    "data-content-role",
+    "diagnostic-evidence",
+  );
+  await expect(page.getByRole("region", { name: "引用依据" })).toHaveCount(0);
+  const evidence = candidates
     .getByRole("button", { name: /青岛啤酒采购流程/ })
     .first();
   await expect(evidence).toBeVisible();
   await expect(page.getByText("无关噪声.docx")).toHaveCount(0);
   await evidence.click();
+  await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
+    "检索候选（未发布）",
+  );
   await expect(page.getByRole("dialog", { name: "证据详情" })).toContainText(
     "青岛啤酒采购流程",
   );
