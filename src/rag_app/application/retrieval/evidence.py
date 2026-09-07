@@ -28,6 +28,7 @@ _MAX_SEMANTIC_RANK = 10
 _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
+_TablePiece = tuple[RankedChunk, SourceSpan, str]
 
 
 class EvidenceAssembler:
@@ -39,6 +40,7 @@ class EvidenceAssembler:
         policy: RetrievalPolicy,
         *,
         context: EvidenceSelectionContext | None = None,
+        allow_uncertain: bool = False,
     ) -> tuple[EvidenceItem, ...]:
         """依次执行 chunk/span dedup、cap、多样性和 token packing。
 
@@ -46,6 +48,7 @@ class EvidenceAssembler:
             candidates: canonical hydrated 候选和结构扩展。
             policy: Evidence V2 relevance、cap 与 token 预算。
             context: QueryAnalysis、QueryKind、rerank mode 与 selected slot。
+            allow_uncertain: 配置了证据核验生成器时保留待核验的相关来源。
 
         Returns:
             仅含单一可发布 span quote 的 EvidenceItem 序列。
@@ -54,6 +57,11 @@ class EvidenceAssembler:
         unique_chunks = tuple(
             {item.hydrated.chunk.chunk_id: item for item in candidates}.values()
         )
+        descriptive_table = _descriptive_table_evidence(
+            unique_chunks, policy, context
+        )
+        if descriptive_table is not None:
+            return descriptive_table
         table_spans = _table_intersections(unique_chunks, context)
         support_overrides = _context_supports(
             unique_chunks, context, table_spans
@@ -83,6 +91,7 @@ class EvidenceAssembler:
                 ),
                 table_spans=table_spans.get(chunk.chunk_id),
                 support_overrides=support_overrides,
+                **({"allow_uncertain": True} if allow_uncertain else {}),
             ):
                 if len(evidence) >= policy.max_evidence_items:
                     break
@@ -120,7 +129,10 @@ class EvidenceAssembler:
                     item = item.model_copy(
                         update={
                             "metadata": freeze_json_object(
-                                {"answer_support": support_metadata}
+                                {
+                                    **dict(item.metadata),
+                                    "answer_support": support_metadata,
+                                }
                             )
                         }
                     )
@@ -138,6 +150,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
     allow_semantic: bool,
     table_spans: set[_SpanKey] | None = None,
     support_overrides: dict[_SpanKey, AnswerSupport] | None = None,
+    allow_uncertain: bool = False,
 ) -> tuple[tuple[SourceSpan, str, tuple[object, ...]], ...]:
     selected: list[tuple[float, int, SourceSpan, str, tuple[object, ...]]] = []
     for span in chunk.source_spans:
@@ -152,6 +165,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
         if not quote.strip():
             continue
         relevance = _span_relevance(quote, context, chunk.role.value)
+        temperature_supported = False
         if context is not None:
             support = (support_overrides or {}).get(
                 key
@@ -160,12 +174,20 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 quote,
                 table_relation=table_spans is not None,
             )
-            if support.status is not SupportStatus.SUPPORTED:
+            if support.status is not SupportStatus.SUPPORTED and not (
+                allow_uncertain and support.status is SupportStatus.UNCERTAIN
+            ):
                 continue
+            # 精确对象、温度属性与合法量值已逐项证明，中英词面差异不否定该证据。
+            temperature_supported = (
+                support.status is SupportStatus.SUPPORTED
+                and support.answer_type == "TEMPERATURE"
+            )
         if (
             table_spans is None
             and key not in (support_overrides or {})
             and context is not None
+            and not temperature_supported
             and not _span_is_eligible(
                 relevance,
                 context,
@@ -293,6 +315,184 @@ def _table_intersections(
         for chunk_id in members[table_key]:
             selected.setdefault(chunk_id, set()).update(values)
     return selected
+
+
+def _descriptive_table_evidence(
+    candidates: tuple[RankedChunk, ...],
+    policy: RetrievalPolicy,
+    context: EvidenceSelectionContext | None,
+) -> tuple[EvidenceItem, ...] | None:
+    """把同表唯一角色行的多段职责作为完整支持链，保留各自原文引用。"""
+    if context is None:
+        return None
+    request = evaluate_span_support(context.analysis, "")
+    if request.answer_type != "DUTIES":
+        return None
+    groups = _descriptive_table_groups(candidates, request.query_target)
+    if not groups:
+        return None
+    # 多个文档的同名角色不能悄悄拼成一个角色，保留明确的来源歧义。
+    if (
+        len(groups) != 1
+        or not groups[0]
+        or not _complete_table_pieces(groups[0])
+    ):
+        return ()
+    pieces = groups[0]
+    counts = Counter(piece[0].hydrated.chunk.chunk_id for piece in pieces)
+    if (
+        len(pieces)
+        > min(
+            policy.max_evidence_items,
+            policy.per_document_cap,
+            policy.per_section_cap,
+        )
+        or max(counts.values()) > policy.max_evidence_items_per_chunk
+        or sum(max(1, (len(piece[2]) + 3) // 4) for piece in pieces)
+        > policy.evidence_token_budget
+    ):
+        return ()
+    span_ids = list(dict.fromkeys(piece[1].node_id for piece in pieces))
+    metadata = freeze_json_object(
+        {
+            "answer_support": {
+                "status": SupportStatus.SUPPORTED.value,
+                "query_target": request.query_target,
+                "requested_relation_or_attribute": "职责",
+                "answer_type": "DUTIES",
+                "support_reason": "TABLE_ROW_ATTRIBUTE",
+                "supporting_span_ids": span_ids,
+            }
+        }
+    )
+    return tuple(
+        _evidence_item(candidate, span, quote, f"S{index}").model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {**dict(span.metadata), **dict(metadata)}
+                )
+            }
+        )
+        for index, (candidate, span, quote) in enumerate(pieces, 1)
+    )
+
+
+def _descriptive_table_groups(
+    candidates: tuple[RankedChunk, ...], target: str
+) -> list[tuple[_TablePiece, ...]]:
+    tables: dict[
+        _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
+    ] = defaultdict(lambda: defaultdict(dict))
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        if chunk.role.value != "table" or not _regular_table_grid(chunk):
+            continue
+        for span in chunk.source_spans:
+            location = _table_location(chunk, span)
+            if location is None or span.is_repeated:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if quote.strip():
+                key, row, column = location
+                tables[key][row, column][_span_key(chunk, span)] = (
+                    candidate,
+                    span,
+                    quote,
+                )
+    groups: list[tuple[_TablePiece, ...]] = []
+    for cells in tables.values():
+        columns = {
+            column
+            for (row, column), pieces in cells.items()
+            if row == 0
+            and column > 0
+            and any(
+                re.fullmatch(
+                    r"(?:核心|主要|工作)?职责(?:说明)?|负责事项", p[2].strip()
+                )
+                for p in pieces.values()
+            )
+        }
+        rows = {
+            row
+            for (row, column), pieces in cells.items()
+            if row > 0
+            and column == 0
+            and {p[2].strip().casefold() for p in pieces.values()} == {target}
+        }
+        if len(rows) != 1 or len(columns) != 1:
+            continue
+        row, column = next(iter(rows)), next(iter(columns))
+        values = tuple(cells.get((row, column), {}).values())
+        subject = tuple(cells[row, 0].values())
+        if not values:
+            continue
+        pieces = (*subject, *sorted(values, key=_table_piece_order))
+        if not _all_cell_nodes_present(pieces, row, column):
+            return [()]
+        groups.append(pieces)
+    return groups
+
+
+def _table_piece_order(piece: _TablePiece) -> tuple[int, int]:
+    span = piece[1]
+    return (
+        span.source_anchor.ordinal if span.source_anchor is not None else 0,
+        span.source_start_char or 0,
+    )
+
+
+def _all_cell_nodes_present(
+    pieces: tuple[_TablePiece, ...], row: int, column: int
+) -> bool:
+    actual = {piece[1].node_id for piece in pieces}
+    expected: set[str] = set()
+    for candidate, _, _ in pieces:
+        atoms = dict(candidate.hydrated.chunk.metadata).get("atoms", [])
+        if not isinstance(atoms, list):
+            continue
+        for atom in atoms:
+            if not isinstance(atom, dict):
+                continue
+            metadata = atom.get("metadata", {})
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("row_index") != row
+            ):
+                continue
+            cells = metadata.get("cell_source_node_ids", {})
+            if isinstance(cells, dict):
+                values = cells.get(str(column), [])
+                if isinstance(values, list):
+                    expected.update(
+                        value for value in values if isinstance(value, str)
+                    )
+    return not expected or expected <= actual
+
+
+def _complete_table_pieces(pieces: tuple[_TablePiece, ...]) -> bool:
+    """跨 chunk 的同一段落必须覆盖整个实际来源范围。"""
+    ranges: dict[str, list[SourceSpan]] = defaultdict(list)
+    for _, span, _ in pieces:
+        if span.node_id:
+            ranges[span.node_id].append(span)
+    for spans in ranges.values():
+        first = spans[0]
+        anchor = first.source_anchor
+        if anchor is None:
+            return False
+        cursor = anchor.source_start_char
+        if cursor is None or anchor.source_end_char is None:
+            return False
+        for span in sorted(spans, key=lambda s: s.source_start_char or 0):
+            if span.source_start_char != cursor or span.source_end_char is None:
+                return False
+            cursor = span.source_end_char
+        if cursor != anchor.source_end_char:
+            return False
+    return True
 
 
 def _requested_columns(
@@ -629,6 +829,9 @@ def _evidence_item(
         table_context=chunk.role.value == "table",
         selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
+        metadata=(
+            span.metadata if dict(span.metadata).get("origin") == "ocr" else ()
+        ),
         retrieval_origins=tuple(
             contribution.channel for contribution in candidate.contributions
         )

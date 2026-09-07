@@ -4,7 +4,10 @@ export type Project = components["schemas"]["Project"];
 export type KnowledgeBase = components["schemas"]["KnowledgeBase"];
 export type Document = components["schemas"]["Document"];
 export type DocumentVersion = components["schemas"]["DocumentVersion"];
-export type Job = components["schemas"]["Job"];
+export type Job = components["schemas"]["Job"] & {
+  error_code?: string | null;
+  trace_id?: string | null;
+};
 export type JobPage = components["schemas"]["JobPage"];
 export type RevisionInspection = components["schemas"]["RevisionInspection"];
 export type ChunkPage = components["schemas"]["ChunkPage"];
@@ -24,9 +27,96 @@ export interface Page<T> {
   next_offset?: number | null;
 }
 
+export interface HistoryEntry {
+  trace_id: string;
+  project_id: string;
+  knowledge_base_id: string;
+  created_at: string;
+  finished_at?: string | null;
+  status: string;
+  duration_ms?: number | null;
+  question?: string | null;
+  answer?: string | null;
+  answer_summary: string;
+  body_saved: boolean;
+  body_available: boolean;
+  body_message: string;
+  cache_hit?: boolean;
+  generation_mode?: string;
+  reason_code?: string;
+  error_stage?: string;
+  active_index_revision_id?: string;
+  models?: string[];
+  provider_usage?: {
+    operation: string;
+    call_count: number;
+    reason_code?: string | null;
+    usage?: number | string | null;
+  }[];
+  events?: { event_name: string; occurred_at: string; attributes: unknown }[];
+  diagnostics?: RetrievalDiagnostics;
+  result?: {
+    evidence?: Evidence[];
+    related_contents?: RelatedContent[];
+    generation_mode?: string;
+  } | null;
+}
+
+export interface HistoryPageResult extends Page<HistoryEntry> {
+  total: number;
+  body_enabled: boolean;
+  retention_days: number;
+  storage: string;
+}
+
+export interface HistoryFilters {
+  project_id?: string;
+  knowledge_base_id?: string;
+  status?: string;
+  created_from?: string;
+  created_to?: string;
+  keyword?: string;
+  page_size?: number;
+  offset?: number;
+}
+
 export interface Tokens {
   admin: string;
   query: string;
+}
+
+export interface KnowledgeBaseModelSettings {
+  generation_connection_id: string | null;
+  generation_model: string | null;
+  rewrite_enabled: boolean;
+  ocr_connection_id: string | null;
+  ocr_model: string | null;
+  ocr_enabled: boolean;
+  budget_campaign_id: string | null;
+  generation_configured?: boolean;
+  ocr_configured?: boolean;
+}
+
+export interface DocumentOcrScan {
+  media: {
+    media_sha256: string;
+    artifact_id: string;
+    part_uri: string;
+    media_type: string;
+    size_bytes: number;
+    width?: number | null;
+    height?: number | null;
+    supported: boolean;
+    approved: boolean;
+    cached: boolean;
+    indexed?: boolean;
+    reason_code?: string | null;
+  }[];
+  media_count: number;
+  recognized_count: number;
+  pending_count: number;
+  indexed_count?: number;
+  rebuild_count?: number;
 }
 
 export interface ConsoleSession {
@@ -207,6 +297,7 @@ async function request<T>(
   path: string,
   token: string,
   init: RequestInit = {},
+  receivedStatus?: (status: number) => void,
 ): Promise<T> {
   void token;
   const headers = new Headers(init.headers);
@@ -223,6 +314,7 @@ async function request<T>(
     const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
     throw new ApiError(response.status, payload);
   }
+  receivedStatus?.(response.status);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
@@ -248,7 +340,7 @@ export async function readSseResponse(
 }
 
 function jsonInit(
-  method: "POST" | "PATCH",
+  method: "POST" | "PATCH" | "PUT",
   body: object,
   idempotencyKey?: string,
 ): RequestInit {
@@ -292,6 +384,57 @@ export const api = {
   },
   providerCatalog: () =>
     request<ProviderCatalog>("/api/v1/provider-catalog", ""),
+  modelSettings: (kbId: string) =>
+    request<KnowledgeBaseModelSettings>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/model-settings`,
+      "",
+    ),
+  scanDocumentImages: (kbId: string, documentId: string) =>
+    request<DocumentOcrScan>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(documentId)}/ocr`,
+      "",
+    ),
+  recognizeDocumentImages: (
+    kbId: string,
+    documentId: string,
+    hashes: string[],
+  ) =>
+    request<Job>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(documentId)}/ocr`,
+      "",
+      jsonInit("POST", { confirmed_media_hashes: hashes }),
+    ),
+  documentImageUrl: (
+    projectId: string,
+    kbId: string,
+    documentId: string,
+    artifactId: string,
+  ) =>
+    `/api/v1/projects/${encodeURIComponent(projectId)}/knowledge-bases/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(documentId)}/images/${encodeURIComponent(artifactId)}`,
+  saveModelSettings: (kbId: string, settings: KnowledgeBaseModelSettings) => {
+    const {
+      generation_connection_id,
+      generation_model,
+      rewrite_enabled,
+      ocr_connection_id,
+      ocr_model,
+      ocr_enabled,
+      budget_campaign_id,
+    } = settings;
+    return request<KnowledgeBaseModelSettings>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/model-settings`,
+      "",
+      jsonInit("PUT", {
+        generation_connection_id,
+        generation_model,
+        rewrite_enabled,
+        ocr_connection_id,
+        ocr_model,
+        ocr_enabled,
+        budget_campaign_id,
+      }),
+    );
+  },
   listProjects: (token: string, offset = 0) =>
     request<Page<Project>>(`/api/v1/projects?offset=${offset}`, token),
   createProject: (token: string, name: string, key: string) =>
@@ -353,17 +496,23 @@ export const api = {
       token,
       jsonInit("PATCH", { display_name: displayName }),
     ),
-  deleteDocument: (
+  deleteDocument: async (
     token: string,
     projectId: string,
     kbId: string,
     documentId: string,
-  ) =>
-    request<Document>(
+  ) => {
+    let statusCode = 200;
+    const document = await request<Document | { status?: string } | void>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents/${documentId}`,
       token,
       { method: "DELETE" },
-    ),
+      (status) => {
+        statusCode = status;
+      },
+    );
+    return { statusCode, document };
+  },
   uploadDocument: (
     token: string,
     projectId: string,
@@ -413,6 +562,68 @@ export const api = {
   },
   getJob: (token: string, jobId: string) =>
     request<Job>(`/api/v1/jobs/${jobId}`, token),
+  jobTrace: (jobId: string) =>
+    request<{
+      trace_id: string;
+      job: Job;
+      events: NonNullable<HistoryEntry["events"]>;
+    }>(`/api/v1/admin/traces?${new URLSearchParams({ job_id: jobId })}`, ""),
+  retryJob: (token: string, jobId: string) =>
+    request<Job>(`/api/v1/jobs/${jobId}:retry`, token, { method: "POST" }),
+  cancelJob: (token: string, jobId: string) =>
+    request<Job>(`/api/v1/jobs/${jobId}:cancel`, token, { method: "POST" }),
+  listHistory: (filters: HistoryFilters = {}, signal?: AbortSignal) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    return request<HistoryPageResult>(`/api/v1/history?${params}`, "", {
+      signal,
+    });
+  },
+  historyDetail: (traceId: string, signal?: AbortSignal) =>
+    request<HistoryEntry>(
+      `/api/v1/history/${encodeURIComponent(traceId)}`,
+      "",
+      { signal },
+    ),
+  clearHistory: () =>
+    request<void>("/api/v1/history", "", { method: "DELETE" }),
+  readEvidenceSource: async (
+    token: string,
+    projectId: string,
+    kbId: string,
+    revisionId: string,
+    evidence: Evidence,
+    signal?: AbortSignal,
+  ): Promise<SourceChunk> => {
+    if (!evidence.document_id || !evidence.document_version_id) {
+      throw new Error("引用缺少来源身份，无法读取原文。");
+    }
+    const params = new URLSearchParams({
+      chunk_id: evidence.chunk_id,
+      document_id: evidence.document_id,
+      page_size: "1",
+    });
+    const page = await request<ChunkPage>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/revisions/${revisionId}/chunks?${params}`,
+      token,
+      { signal },
+    );
+    const chunk = page.items[0];
+    if (
+      !chunk ||
+      chunk.chunk_id !== evidence.chunk_id ||
+      chunk.project_id !== projectId ||
+      chunk.knowledge_base_id !== kbId ||
+      chunk.index_revision_id !== revisionId ||
+      chunk.version.document_id !== evidence.document_id ||
+      chunk.version.document_version_id !== evidence.document_version_id
+    ) {
+      throw new Error("原文当前不可读取，请重新查询。");
+    }
+    return chunk;
+  },
   inspectRevision: (
     token: string,
     projectId: string,
@@ -481,6 +692,7 @@ export const api = {
     query: string,
     signal?: AbortSignal,
     includeRelatedContent = false,
+    historyMode?: "full" | "metadata_only",
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:search`,
@@ -491,6 +703,7 @@ export const api = {
           limit: 10,
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
+          ...(historyMode ? { history_mode: historyMode } : {}),
         }),
         signal,
       },
@@ -502,6 +715,7 @@ export const api = {
     query: string,
     signal?: AbortSignal,
     includeRelatedContent = false,
+    historyMode?: "full" | "metadata_only",
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
@@ -512,6 +726,7 @@ export const api = {
           limit: 10,
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
+          ...(historyMode ? { history_mode: historyMode } : {}),
         }),
         signal,
       },

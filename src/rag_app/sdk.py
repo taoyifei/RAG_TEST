@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Literal
 
 from rag_app.application.console import ConsoleInspectionService
 from rag_app.application.lifecycle import LifecycleService
 from rag_app.application.retrieval import RetrievalService
-from rag_app.core.errors import CapabilityUnavailable, NotFound
+from rag_app.core.errors import CapabilityUnavailable, NotFound, RagError
 from rag_app.core.events import TraceEvent
+from rag_app.core.identifiers import new_id
 from rag_app.core.models import (
     ArtifactDescriptor,
     ChunkPage,
@@ -30,6 +32,7 @@ from rag_app.core.models.management import (
 )
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
 from rag_app.core.ports import BlobReadResult
+from rag_app.core.ports.query_history import QueryHistoryPort
 
 
 class RagSdk:
@@ -54,6 +57,7 @@ class RagSdk:
             [str, LifecycleService], LifecycleService
         ]
         | None = None,
+        query_history: QueryHistoryPort | None = None,
     ) -> None:
         """保存 Application Services，不持有具体 Store 类型。
 
@@ -71,6 +75,7 @@ class RagSdk:
             retrieval_resolver: 可选按知识库选择检索服务的解析器。
             revision_builder_resolver: 可选按知识库选择 Revision
                 构建服务的解析器。
+            query_history: 宿主注入的持久历史，SDK 默认只保存元数据。
 
         Returns:
             无返回值。
@@ -88,6 +93,7 @@ class RagSdk:
         self._console = console
         self._retrieval_resolver = retrieval_resolver
         self._revision_builder_resolver = revision_builder_resolver
+        self._query_history = query_history
         self._closed = False
         self._diagnostics: dict[str, RetrievalDiagnostics] = {}
 
@@ -701,7 +707,7 @@ class RagSdk:
             project_id, knowledge_base_id, revision_id
         )
 
-    def search(
+    def search(  # noqa: PLR0913
         self,
         project_id: str,
         knowledge_base_id: str,
@@ -709,6 +715,9 @@ class RagSdk:
         *,
         limit: int = 10,
         include_related_content: bool = False,
+        history_mode: Literal["full", "metadata_only"] = "metadata_only",
+        owner_id: str = "sdk",
+        trace_id: str | None = None,
     ) -> SearchAnswerResult:
         """执行 revision-sticky 检索并保存安全诊断。
 
@@ -718,30 +727,75 @@ class RagSdk:
             text: 查询文本。
             limit: 最大结果数。
             include_related_content: 是否返回独立的相关原文预览。
+            history_mode: 是否允许宿主保存本次问答正文。
+            owner_id: 经过宿主鉴权的调用方身份，不包含凭据。
+            trace_id: 宿主在请求开始时分配的安全关联 ID。
 
         Returns:
             P08.5 实际路由与最小证据结果。
 
         """
         self._require_open()
+        request = SearchRequest(
+            scope=KnowledgeBaseScope(
+                project_id=project_id, knowledge_base_id=knowledge_base_id
+            ),
+            text=text,
+            limit=limit,
+            include_related_content=include_related_content,
+            trace_id=trace_id or new_id("trace"),
+        )
+        request_trace_id = request.trace_id
+        if request_trace_id is None:
+            raise RuntimeError("查询缺少 trace_id。")
+        if self._query_history is not None:
+            self._query_history.start(
+                request_trace_id,
+                request.scope,
+                text,
+                owner_id=owner_id,
+                save_body=history_mode == "full",
+            )
+        result: SearchAnswerResult | None = None
+        failure: RagError | None = None
+        cancelled = False
+        try:
+            result = self._execute_search(request)
+            return result
+        except RagError as error:
+            error.trace_id = request_trace_id
+            failure = error
+            raise
+        except Exception as error:
+            failure = RagError(
+                "查询执行失败，请查看检索过程。",
+                stage="query.execute",
+                code="INTERNAL_ERROR",
+                trace_id=request_trace_id,
+                details={"exception_type": type(error).__name__},
+            )
+            raise failure from error
+        except BaseException:
+            cancelled = True
+            raise
+        finally:
+            if self._query_history is not None:
+                self._query_history.finish(
+                    request_trace_id,
+                    result=result,
+                    error=failure,
+                    cancelled=cancelled,
+                )
+
+    def _execute_search(self, request: SearchRequest) -> SearchAnswerResult:
         retrieval = self._retrieval
         if self._retrieval_resolver is not None:
             retrieval = self._retrieval_resolver(
-                knowledge_base_id,
+                request.scope.knowledge_base_id,
                 self._retrieval,
             )
-        result = retrieval.search_and_answer(
-            SearchRequest(
-                scope=KnowledgeBaseScope(
-                    project_id=project_id,
-                    knowledge_base_id=knowledge_base_id,
-                ),
-                text=text,
-                limit=limit,
-                include_related_content=include_related_content,
-            )
-        )
-        if result.diagnostics is not None:
+        result = retrieval.search_and_answer(request)
+        if result.diagnostics is not None and self._query_history is None:
             self._diagnostics[result.trace_id] = result.diagnostics
         return result
 
@@ -753,7 +807,7 @@ class RagSdk:
             self._lifecycle,
         )
 
-    def answer(
+    def answer(  # noqa: PLR0913
         self,
         project_id: str,
         knowledge_base_id: str,
@@ -761,6 +815,9 @@ class RagSdk:
         *,
         limit: int = 10,
         include_related_content: bool = False,
+        history_mode: Literal["full", "metadata_only"] = "metadata_only",
+        owner_id: str = "sdk",
+        trace_id: str | None = None,
     ) -> SearchAnswerResult:
         """执行与 Search 共用的检索和受控回答链。
 
@@ -770,6 +827,9 @@ class RagSdk:
             text: 用户问题。
             limit: 最大候选数。
             include_related_content: 是否返回独立的相关原文预览。
+            history_mode: 正文保存选择。
+            owner_id: 宿主鉴权后的非秘密身份。
+            trace_id: 宿主在请求开始分配的 ID。
 
         Returns:
             含回答或明确拒答的结果。
@@ -781,6 +841,9 @@ class RagSdk:
             text,
             limit=limit,
             include_related_content=include_related_content,
+            history_mode=history_mode,
+            owner_id=owner_id,
+            trace_id=trace_id,
         )
 
     def retrieval_diagnostics(self, trace_id: str) -> RetrievalDiagnostics:
@@ -794,6 +857,8 @@ class RagSdk:
 
         """
         self._require_open()
+        if self._query_history is not None:
+            return self._query_history.diagnostics(trace_id)
         try:
             return self._diagnostics[trace_id]
         except KeyError as error:

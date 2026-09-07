@@ -488,7 +488,7 @@ class SqliteTraceSink:
 
     descriptor = ComponentDescriptor(
         kind=ComponentKind.TRACE_SINK,
-        name="sqlite",
+        name="sqlite-memory",
         version=sqlite3.sqlite_version,
         mode=ProviderMode.LOCAL,
     )

@@ -214,7 +214,7 @@ class QdrantRevisionVectorStore:
             if point_id in converted
         )
 
-    def search_named(
+    def search_named(  # noqa: PLR0913
         self,
         spec: RevisionVectorSpec,
         *,
@@ -222,6 +222,7 @@ class QdrantRevisionVectorStore:
         vector_name: str,
         query_vector: tuple[float, ...],
         limit: int,
+        excluded_document_ids: tuple[str, ...] = (),
     ) -> tuple[VectorSearchResult, ...]:
         """仅查询 slot 对应的 named vector 并硬过滤 scope。
 
@@ -231,6 +232,7 @@ class QdrantRevisionVectorStore:
             vector_name: 必须属于 slot 的 vector name。
             query_vector: 同维度查询向量。
             limit: 最大命中数。
+            excluded_document_ids: 排名截断前排除的已删除文档。
 
         Returns:
             Qdrant 分数降序命中。
@@ -252,7 +254,15 @@ class QdrantRevisionVectorStore:
                     _match("project_id", revision.project_id),
                     _match("knowledge_base_id", revision.knowledge_base_id),
                     _match("index_revision_id", revision.index_revision_id),
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key="document_id",
+                        match=models.MatchAny(any=list(excluded_document_ids)),
+                    )
                 ]
+                if excluded_document_ids
+                else None,
             ),
             limit=limit,
             with_payload=True,
@@ -548,9 +558,7 @@ class QdrantRevisionVectorStore:
         typed_record = cast(_QdrantRecord, record)
         point_id = _canonical_uuid(typed_record.id)
         payload = _safe_payload(typed_record.payload)
-        vector_names, vector_dimensions = safe_vector_shape(
-            typed_record.vector
-        )
+        vector_names, vector_dimensions = safe_vector_shape(typed_record.vector)
         if payload is None:
             return VectorPointAudit(
                 point_id=point_id,

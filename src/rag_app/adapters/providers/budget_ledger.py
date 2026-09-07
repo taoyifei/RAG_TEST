@@ -14,7 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from rag_app.adapters.providers.budget_errors import BudgetBlockedError
-from rag_app.adapters.providers.budget_models import BudgetCampaign
+from rag_app.adapters.providers.budget_models import (
+    BudgetCampaign,
+    campaign_configuration,
+)
 from rag_app.adapters.providers.budget_revision import (
     BudgetAuthorizationRevision,
     budget_payload_set_identity,
@@ -45,6 +48,15 @@ class BudgetRequest:
     retry_index: int = 0
     text_hashes: tuple[str, ...] = ()
     shape_identity: str | None = None
+    model: str | None = None
+    project_id: str | None = None
+    knowledge_base_id: str | None = None
+    source_hashes: tuple[str, ...] = ()
+    media_hashes: tuple[str, ...] = ()
+    provenance_verified: bool = False
+    policy_valid: bool = True
+    estimated_output_tokens: int = 0
+    estimated_image_tokens: int = 0
 
 
 class ProviderBudgetLedger:
@@ -110,6 +122,7 @@ class ProviderBudgetLedger:
                 );
                 """
             )
+            _upgrade_usage_schema(connection)
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
@@ -144,7 +157,9 @@ class ProviderBudgetLedger:
             无返回值；只追加首次配置。
 
         """
-        configuration = json.dumps(asdict(campaign), sort_keys=True)
+        configuration = json.dumps(
+            campaign_configuration(campaign), sort_keys=True
+        )
         with self._transaction() as connection:
             previous = connection.execute(
                 "SELECT configuration FROM provider_budget_campaigns "
@@ -232,6 +247,7 @@ class ProviderBudgetLedger:
             reason = None
             try:
                 self._campaign(connection, campaign_id)
+                _assert_scope_current(base)
             except BudgetBlockedError as error:
                 reason = error.reason
             attempts = [
@@ -292,16 +308,19 @@ class ProviderBudgetLedger:
             raise BudgetBlockedError("BUDGET_ADMIN_SESSION_REQUIRED")
         encoded = json.dumps(asdict(revision), sort_keys=True)
         with self._transaction() as connection:
+            try:
+                base = self._base_campaign(connection, revision.campaign_id)
+            except BudgetBlockedError:
+                raise BudgetBlockedError("CAMPAIGN_BINDING_REQUIRED") from None
             binding = connection.execute(
                 "SELECT campaign_id FROM provider_budget_active_campaign "
                 "WHERE singleton=1"
             ).fetchone()
-            if (
+            if base.scope_mode != "knowledge_base" and (
                 binding is None
                 or binding["campaign_id"] != revision.campaign_id
             ):
                 raise BudgetBlockedError("CAMPAIGN_BINDING_REQUIRED")
-            base = self._base_campaign(connection, revision.campaign_id)
             effective = revision.effective_campaign(base)
             existing = connection.execute(
                 "SELECT configuration FROM provider_budget_revisions "
@@ -448,7 +467,10 @@ class ProviderBudgetLedger:
             raise BudgetBlockedError("CAMPAIGN_NOT_ACTIVE")
         configuration = json.loads(row["configuration"])
         for key in tuple(configuration):
-            if key.startswith("approved_"):
+            if key.startswith("approved_") or key in {
+                "allowed_models",
+                "allowed_operations",
+            }:
                 configuration[key] = tuple(configuration[key])
         return BudgetCampaign(**configuration)
 
@@ -521,15 +543,17 @@ class ProviderBudgetLedger:
                 blocked = BudgetBlockedError("AUTHORIZATION_ID_MISMATCH")
             elif scope != campaign.scope:
                 blocked = BudgetBlockedError("AUTHORIZATION_SCOPE_MISMATCH")
+            elif campaign.scope_mode == "knowledge_base":
+                blocked = _knowledge_scope_failure(campaign, request)
             elif not _payload_approved(campaign, request):
                 blocked = BudgetBlockedError("PAYLOAD_NOT_APPROVED")
-            elif (
+            if blocked is None and (
                 campaign.approved_request_identities
                 and request.request_identity
                 not in campaign.approved_request_identities
             ):
                 blocked = BudgetBlockedError("REQUEST_IDENTITY_NOT_APPROVED")
-            else:
+            if blocked is None:
                 blocked = _budget_failure(
                     connection, campaign, request, step_id
                 )
@@ -537,8 +561,9 @@ class ProviderBudgetLedger:
                 "INSERT INTO provider_budget_attempts "
                 "(attempt_id, campaign_id, step_id, provider, operation, "
                 "request_identity, payload_identity, retry_index, reserved, "
-                "locally_blocked, status, estimated_input_tokens, timestamp) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "locally_blocked, status, estimated_input_tokens, timestamp, "
+                "estimated_output_tokens, estimated_image_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     attempt_id,
                     campaign_id,
@@ -553,6 +578,8 @@ class ProviderBudgetLedger:
                     "RESERVED" if blocked is None else blocked.reason,
                     request.estimated_input_tokens,
                     _now(),
+                    request.estimated_output_tokens,
+                    request.estimated_image_tokens,
                 ),
             )
         if blocked is not None:
@@ -578,7 +605,9 @@ class ProviderBudgetLedger:
             ).fetchone()
             if row is None:
                 raise BudgetBlockedError("ATTEMPT_NOT_RESERVED")
-            self._campaign(connection, row["campaign_id"])
+            _assert_scope_current(
+                self._campaign(connection, row["campaign_id"])
+            )
             cursor = connection.execute(
                 "UPDATE provider_budget_attempts SET forwarded = 1, "
                 "status = 'FORWARDED' WHERE attempt_id = ? "
@@ -852,6 +881,90 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _upgrade_usage_schema(connection: sqlite3.Connection) -> None:
+    """顺序追加 Chat 输出/图像预留列；既有行和定义不回写。"""
+    version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+    if version > 1:
+        raise BudgetBlockedError("BUDGET_SCHEMA_NEWER_THAN_RUNTIME")
+    if version == 0:
+        names = {
+            row[1]
+            for row in connection.execute(
+                "PRAGMA table_info(provider_budget_attempts)"
+            )
+        }
+        for name in ("estimated_output_tokens", "estimated_image_tokens"):
+            if name not in names:
+                connection.execute(
+                    f"ALTER TABLE provider_budget_attempts ADD COLUMN {name} "
+                    "INTEGER NOT NULL DEFAULT 0"
+                )
+        connection.execute("PRAGMA user_version = 1")
+
+
+def _assert_scope_current(campaign: BudgetCampaign) -> None:
+    if campaign.scope_mode == "knowledge_base" and (
+        campaign.expires_at is None
+        or datetime.fromisoformat(campaign.expires_at) <= datetime.now(UTC)
+    ):
+        raise BudgetBlockedError("BUSINESS_AUTHORIZATION_EXPIRED")
+
+
+def _knowledge_scope_failure(  # noqa: PLR0911
+    campaign: BudgetCampaign, request: BudgetRequest
+) -> BudgetBlockedError | None:
+    try:
+        _assert_scope_current(campaign)
+    except BudgetBlockedError as error:
+        return error
+    if (
+        not request.provenance_verified
+        or request.project_id != campaign.project_id
+        or request.knowledge_base_id != campaign.knowledge_base_id
+    ):
+        return BudgetBlockedError("BUSINESS_DATA_SCOPE_MISMATCH")
+    if (
+        request.provider != "aliyun"
+        or request.operation not in campaign.allowed_operations
+        or request.model not in campaign.allowed_models
+    ):
+        return BudgetBlockedError("BUSINESS_MODEL_OPERATION_NOT_APPROVED")
+    if not request.policy_valid:
+        return BudgetBlockedError("BUSINESS_REQUEST_POLICY_MISMATCH")
+    if (
+        not request.source_hashes and request.operation != "query.rewrite"
+    ) or not _hash_subset(
+        request.source_hashes, campaign.approved_source_hashes
+    ):
+        return BudgetBlockedError("BUSINESS_SOURCE_NOT_APPROVED")
+    if request.operation == "image.ocr" and (
+        len(request.media_hashes) != 1
+        or not _hash_subset(
+            request.media_hashes, campaign.approved_media_hashes
+        )
+    ):
+        return BudgetBlockedError("BUSINESS_MEDIA_NOT_APPROVED")
+    if request.operation != "image.ocr" and request.media_hashes:
+        return BudgetBlockedError("BUSINESS_UNEXPECTED_IMAGE_INPUT")
+    return None
+
+
+def _hash_subset(values: tuple[str, ...], approved: tuple[str, ...]) -> bool:
+    return {value.removeprefix("sha256:") for value in values} <= {
+        value.removeprefix("sha256:") for value in approved
+    }
+
+
+def _reserved_tokens(row: sqlite3.Row, campaign: BudgetCampaign) -> int:
+    if campaign.scope_mode == "knowledge_base":
+        return max(
+            int(row["estimated_input_tokens"])
+            + int(row["estimated_output_tokens"]),
+            int(row["observed_tokens"] or 0),
+        )
+    return int(row["estimated_input_tokens"])
+
+
 def _validate_request(step_id: str, request: BudgetRequest) -> None:
     if any(
         not _SAFE_IDENTIFIER.fullmatch(value)
@@ -863,7 +976,15 @@ def _validate_request(step_id: str, request: BudgetRequest) -> None:
         for value in (request.request_identity, request.payload_identity)
     ):
         raise ValueError("请求身份必须是 SHA256。")
-    if request.estimated_input_tokens < 0 or request.retry_index < 0:
+    if any(
+        type(value) is not int or value < 0
+        for value in (
+            request.estimated_input_tokens,
+            request.retry_index,
+            request.estimated_output_tokens,
+            request.estimated_image_tokens,
+        )
+    ):
         raise ValueError("请求估算与重试次数不可为负数。")
 
 
@@ -887,21 +1008,23 @@ def _budget_failure(
     step_id: str,
 ) -> BudgetBlockedError | None:
     rows = connection.execute(
-        "SELECT provider, step_id, estimated_input_tokens "
+        "SELECT provider, operation, step_id, estimated_input_tokens, "
+        "estimated_output_tokens, observed_tokens "
         "FROM provider_budget_attempts WHERE campaign_id = ? AND reserved = 1",
         (campaign.campaign_id,),
     ).fetchall()
-    total_tokens = sum(row["estimated_input_tokens"] for row in rows)
+    total_tokens = sum(_reserved_tokens(row, campaign) for row in rows)
     provider_rows = [row for row in rows if row["provider"] == request.provider]
     provider_tokens = sum(
-        row["estimated_input_tokens"] for row in provider_rows
+        _reserved_tokens(row, campaign) for row in provider_rows
+    )
+    requested_tokens = (
+        request.estimated_input_tokens + request.estimated_output_tokens
     )
     needs = {
         "requests": len(rows) + 1 - campaign.request_limit,
         "estimated_input_tokens": (
-            total_tokens
-            + request.estimated_input_tokens
-            - campaign.estimated_token_limit
+            total_tokens + requested_tokens - campaign.estimated_token_limit
         ),
         "provider_requests": len(provider_rows)
         + 1
@@ -910,7 +1033,7 @@ def _budget_failure(
         ),
         "provider_estimated_input_tokens": (
             provider_tokens
-            + request.estimated_input_tokens
+            + requested_tokens
             - campaign.provider_token_limits.get(
                 request.provider, campaign.estimated_token_limit
             )
@@ -919,6 +1042,12 @@ def _budget_failure(
         + 1
         - campaign.step_request_limits.get(step_id, campaign.request_limit),
     }
+    if campaign.scope_mode == "knowledge_base":
+        needs["operation_requests"] = (
+            sum(row["operation"] == request.operation for row in rows)
+            + 1
+            - campaign.operation_request_limits[request.operation]
+        )
     additional = {key: value for key, value in needs.items() if value > 0}
     return (
         BudgetBlockedError("BLOCKED_BUDGET", additional) if additional else None
@@ -929,13 +1058,14 @@ def _assert_limits_cover_usage(
     connection: sqlite3.Connection, campaign: BudgetCampaign
 ) -> None:
     rows = connection.execute(
-        "SELECT provider,step_id,estimated_input_tokens "
+        "SELECT provider,operation,step_id,estimated_input_tokens, "
+        "estimated_output_tokens,observed_tokens "
         "FROM provider_budget_attempts WHERE campaign_id=? AND reserved=1",
         (campaign.campaign_id,),
     ).fetchall()
     if (
         len(rows) > campaign.request_limit
-        or sum(row["estimated_input_tokens"] for row in rows)
+        or sum(_reserved_tokens(row, campaign) for row in rows)
         > campaign.estimated_token_limit
     ):
         raise BudgetBlockedError("BUDGET_REVISION_BELOW_CONSUMPTION")
@@ -944,7 +1074,7 @@ def _assert_limits_cover_usage(
         if len(selected) > campaign.provider_request_limits.get(
             provider, campaign.request_limit
         ) or sum(
-            row["estimated_input_tokens"] for row in selected
+            _reserved_tokens(row, campaign) for row in selected
         ) > campaign.provider_token_limits.get(
             provider, campaign.estimated_token_limit
         ):
@@ -953,6 +1083,9 @@ def _assert_limits_cover_usage(
         if sum(row["step_id"] == step for row in rows) > (
             campaign.step_request_limits.get(step, campaign.request_limit)
         ):
+            raise BudgetBlockedError("BUDGET_REVISION_BELOW_CONSUMPTION")
+    for operation, limit in campaign.operation_request_limits.items():
+        if sum(row["operation"] == operation for row in rows) > limit:
             raise BudgetBlockedError("BUDGET_REVISION_BELOW_CONSUMPTION")
 
 
@@ -1042,7 +1175,7 @@ def summarize_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any]:
         for row in forwarded
         if row["observed_tokens"] is not None
     ]
-    return {
+    summary = {
         "total": len(attempts),
         "reserved": sum(row["reserved"] for row in attempts),
         "forwarded": len(forwarded),
@@ -1079,3 +1212,25 @@ def summarize_attempts(attempts: list[dict[str, Any]]) -> dict[str, Any]:
             if row["locally_blocked"]
         ),
     }
+    if any(row.get("estimated_output_tokens", 0) for row in attempts):
+        summary.update(
+            {
+                "estimated_output_tokens": sum(
+                    row.get("estimated_output_tokens", 0)
+                    for row in attempts
+                    if row["reserved"]
+                ),
+                "estimated_image_tokens": sum(
+                    row.get("estimated_image_tokens", 0)
+                    for row in attempts
+                    if row["reserved"]
+                ),
+                "reserved_total_tokens": sum(
+                    row["estimated_input_tokens"]
+                    + row.get("estimated_output_tokens", 0)
+                    for row in attempts
+                    if row["reserved"]
+                ),
+            }
+        )
+    return summary

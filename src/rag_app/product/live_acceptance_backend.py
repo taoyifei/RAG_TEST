@@ -793,7 +793,14 @@ class ProductAcceptanceBackend:
                     "aliyun_document_canary": 1,
                     "aliyun_query_canary": 1,
                 },
-                **contracts,
+                approved_payload_hashes=contracts["approved_payload_hashes"],
+                approved_text_hashes=contracts["approved_text_hashes"],
+                approved_request_shape_hashes=contracts[
+                    "approved_request_shape_hashes"
+                ],
+                approved_request_identities=contracts[
+                    "approved_request_identities"
+                ],
             )
             summary = bind_existing_product_campaign(
                 Path(str(self.config["data_dir"])),

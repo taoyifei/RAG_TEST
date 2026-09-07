@@ -198,6 +198,14 @@ def test_expansion_rejects_structural_and_scope_boundary(
     bad_chunk = second.hydrated.chunk.model_copy(update={boundary: value})
     bad = second.hydrated.model_copy(update={"chunk": bad_chunk})
     outcome = _expand((first,), (bad,), mode)
+    if mode == "section" and boundary == "neighbor_group_id":
+        # 显式章节扩展允许引言与表格属于不同 group，不继承种子的排名。
+        assert outcome.candidates[0] == first
+        assert outcome.candidates[1].hydrated == bad
+        assert outcome.candidates[1].contributions == ()
+        assert outcome.candidates[1].expansion_reason == "SECTION_SIBLING"
+        assert outcome.degraded_reason_codes == ()
+        return
     assert outcome.candidates == (first,)
     assert outcome.degraded_reason_codes == ("NEIGHBOR_INDEX_CORRUPT",)
 

@@ -9,7 +9,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
@@ -61,6 +61,7 @@ _ERROR_STATUS = {
     "REVISION_STATE_ERROR": 409,
     "UPLOAD_TOO_LARGE": 413,
     "VALIDATION_FAILED": 422,
+    "TRACE_PERSISTENCE_UNAVAILABLE": 503,
 }
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorEnvelope, "description": "统一安全错误结构"}
@@ -581,20 +582,27 @@ def _register_query_routes(
         response_model=QueryResponse,
         response_model_exclude_unset=True,
     )
-    def _search(
+    def _search(  # noqa: PLR0913, PLR0917
         project_id: str,
         kb_id: str,
         body: QueryRequest,
+        request: Request,
+        response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
         """返回 P08.5 实际路由与最小证据。"""
         require_query(authorization)
+        trace_id = new_id("trace")
+        response.headers["X-Trace-Id"] = trace_id
         result = runtime.sdk.search(
             project_id,
             kb_id,
             body.query,
             limit=body.limit,
             include_related_content=body.include_related_content,
+            history_mode=_history_mode(request, body),
+            owner_id=_history_owner(request),
+            trace_id=trace_id,
         )
         return _query_payload(
             runtime,
@@ -610,20 +618,27 @@ def _register_query_routes(
         response_model=None,
         responses={200: {"model": QueryResponse}},
     )
-    def _answer(
+    def _answer(  # noqa: PLR0913, PLR0917
         project_id: str,
         kb_id: str,
         body: QueryRequest,
+        request: Request,
+        response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object] | StreamingResponse:
         """返回非流式结果或最终一致的 SSE。"""
         require_query(authorization)
+        trace_id = new_id("trace")
+        response.headers["X-Trace-Id"] = trace_id
         result = runtime.sdk.answer(
             project_id,
             kb_id,
             body.query,
             limit=body.limit,
             include_related_content=body.include_related_content,
+            history_mode=_history_mode(request, body),
+            owner_id=_history_owner(request),
+            trace_id=trace_id,
         )
         payload = _query_payload(
             runtime,
@@ -637,7 +652,10 @@ def _register_query_routes(
         return StreamingResponse(
             _sse_events(payload),
             media_type="text/event-stream",
-            headers={"Cache-Control": "no-store, no-transform"},
+            headers={
+                "Cache-Control": "no-store, no-transform",
+                "X-Trace-Id": trace_id,
+            },
         )
 
     @app.get(
@@ -926,6 +944,22 @@ def _query_payload(
     return payload
 
 
+def _history_mode(
+    request: Request, body: QueryRequest
+) -> Literal["full", "metadata_only"]:
+    if body.history_mode is not None:
+        return body.history_mode
+    return (
+        "full"
+        if getattr(request.state, "product_principal", None) == "admin_session"
+        else "metadata_only"
+    )
+
+
+def _history_owner(request: Request) -> str:
+    return str(getattr(request.state, "access_token_id", "local-admin"))
+
+
 def _sse_events(payload: dict[str, object]) -> Iterator[bytes]:
     trace_id = payload["trace_id"]
     yield _sse("meta", {"trace_id": trace_id})
@@ -960,6 +994,7 @@ def _error_response(  # noqa: PLR0913
     trace_id: str | None = None,
     details: dict[str, object] | None = None,
 ) -> JSONResponse:
+    resolved_trace_id = trace_id or new_id("trace")
     return JSONResponse(
         status_code=status_code,
         content={
@@ -968,11 +1003,11 @@ def _error_response(  # noqa: PLR0913
                 "message": message,
                 "stage": stage,
                 "retryable": retryable,
-                "trace_id": trace_id or new_id("trace"),
+                "trace_id": resolved_trace_id,
                 "details": details or {},
             }
         },
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", "X-Trace-Id": resolved_trace_id},
     )
 
 

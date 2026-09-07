@@ -235,7 +235,7 @@ class LifecycleStorePort(Protocol):
     def mark_document_deleting(
         self, project_id: str, knowledge_base_id: str, document_id: str
     ) -> Document:
-        """把文档置为受控删除状态。
+        """幂等完成逻辑删除并登记后续物理回收操作。
 
         Args:
             project_id: 所属项目 ID。
@@ -243,7 +243,7 @@ class LifecycleStorePort(Protocol):
             document_id: 目标文档 ID。
 
         Returns:
-            deleting 状态文档。
+            deleted 状态文档；包含既有 tombstone 的幂等响应。
 
         """
         ...
@@ -379,6 +379,18 @@ class LifecycleStorePort(Protocol):
         """
         ...
 
+    def refresh_ingestion(self, request: QueuedIngestion) -> None:
+        """在持久 KB 占用下保存按最新 Active 合并后的完整快照。
+
+        Args:
+            request: 保持 Job 身份、包含最新成员和 Active 前置的请求。
+
+        Returns:
+            无返回值；占用或 Active 已改变时拒绝写入。
+
+        """
+        ...
+
     def finish_ingestion(
         self,
         job_id: str,
@@ -462,6 +474,18 @@ class LifecycleStorePort(Protocol):
 
 class ActiveDocumentStorePort(Protocol):
     """提供 Active Revision 文档快照。"""
+
+    def active_revision_id(self, knowledge_base_id: str) -> str | None:
+        """返回知识库当前 Active 指针，用于完整快照的发布前置。
+
+        Args:
+            knowledge_base_id: 待读取的知识库身份。
+
+        Returns:
+            当前 Active Revision ID；尚未建立索引时为 None。
+
+        """
+        ...
 
     def active_documents(
         self, knowledge_base_id: str

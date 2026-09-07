@@ -1449,6 +1449,9 @@ class SqliteControlStore:
             if kb is None:
                 raise NotFound("目标知识库不存在。", stage="revision.activate")
             old_revision_id = kb["active_revision_id"]
+            self._assert_ingestion_snapshot(
+                connection, evidence.revision_id, old_revision_id
+            )
             activate_bound_profile(
                 connection, evidence.revision_id, knowledge_base_id, now
             )
@@ -1481,6 +1484,35 @@ class SqliteControlStore:
                     reason,
                     trace_id,
                 ),
+            )
+
+    @staticmethod
+    def _assert_ingestion_snapshot(
+        connection: Connection, revision_id: str, active_revision_id: object
+    ) -> None:
+        """普通上传同样执行 Active CAS，阻断旧 Worker 覆盖新完整快照。"""
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='ingestion_requests'"
+            ).fetchone()
+            is None
+        ):
+            return
+        row = connection.execute(
+            "SELECT r.request_json FROM ingestion_requests r "
+            "JOIN ingestion_jobs j ON j.job_id=r.job_id "
+            "WHERE j.revision_id=? AND r.state='running'",
+            (revision_id,),
+        ).fetchone()
+        if row is None:
+            return
+        request = json.loads(str(row["request_json"]))
+        if not request.get("activate_profile") and (
+            request.get("expected_index_revision_id") != active_revision_id
+        ):
+            raise Conflict(
+                "知识库 Active 已更新，旧快照不能覆盖新文档。",
+                stage="revision.activate",
             )
 
     def active_revision_id(self, knowledge_base_id: str) -> str | None:
@@ -1804,9 +1836,13 @@ class SqliteControlStore:
             rows = connection.execute(
                 "SELECT c.chunk_id FROM chunks c JOIN index_revisions r "
                 "ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
                 "WHERE c.revision_id=? AND c.document_version_id=? "
                 "AND c.section_id=? AND r.project_id=? "
-                "AND r.knowledge_base_id=? ORDER BY c.chunk_id LIMIT ?",
+                "AND r.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.lifecycle_status='active' "
+                "ORDER BY COALESCE(json_extract(c.source_spans_json, "
+                "'$[0].source_anchor.ordinal'), 0), c.row_id LIMIT ?",
                 (
                     revision.index_revision_id,
                     document_version_id,
@@ -1892,7 +1928,8 @@ class SqliteControlStore:
                 "JOIN documents d ON d.document_id=rd.document_id "
                 "JOIN document_versions dv "
                 "ON dv.document_version_id=rd.document_version_id "
-                "WHERE kb.knowledge_base_id=? ORDER BY d.document_id",
+                "WHERE kb.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.lifecycle_status='active' ORDER BY d.document_id",
                 (knowledge_base_id,),
             ).fetchall()
         return tuple(

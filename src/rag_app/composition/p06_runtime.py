@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,8 +27,8 @@ from rag_app.composition.registry import (
     register_builtin_components,
 )
 from rag_app.core.identifiers import canonical_sha256
-from rag_app.core.models import DocumentEmbeddingBudget
-from rag_app.core.ports import ChunkValidationPort
+from rag_app.core.models import DocumentEmbeddingBudget, ParseResult
+from rag_app.core.ports import ChunkValidationPort, TracePort
 
 
 @dataclass(slots=True)
@@ -90,12 +91,16 @@ def build_p06_runtime(
     profile: str | Path | RagProfile,
     *,
     data_dir: str | Path | None = None,
+    trace_sink: TracePort | None = None,
+    document_enricher: Callable[[ParseResult], ParseResult] | None = None,
 ) -> P06Runtime:
     """构造无隐藏默认策略的 P06 本地运行时。
 
     Args:
         profile: 严格 Profile 或 JSON 文件路径。
         data_dir: 可选显式本地数据根覆盖。
+        trace_sink: 可选宿主持久化 Trace 适配器。
+        document_enricher: 可选原生解析后增补钩子。
 
     Returns:
         完整拥有资源的 P06 运行时。
@@ -114,7 +119,11 @@ def build_p06_runtime(
         )
     registry = ComponentRegistry()
     register_builtin_components(registry)
-    components = build_components(resolved, registry)
+    components = build_components(
+        resolved,
+        registry,
+        overrides=None if trace_sink is None else {"trace_sink": trace_sink},
+    )
     if not isinstance(components.metadata_store, SqliteControlStore):
         components.close()
         raise TypeError("P06 Profile 必须使用 sqlite-control。")
@@ -152,6 +161,8 @@ def build_p06_runtime(
     )
     embedding = DocumentEmbeddingService(cache, control, providers)
     builder = RevisionBuilder(
+        document_enricher=document_enricher,
+        trace=components.trace_sink,
         control=control,
         parser=components.parser,
         parsing_policy=components.parsing_policy,

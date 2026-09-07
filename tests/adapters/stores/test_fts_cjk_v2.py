@@ -143,3 +143,42 @@ def test_cjk_group_does_not_degrade_to_unbounded_single_character_or(
         }
     finally:
         runtime.close()
+
+
+def test_deleted_lexical_hit_is_removed_before_limit(tmp_path: Path) -> None:
+    """已删除的首名不能占用窗口；直接 Store 也必须返回次名活动文档。"""
+    runtime, project, kb = runtime_with_kb(tmp_path)
+    documents = tuple(
+        _document(project, kb, name, "巡检要求记录完整。")
+        for name in ("first", "second")
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project,
+            knowledge_base_id=kb,
+            documents=documents,
+            idempotency_key="deleted-before-limit",
+            budgets=runtime.default_budgets(),
+        )
+        request = LexicalSearchRequest(
+            revision=runtime.control.revision_vector_spec(
+                result.revision_id
+            ).revision,
+            query="巡检要求",
+            limit=1,
+        )
+        store = runtime.components.lexical_store
+        first = store.search_candidates(request)[0]
+        with runtime.connections.transaction(write=True) as connection:
+            connection.execute(
+                "UPDATE documents SET deleted_at='2026-01-01T00:00:00Z', "
+                "lifecycle_status='deleted' WHERE document_id=?",
+                (first.document_id,),
+            )
+        candidates = store.search_candidates(request)
+        direct = store.search(request)
+        assert len(candidates) == len(direct) == 1
+        assert candidates[0].document_id != first.document_id
+        assert direct[0].chunk.version.document_id == candidates[0].document_id
+    finally:
+        runtime.close()

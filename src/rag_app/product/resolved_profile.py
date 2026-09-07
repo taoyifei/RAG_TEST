@@ -204,7 +204,15 @@ def resolve_retrieval_policy(
         if canonical in merged and merged[canonical] != value:
             raise ValueError(f"Evidence 参数冲突：{canonical}。")
         merged[canonical] = value
-    policy = RetrievalPolicy.model_validate(merged)
+    # 职责表的一行可由多个段落共同支持，总证据数和 token 上限仍保持不变。
+    policy = RetrievalPolicy.model_validate(
+        {
+            "per_document_cap": 8,
+            "per_section_cap": 8,
+            "max_evidence_items_per_chunk": 8,
+            **merged,
+        }
+    )
     if (
         policy.dense_semantic_calibration_state != "UNCALIBRATED"
         or policy.dense_calibrated_vector_spaces

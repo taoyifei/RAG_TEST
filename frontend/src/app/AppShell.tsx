@@ -4,6 +4,7 @@ import {
   Database,
   FileSearch,
   FolderKanban,
+  History,
   KeyRound,
   LayoutDashboard,
   LogOut,
@@ -31,10 +32,12 @@ import { JobsPage } from "../pages/JobsPage";
 import { RevisionPage } from "../pages/RevisionPage";
 import { QueryPage } from "../pages/QueryPage";
 import { SystemPage } from "../pages/SystemPage";
+import { HistoryPage } from "../pages/HistoryPage";
 const primaryNav = [
   [routes.workspace, zhCN.navigation.workspace, LayoutDashboard],
   [routes.knowledgeBases, zhCN.navigation.knowledge, FolderKanban],
   [routes.chat, zhCN.navigation.chat, MessageSquareText],
+  [routes.history, "问答历史", History],
   [routes.modelServices, zhCN.navigation.modelServices, KeyRound],
 ] as const;
 
@@ -261,6 +264,9 @@ export default function AppShell() {
                 </ScopeGuard>
               )}
               {path === "/system" && <SystemPage />}
+              {path === routes.history && (
+                <HistoryPage key={`${scope.projectId}:${scope.kbId}`} />
+              )}
               {path === routes.modelServices && <ModelServicesPage />}
               {path === routes.retrievalProfiles && (
                 <RetrievalProfilesPage key={scope.kbId} />

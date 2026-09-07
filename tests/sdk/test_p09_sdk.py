@@ -269,7 +269,7 @@ def test_queue_limit_and_delete_cancel_are_persistent(tmp_path: Path) -> None:
             (queued.document_id,),
         ).fetchone()
 
-    assert deleted.status.value == "deleting"
+    assert deleted.status.value == "deleted"
     assert cancelled.state.value == "cancelled"
     assert runtime.store.pending_ingestion_jobs() == ()
     assert operation is not None and operation["state"] == "planned"

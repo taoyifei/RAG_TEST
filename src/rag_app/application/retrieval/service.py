@@ -5,10 +5,12 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from copy import copy
 from datetime import UTC, datetime
 from time import perf_counter
 
 from rag_app.application.answering import ExtractiveAnsweringService
+from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
@@ -80,6 +82,7 @@ from rag_app.core.ports import (
     TracePort,
     VectorStorePort,
 )
+from rag_app.core.ports.query_rewrite import QueryRewritePort
 
 
 class RetrievalService:
@@ -111,6 +114,9 @@ class RetrievalService:
         self._dense = DenseChannel(query_embedding, vector_store)
         self._reranker = CircuitAwareReranker(reranker)
         self._answering = ExtractiveAnsweringService(generator)
+        self._generator = generator
+        self._grounded: GroundedAnsweringService | None = None
+        self._rewriter: QueryRewritePort | None = None
         self._trace = trace
         self._cache = cache
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
@@ -130,6 +136,37 @@ class RetrievalService:
         self._evidence = EvidenceAssembler()
         self._confidence = ConfidenceEvaluator()
 
+    def with_generation(
+        self,
+        generator: GeneratorPort,
+        *,
+        serving_identity: str,
+        rewriter: QueryRewritePort | None = None,
+    ) -> RetrievalService:
+        """为单次知识库解析创建轻量配置副本，共用原索引与检索通道。
+
+        Args:
+            generator: 已绑定知识库与出站授权的生成器。
+            serving_identity: 模型及查询策略缓存身份。
+            rewriter: 可选的一次问题改写端口。
+
+        Returns:
+            与原文档向量配置共存的查询服务。
+
+        """
+        configured = copy(self)
+        configured._grounded = GroundedAnsweringService(
+            generator, self._generator
+        )
+        configured._rewriter = rewriter
+        configured._serving_fingerprint = canonical_sha256(
+            {
+                "retrieval": self._serving_fingerprint,
+                "generation": serving_identity,
+            }
+        )
+        return configured
+
     def search_and_answer(  # noqa: PLR0912, PLR0915
         self, request: SearchRequest
     ) -> SearchAnswerResult:
@@ -147,7 +184,7 @@ class RetrievalService:
             PolicyDenied: 未支持 filter 或 profile 要求 fail closed。
 
         """
-        trace_id = f"trace_{uuid.uuid4().hex}"
+        trace_id = request.trace_id or f"trace_{uuid.uuid4().hex}"
         stage_started = perf_counter()
         stage_timings: list[StageTiming] = []
         provider_calls: list[ProviderCall] = []
@@ -265,6 +302,25 @@ class RetrievalService:
             )
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
+        rewrite_attempted = False
+        rewrite_reason = "REWRITE_NOT_CONFIGURED"
+        if self._rewriter is not None:
+            rewritten = self._rewriter.rewrite(request)
+            rewrite_reason = rewritten.reason_code
+            rewrite_attempted = rewritten.attempted
+            provider_calls.extend(rewritten.calls)
+            if rewritten.variant is not None:
+                plan = plan.model_copy(
+                    update={"variants": (plan.variants[0], rewritten.variant)}
+                )
+            self._record(
+                trace_id,
+                "rewrite",
+                {
+                    "reason_code": rewritten.reason_code,
+                    "attempted": rewritten.attempted,
+                },
+            )
         top_k = dict(plan.channel_top_k)
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
@@ -314,6 +370,33 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "lexical_channel", channel_started)
+        if (
+            self._rewriter is not None
+            and not rewrite_attempted
+            and not any(channel_hits.values())
+        ):
+            rewritten = self._rewriter.rewrite(
+                request, recall_insufficient=True
+            )
+            rewrite_reason = rewritten.reason_code
+            provider_calls.extend(rewritten.calls)
+            if rewritten.variant is not None:
+                channel_hits["lexical:rewrite"] = apply_candidate_filters(
+                    self._lexical.search(
+                        snapshot,
+                        rewritten.variant,
+                        limit=top_k.get("lexical", 20),
+                    ),
+                    request,
+                )
+            self._record(
+                trace_id,
+                "rewrite",
+                {
+                    "reason_code": rewritten.reason_code,
+                    "attempted": rewritten.attempted,
+                },
+            )
         selected_slot: str | None = None
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
@@ -460,6 +543,7 @@ class RetrievalService:
         evidence = self._evidence.assemble(
             expansion.candidates,
             self._policy,
+            allow_uncertain=self._grounded is not None,
             context=EvidenceSelectionContext(
                 analysis=analysis,
                 query_kind=plan.query_kind,
@@ -497,10 +581,37 @@ class RetrievalService:
             "confidence",
             {"status": confidence.status.value, "score": confidence.score},
         )
+        generation_mode = "none"
+        generation_reason: str | None = "GENERATOR_NOT_CONFIGURED"
         try:
-            answer = self._answering.answer(
-                analysis.original_query, evidence, confidence
-            )
+            if self._grounded is not None:
+                generated = self._grounded.answer(
+                    analysis.original_query, evidence, confidence
+                )
+                answer = generated.answer
+                generation_mode = generated.mode
+                generation_reason = generated.reason_code
+                provider_calls.extend(generated.calls)
+                if answer is not None:
+                    confidence = confidence.model_copy(
+                        update={"status": ConfidenceStatus.ANSWERABLE}
+                    )
+                elif generation_reason == "GENERATION_ABSTAINED":
+                    confidence = confidence.model_copy(
+                        update={
+                            "status": ConfidenceStatus.INSUFFICIENT_EVIDENCE
+                        }
+                    )
+                if (
+                    generation_reason
+                    and generation_reason != "CLAIMS_VALIDATED"
+                ):
+                    degraded.append(generation_reason)
+            else:
+                answer = self._answering.answer(
+                    analysis.original_query, evidence, confidence
+                )
+                generation_mode = "extractive" if answer is not None else "none"
         except (RagError, ValueError) as error:
             degraded.append(f"GENERATOR_FAILURE:{type(error).__name__}")
             confidence = confidence.model_copy(
@@ -517,7 +628,15 @@ class RetrievalService:
         self._record(
             trace_id,
             "generate",
-            {"mode": "extractive" if answer is not None else "none"},
+            {
+                "mode": generation_mode,
+                "reason_code": generation_reason,
+                "provider_calls": [
+                    call.model_dump(mode="json")
+                    for call in provider_calls
+                    if call.operation in {"generation", "query.rewrite"}
+                ],
+            },
         )
         self._record(
             trace_id,
@@ -580,7 +699,9 @@ class RetrievalService:
             selected_vector_name=selected_vector,
             route_reason_code=route_reason,
             rerank_execution_mode=reranked.mode,
-            generation_mode="extractive" if answer is not None else "none",
+            generation_mode=generation_mode,
+            generation_reason_code=generation_reason,
+            rewrite_reason_code=rewrite_reason,
             degraded_reason_codes=tuple(dict.fromkeys(degraded)),
             cache_key=cache_key,
             diagnostics_summary=_diagnostics_summary(diagnostics),
@@ -589,6 +710,7 @@ class RetrievalService:
         if (
             result.status is ConfidenceStatus.ANSWERABLE
             and not rerank_dependency_failed(reranked.mode)
+            and result.generation_mode != "extractive_fallback"
         ):
             self._cache.put(cache_key, result, ttl_seconds=300)
         elif (
@@ -808,6 +930,7 @@ def _diagnostics(  # noqa: PLR0913
             )
             for operation, counts in sorted(call_totals.items())
         ),
+        provider_call_details=provider_calls,
         stage_timings=stage_timings,
         degraded_reason_codes=degraded,
     )

@@ -99,6 +99,7 @@ def build_table_run(
                     "table_node_id": table.node_id,
                     "row_index": row.anchor.row_index,
                     "cell_coordinates": list(cell_coordinates),
+                    "cell_source_node_ids": _cell_source_node_ids(row, nodes),
                     "header_strategy": "tblHeader" if is_header else "none",
                     "header_confidence": 1.0 if is_header else 0.0,
                     "contains_nested_table": bool(child_groups),
@@ -131,6 +132,27 @@ def build_table_run(
         heading_path=heading_path,
         atoms=tuple(atoms),
     )
+
+
+def _cell_source_node_ids(
+    row: DocumentNode, nodes: dict[str, DocumentNode]
+) -> dict[str, list[str]]:
+    """在切块前登记每个单元格的真实段落集合，供取证检查遗漏。"""
+    result: dict[str, list[str]] = {}
+    cells = [
+        nodes[node_id]
+        for node_id in row.child_ids
+        if nodes[node_id].kind is NodeKind.TABLE_CELL
+    ]
+    for index, cell in enumerate(cells):
+        result[str(index)] = list(
+            dict.fromkeys(
+                fragment.node_id
+                for fragment in _cell_fragments(cell, nodes)
+                if fragment.node_id is not None
+            )
+        )
+    return result
 
 
 def _row_fragments(

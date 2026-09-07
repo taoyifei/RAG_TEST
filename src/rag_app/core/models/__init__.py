@@ -120,8 +120,10 @@ from rag_app.core.models.query import (
     RoutedEmbeddingResult,
 )
 from rag_app.core.models.retrieval import (
+    AnswerClaim,
     AnswerDraft,
     AnswerResult,
+    ClaimSupport,
     EvidenceItem,
     LexicalSearchRequest,
     SearchHit,
@@ -172,6 +174,7 @@ __all__ = [
     "ActiveRevisionQuerySnapshot",
     "AnalyzedLexicalDocument",
     "AnalyzedLexicalQuery",
+    "AnswerClaim",
     "AnswerDraft",
     "AnswerResult",
     "ArtifactDescriptor",
@@ -194,6 +197,7 @@ __all__ = [
     "CircuitKey",
     "CircuitSnapshot",
     "CircuitState",
+    "ClaimSupport",
     "ConfidenceDecision",
     "ConfidenceStatus",
     "DiagnosticEvidenceItem",

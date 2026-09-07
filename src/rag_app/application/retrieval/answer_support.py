@@ -33,13 +33,16 @@ class AnswerSupport:
 
 # 仅为语言和量纲类别，不含语料实体、文档身份或题目映射。
 _ATTRIBUTES = (
-    ("CONTACT", r"联系电话|联系方式|电话号码|电话|分机号|分机|邮箱|电子邮件"),
+    (
+        "CONTACT",
+        r"联系电话|联系方式|电话号码|手机号码|手机号|电话|分机号|分机|邮箱|电子邮件",
+    ),
     (
         "MONEY",
         r"采购价格|采购价|采购成本|购买价格|售价|销售价格|价格|价钱|费用|工资|薪资|保证金|补助|预付款",
     ),
     ("AREA", r"建筑面积|占地面积|面积"),
-    ("TEMPERATURE", r"储存温度|温度"),
+    ("TEMPERATURE", r"储存温度|温度|(?<![a-z])temperature(?![a-z])"),
     ("PRESSURE", r"额定压力|压力"),
     ("MASS", r"载荷上限|载荷|重量|质量"),
     ("RATIO", r"允许偏差|偏差|比例|百分比"),
@@ -59,7 +62,10 @@ _VALUES = {
         r"|(?:分机(?:号)?\s*(?:为|是|[:：])?\s*\d{2,6})"
         r"|(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})"
     ),
-    "TEMPERATURE": rf"{_NUMBER}(?:至{_NUMBER})?\s*(?:摄氏度|℃|°c|度)",
+    "TEMPERATURE": (
+        rf"{_NUMBER}(?:至{_NUMBER})?\s*"
+        r"(?:摄氏度|℃|°\s*c|度|(?:degrees?\s+)?celsius(?![a-z]))"
+    ),
     "PRESSURE": rf"{_NUMBER}\s*(?:mpa|kpa|pa|bar)",
     "MASS": rf"{_NUMBER}\s*(?:kg|千克|公斤|吨|g|克)",
     "RATIO": rf"{_NUMBER}\s*[%％]|百分之{_NUMBER}",
@@ -111,8 +117,66 @@ def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
             target = _REQUEST_WORDS.sub("", query[: match.start()])
             target = re.sub(r"(?:保持|允许|储存)$", "", target)
             return target, match[0], answer_type
+    descriptive = descriptive_request(query)
+    if descriptive is not None:
+        return descriptive
     relation = "事实关系" if _QUESTION.search(query) else "字面查找"
     return _REQUEST_WORDS.sub("", query), relation, "FACT"
+
+
+def descriptive_request(query: str) -> tuple[str, str, str] | None:
+    """识别通用列举与职责问法，不包含语料实体或预写答案。
+
+    Args:
+        query: 用户原始问句或确定性规范化后的问句。
+
+    Returns:
+        对象、关系和描述类型三元组；不属于描述类问法时返回 None。
+
+    """
+    query = _normalized(query)
+    if not re.search(r"哪些|什么|干啥|几种|列举|列出|职责|负责", query):
+        return None
+    # 仅将紧邻职责关系的修饰语归入关系，保留角色名称中的相同字词。
+    # 口语动作问法限定在句尾，避免截断名称中包含相同字词的角色。
+    duty = re.search(
+        r"(?:(?:具体|主要)(?:地)?)?"
+        r"(?:职责|负责(?:什么|哪些)(?:工作|事项|内容)?|"
+        r"(?P<colloquial>干(?:什么|啥|些什么)|做(?:什么|些什么))"
+        r"(?:工作|事项|内容)?[?？\s]*$)",
+        query,
+    )
+    if duty is not None and duty["colloquial"] is not None:
+        # 条件和操作顺序属于所问关系，不能被当成角色名或无条件职责。
+        prefix = query[: duty.start()]
+        if re.search(
+            r"如果|一旦|若|当.+时|之前|之后|以前|以后|期间|过程中|"
+            r"(?:先|再|然后|随后|接着|前|后|时)(?:应|要|需|应该|需要)?$",
+            prefix,
+        ):
+            return None
+    collection = re.search(r"工作模式|模式|类型|种类|类别|分类|方式", query)
+    match = duty or collection
+    if match is None:
+        return None
+    target = query[: match.start()]
+    target = re.sub(
+        r"请问|请列举|请列出|告诉我|我想知道|请|列举|列出|"
+        r"采用|有哪些|哪些|哪几种|需要承担|承担|主要|核心|的|"
+        r"[零一二三四五六七八九十百两\d]+(?:种|类)|[？?\s]",
+        "",
+        target,
+    )
+    if duty is not None:
+        # 文档限定与角色标签分开，来源选择仍按原问题与实际表格定位。
+        target = re.split(r"(?:规范|文档|制度|手册)(?:里|中)", target)[-1]
+    if not target:
+        return None
+    return (
+        target,
+        "职责" if duty else match[0],
+        "DUTIES" if duty else "ENUMERATION",
+    )
 
 
 def _literal_lookup_supports(query: str, text: str) -> bool:
@@ -210,7 +274,9 @@ def evaluate_span_support(
             "LITERAL_LOOKUP_SOURCE"
             if relation == "字面查找"
             else "SOURCE_RELATION_AND_VALUE"
-        ) if supported else "REQUESTED_RELATION_NOT_SUPPORTED",
+        )
+        if supported
+        else "REQUESTED_RELATION_NOT_SUPPORTED",
         supporting_span_ids=(span_id,) if supported and span_id else (),
     )
 
@@ -222,14 +288,28 @@ def _clause_supports(  # noqa: PLR0911
     clause: str,
     analysis: QueryAnalysis,
 ) -> bool:
-    if _UNKNOWN.search(clause):
-        return False
+    if _UNKNOWN.search(clause) or answer_type in {"ENUMERATION", "DUTIES"}:
+        return not _UNKNOWN.search(clause) and _descriptive_clause_supports(
+            target, relation, answer_type, clause
+        )
     if answer_type in {"MONEY", "AREA", "CONTACT", "TEMPERATURE"}:
         # 不从逗号后另一个对象的金额或号码借值。
         return any(
             _target_matches(target, part, strict=True)
+            and (
+                answer_type != "TEMPERATURE"
+                or not re.fullmatch(r"[a-z][a-z0-9_-]*", target)
+                or re.search(
+                    r"(?<![a-z0-9_-])" + re.escape(target) + r"(?![a-z0-9_-])",
+                    part,
+                )
+            )
             and _attribute_matches(relation, answer_type, part)
             and not re.search(r"不是|并非|不等于", part)
+            and not (
+                answer_type == "TEMPERATURE"
+                and re.search(r"\b(?:not|no|never|unknown|unavailable)\b", part)
+            )
             and _typed_value_matches(answer_type, relation, part)
             for part in re.split(r"[，,]", clause)
         )
@@ -307,6 +387,26 @@ def _clause_supports(  # noqa: PLR0911
     return target in clause
 
 
+def _descriptive_clause_supports(
+    target: str, relation: str, answer_type: str, clause: str
+) -> bool:
+    if answer_type == "ENUMERATION":
+        return (
+            _target_matches(target, clause, strict=True)
+            and relation in clause
+            and bool(re.search(r"分为|分成|包括|包含|分别为|有|采用", clause))
+            and bool(re.search(r"、|[“”\"]|(?:一|二|三|四|\d)[)）]", clause))
+        )
+    if answer_type == "DUTIES":
+        return _target_matches(target, clause, strict=True) and bool(
+            re.search(
+                r"(?:负责(?!人|者)|职责(?:是|为|包括|[:：])|承担|牵头).+",
+                clause.replace(target, "", 1),
+            )
+        )
+    return False
+
+
 def _attribute_matches(relation: str, answer_type: str, text: str) -> bool:
     if answer_type == "CONTACT":
         pattern = _contact_pattern(relation)
@@ -327,7 +427,7 @@ def _contact_pattern(relation: str) -> str:
         return r"邮箱|电子邮件"
     if "分机" in relation:
         return r"分机(?:号)?"
-    return r"联系电话|电话号码|电话|联系方式"
+    return r"联系电话|电话号码|手机号码|手机号|电话|联系方式"
 
 
 def _typed_value_matches(answer_type: str, relation: str, text: str) -> bool:

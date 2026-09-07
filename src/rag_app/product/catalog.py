@@ -22,6 +22,8 @@ class CatalogProvider(BaseModel):
 
 
 CATALOG_VERSION: Final = "2026-09-04.1"
+# 新增生成能力不改变已落盘的 Embedding 数学合同和向量缓存身份。
+CAPABILITY_CATALOG_VERSION: Final = "2026-09-07.1"
 _PROVIDERS: Final = (
     CatalogProvider(
         provider_type="jina",
@@ -41,11 +43,20 @@ _PROVIDERS: Final = (
     CatalogProvider(
         provider_type="aliyun-model-studio",
         display_name="阿里云百炼",
-        operations=("embedding.document", "embedding.query"),
-        models=("qwen3.7-text-embedding",),
+        operations=(
+            "embedding.document",
+            "embedding.query",
+            "generation",
+            "query.rewrite",
+            "image.ocr",
+        ),
+        models=("qwen3.7-text-embedding", "qwen3.7-flash", "qwen3.5-ocr"),
         operation_models={
             "embedding.document": ("qwen3.7-text-embedding",),
             "embedding.query": ("qwen3.7-text-embedding",),
+            "generation": ("qwen3.7-flash",),
+            "query.rewrite": ("qwen3.7-flash",),
+            "image.ocr": ("qwen3.5-ocr",),
         },
         regions=("cn-beijing",),
     ),
@@ -64,6 +75,7 @@ def provider_catalog() -> dict[str, object]:
     """
     return {
         "catalog_version": CATALOG_VERSION,
+        "capability_catalog_version": CAPABILITY_CATALOG_VERSION,
         "providers": [item.model_dump(mode="json") for item in _PROVIDERS],
     }
 

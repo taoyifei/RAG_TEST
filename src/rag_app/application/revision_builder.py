@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from time import perf_counter
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from rag_app.application.artifact_lifecycle import ArtifactLifecycleService
 from rag_app.application.embedding_indexing import DocumentEmbeddingService
 from rag_app.application.revision_validator import RevisionValidator
-from rag_app.core.errors import RagError
+from rag_app.core.errors import RagError, RevisionStateError
+from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import (
     canonical_sha256,
     deterministic_id,
@@ -34,6 +39,7 @@ from rag_app.core.models import (
     NamedVectorPoint,
     ParseContext,
     ParseReport,
+    ParseResult,
     ParseSource,
     RevisionValidationEvidence,
     RevisionVectorSpec,
@@ -41,11 +47,13 @@ from rag_app.core.models import (
     validate_document_ir,
     vector_point_id,
 )
+from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import ParsingPolicy
 from rag_app.core.ports import (
     ChunkerPort,
     EmbeddingPort,
     ParserPort,
+    TracePort,
     VectorStorePort,
 )
 
@@ -67,6 +75,17 @@ class RevisionBuildResult(FrozenModel):
     document_count: int = Field(ge=0)
     chunk_count: int = Field(ge=0)
     evidence: RevisionValidationEvidence
+
+
+@dataclass(frozen=True, slots=True)
+class _DocumentStage:
+    """不含正文的单文档阶段身份。"""
+
+    job_id: str
+    revision_id: str
+    document_id: str | None
+    input_sha256: str | None
+    attempt: int
 
 
 class _RevisionBuildControl(Protocol):
@@ -431,6 +450,8 @@ class RevisionBuilder:
         slots: Sequence[EmbeddingSlotIdentity],
         index_fingerprint: str,
         resolved_contracts: Mapping[str, object],
+        trace: TracePort | None = None,
+        document_enricher: Callable[[ParseResult], ParseResult] | None = None,
     ) -> None:
         """保存全部显式 resolved 依赖，不重建默认策略。
 
@@ -448,6 +469,8 @@ class RevisionBuilder:
             slots: required slot 顺序。
             index_fingerprint: 当前 composition 指纹。
             resolved_contracts: 可持久化且不含 secret 的 schema 合同。
+            trace: 可选同步安全事件端口。
+            document_enricher: 原生解析后、分块前的受控增补钩子。
 
         Returns:
             无返回值。
@@ -466,6 +489,8 @@ class RevisionBuilder:
         self._slots = tuple(slots)
         self._index_fingerprint = index_fingerprint
         self._resolved_contracts = dict(resolved_contracts)
+        self._trace = trace
+        self._document_enricher = document_enricher
 
     def build_and_activate(  # noqa: PLR0913, PLR0915
         self,
@@ -477,6 +502,9 @@ class RevisionBuilder:
         budgets: Mapping[str, DocumentEmbeddingBudget],
         egress_allowed_slots: frozenset[str] = frozenset(),
         attempt: int = 1,
+        persistent_job_id: str | None = None,
+        content_identity: str | None = None,
+        content_identity_current: Callable[[], str | None] | None = None,
     ) -> RevisionBuildResult:
         """执行固定 Build、Validate、Activate 流程。
 
@@ -488,6 +516,9 @@ class RevisionBuilder:
             budgets: 每个 required slot 的文档索引预算。
             egress_allowed_slots: 显式远程出网授权。
             attempt: 当前用户发起的尝试序号。
+            persistent_job_id: 队列重新冻结快照时保留的公开 Job 身份。
+            content_identity: 与向量契约独立的 OCR 内容修订身份。
+            content_identity_current: 激活前复核内容配置未漂移的读取函数。
 
         Returns:
             成功激活的新 revision 与实际证据。
@@ -510,9 +541,15 @@ class RevisionBuilder:
             "irev",
             knowledge_base_id,
             tuple(sorted(version_ids)),
-            self._index_fingerprint,
+            self._index_fingerprint
+            if content_identity is None
+            else canonical_sha256(
+                {"index": self._index_fingerprint, "content": content_identity}
+            ),
         )
-        job_id = deterministic_id("job", knowledge_base_id, revision_id)
+        job_id = persistent_job_id or deterministic_id(
+            "job", knowledge_base_id, revision_id
+        )
         revision = IndexRevisionRef(
             project_id=project_id,
             knowledge_base_id=knowledge_base_id,
@@ -569,6 +606,7 @@ class RevisionBuilder:
                 documents,
                 revision_id=revision_id,
                 job_id=job_id,
+                attempt=attempt,
             )
             current_state = self._advance(
                 revision_id,
@@ -577,7 +615,11 @@ class RevisionBuilder:
                 job_id,
                 attempt,
             )
-            self._control.write_chunks(revision_id, chunks)
+            with self._document_stage(
+                _DocumentStage(job_id, revision_id, None, None, attempt),
+                "chunk_persistence",
+            ):
+                self._control.write_chunks(revision_id, chunks)
             current_state = self._advance(
                 revision_id,
                 current_state,
@@ -669,6 +711,14 @@ class RevisionBuilder:
                 attempt=attempt,
             )
             trace_id = deterministic_id("trace", job_id, revision_id)
+            if (
+                content_identity_current is not None
+                and content_identity_current() != content_identity
+            ):
+                raise RevisionStateError(
+                    "内容加工配置在构建期间改变，原索引继续可用。",
+                    stage="revision.activate.content_identity",
+                )
             self._control.activate(
                 knowledge_base_id,
                 evidence,
@@ -733,22 +783,36 @@ class RevisionBuilder:
         *,
         revision_id: str,
         job_id: str,
+        attempt: int,
     ) -> tuple[Chunk, ...]:
         all_chunks: list[Chunk] = []
         for item in documents:
             self._control.assert_job_active(job_id)
             self._control.upsert_document(item.document)
-            result = self._parser.parse(
-                ParseSource(
-                    media_type=item.media_type,
-                    display_name=item.document.display_name,
-                    content=item.content,
-                    extension=item.extension,
-                ),
-                self._parsing_policy,
-                ParseContext(document=item.document),
+            context = _DocumentStage(
+                job_id,
+                revision_id,
+                item.document.document_id,
+                hashlib.sha256(item.content).hexdigest(),
+                attempt,
             )
-            validate_document_ir(result.document_ir)
+            with self._document_stage(context, "parsing"):
+                result = self._parser.parse(
+                    ParseSource(
+                        media_type=item.media_type,
+                        display_name=item.document.display_name,
+                        content=item.content,
+                        extension=item.extension,
+                    ),
+                    self._parsing_policy,
+                    ParseContext(document=item.document),
+                )
+            with self._document_stage(context, "ir_validation"):
+                validate_document_ir(result.document_ir)
+            if self._document_enricher is not None:
+                with self._document_stage(context, "image_enrichment"):
+                    result = self._document_enricher(result)
+                    validate_document_ir(result.document_ir)
             version = result.document_ir.version
             created, existing = self._artifact_lifecycle.persist(
                 result.artifacts,
@@ -768,28 +832,108 @@ class RevisionBuilder:
                 len(item.content),
                 item.media_type,
             )
-            chunked = self._chunker.chunk(
-                result.document_ir,
-                ChunkingContext(
-                    chunker_fingerprint=self._chunker_fingerprint(),
-                    index_revision_id=revision_id,
-                ),
-            )
-            self._control.add_revision_document(
-                revision_id,
-                result.document_ir,
-                result.report,
-                chunked.report,
-                parsing_policy_fingerprint=canonical_sha256(
-                    self._parsing_policy.model_dump(mode="json")
-                ),
-                part_catalog_identity=canonical_sha256(
-                    tuple(artifact.artifact_id for artifact in result.artifacts)
-                ),
-                chunk_count=len(chunked.chunks),
-            )
+            with self._document_stage(context, "chunking"):
+                chunked = self._chunker.chunk(
+                    result.document_ir,
+                    ChunkingContext(
+                        chunker_fingerprint=self._chunker_fingerprint(),
+                        index_revision_id=revision_id,
+                    ),
+                )
+            with self._document_stage(context, "document_persistence"):
+                self._control.add_revision_document(
+                    revision_id,
+                    result.document_ir,
+                    result.report,
+                    chunked.report,
+                    parsing_policy_fingerprint=canonical_sha256(
+                        self._parsing_policy.model_dump(mode="json")
+                    ),
+                    part_catalog_identity=canonical_sha256(
+                        tuple(
+                            artifact.artifact_id
+                            for artifact in result.artifacts
+                        )
+                    ),
+                    chunk_count=len(chunked.chunks),
+                )
             all_chunks.extend(chunked.chunks)
         return tuple(all_chunks)
+
+    @contextmanager
+    def _document_stage(
+        self, context: _DocumentStage, stage: str
+    ) -> Iterator[None]:
+        self._control.update_job(
+            context.job_id,
+            state="running",
+            stage=stage,
+            attempt=context.attempt,
+        )
+        started = perf_counter()
+        attributes: dict[str, object] = {
+            "document_id": context.document_id,
+            "input_sha256": context.input_sha256,
+            "attempt": context.attempt,
+            "parsing_policy": self._parsing_policy.model_dump(mode="json"),
+            "parser": self._parser.descriptor.model_dump(mode="json"),
+            "chunker": self._chunker.descriptor.model_dump(mode="json"),
+        }
+        self._record_event(
+            context.job_id, context.revision_id, f"{stage}.started", attributes
+        )
+        try:
+            yield
+        except Exception as error:
+            if isinstance(error, RagError):
+                raise
+            details = _safe_exception_location(error)
+            details["document_id"] = context.document_id
+            if isinstance(error, ValidationError):
+                details["invalid_fields"] = [
+                    ".".join(str(value) for value in item["loc"])
+                    for item in error.errors(
+                        include_input=False, include_context=False
+                    )[:8]
+                ]
+            stage_label = {
+                "chunk_persistence": "分块与检索索引保存",
+                "document_persistence": "文档解析结果保存",
+            }.get(stage, stage)
+            raise RagError(
+                f"{stage_label}阶段处理失败（{type(error).__name__}），"
+                "请查看任务检索过程中的安全定位信息。",
+                code=f"{stage.upper()}_FAILED",
+                stage=stage,
+                details=details,
+            ) from error
+        finally:
+            self._record_event(
+                context.job_id,
+                context.revision_id,
+                f"{stage}.finished",
+                {
+                    "elapsed_ms": (perf_counter() - started) * 1000,
+                    "document_id": context.document_id,
+                },
+            )
+
+    def _record_event(
+        self,
+        job_id: str,
+        revision_id: str,
+        name: str,
+        attributes: dict[str, object],
+    ) -> None:
+        if self._trace is not None:
+            self._trace.record(
+                TraceEvent(
+                    trace_id=deterministic_id("trace", job_id, revision_id),
+                    event_name="ingestion." + name,
+                    occurred_at=datetime.now(UTC),
+                    attributes=freeze_json_object(attributes),
+                )
+            )
 
     def _chunker_fingerprint(self) -> str:
         value = getattr(self._chunker, "fingerprint", None)
@@ -812,6 +956,9 @@ class RevisionBuilder:
             state="running",
             stage=target.value,
             attempt=attempt,
+        )
+        self._record_event(
+            job_id, revision_id, target.value, {"attempt": attempt}
         )
         return target
 
@@ -852,12 +999,43 @@ class RevisionBuilder:
         self._control.update_job(
             job_id,
             state="failed_retryable" if retryable else "failed_terminal",
-            stage=current.value,
+            stage=error.stage if isinstance(error, RagError) else current.value,
             attempt=attempt,
             error_code=code,
             safe_message=safe_message,
             retryable=retryable,
         )
+        self._record_event(
+            job_id,
+            revision_id,
+            "failed",
+            {
+                "error_code": code,
+                "safe_message": safe_message,
+                "stage": error.stage
+                if isinstance(error, RagError)
+                else current.value,
+                "attempt": attempt,
+                "details": dict(error.details)
+                if isinstance(error, RagError)
+                else _safe_exception_location(error),
+            },
+        )
+
+
+def _safe_exception_location(error: Exception) -> dict[str, object]:
+    traceback = error.__traceback__
+    while traceback is not None and traceback.tb_next is not None:
+        traceback = traceback.tb_next
+    if traceback is None:
+        return {"exception_type": type(error).__name__}
+    return {
+        "exception_type": type(error).__name__,
+        "source_file": traceback.tb_frame.f_code.co_filename.replace(
+            "\\", "/"
+        ).rsplit("/", 1)[-1],
+        "source_line": traceback.tb_lineno,
+    }
 
 
 def _validate_snapshot_scope(

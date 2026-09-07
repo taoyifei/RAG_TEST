@@ -776,7 +776,15 @@ def register_builtin_components(registry: ComponentRegistry) -> None:
         descriptor=ExtractiveGenerator.descriptor,
     )
     registry.register_trace_sink(
-        "sqlite",
+        "sqlite-memory",
         SqliteTraceSink,
         descriptor=SqliteTraceSink.descriptor,
+    )
+    # 旧配置名称保留为显式兼容入口，实例仍如实报告内存存储。
+    registry.register_trace_sink(
+        "sqlite",
+        SqliteTraceSink,
+        descriptor=SqliteTraceSink.descriptor.model_copy(
+            update={"name": "sqlite", "version": "memory-compatibility-alias"}
+        ),
     )

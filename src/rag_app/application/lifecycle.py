@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 
 from rag_app.application.revision_builder import (
     IngestionDocument,
@@ -71,6 +72,7 @@ class LifecycleService:
         budgets: dict[str, DocumentEmbeddingBudget],
         egress_allowed_slots: frozenset[str] = frozenset(),
         retrieval_profile_revision_id: str | None = None,
+        content_identity: Callable[[str], str | None] | None = None,
     ) -> None:
         """保存全部显式依赖和离线预算。
 
@@ -84,6 +86,7 @@ class LifecycleService:
             budgets: 每个 embedding slot 的硬预算。
             egress_allowed_slots: 当前 Profile 明确授权的远程索引 slot。
             retrieval_profile_revision_id: 队列需要冻结的产品 Profile Revision。
+            content_identity: 可选知识库内容加工身份，入队后禁止漂移。
 
         Returns:
             无返回值。
@@ -98,6 +101,7 @@ class LifecycleService:
         self._budgets = dict(budgets)
         self._egress_allowed_slots = egress_allowed_slots
         self._retrieval_profile_revision_id = retrieval_profile_revision_id
+        self._content_identity = content_identity
 
     def create_project(
         self, name: str, *, idempotency_key: str | None = None
@@ -514,7 +518,7 @@ class LifecycleService:
     def delete_document(
         self, project_id: str, knowledge_base_id: str, document_id: str
     ) -> Document:
-        """只生成 deleting 生命周期状态，不物理删除。
+        """幂等完成逻辑删除，物理回收仍由已有 GC 处理。
 
         Args:
             project_id: 所属项目 ID。
@@ -522,18 +526,9 @@ class LifecycleService:
             document_id: 目标文档 ID。
 
         Returns:
-            状态为 deleting 的文档。
+            已持久化删除标记的文档。
 
         """
-        current = self._store.get_document(
-            project_id, knowledge_base_id, document_id
-        )
-        if current.status is DocumentStatus.DELETING:
-            return current
-        if current.status is DocumentStatus.DELETED:
-            raise RevisionStateError(
-                "deleted 文档不能重复删除。", stage="document.delete"
-            )
         return self._store.mark_document_deleting(
             project_id, knowledge_base_id, document_id
         )
@@ -694,11 +689,12 @@ class LifecycleService:
             document_version_id(item.document.document_id, item.content_sha256)
             for item in documents
         )
+        identity = self._current_content_identity(knowledge_base_id)
         revision_id = deterministic_id(
             "irev",
             knowledge_base_id,
             tuple(sorted(version_ids)),
-            self._index_fingerprint,
+            self._content_fingerprint(identity),
         )
         request = QueuedIngestion(
             job_id=deterministic_id("job", knowledge_base_id, revision_id),
@@ -706,6 +702,7 @@ class LifecycleService:
             target_document_id=document_id,
             target_document_version_id=document_version_id(document_id, digest),
             retrieval_profile_revision_id=self._retrieval_profile_revision_id,
+            content_identity=identity,
             documents=tuple(
                 sorted(documents, key=lambda item: item.document.document_id)
             ),
@@ -751,8 +748,12 @@ class LifecycleService:
                 for item in documents
             )
         )
+        identity = self._current_content_identity(knowledge_base_id)
         revision_id = deterministic_id(
-            "irev", knowledge_base_id, versions, self._index_fingerprint
+            "irev",
+            knowledge_base_id,
+            versions,
+            self._content_fingerprint(identity),
         )
         first = documents[0]
         request = QueuedIngestion(
@@ -768,6 +769,7 @@ class LifecycleService:
             expected_profile_revision_id=expected_profile_revision_id,
             expected_index_revision_id=expected_index_revision_id,
             activation_validation_ids=activation_validation_ids,
+            content_identity=identity,
         )
         return self._store.enqueue_ingestion(
             request, idempotency_key=request.job_id
@@ -787,6 +789,15 @@ class LifecycleService:
         if request is None:
             return
         try:
+            knowledge_base_id = request.documents[0].document.knowledge_base_id
+            if (
+                self._current_content_identity(knowledge_base_id)
+                != request.content_identity
+            ):
+                raise RevisionStateError(
+                    "持久作业绑定的内容加工配置已漂移。",
+                    stage="document.worker.content_identity",
+                )
             if (
                 request.retrieval_profile_revision_id
                 != self._retrieval_profile_revision_id
@@ -795,6 +806,8 @@ class LifecycleService:
                     "持久作业绑定的 Retrieval Profile 已漂移。",
                     stage="document.worker",
                 )
+            if not request.activate_profile:
+                request = self._refresh_ingestion_snapshot(request)
             documents = tuple(
                 _ingestion_document(self._blob_store, item)
                 for item in request.documents
@@ -808,6 +821,11 @@ class LifecycleService:
                 budgets=self._budgets,
                 egress_allowed_slots=self._egress_allowed_slots,
                 attempt=max(1, self._store.get_job(job_id).attempt),
+                persistent_job_id=job_id,
+                content_identity=request.content_identity,
+                content_identity_current=lambda: self._current_content_identity(
+                    knowledge_base_id
+                ),
             )
             if result.revision_id != request.revision_id:
                 raise AssertionError("持久请求与 Builder Revision 身份不一致。")
@@ -839,6 +857,68 @@ class LifecycleService:
             )
             return
         self._store.finish_ingestion(job_id, succeeded=True)
+
+    def _refresh_ingestion_snapshot(
+        self, request: QueuedIngestion
+    ) -> QueuedIngestion:
+        """领取 KB 独占后合并最新成员，保留本次目标版本和公开 Job ID。"""
+        target = next(
+            item
+            for item in request.documents
+            if item.document.document_id == request.target_document_id
+        )
+        kb_id = target.document.knowledge_base_id
+        expected_revision_id = self._control.active_revision_id(kb_id)
+        documents = [
+            _queued_active_document(self._blob_store, item, artifact, media)
+            for item, artifact, media in self._control.active_documents(kb_id)
+            if item.document_id != request.target_document_id
+        ]
+        documents.append(target)
+        version_ids = tuple(
+            sorted(
+                document_version_id(
+                    item.document.document_id, item.content_sha256
+                )
+                for item in documents
+            )
+        )
+        refreshed = request.model_copy(
+            update={
+                "documents": tuple(
+                    sorted(
+                        documents, key=lambda item: item.document.document_id
+                    )
+                ),
+                "revision_id": deterministic_id(
+                    "irev",
+                    kb_id,
+                    version_ids,
+                    self._content_fingerprint(request.content_identity),
+                ),
+                "expected_index_revision_id": expected_revision_id,
+            }
+        )
+        self._store.refresh_ingestion(refreshed)
+        return refreshed
+
+    def _current_content_identity(self, knowledge_base_id: str) -> str | None:
+        """读取当前加工配置；未配置时保留历史 Revision 身份算法。"""
+        return (
+            self._content_identity(knowledge_base_id)
+            if self._content_identity is not None
+            else None
+        )
+
+    def _content_fingerprint(self, identity: str | None) -> str:
+        """隔离加工内容的 Revision，保持原向量空间及缓存指纹。"""
+        return (
+            canonical_sha256(
+                {"index": self._index_fingerprint, "content": identity}
+            )
+            if identity is not None
+            else self._index_fingerprint
+        )
 
 
 def _validate_document_input(

@@ -105,6 +105,9 @@ def build_chunking_report(
         represented_nodes,
         document_ir,
     )
+    represented_relationship_nodes.update(
+        _represented_heading_context(chunks, document_ir)
+    )
     orphan_relations = sum(
         relationship.source_node_id not in represented_relationship_nodes
         or relationship.target_node_id not in represented_relationship_nodes
@@ -314,6 +317,33 @@ def _represented_with_ancestors(
             expanded.add(current_id)
             current_id = nodes[current_id].parent_node_id
     return expanded
+
+
+def _represented_heading_context(
+    chunks: Sequence[Chunk], document_ir: DocumentIR
+) -> set[str]:
+    """标题以结构上下文保留；用真实来源 breadcrumb 核对其表示关系。"""
+    nodes = {node.node_id: node for node in document_ir.nodes}
+    represented: set[str] = set()
+    for chunk in chunks:
+        for span in chunk.source_spans:
+            node = nodes.get(span.node_id or "")
+            if node is None:
+                continue
+            breadcrumbs = dict(node.metadata).get("heading_breadcrumb_node_ids")
+            if not isinstance(breadcrumbs, list):
+                continue
+            for heading_id in breadcrumbs:
+                if not isinstance(heading_id, str):
+                    continue
+                heading = nodes.get(heading_id)
+                if (
+                    heading is not None
+                    and heading.kind is NodeKind.HEADING
+                    and heading.text in chunk.heading_path
+                ):
+                    represented.add(heading_id)
+    return represented
 
 
 def _warnings(

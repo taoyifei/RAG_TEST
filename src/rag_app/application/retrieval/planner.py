@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from rag_app.application.retrieval.answer_support import descriptive_request
 from rag_app.core.models import (
     QueryAnalysis,
     QueryKind,
@@ -62,6 +63,9 @@ class QueryPlanner:
             neighbor = "none"
         elif kind is QueryKind.COMPLEX:
             neighbor = "section"
+        descriptive = descriptive_request(analysis.normalized_query)
+        if descriptive is not None:
+            neighbor = "table" if descriptive[2] == "DUTIES" else "section"
         enabled = set(policy.enabled_channels)
         channels = tuple(channel for channel in channels if channel in enabled)
         if not channels:

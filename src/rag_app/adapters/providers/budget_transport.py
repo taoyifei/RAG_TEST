@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import io
 import json
 import os
 import re
 import time
+import warnings
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -14,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from rag_app.adapters.providers.budget_authorization import (
     provider_request_lease,
@@ -44,17 +50,85 @@ class _Binding:
     local_blocker: Callable[[httpx.Request], bool] | None = None
 
 
+@dataclass(frozen=True)
+class ProviderDataScope:
+    """仅由已鉴权应用建立的来源上下文，不接受请求 JSON 自报。"""
+
+    project_id: str
+    knowledge_base_id: str
+    source_hashes: tuple[str, ...]
+    media_hashes: tuple[str, ...] = ()
+
+
 _BINDING: ContextVar[_Binding | None] = ContextVar(
     "provider_budget", default=None
 )
 _LOCAL_BLOCKER: ContextVar[Callable[[httpx.Request], bool] | None] = ContextVar(
     "provider_budget_local_blocker", default=None
 )
+_DATA_SCOPE: ContextVar[ProviderDataScope | None] = ContextVar(
+    "provider_data_scope", default=None
+)
 _ALIYUN_WORKSPACE_HOST = re.compile(
     r"[a-z0-9-]+\.cn-beijing\.maas\.aliyuncs\.com\Z"
 )
 _MAX_USAGE = 2**63 - 1
 _MAX_OBSERVATION_BYTES = 4 * 1024 * 1024
+_CHAT_OPERATIONS = frozenset({"generation", "query.rewrite", "image.ocr"})
+_CHAT_LIMITS = {
+    "generation": (6144, 1536),
+    "query.rewrite": (1024, 256),
+    "image.ocr": (2560, 4096),
+}
+_IMAGE_TOKEN_RESERVATION = 2048
+_MAX_IMAGE_BYTES = 2_097_152
+_MAX_OUTPUT_TOKENS = 4096
+_MAX_IMAGE_PIXELS = 1_048_576
+_OCR_CONTENT_PARTS = 2
+_MAX_IMAGE_DIMENSION = 4096
+_HASH = re.compile(r"(?:sha256:)?[0-9a-f]{64}\Z")
+
+
+@contextmanager
+def provider_data_scope(
+    *,
+    project_id: str,
+    knowledge_base_id: str,
+    source_hashes: tuple[str, ...],
+    media_hashes: tuple[str, ...] = (),
+) -> Iterator[None]:
+    """在实际执行线程绑定已经鉴权、按当前来源版本验证的数据范围。
+
+    Args:
+        project_id: 当前产品请求的项目。
+        knowledge_base_id: 当前产品请求的知识库。
+        source_hashes: 本次证据/图片所属原件的实际 SHA256。
+        media_hashes: 本次选中且获准识别的媒体 SHA256。
+
+    Returns:
+        离开调用链后恢复之前范围的上下文管理器。
+
+    """
+    if any(
+        safe_identifier(value) is None
+        for value in (project_id, knowledge_base_id)
+    ):
+        raise ValueError("出网项目与知识库身份无效。")
+    if any(
+        not _HASH.fullmatch(value) for value in (*source_hashes, *media_hashes)
+    ):
+        raise ValueError("出网来源只能使用实际 SHA256。")
+    scope = ProviderDataScope(
+        project_id,
+        knowledge_base_id,
+        tuple(value.removeprefix("sha256:") for value in source_hashes),
+        tuple(value.removeprefix("sha256:") for value in media_hashes),
+    )
+    token = _DATA_SCOPE.set(scope)
+    try:
+        yield
+    finally:
+        _DATA_SCOPE.reset(token)
 
 
 @contextmanager
@@ -113,6 +187,13 @@ def provider_budget_fault(
 
 def _binding(ledger_path: Path) -> _Binding | None:
     explicit = _explicit_binding()
+    if explicit is not None:
+        selected = explicit.ledger.campaign(explicit.campaign_id)
+        if selected.scope_mode == "knowledge_base":
+            if explicit.ledger.path.resolve() != ledger_path.resolve():
+                raise BudgetBlockedError("ACTIVE_CAMPAIGN_BINDING_MISMATCH")
+            # 显式业务授权独立累计，不替换或扩大旧合成验收的活动范围。
+            return explicit
     if not ledger_path.exists():
         return explicit
     reader = ProviderBudgetLedger(ledger_path, read_only=True)
@@ -232,7 +313,19 @@ def estimated_input_tokens(payload: object) -> int:
         与现有 Token 估算器一致的输入预留值。
 
     """
-    return sum(estimate_tokens(text) for text in _request_texts(payload))
+    total = sum(estimate_tokens(text) for text in _request_texts(payload))
+    if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
+        for message in payload["messages"]:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            total += 64 if isinstance(content, list) else 16
+            if isinstance(content, list):
+                total += _IMAGE_TOKEN_RESERVATION * sum(
+                    isinstance(item, dict) and item.get("type") == "image_url"
+                    for item in content
+                )
+    return total
 
 
 def provider_request_identity(
@@ -318,6 +411,10 @@ class BudgetedTransport(httpx.BaseTransport):
     def _handle_request(self, request: httpx.Request) -> httpx.Response:
         binding = _binding(self._ledger_path)
         if binding is None:
+            if request.url.path.endswith("/chat/completions") and type(
+                self._transport
+            ) not in {httpx.MockTransport, BuiltinOfflineMockTransport}:
+                raise BudgetBlockedError("CHAT_AUTHORIZATION_REQUIRED")
             return self._transport.handle_request(request)
         descriptor = _request_descriptor(
             request,
@@ -355,7 +452,9 @@ class BudgetedTransport(httpx.BaseTransport):
                 ),
             )
             raise
-        observed, request_id = _response_observation(response)
+        observed, request_id = _response_observation(
+            response, chat=descriptor.operation in _CHAT_OPERATIONS
+        )
         _finish_safely(
             binding.ledger,
             attempt_id,
@@ -455,6 +554,15 @@ def _request_descriptor(
     operation = (
         "reranking" if "rerank" in request.url.path else "embedding.document"
     )
+    chat = request.url.path.endswith("/chat/completions")
+    if chat:
+        raw_operation = request.extensions.get("rag_chat_operation")
+        operation = (
+            raw_operation
+            if isinstance(raw_operation, str)
+            and raw_operation in _CHAT_OPERATIONS
+            else "chat.unknown"
+        )
     if isinstance(payload, dict) and (
         payload.get("task") == "retrieval.query"
         or (
@@ -464,6 +572,10 @@ def _request_descriptor(
     ):
         operation = "embedding.query"
     retry = request.extensions.get("rag_provider_retry_index", 0)
+    data_scope = _DATA_SCOPE.get()
+    media_hashes = _submitted_media_hashes(payload) if chat else ()
+    input_tokens = estimated_input_tokens(payload)
+    output_tokens = _output_tokens(payload) if chat else 0
     return BudgetRequest(
         provider=provider,
         operation=operation,
@@ -474,10 +586,27 @@ def _request_descriptor(
             method=request.method,
         ),
         payload_identity=payload_hash,
-        estimated_input_tokens=estimated_input_tokens(payload),
+        estimated_input_tokens=input_tokens,
         retry_index=retry if type(retry) is int else 0,
         text_hashes=text_hashes,
         shape_identity=shape_hash,
+        model=payload.get("model") if isinstance(payload, dict) else None,
+        project_id=None if data_scope is None else data_scope.project_id,
+        knowledge_base_id=None
+        if data_scope is None
+        else data_scope.knowledge_base_id,
+        source_hashes=() if data_scope is None else data_scope.source_hashes,
+        media_hashes=media_hashes,
+        provenance_verified=(
+            data_scope is not None
+            and set(media_hashes) <= set(data_scope.media_hashes)
+        ),
+        policy_valid=not chat
+        or _chat_request_valid(
+            payload, operation, input_tokens, output_tokens, media_hashes
+        ),
+        estimated_output_tokens=output_tokens,
+        estimated_image_tokens=len(media_hashes) * _IMAGE_TOKEN_RESERVATION,
     )
 
 
@@ -502,11 +631,186 @@ def _request_texts(payload: object) -> list[str]:
         parameters.get("instruct"), str
     ):
         texts.extend([parameters["instruct"]] * len(texts))
+    messages = payload.get("messages", [])
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                texts.extend(
+                    item["text"]
+                    for item in content
+                    if isinstance(item, dict)
+                    and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
+                )
     return texts
+
+
+def _output_tokens(payload: object) -> int:
+    if not isinstance(payload, dict):
+        return 0
+    maximum = payload.get("max_tokens")
+    return (
+        maximum
+        if type(maximum) is int and 0 < maximum <= _MAX_OUTPUT_TOKENS
+        else 0
+    )
+
+
+def _submitted_media_hashes(  # noqa: PLR0911
+    payload: object,
+) -> tuple[str, ...]:
+    if not isinstance(payload, dict) or not isinstance(
+        payload.get("messages"), list
+    ):
+        return ()
+    hashes: list[str] = []
+    for message in payload["messages"]:
+        if not isinstance(message, dict) or not isinstance(
+            message.get("content"), list
+        ):
+            continue
+        for item in message["content"]:
+            if not isinstance(item, dict) or item.get("type") != "image_url":
+                continue
+            image = item.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else None
+            if not isinstance(url, str) or not url.startswith(
+                ("data:image/png;base64,", "data:image/jpeg;base64,")
+            ):
+                return ()
+            if len(url) > ((_MAX_IMAGE_BYTES + 2) // 3) * 4 + 32:
+                return ()
+            try:
+                raw = base64.b64decode(url.split(",", 1)[1], validate=True)
+            except (ValueError, binascii.Error):
+                return ()
+            if not raw or len(raw) > _MAX_IMAGE_BYTES:
+                return ()
+            if not _image_within_reservation(raw, url.split(";", 1)[0]):
+                return ()
+            hashes.append(hashlib.sha256(raw).hexdigest())
+    return tuple(hashes)
+
+
+def _image_within_reservation(raw: bytes, prefix: str) -> bool:
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(raw)) as image:
+                if (
+                    image.format
+                    != {"data:image/png": "PNG", "data:image/jpeg": "JPEG"}.get(
+                        prefix
+                    )
+                    or image.width * image.height > _MAX_IMAGE_PIXELS
+                    or max(image.size) > _MAX_IMAGE_DIMENSION
+                    or getattr(image, "n_frames", 1) != 1
+                ):
+                    return False
+                image.verify()
+    except (
+        OSError,
+        ValueError,
+        SyntaxError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
+        return False
+    return True
+
+
+def _ocr_messages_valid(messages: list[Any]) -> bool:
+    if len(messages) != 1 or messages[0].get("role") != "user":
+        return False
+    content = messages[0].get("content")
+    if not isinstance(content, list) or len(content) != _OCR_CONTENT_PARTS:
+        return False
+    image, text = content
+    if not isinstance(image, dict) or not isinstance(text, dict):
+        return False
+    minimum, maximum = image.get("min_pixels"), image.get("max_pixels")
+    return (
+        set(image) == {"type", "image_url", "min_pixels", "max_pixels"}
+        and image["type"] == "image_url"
+        and isinstance(image["image_url"], dict)
+        and set(image["image_url"]) == {"url"}
+        and type(minimum) is int
+        and type(maximum) is int
+        and 0 < minimum <= maximum <= _MAX_IMAGE_PIXELS
+        and set(text) == {"type", "text"}
+        and text["type"] == "text"
+        and isinstance(text["text"], str)
+    )
+
+
+def _chat_request_valid(  # noqa: PLR0911
+    payload: object,
+    operation: str,
+    input_tokens: int,
+    output_tokens: int,
+    media_hashes: tuple[str, ...],
+) -> bool:
+    if not isinstance(payload, dict) or operation not in _CHAT_LIMITS:
+        return False
+    input_limit, output_limit = _CHAT_LIMITS[operation]
+    if (
+        input_tokens > input_limit
+        or not 0 < output_tokens <= output_limit
+        or set(payload)
+        - {
+            "model",
+            "messages",
+            "stream",
+            "max_tokens",
+            "enable_thinking",
+            "response_format",
+        }
+        or payload.get("stream") is not False
+        or payload.get("enable_thinking") not in (None, False)
+    ):
+        return False
+    expected_model = (
+        "qwen3.5-ocr" if operation == "image.ocr" else "qwen3.7-flash"
+    )
+    if payload.get("model") != expected_model:
+        return False
+    if operation != "image.ocr" and payload.get("enable_thinking") is not False:
+        return False
+    if operation == "image.ocr" and (
+        "enable_thinking" in payload or "response_format" in payload
+    ):
+        return False
+    if "response_format" in payload and payload["response_format"] != {
+        "type": "json_object"
+    }:
+        return False
+    messages = payload.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return False
+    for message in messages:
+        if (
+            not isinstance(message, dict)
+            or set(message) != {"role", "content"}
+            or message["role"] not in {"system", "user", "assistant"}
+        ):
+            return False
+        content = message["content"]
+        if operation != "image.ocr" and not isinstance(content, str):
+            return False
+    if operation == "image.ocr":
+        return len(media_hashes) == 1 and _ocr_messages_valid(messages)
+    return not media_hashes
 
 
 def _response_observation(
     response: httpx.Response,
+    *,
+    chat: bool = False,
 ) -> tuple[int | None, str | None]:
     if len(response.content) > _MAX_OBSERVATION_BYTES:
         return None, None
@@ -519,7 +823,12 @@ def _response_observation(
     usage = payload.get("usage")
     observed: int | None = None
     if isinstance(usage, dict):
-        for field in ("total_tokens", "input_tokens", "prompt_tokens"):
+        fields = (
+            ("total_tokens",)
+            if chat
+            else ("total_tokens", "input_tokens", "prompt_tokens")
+        )
+        for field in fields:
             value = usage.get(field)
             if type(value) is int and 0 <= value <= _MAX_USAGE:
                 observed = value

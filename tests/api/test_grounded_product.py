@@ -1,0 +1,187 @@
+"""完整产品资料生成链的离线 HTTP、真实预算边界和重启历史回归。"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import httpx
+import pytest
+
+from rag_app.adapters.providers.budget_ledger import (
+    BudgetCampaign,
+    ProviderBudgetLedger,
+)
+from rag_app.adapters.providers.budget_transport import (
+    provider_request_identity,
+)
+from rag_app.composition.product_runtime import build_product_runtime
+from tests.api.test_query_history import _upload
+from tests.product_support import (
+    build_product_harness,
+    create_project_and_knowledge_base,
+    create_provider_connections,
+)
+
+
+def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    requests: list[httpx.Request] = []
+    failing = False
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if failing:
+            return httpx.Response(503, json={"error": {"code": "unavailable"}})
+        payload = json.loads(request.content)
+        data = json.loads(payload["messages"][1]["content"])
+        evidence = data["evidence"][0]
+        return httpx.Response(
+            200,
+            json={
+                "model": payload["model"],
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "claims": [
+                                        {
+                                            "text": evidence["text"],
+                                            "supports": [
+                                                {
+                                                    "support_id": evidence[
+                                                        "support_id"
+                                                    ],
+                                                    "quote": evidence["text"],
+                                                }
+                                            ],
+                                        }
+                                    ]
+                                },
+                                ensure_ascii=False,
+                            ),
+                        },
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 30,
+                    "total_tokens": 130,
+                },
+            },
+        )
+
+    harness = build_product_harness(
+        tmp_path, transport_factory=lambda _: httpx.MockTransport(respond)
+    )
+    project, kb = create_project_and_knowledge_base(harness)
+    document_id = _upload(harness, project, kb)
+    _, _, _, connection_id = create_provider_connections(harness)
+    connection = harness.runtime.control.get_connection(connection_id)
+    document = harness.runtime.sdk.get_document(project, kb, document_id)
+    assert document.current_version_id
+    version = harness.runtime.sdk.get_document_version(
+        project, kb, document_id, document.current_version_id
+    )
+    ledger = ProviderBudgetLedger(
+        harness.runtime.data_dir / "provider-budget.sqlite3"
+    )
+    ledger.create_campaign(
+        BudgetCampaign(
+            campaign_id="product-grounded-test",
+            authorization_id="synthetic-scope-test",
+            scope="test-kb",
+            request_limit=8,
+            estimated_token_limit=80_000,
+            scope_mode="knowledge_base",
+            project_id=project,
+            knowledge_base_id=kb,
+            approved_source_hashes=(version.content_sha256,),
+            allowed_models=("qwen3.7-flash",),
+            allowed_operations=("generation",),
+            operation_request_limits={"generation": 8},
+            expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            approved_request_identities=(
+                provider_request_identity(
+                    "https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
+                    "qwen3.7-flash",
+                    {
+                        "connection_id": connection_id,
+                        "configuration_version": (
+                            connection.configuration_version
+                        ),
+                        "credential_key_version": (
+                            harness.runtime.control.credential_version(
+                                connection.credential_id
+                            )
+                        ),
+                    },
+                ),
+            ),
+        )
+    )
+    settings_path = f"/api/v1/knowledge-bases/{kb}/model-settings"
+    response = harness.client.put(
+        settings_path,
+        headers=harness.write_headers,
+        json={
+            "generation_connection_id": connection_id,
+            "generation_model": "qwen3.7-flash",
+            "budget_campaign_id": "product-grounded-test",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert not requests
+    endpoint = f"/api/v1/projects/{project}/knowledge-bases/{kb}:answer"
+
+    def query(text: str) -> dict:
+        response = harness.client.post(
+            endpoint, headers=harness.write_headers, json={"query": text}
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    first = query("MX-41")
+    assert first["generation_mode"] == "llm", first
+    assert len(requests) == 1
+    cached = query("MX-41")
+    assert cached["cache_hit"] is True
+    assert len(requests) == 1
+    refused = query("MX-41 负责人的手机号是什么")
+    assert refused["answer"] is None, refused
+    failing = True
+    failure = query("设备 MX-41 的维护周期是多少？")
+    assert failure["generation_mode"] == "extractive_fallback", failure
+    assert len(requests) == 2
+    page = harness.runtime.history.list_history()
+    assert {item["status"] for item in page["items"]} >= {
+        "ANSWERED",
+        "REFUSED",
+        "FAILED",
+    }
+    failed_detail = harness.runtime.history.detail(failure["trace_id"])
+    assert any(
+        item["call_count"] == 1 and item["operation"] == "generation"
+        for item in failed_detail["provider_usage"]
+    )
+    assert any(
+        item["usage"] == 130
+        for item in harness.runtime.history.detail(first["trace_id"])[
+            "provider_usage"
+        ]
+    )
+    saved_settings = harness.runtime.settings
+    harness.close()
+    with build_product_runtime(
+        saved_settings, transport_factory=lambda _: httpx.MockTransport(respond)
+    ) as runtime:
+        page = runtime.history.list_history()
+        assert page["total"] == 4
+        assert runtime.history.detail(first["trace_id"])["answer"]
+        assert runtime.history.detail(cached["trace_id"])["cache_hit"] is True

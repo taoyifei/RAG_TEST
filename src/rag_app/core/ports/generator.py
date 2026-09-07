@@ -17,6 +17,7 @@ class GenerationRequest(FrozenModel):
     query: str = Field(min_length=1, repr=False)
     evidence: tuple[EvidenceItem, ...]
     citation_protocol: str = Field(min_length=1)
+    repair_reason: str | None = Field(default=None, max_length=200)
 
 
 class GeneratorPort(Protocol):

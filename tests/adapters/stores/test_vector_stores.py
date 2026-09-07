@@ -166,6 +166,35 @@ def test_qdrant_local_path_reopens_complete_named_vectors(
 @pytest.mark.parametrize(
     "store_type", [MemoryRevisionVectorStore, QdrantRevisionVectorStore]
 )
+def test_deleted_document_is_filtered_before_vector_limit(
+    store_type: type,
+) -> None:
+    """高分已删除文档不能占满候选窗口并挤掉活动文档。"""
+    store = store_type()
+    spec = _spec()
+    deleted = _point(spec, "deleted", (1.0, 0.0))
+    active = _point(spec, "active", (0.5, 0.5))
+    try:
+        store.create_revision(spec)
+        store.upsert_complete_points(spec, (deleted, active))
+        hits = store.search_named(
+            spec,
+            slot_id="primary",
+            vector_name="dense_primary",
+            query_vector=(1.0, 0.0),
+            limit=1,
+            excluded_document_ids=(deleted.payload.document_id,),
+        )
+        assert len(hits) == 1
+        assert hits[0].document_id == active.payload.document_id
+        assert hits[0].rank == 1
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize(
+    "store_type", [MemoryRevisionVectorStore, QdrantRevisionVectorStore]
+)
 def test_complete_point_missing_required_slot_is_rejected(
     store_type: type,
 ) -> None:

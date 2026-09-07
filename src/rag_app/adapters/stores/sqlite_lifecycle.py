@@ -14,7 +14,11 @@ from rag_app.core.errors import (
     QueueLimitExceeded,
     RevisionStateError,
 )
-from rag_app.core.identifiers import canonical_json, document_version_id
+from rag_app.core.identifiers import (
+    canonical_json,
+    deterministic_id,
+    document_version_id,
+)
 from rag_app.core.models.management import (
     ArtifactDescriptor,
     Document,
@@ -34,6 +38,17 @@ from rag_app.core.models.management import (
 _MAX_PAGE_SIZE = 200
 _DEFAULT_MAX_PENDING_JOBS = 64
 _MAX_JOB_ATTEMPTS = 3
+
+# r/j 是待领取请求；已领取记录同时充当跨进程 KB 单 Writer 的持久占用。
+_CLAIMABLE_KNOWLEDGE_BASE = (
+    "NOT EXISTS (SELECT 1 FROM ingestion_requests other_r "
+    "JOIN ingestion_jobs other_j ON other_j.job_id=other_r.job_id "
+    "WHERE other_j.knowledge_base_id=j.knowledge_base_id "
+    "AND other_j.job_id<>j.job_id AND other_j.cancel_requested=0 "
+    "AND (other_r.state='running' OR (other_r.state='queued' AND "
+    "(other_r.created_at<r.created_at OR (other_r.created_at=r.created_at "
+    "AND other_r.job_id<r.job_id)))))"
+)
 
 
 class SqliteLifecycleStore:
@@ -327,7 +342,12 @@ class SqliteLifecycleStore:
             row = connection.execute(
                 "SELECT d.project_id, d.knowledge_base_id, d.document_id, "
                 "d.display_name, d.lifecycle_status, d.current_version_id, "
-                "kb.active_revision_id, d.created_at, d.updated_at "
+                "CASE WHEN EXISTS (SELECT 1 FROM revision_documents rd "
+                "WHERE rd.revision_id=kb.active_revision_id "
+                "AND rd.document_id=d.document_id "
+                "AND rd.document_version_id=d.current_version_id) "
+                "THEN kb.active_revision_id END AS active_revision_id, "
+                "d.created_at, d.updated_at "
                 "FROM documents d JOIN knowledge_bases kb "
                 "ON kb.knowledge_base_id=d.knowledge_base_id "
                 "WHERE d.project_id=? AND d.knowledge_base_id=? "
@@ -408,7 +428,12 @@ class SqliteLifecycleStore:
             rows = connection.execute(
                 "SELECT d.project_id, d.knowledge_base_id, d.document_id, "
                 "d.display_name, d.lifecycle_status, d.current_version_id, "
-                "kb.active_revision_id, d.created_at, d.updated_at "
+                "CASE WHEN EXISTS (SELECT 1 FROM revision_documents rd "
+                "WHERE rd.revision_id=kb.active_revision_id "
+                "AND rd.document_id=d.document_id "
+                "AND rd.document_version_id=d.current_version_id) "
+                "THEN kb.active_revision_id END AS active_revision_id, "
+                "d.created_at, d.updated_at "
                 "FROM documents d JOIN knowledge_bases kb "
                 "ON kb.knowledge_base_id=d.knowledge_base_id "
                 "WHERE d.project_id=? AND d.knowledge_base_id=? AND "
@@ -454,7 +479,7 @@ class SqliteLifecycleStore:
     def mark_document_deleting(
         self, project_id: str, knowledge_base_id: str, document_id: str
     ) -> Document:
-        """将删除转换为受控生命周期操作。
+        """在单个事务内落盘 tombstone、隔离作业并登记物理回收。
 
         Args:
             project_id: 所属项目 ID。
@@ -462,18 +487,30 @@ class SqliteLifecycleStore:
             document_id: 目标文档 ID。
 
         Returns:
-            状态为 deleting 的文档。
+            状态为 deleted 的文档，重复请求返回相同 tombstone。
 
         """
-        self.get_document(project_id, knowledge_base_id, document_id)
         with self._connections.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE documents SET lifecycle_status='deleting', "
-                "updated_at=? "
-                "WHERE project_id=? AND knowledge_base_id=? AND document_id=?",
-                (_now(), project_id, knowledge_base_id, document_id),
-            )
+            row = connection.execute(
+                "SELECT d.project_id, d.knowledge_base_id, d.document_id, "
+                "d.display_name, d.lifecycle_status, d.current_version_id, "
+                "NULL AS active_revision_id, d.created_at, d.updated_at, "
+                "d.deleted_at FROM documents d WHERE d.project_id=? "
+                "AND d.knowledge_base_id=? AND d.document_id=?",
+                (project_id, knowledge_base_id, document_id),
+            ).fetchone()
+            if row is None:
+                raise NotFound("文档不存在。", stage="document.delete")
+            if row["deleted_at"] is not None:
+                return _document(row)
             now = _now()
+            connection.execute(
+                "UPDATE documents SET lifecycle_status='deleted', "
+                "status='deleted', "
+                "deleted_at=?, updated_at=? "
+                "WHERE project_id=? AND knowledge_base_id=? AND document_id=?",
+                (now, now, project_id, knowledge_base_id, document_id),
+            )
             connection.execute(
                 "INSERT OR IGNORE INTO lifecycle_operations("
                 "operation_id, operation_type, project_id, knowledge_base_id, "
@@ -494,7 +531,9 @@ class SqliteLifecycleStore:
                 document_id=document_id,
                 now=now,
             )
-        return self.get_document(project_id, knowledge_base_id, document_id)
+            return _document(row).model_copy(
+                update={"status": DocumentStatus.DELETED, "updated_at": now}
+            )
 
     def list_document_versions(
         self, project_id: str, knowledge_base_id: str, document_id: str
@@ -561,6 +600,7 @@ class SqliteLifecycleStore:
 
         """
         with self._connections.transaction(write=True) as connection:
+            _require_live_document(connection, document_id, "document.ready")
             connection.execute(
                 "UPDATE document_versions SET lifecycle_status='superseded' "
                 "WHERE document_id=? AND document_version_id<>? AND "
@@ -677,11 +717,50 @@ class SqliteLifecycleStore:
         serialized = canonical_json(request.model_dump(mode="json"))
         now = _now()
         with self._connections.transaction(write=True) as connection:
+            unchanged = _already_active_version(connection, request)
+            alias = connection.execute(
+                "SELECT j.job_id FROM ingestion_jobs j "
+                "JOIN ingestion_requests r ON r.job_id=j.job_id "
+                "WHERE j.revision_id=? AND j.document_id=? "
+                "AND j.document_version_id=? "
+                "AND json_extract(r.request_json, '$.activate_profile')=? "
+                "AND (?=0 OR (j.state='completed' AND r.state='succeeded' "
+                "AND j.cancel_requested=0)) "
+                "ORDER BY j.created_at, j.job_id LIMIT 1",
+                (
+                    request.revision_id,
+                    request.target_document_id,
+                    request.target_document_version_id,
+                    int(request.activate_profile),
+                    int(unchanged),
+                ),
+            ).fetchone()
+            if alias is not None:
+                # Worker 合并成员可能改变 Revision，但公开 Job 身份保持不变。
+                request = request.model_copy(
+                    update={"job_id": str(alias["job_id"])}
+                )
+                serialized = canonical_json(request.model_dump(mode="json"))
+            elif unchanged:
+                # Revision 的构建 Job 属于最初目标；同内容回执另绑当前文档。
+                request = request.model_copy(
+                    update={
+                        "job_id": deterministic_id(
+                            "job",
+                            document.knowledge_base_id,
+                            request.revision_id,
+                            document.document_id,
+                            request.target_document_version_id,
+                            "already-indexed",
+                        )
+                    }
+                )
+                serialized = canonical_json(request.model_dump(mode="json"))
             existing_request = connection.execute(
                 "SELECT job_id FROM ingestion_requests WHERE job_id=?",
                 (request.job_id,),
             ).fetchone()
-            if existing_request is None:
+            if existing_request is None and not unchanged:
                 pending = connection.execute(
                     "SELECT count(*) AS value FROM ingestion_requests "
                     "WHERE state IN ('queued', 'running')"
@@ -717,6 +796,9 @@ class SqliteLifecycleStore:
                 raise Conflict(
                     "文档 ID 已绑定其他 scope。", stage="document.queue"
                 )
+            _require_live_document(
+                connection, document.document_id, "document.queue"
+            )
             connection.execute(
                 "INSERT OR IGNORE INTO document_versions("
                 "document_version_id, document_id, content_sha256, "
@@ -737,8 +819,8 @@ class SqliteLifecycleStore:
                 "job_id, project_id, knowledge_base_id, document_id, "
                 "document_version_id, revision_id, idempotency_key, state, "
                 "stage, attempt, heartbeat_at, retryable, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', "
-                "'queued', 0, ?, 0, ?, ?)",
+                "updated_at, finished_at, safe_message) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?)",
                 (
                     request.job_id,
                     document.project_id,
@@ -747,9 +829,13 @@ class SqliteLifecycleStore:
                     request.target_document_version_id,
                     request.revision_id,
                     idempotency_key,
+                    "completed" if unchanged else "pending",
+                    "unchanged" if unchanged else "queued",
                     now,
                     now,
                     now,
+                    now if unchanged else None,
+                    "相同内容已在当前索引，无需重建" if unchanged else None,
                 ),
             )
             job = connection.execute(
@@ -770,8 +856,14 @@ class SqliteLifecycleStore:
             connection.execute(
                 "INSERT OR IGNORE INTO ingestion_requests("
                 "job_id, request_json, state, created_at, updated_at) "
-                "VALUES (?, ?, 'queued', ?, ?)",
-                (request.job_id, serialized, now, now),
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    request.job_id,
+                    serialized,
+                    "succeeded" if unchanged else "queued",
+                    now,
+                    now,
+                ),
             )
             bind_publication(connection, request, now)
         return self.get_job(request.job_id)
@@ -791,7 +883,8 @@ class SqliteLifecycleStore:
             row = connection.execute(
                 "SELECT r.request_json, r.state, j.cancel_requested "
                 "FROM ingestion_requests r JOIN ingestion_jobs j "
-                "ON j.job_id=r.job_id WHERE r.job_id=?",
+                "ON j.job_id=r.job_id WHERE r.job_id=? AND "
+                + _CLAIMABLE_KNOWLEDGE_BASE,
                 (job_id,),
             ).fetchone()
             if (
@@ -814,6 +907,57 @@ class SqliteLifecycleStore:
                 (now, now, now, job_id),
             )
         return QueuedIngestion.model_validate_json(str(row["request_json"]))
+
+    def refresh_ingestion(self, request: QueuedIngestion) -> None:
+        """在 KB 独占期间冻结最新完整快照，保持用户已收到的 Job ID。
+
+        Args:
+            request: 合并最新 Active 后的请求及其发布前置。
+
+        Returns:
+            无返回值；失去占用或来源失效时拒绝写入。
+
+        """
+        with self._connections.transaction(write=True) as connection:
+            row = connection.execute(
+                "SELECT r.state, j.cancel_requested, kb.active_revision_id "
+                "FROM ingestion_requests r JOIN ingestion_jobs j "
+                "ON j.job_id=r.job_id JOIN knowledge_bases kb "
+                "ON kb.knowledge_base_id=j.knowledge_base_id "
+                "WHERE j.job_id=?",
+                (request.job_id,),
+            ).fetchone()
+            if (
+                row is None
+                or row["state"] != "running"
+                or row["cancel_requested"]
+            ):
+                raise RevisionStateError(
+                    "作业已取消或失去知识库写入占用。", stage="job.refresh"
+                )
+            if row["active_revision_id"] != request.expected_index_revision_id:
+                raise Conflict(
+                    "知识库已更新，请重试文档构建。", stage="job.refresh"
+                )
+            for item in request.documents:
+                _require_live_document(
+                    connection, item.document.document_id, "job.refresh"
+                )
+            now = _now()
+            connection.execute(
+                "UPDATE ingestion_requests SET request_json=?, updated_at=? "
+                "WHERE job_id=?",
+                (
+                    canonical_json(request.model_dump(mode="json")),
+                    now,
+                    request.job_id,
+                ),
+            )
+            connection.execute(
+                "UPDATE ingestion_jobs SET revision_id=?, updated_at=? "
+                "WHERE job_id=?",
+                (request.revision_id, now, request.job_id),
+            )
 
     def ingestion_profile_revision_id(self, job_id: str) -> str | None:
         """读取持久作业在入队时冻结的 Retrieval Profile Revision。
@@ -939,7 +1083,7 @@ class SqliteLifecycleStore:
         with self._connections.transaction(write=True) as connection:
             connection.execute(
                 "UPDATE ingestion_requests SET state=?, updated_at=? "
-                "WHERE job_id=?",
+                "WHERE job_id=? AND state!='cancelled'",
                 ("succeeded" if succeeded else "failed", now, job_id),
             )
             if not succeeded:
@@ -1026,6 +1170,8 @@ class SqliteLifecycleStore:
             attempt=int(row["attempt"]),
             retryable=bool(row["retryable"]),
             safe_error=_optional(row["safe_message"]),
+            error_code=error_code,
+            trace_id=deterministic_id("trace", job_id, str(row["revision_id"])),
             lease_owner=(
                 lease is not None and str(lease["owner_job_id"]) == job_id
             ),
@@ -1141,6 +1287,10 @@ class SqliteLifecycleStore:
                 "作业已达到最大尝试次数。", stage="job.retry"
             )
         with self._connections.transaction(write=True) as connection:
+            if current.document_id is not None:
+                _require_live_document(
+                    connection, current.document_id, "job.retry"
+                )
             connection.execute(
                 "UPDATE ingestion_jobs SET state='pending', "
                 "stage='retry_queued', "
@@ -1181,12 +1331,25 @@ class SqliteLifecycleStore:
         )
         with self._connections.transaction() as connection:
             rows = connection.execute(
-                "SELECT bo.artifact_id, br.owner_id AS document_version_id, "
+                "SELECT DISTINCT bo.artifact_id, ? AS document_version_id, "
                 "bo.media_type, bo.size_bytes, br.role FROM blob_references br "
                 "JOIN blob_objects bo ON bo.artifact_id=br.artifact_id WHERE "
-                "br.owner_type='document_version' AND br.owner_id=? "
+                "(br.owner_type='document_version' AND br.owner_id=?) OR "
+                "(br.owner_type='parsed_media' AND EXISTS ("
+                "SELECT 1 FROM revision_documents rd, "
+                "json_each(rd.document_ir_json, '$.nodes') node "
+                "WHERE rd.revision_id=br.revision_id "
+                "AND rd.document_version_id=? AND rd.document_id=? "
+                "AND json_extract(node.value, '$.kind')='image' "
+                "AND json_extract(node.value, '$.image_attributes.blob_ref')"
+                "=br.artifact_id)) "
                 "ORDER BY bo.artifact_id",
-                (document_version_id,),
+                (
+                    document_version_id,
+                    document_version_id,
+                    document_version_id,
+                    document_id,
+                ),
             ).fetchall()
         return tuple(
             ArtifactDescriptor(
@@ -1389,26 +1552,86 @@ def _cancel_scope_jobs(
     now: str,
 ) -> None:
     """在生命周期删除事务内取消目标 scope 的未完成作业。"""
+    # 完整快照可能由另一个文档的上传创建；其冻结成员同样不能复活已删来源。
+    jobs = connection.execute(
+        "SELECT j.job_id FROM ingestion_jobs j "
+        "LEFT JOIN ingestion_requests r ON r.job_id=j.job_id "
+        "WHERE j.knowledge_base_id=? "
+        "AND (j.state IN ('pending', 'running', 'failed_retryable', "
+        "'interrupted') OR r.state IN ('queued', 'running')) "
+        "AND (? IS NULL OR j.document_id=? OR EXISTS ("
+        "SELECT 1 FROM json_each(r.request_json, '$.documents') member "
+        "WHERE json_extract(member.value, '$.document.document_id')=?) "
+        "OR EXISTS (SELECT 1 FROM revision_documents rd "
+        "WHERE rd.revision_id=j.revision_id AND rd.document_id=?))",
+        (knowledge_base_id, document_id, document_id, document_id, document_id),
+    ).fetchall()
+    job_ids = canonical_json(tuple(str(row["job_id"]) for row in jobs))
     connection.execute(
         "UPDATE ingestion_requests SET state='cancelled', updated_at=? "
-        "WHERE state='queued' AND job_id IN (SELECT job_id FROM "
-        "ingestion_jobs WHERE knowledge_base_id=? "
-        "AND (? IS NULL OR document_id=?) AND state='pending')",
-        (now, knowledge_base_id, document_id, document_id),
+        "WHERE job_id IN (SELECT value FROM json_each(?))",
+        (now, job_ids),
     )
     connection.execute(
         "UPDATE ingestion_jobs SET cancel_requested=1, "
-        "state=CASE WHEN state='pending' THEN 'failed_terminal' "
-        "ELSE state END, "
-        "stage=CASE WHEN state='pending' THEN 'cancelled' ELSE stage END, "
-        "error_code=CASE WHEN state='pending' THEN 'JOB_CANCELLED' "
-        "ELSE error_code END, "
-        "safe_message=CASE WHEN state='pending' THEN '作业已取消。' "
-        "ELSE safe_message END, retryable=0, updated_at=?, "
-        "finished_at=CASE WHEN state='pending' THEN ? ELSE finished_at END "
-        "WHERE knowledge_base_id=? AND (? IS NULL OR document_id=?) "
-        "AND state IN ('pending', 'running')",
-        (now, now, knowledge_base_id, document_id, document_id),
+        "state='failed_terminal', stage='cancelled', "
+        "error_code='JOB_CANCELLED', safe_message='来源已删除，作业已取消。', "
+        "retryable=0, updated_at=?, finished_at=? "
+        "WHERE job_id IN (SELECT value FROM json_each(?))",
+        (now, now, job_ids),
+    )
+
+
+def _require_live_document(
+    connection: sqlite3.Connection, document_id: str, stage: str
+) -> None:
+    """在写事务中阻断旧请求和旧 Worker 再次写入已删除来源。"""
+    row = connection.execute(
+        "SELECT 1 FROM documents WHERE document_id=? "
+        "AND deleted_at IS NULL AND lifecycle_status='active' "
+        "AND status='active'",
+        (document_id,),
+    ).fetchone()
+    if row is None:
+        raise RevisionStateError("文档已删除或不可写入。", stage=stage)
+
+
+def _already_active_version(
+    connection: sqlite3.Connection,
+    request: QueuedIngestion,
+) -> bool:
+    """同一写事务确认完整快照及目标版本均已发布，不复用别的目标 Job。"""
+    if request.activate_profile:
+        return False
+    target = next(
+        item
+        for item in request.documents
+        if item.document.document_id == request.target_document_id
+    )
+    return (
+        connection.execute(
+            "SELECT 1 FROM documents d JOIN knowledge_bases kb "
+            "ON kb.knowledge_base_id=d.knowledge_base_id "
+            "JOIN index_revisions r "
+            "ON r.index_revision_id=kb.active_revision_id "
+            "JOIN revision_documents rd ON rd.revision_id=r.index_revision_id "
+            "AND rd.document_id=d.document_id "
+            "WHERE d.project_id=? AND d.knowledge_base_id=? "
+            "AND d.document_id=? "
+            "AND d.current_version_id=? AND rd.document_version_id=? "
+            "AND kb.active_revision_id=? AND r.state='active' "
+            "AND d.status='active' AND d.lifecycle_status='active' "
+            "AND d.deleted_at IS NULL AND kb.deleted_at IS NULL",
+            (
+                target.document.project_id,
+                target.document.knowledge_base_id,
+                request.target_document_id,
+                request.target_document_version_id,
+                request.target_document_version_id,
+                request.revision_id,
+            ),
+        ).fetchone()
+        is not None
     )
 
 

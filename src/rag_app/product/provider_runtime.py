@@ -24,6 +24,15 @@ from rag_app.adapters.providers import (
     JinaRerankerV35Adapter,
     JinaV5TextEmbeddingAdapter,
 )
+from rag_app.adapters.providers.aliyun_chat import (
+    CHAT_COMPLETIONS_PATH,
+    AliyunChatAdapter,
+    AliyunChatConfig,
+    ChatMessage,
+    chat_payload,
+    decode_chat_content,
+    message_token_estimate,
+)
 from rag_app.adapters.providers.aliyun_contract import (
     decode_embeddings,
     embedding_payload,
@@ -31,6 +40,12 @@ from rag_app.adapters.providers.aliyun_contract import (
 from rag_app.adapters.providers.aliyun_endpoint import (
     AliyunEndpointConfig,
     resolve_endpoint,
+)
+from rag_app.adapters.providers.aliyun_ocr import (
+    AliyunOcrAdapter,
+    AliyunOcrConfig,
+    ocr_input_token_estimate,
+    synthetic_ocr_payload,
 )
 from rag_app.adapters.providers.batching import estimate_tokens
 from rag_app.adapters.providers.budget_ledger import BudgetBlockedError
@@ -244,6 +259,9 @@ class ProviderRuntimeRegistry:
             response = client.post(
                 _path(connection.provider_type, operation),
                 json=request_payload,
+                extensions={"rag_chat_operation": operation}
+                if operation in {"generation", "query.rewrite", "image.ocr"}
+                else None,
             )
             diagnostics.http_status = response.status_code
             diagnostics.provider_code, diagnostics.provider_request_id = (
@@ -502,6 +520,64 @@ class ProviderRuntimeRegistry:
             client.close()
         self._clients.clear()
 
+    def chat_adapter(
+        self,
+        connection_id: str,
+        *,
+        model: str,
+        config: AliyunChatConfig | None = None,
+    ) -> AliyunChatAdapter:
+        """复用已保存百炼连接，生成与改写不隐式重试 HTTP。
+
+        Args:
+            connection_id: 当前受控百炼连接。
+            model: 已批准的回答模型 ID。
+            config: 可选的完整模型策略，模型必须与引用一致。
+
+        Returns:
+            调用时解析凭据且受既有出网账本限制的生成 adapter。
+
+        """
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "generation")
+        resolved = config or AliyunChatConfig(model=model, egress_allowed=True)
+        if resolved.model != model:
+            raise ValueError("回答策略与模型引用不一致。")
+        return AliyunChatAdapter(
+            resolved,
+            http_client=self._adapter_http_client(connection, max_attempts=1),
+            api_key_resolver=self._secret_resolver(connection),
+        )
+
+    def ocr_adapter(
+        self,
+        connection_id: str,
+        *,
+        model: str,
+        config: AliyunOcrConfig | None = None,
+    ) -> AliyunOcrAdapter:
+        """复用同一百炼凭据创建有界图片识别 adapter。
+
+        Args:
+            connection_id: 当前受控百炼连接。
+            model: 已批准的 OCR 模型 ID。
+            config: 可选图像/输出预算及识别策略身份。
+
+        Returns:
+            每图至多两次 HTTP 尝试的 OCR adapter。
+
+        """
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "image.ocr")
+        resolved = config or AliyunOcrConfig(model=model, egress_allowed=True)
+        if resolved.model != model:
+            raise ValueError("OCR 策略与模型引用不一致。")
+        return AliyunOcrAdapter(
+            resolved,
+            http_client=self._adapter_http_client(connection, max_attempts=2),
+            api_key_resolver=self._secret_resolver(connection),
+        )
+
     def _client(
         self, connection: ProviderConnection
     ) -> tuple[httpx.Client, int]:
@@ -563,6 +639,7 @@ class ProviderRuntimeRegistry:
         *,
         selected_slot: str | None = None,
         reranker_mode: str | None = None,
+        max_attempts: int = 3,
     ) -> ProviderHttpClient:
         if not connection.enabled:
             raise ConfigurationError("连接已停用。", stage="provider.config")
@@ -594,6 +671,7 @@ class ProviderRuntimeRegistry:
         return ProviderHttpClient(
             base_url,
             client=client,
+            max_attempts=max_attempts,
             observer=lambda call: self._control.record_provider_call(
                 connection.connection_id,
                 call,
@@ -656,6 +734,13 @@ def _payload(
     *,
     resolved: ResolvedEmbeddingSpec | None = None,
 ) -> dict[str, object]:
+    if operation in {"generation", "query.rewrite"}:
+        return chat_payload(
+            (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
+            AliyunChatConfig(model=model, max_output_tokens=256),
+        )
+    if operation == "image.ocr":
+        return synthetic_ocr_payload(model)
     if operation == "reranking":
         return {
             "documents": list(_SYNTHETIC_RERANK_DOCUMENTS),
@@ -706,6 +791,10 @@ def _validation_spec(
     dimension: int | None,
     policy: dict[str, object] | None,
 ) -> ResolvedEmbeddingSpec | None:
+    if operation in {"generation", "query.rewrite", "image.ocr"}:
+        if policy:
+            raise ValueError("生成和 OCR 探针使用固定公开合成内容。")
+        return None
     if operation == "reranking":
         if policy:
             raise ValueError("Reranker 暂不支持可编辑请求策略。")
@@ -750,6 +839,9 @@ def _validate_payload(  # noqa: PLR0912
     expected_model: str,
     expected_dimension: int | None,
 ) -> tuple[int | None, int | None]:
+    if operation in {"generation", "query.rewrite", "image.ocr"}:
+        decoded = decode_chat_content(payload, expected_model=expected_model)
+        return None, decoded.usage.total_tokens or None
     if not isinstance(payload, dict):
         raise TypeError("响应必须为 object。")
     if provider_type == "jina":
@@ -826,6 +918,12 @@ def _estimated_tokens(
     connection: ProviderConnection,
     operation: str,
 ) -> int:
+    if operation in {"generation", "query.rewrite"}:
+        return message_token_estimate(
+            (ChatMessage(role="user", content=_SYNTHETIC_TEXT),)
+        )
+    if operation == "image.ocr":
+        return ocr_input_token_estimate()
     texts = [_SYNTHETIC_TEXT]
     if operation == "reranking":
         texts.extend(_SYNTHETIC_RERANK_DOCUMENTS)
@@ -865,6 +963,8 @@ def _base_url(connection: ProviderConnection) -> str:
 def _path(provider_type: str, operation: str) -> str:
     if provider_type == "jina":
         return "/v1/rerank" if operation == "reranking" else "/v1/embeddings"
+    if operation in {"generation", "query.rewrite", "image.ocr"}:
+        return CHAT_COMPLETIONS_PATH
     return "/api/v1/services/embeddings/text-embedding/text-embedding"
 
 

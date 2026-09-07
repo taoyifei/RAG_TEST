@@ -92,7 +92,7 @@ class VectorStorePort(Protocol):
         """
         ...
 
-    def search_named(
+    def search_named(  # noqa: PLR0913
         self,
         spec: RevisionVectorSpec,
         *,
@@ -100,6 +100,7 @@ class VectorStorePort(Protocol):
         vector_name: str,
         query_vector: tuple[float, ...],
         limit: int,
+        excluded_document_ids: tuple[str, ...] = (),
     ) -> tuple[VectorSearchResult, ...]:
         """拒绝 slot/vector name 交叉并执行精确空间查询。
 
@@ -109,6 +110,7 @@ class VectorStorePort(Protocol):
             vector_name: 查询 named vector。
             query_vector: 与 slot 同维度的向量。
             limit: 最大命中数。
+            excluded_document_ids: 排名截断前排除的已删除文档。
 
         Returns:
             分数降序且稳定 tie-break 的命中。

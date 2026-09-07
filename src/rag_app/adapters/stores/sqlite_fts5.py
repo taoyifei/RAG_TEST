@@ -145,8 +145,10 @@ class SqliteFtsStore:
                 "4.0, 3.0, 6.0, 1.0) AS raw_score "
                 f"FROM {table} JOIN chunks c ON c.row_id={table}.rowid "
                 "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
                 "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?",
                 (
                     expression,
@@ -195,8 +197,10 @@ class SqliteFtsStore:
                 "4.0, 3.0, 6.0, 1.0) AS raw_score "
                 f"FROM {table} JOIN chunks c ON c.row_id={table}.rowid "
                 "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
+                "JOIN documents d ON d.document_id=c.document_id "
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
+                "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
                 "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?",
                 (
                     expression,
@@ -259,8 +263,10 @@ class SqliteFtsStore:
                     "AND c.chunk_id=e.chunk_id "
                     "JOIN index_revisions r "
                     "ON r.index_revision_id=e.revision_id "
+                    "JOIN documents d ON d.document_id=c.document_id "
                     "WHERE e.revision_id=? AND e.normalized_identifier=? "
                     "AND r.project_id=? AND r.knowledge_base_id=? "
+                    "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
                     "ORDER BY e.chunk_id LIMIT ?",
                     (
                         revision.index_revision_id,
@@ -290,8 +296,10 @@ class SqliteFtsStore:
                     f"JOIN chunks c ON c.row_id={table}.rowid "
                     "JOIN index_revisions r "
                     "ON r.index_revision_id=c.revision_id "
+                    "JOIN documents d ON d.document_id=c.document_id "
                     f"WHERE {table} MATCH ? AND c.revision_id=? "
                     "AND r.project_id=? AND r.knowledge_base_id=? "
+                    "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
                     "ORDER BY c.chunk_id LIMIT ?",
                     (
                         expression,
@@ -350,9 +358,13 @@ class SqliteFtsStore:
             return ()
         with self._connections.transaction() as connection:
             rows = connection.execute(
-                "SELECT chunk_id FROM exact_identifiers "
-                "WHERE revision_id=? AND normalized_identifier=? "
-                "ORDER BY chunk_id LIMIT ?",
+                "SELECT e.chunk_id FROM exact_identifiers e "
+                "JOIN chunks c ON c.revision_id=e.revision_id "
+                "AND c.chunk_id=e.chunk_id "
+                "JOIN documents d ON d.document_id=c.document_id "
+                "WHERE e.revision_id=? AND e.normalized_identifier=? "
+                "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
+                "ORDER BY e.chunk_id LIMIT ?",
                 (revision_id, normalized, limit),
             ).fetchall()
         return tuple(str(row["chunk_id"]) for row in rows)
@@ -519,7 +531,13 @@ def write_chunks_transaction(
                     chunk.lexical_text,
                 ),
             )
+        normalized_identifiers: set[str] = set()
         for identifier in chunk.identifiers:
+            normalized = normalize_identifier(identifier)
+            # Exact 主键采用规范形式；原文变体仍完整保留在 Chunk 中。
+            if normalized in normalized_identifiers:
+                continue
+            normalized_identifiers.add(normalized)
             connection.execute(
                 "INSERT INTO exact_identifiers("
                 "revision_id, chunk_id, identifier, normalized_identifier) "
@@ -528,7 +546,7 @@ def write_chunks_transaction(
                     chunk.index_revision_id,
                     chunk.chunk_id,
                     identifier,
-                    normalize_identifier(identifier),
+                    normalized,
                 ),
             )
 
@@ -579,9 +597,7 @@ def build_fts_v2_query(analysis: AnalyzedLexicalQuery) -> str:
             if len(token) == _CJK_BIGRAM_LENGTH
         )
         if bigrams and bigrams != (full_phrase,):
-            groups.append(
-                f"({full_phrase} OR ({' AND '.join(bigrams)}))"
-            )
+            groups.append(f"({full_phrase} OR ({' AND '.join(bigrams)}))")
         else:
             groups.append(full_phrase)
     groups.extend(_fts_quote(token) for token in analysis.identifier_tokens)
@@ -620,9 +636,7 @@ def fts_table_for_revision(
             "Lexical schema JSON 已损坏。", stage="fts.schema"
         ) from None
     if not isinstance(schema, dict):
-        raise IndexCorrupt(
-            "Lexical schema 必须为对象。", stage="fts.schema"
-        )
+        raise IndexCorrupt("Lexical schema 必须为对象。", stage="fts.schema")
     version = schema.get("fts_schema_version")
     if version in {"2", _FTS_SCHEMA_VERSION}:
         return "chunks_fts_v2"
