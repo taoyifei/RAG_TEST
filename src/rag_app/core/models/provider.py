@@ -66,6 +66,12 @@ class ProviderCall(FrozenModel):
         ge=1,
         le=_SIGNED_64_BIT_MAX,
     )
+    transport_diagnostics: JsonObject = ()
+
+    @field_validator("transport_diagnostics", mode="before")
+    @classmethod
+    def _freeze_transport_diagnostics(cls, value: object) -> JsonObject:
+        return freeze_json_object(value)
 
 
 class ProviderFailureCategory(StrEnum):

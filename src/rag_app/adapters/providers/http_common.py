@@ -8,11 +8,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from email.utils import parsedate_to_datetime
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
 from rag_app.adapters.providers.budget_transport import budgeted_client
+from rag_app.adapters.providers.transport_diagnostics import (
+    retryable_transport,
+    transport_diagnostics,
+)
 from rag_app.core.errors import (
     ProviderAuthenticationError,
     ProviderInputTooLarge,
@@ -22,6 +27,7 @@ from rag_app.core.errors import (
     RagError,
 )
 from rag_app.core.models import ProviderCall, ProviderFailureCategory
+from rag_app.core.models.common import freeze_json_object
 
 _DEFAULT_RETRY_STATUSES = frozenset({408, 429, 502, 503, 504})
 _AUTH_OR_MODEL_STATUSES = frozenset({401, 403, 404})
@@ -186,19 +192,22 @@ class ProviderHttpClient:
         last_retry_after_ms: int | None = None
         encountered_rate_limit = False
         for attempt in range(1, self._max_attempts + 1):
+            attempt_started = self._monotonic()
             try:
                 response = self._client.request(
                     method,
                     self._base_url + path,
                     json=payload,
                     headers=headers,
-                    extensions={"rag_provider_retry_index": attempt - 1},
+                    extensions={
+                        "rag_provider_retry_index": attempt - 1,
+                        "rag_provider_max_attempts": self._max_attempts,
+                    },
                 )
-            except (
-                httpx.ConnectError,
-                httpx.ReadError,
-                httpx.TimeoutException,
-            ):
+            except httpx.TransportError as error:
+                diagnostics, transport_category = self._transport_details(
+                    error, attempt_started
+                )
                 call = self._call(
                     provider_id,
                     operation,
@@ -206,17 +215,25 @@ class ProviderHttpClient:
                     path,
                     attempt,
                     started,
-                    "TRANSIENT",
+                    transport_category.name,
                     "HTTP_TRANSPORT",
                     input_count,
                     estimated_tokens,
                     last_retry_after_ms,
                     encountered_rate_limit,
                 )
-                if attempt == self._max_attempts:
+                call = call.model_copy(
+                    update={
+                        "transport_diagnostics": freeze_json_object(diagnostics)
+                    }
+                )
+                if (
+                    transport_category is not ProviderFailureCategory.TRANSIENT
+                    or attempt == self._max_attempts
+                ):
                     self._observe(call)
                     raise ProviderHttpError(
-                        ProviderFailureCategory.TRANSIENT,
+                        transport_category,
                         "HTTP_TRANSPORT",
                         call,
                     ) from None
@@ -335,6 +352,21 @@ class ProviderHttpClient:
                 self._observe(call)
             return ProviderHttpResult(payload=response_payload, call=call)
         raise AssertionError("有限尝试循环必须返回或抛出。")
+
+    def _transport_details(
+        self, error: httpx.TransportError, started: float
+    ) -> tuple[dict[str, Any], ProviderFailureCategory]:
+        diagnostics = transport_diagnostics(
+            error,
+            elapsed_ms=round((self._monotonic() - started) * 1000),
+            extensions=error.request.extensions,
+        )
+        category = (
+            ProviderFailureCategory.TRANSIENT
+            if retryable_transport(error, diagnostics)
+            else ProviderFailureCategory.AUTH_OR_MODEL
+        )
+        return diagnostics, category
 
     def complete_call(
         self,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from typing import NoReturn
 
@@ -19,7 +20,10 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
     provider_request_identity,
 )
-from rag_app.adapters.providers.http_common import ProviderHttpClient
+from rag_app.adapters.providers.http_common import (
+    ProviderHttpClient,
+    ProviderHttpError,
+)
 from rag_app.adapters.providers.offline_mock_transport import (
     BuiltinOfflineMockTransport,
 )
@@ -60,9 +64,7 @@ def test_restore_marker_still_blocks_custom_mock_and_real_transport(
 
 def test_builtin_offline_responder_does_not_accept_injected_handler() -> None:
     with pytest.raises(TypeError):
-        BuiltinOfflineMockTransport(
-            handler=lambda _: httpx.Response(200)
-        )
+        BuiltinOfflineMockTransport(handler=lambda _: httpx.Response(200))
 
 
 def _ledger(
@@ -144,6 +146,140 @@ def test_retry_reserves_each_http_and_stops_at_persistent_limit(
     ] == [0, 1, 2]
 
 
+def test_transport_diagnostics_persist_each_attempt_and_success(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            raise httpx.RemoteProtocolError(
+                "unit_synthetic secret", request=request
+            )
+        return httpx.Response(200, json={})
+
+    client = ProviderHttpClient(
+        "https://api.jina.ai/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(handler),
+            timeout=httpx.Timeout(connect=2, read=7, write=8, pool=3),
+        ),
+        sleeper=lambda _: None,
+    )
+    with provider_budget_scope(
+        ledger,
+        campaign_id="transport-test",
+        authorization_id="authorization-test",
+        scope="public-only",
+        step_id="recovery",
+    ):
+        _request(client)
+    client.close()
+    attempts = ledger.attempts("transport-test")
+    assert len(attempts) == 2
+    assert (
+        attempts[0]["transport_diagnostics"]["transport_error_type"]
+        == "RemoteProtocolError"
+    )
+    assert (
+        attempts[1]["transport_diagnostics"]["transport_error_type"] == "NONE"
+    )
+    assert attempts[0]["transport_diagnostics"]["timeout_seconds"] == {
+        "connect": 2.0,
+        "read": 7.0,
+        "write": 8.0,
+        "pool": 3.0,
+    }
+    assert [a["transport_diagnostics"]["retry_index"] for a in attempts] == [
+        0,
+        1,
+    ]
+    assert all(a["observed_tokens"] is None for a in attempts)
+    assert "secret" not in json.dumps(attempts)
+
+
+def test_old_ledger_readonly_and_additive_diagnostic_migration(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                httpx.MockTransport(lambda _: httpx.Response(200, json={})),
+                ledger_path=ledger.path,
+            )
+        ) as client,
+        provider_budget_scope(
+            ledger,
+            campaign_id="transport-test",
+            authorization_id="authorization-test",
+            scope="public-only",
+            step_id="legacy",
+        ),
+    ):
+        client.post("https://api.jina.ai/v1/embeddings", json=_PAYLOAD)
+    # 只在临时合成账本模拟旧 schema，不触碰产品历史账本。
+    with sqlite3.connect(ledger.path) as connection:
+        connection.execute("DROP TABLE provider_budget_attempt_diagnostics")
+    reader = ProviderBudgetLedger(ledger.path, read_only=True)
+    before = reader.attempts("transport-test")
+    assert "transport_diagnostics" not in before[0]
+    upgraded = ProviderBudgetLedger(ledger.path)
+    assert upgraded.attempts("transport-test") == before
+    assert upgraded.summary("transport-test") == reader.summary(
+        "transport-test"
+    )
+
+
+@pytest.mark.parametrize("transport_fails", [False, True])
+def test_terminal_audit_failure_preserves_business_result_and_reservation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, transport_fails: bool
+) -> None:
+    ledger = _ledger(tmp_path)
+
+    def failed_audit(*_args: object, **_kwargs: object) -> NoReturn:
+        raise OSError("unit_synthetic audit failure")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if transport_fails:
+            raise httpx.ReadError(
+                "unit_synthetic business failure", request=request
+            )
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(ProviderBudgetLedger, "finish", failed_audit)
+    client = ProviderHttpClient(
+        "https://api.jina.ai/v1",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_attempts=1,
+    )
+    with provider_budget_scope(
+        ledger,
+        campaign_id="transport-test",
+        authorization_id="authorization-test",
+        scope="public-only",
+        step_id="audit-failure",
+    ):
+        if transport_fails:
+            with pytest.raises(ProviderHttpError) as captured:
+                _request(client)
+            assert (
+                dict(captured.value.call.transport_diagnostics)[
+                    "transport_error_type"
+                ]
+                == "ReadError"
+            )
+        else:
+            _request(client)
+    client.close()
+    summary = ledger.summary("transport-test")
+    assert summary["forwarded"] == 1
+    assert summary["reserved"] == 1
+    assert summary["unknown_usage_attempts"] == 1
+
+
 def test_acceptance_fault_is_local_and_releases_reservation(
     tmp_path: Path,
 ) -> None:
@@ -186,6 +322,58 @@ def test_acceptance_fault_is_local_and_releases_reservation(
     assert summary["forwarded"] == 1
     assert summary["locally_blocked"] == 1
     assert summary["observed_tokens"] == 9
+
+
+def test_fault_and_step_scopes_unwind_after_exception_for_query_and_rerank(
+    tmp_path: Path,
+) -> None:
+    ledger = _ledger(tmp_path)
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                httpx.MockTransport(handler),
+                ledger_path=tmp_path / "budget.sqlite3",
+            )
+        ) as client,
+        provider_budget_scope(
+            ledger,
+            campaign_id="transport-test",
+            authorization_id="authorization-test",
+            scope="public-only",
+            step_id="outer",
+        ),
+    ):
+        with (
+            pytest.raises(httpx.ConnectTimeout),
+            provider_budget_scope(
+                ledger,
+                campaign_id="transport-test",
+                authorization_id="authorization-test",
+                scope="public-only",
+                step_id="inner-fault",
+            ),
+            provider_budget_fault(lambda _: True),
+        ):
+            client.post("https://api.jina.ai/v1/embeddings", json=_PAYLOAD)
+        for path in ("embeddings", "rerank"):
+            response = client.post(
+                "https://api.jina.ai/v1/" + path, json=_PAYLOAD
+            )
+            assert response.status_code == 200
+    attempts = ledger.attempts("transport-test")
+    assert [a["step_id"] for a in attempts] == ["inner-fault", "outer", "outer"]
+    assert [a["forwarded"] for a in attempts] == [0, 1, 1]
+    assert len(requests) == 2
+    assert all(
+        a["transport_diagnostics"]["locally_blocked"] is False
+        for a in attempts[1:]
+    )
 
 
 def test_approved_text_cannot_change_model_or_disclose_private_text(

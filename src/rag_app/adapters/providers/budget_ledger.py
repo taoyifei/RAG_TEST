@@ -89,6 +89,11 @@ class ProviderBudgetLedger:
                 );
                 CREATE INDEX IF NOT EXISTS provider_budget_campaign_attempts
                 ON provider_budget_attempts(campaign_id);
+                CREATE TABLE IF NOT EXISTS provider_budget_attempt_diagnostics (
+                    attempt_id TEXT PRIMARY KEY,
+                    diagnostics TEXT NOT NULL,
+                    finished_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS provider_budget_active_campaign (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
                     campaign_id TEXT NOT NULL,
@@ -626,6 +631,30 @@ class ProviderBudgetLedger:
                 ),
             )
 
+    def record_diagnostics(
+        self, attempt_id: str, diagnostics: dict[str, Any]
+    ) -> None:
+        """追加发送边界生成的安全诊断，不回写历史尝试。
+
+        Args:
+            attempt_id: 已转发的尝试身份。
+            diagnostics: 内部白名单提取器生成的有限诊断。
+
+        Returns:
+            无返回值；保存关联终态时刻。
+
+        """
+        with self._transaction() as connection:
+            connection.execute(
+                "INSERT OR IGNORE INTO provider_budget_attempt_diagnostics "
+                "(attempt_id, diagnostics, finished_at) VALUES (?, ?, ?)",
+                (
+                    attempt_id,
+                    json.dumps(diagnostics, ensure_ascii=True, allow_nan=False),
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+
     def mark_locally_blocked(self, attempt_id: str) -> None:
         """验收注入在转发前拒绝，释放预留并与供应商 HTTP 分开统计。
 
@@ -688,7 +717,38 @@ class ProviderBudgetLedger:
                 "ORDER BY timestamp, attempt_id",
                 (campaign_id,),
             ).fetchall()
-        return [dict(row) for row in rows]
+            has_diagnostics = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                "AND name = 'provider_budget_attempt_diagnostics'"
+            ).fetchone()
+            diagnostics = (
+                {
+                    row["attempt_id"]: {
+                        **json.loads(row["diagnostics"]),
+                        "finished_at": row["finished_at"],
+                    }
+                    for row in connection.execute(
+                        "SELECT d.* FROM provider_budget_attempt_diagnostics d "
+                        "JOIN provider_budget_attempts a "
+                        "ON a.attempt_id=d.attempt_id "
+                        "WHERE a.campaign_id = ?",
+                        (campaign_id,),
+                    )
+                }
+                if has_diagnostics
+                else {}
+            )
+        return [
+            {
+                **dict(row),
+                **(
+                    {"transport_diagnostics": diagnostics[row["attempt_id"]]}
+                    if row["attempt_id"] in diagnostics
+                    else {}
+                ),
+            }
+            for row in rows
+        ]
 
     def summary(self, campaign_id: str) -> dict[str, Any]:
         """分别报告 HTTP、预留、拒绝、估算和实际可观测 Token。
