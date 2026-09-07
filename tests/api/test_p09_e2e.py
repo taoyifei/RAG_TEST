@@ -76,9 +76,7 @@ def _upload(
     return _wait_job(client, dict(response.json()))
 
 
-def _wait_job(
-    client: TestClient, job: dict[str, object]
-) -> dict[str, object]:
+def _wait_job(client: TestClient, job: dict[str, object]) -> dict[str, object]:
     deadline = monotonic() + 10
     while monotonic() < deadline:
         current = client.get(f"/api/v1/jobs/{job['job_id']}", headers=_ADMIN)
@@ -112,8 +110,7 @@ def test_full_lifecycle_switches_revision_and_rejects_invalid_state(
         )
         assert renamed.status_code == 200
         assert (
-            renamed.json()["current_version_id"]
-            == before["current_version_id"]
+            renamed.json()["current_version_id"] == before["current_version_id"]
         )
         assert (
             renamed.json()["active_index_revision_id"]
@@ -152,9 +149,13 @@ def test_full_lifecycle_switches_revision_and_rejects_invalid_state(
             headers=_ADMIN,
         )
         assert deleted.status_code == 200
-        assert deleted.json()["status"] == "deleting"
-        assert invalid_rename.status_code == 409
-        assert invalid_rename.json()["error"]["code"] == "REVISION_STATE_ERROR"
+        assert deleted.json()["status"] == "deleted"
+        assert (
+            client.delete(document_path, headers=_ADMIN).json()
+            == deleted.json()
+        )
+        assert invalid_rename.status_code == 404
+        assert invalid_rename.json()["error"]["code"] == "NOT_FOUND"
 
 
 def test_cjk_fts_v2_cache_and_public_diagnostics(tmp_path: Path) -> None:

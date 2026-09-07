@@ -119,7 +119,7 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             points[point_id] for point_id in point_ids if point_id in points
         )
 
-    def search_named(
+    def search_named(  # noqa: PLR0913
         self,
         spec: RevisionVectorSpec,
         *,
@@ -127,6 +127,7 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
         vector_name: str,
         query_vector: tuple[float, ...],
         limit: int,
+        excluded_document_ids: tuple[str, ...] = (),
     ) -> tuple[VectorSearchResult, ...]:
         """在严格 slot/vector 空间内执行余弦查询。
 
@@ -136,6 +137,7 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
             vector_name: 必须属于该 slot 的向量名。
             query_vector: 同维度查询向量。
             limit: 最大命中数。
+            excluded_document_ids: 排名截断前排除的已删除文档。
 
         Returns:
             稳定排序的向量命中。
@@ -148,7 +150,10 @@ class MemoryRevisionVectorStore(InMemoryVectorStore):
                 "查询向量维度不匹配。", stage="vector.search"
             )
         scored = []
+        excluded = frozenset(excluded_document_ids)
         for point in self._points[spec.physical_namespace].values():
+            if point.payload.document_id in excluded:
+                continue
             vector = point.vector_map()[vector_name]
             scored.append((point, _cosine(query_vector, vector)))
         scored.sort(key=lambda item: (-item[1], item[0].point_id))

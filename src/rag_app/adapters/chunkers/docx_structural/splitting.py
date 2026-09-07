@@ -94,6 +94,9 @@ def split_atom(
             hard_end,
             _fragment_boundaries(atom.fragments),
         )
+        # 尾部空白仍保留在最后一个有正文的来源片段中，避免单独发布空块。
+        if hard_end == len(rendered.text) and not rendered.text[end:].strip():
+            end = hard_end
         end = _protect_grapheme_boundary(rendered.text, fresh_start, end)
         if end <= fresh_start:
             end = _protect_grapheme_boundary(
@@ -192,7 +195,9 @@ def _preferred_boundary(
     for limit in (target_end, hard_end):
         for boundaries in priorities:
             candidates = [
-                index for index in boundaries if start < index <= limit
+                index
+                for index in boundaries
+                if start < index <= limit and text[start:index].strip()
             ]
             if candidates:
                 return max(candidates)

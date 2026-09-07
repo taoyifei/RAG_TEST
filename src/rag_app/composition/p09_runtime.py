@@ -19,8 +19,10 @@ from rag_app.composition.profiles import (
     load_profile,
 )
 from rag_app.core.events import TraceEvent
-from rag_app.core.models import SystemStatus
+from rag_app.core.models import ParseResult, RetrievalPolicy, SystemStatus
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.ports import TracePort
+from rag_app.core.ports.query_history import QueryHistoryPort
 from rag_app.sdk import RagSdk
 
 
@@ -89,6 +91,11 @@ class P09RuntimeHooks:
         Callable[[str, LifecycleService], LifecycleService] | None
     ) = None
     recover_jobs: bool = True
+    trace_sink: TracePort | None = None
+    query_history: QueryHistoryPort | None = None
+    retrieval_policy: RetrievalPolicy | None = None
+    document_enricher: Callable[[ParseResult], ParseResult] | None = None
+    content_identity: Callable[[str], str | None] | None = None
 
 
 def build_p09_runtime(
@@ -117,7 +124,11 @@ def build_p09_runtime(
         profile if isinstance(profile, RagProfile) else load_profile(profile)
     )
     retrieval_runtime = build_p07_runtime(
-        _persistent_profile(requested), data_dir=resolved_data_dir
+        _persistent_profile(requested),
+        data_dir=resolved_data_dir,
+        trace_sink=None if hooks is None else hooks.trace_sink,
+        policy=None if hooks is None else hooks.retrieval_policy,
+        document_enricher=None if hooks is None else hooks.document_enricher,
     )
     persistence = retrieval_runtime.persistence
     store = SqliteLifecycleStore(
@@ -132,6 +143,7 @@ def build_p09_runtime(
         profile_id=components.profile.profile_id,
         index_fingerprint=components.index_fingerprint,
         budgets=persistence.default_budgets(),
+        content_identity=None if hooks is None else hooks.content_identity,
     )
 
     def _system_status() -> SystemStatus:
@@ -202,6 +214,7 @@ def build_p09_runtime(
         system_status=_system_status,
         close=_close,
         console=console,
+        query_history=None if hooks is None else hooks.query_history,
         retrieval_resolver=(
             None if hooks is None else hooks.retrieval_resolver
         ),

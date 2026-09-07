@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
-from threading import RLock
+from threading import Event, RLock, Thread
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class DurableJobRunner:
@@ -40,6 +43,9 @@ class DurableJobRunner:
         self._futures: dict[str, Future[None]] = {}
         self._lock = RLock()
         self._closed = False
+        self._requested: set[str] = set()
+        self._stop_polling = Event()
+        self._poller: Thread | None = None
 
     def recover(self) -> None:
         """重新调度数据库中的 interrupted/queued Job。
@@ -51,8 +57,12 @@ class DurableJobRunner:
             无返回值。
 
         """
-        for job_id in self._pending_jobs():
-            self.submit(job_id)
+        with self._lock:
+            if self._closed:
+                return
+            self._start_polling()
+            self._requested.update(self._pending_jobs())
+        self._schedule_pending()
 
     def submit(self, job_id: str) -> None:
         """幂等调度一个已持久化 Job。
@@ -70,6 +80,8 @@ class DurableJobRunner:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Job Runner 已关闭。")
+            self._requested.add(job_id)
+            self._start_polling()
             current = self._futures.get(job_id)
             if current is not None and not current.done():
                 return
@@ -91,12 +103,38 @@ class DurableJobRunner:
             if self._closed:
                 return
             self._closed = True
+            self._stop_polling.set()
+        if self._poller is not None:
+            self._poller.join()
         self._executor.shutdown(wait=True, cancel_futures=False)
 
     def _discard(self, job_id: str, future: Future[None]) -> None:
-        del future
         with self._lock:
-            self._futures.pop(job_id, None)
+            if self._futures.get(job_id) is future:
+                self._futures.pop(job_id, None)
+
+    def _start_polling(self) -> None:
+        """跨进程占用释放后继续领取，关闭启动恢复时只调度显式提交项。"""
+        if self._poller is None:
+            self._poller = Thread(
+                target=self._poll, name="rag-p09-queue", daemon=True
+            )
+            self._poller.start()
+
+    def _poll(self) -> None:
+        while not self._stop_polling.wait(0.25):
+            try:
+                self._schedule_pending()
+            except Exception as error:  # 后续轮询可以恢复短暂 SQLite 不可用。
+                _LOGGER.error("持久作业调度暂不可用：%s", type(error).__name__)
+
+    def _schedule_pending(self) -> None:
+        for job_id in self._pending_jobs():
+            with self._lock:
+                if self._closed:
+                    return
+                if job_id in self._requested:
+                    self.submit(job_id)
 
 
 __all__ = ["DurableJobRunner"]

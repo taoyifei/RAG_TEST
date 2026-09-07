@@ -68,7 +68,7 @@ def test_job_and_revision_status_survive_runtime_restart(
 
     with build_p09_runtime(_PROFILE, data_dir=tmp_path) as reopened:
         recovered = reopened.sdk.get_job(second_job.job_id)
-        document = reopened.sdk.get_document(
+        document = reopened.sdk.delete_document(
             project.project_id,
             knowledge_base.knowledge_base_id,
             job.document_id,
@@ -76,8 +76,11 @@ def test_job_and_revision_status_survive_runtime_restart(
 
         assert recovered.state.value == "succeeded"
         assert recovered.revision_id == second_job.revision_id
-        assert document.active_index_revision_id == second_job.revision_id
-        assert document.status.value == "deleting"
+        assert document.active_index_revision_id is None
+        assert document.status.value == "deleted"
+        assert reopened.sdk.list_documents(
+            project.project_id, knowledge_base.knowledge_base_id
+        ) == ()
         assert reopened.sdk.health().pending_gc_items > 0
         assert reopened.control.gc_plan_items(plan.plan_id)
         assert (

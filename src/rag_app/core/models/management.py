@@ -154,6 +154,8 @@ class Job(FrozenModel):
     attempt: StrictInt = Field(ge=0)
     retryable: bool
     safe_error: str | None = Field(default=None, max_length=500)
+    error_code: str | None = None
+    trace_id: str | None = Field(default=None, pattern=r"^trace_[0-9a-f]{32}$")
     lease_owner: bool
     fencing_safe_status: str = Field(min_length=1, max_length=80)
     slot_progress: tuple[SlotProgress, ...] = ()
@@ -224,6 +226,7 @@ class QueuedIngestion(FrozenModel):
     expected_profile_revision_id: str | None = None
     expected_index_revision_id: str | None = None
     activation_validation_ids: tuple[str, ...] = ()
+    content_identity: str | None = None
 
 
 __all__ = [

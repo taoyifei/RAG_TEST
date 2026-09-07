@@ -105,6 +105,11 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
             source_anchor=node.anchor,
             source_start_char=0,
             source_end_char=len(exact_text),
+            metadata=(
+                node.metadata
+                if dict(node.metadata).get("origin") == "ocr"
+                else ()
+            ),
         )
     )
     return tuple(fragments)
