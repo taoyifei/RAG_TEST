@@ -56,6 +56,7 @@ def test_backup_restores_all_product_state_and_qdrant_snapshot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_url = _required_environment("RAG_TEST_QDRANT_SOURCE_URL")
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path / "controlled-data"))
     target_url = _required_environment("RAG_TEST_QDRANT_TARGET_URL")
     source_key = Path(_required_environment("RAG_TEST_QDRANT_SOURCE_KEY_FILE"))
     target_key = Path(_required_environment("RAG_TEST_QDRANT_TARGET_KEY_FILE"))
@@ -133,9 +134,7 @@ def test_backup_restores_all_product_state_and_qdrant_snapshot(
             ProductRuntimeSettings(
                 data_dir=restored_dir,
                 frontend_dir=tmp_path / "source" / "frontend",
-                bootstrap_token_file=(
-                    tmp_path / "source" / "bootstrap-token"
-                ),
+                bootstrap_token_file=(tmp_path / "source" / "bootstrap-token"),
                 master_key_file=tmp_path / "source" / "master-key",
                 qdrant_mode="url",
                 qdrant_url=target_url,
