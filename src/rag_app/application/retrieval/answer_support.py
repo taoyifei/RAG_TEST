@@ -135,9 +135,26 @@ def descriptive_request(query: str) -> tuple[str, str, str] | None:
 
     """
     query = _normalized(query)
-    if not re.search(r"哪些|什么|几种|列举|列出|职责|负责", query):
+    if not re.search(r"哪些|什么|干啥|几种|列举|列出|职责|负责", query):
         return None
-    duty = re.search(r"职责|负责(?:什么|哪些)(?:工作|事项|内容)?", query)
+    # 仅将紧邻职责关系的修饰语归入关系，保留角色名称中的相同字词。
+    # 口语动作问法限定在句尾，避免截断名称中包含相同字词的角色。
+    duty = re.search(
+        r"(?:(?:具体|主要)(?:地)?)?"
+        r"(?:职责|负责(?:什么|哪些)(?:工作|事项|内容)?|"
+        r"(?P<colloquial>干(?:什么|啥|些什么)|做(?:什么|些什么))"
+        r"(?:工作|事项|内容)?[?？\s]*$)",
+        query,
+    )
+    if duty is not None and duty["colloquial"] is not None:
+        # 条件和操作顺序属于所问关系，不能被当成角色名或无条件职责。
+        prefix = query[: duty.start()]
+        if re.search(
+            r"如果|一旦|若|当.+时|之前|之后|以前|以后|期间|过程中|"
+            r"(?:先|再|然后|随后|接着|前|后|时)(?:应|要|需|应该|需要)?$",
+            prefix,
+        ):
+            return None
     collection = re.search(r"工作模式|模式|类型|种类|类别|分类|方式", query)
     match = duty or collection
     if match is None:

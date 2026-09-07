@@ -150,6 +150,7 @@ class ProductModelSettings:
             "prompt": "grounded-chat-v2",
             "rewrite": "bounded-rewrite-v2",
             "validation": "claim-support-v3",
+            "answer_selection": "descriptive-support-v2",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

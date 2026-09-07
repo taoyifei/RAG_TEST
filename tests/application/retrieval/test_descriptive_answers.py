@@ -6,6 +6,7 @@ from xml.sax.saxutils import escape
 
 import pytest
 
+from rag_app.application.retrieval.answer_support import evaluate_span_support
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.models import (
     HydratedChunk,
@@ -45,10 +46,33 @@ def _candidates(blocks: str) -> tuple[RankedChunk, ...]:
     )
 
 
-@pytest.mark.parametrize("role", ["设备协调员", "验收负责人"])
+@pytest.mark.parametrize(
+    "role",
+    [
+        "设备协调员",
+        "验收负责人",
+        "具体事务协调员",
+        "干啥研究员",
+        "做什么协调员",
+    ],
+)
 @pytest.mark.parametrize(
     "question",
-    ["{role}的核心职责是什么", "{role}负责哪些工作", "{role}需要承担哪些职责"],
+    [
+        "{role}的核心职责是什么",
+        "{role}负责哪些工作",
+        "{role}需要承担哪些职责",
+        "{role}具体负责哪些工作",
+        "{role}具体地负责什么事项",
+        "合成规范中{role}具体负责哪些工作",
+        "{role}的具体职责是什么",
+        "{role}具体干什么",
+        "{role}具体干啥",
+        "{role}具体做什么",
+        "{role}具体干些什么",
+        "{role}具体做些什么",
+        "{role}干什么工作？",
+    ],
 )
 def test_role_table_keeps_every_duty_from_the_selected_row(
     role: str, question: str
@@ -89,6 +113,19 @@ def test_role_table_keeps_every_duty_from_the_selected_row(
     assert not EvidenceAssembler().assemble(
         candidates, _POLICY, context=_context(f"{role}的手机号是多少")
     )
+    for unsupported in (
+        f"{role}的具体手机号是多少",
+        f"{role}的具体价格是多少",
+        f"{role}具体不负责哪些工作",
+        f"{role}不具体负责哪些工作",
+        f"{role}具体不干什么",
+        f"{role}不具体做什么",
+        "外部协调员具体负责哪些工作",
+        "外部协调员具体干啥",
+    ):
+        assert not EvidenceAssembler().assemble(
+            candidates, _POLICY, context=_context(unsupported)
+        )
     # 无法装下整行时不能截掉后一项职责后声称已经完整回答。
     assert not EvidenceAssembler().assemble(
         candidates,
@@ -145,3 +182,30 @@ def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
         context=_context("阀门检查员的手机号是多少"),
         allow_uncertain=True,
     )
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "档案受潮后应先做什么？",
+        "档案受潮后应该先具体做什么？",
+        "档案受潮后做什么？",
+        "如果档案受潮，管理员做什么？",
+    ],
+)
+def test_colloquial_action_preserves_conditions_and_sequence(
+    question: str,
+) -> None:
+    """带条件或顺序的操作问法继续走事实支持，不能变成角色职责。"""
+    context = _context(question)
+    assert evaluate_span_support(context.analysis, "").answer_type == "FACT"
+
+
+def test_first_action_question_keeps_its_supported_source() -> None:
+    statement = "档案受潮时先转移材料，再通知管理员。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(statement)),
+        _POLICY,
+        context=_context("档案受潮后应先做什么？"),
+    )
+    assert [item.citation_text for item in evidence] == [statement]
