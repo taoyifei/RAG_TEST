@@ -282,7 +282,7 @@ def test_rerank_failure_keeps_lexical_answer_and_is_not_cached(
 def test_real_failure_category_controls_notice_without_changing_refusal(
     runtime: P07Runtime,
 ) -> None:
-    request = _request("值班员联系电话是多少？", related=True)
+    request = _request("替补值班员联系电话是多少？", related=True)
     with patch.object(
         runtime.persistence.components.reranker,
         "rerank",
@@ -301,7 +301,7 @@ def test_real_failure_category_controls_notice_without_changing_refusal(
 def test_provider_auth_failure_and_its_circuit_are_not_service_outage(
     runtime: P07Runtime,
 ) -> None:
-    request = _request("值班员联系电话是多少？", related=True)
+    request = _request("替补值班员联系电话是多少？", related=True)
     with patch.object(
         runtime.persistence.components.reranker,
         "rerank",

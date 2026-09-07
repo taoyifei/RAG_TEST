@@ -23,7 +23,11 @@ from rag_app.core.models.common import (
 from rag_app.core.models.confidence import ConfidenceDecision, ConfidenceStatus
 from rag_app.core.models.document import KnowledgeBaseScope
 from rag_app.core.models.lifecycle import IndexRevisionRef, IndexRevisionState
-from rag_app.core.models.provider import EmbeddingCoverage, EmbeddingTopology
+from rag_app.core.models.provider import (
+    EmbeddingCoverage,
+    EmbeddingTopology,
+    ProviderCall,
+)
 from rag_app.core.models.query import QueryAnalysis, QueryKind
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
@@ -104,6 +108,8 @@ class SearchRequest(FrozenModel):
     access_filters: JsonObject = ()
     dense_required: bool = False
     include_related_content: bool = False
+
+    trace_id: str | None = Field(default=None, pattern=r"^trace_[0-9a-f]{32}$")
 
     @field_validator("text")
     @classmethod
@@ -313,6 +319,7 @@ class RetrievalDiagnostics(FrozenModel):
     evidence: tuple[DiagnosticEvidenceItem, ...] = ()
     cited_chunk_ids: tuple[str, ...] = ()
     provider_calls: tuple[ProviderCallCount, ...] = ()
+    provider_call_details: tuple[ProviderCall, ...] = ()
     cache_hit: bool = False
     stage_timings: tuple[StageTiming, ...] = ()
     degraded_reason_codes: tuple[str, ...] = ()
@@ -401,7 +408,11 @@ class SearchAnswerResult(FrozenModel):
     selected_vector_name: str | None = None
     route_reason_code: str
     rerank_execution_mode: str
-    generation_mode: str = Field(pattern=r"^(extractive|none)$")
+    generation_mode: str = Field(
+        pattern=r"^(extractive|extractive_fallback|llm|none)$"
+    )
+    generation_reason_code: str | None = None
+    rewrite_reason_code: str | None = None
     degraded_reason_codes: tuple[str, ...] = ()
     cache_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_hit: bool = False

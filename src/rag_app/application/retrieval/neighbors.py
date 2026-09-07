@@ -58,16 +58,69 @@ class NeighborExpander:
         candidates = tuple(originals.values())
         try:
             if mode == "none":
-                return ExpansionOutcome(candidates)
-            if mode == "section":
-                return ExpansionOutcome(
-                    self._expand_sections(snapshot, candidates, policy)
+                expanded = candidates
+            elif mode == "section":
+                expanded = self._expand_sections(snapshot, candidates, policy)
+            elif (
+                mode == "table"
+                and policy.neighbor_count
+                and _has_table_coordinates(candidates)
+            ):
+                expanded = self._expand_table_context(
+                    snapshot, candidates, policy
                 )
-            return ExpansionOutcome(
-                self._expand_links(snapshot, candidates, mode, policy)
-            )
+            else:
+                expanded = self._expand_links(
+                    snapshot, candidates, mode, policy
+                )
+            return ExpansionOutcome(expanded)
         except IndexCorrupt:
             return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
+
+    def _expand_table_context(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+    ) -> tuple[RankedChunk, ...]:
+        """取实际章节开头表头，并在候选上限内闭合被切开的逻辑行。"""
+        originals = _original_candidates(candidates)
+        context: dict[str, RankedChunk] = {}
+        limit = max(len(candidates), policy.fusion_candidate_limit)
+        # 每个种子先闭合同组来源链，防止无关章节铺满窗口后留下半个职责行。
+        for seed in candidates:
+            expanded: tuple[RankedChunk, ...] = (seed,)
+            for _ in range(min(policy.max_evidence_items, 8)):
+                additional = self._expand_links(
+                    snapshot, expanded, "table", policy
+                )
+                if len(additional) == len(expanded):
+                    break
+                expanded = additional[: policy.max_evidence_items + 1]
+            expanded = self._expand_sections(
+                snapshot,
+                expanded,
+                policy.model_copy(
+                    update={
+                        "section_chunk_limit": min(
+                            1, policy.section_chunk_limit
+                        )
+                    }
+                ),
+            )
+            for candidate in expanded:
+                _add_context(
+                    originals,
+                    context,
+                    candidate.hydrated,
+                    seed_id=seed.hydrated.chunk.chunk_id,
+                    reason="TABLE_CONTINUITY",
+                )
+                if len(originals) + len(context) >= limit:
+                    break
+            if len(originals) + len(context) >= limit:
+                break
+        return (*candidates, *context.values())
 
     def _expand_links(
         self,
@@ -77,6 +130,7 @@ class NeighborExpander:
         policy: RetrievalPolicy,
     ) -> tuple[RankedChunk, ...]:
         ids: list[str] = []
+        originals = _original_candidates(candidates)
         if policy.neighbor_count == 0:
             return candidates
         for candidate in candidates:
@@ -91,8 +145,10 @@ class NeighborExpander:
         hydrated = self._source.hydrate_chunks(
             snapshot, tuple(dict.fromkeys(ids))
         )
-        originals = _original_candidates(candidates)
         by_id = _hydrated_candidates(hydrated, originals)
+        by_id.update(
+            {chunk_id: item.hydrated for chunk_id, item in originals.items()}
+        )
         context: dict[str, RankedChunk] = {}
         for candidate in candidates:
             chunk = candidate.hydrated.chunk
@@ -138,7 +194,7 @@ class NeighborExpander:
                 snapshot, ids[: policy.section_chunk_limit]
             )
             for item in _hydrated_candidates(hydrated, originals).values():
-                _validate_boundary(chunk, item.chunk)
+                _validate_boundary(chunk, item.chunk, require_group=False)
                 _add_context(
                     originals,
                     context,
@@ -165,6 +221,16 @@ def _original_candidates(
         if existing is None:
             originals[chunk_id] = candidate
     return originals
+
+
+def _has_table_coordinates(candidates: tuple[RankedChunk, ...]) -> bool:
+    return any(
+        any(part.startswith("tbl:") for part in span.structural_path)
+        and any(part.startswith("tr:") for part in span.structural_path)
+        for candidate in candidates
+        if candidate.hydrated.chunk.role.value == "table"
+        for span in candidate.hydrated.chunk.source_spans
+    )
 
 
 def _hydrated_candidates(
@@ -240,14 +306,20 @@ def _validate_neighbor(origin_chunk: Chunk, neighbor_chunk: Chunk) -> None:
         )
 
 
-def _validate_boundary(origin_chunk: Chunk, neighbor_chunk: Chunk) -> None:
+def _validate_boundary(
+    origin_chunk: Chunk, neighbor_chunk: Chunk, *, require_group: bool = True
+) -> None:
     if (
         neighbor_chunk.version != origin_chunk.version
         or neighbor_chunk.project_id != origin_chunk.project_id
         or neighbor_chunk.knowledge_base_id != origin_chunk.knowledge_base_id
         or neighbor_chunk.index_revision_id != origin_chunk.index_revision_id
         or neighbor_chunk.section_id != origin_chunk.section_id
-        or neighbor_chunk.neighbor_group_id != origin_chunk.neighbor_group_id
+        or (
+            require_group
+            and neighbor_chunk.neighbor_group_id
+            != origin_chunk.neighbor_group_id
+        )
     ):
         raise IndexCorrupt(
             "Neighbor 跨越 canonical 结构边界。",

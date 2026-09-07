@@ -99,7 +99,11 @@ class ConfidenceEvaluator:
         metadata_only = bool(evidence) and all(
             "METADATA_ONLY" in item.quality_flags for item in evidence
         )
-        dense_only = bool(supported_candidates) and not (exact or lexical)
+        dense_only = any(
+            contribution.channel.startswith("dense:")
+            for item in supported_candidates
+            for contribution in item.contributions
+        ) and not (exact or lexical)
         semantic_context = EvidenceSelectionContext(
             analysis=analysis,
             query_kind=query_kind,
@@ -126,7 +130,9 @@ class ConfidenceEvaluator:
                 for contribution in item.contributions
             )
         }
-        qualified_support = _qualified_support(evidence, qualified_ids)
+        qualified_support = _qualified_support(
+            evidence, qualified_ids, analysis
+        )
         support_states = tuple(
             _support_status(analysis, item) for item in evidence
         )
@@ -217,7 +223,9 @@ def _support_status(analysis: QueryAnalysis, evidence: EvidenceItem) -> str:
 
 
 def _qualified_support(
-    evidence: tuple[EvidenceItem, ...], direct_ids: set[str]
+    evidence: tuple[EvidenceItem, ...],
+    direct_ids: set[str],
+    analysis: QueryAnalysis,
 ) -> bool:
     qualified_nodes = {
         span.node_id
@@ -228,11 +236,18 @@ def _qualified_support(
     for item in evidence:
         if item.chunk_id in direct_ids:
             continue
-        support = dict(item.metadata).get("answer_support")
+        # 同章节引言以自己的完整对象、集合关系和原文值证明支持，
+        # 不继承种子的 Dense 分数或语义校准资格。
+        literal = evaluate_span_support(analysis, item.citation_text)
         if (
-            not isinstance(support, dict)
-            or support.get("support_reason") != "LINKED_SUBJECT_ATTRIBUTE"
+            literal.answer_type == "ENUMERATION"
+            and literal.status is SupportStatus.SUPPORTED
         ):
+            continue
+        support = dict(item.metadata).get("answer_support")
+        if not isinstance(support, dict) or support.get(
+            "support_reason"
+        ) not in {"LINKED_SUBJECT_ATTRIBUTE", "TABLE_ROW_ATTRIBUTE"}:
             return False
         nodes = support.get("supporting_span_ids", [])
         if not isinstance(nodes, list) or not any(

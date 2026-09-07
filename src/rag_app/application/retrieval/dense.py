@@ -75,6 +75,7 @@ class DenseChannel:
             vector_name=routed.vector_name,
             query_vector=routed.vector,
             limit=limit,
+            excluded_document_ids=snapshot.excluded_document_ids,
         )
         channel = f"dense:{routed.selected_slot_id}"
         return DenseChannelResult(

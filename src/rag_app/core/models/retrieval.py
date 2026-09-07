@@ -8,6 +8,7 @@ from rag_app.core.models.chunk import Chunk, SourceSpan
 from rag_app.core.models.common import FrozenModel, MetadataModel
 from rag_app.core.models.document import KnowledgeBaseScope
 from rag_app.core.models.lifecycle import IndexRevisionRef
+from rag_app.core.models.provider import ProviderCall
 
 
 class SearchQuery(MetadataModel):
@@ -42,9 +43,7 @@ class EvidenceItem(MetadataModel):
     citation_text: str = Field(min_length=1, repr=False)
     source_label: str = Field(min_length=1)
     source_spans: tuple[SourceSpan, ...] = ()
-    document_id: str | None = Field(
-        default=None, pattern=r"^doc_[0-9a-f]{32}$"
-    )
+    document_id: str | None = Field(default=None, pattern=r"^doc_[0-9a-f]{32}$")
     document_version_id: str | None = Field(
         default=None, pattern=r"^dver_[0-9a-f]{32}$"
     )
@@ -74,11 +73,31 @@ class EvidenceItem(MetadataModel):
         return self.evidence_id
 
 
+class ClaimSupport(FrozenModel):
+    """单条事实引用的服务端证据 ID 与逐字支持片段。"""
+
+    support_id: str = Field(min_length=1)
+    quote: str = Field(min_length=1, max_length=6000, repr=False)
+
+
+class AnswerClaim(FrozenModel):
+    """供应用层进行对象、数值、否定和来源支持校验的事实。"""
+
+    text: str = Field(min_length=1, max_length=6000, repr=False)
+    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
+
+
 class AnswerDraft(FrozenModel):
     """GeneratorPort 的尚未发布回答草稿。"""
 
     text: str = Field(min_length=1, repr=False)
     cited_evidence_ids: tuple[str, ...]
+    claims: tuple[AnswerClaim, ...] = Field(default=(), max_length=24)
+    provider_calls: tuple[ProviderCall, ...] = ()
+    generation_mode: str = Field(
+        default="extractive", pattern=r"^(extractive|llm)$"
+    )
+    reason_code: str | None = None
 
 
 class AnswerResult(FrozenModel):
