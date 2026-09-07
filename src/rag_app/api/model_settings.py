@@ -152,7 +152,8 @@ def register_model_settings_routes(
             knowledge_base_id,
             document_id,
             content=source.content,
-            media_type=source.media_type,
+            # 版本保留上传 MIME；共享 Blob 的解析制品 MIME 可以不同。
+            media_type=version.media_type,
             idempotency_key="ocr-"
             + str(runtime.ocr.content_identity(knowledge_base_id)),
         )

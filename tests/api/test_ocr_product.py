@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 
 from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
@@ -23,6 +24,8 @@ from rag_app.adapters.providers.budget_models import BudgetCampaign
 from rag_app.adapters.providers.budget_transport import (
     provider_request_identity,
 )
+from rag_app.api.product import create_product_app
+from rag_app.composition.product_runtime import build_product_runtime
 from rag_app.core.models import Chunk, DocumentIR, ParseResult
 from tests.adapters.parsers.docx_fixtures import IMAGE, build_docx
 from tests.product_support import (
@@ -102,7 +105,7 @@ def _wait_job(
     raise AssertionError("图片识别产品作业超时。")
 
 
-def _prepare(tmp_path: Path) -> _Scenario:
+def _prepare(tmp_path: Path, *, media_type: str = _MEDIA_TYPE) -> _Scenario:
     stream = io.BytesIO()
     picture = Image.new("RGB", (320, 96), color="white")
     ImageDraw.Draw(picture).text(
@@ -170,7 +173,7 @@ def _prepare(tmp_path: Path) -> _Scenario:
             headers={
                 **harness.write_headers,
                 "Idempotency-Key": "ocr-source",
-                "Content-Type": _MEDIA_TYPE,
+                "Content-Type": media_type,
             },
         )
         assert uploaded.status_code == 202, uploaded.text
@@ -485,14 +488,39 @@ def test_image_access_requires_the_exact_document_version(
         harness.close()
 
 
+@pytest.mark.parametrize("restart", [False, True])
 def test_cached_ocr_recovers_failed_index_without_another_provider_call(  # noqa: PLR0915
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    restart: bool,
 ) -> None:
     scenario = _prepare(tmp_path)
     harness = scenario.harness
     control = harness.runtime.retrieval_runtime.persistence.control
     write_chunks = control.write_chunks
+    if restart:
+        for number in range(3):
+            uploaded = harness.client.post(
+                scenario.base + "/documents",
+                params={"display_name": f"保留原件{number}.docx"},
+                content=build_docx(
+                    f"<w:p><w:r><w:t>原生资料{number}</w:t></w:r></w:p>"
+                ),
+                headers={
+                    **harness.write_headers,
+                    "Idempotency-Key": f"retained-source-{number}",
+                    "Content-Type": _MEDIA_TYPE,
+                },
+            )
+            assert uploaded.status_code == 202, uploaded.text
+            _wait_job(harness, uploaded.json()["job_id"])
+    versions_before = {
+        item.document_id: item.current_version_id
+        for item in harness.runtime.sdk.list_documents(
+            scenario.project, scenario.kb
+        )
+    }
+    assert len(versions_before) == (4 if restart else 1)
     active_before = scenario.answer()["active_index_revision_id"]
     body = {
         "confirmed_media_hashes": [hashlib.sha256(scenario.image).hexdigest()]
@@ -534,6 +562,17 @@ def test_cached_ocr_recovers_failed_index_without_another_provider_call(  # noqa
         assert details["source_file"] == "test_ocr_product.py"
         assert isinstance(details["source_line"], int)
 
+        if restart:
+            harness = _restart_without_provider(scenario)
+            control = harness.runtime.retrieval_runtime.persistence.control
+            write_chunks = control.write_chunks
+            assert (
+                harness.runtime.sdk.get_document(
+                    scenario.project, scenario.kb, scenario.document
+                ).active_index_revision_id
+                == active_before
+            )
+
         entered, release = Event(), Event()
 
         def block_write(revision_id: str, chunks: Sequence[Chunk]) -> None:
@@ -568,6 +607,99 @@ def test_cached_ocr_recovers_failed_index_without_another_provider_call(  # noqa
         )
         scan = harness.client.get(scenario.ocr_path).json()
         assert scan["media"][0]["indexed"] and scan["rebuild_count"] == 0
+        documents = harness.runtime.sdk.list_documents(
+            scenario.project, scenario.kb
+        )
+        assert {
+            item.document_id: item.current_version_id for item in documents
+        } == versions_before
+        assert {item.active_index_revision_id for item in documents} == {
+            complete["revision_id"]
+        }
         assert "27" in scenario.answer()["answer"]
+    finally:
+        harness.close()
+
+
+def _restart_without_provider(scenario: _Scenario) -> ProductHarness:
+    """完全关闭旧 Runtime，以相同持久数据冷启动且拒绝任何新请求。"""
+    previous = scenario.harness
+    settings = previous.runtime.settings
+    previous.close()
+
+    def transport(_connection: object) -> httpx.MockTransport:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            pytest.fail("冷启动缓存重建不得新增 Provider 请求。")
+
+        return httpx.MockTransport(handler)
+
+    runtime = build_product_runtime(settings, transport_factory=transport)
+    client = TestClient(create_product_app(runtime))
+    session = client.post(
+        "/api/v1/console/session",
+        json={"bootstrap_token": previous.bootstrap_token},
+    )
+    assert session.status_code == 200, session.text
+    scenario.harness = ProductHarness(
+        runtime, client, session.json()["csrf_token"], previous.bootstrap_token
+    )
+    return scenario.harness
+
+
+def test_cold_runtime_preserves_source_and_image_media_types(
+    tmp_path: Path,
+) -> None:
+    scenario = _prepare(tmp_path)
+    harness = _restart_without_provider(scenario)
+    try:
+        document = _active_ir(scenario)
+        source = harness.client.get(
+            scenario.base + f"/artifacts/{document.source.blob_ref}",
+            params={
+                "document_id": scenario.document,
+                "document_version_id": document.version.document_version_id,
+            },
+        )
+        assert source.status_code == 200, source.text
+        assert source.headers["content-type"] == _MEDIA_TYPE
+        assert source.content == scenario.source
+        image = next(
+            node.image_attributes
+            for node in document.nodes
+            if node.image_attributes is not None
+        )
+        response = harness.client.get(
+            scenario.base
+            + f"/documents/{scenario.document}/images/{image.blob_ref}"
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == "image/png"
+        assert response.content == scenario.image
+        assert scenario.calls == []
+    finally:
+        harness.close()
+
+
+def test_ocr_preserves_generic_upload_document_version_metadata(
+    tmp_path: Path,
+) -> None:
+    scenario = _prepare(tmp_path, media_type="application/octet-stream")
+    harness = scenario.harness
+    try:
+        scope = (scenario.project, scenario.kb, scenario.document)
+        document = harness.runtime.sdk.get_document(*scope)
+        version = harness.runtime.sdk.get_document_version(
+            *scope, str(document.current_version_id)
+        )
+        assert version.media_type == "application/octet-stream"
+        complete = scenario.recognize()
+        assert complete["state"] == "succeeded"
+        assert len(scenario.calls) == 1
+        assert (
+            harness.runtime.sdk.get_document_version(
+                *scope, version.document_version_id
+            )
+            == version
+        )
     finally:
         harness.close()

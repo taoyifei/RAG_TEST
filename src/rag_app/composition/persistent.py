@@ -81,7 +81,10 @@ def filesystem_blob_factory(config: JsonObject) -> FilesystemBlobStore:
 
     """
     resolved = LocalPersistenceConfig.model_validate(dict(config))
-    return FilesystemBlobStore(resolved.data_root)
+    catalog = sqlite_control_factory(config)
+    return FilesystemBlobStore(
+        resolved.data_root, media_type_lookup=catalog.artifact_media_type
+    )
 
 
 def qdrant_local_factory(config: JsonObject) -> QdrantRevisionVectorStore:
