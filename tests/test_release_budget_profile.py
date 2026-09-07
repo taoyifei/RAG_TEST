@@ -31,6 +31,8 @@ def draft_context(
     harness = build_product_harness(tmp_path)
     _, knowledge_base = create_project_and_knowledge_base(harness)
     _, _, jina, aliyun = create_provider_connections(harness)
+    # 预算读取要求静止元数据；本夹具不提交作业，先停止后台 SQLite 轮询。
+    harness.runtime.jobs.close()
     yield (
         harness,
         {
