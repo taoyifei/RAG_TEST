@@ -3,6 +3,7 @@ import { useEffect } from "react";
 export function useJobPolling(
   load: () => Promise<boolean | void>,
   onError: (error: unknown) => void = console.error,
+  refreshKey = 0,
 ): void {
   useEffect(() => {
     let timer = 0;
@@ -42,5 +43,5 @@ export function useJobPolling(
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [load, onError]);
+  }, [load, onError, refreshKey]);
 }

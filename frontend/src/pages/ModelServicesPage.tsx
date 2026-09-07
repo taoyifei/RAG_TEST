@@ -84,7 +84,7 @@ export function ModelServicesPage() {
       <div className="section-heading">
         <div>
           <h2>模型服务</h2>
-          <p>一处配置，供知识库检索使用。</p>
+          <p>一处配置，供知识库检索、回答和图片识别使用。</p>
         </div>
         <div className="row-actions">
           <button
@@ -176,40 +176,57 @@ export function ModelServicesPage() {
                           : "failed"
                         : "not_verified";
                   const key = `${connection.connection_id}:${operation}`;
+                  const configurable = [
+                    "generation",
+                    "query.rewrite",
+                    "image.ocr",
+                  ].includes(operation);
                   return (
                     <div className="capability" key={operation}>
                       <strong>{operationLabel(operation)}</strong>
-                      <StatusBadge value={status} />
-                      <small>
-                        {run
-                          ? `最近测试：${new Date(run.finished_at).toLocaleString("zh-CN")}`
-                          : "尚未测试"}
-                      </small>
-                      {incomplete && (
-                        <p className="failure-message">
-                          配置尚未完整，请补充 API Host。本次未发送请求。
-                        </p>
+                      <StatusBadge
+                        value={configurable ? "not_verified" : status}
+                      />
+                      {configurable && (
+                        <small>
+                          {model} ·
+                          在文档页的知识库模型设置中选择；实际调用结果见历史记录。
+                        </small>
                       )}
-                      {run?.status === "failed" && !stale && (
-                        <p className="failure-message">
-                          {validationMessage(run)}
-                        </p>
+                      {!configurable && (
+                        <>
+                          <small>
+                            {run
+                              ? `最近测试：${new Date(run.finished_at).toLocaleString("zh-CN")}`
+                              : "尚未测试"}
+                          </small>
+                          {incomplete && (
+                            <p className="failure-message">
+                              配置尚未完整，请补充 API Host。本次未发送请求。
+                            </p>
+                          )}
+                          {run?.status === "failed" && !stale && (
+                            <p className="failure-message">
+                              {validationMessage(run)}
+                            </p>
+                          )}
+                          <button
+                            disabled={
+                              !model ||
+                              connection.enabled === false ||
+                              pending.includes(key)
+                            }
+                            onClick={() =>
+                              model &&
+                              setConfirmation({ connection, operation, model })
+                            }
+                          >
+                            {pending.includes(key)
+                              ? "测试中…"
+                              : `测试${operationLabel(operation)}`}
+                          </button>
+                        </>
                       )}
-                      <button
-                        disabled={
-                          !model ||
-                          connection.enabled === false ||
-                          pending.includes(key)
-                        }
-                        onClick={() =>
-                          model &&
-                          setConfirmation({ connection, operation, model })
-                        }
-                      >
-                        {pending.includes(key)
-                          ? "测试中…"
-                          : `测试${operationLabel(operation)}`}
-                      </button>
                     </div>
                   );
                 })}

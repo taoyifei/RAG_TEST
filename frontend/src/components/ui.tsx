@@ -30,6 +30,7 @@ export function StatusBadge({ value }: { value: string | boolean }) {
     "active",
     "succeeded",
     "ANSWERABLE",
+    "ANSWERED",
     "healthy",
     "mock_validated",
     "live_validated",
@@ -38,6 +39,7 @@ export function StatusBadge({ value }: { value: string | boolean }) {
   const bad = [
     "failed",
     "failed_terminal",
+    "FAILED",
     "INDEX_CORRUPT",
     "unhealthy",
   ].includes(raw);
@@ -150,10 +152,12 @@ export function EvidenceDrawer({
   evidence,
   purpose = "citation",
   onClose,
+  imageSource,
 }: {
   evidence: Evidence | null;
   purpose?: "citation" | "diagnostic";
   onClose: () => void;
+  imageSource?: ReactNode;
 }) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
@@ -200,6 +204,7 @@ export function EvidenceDrawer({
           </button>
         </header>
         <blockquote>{evidence.citation_text}</blockquote>
+        {imageSource}
         <dl className="detail-grid">
           <dt>{purpose === "diagnostic" ? "候选编号" : "引用编号"}</dt>
           <dd>{evidence.evidence_id}</dd>

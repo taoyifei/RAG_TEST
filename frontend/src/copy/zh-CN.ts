@@ -18,6 +18,7 @@ export const zhCN = {
     succeeded: "已完成",
     failed: "失败",
     active: "使用中",
+    registered: "已登记",
     inactive: "未使用",
     pending: "等待中",
     running: "处理中",
@@ -45,6 +46,15 @@ export const zhCN = {
     failed_retryable: "等待重试",
     failed_terminal: "处理失败",
     cancelled: "已取消",
+    deleted: "已删除",
+    deleting: "正在清理",
+    archived: "已归档",
+    ANSWERED: "已回答",
+    REFUSED: "拒答",
+    FAILED: "请求失败",
+    STARTED: "处理中",
+    INTERRUPTED: "进程中断",
+    CANCELLED: "已取消",
     draft: "草稿",
     true: "是",
     false: "否",
@@ -70,6 +80,9 @@ export function operationLabel(operation: string): string {
         "embedding.document": "文档向量",
         "embedding.query": "查询向量",
         reranking: "结果重排",
+        generation: "回答生成",
+        "query.rewrite": "问题改写",
+        "image.ocr": "图片文字识别",
       } as Record<string, string>
     )[operation] ?? "未知能力"
   );

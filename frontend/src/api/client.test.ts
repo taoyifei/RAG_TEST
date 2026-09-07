@@ -8,6 +8,57 @@ afterEach(() => {
 });
 
 describe("API 客户端契约", () => {
+  it("删除正确处理204空响应与202接受状态，并携带会话CSRF", async () => {
+    setBrowserCsrfToken("synthetic-csrf");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ status: "deleting" }), { status: 202 }),
+      );
+    await expect(api.deleteDocument("", "prj", "kb", "doc")).resolves.toEqual({
+      statusCode: 204,
+      document: undefined,
+    });
+    await expect(api.deleteDocument("", "prj", "kb", "doc")).resolves.toEqual({
+      statusCode: 202,
+      document: { status: "deleting" },
+    });
+    expect(
+      new Headers(fetchMock.mock.calls[0][1]?.headers).get("X-CSRF-Token"),
+    ).toBe("synthetic-csrf");
+    expect(fetchMock.mock.calls[0][1]?.credentials).toBe("same-origin");
+  });
+
+  it("历史关键词参数化且正文保存选择只作用于该次请求", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(new Response("{}")));
+    await api.listHistory({ keyword: "职责&status=FAILED", offset: 20 });
+    const input = fetchMock.mock.calls[0][0];
+    const path =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
+    const params = new URL(path, "http://localhost").searchParams;
+    expect(params.get("keyword")).toBe("职责&status=FAILED");
+    expect(params.has("status")).toBe(false);
+    await api.answer(
+      "",
+      "prj",
+      "kb",
+      "合成问题",
+      undefined,
+      true,
+      "metadata_only",
+    );
+    const body = JSON.parse(fetchMock.mock.calls[1][1]?.body as string) as {
+      history_mode: string;
+    };
+    expect(body.history_mode).toBe("metadata_only");
+  });
   it("相关内容开关保留旧请求形状，每次调用只发送一次请求", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

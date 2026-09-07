@@ -2,6 +2,7 @@ import { Search } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   api,
+  ApiError,
   type Evidence,
   type QueryResponse,
   type RetrievalDiagnostics,
@@ -14,7 +15,9 @@ import {
   EvidenceDrawer,
   StatusBadge,
 } from "../components/ui";
+import { DiagnosticsView, HistoryTrace } from "../components/HistoryTrace";
 import { useConsole } from "../state/console-context";
+import { isOcrEvidence, OcrEvidenceSource } from "../components/DocumentImages";
 
 export function QueryPage({ mode }: { mode: "search" | "answer" }) {
   const { tokens, scope } = useConsole();
@@ -41,6 +44,9 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
   const [sourceError, setSourceError] = useState<unknown>();
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const [saveBody, setSaveBody] = useState(true);
+  const [savedBody, setSavedBody] = useState(true);
+  const [historyTrace, setHistoryTrace] = useState<string>();
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const sourceRequest = useRef<AbortController | undefined>(undefined);
   useEffect(
@@ -64,6 +70,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
     setError(undefined);
     setDiagnostics(undefined);
     setDiagnosticsError(undefined);
+    setHistoryTrace(undefined);
     try {
       const response =
         mode === "search"
@@ -74,6 +81,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               query,
               controller.signal,
               true,
+              saveBody ? "full" : "metadata_only",
             )
           : await api.answer(
               tokens.query,
@@ -82,9 +90,11 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               query,
               controller.signal,
               true,
+              saveBody ? "full" : "metadata_only",
             );
       if (controller.signal.aborted) return;
       setResult(response);
+      setSavedBody(saveBody);
       if (mode === "search") {
         void api
           .diagnostics(tokens.admin, response.trace_id)
@@ -135,7 +145,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
           <p>
             {mode === "search"
               ? "查看真实通道、RRF 贡献、重排与证据选择。"
-              : "按文档提供参考原文。当前未配置生成模型。"}
+              : "基于当前知识库回答问题，每条引用均可核对原文。"}
           </p>
         </div>
       </div>
@@ -146,7 +156,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             id={`${mode}-query`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="例如：青岛啤酒"
+            placeholder="输入需要从资料中查证的问题"
             required
           />
           <button className="primary" disabled={busy}>
@@ -154,41 +164,24 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             {busy ? "执行中…" : "执行"}
           </button>
         </div>
+        <label className="query-options">
+          <input
+            type="checkbox"
+            checked={saveBody}
+            onChange={(event) => setSaveBody(event.target.checked)}
+          />
+          在本机加密保存本次问题与答案（默认保留 7 天）
+        </label>
       </form>
       {error !== undefined && <ErrorPanel error={error} />}
+      {error instanceof ApiError && error.traceId && (
+        <button onClick={() => setHistoryTrace(error.traceId)}>
+          查看失败请求过程
+        </button>
+      )}
       {sourceError !== undefined && <ErrorPanel error={sourceError} />}
       {result && (
         <>
-          <div className="metric-grid">
-            <article>
-              <span>状态</span>
-              <StatusBadge value={result.status} />
-              <details>
-                <summary>技术详情</summary>
-                <code>{result.reason_code}</code>
-              </details>
-            </article>
-            <article>
-              <span>检索方式</span>
-              <strong>
-                {result.selected_embedding_slot ? "向量与原文检索" : "原文检索"}
-              </strong>
-              <details>
-                <summary>技术详情</summary>
-                <code>
-                  {result.route_reason_code} · {result.selected_embedding_slot}
-                </code>
-              </details>
-            </article>
-            <article>
-              <span>证据</span>
-              <strong>{result.evidence_count}</strong>
-              <details>
-                <summary>技术详情</summary>
-                <code>{result.quality_profile_status}</code>
-              </details>
-            </article>
-          </div>
           {mode === "answer" && result.answer && (
             <section
               className="answer"
@@ -199,6 +192,61 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               <p>{result.answer}</p>
             </section>
           )}
+          <div className="row-actions">
+            <StatusBadge value={result.status} />
+            <button onClick={() => setHistoryTrace(result.trace_id)}>
+              查看检索过程
+            </button>
+            <small>
+              {savedBody
+                ? "已请求本机保存；可在问答历史中查看"
+                : "本次未保存正文"}
+            </small>
+          </div>
+          {result.generation_mode === "extractive" && (
+            <p role="status">本次答案采用原文抽取；未使用回答模型生成。</p>
+          )}
+          <details className="panel">
+            <summary>技术统计与检索状态</summary>
+            <div className="metric-grid">
+              <article>
+                <span>状态</span>
+                <StatusBadge value={result.status} />
+                <details>
+                  <summary>技术详情</summary>
+                  <code>{result.reason_code}</code>
+                </details>
+              </article>
+              <article>
+                <span>检索方式</span>
+                <strong>
+                  {result.selected_embedding_slot
+                    ? "向量与原文检索"
+                    : "原文检索"}
+                </strong>
+                <details>
+                  <summary>技术详情</summary>
+                  <code>
+                    {result.route_reason_code} ·{" "}
+                    {result.selected_embedding_slot}
+                  </code>
+                </details>
+              </article>
+              <article>
+                <span>证据</span>
+                <strong>{result.evidence_count}</strong>
+                <details>
+                  <summary>技术详情</summary>
+                  <code>{result.quality_profile_status}</code>
+                </details>
+              </article>
+            </div>
+            <p>
+              回答方式：{result.generation_mode} ·{" "}
+              {result.degraded_reason_codes?.join("、") || "未报告降级"}
+            </p>
+            <code>{result.trace_id}</code>
+          </details>
           {!!result.evidence.length && (mode === "search" || result.answer) && (
             <section
               aria-label={mode === "search" ? "检索候选" : "引用依据"}
@@ -220,6 +268,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
                     <span>{item.source_label}</span>
                     <p>{item.citation_text}</p>
                     <small>
+                      {isOcrEvidence(item) && "图片识别文字 · "}
                       {mode === "search" ? "未发布候选" : "原文引用"} · 排序{" "}
                       {item.fusion_rank ?? "—"}
                     </small>
@@ -261,7 +310,12 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               系统不会为无证据结果生成伪引用。
             </EmptyState>
           )}
-          {diagnostics && <DiagnosticsView value={diagnostics} />}
+          {diagnostics && (
+            <details className="panel">
+              <summary>本次检索诊断</summary>
+              <DiagnosticsView value={diagnostics} />
+            </details>
+          )}
           {diagnosticsError !== undefined && (
             <details className="panel">
               <summary>诊断信息暂不可用</summary>
@@ -272,9 +326,25 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
       )}
       <EvidenceDrawer
         evidence={evidence}
+        imageSource={
+          evidence && (
+            <OcrEvidenceSource
+              evidence={evidence}
+              projectId={scope.projectId}
+              kbId={scope.kbId}
+            />
+          )
+        }
         purpose={mode === "search" ? "diagnostic" : "citation"}
         onClose={() => setEvidence(null)}
       />
+      {historyTrace && (
+        <HistoryTrace
+          key={historyTrace}
+          traceId={historyTrace}
+          onClose={() => setHistoryTrace(undefined)}
+        />
+      )}
       {source && (
         <section className="panel" aria-label="相关原文详情">
           <h3>相关原文 · 仅供参考</h3>
@@ -302,46 +372,5 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
         </section>
       )}
     </section>
-  );
-}
-
-function DiagnosticsView({ value }: { value: RetrievalDiagnostics }) {
-  return (
-    <div className="panel">
-      <h3>安全检索诊断</h3>
-      <div className="diagnostic-columns">
-        <div>
-          <h4>通道候选</h4>
-          {value.channel_chunk_ids.map(([channel, ids]) => (
-            <details key={channel}>
-              <summary>
-                {channel} · {ids.length}
-              </summary>
-              <pre>{ids.join("\n")}</pre>
-            </details>
-          ))}
-        </div>
-        <div>
-          <h4>RRF 融合贡献</h4>
-          {value.fusion.map((item) => (
-            <details key={item.chunk_id}>
-              <summary>
-                #{item.rank} · {item.chunk_id}
-              </summary>
-              <pre>{JSON.stringify(item.contributions, null, 2)}</pre>
-            </details>
-          ))}
-        </div>
-        <div>
-          <h4>阶段耗时</h4>
-          {value.stage_timings.map((item) => (
-            <p key={item.stage}>
-              {item.stage}
-              <strong>{item.elapsed_ms.toFixed(2)} ms</strong>
-            </p>
-          ))}
-        </div>
-      </div>
-    </div>
   );
 }

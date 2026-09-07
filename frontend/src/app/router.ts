@@ -9,6 +9,7 @@ export const routes = {
   revision: "/revision",
   retrieval: "/retrieval",
   chat: "/chat",
+  history: "/history",
   modelServices: "/model-services",
   retrievalProfiles: "/retrieval-profiles",
   system: "/system",

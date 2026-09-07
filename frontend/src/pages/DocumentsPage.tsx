@@ -5,9 +5,12 @@ import {
   createIdempotencyKey,
   type Document,
   type DocumentVersion,
+  type Job,
 } from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
 import { useConsole } from "../state/console-context";
+import { KnowledgeBaseModels } from "../components/KnowledgeBaseModels";
+import { DocumentImages } from "../components/DocumentImages";
 
 export function DocumentsPage({ go }: { go: (path: string) => void }) {
   const { tokens, scope, setRevision } = useConsole();
@@ -16,6 +19,7 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [error, setError] = useState<unknown>();
   const [uploading, setUploading] = useState(false);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [detail, setDetail] = useState<{
     document: Document;
     versions: DocumentVersion[];
@@ -25,15 +29,32 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
       api
         .listDocuments(tokens.admin, scope.projectId, scope.kbId, offset)
         .then((p) => {
+          if (!p.items.length && offset > 0) {
+            setOffset(Math.max(0, offset - (p.page_size || 50)));
+            return;
+          }
           setItems(p.items);
           setNextOffset(p.next_offset ?? null);
+          setError(undefined);
         })
         .catch(setError),
     [scope, tokens.admin, offset],
   );
   useEffect(() => {
     void load();
-  }, [load]);
+    let active = true;
+    void api
+      .listJobs(tokens.admin, scope.projectId, scope.kbId)
+      .then((page) => {
+        if (active) setJobs(page.items);
+      })
+      .catch((reason) => {
+        if (active) setError(reason);
+      });
+    return () => {
+      active = false;
+    };
+  }, [load, tokens.admin, scope.projectId, scope.kbId]);
   async function upload(file: File) {
     setUploading(true);
     setError(undefined);
@@ -90,13 +111,16 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
             type="file"
             accept=".doc,.docx"
             disabled={uploading}
-            onChange={(e) =>
-              e.target.files?.[0] && void upload(e.target.files[0])
-            }
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = "";
+              if (file) void upload(file);
+            }}
           />
         </label>
       </div>
       {error !== undefined && <ErrorPanel error={error} />}
+      <KnowledgeBaseModels key={scope.kbId} kbId={scope.kbId} />
       <div className="row-actions" aria-label="分页">
         <button disabled={offset === 0} onClick={() => setOffset(0)}>
           返回首页
@@ -110,13 +134,14 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
         </button>
       </div>
       <div className="table-wrap">
-        <table>
+        <table className="document-table">
           <thead>
             <tr>
               <th>显示名</th>
               <th>文档标识</th>
               <th>当前版本</th>
-              <th>状态</th>
+              <th>登记状态</th>
+              <th>当前索引可检索</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -131,7 +156,27 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
                   <code>{item.current_version_id ?? "—"}</code>
                 </td>
                 <td>
-                  <StatusBadge value={item.status} />
+                  <StatusBadge
+                    value={
+                      item.status === "active" ? "registered" : item.status
+                    }
+                  />
+                </td>
+                <td>
+                  {item.current_version_id && item.active_index_revision_id
+                    ? "已进入当前索引"
+                    : item.current_version_id
+                      ? "未被当前索引收录"
+                      : "无当前版本，尚不可检索"}
+                  {jobs.find((job) => job.document_id === item.document_id)
+                    ?.safe_error && (
+                    <small className="error-text">
+                      {
+                        jobs.find((job) => job.document_id === item.document_id)
+                          ?.safe_error
+                      }
+                    </small>
+                  )}
                 </td>
                 <td>
                   <DocumentActions
@@ -140,6 +185,15 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
                     go={go}
                     inspect={() => void inspect(item)}
                     onError={setError}
+                    onDeleted={() => {
+                      setItems((current) =>
+                        current.filter(
+                          (doc) => doc.document_id !== item.document_id,
+                        ),
+                      );
+                      if (detail?.document.document_id === item.document_id)
+                        setDetail(undefined);
+                    }}
                   />
                 </td>
               </tr>
@@ -158,6 +212,9 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
             <StatusBadge value={detail.document.status} />
           </div>
           <h4>不可变版本时间线</h4>
+          {!detail.versions.length && (
+            <p>尚无版本。可为此文档重新上传原件，或删除整个逻辑文档。</p>
+          )}
           <div className="version-list">
             {detail.versions.map((version) => (
               <article key={version.document_version_id}>
@@ -193,17 +250,22 @@ function DocumentActions({
   go,
   inspect,
   onError,
+  onDeleted,
 }: {
   document: Document;
   reload: () => void;
   go: (path: string) => void;
   inspect: () => void;
   onError: (error: unknown) => void;
+  onDeleted: () => void;
 }) {
   const { tokens, scope, setRevision } = useConsole();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(document.display_name);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [deleteMessage, setDeleteMessage] = useState("");
+  const [images, setImages] = useState(false);
   async function rename() {
     await api.renameDocument(
       tokens.admin,
@@ -234,17 +296,28 @@ function DocumentActions({
     go("/jobs");
   }
   async function remove() {
+    setBusy(true);
     try {
-      await api.deleteDocument(
+      const removed = await api.deleteDocument(
         tokens.admin,
         scope.projectId,
         scope.kbId,
         document.document_id,
       );
       setConfirmDelete(false);
+      if (
+        removed.statusCode === 202 &&
+        removed.document?.status !== "deleted"
+      ) {
+        setDeleteMessage("删除请求已接收，后台处理中；可刷新列表核对。");
+      } else {
+        onDeleted();
+      }
       reload();
     } catch (reason) {
       onError(reason);
+    } finally {
+      setBusy(false);
     }
   }
   return (
@@ -256,30 +329,62 @@ function DocumentActions({
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button onClick={() => void rename()}>保存</button>
+          <button onClick={() => void rename().catch(onError)}>保存</button>
           <small>只改显示名，不创建新 dver 或重建索引。</small>
         </>
       ) : (
         <button onClick={() => setRenaming(true)}>重命名</button>
       )}
       <label className="button-link">
-        创建新版本
+        {document.current_version_id ? "创建新版本" : "重新上传此文档"}
         <input
           data-testid={`version-${document.document_id}`}
           type="file"
           accept=".doc,.docx"
-          onChange={(e) =>
-            e.target.files?.[0] && void version(e.target.files[0])
-          }
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = "";
+            if (file) void version(file).catch(onError);
+          }}
         />
       </label>
       <button onClick={inspect}>详情</button>
+      <button onClick={() => setImages(true)}>图片识别</button>
+      {images && (
+        <DocumentImages
+          projectId={scope.projectId}
+          kbId={scope.kbId}
+          documentId={document.document_id}
+          onClose={() => setImages(false)}
+          onSubmitted={(job) => {
+            setImages(false);
+            setRevision(job.revision_id);
+            go("/jobs");
+          }}
+        />
+      )}
+      {!document.active_index_revision_id && (
+        <button onClick={() => go("/jobs")}>查看处理任务</button>
+      )}
       <button
         className={confirmDelete ? "danger" : ""}
+        disabled={busy}
         onClick={() => (confirmDelete ? void remove() : setConfirmDelete(true))}
       >
-        {confirmDelete ? "确认删除" : "删除"}
+        {busy ? "删除中…" : confirmDelete ? "确认删除整个文档" : "删除"}
       </button>
+      {confirmDelete && (
+        <>
+          <small>
+            删除“{document.display_name}
+            ”的全部版本；新查询和来源访问会立即排除它。
+          </small>
+          <button disabled={busy} onClick={() => setConfirmDelete(false)}>
+            取消删除
+          </button>
+        </>
+      )}
+      {deleteMessage && <small role="status">{deleteMessage}</small>}
     </div>
   );
 }
