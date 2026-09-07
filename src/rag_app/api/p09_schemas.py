@@ -68,6 +68,7 @@ class QueryRequest(RequestModel):
     limit: int = Field(default=10, ge=1, le=50)
     stream: bool = False
     include_related_content: bool = False
+    history_mode: Literal["full", "metadata_only"] | None = None
 
 
 class QueryResponse(SearchAnswerResult):

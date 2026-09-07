@@ -272,7 +272,7 @@ class ComponentsProfile(_ProfileModel):
     metadata_store: str = "sqlite"
     blob_store: str = "local"
     generator: str = "extractive"
-    trace_sink: str = "sqlite"
+    trace_sink: str = "sqlite-memory"
 
     @model_validator(mode="before")
     @classmethod

@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from rag_app.adapters.providers.budget_errors import BudgetBlockedError
-from rag_app.adapters.providers.budget_models import BudgetCampaign
+from rag_app.adapters.providers.budget_models import (
+    BudgetCampaign,
+    campaign_configuration,
+)
 from rag_app.core.identifiers import canonical_sha256
 
 _MAX_TEXT = 500
@@ -134,10 +137,25 @@ def budget_payload_set_identity(campaign: BudgetCampaign) -> str:
         包含文本、请求形状和端点请求身份的 SHA256。
 
     """
-    return canonical_sha256(
-        {
-            key: sorted(value)
-            for key, value in asdict(campaign).items()
-            if key.startswith("approved_")
-        }
-    )
+    configuration = campaign_configuration(campaign)
+    approved: dict[str, object] = {
+        key: sorted(value)
+        for key, value in configuration.items()
+        if key.startswith("approved_") and isinstance(value, (tuple, list))
+    }
+    if campaign.scope_mode == "knowledge_base":
+        approved.update(
+            {
+                key: configuration[key]
+                for key in (
+                    "scope_mode",
+                    "project_id",
+                    "knowledge_base_id",
+                    "allowed_models",
+                    "allowed_operations",
+                    "expires_at",
+                    "operation_request_limits",
+                )
+            }
+        )
+    return canonical_sha256(approved)

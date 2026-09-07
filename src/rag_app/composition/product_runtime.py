@@ -69,16 +69,23 @@ from rag_app.product.compatibility import CompatibilityManifest, load_manifest
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
+from rag_app.product.grounded_runtime import ProductGroundedModel
+from rag_app.product.model_settings import ProductModelSettings
 from rag_app.product.models import (
     ProviderValidationRun,
     RetrievalProfileRevision,
 )
+from rag_app.product.ocr_enrichment import ProductOcrEnrichment
 from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     TransportFactory,
     build_offline_mock_transport,
 )
-from rag_app.product.resolved_profile import ResolvedEmbeddingSpec
+from rag_app.product.query_history import ProductQueryHistory
+from rag_app.product.resolved_profile import (
+    ResolvedEmbeddingSpec,
+    resolve_retrieval_policy,
+)
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 
@@ -105,6 +112,8 @@ class ProductRuntimeSettings:
     )
     trusted_proxies: frozenset[str] = frozenset()
     trust_loopback_host_proxy: bool = False
+    history_save_body: bool = True
+    history_retention_days: int = 7
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -169,6 +178,12 @@ class ProductRuntimeSettings:
             ),
             trust_loopback_host_proxy=(
                 os.environ.get("RAG_TRUST_LOOPBACK_HOST_PROXY") == "true"
+            ),
+            history_save_body=(
+                os.environ.get("RAG_HISTORY_SAVE_BODY", "true") == "true"
+            ),
+            history_retention_days=int(
+                os.environ.get("RAG_HISTORY_RETENTION_DAYS", "7")
             ),
         )
 
@@ -268,11 +283,13 @@ class _PersistentUsageBudget(LocalUsageBudget):
 class ProductProfileResolver:
     """每次请求从 SQLite 解析知识库 Active Profile。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         control: ProductControlStore,
         providers: ProviderRuntimeRegistry,
         *,
+        models: ProductModelSettings | None = None,
+        ocr: ProductOcrEnrichment | None = None,
         circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
         acceptance_egress_resolver: Callable[
             [RetrievalProfileRevision, EgressPolicy], EgressPolicy
@@ -284,6 +301,8 @@ class ProductProfileResolver:
         Args:
             control: Retrieval Profile Store。
             providers: 页面托管 Credential 的 Provider 工厂。
+            models: 可选的知识库回答和 OCR 配置存储。
+            ocr: 可选的同库图片增补服务。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
 
@@ -293,6 +312,9 @@ class ProductProfileResolver:
         """
         self._control = control
         self._providers = providers
+        self._models = models
+        self._ocr = ocr
+        self._grounded_models: dict[str, ProductGroundedModel] = {}
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
@@ -392,9 +414,28 @@ class ProductProfileResolver:
 
         """
         profile = self.active_profile(knowledge_base_id)
-        if profile is None:
-            return fallback
-        return self._resolve(profile).retrieval
+        service = (
+            fallback if profile is None else self._resolve(profile).retrieval
+        )
+        if self._models is None:
+            return service
+        settings = self._models.get(knowledge_base_id)
+        if not settings.generation_connection_id:
+            return service
+        identity = self._models.serving_identity(settings)
+        key = knowledge_base_id + identity
+        with self._lock:
+            if key not in self._grounded_models:
+                self._grounded_models[key] = ProductGroundedModel(
+                    settings,
+                    knowledge_base_id,
+                    self._models.connections,
+                    self._providers,
+                )
+            model = self._grounded_models[key]
+        return service.with_generation(
+            model, serving_identity=identity, rewriter=model
+        )
 
     def revision_lifecycle(
         self,
@@ -467,6 +508,9 @@ class ProductProfileResolver:
             for item in self._retired_services:
                 item.close()
             self._retired_services.clear()
+            for model in self._grounded_models.values():
+                model.close()
+            self._grounded_models.clear()
 
     def _resolve(
         self, profile: RetrievalProfileRevision
@@ -729,6 +773,10 @@ class ProductProfileResolver:
         ]
         contracts["vector_schema"] = vector_schema
         builder = RevisionBuilder(
+            document_enricher=None
+            if self._ocr is None
+            else self._ocr.enrich_result,
+            trace=components.trace_sink,
             control=persistence.control,
             parser=components.parser,
             parsing_policy=components.parsing_policy,
@@ -758,6 +806,9 @@ class ProductProfileResolver:
             budgets=budgets,
             egress_allowed_slots=frozenset(embedding_providers),
             retrieval_profile_revision_id=profile.profile_revision_id,
+            content_identity=None
+            if self._ocr is None
+            else self._ocr.content_identity,
         )
         cache = InMemoryRetrievalCache()
         policy, egress, serving_fingerprint = self.serving_contract(profile)
@@ -822,6 +873,9 @@ class ProductRuntime:
     profiles: ProductProfileResolver
     compatibility: CompatibilityManifest
     settings: ProductRuntimeSettings
+    history: ProductQueryHistory
+    models: ProductModelSettings
+    ocr: ProductOcrEnrichment
     _closed: bool = False
 
     @property
@@ -950,9 +1004,17 @@ def build_product_runtime(
     credential_cipher = None if master_key is None else SecretCipher(master_key)
     credentials = CredentialStore(connections, credential_cipher)
     control = ProductControlStore(connections, credentials)
+    models = ProductModelSettings(connections, control)
     auth_cipher = SecretCipher(_authentication_key(bootstrap_token))
     auth = AuthStore(connections, auth_cipher)
     sessions = ConsoleSessionService(auth, bootstrap_token)
+    history = ProductQueryHistory(
+        connections,
+        credential_cipher or auth_cipher,
+        save_body=settings.history_save_body,
+        retention_days=settings.history_retention_days,
+    )
+    history.recover()
     if (
         transport_factory is None
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
@@ -964,9 +1026,14 @@ def build_product_runtime(
         transport_factory=transport_factory,
         budget_ledger_path=data_dir / "provider-budget.sqlite3",
     )
+    ocr = ProductOcrEnrichment(
+        connections, models, providers, data_dir / "provider-budget.sqlite3"
+    )
     profiles = ProductProfileResolver(
         control,
         providers,
+        models=models,
+        ocr=ocr,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
     )
@@ -985,6 +1052,13 @@ def build_product_runtime(
             data_dir=data_dir,
             hooks=P09RuntimeHooks(
                 recover_jobs=recover_jobs,
+                trace_sink=history,
+                query_history=history,
+                document_enricher=ocr.enrich_result,
+                content_identity=ocr.content_identity,
+                retrieval_policy=RetrievalPolicy.model_validate(
+                    resolve_retrieval_policy({}, {}),
+                ),
                 system_status_overlay=_status_overlay,
                 retrieval_resolver=profiles.retrieval_service,
                 revision_builder_resolver=profiles.revision_lifecycle,
@@ -995,6 +1069,7 @@ def build_product_runtime(
         providers.close()
         raise
     profiles.bind_runtime(p09)
+    ocr.bind_blob_store(p09.retrieval_runtime.persistence.components.blob_store)
     return ProductRuntime(
         p09=p09,
         connections=connections,
@@ -1006,6 +1081,9 @@ def build_product_runtime(
         profiles=profiles,
         compatibility=compatibility,
         settings=settings,
+        history=history,
+        models=models,
+        ocr=ocr,
     )
 
 
@@ -1128,7 +1206,7 @@ def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
         metadata_store="sqlite-control",
         blob_store="filesystem-blob",
         generator="extractive",
-        trace_sink="sqlite",
+        trace_sink="sqlite-product-history",
     )
     return base.model_copy(
         update={

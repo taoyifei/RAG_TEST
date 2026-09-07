@@ -20,6 +20,7 @@ _READ_PATHS = (
     _BASE + "/documents/{document_id}/versions",
     _BASE + "/documents/{document_id}/versions/{dver}",
     _BASE + "/documents/{document_id}/versions/{dver}/artifacts",
+    _BASE + "/documents/{document_id}/images/{artifact_id}",
     _BASE + "/artifacts/{artifact_id}",
     "/api/v1/jobs/{job_id}",
     "/api/v1/jobs",
@@ -67,6 +68,8 @@ def resolve_token_route(
         *((method, path, "knowledge:write") for method, path in _WRITE_ROUTES),
         ("POST", _BASE + ":search", "query:read"),
         ("POST", _BASE + ":answer", "query:read"),
+        ("GET", _BASE + "/history", "query:read"),
+        ("GET", _BASE + "/history/{trace_id}", "query:read"),
         ("GET", "/api/v1/system/components", "system:read"),
     )
     for method, template, scope in routes:
@@ -92,11 +95,20 @@ def resolve_token_route(
             if "artifact_id" in params:
                 if project_id is None or kb_id is None:
                     raise PolicyDenied("资源范围缺失。", stage="token.scope")
+                document_id = params.get(
+                    "document_id"
+                ) or request.query_params.get("document_id", "")
+                version_id = request.query_params.get("document_version_id", "")
+                if "/images/" in template:
+                    document = runtime.sdk.get_document(
+                        project_id, kb_id, document_id
+                    )
+                    version_id = document.current_version_id or ""
                 runtime.p09.store.authorize_artifact(
                     project_id,
                     kb_id,
-                    request.query_params.get("document_id", ""),
-                    request.query_params.get("document_version_id", ""),
+                    document_id,
+                    version_id,
                     params["artifact_id"],
                 )
         except NotFound:

@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from rag_app._build_revision import SOURCE_REVISION
 
-CURRENT_DATABASE_SCHEMA = 17
+CURRENT_DATABASE_SCHEMA = 20
 
 
 class SchemaRange(BaseModel):

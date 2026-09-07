@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -17,9 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
+from rag_app.api.model_settings import register_model_settings_routes
 from rag_app.api.p09 import create_p09_app
 from rag_app.api.product_token_policy import resolve_token_route
 from rag_app.api.provider_budget import register_provider_budget_routes
+from rag_app.api.query_history import register_query_history_routes
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -39,6 +42,7 @@ from rag_app.product.provider_runtime import TransportFactory
 from rag_app.product.verification import validation_is_current
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_LOGGER = logging.getLogger(__name__)
 _INTERNAL_QUERY_PREFIX = "internal-query-"
 _INTERNAL_ADMIN_PREFIX = "internal-admin-"
 _HTTP_TOO_MANY_REQUESTS = 429
@@ -126,7 +130,14 @@ class ConnectionPatchRequest(_RequestModel):
 class ValidationRequest(_RequestModel):
     """单项 Provider 验证请求。"""
 
-    operation: Literal["embedding.document", "embedding.query", "reranking"]
+    operation: Literal[
+        "embedding.document",
+        "embedding.query",
+        "reranking",
+        "generation",
+        "query.rewrite",
+        "image.ocr",
+    ]
     model: str = Field(min_length=1, max_length=200)
     expected_dimension: int | None = Field(default=None, gt=0)
     request_policy: dict[str, object] = Field(default_factory=dict)
@@ -291,6 +302,12 @@ def _register_auth_middleware(
         if auth_error is not None:
             return _apply_security_headers(request, auth_error, runtime)
         response = await call_next(request)
+        if response.headers.get("X-Trace-Id"):
+            _LOGGER.info(
+                "query_access trace_id=%s status=%d",
+                response.headers["X-Trace-Id"],
+                response.status_code,
+            )
         return _apply_security_headers(request, response, runtime)
 
 
@@ -433,6 +450,8 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     _register_profile_routes(app, runtime)
     _register_access_token_routes(app, runtime)
     register_provider_budget_routes(app, runtime)
+    register_query_history_routes(app, runtime)
+    register_model_settings_routes(app, runtime)
 
 
 def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:

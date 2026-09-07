@@ -202,6 +202,13 @@ class ProviderHttpClient:
                     extensions={
                         "rag_provider_retry_index": attempt - 1,
                         "rag_provider_max_attempts": self._max_attempts,
+                        **(
+                            {"rag_chat_operation": operation}
+                            if operation in {
+                                "generation", "query.rewrite", "image.ocr"
+                            }
+                            else {}
+                        ),
                     },
                 )
             except httpx.TransportError as error:
