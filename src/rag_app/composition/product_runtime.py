@@ -1065,6 +1065,10 @@ def build_product_runtime(
     )
     history.recover()
     product_profile = _product_profile(settings)
+    # 在启动非守护 Trace writer 前完成本地 OCR 配置校验，避免失败构造泄漏线程。
+    local_ocr_adapter, local_ocr_http_client = _build_local_ocr_adapter(
+        settings
+    )
     trace_store = TraceStore(data_dir / "product-traces.sqlite3")
     trace_store.initialize()
     trace_recorder = TraceRecorder(
@@ -1100,9 +1104,6 @@ def build_product_runtime(
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
     ):
         transport_factory = build_offline_mock_transport
-    local_ocr_adapter, local_ocr_http_client = _build_local_ocr_adapter(
-        settings
-    )
     providers = ProviderRuntimeRegistry(
         credentials,
         control,
@@ -1166,6 +1167,8 @@ def build_product_runtime(
         )
     except Exception:
         providers.close()
+        if local_ocr_http_client is not None:
+            local_ocr_http_client.close()
         traces.close()
         raise
     profiles.bind_runtime(p09)

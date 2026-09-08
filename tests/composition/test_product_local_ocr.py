@@ -1,5 +1,6 @@
 """Product Composition Root 的可选本地 OCR 配置边界。"""
 
+import threading
 from pathlib import Path
 
 import pytest
@@ -46,11 +47,21 @@ def test_product_runtime_can_select_injected_local_ocr(tmp_path: Path) -> None:
 
 def test_local_ocr_configuration_fails_closed(tmp_path: Path) -> None:
     """端点、Token 或固定模型身份不完整时不得伪装为可用。"""
+    trace_writers_before = sum(
+        thread.name == "rag-trace-writer" for thread in threading.enumerate()
+    )
     with pytest.raises(ValueError, match="RAG_OCR_API_TOKEN_FILE"):
         build_product_harness(
             tmp_path / "missing-token",
             local_ocr_endpoints=("http://rag-ocr:8090",),
         )
+    assert (
+        sum(
+            thread.name == "rag-trace-writer"
+            for thread in threading.enumerate()
+        )
+        == trace_writers_before
+    )
 
     token = tmp_path / "bad-permissions-token"
     token.write_text("s" * 32, encoding="utf-8")
@@ -61,3 +72,10 @@ def test_local_ocr_configuration_fails_closed(tmp_path: Path) -> None:
             local_ocr_endpoints=("http://rag-ocr:8090",),
             local_ocr_token_file=token,
         )
+    assert (
+        sum(
+            thread.name == "rag-trace-writer"
+            for thread in threading.enumerate()
+        )
+        == trace_writers_before
+    )
