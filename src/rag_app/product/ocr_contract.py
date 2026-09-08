@@ -74,7 +74,15 @@ class ProductOcrRecognition(FrozenModel):
 
     @property
     def adapter_identity(self) -> OcrAdapterIdentity:
-        """返回与缓存键完全相同的适配器身份。"""
+        """返回与缓存键完全相同的适配器身份。
+
+        Args:
+            无参数；读取当前识别结果中的身份字段。
+
+        Returns:
+            完整的 OCR 适配器身份。
+
+        """
         return OcrAdapterIdentity(
             adapter=self.adapter,
             provider=self.provider,
@@ -89,7 +97,15 @@ class ProductOcrAdapter(Protocol):
 
     @property
     def identity(self) -> OcrAdapterIdentity:
-        """返回当前适配器的完整内容身份。"""
+        """返回当前适配器的完整内容身份。
+
+        Args:
+            无参数；读取实现冻结的适配器配置。
+
+        Returns:
+            参与缓存与 Revision 的 OCR 适配器身份。
+
+        """
 
     def inspect(
         self,
@@ -98,7 +114,17 @@ class ProductOcrAdapter(Protocol):
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrInspection:
-        """在发送请求前验证媒体边界。"""
+        """在发送请求前验证媒体边界。
+
+        Args:
+            media_bytes: 待检查的媒体字节。
+            media_type: 声明的媒体 MIME 类型。
+            media_sha256: 调用方提供的内容摘要。
+
+        Returns:
+            可在本地证明的媒体属性。
+
+        """
 
     def recognize(
         self,
@@ -107,10 +133,28 @@ class ProductOcrAdapter(Protocol):
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrRecognition:
-        """识别一张受控媒体并返回统一结果。"""
+        """识别一张受控媒体并返回统一结果。
+
+        Args:
+            media_bytes: 已通过边界检查的媒体字节。
+            media_type: 媒体 MIME 类型。
+            media_sha256: 媒体内容 SHA-256。
+
+        Returns:
+            带真实可选定位和调用信息的统一识别结果。
+
+        """
 
     def close(self) -> None:
-        """释放当前适配器持有的资源。"""
+        """释放当前适配器持有的资源。
+
+        Args:
+            无参数；关闭当前适配器。
+
+        Returns:
+            无返回值。
+
+        """
 
 
 __all__ = [

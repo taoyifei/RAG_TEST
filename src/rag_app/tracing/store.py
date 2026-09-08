@@ -371,7 +371,15 @@ class TraceStore:
             raise
 
     def recover_running(self, *, now: datetime | None = None) -> int:
-        """把重启前遗留的根与 span 关闭为 INTERRUPTED。"""
+        """把重启前遗留的根与 span 关闭为 INTERRUPTED。
+
+        Args:
+            now: 可选的确定性恢复时点；省略时使用当前 UTC 时间。
+
+        Returns:
+            被恢复为终态的根 Trace 数量。
+
+        """
         recovered_at = now or datetime.now(UTC)
         with self._lock:
             connection = self._require_connection()
@@ -426,7 +434,15 @@ class TraceStore:
             return len(rows)
 
     def preflight_full(self, *, reserved_bytes: int) -> None:
-        """在业务执行前检查 FULL 捕获、磁盘与导出容量。"""
+        """在业务执行前检查 FULL 捕获、磁盘与导出容量。
+
+        Args:
+            reserved_bytes: 本次 FULL 查询要求预留的原始 Artifact 字节。
+
+        Returns:
+            无返回值；所有容量和权限检查通过即返回。
+
+        """
         if not 0 < reserved_bytes <= self._artifact_limit_bytes:
             raise TraceArtifactLimitError("FULL artifact 预留量越界。")
         with self._lock:
@@ -590,7 +606,19 @@ class TraceStore:
         serving_fingerprint: str | None = None,
         active_collection: str | None = None,
     ) -> None:
-        """在 snapshot 固定后补齐根 Trace 的活动身份。"""
+        """在 snapshot 固定后补齐根 Trace 的活动身份。
+
+        Args:
+            trace_id: 待更新根 Trace ID。
+            revision_id: 可选的活动 Revision ID。
+            index_fingerprint: 可选的活动索引指纹。
+            serving_fingerprint: 可选的查询服务指纹。
+            active_collection: 可选的活动集合身份。
+
+        Returns:
+            无返回值。
+
+        """
         if not any(
             (
                 revision_id,

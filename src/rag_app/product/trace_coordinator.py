@@ -87,7 +87,16 @@ class ProductTraceCoordinator:
         self.store.recover_running()
 
     def prepare(self, trace_id: str, mode: TraceMode) -> None:
-        """在查询读取 snapshot 前冻结 capture mode 并执行 FULL 准入。"""
+        """在查询读取 snapshot 前冻结 capture mode 并执行 FULL 准入。
+
+        Args:
+            trace_id: 当前请求的公开 Trace ID。
+            mode: 本次 SAFE、DIAGNOSTIC 或 FULL 模式。
+
+        Returns:
+            无返回值。
+
+        """
         if mode is TraceMode.FULL:
             self.recorder.require_full_capacity()
         with self._lock:
@@ -102,7 +111,19 @@ class ProductTraceCoordinator:
         owner_id: str,
         save_body: bool,
     ) -> None:
-        """先建立权威 History，再以相同 ID 开始 Operational Trace。"""
+        """先建立权威 History，再以相同 ID 开始 Operational Trace。
+
+        Args:
+            trace_id: History 与技术 Trace 共享的公开 ID。
+            scope: 当前 Project/KB 范围。
+            question: 待查询问题；技术 Trace 只保存摘要。
+            owner_id: 当前主体 ID；技术 Trace 只保存摘要。
+            save_body: 是否按 History 政策加密保存正文。
+
+        Returns:
+            无返回值。
+
+        """
         mode = self._take_mode(trace_id)
         self.history.start(
             trace_id,
@@ -157,7 +178,18 @@ class ProductTraceCoordinator:
         error: RagError | None,
         cancelled: bool,
     ) -> None:
-        """一次结算 History 与 Operational Trace，并保留原查询错误。"""
+        """一次结算 History 与 Operational Trace，并保留原查询错误。
+
+        Args:
+            trace_id: 待结算的共享公开 ID。
+            result: 可选的统一查询结果。
+            error: 可选的原业务错误。
+            cancelled: 请求是否被取消。
+
+        Returns:
+            无返回值。
+
+        """
         history_failure: RagError | None = None
         try:
             self.history.finish(
@@ -201,7 +233,15 @@ class ProductTraceCoordinator:
             raise history_failure
 
     def record(self, event: TraceEvent) -> None:
-        """保留旧平面事件，并同步形成有界层级 Operational Trace。"""
+        """保留旧平面事件，并同步形成有界层级 Operational Trace。
+
+        Args:
+            event: 当前查询或 ingestion 的安全结构化事件。
+
+        Returns:
+            无返回值。
+
+        """
         try:
             self.history.record(event)
         except RagError:
@@ -230,39 +270,104 @@ class ProductTraceCoordinator:
             self._record_query_event(session, event)
 
     def events(self, trace_id: str) -> tuple[TraceEvent, ...]:
-        """继续提供旧 flat event 读取能力。"""
+        """继续提供旧 flat event 读取能力。
+
+        Args:
+            trace_id: 待读取的共享 Trace ID。
+
+        Returns:
+            按发生顺序排列的旧平面事件。
+
+        """
         return self.history.events(trace_id)
 
     def diagnostics(self, trace_id: str) -> RetrievalDiagnostics:
-        """继续从加密 History 元数据读取检索诊断。"""
+        """继续从加密 History 元数据读取检索诊断。
+
+        Args:
+            trace_id: 待读取的共享 Trace ID。
+
+        Returns:
+            History 中保存的安全检索诊断。
+
+        """
         return self.history.diagnostics(trace_id)
 
     def list_traces(self, filters: TraceListFilter) -> TracePage:
-        """排空已确认写入后读取有界 Operational Trace 列表。"""
+        """排空已确认写入后读取有界 Operational Trace 列表。
+
+        Args:
+            filters: 分页、时间、状态、scope 和身份过滤条件。
+
+        Returns:
+            有界且稳定排序的 Trace 页面。
+
+        """
         self.recorder.flush()
         return self.store.list_traces(filters)
 
     def detail(self, trace_id: str) -> TraceDetail:
-        """读取稳定 span tree、候选与 Artifact 元数据。"""
+        """读取稳定 span tree、候选与 Artifact 元数据。
+
+        Args:
+            trace_id: 目标 Operational Trace ID。
+
+        Returns:
+            根 Trace、span、候选决策和 Artifact 元数据。
+
+        """
         self.recorder.flush()
         return self.store.get_trace(trace_id)
 
     def artifact(self, trace_id: str, artifact_id: str) -> ArtifactContent:
-        """惰性读取并验证 FULL Artifact。"""
+        """惰性读取并验证 FULL Artifact。
+
+        Args:
+            trace_id: Artifact 所属 Trace ID。
+            artifact_id: 待读取 Artifact ID。
+
+        Returns:
+            通过摘要和大小复核的解压内容。
+
+        """
         self.recorder.flush()
         return self.store.get_artifact(trace_id, artifact_id)
 
     def export(self, trace_id: str) -> bytes:
-        """导出单条 canonical JSON。"""
+        """导出单条 canonical JSON。
+
+        Args:
+            trace_id: 待导出的 Operational Trace ID。
+
+        Returns:
+            UTF-8 canonical JSON 字节。
+
+        """
         self.recorder.flush()
         return self.store.export_trace(trace_id)
 
     def metrics(self) -> dict[str, int]:
-        """返回 Trace writer 性能计数。"""
+        """返回 Trace writer 性能计数。
+
+        Args:
+            无参数；读取线程安全的当前计数。
+
+        Returns:
+            submitted、written、dropped 和队列水位计数。
+
+        """
         return self.recorder.metrics
 
     def legacy_detail(self, trace_id: str) -> dict[str, object]:
-        """为迁移前 flat events 返回明确不完整的兼容视图。"""
+        """为迁移前 flat events 返回明确不完整的兼容视图。
+
+        Args:
+            trace_id: 待读取的新旧共享 Trace ID。
+
+        Returns:
+            当前层级详情或标记为不完整的旧事件视图。
+
+        """
         try:
             detail = self.detail(trace_id)
         except TraceNotFoundError:
@@ -286,7 +391,15 @@ class ProductTraceCoordinator:
         return _detail_dict(detail)
 
     def close(self) -> None:
-        """按 writer flush、Store、History 的顺序幂等关闭。"""
+        """按 writer flush、Store、History 的顺序幂等关闭。
+
+        Args:
+            无参数；关闭 coordinator 持有的资源。
+
+        Returns:
+            无返回值。
+
+        """
         self.recorder.close()
         self.history.close()
 

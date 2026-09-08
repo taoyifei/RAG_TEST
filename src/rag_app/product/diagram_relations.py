@@ -173,7 +173,15 @@ class ProductDiagramRelations:
 
     @property
     def policy_version(self) -> str:
-        """返回正式证据发布政策版本。"""
+        """返回正式证据发布政策版本。
+
+        Args:
+            无参数；读取当前固定发布政策。
+
+        Returns:
+            参与关系内容身份的版本字符串。
+
+        """
         return _POLICY_VERSION
 
     def upsert_candidates(
@@ -255,7 +263,17 @@ class ProductDiagramRelations:
         *,
         document_version_id: str | None = None,
     ) -> tuple[DiagramRelationCandidate, ...]:
-        """按 KB、文档和可选版本读取有界候选清单。"""
+        """按 KB、文档和可选版本读取有界候选清单。
+
+        Args:
+            knowledge_base_id: 候选所属知识库 ID。
+            document_id: 候选所属文档 ID。
+            document_version_id: 可选的精确文档版本 ID。
+
+        Returns:
+            按创建时间和候选 ID 排序的有界候选元组。
+
+        """
         with self.connections.transaction() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM diagram_relation_candidates "
@@ -281,7 +299,17 @@ class ProductDiagramRelations:
         *,
         reviewer_id: str,
     ) -> DiagramRelationCandidate:
-        """显式接纳、拒绝或标记歧义，并保存主体摘要。"""
+        """显式接纳、拒绝或标记歧义，并保存主体摘要。
+
+        Args:
+            candidate_id: 待审候选 ID。
+            state: 接纳、拒绝或歧义终态。
+            reviewer_id: 当前审阅主体 ID；只保存摘要。
+
+        Returns:
+            已持久化的新候选状态；重复相同审阅返回当前状态。
+
+        """
         if state is RelationReviewState.PENDING:
             raise PolicyDenied(
                 "审阅不能把候选退回未审状态。",
@@ -340,7 +368,15 @@ class ProductDiagramRelations:
         return updated
 
     def content_identity(self, knowledge_base_id: str) -> str | None:
-        """只让正式接纳关系参与索引内容 Revision 身份。"""
+        """只让正式接纳关系参与索引内容 Revision 身份。
+
+        Args:
+            knowledge_base_id: 待计算关系内容身份的知识库 ID。
+
+        Returns:
+            有接纳关系时返回 canonical SHA-256，否则返回 ``None``。
+
+        """
         with self.connections.transaction() as connection:
             rows = connection.execute(
                 "SELECT payload_json FROM diagram_relation_candidates "
@@ -364,14 +400,30 @@ class ProductDiagramRelations:
         )
 
     def enrich_result(self, parsed: ParseResult) -> ParseResult:
-        """只把匹配当前图像 occurrence 的已接纳关系加入可检索 IR。"""
+        """只把匹配当前图像 occurrence 的已接纳关系加入可检索 IR。
+
+        Args:
+            parsed: Parser 返回的原始 Document IR 与报告。
+
+        Returns:
+            带已发布关系节点和同步报告的 ParseResult。
+
+        """
         document = self.enrich(parsed.document_ir)
         return parsed.model_copy(
             update={"document_ir": document, "report": document.parse_report}
         )
 
     def enrich(self, document: DocumentIR) -> DocumentIR:
-        """保存全部候选计数，但只发布无歧义且已接纳的关系。"""
+        """保存全部候选计数，但只发布无歧义且已接纳的关系。
+
+        Args:
+            document: 当前文档版本的不可变 Document IR。
+
+        Returns:
+            加入可证明关系节点和审阅汇总的新 Document IR。
+
+        """
         candidates = self.list_candidates(
             document.document.knowledge_base_id,
             document.document.document_id,

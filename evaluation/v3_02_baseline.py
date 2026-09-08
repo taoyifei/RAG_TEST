@@ -320,7 +320,15 @@ class FixedChunkCase(_FrozenModel):
 
     @property
     def query_sha256(self) -> str:
-        """返回不泄漏公开查询正文的稳定摘要。"""
+        """返回不泄漏公开查询正文的稳定摘要。
+
+        Args:
+            无参数；读取当前固定 Case。
+
+        Returns:
+            带 ``sha256:`` 前缀的问题正文摘要。
+
+        """
         return _sha256_bytes(self.query.encode("utf-8"))
 
 
@@ -604,10 +612,26 @@ class FixedChunkRuntime(Protocol):
     """当前 Product 查询链需提供的最小基线适配合同。"""
 
     def build_once(self) -> FrozenBuild:
-        """构建一次语料并返回全部固定身份。"""
+        """构建一次语料并返回全部固定身份。
+
+        Args:
+            无参数；使用实现已配置的数据集与 Profile。
+
+        Returns:
+            单次构建得到的固定身份与构建耗时。
+
+        """
 
     def reset_query_cache(self, mode: TraceMode) -> None:
-        """在每个 Trace 模式开始前恢复同一 cold 条件。"""
+        """在每个 Trace 模式开始前恢复同一 cold 条件。
+
+        Args:
+            mode: 即将测量的 Trace 捕获模式。
+
+        Returns:
+            无返回值。
+
+        """
 
     def execute(
         self,
@@ -615,7 +639,17 @@ class FixedChunkRuntime(Protocol):
         mode: TraceMode,
         cache_condition: CacheCondition,
     ) -> QueryMeasurement:
-        """通过当前 Product 同一查询执行链执行一次测量。"""
+        """通过当前 Product 同一查询执行链执行一次测量。
+
+        Args:
+            case: 绑定固定 Chunk 标签的公开合成 Case。
+            mode: 本次 Trace 捕获模式。
+            cache_condition: 本次必须满足的 cold 或 warm 条件。
+
+        Returns:
+            不含正文的单次查询与 Trace 测量。
+
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,11 +709,27 @@ class DeterministicProductBaselineRuntime:
 
     @property
     def build_execution_count(self) -> int:
-        """返回真实语料构建次数。"""
+        """返回真实语料构建次数。
+
+        Args:
+            无参数；读取当前 runtime 计数。
+
+        Returns:
+            已完成的语料构建次数。
+
+        """
         return self._build_execution_count
 
     def build_once(self) -> FrozenBuild:
-        """构建且只构建一次 Evaluation V3 固定语料。"""
+        """构建且只构建一次 Evaluation V3 固定语料。
+
+        Args:
+            无参数；使用初始化时冻结的数据集与 Profile。
+
+        Returns:
+            固定 Chunk、Revision、组件和运行环境身份。
+
+        """
         if self._closed:
             raise RuntimeError("固定 Chunk runtime 已关闭。")
         if self._state is not None:
@@ -728,7 +778,15 @@ class DeterministicProductBaselineRuntime:
             raise
 
     def fixed_trace_cases(self) -> tuple[FixedChunkCase, ...]:
-        """返回绑定实际 Chunk 的九切片 Trace 消费器 Case。"""
+        """返回绑定实际 Chunk 的九切片 Trace 消费器 Case。
+
+        Args:
+            无参数；读取构建后的公开合成 Case。
+
+        Returns:
+            按合同顺序排列的九个固定 Trace Case。
+
+        """
         self.build_once()
         by_source = self._consumer_cases
         return tuple(
@@ -745,7 +803,15 @@ class DeterministicProductBaselineRuntime:
         )
 
     def trace_consumer_receipt(self) -> TraceConsumerReceipt:
-        """返回九切片只测 Trace 消费行为的明确声明。"""
+        """返回九切片只测 Trace 消费行为的明确声明。
+
+        Args:
+            无参数；读取固定切片映射。
+
+        Returns:
+            不声明 Product 或视觉质量的 Trace consumer 收据。
+
+        """
         return TraceConsumerReceipt(
             contracts=tuple(
                 TraceConsumerContract(
@@ -757,7 +823,15 @@ class DeterministicProductBaselineRuntime:
         )
 
     def execute_production_retrieval(self) -> ProductionRetrievalReceipt:
-        """绕过候选选择，直接执行 fts5-only 的全部 52 Case。"""
+        """绕过候选选择，直接执行 fts5-only 的全部 52 Case。
+
+        Args:
+            无参数；复用同一次固定语料构建。
+
+        Returns:
+            当前 Production Retrieval 的指标与门禁收据。
+
+        """
         self.build_once()
         state = self._require_state()
         self._replace_query_cache(TraceMode.SAFE)
@@ -817,7 +891,15 @@ class DeterministicProductBaselineRuntime:
         )
 
     def reset_query_cache(self, mode: TraceMode) -> None:
-        """为一种 Trace 模式创建新的进程内查询缓存。"""
+        """为一种 Trace 模式创建新的进程内查询缓存。
+
+        Args:
+            mode: 即将测量的 Trace 模式；只用于建立测量边界。
+
+        Returns:
+            无返回值。
+
+        """
         self.build_once()
         self._replace_query_cache(mode)
 
@@ -827,7 +909,17 @@ class DeterministicProductBaselineRuntime:
         mode: TraceMode,
         cache_condition: CacheCondition,
     ) -> QueryMeasurement:
-        """执行一次实际 P07 查询并消费其诊断形成 Operational Trace。"""
+        """执行一次实际 P07 查询并消费其诊断形成 Operational Trace。
+
+        Args:
+            case: 当前公开合成固定 Case。
+            mode: SAFE、DIAGNOSTIC 或 FULL。
+            cache_condition: 预期的 cold 或 warm 缓存条件。
+
+        Returns:
+            质量、耗时、调用量、缓存与 Trace 资源测量。
+
+        """
         state = self._require_state()
         source_case = self._consumer_cases[case.case_id]
         metrics_before = self._trace_recorder.metrics
@@ -953,7 +1045,15 @@ class DeterministicProductBaselineRuntime:
         )
 
     def close(self) -> None:
-        """关闭 Trace writer、缓存与 P07 持久资源。"""
+        """关闭 Trace writer、缓存与 P07 持久资源。
+
+        Args:
+            无参数；关闭当前 runtime 持有的资源。
+
+        Returns:
+            无返回值。
+
+        """
         if self._closed:
             return
         self._closed = True
@@ -1570,7 +1670,15 @@ def _build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """执行命令行并以报告门禁状态决定退出码。"""
+    """执行命令行并以报告门禁状态决定退出码。
+
+    Args:
+        argv: 可选的显式命令行参数；省略时读取当前进程参数。
+
+    Returns:
+        报告全部门禁通过时返回 0，否则返回 1。
+
+    """
     parsed = _build_argument_parser().parse_args(argv)
     bundle = run_concrete_fixed_chunk_baseline(
         output_directory=parsed.output,
@@ -1741,6 +1849,9 @@ def write_baseline_bundle(directory: Path, bundle: BaselineBundle) -> None:
     Args:
         directory: 尚不存在的单次基线目录。
         bundle: :func:`create_baseline_bundle` 生成的稳定字节。
+
+    Returns:
+        无返回值。
 
     Raises:
         FileExistsError: 目标目录或任一目标文件已存在。

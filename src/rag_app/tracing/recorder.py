@@ -699,7 +699,15 @@ class TraceRecorder:
 
     @property
     def metrics(self) -> dict[str, int]:
-        """返回不含内容的队列与写入计数。"""
+        """返回不含内容的队列与写入计数。
+
+        Args:
+            无参数；读取当前 recorder 的线程安全计数。
+
+        Returns:
+            提交、完成、丢弃和队列当前/最高水位。
+
+        """
         with self._metrics_lock:
             return {
                 "submitted": self._submitted_count,
@@ -828,7 +836,19 @@ class TraceRecorder:
         serving_fingerprint: str | None = None,
         active_collection: str | None = None,
     ) -> None:
-        """在检索 snapshot 固定后异步补齐活动身份。"""
+        """在检索 snapshot 固定后异步补齐活动身份。
+
+        Args:
+            trace_id: 待更新根 Trace ID。
+            revision_id: 可选的活动 Revision ID。
+            index_fingerprint: 可选的活动索引指纹。
+            serving_fingerprint: 可选的查询服务指纹。
+            active_collection: 可选的活动集合身份。
+
+        Returns:
+            无返回值；更新通过有界 writer 异步提交。
+
+        """
         self._submit(
             trace_id,
             lambda: self._store.update_trace_identity(

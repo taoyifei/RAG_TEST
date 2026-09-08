@@ -73,7 +73,15 @@ class AliyunProductOcrAdapter:
 
     @property
     def identity(self) -> OcrAdapterIdentity:
-        """返回百炼连接与适配器实现的缓存身份。"""
+        """返回百炼连接与适配器实现的缓存身份。
+
+        Args:
+            无参数；读取构造时冻结的身份。
+
+        Returns:
+            参与 OCR 缓存键的完整适配器身份。
+
+        """
         return self._identity
 
     def inspect(
@@ -83,7 +91,17 @@ class AliyunProductOcrAdapter:
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrInspection:
-        """使用百炼发送前的同一图片策略执行检查。"""
+        """使用百炼发送前的同一图片策略执行检查。
+
+        Args:
+            media_bytes: 待检查的受控图片字节。
+            media_type: 声明的图片 MIME 类型。
+            media_sha256: 调用方计算的图片 SHA-256。
+
+        Returns:
+            通过字节、类型、摘要和像素边界检查的媒体信息。
+
+        """
         image = inspect_ocr_image(
             media_bytes,
             media_type=media_type,
@@ -105,7 +123,17 @@ class AliyunProductOcrAdapter:
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrRecognition:
-        """映射百炼结果；供应商未返回的框和置信度保持 None。"""
+        """映射百炼结果；供应商未返回的框和置信度保持 None。
+
+        Args:
+            media_bytes: 已受控的图片字节。
+            media_type: 图片 MIME 类型。
+            media_sha256: 图片内容 SHA-256。
+
+        Returns:
+            带实际 Provider 计量和可选定位的统一 OCR 结果。
+
+        """
         result = self._adapter.recognize(
             media_bytes,
             media_type=media_type,
@@ -125,7 +153,15 @@ class AliyunProductOcrAdapter:
         )
 
     def close(self) -> None:
-        """关闭百炼适配器持有的 HTTP 客户端。"""
+        """关闭百炼适配器持有的 HTTP 客户端。
+
+        Args:
+            无参数；释放当前适配器资源。
+
+        Returns:
+            无返回值。
+
+        """
         self._adapter.close()
 
 
@@ -147,12 +183,28 @@ class LocalProductOcrAdapter:
 
     @property
     def connection_id(self) -> str:
-        """返回 Product settings 用于选择本地服务的稳定标识。"""
+        """返回 Product settings 用于选择本地服务的稳定标识。
+
+        Args:
+            无参数；读取注入配置。
+
+        Returns:
+            本地 OCR 连接 ID。
+
+        """
         return self.config.connection_id
 
     @property
     def identity(self) -> OcrAdapterIdentity:
-        """返回本地服务 provider、revision 与策略身份。"""
+        """返回本地服务 provider、revision 与策略身份。
+
+        Args:
+            无参数；读取构造时冻结的身份。
+
+        Returns:
+            参与 OCR 缓存与 Revision 的适配器身份。
+
+        """
         return self._identity
 
     def inspect(
@@ -162,7 +214,17 @@ class LocalProductOcrAdapter:
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrInspection:
-        """在进入 OcrClient 前验证摘要、字节、格式和已知像素。"""
+        """在进入 OcrClient 前验证摘要、字节、格式和已知像素。
+
+        Args:
+            media_bytes: 待识别媒体字节。
+            media_type: 声明的媒体 MIME 类型。
+            media_sha256: 调用方提供的内容摘要。
+
+        Returns:
+            验证后的字节数和可证明图像尺寸。
+
+        """
         return _inspect_local_media(
             media_bytes,
             media_type=media_type,
@@ -177,7 +239,17 @@ class LocalProductOcrAdapter:
         media_type: str,
         media_sha256: str,
     ) -> ProductOcrRecognition:
-        """调用内部服务并逐字段保留它实际返回的置信度和框。"""
+        """调用内部服务并逐字段保留它实际返回的置信度和框。
+
+        Args:
+            media_bytes: 已受控的媒体字节。
+            media_type: 媒体 MIME 类型。
+            media_sha256: 媒体内容 SHA-256。
+
+        Returns:
+            版本匹配且非空的统一 OCR 识别结果。
+
+        """
         self.inspect(
             media_bytes,
             media_type=media_type,
@@ -214,13 +286,30 @@ class LocalProductOcrAdapter:
         )
 
     def close(self) -> None:
-        """客户端生命周期由注入方所有，单次识别不关闭共享连接池。"""
+        """客户端生命周期由注入方所有，单次识别不关闭共享连接池。
+
+        Args:
+            无参数；本适配器没有独占资源需要释放。
+
+        Returns:
+            无返回值。
+
+        """
 
 
 def aliyun_ocr_identity(
     *, provider: str, policy: ProductOcrPolicy
 ) -> OcrAdapterIdentity:
-    """不创建 HTTP Client 即计算百炼 OCR 内容身份。"""
+    """不创建 HTTP Client 即计算百炼 OCR 内容身份。
+
+    Args:
+        provider: 当前百炼连接的 Provider ID。
+        policy: 统一 Product OCR 策略。
+
+    Returns:
+        可在组合阶段参与内容和缓存身份的适配器身份。
+
+    """
     return OcrAdapterIdentity(
         adapter=_ALIYUN_ADAPTER,
         provider=provider,
@@ -247,7 +336,17 @@ def aliyun_product_ocr_adapter(
     provider: str,
     policy: ProductOcrPolicy,
 ) -> AliyunProductOcrAdapter:
-    """把已安全构造的百炼适配器包装为 Product 端口。"""
+    """把已安全构造的百炼适配器包装为 Product 端口。
+
+    Args:
+        adapter: 已配置凭据和传输边界的百炼适配器。
+        provider: 当前连接的 Provider ID。
+        policy: 统一 Product OCR 策略。
+
+    Returns:
+        实现 Product OCR 合同的百炼包装器。
+
+    """
     return AliyunProductOcrAdapter(
         adapter,
         provider=provider,
@@ -256,7 +355,15 @@ def aliyun_product_ocr_adapter(
 
 
 def aliyun_ocr_config(policy: ProductOcrPolicy) -> AliyunOcrConfig:
-    """把统一策略映射为百炼适配器配置。"""
+    """把统一策略映射为百炼适配器配置。
+
+    Args:
+        policy: 已验证的 Product OCR 策略。
+
+    Returns:
+        字节、像素、输出和出网边界一致的百炼配置。
+
+    """
     return _aliyun_config(policy)
 
 

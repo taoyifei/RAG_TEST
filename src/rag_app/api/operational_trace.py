@@ -171,7 +171,16 @@ class TraceExportRequest(BaseModel):
 def register_operational_trace_routes(
     app: FastAPI, runtime: ProductRuntime
 ) -> None:
-    """注册列表、详情、惰性 Artifact 和稳定导出。"""
+    """注册列表、详情、惰性 Artifact 和稳定导出。
+
+    Args:
+        app: 当前 Product FastAPI 应用。
+        runtime: 提供 Trace Store、授权和来源重鉴权的 Product runtime。
+
+    Returns:
+        无返回值；路由直接注册到应用。
+
+    """
     base = "/api/v1/admin/operational-traces"
 
     @app.get(base, tags=["operational-trace"], response_model=TracePageResponse)

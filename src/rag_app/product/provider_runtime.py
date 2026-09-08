@@ -180,7 +180,15 @@ class ProviderRuntimeRegistry:
 
     @property
     def local_ocr_available(self) -> bool:
-        """说明 Product 组合根是否注入了可用的本地 OCR Adapter。"""
+        """说明 Product 组合根是否注入了可用的本地 OCR Adapter。
+
+        Args:
+            无参数；读取当前 Provider Registry 配置。
+
+        Returns:
+            本地 OCR Adapter 已注入时为 ``True``。
+
+        """
         return self._local_ocr_adapter is not None
 
     def validate(
