@@ -10,6 +10,9 @@ from typing import Any
 import pytest
 
 from rag_app.adapters.chunkers import DocxStructuralChunker
+from rag_app.adapters.parsers.doc_conversion import (
+    DocConversionUnavailableError,
+)
 from rag_app.adapters.parsers.word_document import WordDocumentV1Parser
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
@@ -29,6 +32,7 @@ from rag_app.core.policies import (
 )
 from scripts.v3_00_word_probe import classify_media_inventory, run_probe
 from tests.adapters.parsers.docx.fixtures import build_package
+from tests.ole_doc_fixture import build_ole_word_container
 
 _ROOT = Path(__file__).resolve().parents[2]
 _EXPECTED = _ROOT / "tests/fixtures/v3_00_word/expected_baseline.json"
@@ -280,16 +284,17 @@ def test_default_product_probe_uses_word_parser_and_structural_chunker(
     assert (
         first["product_components"]["chunker"]["name"] == "docx-structural-v3"
     )
-    assert first["media_scan"]["inventory_status"] == "confirmed"
+    assert first["media_scan"]["inventory_status"] == "complete"
     assert first["parse"]["image_display_instances"] == 2
     assert first["parse"]["unique_embedded_media"] == 1
 
 
 def test_flattened_doc_pic_placeholder_keeps_media_inventory_unknown() -> None:
     parser = WordDocumentV1Parser(
-        doc_extractor=lambda _content, _policy: "正文\n[pic]\n图下注释"
+        doc_converter=_UnavailableConverter(),
+        doc_extractor=lambda _content, _policy: "正文\n[pic]\n图下注释",
     )
-    content = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"synthetic"
+    content = build_ole_word_container()
     parsed = parser.parse(
         ParseSource(
             media_type="application/msword",
@@ -316,6 +321,13 @@ def test_flattened_doc_pic_placeholder_keeps_media_inventory_unknown() -> None:
         node.image_attributes is None for node in parsed.document_ir.nodes
     )
     assert {item.role for item in parsed.artifacts} == {"source_document"}
+
+
+class _UnavailableConverter:
+    """V3-00 缺陷历史只绑定显式文本 fallback。"""
+
+    def convert(self, *_args: object, **_kwargs: object) -> object:
+        raise DocConversionUnavailableError("synthetic unavailable")
 
 
 def test_word_probe_rejects_symlink_before_resolving(tmp_path: Path) -> None:

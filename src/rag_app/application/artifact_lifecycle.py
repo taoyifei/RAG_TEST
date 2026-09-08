@@ -116,14 +116,16 @@ class ArtifactLifecycleService:
                 )
             )
         for artifact in unique.values():
+            version_artifact = artifact.role in {
+                "source_document",
+                "derived_document",
+            }
             owner_type = (
-                "document_version"
-                if artifact.role == "source_document"
-                else "parsed_media"
+                "document_version" if version_artifact else "parsed_media"
             )
             owner_id = (
                 owner_document_version_id
-                if artifact.role == "source_document"
+                if version_artifact
                 else deterministic_id(
                     "bref",
                     revision_id,
@@ -139,7 +141,7 @@ class ArtifactLifecycleService:
                 artifact.role,
                 (
                     revision_id
-                    if artifact.role != "source_document"
+                    if not version_artifact
                     else "persistent-document-version"
                 ),
             )
@@ -150,11 +152,7 @@ class ArtifactLifecycleService:
                     owner_type=owner_type,
                     owner_id=owner_id,
                     role=artifact.role,
-                    revision_id=(
-                        None
-                        if artifact.role == "source_document"
-                        else revision_id
-                    ),
+                    revision_id=(None if version_artifact else revision_id),
                 )
             )
         self._catalog.commit_references(references)

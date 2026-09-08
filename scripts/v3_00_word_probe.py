@@ -179,7 +179,7 @@ def _chunk_summary(chunks: Sequence[Chunk]) -> dict[str, object]:
 
 
 def classify_media_inventory(document: DocumentIR) -> tuple[str, str]:
-    """区分已确认无图与扁平化后无法盘点媒体。
+    """区分完整、部分和无法证明的媒体盘点。
 
     Args:
         document: Parser 或增补器输出的规范 IR。
@@ -197,7 +197,12 @@ def classify_media_inventory(document: DocumentIR) -> tuple[str, str]:
     )
     if flattened and not has_image_instance:
         return "unknown", "unknown_after_flattening"
-    return "confirmed", "confirmed_by_image_nodes"
+    declared = dict(document.metadata).get("media_inventory")
+    if declared == "unknown":
+        return "unknown", "unknown_source_inventory"
+    if declared == "partial" or document.parse_report.unsupported_with_media:
+        return "partial", "partial_with_unresolved_media"
+    return "complete", "complete_by_package_inventory"
 
 
 def run_probe(
@@ -301,11 +306,16 @@ def run_probe(
     media_inventory_status, zero_count_meaning = classify_media_inventory(
         enriched.document_ir
     )
+    document_metadata = dict(enriched.document_ir.metadata)
     normalized_ir = _normalize_ir(enriched.document_ir)
     normalized_chunks = _normalize_chunks(chunked.chunks, chunked.report)
     result: dict[str, Any] = {
         "schema_version": "v3-00-word-baseline-1",
-        "status": "PARTIAL" if flattened_doc else "PASS",
+        "status": (
+            "PARTIAL"
+            if flattened_doc or media_inventory_status != "complete"
+            else "PASS"
+        ),
         "input": {
             "display_name": path.name,
             "size_bytes": len(content),
@@ -325,6 +335,13 @@ def run_probe(
         },
         "parse": {
             **node_summary,
+            "native_text": document_metadata.get("native_text", "native"),
+            "structure_coverage": document_metadata.get(
+                "source_representation", "native-docx"
+            ),
+            "relationship_status": document_metadata.get(
+                "relationship_status", "native-package"
+            ),
             "issue_codes": issue_codes,
             "warnings": list(enriched.report.warnings),
             "artifacts": _artifact_summary(enriched.artifacts),

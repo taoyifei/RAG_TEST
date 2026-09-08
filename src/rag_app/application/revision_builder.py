@@ -830,7 +830,12 @@ class RevisionBuilder:
                         extension=item.extension,
                     ),
                     self._parsing_policy,
-                    ParseContext(document=item.document),
+                    ParseContext(
+                        document=item.document,
+                        cancel_check=lambda: self._control.assert_job_active(
+                            job_id
+                        ),
+                    ),
                 )
             with self._document_stage(context, "ir_validation"):
                 validate_document_ir(result.document_ir)

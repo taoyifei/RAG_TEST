@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import PurePath
 
 from rag_app.adapters.chunkers.docx_structural.atoms import (
@@ -23,6 +24,16 @@ from rag_app.core.models import (
     StoryKind,
 )
 from rag_app.core.models.common import freeze_json_object
+
+_GENERIC_IMAGE_LABEL = re.compile(
+    r"^(?:image|picture|graphic|drawing|shape|图像|图片|图形|绘图)"
+    r"\s*[-_#]?\s*\d+$",
+    re.IGNORECASE,
+)
+_IMAGE_FILE_SUFFIXES = frozenset(
+    {".bmp", ".emf", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp", ".wmf"}
+)
+_IMAGE_PLACEHOLDERS = frozenset({"[pic]", "[image]", "[picture]"})
 
 
 def plan_sections(
@@ -515,8 +526,14 @@ def _node_order(node: DocumentNode) -> tuple[int, int, str]:
 
 
 def _looks_like_filename_only(text: str) -> bool:
-    path = PurePath(text)
-    return bool(path.suffix and path.stem and " " not in text)
+    normalized = text.strip()
+    path = PurePath(normalized)
+    return (
+        normalized.casefold() in _IMAGE_PLACEHOLDERS
+        or _GENERIC_IMAGE_LABEL.fullmatch(normalized) is not None
+        or path.suffix.casefold() in _IMAGE_FILE_SUFFIXES
+        or bool(path.suffix and path.stem and " " not in normalized)
+    )
 
 
 def _stable_label(prefix: str, *parts: object) -> str:

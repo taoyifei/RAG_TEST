@@ -1336,7 +1336,11 @@ class SqliteControlStore:
             ).fetchall()
             counts = {str(row["state"]): int(row["value"]) for row in rows}
             expected = sum(counts.values())
-            ratio = 0.0 if expected == 0 else valid_vector_count / expected
+            ratio = (
+                (1.0 if valid_vector_count == 0 else 0.0)
+                if expected == 0
+                else valid_vector_count / expected
+            )
             connection.execute(
                 "INSERT INTO revision_embedding_coverage("
                 "revision_id, slot_id, expected_chunk_count, cached_count, "
@@ -1363,11 +1367,7 @@ class SqliteControlStore:
                     valid_vector_count,
                     counts.get("failed", 0),
                     ratio,
-                    (
-                        "complete"
-                        if expected > 0 and ratio == 1.0
-                        else "incomplete"
-                    ),
+                    ("complete" if ratio == 1.0 else "incomplete"),
                     _now(),
                 ),
             )

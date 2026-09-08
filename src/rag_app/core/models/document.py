@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import StrEnum
 from typing import Literal, Self
 
@@ -61,6 +61,11 @@ class ParseContext(FrozenModel):
     """不进入解析策略指纹的运行时文档身份。"""
 
     document: DocumentRef
+    cancel_check: Callable[[], None] | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
 
 
 def validate_document_ref_uniqueness(
@@ -336,16 +341,14 @@ class DocumentNode(MetadataModel):
             text_payload=(payload if kind is not NodeKind.IMAGE else None),
             list_attributes=(
                 ListAttributes(level=list_level)
-                if kind is NodeKind.LIST_ITEM
-                and isinstance(list_level, int)
+                if kind is NodeKind.LIST_ITEM and isinstance(list_level, int)
                 else None
             ),
             image_attributes=(
                 ImageAttributes(
                     blob_ref=f"legacy-unpersisted:{expected_hash}",
                     media_type=str(
-                        metadata.get("media_type")
-                        or "application/octet-stream"
+                        metadata.get("media_type") or "application/octet-stream"
                     ),
                     content_sha256=expected_hash,
                     display_name=(
@@ -599,7 +602,7 @@ class ParsedArtifact(FrozenModel):
     content_sha256: str = Field(pattern=_SHA256_PATTERN)
     media_type: str = Field(min_length=1, max_length=255)
     content: bytes = Field(repr=False)
-    role: Literal["source_document", "embedded_media"]
+    role: Literal["source_document", "derived_document", "embedded_media"]
 
     @model_validator(mode="after")
     def _validate_content(self) -> Self:
@@ -757,11 +760,7 @@ def validate_document_ir(  # noqa: PLR0912, PLR0915
     ordered_roots = tuple(
         node.node_id
         for node in sorted(
-            (
-                node
-                for node in document_ir.nodes
-                if node.parent_node_id is None
-            ),
+            (node for node in document_ir.nodes if node.parent_node_id is None),
             key=lambda node: (node.order, node.anchor.ordinal, node.node_id),
         )
     )
