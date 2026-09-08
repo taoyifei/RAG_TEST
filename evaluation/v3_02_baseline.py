@@ -339,7 +339,7 @@ class StageDuration(_FrozenModel):
 
 
 class TraceMeasurement(_FrozenModel):
-    """单次查询产生的 writer、存储和 Artifact 增量。"""
+    """单次查询产生的 writer、逻辑存储和 Artifact 增量。"""
 
     submitted_count: int = Field(ge=0)
     written_count: int = Field(ge=0)
@@ -831,7 +831,6 @@ class DeterministicProductBaselineRuntime:
         state = self._require_state()
         source_case = self._consumer_cases[case.case_id]
         metrics_before = self._trace_recorder.metrics
-        storage_before = _trace_storage_bytes(self._trace_store.database_path)
         trace_id = _trace_id(
             case.case_id, mode, cache_condition, case.query_sha256
         )
@@ -868,8 +867,8 @@ class DeterministicProductBaselineRuntime:
         total_duration_ns = time.perf_counter_ns() - started
         self._trace_recorder.flush()
         detail = self._trace_store.get_trace(trace_id)
+        canonical_export = self._trace_store.export_trace(trace_id)
         metrics_after = self._trace_recorder.metrics
-        storage_after = _trace_storage_bytes(self._trace_store.database_path)
         diagnostics = _require_diagnostics(result)
         provider_calls = sum(
             item.call_count for item in diagnostics.provider_calls
@@ -944,7 +943,7 @@ class DeterministicProductBaselineRuntime:
                     metrics_after["dropped"] - metrics_before["dropped"]
                 ),
                 queue_high_water=metrics_after["queue_high_water"],
-                storage_bytes=max(0, storage_after - storage_before),
+                storage_bytes=len(canonical_export),
                 artifact_count=len(detail.artifacts),
                 artifact_bytes=sum(
                     item.original_bytes for item in detail.artifacts
@@ -1341,15 +1340,6 @@ def _trace_consumer_case_map(
     if missing:
         raise ValueError(f"Trace consumer 缺少实际 Case：{missing}")
     return {case_id: mapped[case_id] for case_id in required}
-
-
-def _trace_storage_bytes(database_path: Path) -> int:
-    """统计 Trace SQLite 主文件、WAL 与 SHM 的当前字节。"""
-    return sum(
-        item.stat().st_size
-        for item in database_path.parent.glob(f"{database_path.name}*")
-        if item.is_file()
-    )
 
 
 def _trace_id(

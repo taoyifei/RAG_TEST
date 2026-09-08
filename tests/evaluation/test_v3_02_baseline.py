@@ -565,6 +565,12 @@ def test_concrete_runner_writes_52_case_and_trace_receipts(
             "erroneous_answer_rate",
         ):
             assert cold[field_name] == warm[field_name]
+    for cache_condition in ("cold", "warm"):
+        safe = metrics[("SAFE", cache_condition)]
+        diagnostic = metrics[("DIAGNOSTIC", cache_condition)]
+        full = metrics[("FULL", cache_condition)]
+        assert safe["trace_storage_bytes"] < diagnostic["trace_storage_bytes"]
+        assert diagnostic["trace_storage_bytes"] < full["trace_storage_bytes"]
     assert (output / "report.json").read_bytes() == bundle.report_json
     assert (output / "manifest.json").read_bytes() == bundle.manifest_json
     assert (output / "MANIFEST.sha256").read_bytes() == bundle.checksums
