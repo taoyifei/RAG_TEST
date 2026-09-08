@@ -966,6 +966,33 @@ def _blocked_identity(reason: str) -> dict[str, object]:
     return {"status": "BLOCKED", "reason": reason}
 
 
+def _emit_identity_report(
+    report: Mapping[str, object], output_json: Path | None
+) -> None:
+    """向 stdout 和可选私有文件写出同一份稳定身份报告。
+
+    Args:
+        report: 已完成全部检查的身份报告。
+        output_json: 可选 JSON 收据路径。
+
+    Returns:
+        无返回值。
+
+    """
+    rendered = json.dumps(
+        report,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(f"{rendered}\n", encoding="utf-8")
+        if os.name != "nt":
+            output_json.chmod(0o600)
+    print(rendered)
+
+
 def _run_runtime_identity(arguments: argparse.Namespace) -> int:
     """输出源码树、构建、前端与可选 Runtime 的统一身份 JSON。"""
     checks: dict[str, dict[str, object]] = {}
@@ -1061,14 +1088,7 @@ def _run_runtime_identity(arguments: argparse.Namespace) -> int:
         },
         "checks": checks,
     }
-    print(
-        json.dumps(
-            report,
-            ensure_ascii=True,
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
+    _emit_identity_report(report, arguments.output_json)
     return 1 if blocked else 0
 
 

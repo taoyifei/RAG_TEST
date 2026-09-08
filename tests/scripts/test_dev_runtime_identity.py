@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -118,6 +120,25 @@ def test_explicit_profile_reports_offline_composition_fingerprints(
     assert identity["index_fingerprint"].startswith("sha256:")
     assert identity["serving_fingerprint"].startswith("sha256:")
     assert identity["network_calls"] == 0
+
+
+def test_output_json_matches_stdout_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """显式输出文件与 stdout 必须是同一份稳定身份报告。"""
+    monkeypatch.setattr(dev, "SOURCE_REVISION", "development-unset")
+    _clean_source_tree(monkeypatch)
+    output = tmp_path / "receipts" / "runtime-identity.json"
+
+    assert dev.main(["runtime-identity", "--output-json", str(output)]) == 0
+    stdout, report = _report(capsys)
+
+    assert output.read_text(encoding="utf-8") == stdout
+    assert json.loads(output.read_text(encoding="utf-8")) == report
+    if os.name != "nt":
+        assert stat.S_IMODE(output.stat().st_mode) == 0o600
 
 
 def test_explicit_context_runtime_and_image_identities_are_cross_checked(
