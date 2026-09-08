@@ -196,6 +196,28 @@ def test_doc_parser_rejects_renamed_or_foreign_formats(
     assert message in captured.value.safe_message
 
 
+def test_doc_parser_accepts_non_sector_aligned_word_cfb() -> None:
+    derived = build_package(
+        "<w:p><w:r><w:t>公开合成尾段兼容</w:t></w:r></w:p>"
+    )
+    original = build_ole_word_container() + b"public-synthetic-tail"
+    parser = WordDocumentV1Parser(doc_converter=_StaticConverter(derived))
+
+    result = parser.parse(
+        _doc_source(content=original),
+        ParsingPolicy(),
+        _context(),
+    )
+
+    assert result.document_ir.source.content_sha256 == hashlib.sha256(
+        original
+    ).hexdigest()
+    assert any(
+        node.text == "公开合成尾段兼容"
+        for node in result.document_ir.nodes
+    )
+
+
 def test_converted_doc_maps_structure_media_and_artifacts_to_original() -> None:
     derived = build_package(
         _CONVERTED_BLOCKS,

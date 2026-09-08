@@ -650,7 +650,9 @@ def _ole_directory_stream_names(  # noqa: PLR0912, PLR0915
         ) not in {(3, 9), (4, 12)}:
             raise ValueError
         sector_size = 1 << sector_shift
-        if len(content) % sector_size or len(content) < sector_size * 2:
+        # FAT 与目录只从完整 sector 读取；兼容 Office 实现可读取的
+        # 非整 sector 尾段，原始尾段仍原样交给后续受限转换器。
+        if len(content) < sector_size * 2:
             raise ValueError
         sector_count = len(content) // sector_size - 1
         traversal_limit = min(sector_count, policy.max_entries)
