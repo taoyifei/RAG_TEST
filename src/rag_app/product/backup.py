@@ -294,12 +294,12 @@ def _restore_trusted_archive(
                     qdrant_url=qdrant_url,
                     api_key=api_key,
                 )
-            shutil.copyfile(
+            _copy_private_file(
                 root / "sqlite" / _DATABASE_NAME,
                 target / _DATABASE_NAME,
             )
             for name in _auxiliary_databases(manifest):
-                shutil.copyfile(root / "sqlite" / name, target / name)
+                _copy_private_file(root / "sqlite" / name, target / name)
             # 首绑前备份也可能缺少后来消费；所有恢复都必须先对账。
             (target / "provider-budget.restore-blocked").write_text(
                 "RECONCILE_WITH_AUTHORITATIVE_CAMPAIGN_BEFORE_LIVE\n",
@@ -422,6 +422,32 @@ def _sqlite_snapshot(source: Path, target: Path) -> None:
         source_connection.backup(target_connection)
     if _sqlite_integrity(target) != "ok":
         raise ValueError("SQLite 一致性快照完整性失败。")
+
+
+def _copy_private_file(source: Path, target: Path) -> None:
+    """把恢复文件独占写入为仅当前用户可读写的普通文件。
+
+    Args:
+        source: 已验证归档中的源文件。
+        target: 私有恢复目录中必须尚不存在的目标文件。
+
+    Returns:
+        无返回值。
+
+    Raises:
+        FileExistsError: 目标文件已经存在。
+        OSError: 源文件读取或目标文件创建、写入失败。
+
+    """
+    descriptor = os.open(
+        target,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+    )
+    with source.open("rb") as source_stream, os.fdopen(
+        descriptor, "wb"
+    ) as target_stream:
+        shutil.copyfileobj(source_stream, target_stream)
 
 
 def _auxiliary_databases(manifest: dict[str, Any]) -> tuple[str, ...]:

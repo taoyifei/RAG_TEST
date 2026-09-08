@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import stat
 import tarfile
 from pathlib import Path
 
@@ -187,6 +188,13 @@ def test_backup_verifies_and_restores_without_secret_files(
     assert (tmp_path / "restored" / "universal-rag.sqlite3").is_file()
     trace_database = tmp_path / "restored" / "product-traces.sqlite3"
     assert trace_database.is_file()
+    assert stat.S_IMODE(trace_database.stat().st_mode) == 0o600
+    assert (
+        stat.S_IMODE(
+            (tmp_path / "restored" / "universal-rag.sqlite3").stat().st_mode
+        )
+        == 0o600
+    )
     with sqlite3.connect(trace_database) as connection:
         assert connection.execute(
             "SELECT status FROM traces WHERE trace_id=?", (trace_id,)
