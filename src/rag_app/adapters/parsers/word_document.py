@@ -88,8 +88,8 @@ class WordDocumentV1Parser:
         kind=ComponentKind.PARSER,
         name="word-document-v1",
         version=(
-            "2.0.0+docx-4.0.0."
-            "libreoffice-landlock-seccomp-v1."
+            "2.0.1+docx-4.0.0."
+            f"{SandboxedLibreOfficeConverter.recipe}."
             f"antiword-{_ANTIWORD_PACKAGE_VERSION}"
         ),
         mode=ProviderMode.LOCAL,

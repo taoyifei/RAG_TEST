@@ -90,6 +90,8 @@ class DocConversionTimeoutError(DocConversionFailedError):
 class SandboxedLibreOfficeConverter:
     """用 Landlock、seccomp 与 rlimit 约束 LibreOffice。"""
 
+    recipe = _CONVERTER_RECIPE
+
     def __init__(
         self,
         *,
@@ -261,7 +263,7 @@ class SandboxedLibreOfficeConverter:
                 content=expected.read_bytes(),
                 converter="libreoffice",
                 converter_version=_LIBREOFFICE_PACKAGE_VERSION,
-                recipe=_CONVERTER_RECIPE,
+                recipe=self.recipe,
             )
 
     def _wait(

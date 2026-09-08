@@ -13,6 +13,7 @@ from rag_app.adapters.parsers import word_document
 from rag_app.adapters.parsers.doc_conversion import (
     DocConversion,
     DocConversionUnavailableError,
+    SandboxedLibreOfficeConverter,
 )
 from rag_app.adapters.parsers.word_document import WordDocumentV1Parser
 from rag_app.core.errors import InvalidDocument
@@ -57,6 +58,13 @@ _CONVERTED_BLOCKS = """
 <w:p><w:r><w:drawing><wp:inline><wp:extent cx="9525" cy="9525"/><wp:docPr id="2" name="合成图二"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdImage"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
 <w:p><w:hyperlink r:id="rIdExternal"><w:r><w:t>保留显示文字</w:t></w:r></w:hyperlink></w:p>
 """
+
+
+def test_parser_descriptor_tracks_default_converter_recipe() -> None:
+    assert (
+        SandboxedLibreOfficeConverter.recipe
+        in WordDocumentV1Parser.descriptor.version
+    )
 
 
 class _StaticConverter:
