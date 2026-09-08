@@ -197,6 +197,7 @@ class TraceSession:
         *,
         parent_span_id: str | None,
         attributes: dict[str, object] | None = None,
+        historical_duration_ms: int | None = None,
     ) -> TraceSpanHandle:
         """开始并尽力持久化一个 RUNNING span。
 
@@ -205,6 +206,8 @@ class TraceSession:
             kind: 可映射到 OpenTelemetry 的类别。
             parent_span_id: 父 span ID；根 span 使用空值。
             attributes: 不含正文、secret 或大对象的安全属性。
+            historical_duration_ms: 已完成外部调用随后补录父阶段时，向前恢复的
+                实际持续时间；不会早于父 span 起点。
 
         Returns:
             供关闭阶段使用的计时状态。
@@ -218,6 +221,20 @@ class TraceSession:
         parent = self._open_parent(parent_span_id)
         self._sequence += 1
         started_at, started_tick = self._timeline_now()
+        safe_attributes = dict(attributes or {})
+        if historical_duration_ms is not None:
+            if historical_duration_ms < 0:
+                raise ValueError("历史 span 持续时间不能为负数。")
+            if parent is None:
+                raise ValueError("根 span 不能使用历史持续时间。")
+            available_ms = _duration_ms(parent.handle.started_at, started_at)
+            restored_ms = min(historical_duration_ms, available_ms)
+            started_at -= timedelta(milliseconds=restored_ms)
+            started_tick -= restored_ms / 1000
+            if restored_ms != historical_duration_ms:
+                safe_attributes["reported_historical_duration_ms"] = (
+                    historical_duration_ms
+                )
         active = TraceSpanHandle(
             span_id=uuid.uuid4().hex[:16],
             parent_span_id=parent_span_id,
@@ -240,7 +257,7 @@ class TraceSession:
                 duration_ms=None,
                 status=SpanStatus.RUNNING,
                 reason_code=DecisionCode.STARTED,
-                attributes=_json_attributes(attributes),
+                attributes=_json_attributes(safe_attributes),
                 input_artifact_id=None,
                 output_artifact_id=None,
             ),

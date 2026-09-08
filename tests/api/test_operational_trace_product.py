@@ -15,7 +15,9 @@ import pytest
 
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import new_id
+from rag_app.core.models import KnowledgeBaseScope, ProviderCall
 from rag_app.tracing import TraceUnavailableError
+from rag_app.tracing.models import TraceMode
 from tests.adapters.parsers.docx.fixtures import build_package
 from tests.product_support import (
     ProductHarness,
@@ -302,6 +304,163 @@ def test_diagnostic_and_full_trace_keep_content_boundaries(
             == hashlib.sha256(artifact.content).hexdigest()
         )
         assert "channel_chunk_ids" in artifact.json()
+    finally:
+        harness.close()
+
+
+def test_product_trace_records_cache_hit_and_refusal_terminal_state(
+    tmp_path: Path,
+) -> None:
+    """默认 Product 的缓存命中不重复检索，无答案查询结算为 REFUSED。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        endpoint = (
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer"
+        )
+        first = harness.client.post(
+            endpoint,
+            json={"query": "TR-21", "trace_mode": "DIAGNOSTIC"},
+            headers=harness.write_headers,
+        )
+        cached = harness.client.post(
+            endpoint,
+            json={"query": "TR-21", "trace_mode": "DIAGNOSTIC"},
+            headers=harness.write_headers,
+        )
+        refused = harness.client.post(
+            endpoint,
+            json={
+                "query": "完全不存在的月球库存编号",
+                "trace_mode": "DIAGNOSTIC",
+            },
+            headers=harness.write_headers,
+        )
+        assert (
+            first.status_code
+            == cached.status_code
+            == refused.status_code
+            == 200
+        )
+        assert cached.json()["cache_hit"] is True
+        cached_detail = harness.client.get(
+            "/api/v1/admin/operational-traces/" + cached.json()["trace_id"]
+        ).json()
+        cache_span = next(
+            item
+            for item in cached_detail["spans"]
+            if item["name"] == "retrieval.cache"
+        )
+        assert cache_span["reason_code"] == "CACHE_HIT"
+        assert not any(
+            item["name"] in {"retrieval.exact", "retrieval.lexical"}
+            for item in cached_detail["spans"]
+        )
+        refused_detail = harness.client.get(
+            "/api/v1/admin/operational-traces/" + refused.json()["trace_id"]
+        ).json()
+        assert refused.json()["answer"] is None
+        assert refused_detail["trace"]["status"] == "REFUSED"
+        assert refused_detail["trace"]["refusal_code"] == (
+            "INSUFFICIENT_EVIDENCE"
+        )
+    finally:
+        harness.close()
+
+
+def test_product_coordinator_nests_provider_call_and_settles_cancel(
+    tmp_path: Path,
+) -> None:
+    """Provider 实际调用是阶段子 Span，取消使用独立 canonical 终态。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        base = harness.runtime.sdk.answer(
+            project_id,
+            knowledge_base_id,
+            "TR-21",
+            owner_id="provider-span-fixture",
+        )
+        assert base.diagnostics is not None
+        trace_id = new_id("trace")
+        diagnostics = base.diagnostics.model_copy(
+            update={
+                "provider_call_details": (
+                    ProviderCall(
+                        provider_id="offline-contract-provider",
+                        operation="answer.generate",
+                        call_count=1,
+                        retry_count=0,
+                        elapsed_ms=7,
+                        model="offline-contract-model",
+                        attempt_count=1,
+                        status_category="success",
+                    ),
+                )
+            }
+        )
+        result = base.model_copy(
+            update={"trace_id": trace_id, "diagnostics": diagnostics}
+        )
+        scope = KnowledgeBaseScope(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+        )
+        harness.runtime.traces.prepare(trace_id, TraceMode.DIAGNOSTIC)
+        harness.runtime.traces.start(
+            trace_id,
+            scope,
+            "TR-21",
+            owner_id="provider-span-fixture",
+            save_body=False,
+        )
+        # 合成调用发生在会话前；留出其声明的 7 ms，避免时间线安全裁剪。
+        sleep(0.01)
+        harness.runtime.traces.finish(
+            trace_id,
+            result=result,
+            error=None,
+            cancelled=False,
+        )
+        detail = harness.runtime.traces.detail(trace_id)
+        phase = next(
+            item
+            for item in detail.spans
+            if item.name == "provider-phase.answer.generate"
+        )
+        call = next(
+            item
+            for item in detail.spans
+            if item.name == "provider.answer.generate"
+        )
+        assert call.parent_span_id == phase.span_id
+        assert call.duration_ms == 7
+
+        cancelled_id = new_id("trace")
+        harness.runtime.traces.prepare(cancelled_id, TraceMode.SAFE)
+        harness.runtime.traces.start(
+            cancelled_id,
+            scope,
+            "已在入口取消的公开请求",
+            owner_id="cancel-fixture",
+            save_body=False,
+        )
+        harness.runtime.traces.finish(
+            cancelled_id,
+            result=None,
+            error=None,
+            cancelled=True,
+        )
+        assert harness.runtime.traces.detail(
+            cancelled_id
+        ).trace.status.value == ("CANCELLED")
     finally:
         harness.close()
 

@@ -718,6 +718,7 @@ def _provider_span(session: TraceSession, call: ProviderCall) -> None:
         _provider_kind(call.operation),
         parent_span_id=session.root.span_id,
         attributes={"operation": call.operation},
+        historical_duration_ms=call.elapsed_ms,
     )
     session.completed_span(
         TraceSpanSpec(
