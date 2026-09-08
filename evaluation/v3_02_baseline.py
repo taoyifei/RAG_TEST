@@ -873,6 +873,7 @@ class DeterministicProductBaselineRuntime:
             sum(item.elapsed_ms for item in diagnostics.provider_call_details)
             * 1_000_000
         )
+        evidence_chunk_ids = tuple(item.chunk_id for item in result.evidence)
         correct = _answer_correct(source_case, result)
         identity = state.build.identity
         return QueryMeasurement(
@@ -890,8 +891,8 @@ class DeterministicProductBaselineRuntime:
                 ChannelCandidates(channel=channel, chunk_ids=chunk_ids)
                 for channel, chunk_ids in diagnostics.channel_chunk_ids
             ),
-            evidence_chunk_ids=tuple(item.chunk_id for item in result.evidence),
-            cited_chunk_ids=diagnostics.cited_chunk_ids,
+            evidence_chunk_ids=evidence_chunk_ids,
+            cited_chunk_ids=evidence_chunk_ids if answered else (),
             answered=answered,
             answer_correct=correct,
             refusal_reason=None if answered else result.reason_code,
@@ -1360,12 +1361,9 @@ def _answer_correct(
     """按固定相关 Chunk 判断公开合成可回答 Case。"""
     if not case.expected.answerable:
         return None
-    diagnostics = _require_diagnostics(result)
     relevant = set(case.expected.relevant_chunk_ids)
-    return (
-        result.status is ConfidenceStatus.ANSWERABLE
-        and bool(relevant & set(diagnostics.reranked))
-        and bool(relevant & set(diagnostics.cited_chunk_ids))
+    return result.status is ConfidenceStatus.ANSWERABLE and bool(
+        relevant & {item.chunk_id for item in result.evidence}
     )
 
 
@@ -1898,6 +1896,17 @@ def _validate_cross_mode_boundaries(
         }
         if len(provider_calls) != 1:
             raise ValueError(f"{key}: Trace 模式增加或改变了 Provider 调用。")
+    by_case_and_mode: dict[tuple[str, TraceMode], list[QueryMeasurement]] = (
+        defaultdict(list)
+    )
+    for result in results:
+        by_case_and_mode[(result.case_id, result.mode)].append(result)
+    for cache_key, measurements in by_case_and_mode.items():
+        if len(measurements) != len(CACHE_CONDITION_ORDER):
+            raise ValueError(f"{cache_key}: cold/warm cache 测量不完整。")
+        quality = {_cache_quality_signature(item) for item in measurements}
+        if len(quality) != 1:
+            raise ValueError(f"{cache_key}: cold/warm cache 改变了质量结果。")
 
 
 def _quality_signature(measurement: QueryMeasurement) -> str:
@@ -1907,6 +1916,19 @@ def _quality_signature(measurement: QueryMeasurement) -> str:
                 item.model_dump(mode="json")
                 for item in measurement.channel_candidates
             ],
+            "evidence": measurement.evidence_chunk_ids,
+            "cited": measurement.cited_chunk_ids,
+            "answered": measurement.answered,
+            "answer_correct": measurement.answer_correct,
+            "refusal_reason": measurement.refusal_reason,
+        }
+    )
+
+
+def _cache_quality_signature(measurement: QueryMeasurement) -> str:
+    """返回不包含本次检索诊断的缓存前后质量签名。"""
+    return canonical_sha256(
+        {
             "evidence": measurement.evidence_chunk_ids,
             "cited": measurement.cited_chunk_ids,
             "answered": measurement.answered,
@@ -2189,13 +2211,12 @@ def _timing_summary(
 
 
 def _recall_at_5(measurement: QueryMeasurement, case: FixedChunkCase) -> float:
-    candidates: list[str] = []
-    for channel in measurement.channel_candidates:
-        for chunk_id in channel.chunk_ids:
-            if chunk_id not in candidates:
-                candidates.append(chunk_id)
+    """按最终返回 evidence 计算冷、暖缓存同义的 Recall@5。"""
     relevant = set(case.relevant_chunk_ids)
-    return _ratio(len(set(candidates[:5]) & relevant), len(relevant))
+    return _ratio(
+        len(set(measurement.evidence_chunk_ids[:5]) & relevant),
+        len(relevant),
+    )
 
 
 def _case_manifest_sha256(cases: Sequence[FixedChunkCase]) -> str:

@@ -541,6 +541,21 @@ def test_concrete_runner_writes_52_case_and_trace_receipts(
     assert all(
         not item["product_quality_claimed"] for item in consumer["contracts"]
     )
+    metrics = {
+        (item["mode"], item["cache_condition"]): item
+        for item in report["mode_metrics"]
+    }
+    for mode in ("SAFE", "DIAGNOSTIC", "FULL"):
+        cold = metrics[(mode, "cold")]
+        warm = metrics[(mode, "warm")]
+        for field_name in (
+            "evidence_recall_at_5",
+            "citation_accuracy",
+            "answer_accuracy",
+            "erroneous_refusal_rate",
+            "erroneous_answer_rate",
+        ):
+            assert cold[field_name] == warm[field_name]
     assert (output / "report.json").read_bytes() == bundle.report_json
     assert (output / "manifest.json").read_bytes() == bundle.manifest_json
     assert (output / "MANIFEST.sha256").read_bytes() == bundle.checksums
