@@ -19,7 +19,13 @@ import { DiagnosticsView, HistoryTrace } from "../components/HistoryTrace";
 import { useConsole } from "../state/console-context";
 import { isOcrEvidence, OcrEvidenceSource } from "../components/DocumentImages";
 
-export function QueryPage({ mode }: { mode: "search" | "answer" }) {
+export function QueryPage({
+  mode,
+  go,
+}: {
+  mode: "search" | "answer";
+  go?: (path: string) => void;
+}) {
   const { tokens, scope } = useConsole();
   const [identity, setIdentity] = useState({ ...tokens, generation: 0 });
   if (identity.query !== tokens.query || identity.admin !== tokens.admin) {
@@ -29,6 +35,7 @@ export function QueryPage({ mode }: { mode: "search" | "answer" }) {
     <ScopedQueryPage
       key={`${mode}:${scope.projectId}:${scope.kbId}:${scope.revisionId}:${identity.generation}`}
       mode={mode}
+      go={go}
     />
   );
 }
@@ -70,7 +77,13 @@ function answerDeliveryMessage(result: QueryResponse): string {
   return "当前资料没有足以直接回答这个问题的证据。";
 }
 
-function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
+function ScopedQueryPage({
+  mode,
+  go,
+}: {
+  mode: "search" | "answer";
+  go?: (path: string) => void;
+}) {
   const { tokens, scope } = useConsole();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResponse>();
@@ -234,6 +247,14 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             <button onClick={() => setHistoryTrace(result.trace_id)}>
               查看检索过程
             </button>
+            {go && (
+              <button
+                className="secondary"
+                onClick={() => openOperationalTrace(result.trace_id, go)}
+              >
+                打开技术 Trace
+              </button>
+            )}
             <small>
               {savedBody
                 ? "已请求本机保存；可在问答历史中查看"
@@ -414,4 +435,11 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
       )}
     </section>
   );
+}
+
+function openOperationalTrace(traceId: string, go: (path: string) => void) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("trace_id", traceId);
+  window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  go("/operational-traces");
 }

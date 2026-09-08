@@ -22,7 +22,11 @@ import httpx
 from qdrant_client import QdrantClient
 
 _DATABASE_NAME = "universal-rag.sqlite3"
-_AUXILIARY_DATABASES = ("provider-budget.sqlite3", "p11-live-state.sqlite3")
+_AUXILIARY_DATABASES = (
+    "product-traces.sqlite3",
+    "provider-budget.sqlite3",
+    "p11-live-state.sqlite3",
+)
 _MANIFEST_NAME = "backup-manifest.json"
 _COMPATIBILITY_NAME = "compatibility-manifest.json"
 _FORMAT_VERSION = 1

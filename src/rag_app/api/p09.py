@@ -29,7 +29,7 @@ from rag_app.api.p09_schemas import (
     UpdateProjectRequest,
 )
 from rag_app.composition.p09_runtime import P09Runtime
-from rag_app.core.errors import PolicyDenied, RagError
+from rag_app.core.errors import PolicyDenied, ProviderUnavailable, RagError
 from rag_app.core.identifiers import deterministic_id, new_id
 from rag_app.core.models import (
     Document,
@@ -41,6 +41,7 @@ from rag_app.core.models import (
     SystemStatus,
 )
 from rag_app.core.models.search import SearchAnswerResult
+from rag_app.tracing import TraceMode, TraceUnavailableError
 
 _MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 _HTTP_UNAUTHORIZED = 401
@@ -62,6 +63,7 @@ _ERROR_STATUS = {
     "UPLOAD_TOO_LARGE": 413,
     "VALIDATION_FAILED": 422,
     "TRACE_PERSISTENCE_UNAVAILABLE": 503,
+    "TRACE_FULL_UNAVAILABLE": 503,
 }
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorEnvelope, "description": "统一安全错误结构"}
@@ -594,6 +596,7 @@ def _register_query_routes(
         require_query(authorization)
         trace_id = new_id("trace")
         response.headers["X-Trace-Id"] = trace_id
+        _prepare_query_trace(runtime, request, trace_id, body.trace_mode)
         result = runtime.sdk.search(
             project_id,
             kb_id,
@@ -630,6 +633,7 @@ def _register_query_routes(
         require_query(authorization)
         trace_id = new_id("trace")
         response.headers["X-Trace-Id"] = trace_id
+        _prepare_query_trace(runtime, request, trace_id, body.trace_mode)
         result = runtime.sdk.answer(
             project_id,
             kb_id,
@@ -673,6 +677,39 @@ def _register_query_routes(
                 "检索诊断端点未启用。", stage="retrieval.diagnostics"
             )
         return _model(runtime.sdk.retrieval_diagnostics(trace_id))
+
+
+def _prepare_query_trace(
+    runtime: P09Runtime,
+    request: Request,
+    trace_id: str,
+    mode: Literal["SAFE", "DIAGNOSTIC", "FULL"],
+) -> None:
+    """只允许管理员显式提高默认 SAFE 捕获级别。"""
+    resolved = TraceMode(mode)
+    if resolved is not TraceMode.SAFE and getattr(
+        request.state, "product_principal", None
+    ) not in {"admin_session", "legacy_admin"}:
+        raise PolicyDenied(
+            "DIAGNOSTIC/FULL Trace 只允许管理员显式启用。",
+            stage="trace.mode",
+        )
+    if runtime.prepare_trace is None:
+        if resolved is not TraceMode.SAFE:
+            raise PolicyDenied(
+                "当前 Runtime 未启用 Operational Trace。",
+                stage="trace.mode",
+            )
+        return
+    try:
+        runtime.prepare_trace(trace_id, resolved)
+    except TraceUnavailableError as error:
+        raise ProviderUnavailable(
+            "FULL Trace 容量不足，查询尚未执行。",
+            code="TRACE_FULL_UNAVAILABLE",
+            stage="trace.preflight",
+            trace_id=trace_id,
+        ) from error
 
 
 def _register_status_routes(

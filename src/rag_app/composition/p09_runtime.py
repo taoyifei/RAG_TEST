@@ -24,6 +24,7 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import TracePort
 from rag_app.core.ports.query_history import QueryHistoryPort
 from rag_app.sdk import RagSdk
+from rag_app.tracing.models import TraceMode
 
 
 @dataclass(slots=True)
@@ -36,6 +37,7 @@ class P09Runtime:
     sdk: RagSdk
     jobs: DurableJobRunner
     data_dir: Path
+    prepare_trace: Callable[[str, TraceMode], None] | None = None
     _closed: bool = False
 
     @property
@@ -96,6 +98,7 @@ class P09RuntimeHooks:
     retrieval_policy: RetrievalPolicy | None = None
     document_enricher: Callable[[ParseResult], ParseResult] | None = None
     content_identity: Callable[[str], str | None] | None = None
+    prepare_trace: Callable[[str, TraceMode], None] | None = None
 
 
 def build_p09_runtime(
@@ -229,6 +232,7 @@ def build_p09_runtime(
         sdk=sdk,
         jobs=jobs,
         data_dir=resolved_data_dir,
+        prepare_trace=None if hooks is None else hooks.prepare_trace,
     )
     if hooks is None or hooks.recover_jobs:
         jobs.recover()

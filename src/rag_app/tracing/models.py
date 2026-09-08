@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,7 +33,7 @@ __all__ = [
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
 
-_TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+_TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
 _SPAN_ID_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 _ARTIFACT_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -52,10 +53,12 @@ class TraceStatus(StrEnum):
     """根 Trace 生命周期状态。"""
 
     RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
     ANSWERED = "ANSWERED"
     REFUSED = "REFUSED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    INTERRUPTED = "INTERRUPTED"
 
 
 class SpanStatus(StrEnum):
@@ -65,6 +68,7 @@ class SpanStatus(StrEnum):
     OK = "OK"
     ERROR = "ERROR"
     SKIPPED = "SKIPPED"
+    INTERRUPTED = "INTERRUPTED"
 
 
 class SpanKind(StrEnum):
@@ -111,6 +115,17 @@ class TraceIdentity:
     active_collection: str
     index_manifest_sha256: str
     payload_schema_version: int
+    kind: str = "query"
+    project_id: str | None = None
+    knowledge_base_id: str | None = None
+    owner_sha256: str | None = None
+    request_id: str | None = None
+    job_id: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    profile_id: str | None = None
+    index_fingerprint: str | None = None
+    source_revision: str | None = None
 
     def __post_init__(self) -> None:
         """校验版本身份字段。
@@ -136,6 +151,27 @@ class TraceIdentity:
         )
         _require_nonempty("release_revision", self.release_revision)
         _require_nonempty("active_collection", self.active_collection)
+        _require_nonempty("kind", self.kind)
+        for name, value in (
+            ("project_id", self.project_id),
+            ("knowledge_base_id", self.knowledge_base_id),
+            ("request_id", self.request_id),
+            ("job_id", self.job_id),
+            ("document_id", self.document_id),
+            ("revision_id", self.revision_id),
+            ("profile_id", self.profile_id),
+            ("source_revision", self.source_revision),
+        ):
+            if value is not None:
+                _require_nonempty(name, value)
+        if self.owner_sha256 is not None:
+            _require_pattern("owner_sha256", self.owner_sha256, _SHA256_PATTERN)
+        if self.index_fingerprint is not None:
+            _require_pattern(
+                "index_fingerprint",
+                self.index_fingerprint,
+                _FINGERPRINT_PATTERN,
+            )
         if self.payload_schema_version <= 0:
             raise ValueError("payload_schema_version 必须为正整数。")
 
@@ -153,6 +189,15 @@ class TraceListFilter:
     refusal_code: str | None = None
     error_code: str | None = None
     feedback_useful: bool | None = None
+    kind: str | None = None
+    project_id: str | None = None
+    knowledge_base_id: str | None = None
+    request_id: str | None = None
+    job_id: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    capture_mode: TraceMode | None = None
+    capture_complete: bool | None = None
 
     def __post_init__(self) -> None:
         """校验分页和时间过滤边界。
@@ -165,6 +210,17 @@ class TraceListFilter:
             raise ValueError("Trace page/page_size 超出固定边界。")
         if self.trace_id is not None:
             _require_pattern("trace_id", self.trace_id, _TRACE_ID_PATTERN)
+        for name, value in (
+            ("kind", self.kind),
+            ("project_id", self.project_id),
+            ("knowledge_base_id", self.knowledge_base_id),
+            ("request_id", self.request_id),
+            ("job_id", self.job_id),
+            ("document_id", self.document_id),
+            ("revision_id", self.revision_id),
+        ):
+            if value is not None:
+                _require_nonempty(name, value)
         if self.created_from is not None:
             _require_aware("created_from", self.created_from)
         if self.created_to is not None:
@@ -199,6 +255,21 @@ class TraceRecord:
     feedback_useful: bool | None
     capture_complete: bool
     expires_at: datetime
+    kind: str = "query"
+    project_id: str | None = None
+    knowledge_base_id: str | None = None
+    owner_sha256: str | None = None
+    request_id: str | None = None
+    job_id: str | None = None
+    document_id: str | None = None
+    revision_id: str | None = None
+    profile_id: str | None = None
+    index_fingerprint: str | None = None
+    source_revision: str | None = None
+    capture_incomplete_reason: str | None = None
+    dropped_span_count: int = 0
+    dropped_decision_count: int = 0
+    writer_queue_high_water: int = 0
 
     def __post_init__(self) -> None:
         """校验根 Trace 的稳定身份、时间和终态一致性。"""
@@ -221,11 +292,42 @@ class TraceRecord:
             self.index_manifest_sha256,
             _SHA256_PATTERN,
         )
-        for name, value in (
+        for required_name, required_value in (
             ("release_revision", self.release_revision),
             ("active_collection", self.active_collection),
+            ("kind", self.kind),
         ):
-            _require_nonempty(name, value)
+            _require_nonempty(required_name, required_value)
+        for optional_name, optional_value in (
+            ("project_id", self.project_id),
+            ("knowledge_base_id", self.knowledge_base_id),
+            ("request_id", self.request_id),
+            ("job_id", self.job_id),
+            ("document_id", self.document_id),
+            ("revision_id", self.revision_id),
+            ("profile_id", self.profile_id),
+            ("source_revision", self.source_revision),
+            ("capture_incomplete_reason", self.capture_incomplete_reason),
+        ):
+            if optional_value is not None:
+                _require_nonempty(optional_name, optional_value)
+        if self.owner_sha256 is not None:
+            _require_pattern("owner_sha256", self.owner_sha256, _SHA256_PATTERN)
+        if self.index_fingerprint is not None:
+            _require_pattern(
+                "index_fingerprint",
+                self.index_fingerprint,
+                _FINGERPRINT_PATTERN,
+            )
+        if (
+            min(
+                self.dropped_span_count,
+                self.dropped_decision_count,
+                self.writer_queue_high_water,
+            )
+            < 0
+        ):
+            raise ValueError("Trace 捕获计数不能为负数。")
         if self.payload_schema_version <= 0:
             raise ValueError("payload_schema_version 必须为正数。")
         if self.expires_at <= self.created_at:
@@ -332,6 +434,13 @@ class CandidateDecision:
     selected: bool
     reason_code: DecisionCode
     details: dict[str, JsonValue]
+    candidate_id: str | None = None
+    evidence_id: str | None = None
+    channel: str | None = None
+    rank: int | None = None
+    score_type: str | None = None
+    score: float | None = None
+    contribution: float | None = None
 
     def __post_init__(self) -> None:
         """拒绝不稳定身份或空候选字段。"""
@@ -340,6 +449,22 @@ class CandidateDecision:
             raise ValueError("decision sequence 必须为正数。")
         _require_nonempty("decision stage", self.stage)
         _require_nonempty("chunk_id", self.chunk_id)
+        for identity_name, identity_value in (
+            ("candidate_id", self.candidate_id),
+            ("evidence_id", self.evidence_id),
+            ("channel", self.channel),
+            ("score_type", self.score_type),
+        ):
+            if identity_value is not None:
+                _require_nonempty(identity_name, identity_value)
+        if self.rank is not None and self.rank <= 0:
+            raise ValueError("candidate rank 必须为正数。")
+        for score_name, score_value in (
+            ("score", self.score),
+            ("contribution", self.contribution),
+        ):
+            if score_value is not None and not math.isfinite(score_value):
+                raise ValueError(f"{score_name} 必须为有限值。")
 
 
 @dataclass(frozen=True, slots=True)

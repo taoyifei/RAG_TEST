@@ -1,6 +1,8 @@
 import json
+import sqlite3
 import stat
 import zlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -73,6 +75,80 @@ def _span(trace_id: str) -> SpanRecord:
         input_artifact_id=None,
         output_artifact_id=None,
     )
+
+
+def _create_v1_database(path: Path, *, partial: bool = False) -> None:
+    """创建不含 Product 扩展列的公开旧版 Trace schema。"""
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE traces (
+            trace_id TEXT PRIMARY KEY,
+            schema_version TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            pipeline_fingerprint TEXT NOT NULL,
+            serving_fingerprint TEXT NOT NULL,
+            release_revision TEXT NOT NULL,
+            active_collection TEXT NOT NULL,
+            index_manifest_sha256 TEXT NOT NULL,
+            payload_schema_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            refusal_code TEXT,
+            error_code TEXT,
+            feedback_useful INTEGER,
+            capture_complete INTEGER NOT NULL,
+            expires_at TEXT NOT NULL
+        );
+        CREATE TABLE candidate_decisions (
+            trace_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            stage TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            selected INTEGER NOT NULL,
+            reason_code TEXT NOT NULL,
+            details_json TEXT NOT NULL,
+            PRIMARY KEY (trace_id, sequence),
+            FOREIGN KEY (trace_id) REFERENCES traces(trace_id)
+                ON DELETE CASCADE
+        );
+        """
+    )
+    if partial:
+        connection.execute(
+            "ALTER TABLE traces ADD COLUMN kind TEXT NOT NULL DEFAULT 'query'"
+        )
+    else:
+        trace = _trace("9" * 32, mode=TraceMode.SAFE)
+        connection.execute(
+            "INSERT INTO traces VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+            "?, ?, ?, ?, ?, ?)",
+            (
+                trace.trace_id,
+                trace.schema_version,
+                trace.mode.value,
+                trace.created_at.isoformat(),
+                None,
+                None,
+                trace.pipeline_fingerprint,
+                trace.serving_fingerprint,
+                trace.release_revision,
+                trace.active_collection,
+                trace.index_manifest_sha256,
+                trace.payload_schema_version,
+                trace.status.value,
+                None,
+                None,
+                None,
+                1,
+                trace.expires_at.isoformat(),
+            ),
+        )
+    connection.commit()
+    connection.close()
+    path.chmod(0o600)
 
 
 def test_store_persists_trace_tree_decisions_and_compressed_artifact(
@@ -189,14 +265,24 @@ def test_list_is_bounded_stable_and_prune_honors_mode_ttl(
         )
     )
     store.create_trace(
-        _trace(
-            "c" * 32,
-            mode=TraceMode.DIAGNOSTIC,
-            created_at=now - timedelta(hours=1),
+        replace(
+            _trace(
+                "c" * 32,
+                mode=TraceMode.DIAGNOSTIC,
+                created_at=now - timedelta(hours=1),
+            ),
+            document_id="doc_public",
+            revision_id="irev_public",
         )
     )
 
     page = store.list_traces(TraceListFilter(page=1, page_size=2))
+    linked = store.list_traces(
+        TraceListFilter(
+            document_id="doc_public",
+            revision_id="irev_public",
+        )
+    )
     deleted = store.prune(now=now)
     remaining = store.list_traces(TraceListFilter(page=1, page_size=10))
 
@@ -205,9 +291,69 @@ def test_list_is_bounded_stable_and_prune_honors_mode_ttl(
         "b" * 32,
     ]
     assert page.total == 3
+    assert [item.trace_id for item in linked.items] == ["c" * 32]
     assert deleted == 1
     assert [item.trace_id for item in remaining.items] == [
         "c" * 32,
         "b" * 32,
     ]
     store.close()
+
+
+def test_v1_schema_migrates_and_old_record_remains_readable(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "v1.sqlite3"
+    _create_v1_database(database)
+
+    store = TraceStore(database)
+    store.initialize()
+    detail = store.get_trace("9" * 32)
+
+    assert detail.trace.kind == "query"
+    assert detail.trace.project_id is None
+    assert detail.trace.capture_complete is True
+    store.close()
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT version FROM trace_schema_metadata WHERE singleton=1"
+        ).fetchone() == (2,)
+
+
+def test_partial_product_migration_fails_closed(tmp_path: Path) -> None:
+    database = tmp_path / "partial.sqlite3"
+    _create_v1_database(database, partial=True)
+
+    with pytest.raises(RuntimeError, match="部分迁移"):
+        TraceStore(database).initialize()
+
+
+def test_restart_recovers_running_root_and_span_as_interrupted(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "restart.sqlite3"
+    store = TraceStore(database)
+    store.initialize()
+    trace = _trace("8" * 32, mode=TraceMode.SAFE)
+    running_span = replace(
+        _span(trace.trace_id),
+        finished_at=None,
+        duration_ms=None,
+        status=SpanStatus.RUNNING,
+        reason_code=DecisionCode.STARTED,
+    )
+    store.create_trace(trace)
+    store.put_span(running_span)
+    store.close()
+
+    reopened = TraceStore(database)
+    reopened.initialize()
+    recovered_at = trace.created_at + timedelta(seconds=2)
+    assert reopened.recover_running(now=recovered_at) == 1
+    detail = reopened.get_trace(trace.trace_id)
+    assert detail.trace.status is TraceStatus.INTERRUPTED
+    assert detail.trace.error_code == "PROCESS_INTERRUPTED"
+    assert detail.spans[0].status is SpanStatus.INTERRUPTED
+    assert detail.spans[0].finished_at == recovered_at
+    assert reopened.recover_running(now=recovered_at) == 0
+    reopened.close()

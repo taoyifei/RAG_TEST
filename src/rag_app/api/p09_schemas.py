@@ -69,6 +69,7 @@ class QueryRequest(RequestModel):
     stream: bool = False
     include_related_content: bool = False
     history_mode: Literal["full", "metadata_only"] | None = None
+    trace_mode: Literal["SAFE", "DIAGNOSTIC", "FULL"] = "SAFE"
 
 
 class QueryResponse(SearchAnswerResult):

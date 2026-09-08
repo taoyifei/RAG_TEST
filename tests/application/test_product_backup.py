@@ -17,7 +17,10 @@ from rag_app.core.models import ParseSource
 from rag_app.product import backup
 from rag_app.product.backup import create_backup, restore_backup, verify_backup
 from tests.adapters.parsers.docx.fixtures import context, policy
-from tests.product_support import build_product_harness
+from tests.product_support import (
+    build_product_harness,
+    create_project_and_knowledge_base,
+)
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -128,7 +131,20 @@ def test_backup_verifies_and_restores_without_secret_files(
 ) -> None:
     harness = build_product_harness(tmp_path / "source")
     try:
-        harness.runtime.sdk.create_project("备份项目")
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        failed = harness.client.post(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer",
+            json={"query": "备份前的公开 Trace 样例"},
+            headers=harness.write_headers,
+        )
+        assert failed.status_code == 409
+        trace_id = failed.json()["error"]["trace_id"]
+        assert (
+            harness.runtime.traces.detail(trace_id).trace.trace_id == trace_id
+        )
         content = b"synthetic-public-blob"
         digest = hashlib.sha256(content).hexdigest()
         blob = harness.runtime.data_dir / "blobs" / "sha256" / digest[:2]
@@ -169,6 +185,12 @@ def test_backup_verifies_and_restores_without_secret_files(
         for name in names
     )
     assert (tmp_path / "restored" / "universal-rag.sqlite3").is_file()
+    trace_database = tmp_path / "restored" / "product-traces.sqlite3"
+    assert trace_database.is_file()
+    with sqlite3.connect(trace_database) as connection:
+        assert connection.execute(
+            "SELECT status FROM traces WHERE trace_id=?", (trace_id,)
+        ).fetchone() == ("FAILED",)
     assert (
         tmp_path / "restored" / "blobs" / "sha256" / digest[:2] / digest
     ).read_bytes() == content

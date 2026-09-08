@@ -7,6 +7,9 @@ import pytest
 from rag_app.tracing.exporter import TraceExporter
 from rag_app.tracing.models import (
     DecisionCode,
+    SpanKind,
+    SpanRecord,
+    SpanStatus,
     TraceDetail,
     TraceFinish,
     TraceIdentity,
@@ -148,10 +151,13 @@ def test_diagnostic_keeps_candidate_scores_without_full_artifact(
             "rrf_contribution": 1 / 61,
         },
     )
-    assert session.artifact(
-        "context",
-        {"question": "must-not-persist"},
-    ) is None
+    assert (
+        session.artifact(
+            "context",
+            {"question": "must-not-persist"},
+        )
+        is None
+    )
     session.finish(
         status=TraceStatus.REFUSED,
         reason_code=DecisionCode.REFUSED,
@@ -168,7 +174,7 @@ def test_diagnostic_keeps_candidate_scores_without_full_artifact(
     recorder.close()
 
 
-def test_bounded_writer_queue_audits_full_without_raising(
+def test_bounded_writer_queue_records_drop_without_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -194,16 +200,37 @@ def test_bounded_writer_queue_audits_full_without_raising(
 
     recorder.begin_trace(trace)
     assert writer_started.wait(timeout=1)
-    recorder.mark_capture_incomplete(trace.trace_id)
-    recorder.mark_capture_incomplete(trace.trace_id)
+    span = SpanRecord(
+        trace_id=trace.trace_id,
+        span_id="1" * 16,
+        parent_span_id=None,
+        sequence=1,
+        name="queue-test",
+        kind=SpanKind.CHAIN,
+        started_at=trace.created_at,
+        finished_at=None,
+        duration_ms=None,
+        status=SpanStatus.RUNNING,
+        reason_code=DecisionCode.STARTED,
+        attributes={},
+        input_artifact_id=None,
+        output_artifact_id=None,
+    )
+    recorder.put_span(span)
+    recorder.put_span(span)
     release_writer.set()
     recorder.flush()
 
     assert DecisionCode.TRACE_QUEUE_FULL in failures
+    root = store.get_trace(trace.trace_id).trace
+    assert root.capture_complete is False
+    assert root.capture_incomplete_reason == DecisionCode.TRACE_QUEUE_FULL.value
+    assert root.dropped_span_count == 1
+    assert root.writer_queue_high_water == 1
     recorder.close()
 
 
-def test_full_artifact_limit_marks_incomplete_without_failing_query(
+def test_full_artifact_limit_fails_request_without_truncation(
     tmp_path: Path,
 ) -> None:
     store = TraceStore(
@@ -215,6 +242,7 @@ def test_full_artifact_limit_marks_incomplete_without_failing_query(
     recorder = TraceRecorder(
         store,
         audit_failure=lambda _trace_id, code: failures.append(code),
+        config=TraceRecorderConfig(full_artifact_reservation_bytes=16),
     )
     trace_id = "f" * 32
     session = recorder.begin_query(
@@ -231,11 +259,12 @@ def test_full_artifact_limit_marks_incomplete_without_failing_query(
         ),
     )
 
-    assert session.artifact("oversized", {"content": "x" * 64}) is None
+    with pytest.raises(TraceUnavailableError):
+        session.artifact("oversized", {"content": "x" * 64})
     session.finish(
-        status=TraceStatus.REFUSED,
-        reason_code=DecisionCode.REFUSED,
-        refusal_code="NO_EVIDENCE",
+        status=TraceStatus.FAILED,
+        reason_code=DecisionCode.ERROR,
+        error_code="TRACE_ARTIFACT_LIMIT",
     )
     recorder.flush()
 

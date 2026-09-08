@@ -606,11 +606,33 @@ class RevisionBuilder:
                 evidence=evidence,
             )
         self._control.acquire_revision_lease(revision_id, job_id)
+        self._record_event(
+            job_id,
+            revision_id,
+            "started",
+            {
+                "attempt": attempt,
+                "project_id": project_id,
+                "knowledge_base_id": knowledge_base_id,
+            },
+        )
         try:
             self._control.assert_job_active(job_id)
             if self._control.is_ready_revision(revision_id):
                 current_state = IndexRevisionState.READY
-                return self._resume_ready(spec, job_id, attempt)
+                resumed = self._resume_ready(spec, job_id, attempt)
+                self._record_event(
+                    job_id,
+                    revision_id,
+                    "completed",
+                    {
+                        "attempt": attempt,
+                        "document_count": resumed.document_count,
+                        "chunk_count": resumed.chunk_count,
+                        "resumed": True,
+                    },
+                )
+                return resumed
             self._control.create_revision(
                 revision,
                 physical_namespace=spec.physical_namespace,
@@ -735,7 +757,7 @@ class RevisionBuilder:
                 stage="activate",
                 attempt=attempt,
             )
-            trace_id = deterministic_id("trace", job_id, revision_id)
+            trace_id = _ingestion_trace_id(job_id, revision_id, attempt)
             if (
                 content_identity_current is not None
                 and content_identity_current() != content_identity
@@ -755,6 +777,17 @@ class RevisionBuilder:
                 state="completed",
                 stage="activated",
                 attempt=attempt,
+            )
+            self._record_event(
+                job_id,
+                revision_id,
+                "completed",
+                {
+                    "attempt": attempt,
+                    "document_count": len(documents),
+                    "chunk_count": len(chunks),
+                    "resumed": False,
+                },
             )
             return RevisionBuildResult(
                 job_id=job_id,
@@ -789,7 +822,11 @@ class RevisionBuilder:
             spec.revision.knowledge_base_id,
             evidence,
             reason="P11_RESUME_VALIDATED",
-            trace_id=deterministic_id("trace", job_id, evidence.revision_id),
+            trace_id=_ingestion_trace_id(
+                job_id,
+                evidence.revision_id,
+                attempt,
+            ),
         )
         self._control.update_job(
             job_id, state="completed", stage="activated", attempt=attempt
@@ -951,6 +988,7 @@ class RevisionBuilder:
                 "elapsed_ms": (perf_counter() - started) * 1000,
                 "document_id": context.document_id,
                 "status": status,
+                "attempt": context.attempt,
             }
             if error_code is not None:
                 terminal_attributes["error_code"] = error_code
@@ -976,12 +1014,21 @@ class RevisionBuilder:
         attributes: dict[str, object],
     ) -> None:
         if self._trace is not None:
+            safe_attributes = {
+                **attributes,
+                "job_id": job_id,
+                "revision_id": revision_id,
+            }
             self._trace.record(
                 TraceEvent(
-                    trace_id=deterministic_id("trace", job_id, revision_id),
+                    trace_id=_ingestion_trace_id(
+                        job_id,
+                        revision_id,
+                        _positive_attempt(safe_attributes.get("attempt")),
+                    ),
                     event_name="ingestion." + name,
                     occurred_at=datetime.now(UTC),
-                    attributes=freeze_json_object(attributes),
+                    attributes=freeze_json_object(safe_attributes),
                 )
             )
 
@@ -1058,7 +1105,7 @@ class RevisionBuilder:
         self._record_event(
             job_id,
             revision_id,
-            "failed",
+            "cancelled" if isinstance(error, JobCancelled) else "failed",
             {
                 "error_code": code,
                 "safe_message": safe_message,
@@ -1071,6 +1118,24 @@ class RevisionBuilder:
                 else _safe_exception_location(error),
             },
         )
+
+
+def _positive_attempt(value: object) -> int:
+    """把事件中的 retry attempt 收窄为正整数。"""
+    if type(value) is not int or value <= 0:
+        raise ValueError("Ingestion Trace 事件必须包含正整数 attempt。")
+    return value
+
+
+def _ingestion_trace_id(
+    job_id: str,
+    revision_id: str,
+    attempt: int,
+) -> str:
+    """为 retry 生成新根，同时保留首次尝试的既有公开 ID。"""
+    if attempt == 1:
+        return deterministic_id("trace", job_id, revision_id)
+    return deterministic_id("trace", job_id, revision_id, attempt)
 
 
 def _safe_exception_details(error: Exception) -> dict[str, object]:

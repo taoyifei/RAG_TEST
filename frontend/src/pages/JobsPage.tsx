@@ -199,6 +199,22 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
               </details>
             ))}
           </section>
+          <button
+            className="secondary"
+            onClick={() => {
+              const url = new URL(window.location.href);
+              url.searchParams.set("job_id", selected.job_id);
+              url.searchParams.delete("trace_id");
+              window.history.replaceState(
+                {},
+                "",
+                `${url.pathname}${url.search}`,
+              );
+              go("/operational-traces");
+            }}
+          >
+            打开技术 Trace
+          </button>
           <details>
             <summary>写入隔离技术状态</summary>
             <p>

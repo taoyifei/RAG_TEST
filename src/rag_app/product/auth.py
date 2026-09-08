@@ -27,7 +27,16 @@ _MAX_TOKEN_NAME_LENGTH = 200
 _LOGIN_WINDOW_SECONDS = 60
 _MAX_LOGIN_FAILURES = 5
 _ALLOWED_SCOPES = frozenset(
-    {"query:read", "knowledge:read", "knowledge:write", "system:read"}
+    {
+        "query:read",
+        "knowledge:read",
+        "knowledge:write",
+        "system:read",
+        "trace:summary",
+        "trace:detail",
+        "trace:full",
+        "trace:export",
+    }
 )
 
 

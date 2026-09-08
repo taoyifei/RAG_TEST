@@ -9,11 +9,13 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import cast
 from urllib.parse import urlparse
 
+from rag_app._build_revision import SOURCE_REVISION
 from rag_app.adapters.stores import (
     InMemoryRetrievalCache,
     MigrationRunner,
@@ -47,6 +49,7 @@ from rag_app.composition.profiles import (
     RagProfile,
     default_offline_profile,
 )
+from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     DocumentEmbeddingBudget,
@@ -86,8 +89,10 @@ from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_retrieval_policy,
 )
+from rag_app.product.trace_coordinator import ProductTraceCoordinator
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
+from rag_app.tracing import TraceRecorder, TraceStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -876,6 +881,7 @@ class ProductRuntime:
     history: ProductQueryHistory
     models: ProductModelSettings
     ocr: ProductOcrEnrichment
+    traces: ProductTraceCoordinator
     _closed: bool = False
 
     @property
@@ -947,6 +953,7 @@ class ProductRuntime:
         self.profiles.close()
         self.providers.close()
         self.p09.close()
+        self.traces.close()
 
     def __enter__(self) -> ProductRuntime:
         """进入 Product Runtime 资源作用域。"""
@@ -1015,6 +1022,37 @@ def build_product_runtime(
         retention_days=settings.history_retention_days,
     )
     history.recover()
+    product_profile = _product_profile(settings)
+    trace_store = TraceStore(data_dir / "product-traces.sqlite3")
+    trace_store.initialize()
+    trace_recorder = TraceRecorder(
+        trace_store,
+        audit_failure=lambda trace_id, code: history.record(
+            TraceEvent(
+                trace_id=trace_id,
+                event_name="trace.capture_failed",
+                occurred_at=datetime.now(UTC),
+                attributes=freeze_json_object({"reason_code": code.value}),
+            )
+        ),
+    )
+    traces = ProductTraceCoordinator(
+        history,
+        trace_recorder,
+        trace_store,
+        connections,
+        pipeline_fingerprint=canonical_sha256(
+            {
+                "profile": product_profile.model_dump(mode="json"),
+                "operational_trace": "product-v2",
+            }
+        ),
+        serving_fingerprint=canonical_sha256(
+            product_profile.model_dump(mode="json")
+        ),
+        release_revision=SOURCE_REVISION,
+        profile_id=product_profile.profile_id,
+    )
     if (
         transport_factory is None
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
@@ -1048,12 +1086,12 @@ def build_product_runtime(
 
     try:
         p09 = build_p09_runtime(
-            _product_profile(settings),
+            product_profile,
             data_dir=data_dir,
             hooks=P09RuntimeHooks(
                 recover_jobs=recover_jobs,
-                trace_sink=history,
-                query_history=history,
+                trace_sink=traces,
+                query_history=traces,
                 document_enricher=ocr.enrich_result,
                 content_identity=ocr.content_identity,
                 retrieval_policy=RetrievalPolicy.model_validate(
@@ -1063,10 +1101,12 @@ def build_product_runtime(
                 retrieval_resolver=profiles.retrieval_service,
                 revision_builder_resolver=profiles.revision_lifecycle,
                 job_lifecycle_resolver=profiles.job_lifecycle,
+                prepare_trace=traces.prepare,
             ),
         )
     except Exception:
         providers.close()
+        traces.close()
         raise
     profiles.bind_runtime(p09)
     ocr.bind_blob_store(p09.retrieval_runtime.persistence.components.blob_store)
@@ -1084,6 +1124,7 @@ def build_product_runtime(
         history=history,
         models=models,
         ocr=ocr,
+        traces=traces,
     )
 
 
@@ -1206,7 +1247,7 @@ def _product_profile(settings: ProductRuntimeSettings) -> RagProfile:
         metadata_store="sqlite-control",
         blob_store="filesystem-blob",
         generator="extractive",
-        trace_sink="sqlite-product-history",
+        trace_sink="sqlite-product-operational-trace",
     )
     return base.model_copy(
         update={

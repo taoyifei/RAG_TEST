@@ -80,6 +80,121 @@ export interface HistoryFilters {
   offset?: number;
 }
 
+export type TraceMode = "SAFE" | "DIAGNOSTIC" | "FULL";
+
+export interface OperationalTraceRoot {
+  trace_id: string;
+  schema_version: string;
+  mode: TraceMode;
+  kind: string;
+  status: string;
+  created_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  project_id?: string | null;
+  knowledge_base_id?: string | null;
+  request_id?: string | null;
+  job_id?: string | null;
+  document_id?: string | null;
+  revision_id?: string | null;
+  profile_id?: string | null;
+  index_fingerprint?: string | null;
+  serving_fingerprint: string;
+  source_revision?: string | null;
+  capture_complete: boolean;
+  capture_incomplete_reason?: string | null;
+  dropped_span_count: number;
+  dropped_decision_count: number;
+  writer_queue_high_water: number;
+}
+
+export interface OperationalTraceSpan {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  sequence: number;
+  name: string;
+  kind: string;
+  started_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  status: string;
+  reason_code: string;
+  attributes: Record<string, unknown>;
+  input_artifact_id?: string | null;
+  output_artifact_id?: string | null;
+}
+
+export interface OperationalTraceDecision {
+  trace_id: string;
+  sequence: number;
+  stage: string;
+  chunk_id: string;
+  selected: boolean;
+  reason_code: string;
+  details: Record<string, unknown>;
+  candidate_id?: string | null;
+  evidence_id?: string | null;
+  channel?: string | null;
+  rank?: number | null;
+  score_type?: string | null;
+  score?: number | null;
+  contribution?: number | null;
+}
+
+export interface OperationalTraceArtifact {
+  artifact_id: string;
+  trace_id: string;
+  kind: string;
+  media_type: string;
+  sha256: string;
+  original_bytes: number;
+  compressed_bytes: number;
+  created_at: string;
+}
+
+export interface OperationalTraceDetail {
+  trace: OperationalTraceRoot;
+  spans: OperationalTraceSpan[];
+  candidate_decisions: OperationalTraceDecision[];
+  artifacts: OperationalTraceArtifact[];
+  legacy_flat_events: HistoryEntry["events"];
+}
+
+export interface OperationalTracePage {
+  items: OperationalTraceRoot[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface OperationalTraceFilters {
+  page?: number;
+  page_size?: number;
+  trace_id?: string;
+  created_from?: string;
+  created_to?: string;
+  kind?: string;
+  status?: string;
+  project_id?: string;
+  knowledge_base_id?: string;
+  request_id?: string;
+  job_id?: string;
+  document_id?: string;
+  revision_id?: string;
+  refusal_code?: string;
+  error_code?: string;
+  capture_mode?: TraceMode | "";
+  capture_complete?: boolean;
+  feedback_useful?: boolean;
+}
+
+export interface OperationalTraceArtifactContent {
+  mediaType: string;
+  sha256: string;
+  body: string;
+}
+
 export interface Tokens {
   admin: string;
   query: string;
@@ -317,6 +432,27 @@ async function request<T>(
   receivedStatus?.(response.status);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+async function rawRequest(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
+    throw new ApiError(response.status, payload);
+  }
+  return response;
 }
 
 export async function readSseResponse(
@@ -589,6 +725,55 @@ export const api = {
     ),
   clearHistory: () =>
     request<void>("/api/v1/history", "", { method: "DELETE" }),
+  listOperationalTraces: (
+    filters: OperationalTraceFilters = {},
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    return request<OperationalTracePage>(
+      `/api/v1/admin/operational-traces?${params}`,
+      "",
+      { signal },
+    );
+  },
+  operationalTraceDetail: (traceId: string, signal?: AbortSignal) =>
+    request<OperationalTraceDetail>(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}`,
+      "",
+      { signal },
+    ),
+  operationalTraceArtifact: async (
+    traceId: string,
+    artifactId: string,
+    signal?: AbortSignal,
+  ): Promise<OperationalTraceArtifactContent> => {
+    const response = await rawRequest(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { signal },
+    );
+    return {
+      mediaType:
+        response.headers.get("Content-Type") ?? "application/octet-stream",
+      sha256: response.headers.get("X-Artifact-SHA256") ?? "",
+      body: await response.text(),
+    };
+  },
+  exportOperationalTrace: async (traceId: string) => {
+    const response = await rawRequest(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}/export`,
+    );
+    return response.blob();
+  },
+  exportOperationalTraces: async (traceIds: string[]) => {
+    const response = await rawRequest(
+      "/api/v1/admin/operational-traces:export",
+      jsonInit("POST", { trace_ids: traceIds }),
+    );
+    return response.blob();
+  },
   readEvidenceSource: async (
     token: string,
     projectId: string,

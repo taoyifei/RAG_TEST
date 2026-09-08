@@ -20,7 +20,7 @@ const STATUSES = [
   ["CANCELLED", "取消"],
 ];
 
-export function HistoryPage() {
+export function HistoryPage({ go }: { go?: (path: string) => void }) {
   const { scope, tokens } = useConsole();
   const [kbId, setKbId] = useState(scope.kbId);
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
@@ -37,7 +37,10 @@ export function HistoryPage() {
   const [page, setPage] = useState<HistoryPageResult>();
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(true);
-  const [traceId, setTraceId] = useState<string>();
+  const [traceId, setTraceId] = useState<string | undefined>(() => {
+    const value = new URLSearchParams(window.location.search).get("trace_id");
+    return value || undefined;
+  });
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [reload, setReload] = useState(0);
@@ -256,6 +259,23 @@ export function HistoryPage() {
                 <button onClick={() => setTraceId(item.trace_id)}>
                   查看详情与过程
                 </button>
+                {go && (
+                  <button
+                    className="secondary"
+                    onClick={() => {
+                      const url = new URL(window.location.href);
+                      url.searchParams.set("trace_id", item.trace_id);
+                      window.history.replaceState(
+                        {},
+                        "",
+                        `${url.pathname}${url.search}`,
+                      );
+                      go("/operational-traces");
+                    }}
+                  >
+                    打开技术 Trace
+                  </button>
+                )}
               </article>
             ))}
           </div>

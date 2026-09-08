@@ -71,6 +71,27 @@ def resolve_token_route(
         ("GET", _BASE + "/history", "query:read"),
         ("GET", _BASE + "/history/{trace_id}", "query:read"),
         ("GET", "/api/v1/system/components", "system:read"),
+        ("GET", "/api/v1/admin/operational-traces", "trace:summary"),
+        (
+            "GET",
+            "/api/v1/admin/operational-traces/{trace_id}",
+            "trace:detail",
+        ),
+        (
+            "GET",
+            "/api/v1/admin/operational-traces/{trace_id}/artifacts/{artifact_id}",
+            "trace:full",
+        ),
+        (
+            "GET",
+            "/api/v1/admin/operational-traces/{trace_id}/export",
+            "trace:export",
+        ),
+        (
+            "POST",
+            "/api/v1/admin/operational-traces:export",
+            "trace:export",
+        ),
     )
     for method, template, scope in routes:
         match = compile_path(template)[0].fullmatch(request.url.path)
@@ -90,9 +111,16 @@ def resolve_token_route(
             if "job_id" in params:
                 job = runtime.p09.store.get_job(params["job_id"])
                 project_id, kb_id = job.project_id, job.knowledge_base_id
+            if "trace_id" in params and "operational-traces" in template:
+                detail = runtime.traces.detail(params["trace_id"])
+                project_id = detail.trace.project_id
+                kb_id = detail.trace.knowledge_base_id
+            elif "operational-traces" in template:
+                project_id = request.query_params.get("project_id")
+                kb_id = request.query_params.get("knowledge_base_id")
             if project_id is not None and kb_id is not None:
                 runtime.p09.store.get_knowledge_base(project_id, kb_id)
-            if "artifact_id" in params:
+            if "artifact_id" in params and "operational-traces" not in template:
                 if project_id is None or kb_id is None:
                     raise PolicyDenied("资源范围缺失。", stage="token.scope")
                 document_id = params.get(

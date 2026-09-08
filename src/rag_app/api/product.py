@@ -19,6 +19,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
 from rag_app.api.model_settings import register_model_settings_routes
+from rag_app.api.operational_trace import register_operational_trace_routes
 from rag_app.api.p09 import create_p09_app
 from rag_app.api.product_token_policy import resolve_token_route
 from rag_app.api.provider_budget import register_provider_budget_routes
@@ -184,6 +185,10 @@ class AccessTokenRequest(_RequestModel):
             "knowledge:read",
             "knowledge:write",
             "system:read",
+            "trace:summary",
+            "trace:detail",
+            "trace:full",
+            "trace:export",
         ],
         ...,
     ] = Field(min_length=1)
@@ -405,6 +410,9 @@ def _authenticate_request(
         return _auth_error(401, "AUTHENTICATION_REQUIRED")
     legacy = config.legacy_query if query_route else config.legacy_admin
     if legacy is not None and hmac.compare_digest(token, legacy):
+        request.state.product_principal = (
+            "legacy_query" if query_route else "legacy_admin"
+        )
         _replace_authorization(request, expected)
         return None
     try:
@@ -451,6 +459,7 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     _register_access_token_routes(app, runtime)
     register_provider_budget_routes(app, runtime)
     register_query_history_routes(app, runtime)
+    register_operational_trace_routes(app, runtime)
     register_model_settings_routes(app, runtime)
 
 

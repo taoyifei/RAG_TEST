@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NoReturn
 
@@ -323,6 +324,57 @@ def test_cancelled_stage_has_one_cancelled_terminal(
         attributes = dict(terminals[0]["attributes"])
         assert attributes["status"] == "cancelled"
         assert attributes["error_code"] == "JOB_CANCELLED"
+    finally:
+        runtime.close()
+
+
+def test_retry_attempt_uses_a_new_trace_root(tmp_path: Path) -> None:
+    """第二次尝试保留第一次 Trace，并把全部新事件写入新根。"""
+    runtime, project_id, knowledge_base_id = runtime_with_kb(tmp_path)
+    document = _document(
+        project_id,
+        knowledge_base_id,
+        deterministic_id("doc", knowledge_base_id, "retry-trace"),
+        "第二次尝试的公开合成样例。",
+    )
+    revision_id, job_id = _build_ids(
+        runtime.components.index_fingerprint,
+        knowledge_base_id,
+        document,
+    )
+    first_trace_id = deterministic_id("trace", job_id, revision_id)
+    second_trace_id = deterministic_id("trace", job_id, revision_id, 2)
+    sink = runtime.components.trace_sink
+    assert isinstance(sink, SqliteTraceSink)
+    sink.record(
+        TraceEvent(
+            trace_id=first_trace_id,
+            event_name="ingestion.failed",
+            occurred_at=datetime.now(UTC),
+            attributes={"attempt": 1, "job_id": job_id},
+        )
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            documents=(document,),
+            idempotency_key="retry-trace-attempt-two",
+            budgets=runtime.default_budgets(),
+            attempt=2,
+            persistent_job_id=job_id,
+        )
+        assert result.job_id == job_id
+        assert [
+            event.event_name for event in _trace_events(runtime, first_trace_id)
+        ] == ["ingestion.failed"]
+        retry_events = _trace_events(runtime, second_trace_id)
+        assert retry_events
+        assert retry_events[0].event_name == "ingestion.started"
+        assert retry_events[-1].event_name == "ingestion.completed"
+        assert all(
+            dict(event.attributes)["attempt"] == 2 for event in retry_events
+        )
     finally:
         runtime.close()
 

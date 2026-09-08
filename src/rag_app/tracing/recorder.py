@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Final, cast
+from typing import Final, Literal, cast
 
 from rag_app.tracing.exporter import NullTraceExporter, TraceExporter
 from rag_app.tracing.models import (
@@ -49,6 +49,7 @@ _STOP: Final = object()
 _DEFAULT_QUEUE_SIZE = 256
 _DEFAULT_WAIT_SECONDS = 5.0
 _DEFAULT_PRUNE_INTERVAL_SECONDS = 300.0
+_DEFAULT_FULL_RESERVATION_BYTES = 1024 * 1024
 
 
 class TraceUnavailableError(RuntimeError):
@@ -62,6 +63,7 @@ class TraceRecorderConfig:
     queue_size: int = _DEFAULT_QUEUE_SIZE
     wait_seconds: float = _DEFAULT_WAIT_SECONDS
     prune_interval_seconds: float = _DEFAULT_PRUNE_INTERVAL_SECONDS
+    full_artifact_reservation_bytes: int = _DEFAULT_FULL_RESERVATION_BYTES
 
     def __post_init__(self) -> None:
         """校验所有资源边界为正数。
@@ -74,6 +76,7 @@ class TraceRecorderConfig:
             self.queue_size <= 0
             or self.wait_seconds <= 0
             or self.prune_interval_seconds <= 0
+            or self.full_artifact_reservation_bytes <= 0
         ):
             raise ValueError("Trace writer 边界必须为正数。")
 
@@ -123,6 +126,7 @@ class TraceSpanSpec:
     reason_code: DecisionCode
     attributes: dict[str, object] | None = None
     duration_ms: int = 0
+    started_offset_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -167,7 +171,7 @@ class TraceSession:
         self._root_attributes = dict(root_attributes or {})
         recorder.begin_trace(trace)
         self.root = self.start_span(
-            "rag.query",
+            f"rag.{trace.kind}",
             SpanKind.CHAIN,
             parent_span_id=None,
             attributes=root_attributes,
@@ -319,16 +323,31 @@ class TraceSession:
             raise RuntimeError("completed span 必须提供父 span。")
         self._sequence += 1
         reported_duration_ms = max(0, spec.duration_ms)
-        finished_at, finished_tick = self._timeline_now()
-        available_ms = _duration_ms(
-            parent.handle.started_at,
-            finished_at,
-        )
-        duration_ms = min(reported_duration_ms, available_ms)
-        started_at = finished_at - timedelta(milliseconds=duration_ms)
+        timeline_now, finished_tick = self._timeline_now()
+        available_ms = _duration_ms(parent.handle.started_at, timeline_now)
+        if spec.started_offset_ms is None:
+            duration_ms = min(reported_duration_ms, available_ms)
+            finished_at = timeline_now
+            started_at = finished_at - timedelta(milliseconds=duration_ms)
+        else:
+            reported_offset_ms = max(0, spec.started_offset_ms)
+            started_offset_ms = min(reported_offset_ms, available_ms)
+            duration_ms = min(
+                reported_duration_ms,
+                available_ms - started_offset_ms,
+            )
+            started_at = parent.handle.started_at + timedelta(
+                milliseconds=started_offset_ms
+            )
+            finished_at = started_at + timedelta(milliseconds=duration_ms)
         attributes = dict(spec.attributes or {})
         if duration_ms != reported_duration_ms:
             attributes["reported_duration_ms"] = reported_duration_ms
+        if (
+            spec.started_offset_ms is not None
+            and started_offset_ms != spec.started_offset_ms
+        ):
+            attributes["reported_started_offset_ms"] = spec.started_offset_ms
         span_id = uuid.uuid4().hex[:16]
         handle = TraceSpanHandle(
             span_id=span_id,
@@ -455,7 +474,7 @@ class TraceSession:
             pending.extend(child.children)
         return descendants
 
-    def decision(
+    def decision(  # noqa: PLR0913
         self,
         *,
         stage: str,
@@ -463,6 +482,13 @@ class TraceSession:
         selected: bool,
         reason_code: DecisionCode,
         details: dict[str, object],
+        candidate_id: str | None = None,
+        evidence_id: str | None = None,
+        channel: str | None = None,
+        rank: int | None = None,
+        score_type: str | None = None,
+        score: float | None = None,
+        contribution: float | None = None,
     ) -> None:
         """保存一行有序候选漏斗决策。
 
@@ -472,6 +498,13 @@ class TraceSession:
             selected: 本阶段是否保留。
             reason_code: 稳定机械原因码。
             details: 不含正文或向量的 rank/score/元数据。
+            candidate_id: 当前阶段使用的候选身份。
+            evidence_id: 已形成证据时的稳定证据身份。
+            channel: 候选进入当前阶段的检索通道。
+            rank: 当前通道或阶段内的一基排名。
+            score_type: score 的独立语义，例如 rrf 或 rerank。
+            score: 当前阶段分数。
+            contribution: 当前通道对融合分数的贡献。
 
         Returns:
             无返回值。
@@ -487,6 +520,13 @@ class TraceSession:
                 selected=selected,
                 reason_code=reason_code,
                 details=_json_attributes(details),
+                candidate_id=candidate_id,
+                evidence_id=evidence_id,
+                channel=channel,
+                rank=rank,
+                score_type=score_type,
+                score=score,
+                contribution=contribution,
             ),
             strict=self.strict,
         )
@@ -552,7 +592,11 @@ class TraceSession:
                 status=(
                     SpanStatus.ERROR
                     if status is TraceStatus.FAILED
-                    else SpanStatus.OK
+                    else (
+                        SpanStatus.INTERRUPTED
+                        if status is TraceStatus.INTERRUPTED
+                        else SpanStatus.OK
+                    )
                 ),
                 reason_code=reason_code,
                 attributes={**self._root_attributes, **(attributes or {})},
@@ -603,7 +647,17 @@ class TraceRecorder:
         )
         self._wait_seconds = resolved_config.wait_seconds
         self._prune_interval_seconds = resolved_config.prune_interval_seconds
+        self._full_reservation_bytes = (
+            resolved_config.full_artifact_reservation_bytes
+        )
         self._state_lock = threading.Lock()
+        self._metrics_lock = threading.Lock()
+        self._pending_incomplete: dict[str, tuple[int, int, int]] = {}
+        self._pending_reasons: dict[str, str] = {}
+        self._submitted_count = 0
+        self._written_count = 0
+        self._dropped_count = 0
+        self._queue_high_water = 0
         self._accepting = True
         self._closed = False
         self._writer = threading.Thread(
@@ -626,6 +680,18 @@ class TraceRecorder:
         """
         return self._writer.is_alive()
 
+    @property
+    def metrics(self) -> dict[str, int]:
+        """返回不含内容的队列与写入计数。"""
+        with self._metrics_lock:
+            return {
+                "submitted": self._submitted_count,
+                "written": self._written_count,
+                "dropped": self._dropped_count,
+                "queue_high_water": self._queue_high_water,
+                "queue_current": self._queue.qsize(),
+            }
+
     def require_full_capacity(self) -> None:
         """在 Debug 查询执行前确认 Store 和队列可用。
 
@@ -645,6 +711,9 @@ class TraceRecorder:
             raise TraceUnavailableError("FULL Trace writer 无容量。")
         try:
             self._store.healthcheck()
+            self._store.preflight_full(
+                reserved_bytes=self._full_reservation_bytes
+            )
         except Exception as error:
             raise TraceUnavailableError("FULL Trace Store 不可用。") from error
 
@@ -680,7 +749,7 @@ class TraceRecorder:
         )
         trace = TraceRecord(
             trace_id=trace_id,
-            schema_version="1",
+            schema_version="2",
             mode=mode,
             created_at=created_at,
             finished_at=None,
@@ -697,6 +766,17 @@ class TraceRecorder:
             feedback_useful=None,
             capture_complete=True,
             expires_at=created_at + ttl,
+            kind=identity.kind,
+            project_id=identity.project_id,
+            knowledge_base_id=identity.knowledge_base_id,
+            owner_sha256=identity.owner_sha256,
+            request_id=identity.request_id or trace_id,
+            job_id=identity.job_id,
+            document_id=identity.document_id,
+            revision_id=identity.revision_id,
+            profile_id=identity.profile_id,
+            index_fingerprint=identity.index_fingerprint,
+            source_revision=identity.source_revision,
         )
         root_attributes: dict[str, object] | None = (
             None
@@ -721,6 +801,29 @@ class TraceRecorder:
 
         """
         self._audit(trace_id, code)
+
+    def update_trace_identity(
+        self,
+        trace_id: str,
+        *,
+        revision_id: str | None = None,
+        index_fingerprint: str | None = None,
+        serving_fingerprint: str | None = None,
+        active_collection: str | None = None,
+    ) -> None:
+        """在检索 snapshot 固定后异步补齐活动身份。"""
+        self._submit(
+            trace_id,
+            lambda: self._store.update_trace_identity(
+                trace_id,
+                revision_id=revision_id,
+                index_fingerprint=index_fingerprint,
+                serving_fingerprint=serving_fingerprint,
+                active_collection=active_collection,
+            ),
+            strict=False,
+            wait=False,
+        )
 
     def begin_trace(self, trace: TraceRecord) -> None:
         """开始一条 Trace；FULL 模式同步确认持久化。
@@ -760,7 +863,8 @@ class TraceRecorder:
             span.trace_id,
             lambda: self._store.put_span(span),
             strict=strict,
-            wait=False,
+            wait=strict,
+            drop_kind="span",
         )
 
     def add_candidate_decision(
@@ -783,7 +887,8 @@ class TraceRecorder:
             decision.trace_id,
             lambda: self._store.add_candidate_decision(decision),
             strict=strict,
-            wait=False,
+            wait=strict,
+            drop_kind="decision",
         )
 
     def add_artifact(
@@ -823,9 +928,7 @@ class TraceRecorder:
                 strict=strict,
                 wait=True,
             )
-        except TraceUnavailableError as error:
-            if isinstance(error.__cause__, TraceArtifactLimitError):
-                return None
+        except TraceUnavailableError:
             raise
         return result if isinstance(result, ArtifactMetadata) else None
 
@@ -877,22 +980,34 @@ class TraceRecorder:
             wait=strict,
         )
 
-    def mark_capture_incomplete(self, trace_id: str) -> None:
+    def mark_capture_incomplete(
+        self,
+        trace_id: str,
+        *,
+        reason: str = "TRACE_CAPTURE_FAILED",
+        dropped_spans: int = 0,
+        dropped_decisions: int = 0,
+    ) -> None:
         """尽力标记当前 Trace 不完整。
 
         Args:
             trace_id: 待标记 Trace。
+            reason: 稳定的不完整捕获原因码。
+            dropped_spans: 本次未写入的 span 数。
+            dropped_decisions: 本次未写入的候选决策数。
 
         Returns:
             无返回值。
 
         """
-        self._submit(
-            trace_id,
-            lambda: self._store.mark_capture_incomplete(trace_id),
-            strict=False,
-            wait=False,
-        )
+        with self._metrics_lock:
+            previous = self._pending_incomplete.get(trace_id, (0, 0, 0))
+            self._pending_incomplete[trace_id] = (
+                previous[0] + max(0, dropped_spans),
+                previous[1] + max(0, dropped_decisions),
+                max(previous[2], self._queue_high_water),
+            )
+            self._pending_reasons.setdefault(trace_id, reason)
 
     def flush(self) -> None:
         """等待当前队列中此前命令全部完成。
@@ -913,6 +1028,7 @@ class TraceRecorder:
             strict=True,
             wait=True,
         )
+        self._flush_incomplete()
 
     def close(self) -> None:
         """停止准入、排空队列并幂等关闭 Store。
@@ -936,6 +1052,7 @@ class TraceRecorder:
                 "Trace writer 无法在关闭前排空。"
             ) from error
         self._queue.join()
+        self._flush_incomplete()
         self._writer.join(timeout=self._wait_seconds)
         if self._writer.is_alive():
             raise TraceUnavailableError("Trace writer 关闭超时。")
@@ -948,6 +1065,7 @@ class TraceRecorder:
         *,
         strict: bool,
         wait: bool,
+        drop_kind: Literal["span", "decision", "other"] = "other",
     ) -> object | None:
         """按捕获模式提交持久化命令并处理背压。
 
@@ -959,6 +1077,7 @@ class TraceRecorder:
             action: 由单一写线程执行的存储操作。
             strict: 是否要求提交及持久化失败对调用方可见。
             wait: 是否等待命令完成并返回存储操作结果。
+            drop_kind: 队列拒绝时用于精确降级计数的命令类型。
 
         Returns:
             同步命令的存储操作结果；异步提交或容错丢弃时返回 `None`。
@@ -986,11 +1105,25 @@ class TraceRecorder:
                 self._queue.put_nowait(command)
         except queue.Full as error:
             self._audit(trace_id, DecisionCode.TRACE_QUEUE_FULL)
+            with self._metrics_lock:
+                self._dropped_count += 1
+            self.mark_capture_incomplete(
+                trace_id,
+                reason=DecisionCode.TRACE_QUEUE_FULL.value,
+                dropped_spans=int(drop_kind == "span"),
+                dropped_decisions=int(drop_kind == "decision"),
+            )
             if strict:
                 raise TraceUnavailableError(
                     "FULL Trace writer 队列已满。"
                 ) from error
             return None
+        with self._metrics_lock:
+            self._submitted_count += 1
+            self._queue_high_water = max(
+                self._queue_high_water,
+                self._queue.qsize(),
+            )
         if completion is None:
             return None
         if not completion.wait(timeout=self._wait_seconds):
@@ -1042,6 +1175,7 @@ class TraceRecorder:
                 if not isinstance(item, _WriteCommand):
                     _LOGGER.error("Trace writer 收到未知命令类型。")
                     continue
+                self._flush_incomplete()
                 self._execute(item)
                 if time.monotonic() >= next_prune:
                     self._prune()
@@ -1064,14 +1198,24 @@ class TraceRecorder:
         """
         try:
             command.results.append(command.action())
+            with self._metrics_lock:
+                self._written_count += 1
         except TraceArtifactLimitError as error:
             command.errors.append(error)
+            self.mark_capture_incomplete(
+                command.trace_id,
+                reason=DecisionCode.TRACE_ARTIFACT_LIMIT.value,
+            )
             self._audit(
                 command.trace_id,
                 DecisionCode.TRACE_ARTIFACT_LIMIT,
             )
         except Exception as error:
             command.errors.append(error)
+            self.mark_capture_incomplete(
+                command.trace_id,
+                reason=DecisionCode.TRACE_CAPTURE_FAILED.value,
+            )
             self._audit(
                 command.trace_id,
                 DecisionCode.TRACE_CAPTURE_FAILED,
@@ -1079,6 +1223,28 @@ class TraceRecorder:
         finally:
             if command.completion is not None:
                 command.completion.set()
+
+    def _flush_incomplete(self) -> None:
+        """由 writer 可靠落盘队列降级摘要，不回写敏感内容。"""
+        with self._metrics_lock:
+            pending = self._pending_incomplete
+            pending_reasons = self._pending_reasons
+            self._pending_incomplete = {}
+            self._pending_reasons = {}
+        for trace_id, (spans, decisions, high_water) in pending.items():
+            try:
+                self._store.mark_capture_incomplete(
+                    trace_id,
+                    reason=pending_reasons.get(trace_id, "TRACE_QUEUE_FULL"),
+                    dropped_spans=spans,
+                    dropped_decisions=decisions,
+                    queue_high_water=high_water,
+                )
+            except Exception:
+                _LOGGER.error(
+                    "Trace 降级摘要无法落盘 trace_id=%s",
+                    trace_id,
+                )
 
     def _prune(self) -> None:
         try:

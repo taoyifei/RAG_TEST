@@ -10,6 +10,9 @@ import stat
 import threading
 import uuid
 import zlib
+from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -40,7 +43,44 @@ __all__ = [
 ]
 
 _DEFAULT_ARTIFACT_LIMIT = 5 * 1024 * 1024
+_DEFAULT_ARTIFACT_ITEM_LIMIT = 2 * 1024 * 1024
+_DEFAULT_GLOBAL_ARTIFACT_LIMIT = 64 * 1024 * 1024
+_DEFAULT_EXPORT_LIMIT = 16 * 1024 * 1024
+_DEFAULT_SPAN_LIMIT = 512
+_DEFAULT_DECISION_LIMIT = 4096
+_DEFAULT_STAGE_DECISION_LIMIT = 512
+_LATEST_SCHEMA_VERSION = 2
+_PRODUCT_TRACE_COLUMNS = {
+    "kind": "TEXT NOT NULL DEFAULT 'query'",
+    "project_id": "TEXT",
+    "knowledge_base_id": "TEXT",
+    "owner_sha256": "TEXT",
+    "request_id": "TEXT",
+    "job_id": "TEXT",
+    "document_id": "TEXT",
+    "revision_id": "TEXT",
+    "profile_id": "TEXT",
+    "index_fingerprint": "TEXT",
+    "source_revision": "TEXT",
+    "capture_incomplete_reason": "TEXT",
+    "dropped_span_count": "INTEGER NOT NULL DEFAULT 0",
+    "dropped_decision_count": "INTEGER NOT NULL DEFAULT 0",
+    "writer_queue_high_water": "INTEGER NOT NULL DEFAULT 0",
+}
+_PRODUCT_DECISION_COLUMNS = {
+    "candidate_id": "TEXT",
+    "evidence_id": "TEXT",
+    "channel": "TEXT",
+    "rank": "INTEGER",
+    "score_type": "TEXT",
+    "score": "REAL",
+    "contribution": "REAL",
+}
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS trace_schema_metadata (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    version INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS traces (
     trace_id TEXT PRIMARY KEY,
     schema_version TEXT NOT NULL,
@@ -59,12 +99,26 @@ CREATE TABLE IF NOT EXISTS traces (
     error_code TEXT,
     feedback_useful INTEGER,
     capture_complete INTEGER NOT NULL,
-    expires_at TEXT NOT NULL
+    expires_at TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'query',
+    project_id TEXT,
+    knowledge_base_id TEXT,
+    owner_sha256 TEXT,
+    request_id TEXT,
+    job_id TEXT,
+    document_id TEXT,
+    revision_id TEXT,
+    profile_id TEXT,
+    index_fingerprint TEXT,
+    source_revision TEXT,
+    capture_incomplete_reason TEXT,
+    dropped_span_count INTEGER NOT NULL DEFAULT 0,
+    dropped_decision_count INTEGER NOT NULL DEFAULT 0,
+    writer_queue_high_water INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS traces_created_idx
 ON traces(created_at DESC, trace_id DESC);
 CREATE INDEX IF NOT EXISTS traces_expires_idx ON traces(expires_at);
-
 CREATE TABLE IF NOT EXISTS artifacts (
     trace_id TEXT NOT NULL,
     artifact_id TEXT NOT NULL,
@@ -113,6 +167,13 @@ CREATE TABLE IF NOT EXISTS candidate_decisions (
     selected INTEGER NOT NULL,
     reason_code TEXT NOT NULL,
     details_json TEXT NOT NULL,
+    candidate_id TEXT,
+    evidence_id TEXT,
+    channel TEXT,
+    rank INTEGER,
+    score_type TEXT,
+    score REAL,
+    contribution REAL,
     PRIMARY KEY (trace_id, sequence),
     FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
 );
@@ -142,11 +203,18 @@ class TraceArtifactLimitError(ValueError):
 class TraceStore:
     """以单连接和锁提供有界、严格的 Trace 持久化。"""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         database_path: Path,
         *,
         artifact_limit_bytes: int = _DEFAULT_ARTIFACT_LIMIT,
+        artifact_item_limit_bytes: int = _DEFAULT_ARTIFACT_ITEM_LIMIT,
+        global_artifact_limit_bytes: int = _DEFAULT_GLOBAL_ARTIFACT_LIMIT,
+        export_limit_bytes: int = _DEFAULT_EXPORT_LIMIT,
+        span_limit: int = _DEFAULT_SPAN_LIMIT,
+        decision_limit: int = _DEFAULT_DECISION_LIMIT,
+        stage_decision_limit: int = _DEFAULT_STAGE_DECISION_LIMIT,
+        minimum_free_disk_bytes: int = 1024 * 1024,
         busy_timeout_ms: int = 5000,
     ) -> None:
         """保存独立数据库路径和硬容量。
@@ -154,19 +222,50 @@ class TraceStore:
         Args:
             database_path: 不与状态库共用的 SQLite 文件。
             artifact_limit_bytes: 单条 Trace 的原始 artifact 字节上限。
+            artifact_item_limit_bytes: 单项 artifact 原始字节上限。
+            global_artifact_limit_bytes: Store 内 artifact 原始总字节上限。
+            export_limit_bytes: 单条 canonical JSON 导出字节上限。
+            span_limit: 单条 Trace 的 span 数量上限。
+            decision_limit: 单条 Trace 的候选决策数量上限。
+            stage_decision_limit: 单阶段候选决策数量上限。
+            minimum_free_disk_bytes: FULL 准入必须保留的磁盘空间。
             busy_timeout_ms: SQLite 锁等待上限。
 
         Raises:
             ValueError: 容量、超时或路径无效。
 
         """
-        if artifact_limit_bytes <= 0 or busy_timeout_ms <= 0:
+        limits = (
+            artifact_limit_bytes,
+            artifact_item_limit_bytes,
+            global_artifact_limit_bytes,
+            export_limit_bytes,
+            span_limit,
+            decision_limit,
+            stage_decision_limit,
+            minimum_free_disk_bytes,
+            busy_timeout_ms,
+        )
+        if any(value <= 0 for value in limits):
             raise ValueError("Trace 容量和 busy timeout 必须为正数。")
+        if stage_decision_limit > decision_limit:
+            raise ValueError("单阶段候选上限不能超过单 Trace 上限。")
         self._path = _canonical_database_path(database_path)
         self._artifact_limit_bytes = artifact_limit_bytes
+        self._artifact_item_limit_bytes = min(
+            artifact_item_limit_bytes,
+            artifact_limit_bytes,
+        )
+        self._global_artifact_limit_bytes = global_artifact_limit_bytes
+        self._export_limit_bytes = export_limit_bytes
+        self._span_limit = span_limit
+        self._decision_limit = decision_limit
+        self._stage_decision_limit = stage_decision_limit
+        self._minimum_free_disk_bytes = minimum_free_disk_bytes
         self._busy_timeout_ms = busy_timeout_ms
         self._connection: sqlite3.Connection | None = None
         self._lock = threading.RLock()
+        self._active_exports: Counter[str] = Counter()
 
     @property
     def database_path(self) -> Path:
@@ -206,8 +305,146 @@ class TraceStore:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
             connection.executescript(_SCHEMA)
+            self._migrate_product_schema(connection)
             connection.commit()
             self._connection = connection
+
+    def _migrate_product_schema(self, connection: sqlite3.Connection) -> None:
+        """把旧 Query Trace v1 原子扩展为 Product Operational Trace v2。"""
+        trace_columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(traces)")
+        }
+        decision_columns = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info(candidate_decisions)"
+            )
+        }
+        missing_trace = set(_PRODUCT_TRACE_COLUMNS) - trace_columns
+        missing_decision = set(_PRODUCT_DECISION_COLUMNS) - decision_columns
+        present_new = (set(_PRODUCT_TRACE_COLUMNS) & trace_columns) | (
+            set(_PRODUCT_DECISION_COLUMNS) & decision_columns
+        )
+        version_row = connection.execute(
+            "SELECT version FROM trace_schema_metadata WHERE singleton=1"
+        ).fetchone()
+        version = None if version_row is None else int(version_row[0])
+        if (missing_trace or missing_decision) and present_new:
+            raise RuntimeError("Trace schema 处于部分迁移状态，拒绝启动。")
+        if version not in (None, 1, _LATEST_SCHEMA_VERSION):
+            raise RuntimeError("Trace schema 版本不受支持。")
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            for name in sorted(missing_trace):
+                definition = _PRODUCT_TRACE_COLUMNS[name]
+                connection.execute(
+                    f"ALTER TABLE traces ADD COLUMN {name} {definition}"
+                )
+            for name in sorted(missing_decision):
+                definition = _PRODUCT_DECISION_COLUMNS[name]
+                connection.execute(
+                    "ALTER TABLE candidate_decisions "
+                    f"ADD COLUMN {name} {definition}"
+                )
+            connection.execute(
+                "INSERT INTO trace_schema_metadata(singleton, version) "
+                "VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE "
+                "SET version=excluded.version",
+                (_LATEST_SCHEMA_VERSION,),
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS traces_product_scope_idx "
+                "ON traces(project_id, knowledge_base_id, created_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS traces_job_idx ON traces(job_id)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS traces_request_idx "
+                "ON traces(request_id)"
+            )
+            connection.execute("COMMIT")
+        except Exception:
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise
+
+    def recover_running(self, *, now: datetime | None = None) -> int:
+        """把重启前遗留的根与 span 关闭为 INTERRUPTED。"""
+        recovered_at = now or datetime.now(UTC)
+        with self._lock:
+            connection = self._require_connection()
+            rows = connection.execute(
+                "SELECT trace_id, created_at FROM traces WHERE status='RUNNING'"
+            ).fetchall()
+            for row in rows:
+                trace_id = str(row["trace_id"])
+                created_at = _parse_timestamp(row["created_at"])
+                duration_ms = max(
+                    0,
+                    round((recovered_at - created_at).total_seconds() * 1000),
+                )
+                running_spans = connection.execute(
+                    "SELECT span_id, started_at FROM spans "
+                    "WHERE trace_id=? AND status='RUNNING'",
+                    (trace_id,),
+                ).fetchall()
+                for span_row in running_spans:
+                    started_at = _parse_timestamp(span_row["started_at"])
+                    span_duration_ms = max(
+                        0,
+                        round(
+                            (recovered_at - started_at).total_seconds() * 1000
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE spans SET finished_at=?, duration_ms=?, "
+                        "status=?, reason_code=? WHERE trace_id=? AND "
+                        "span_id=? AND status='RUNNING'",
+                        (
+                            _timestamp(recovered_at),
+                            span_duration_ms,
+                            SpanStatus.INTERRUPTED.value,
+                            DecisionCode.INTERRUPTED.value,
+                            trace_id,
+                            span_row["span_id"],
+                        ),
+                    )
+                connection.execute(
+                    "UPDATE traces SET finished_at=?, duration_ms=?, status=?, "
+                    "error_code=COALESCE(error_code, 'PROCESS_INTERRUPTED') "
+                    "WHERE trace_id=? AND status='RUNNING'",
+                    (
+                        _timestamp(recovered_at),
+                        duration_ms,
+                        TraceStatus.INTERRUPTED.value,
+                        trace_id,
+                    ),
+                )
+            connection.commit()
+            return len(rows)
+
+    def preflight_full(self, *, reserved_bytes: int) -> None:
+        """在业务执行前检查 FULL 捕获、磁盘与导出容量。"""
+        if not 0 < reserved_bytes <= self._artifact_limit_bytes:
+            raise TraceArtifactLimitError("FULL artifact 预留量越界。")
+        with self._lock:
+            connection = self._require_connection()
+            row = connection.execute(
+                "SELECT COALESCE(SUM(original_bytes), 0) FROM artifacts"
+            ).fetchone()
+            used = 0 if row is None else int(row[0])
+            if used + reserved_bytes > self._global_artifact_limit_bytes:
+                raise TraceArtifactLimitError("FULL artifact 全局容量不足。")
+            if reserved_bytes > self._export_limit_bytes:
+                raise TraceArtifactLimitError("FULL 导出预算不足。")
+            info = os.statvfs(self._path.parent)
+            free = info.f_bavail * info.f_frsize
+            if free < self._minimum_free_disk_bytes + reserved_bytes:
+                raise TraceArtifactLimitError("FULL Trace 磁盘可用空间不足。")
+            if not os.access(self._path.parent, os.R_OK | os.W_OK | os.X_OK):
+                raise PermissionError("FULL Trace 数据目录权限不足。")
 
     def healthcheck(self) -> None:
         """确认数据库仍可执行只读查询。
@@ -249,15 +486,22 @@ class TraceStore:
                     active_collection, index_manifest_sha256,
                     payload_schema_version, status, refusal_code,
                     error_code, feedback_useful, capture_complete,
-                    expires_at
-                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?,
-                          NULL, NULL, NULL, ?, ?)
+                    expires_at, kind, project_id, knowledge_base_id,
+                    owner_sha256, request_id, job_id, document_id,
+                    revision_id, profile_id, index_fingerprint,
+                    source_revision, capture_incomplete_reason,
+                    dropped_span_count, dropped_decision_count,
+                    writer_queue_high_water
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trace.trace_id,
                     trace.schema_version,
                     trace.mode.value,
                     _timestamp(trace.created_at),
+                    None,
+                    None,
                     trace.pipeline_fingerprint,
                     trace.serving_fingerprint,
                     trace.release_revision,
@@ -265,8 +509,26 @@ class TraceStore:
                     trace.index_manifest_sha256,
                     trace.payload_schema_version,
                     trace.status.value,
+                    None,
+                    None,
+                    None,
                     int(trace.capture_complete),
                     _timestamp(trace.expires_at),
+                    trace.kind,
+                    trace.project_id,
+                    trace.knowledge_base_id,
+                    trace.owner_sha256,
+                    trace.request_id,
+                    trace.job_id,
+                    trace.document_id,
+                    trace.revision_id,
+                    trace.profile_id,
+                    trace.index_fingerprint,
+                    trace.source_revision,
+                    trace.capture_incomplete_reason,
+                    trace.dropped_span_count,
+                    trace.dropped_decision_count,
+                    trace.writer_queue_high_water,
                 ),
             )
             connection.commit()
@@ -289,11 +551,13 @@ class TraceStore:
         with self._lock:
             connection = self._require_connection()
             row = connection.execute(
-                "SELECT created_at FROM traces WHERE trace_id=?",
+                "SELECT created_at, status FROM traces WHERE trace_id=?",
                 (trace_id,),
             ).fetchone()
             if row is None:
                 raise TraceNotFoundError(trace_id)
+            if str(row["status"]) != TraceStatus.RUNNING.value:
+                return
             created_at = _parse_timestamp(row["created_at"])
             duration_ms = max(
                 0,
@@ -304,7 +568,7 @@ class TraceStore:
                 UPDATE traces
                 SET finished_at=?, duration_ms=?, status=?,
                     refusal_code=?, error_code=?
-                WHERE trace_id=?
+                WHERE trace_id=? AND status='RUNNING'
                 """,
                 (
                     _timestamp(finish.finished_at),
@@ -315,6 +579,52 @@ class TraceStore:
                     trace_id,
                 ),
             )
+            connection.commit()
+
+    def update_trace_identity(
+        self,
+        trace_id: str,
+        *,
+        revision_id: str | None = None,
+        index_fingerprint: str | None = None,
+        serving_fingerprint: str | None = None,
+        active_collection: str | None = None,
+    ) -> None:
+        """在 snapshot 固定后补齐根 Trace 的活动身份。"""
+        if not any(
+            (
+                revision_id,
+                index_fingerprint,
+                serving_fingerprint,
+                active_collection,
+            )
+        ):
+            return
+        with self._lock:
+            connection = self._require_connection()
+            cursor = connection.execute(
+                """
+                UPDATE traces
+                SET revision_id=COALESCE(?, revision_id),
+                    index_fingerprint=COALESCE(?, index_fingerprint),
+                    serving_fingerprint=COALESCE(?, serving_fingerprint),
+                    active_collection=COALESCE(?, active_collection)
+                WHERE trace_id=? AND status='RUNNING'
+                """,
+                (
+                    revision_id,
+                    index_fingerprint,
+                    serving_fingerprint,
+                    active_collection,
+                    trace_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                existing = connection.execute(
+                    "SELECT 1 FROM traces WHERE trace_id=?", (trace_id,)
+                ).fetchone()
+                if existing is None:
+                    raise TraceNotFoundError(trace_id)
             connection.commit()
 
     def put_span(self, span: SpanRecord) -> None:
@@ -329,6 +639,24 @@ class TraceStore:
         """
         with self._lock:
             connection = self._require_connection()
+            existing = connection.execute(
+                "SELECT 1 FROM spans WHERE trace_id=? AND span_id=?",
+                (span.trace_id, span.span_id),
+            ).fetchone()
+            if existing is None:
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM spans WHERE trace_id=?",
+                    (span.trace_id,),
+                ).fetchone()
+                if count is not None and int(count[0]) >= self._span_limit:
+                    self._mark_capture_incomplete(
+                        connection,
+                        span.trace_id,
+                        reason="SPAN_LIMIT",
+                        dropped_spans=1,
+                    )
+                    connection.commit()
+                    raise TraceArtifactLimitError("Trace span 数超过硬上限。")
             connection.execute(
                 """
                 INSERT INTO spans (
@@ -384,12 +712,33 @@ class TraceStore:
         """
         with self._lock:
             connection = self._require_connection()
+            counts = connection.execute(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN stage=? THEN 1 ELSE 0 END) AS stage_count "
+                "FROM candidate_decisions WHERE trace_id=?",
+                (decision.stage, decision.trace_id),
+            ).fetchone()
+            if counts is not None and (
+                int(counts["total"]) >= self._decision_limit
+                or int(counts["stage_count"] or 0) >= self._stage_decision_limit
+            ):
+                self._mark_capture_incomplete(
+                    connection,
+                    decision.trace_id,
+                    reason="DECISION_LIMIT",
+                    dropped_decisions=1,
+                )
+                connection.commit()
+                raise TraceArtifactLimitError(
+                    "Trace candidate decision 数超过硬上限。"
+                )
             connection.execute(
                 """
                 INSERT INTO candidate_decisions (
                     trace_id, sequence, stage, chunk_id, selected,
-                    reason_code, details_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    reason_code, details_json, candidate_id, evidence_id,
+                    channel, rank, score_type, score, contribution
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     decision.trace_id,
@@ -399,6 +748,13 @@ class TraceStore:
                     int(decision.selected),
                     decision.reason_code.value,
                     _json(decision.details),
+                    decision.candidate_id,
+                    decision.evidence_id,
+                    decision.channel,
+                    decision.rank,
+                    decision.score_type,
+                    decision.score,
+                    decision.contribution,
                 ),
             )
             connection.commit()
@@ -428,6 +784,12 @@ class TraceStore:
         """
         if not payload:
             raise ValueError("artifact payload 不能为空。")
+        if len(payload) > self._artifact_item_limit_bytes:
+            self.mark_capture_incomplete(
+                trace_id,
+                reason="ARTIFACT_ITEM_LIMIT",
+            )
+            raise TraceArtifactLimitError("单项 Trace artifact 超过硬上限。")
         compressed = zlib.compress(payload, level=9)
         metadata = ArtifactMetadata(
             artifact_id=uuid.uuid4().hex,
@@ -451,8 +813,20 @@ class TraceStore:
             if row is None:
                 raise TraceNotFoundError(trace_id)
             used = int(row["used"])
-            if used + len(payload) > self._artifact_limit_bytes:
-                self._mark_capture_incomplete(connection, trace_id)
+            global_row = connection.execute(
+                "SELECT COALESCE(SUM(original_bytes), 0) AS used FROM artifacts"
+            ).fetchone()
+            global_used = 0 if global_row is None else int(global_row["used"])
+            if (
+                used + len(payload) > self._artifact_limit_bytes
+                or global_used + len(payload)
+                > self._global_artifact_limit_bytes
+            ):
+                self._mark_capture_incomplete(
+                    connection,
+                    trace_id,
+                    reason="ARTIFACT_CAPACITY_LIMIT",
+                )
                 connection.commit()
                 raise TraceArtifactLimitError(
                     "Trace artifact 原始字节总量超过硬上限。"
@@ -483,11 +857,23 @@ class TraceStore:
             connection.commit()
         return metadata
 
-    def mark_capture_incomplete(self, trace_id: str) -> None:
+    def mark_capture_incomplete(
+        self,
+        trace_id: str,
+        *,
+        reason: str = "TRACE_CAPTURE_FAILED",
+        dropped_spans: int = 0,
+        dropped_decisions: int = 0,
+        queue_high_water: int = 0,
+    ) -> None:
         """把 Trace 标记为未完整捕获。
 
         Args:
             trace_id: 待标记的 Trace ID。
+            reason: 稳定的不完整捕获原因码。
+            dropped_spans: 本次未写入的 span 数。
+            dropped_decisions: 本次未写入的候选决策数。
+            queue_high_water: writer 队列达到的最高深度。
 
         Returns:
             无返回值。
@@ -495,7 +881,14 @@ class TraceStore:
         """
         with self._lock:
             connection = self._require_connection()
-            self._mark_capture_incomplete(connection, trace_id)
+            self._mark_capture_incomplete(
+                connection,
+                trace_id,
+                reason=reason,
+                dropped_spans=dropped_spans,
+                dropped_decisions=dropped_decisions,
+                queue_high_water=queue_high_water,
+            )
             connection.commit()
 
     def get_trace(self, trace_id: str) -> TraceDetail:
@@ -632,6 +1025,14 @@ class TraceStore:
             if filters.feedback_useful is None
             else int(filters.feedback_useful)
         )
+        capture_mode = (
+            None if filters.capture_mode is None else filters.capture_mode.value
+        )
+        capture_complete = (
+            None
+            if filters.capture_complete is None
+            else int(filters.capture_complete)
+        )
         values = (
             filters.trace_id,
             filters.trace_id,
@@ -647,6 +1048,24 @@ class TraceStore:
             filters.error_code,
             feedback,
             feedback,
+            filters.kind,
+            filters.kind,
+            filters.project_id,
+            filters.project_id,
+            filters.knowledge_base_id,
+            filters.knowledge_base_id,
+            filters.request_id,
+            filters.request_id,
+            filters.job_id,
+            filters.job_id,
+            filters.document_id,
+            filters.document_id,
+            filters.revision_id,
+            filters.revision_id,
+            capture_mode,
+            capture_mode,
+            capture_complete,
+            capture_complete,
         )
         with self._lock:
             connection = self._require_connection()
@@ -660,6 +1079,15 @@ class TraceStore:
                   AND (? IS NULL OR refusal_code=?)
                   AND (? IS NULL OR error_code=?)
                   AND (? IS NULL OR feedback_useful=?)
+                  AND (? IS NULL OR kind=?)
+                  AND (? IS NULL OR project_id=?)
+                  AND (? IS NULL OR knowledge_base_id=?)
+                  AND (? IS NULL OR request_id=?)
+                  AND (? IS NULL OR job_id=?)
+                  AND (? IS NULL OR document_id=?)
+                  AND (? IS NULL OR revision_id=?)
+                  AND (? IS NULL OR mode=?)
+                  AND (? IS NULL OR capture_complete=?)
                 """,
                 values,
             ).fetchone()
@@ -673,6 +1101,15 @@ class TraceStore:
                   AND (? IS NULL OR refusal_code=?)
                   AND (? IS NULL OR error_code=?)
                   AND (? IS NULL OR feedback_useful=?)
+                  AND (? IS NULL OR kind=?)
+                  AND (? IS NULL OR project_id=?)
+                  AND (? IS NULL OR knowledge_base_id=?)
+                  AND (? IS NULL OR request_id=?)
+                  AND (? IS NULL OR job_id=?)
+                  AND (? IS NULL OR document_id=?)
+                  AND (? IS NULL OR revision_id=?)
+                  AND (? IS NULL OR mode=?)
+                  AND (? IS NULL OR capture_complete=?)
                 ORDER BY created_at DESC, trace_id DESC
                 LIMIT ? OFFSET ?
                 """,
@@ -723,9 +1160,21 @@ class TraceStore:
         """
         with self._lock:
             connection = self._require_connection()
-            cursor = connection.execute(
-                "DELETE FROM traces WHERE expires_at<=?",
+            protected = frozenset(self._active_exports)
+            expired = connection.execute(
+                "SELECT trace_id FROM traces WHERE expires_at<=?",
                 (_timestamp(now),),
+            ).fetchall()
+            removable = [
+                (str(row["trace_id"]),)
+                for row in expired
+                if str(row["trace_id"]) not in protected
+            ]
+            if not removable:
+                return 0
+            cursor = connection.executemany(
+                "DELETE FROM traces WHERE trace_id=?",
+                removable,
             )
             connection.commit()
             return cursor.rowcount
@@ -740,29 +1189,46 @@ class TraceStore:
             只含该 Trace 的 UTF-8 canonical JSON。
 
         """
-        detail = self.get_trace(trace_id)
-        artifacts: list[dict[str, object]] = []
-        for metadata in detail.artifacts:
-            content = self.get_artifact(
-                trace_id,
-                metadata.artifact_id,
-            )
-            artifacts.append(
-                {
-                    **_artifact_json(metadata),
-                    "payload": _decode_artifact(content),
-                }
-            )
-        payload = {
-            "trace": _trace_json(detail.trace),
-            "spans": [_span_json(span) for span in detail.spans],
-            "candidate_decisions": [
-                _decision_json(decision)
-                for decision in detail.candidate_decisions
-            ],
-            "artifacts": artifacts,
-        }
-        return _json(payload).encode()
+        with self._export_guard(trace_id):
+            detail = self.get_trace(trace_id)
+            artifacts: list[dict[str, object]] = []
+            for metadata in detail.artifacts:
+                content = self.get_artifact(
+                    trace_id,
+                    metadata.artifact_id,
+                )
+                artifacts.append(
+                    {
+                        **_artifact_json(metadata),
+                        "payload": _decode_artifact(content),
+                    }
+                )
+            payload = {
+                "trace": _trace_json(detail.trace),
+                "spans": [_span_json(span) for span in detail.spans],
+                "candidate_decisions": [
+                    _decision_json(decision)
+                    for decision in detail.candidate_decisions
+                ],
+                "artifacts": artifacts,
+            }
+            encoded = _json(payload).encode()
+            if len(encoded) > self._export_limit_bytes:
+                raise TraceArtifactLimitError("Trace 导出超过总字节上限。")
+            return encoded
+
+    @contextmanager
+    def _export_guard(self, trace_id: str) -> Iterator[None]:
+        """导出期间阻止 prune 删除同一 Trace。"""
+        with self._lock:
+            self._active_exports[trace_id] += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._active_exports[trace_id] -= 1
+                if self._active_exports[trace_id] <= 0:
+                    del self._active_exports[trace_id]
 
     def close(self) -> None:
         """幂等关闭数据库连接。
@@ -787,13 +1253,29 @@ class TraceStore:
         return connection
 
     @staticmethod
-    def _mark_capture_incomplete(
+    def _mark_capture_incomplete(  # noqa: PLR0913
         connection: sqlite3.Connection,
         trace_id: str,
+        *,
+        reason: str,
+        dropped_spans: int = 0,
+        dropped_decisions: int = 0,
+        queue_high_water: int = 0,
     ) -> None:
         cursor = connection.execute(
-            "UPDATE traces SET capture_complete=0 WHERE trace_id=?",
-            (trace_id,),
+            "UPDATE traces SET capture_complete=0, "
+            "capture_incomplete_reason=COALESCE(capture_incomplete_reason, ?), "
+            "dropped_span_count=dropped_span_count+?, "
+            "dropped_decision_count=dropped_decision_count+?, "
+            "writer_queue_high_water=MAX(writer_queue_high_water, ?) "
+            "WHERE trace_id=?",
+            (
+                reason,
+                max(0, dropped_spans),
+                max(0, dropped_decisions),
+                max(0, queue_high_water),
+                trace_id,
+            ),
         )
         if cursor.rowcount != 1:
             raise TraceNotFoundError(trace_id)
@@ -886,6 +1368,23 @@ def _trace_from_row(row: sqlite3.Row) -> TraceRecord:
         feedback_useful=None if feedback is None else bool(feedback),
         capture_complete=bool(row["capture_complete"]),
         expires_at=_parse_timestamp(row["expires_at"]),
+        kind=str(row["kind"]),
+        project_id=_optional_text(row["project_id"]),
+        knowledge_base_id=_optional_text(row["knowledge_base_id"]),
+        owner_sha256=_optional_text(row["owner_sha256"]),
+        request_id=_optional_text(row["request_id"]),
+        job_id=_optional_text(row["job_id"]),
+        document_id=_optional_text(row["document_id"]),
+        revision_id=_optional_text(row["revision_id"]),
+        profile_id=_optional_text(row["profile_id"]),
+        index_fingerprint=_optional_text(row["index_fingerprint"]),
+        source_revision=_optional_text(row["source_revision"]),
+        capture_incomplete_reason=_optional_text(
+            row["capture_incomplete_reason"]
+        ),
+        dropped_span_count=int(row["dropped_span_count"]),
+        dropped_decision_count=int(row["dropped_decision_count"]),
+        writer_queue_high_water=int(row["writer_queue_high_water"]),
     )
 
 
@@ -935,7 +1434,20 @@ def _decision_from_row(row: sqlite3.Row) -> CandidateDecision:
         selected=bool(row["selected"]),
         reason_code=DecisionCode(str(row["reason_code"])),
         details=json.loads(str(row["details_json"])),
+        candidate_id=_optional_text(row["candidate_id"]),
+        evidence_id=_optional_text(row["evidence_id"]),
+        channel=_optional_text(row["channel"]),
+        rank=None if row["rank"] is None else int(row["rank"]),
+        score_type=_optional_text(row["score_type"]),
+        score=None if row["score"] is None else float(row["score"]),
+        contribution=(
+            None if row["contribution"] is None else float(row["contribution"])
+        ),
     )
+
+
+def _optional_text(value: object) -> str | None:
+    return None if value is None else str(value)
 
 
 def _artifact_metadata_from_row(row: sqlite3.Row) -> ArtifactMetadata:
@@ -1010,6 +1522,13 @@ def _decision_json(decision: CandidateDecision) -> dict[str, object]:
         "selected": decision.selected,
         "reason_code": decision.reason_code.value,
         "details": decision.details,
+        "candidate_id": decision.candidate_id,
+        "evidence_id": decision.evidence_id,
+        "channel": decision.channel,
+        "rank": decision.rank,
+        "score_type": decision.score_type,
+        "score": decision.score,
+        "contribution": decision.contribution,
     }
 
 
