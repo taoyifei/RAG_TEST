@@ -94,6 +94,8 @@
     "token_p95": 258,
     "total_citable_source_chars": 46,
     "unique_covered_source_chars": 42,
+    "whitespace_only_citable_char_count": 0,
+    "whitespace_only_citable_node_count": 0,
     "warnings": [
       "PROVISIONAL_CHUNKING_PARAMETERS",
       "HEADER_FOOTER_METADATA_ONLY",
@@ -103,8 +105,8 @@
   "chunks": [
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_56f9406be714f8388b794c419ef1fa6d",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_43a5a5fb529b320f2c4997a4523d8701",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "1.\t一级列表",
       "content_sha256": "6b6287890801c29ba8ab9f693aaf28bba44de2e6e7144f1c816c874130c1a4d2",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：列表\n\n1.\t一级列表",
@@ -112,7 +114,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:列表 1. 一级列表",
       "metadata": [
@@ -249,8 +251,8 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_8225ebfe2a10e7b05f4d43b59d4f3a5a",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_f7d4061ef65fd32f66febc9a8898be3a",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "1.a)\t二级列表",
       "content_sha256": "1005c4badd5bc1186fedc23d6813df9147ec9551c367411c5ab3814d43a2242b",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：列表\n\n1.a)\t二级列表",
@@ -258,7 +260,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:列表 1.a) 二级列表",
       "metadata": [
@@ -395,8 +397,8 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_ca5bbd3f3de68f4a7ecf844e7962dbc4",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_8d8a70b4712213882c38f42c9a44ea93",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "列甲 | 列乙 | 列丙\n合并值 | 丙一\n合并值 | 丙二",
       "content_sha256": "0855fca9bc3825dc3bb039bc26742295a3bb36df0ea10e31f91cd188d4b1ea6d",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：表格\n结构：[列1] 列甲 | [列2] 列乙 | [列3] 列丙\n[列1] 合并值 | [列3] 丙一\n[列1] 合并值 | [列3] 丙二\n\n列甲 | 列乙 | 列丙\n合并值 | 丙一\n合并值 | 丙二",
@@ -404,7 +406,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:表格 结构:[列1] 列甲|[列2] 列乙|[列3] 列丙 [列1] 合并值|[列3] 丙一 [列1] 合并值|[列3] 丙二 列甲|列乙|列丙 合并值|丙一 合并值|丙二",
       "metadata": [
@@ -874,8 +876,8 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_cbcb1116a195de208601374b11173d51",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_2df704e6e16dc9ea93717cfa308560cd",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "正文与图：\n换行后正文跨页后正文",
       "content_sha256": "8aa0647fa2be24b44fbda369b1244395438177646ef4e86c951d18cc9012081e",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：正文\n\n正文与图：\n换行后正文跨页后正文",
@@ -883,7 +885,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:正文 正文与图:换行后正文跨页后正文",
       "metadata": [
@@ -964,8 +966,8 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_4fd6422f4c4ad75d679d1a38e0a8dadd",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_a54bdbf79a56b1d3c4c7e1d76bdecf86",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：图片元数据\n\n合成图片说明",
@@ -973,7 +975,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:图片元数据 合成图片说明",
       "metadata": [
@@ -1062,8 +1064,8 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_6a97ee5a4c26c04090c35a0d99c52272",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_4905996e8dfad314457825ab2393b99d",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：图片元数据\n\n合成图片说明",
@@ -1071,7 +1073,7 @@
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:图片元数据 合成图片说明",
       "metadata": [
@@ -1160,14 +1162,14 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_7c395b5238ba4e7ad4b3be42887772a9",
-      "chunker_fingerprint": "sha256:dc783b06364bbef0dfc50ef5a17caf71b51c39f19eac0038796c118d046d4d30",
+      "chunk_id": "chunk_383f71b6cd94d2f5e5e2f728d4d6a771",
+      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "文本框正文",
       "content_sha256": "103b237c925ac846592ee5fe68c7383fcb13270d52d68653e8525dcda72427d0",
       "embedding_text": "文档：v3-00-synthetic.docx\n类型：文本框\n\n文本框正文",
       "heading_path": [],
       "identifiers": [],
-      "index_revision_id": "irev_2ef02cc45a0dc38d47c32bc4ee91100a",
+      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 类型:文本框 文本框正文",
       "metadata": [

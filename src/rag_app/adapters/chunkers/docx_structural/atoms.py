@@ -66,6 +66,19 @@ class SectionPlan:
     runs: tuple[RunPlan, ...]
 
 
+def has_visible_text(text: str) -> bool:
+    """判断来源文本是否至少包含一个非空白字符。
+
+    Args:
+        text: 不做规范化的来源原文。
+
+    Returns:
+        至少包含一个非空白字符时为 True。
+
+    """
+    return any(not character.isspace() for character in text)
+
+
 def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
     """把段落或列表节点转换为有序来源片段。
 
@@ -77,7 +90,7 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
 
     """
     payload = node.text_payload
-    if payload is None or not payload.exact_text:
+    if payload is None or not has_visible_text(payload.exact_text):
         return ()
     fragments: list[SourceFragment] = []
     attributes = node.list_attributes

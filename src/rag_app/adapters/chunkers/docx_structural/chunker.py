@@ -6,7 +6,7 @@ import hashlib
 import time
 from collections.abc import Sequence
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from rag_app.adapters.chunkers.docx_structural.atoms import AtomicUnit
 from rag_app.adapters.chunkers.docx_structural.context import (
@@ -44,13 +44,27 @@ from rag_app.core.models.common import (
 from rag_app.core.ports import TokenCounterPort
 
 
+class _ChunkConstructionError(ValueError):
+    """携带安全候选身份且保留 Pydantic cause 的构造失败。"""
+
+    def __init__(
+        self,
+        *,
+        chunk_id: str,
+        node_id: str | None,
+    ) -> None:
+        self.chunk_id = chunk_id
+        self.node_id = node_id
+        super().__init__("Chunk 模型不变量未通过。")
+
+
 class DocxStructuralChunker:
     """把 P04 Document IR 转为三视图、精确来源 Chunk V3。"""
 
     descriptor = ComponentDescriptor(
         kind=ComponentKind.CHUNKER,
         name="docx-structural-v3",
-        version="3.0.1",
+        version="3.0.2",
         mode=ProviderMode.LOCAL,
         capabilities=ComponentCapabilities(),
     )
@@ -228,31 +242,45 @@ class DocxStructuralChunker:
             span_identity,
             content_sha256,
         )
-        return Chunk(
-            chunk_id=generated_chunk_id,
-            project_id=document_ir.document.project_id,
-            knowledge_base_id=document_ir.document.knowledge_base_id,
-            index_revision_id=context.index_revision_id,
-            version=document_ir.version,
-            chunker_fingerprint=self.fingerprint,
-            role=first.role,
-            parent_node_id=parent_node_id,
-            section_id=first.section_id,
-            neighbor_group_id=first.neighbor_group_id,
-            child_group_ids=child_groups,
-            note_refs=note_refs,
-            source_spans=rendered.spans,
-            citation_text=rendered.text,
-            embedding_text=embedded,
-            lexical_text=lexical,
-            heading_path=first.heading_path,
-            identifiers=identifiers,
-            token_count=token_count,
-            token_count_is_estimate=not embedding_count.exact,
-            tokenizer_id=embedding_count.tokenizer_id,
-            content_sha256=content_sha256,
-            metadata=_pack_metadata(atoms),
+        source_node_ids = {
+            span.node_id for span in rendered.spans if span.node_id is not None
+        }
+        diagnostic_node_id = (
+            next(iter(source_node_ids))
+            if len(source_node_ids) == 1
+            else parent_node_id
         )
+        try:
+            return Chunk(
+                chunk_id=generated_chunk_id,
+                project_id=document_ir.document.project_id,
+                knowledge_base_id=document_ir.document.knowledge_base_id,
+                index_revision_id=context.index_revision_id,
+                version=document_ir.version,
+                chunker_fingerprint=self.fingerprint,
+                role=first.role,
+                parent_node_id=parent_node_id,
+                section_id=first.section_id,
+                neighbor_group_id=first.neighbor_group_id,
+                child_group_ids=child_groups,
+                note_refs=note_refs,
+                source_spans=rendered.spans,
+                citation_text=rendered.text,
+                embedding_text=embedded,
+                lexical_text=lexical,
+                heading_path=first.heading_path,
+                identifiers=identifiers,
+                token_count=token_count,
+                token_count_is_estimate=not embedding_count.exact,
+                tokenizer_id=embedding_count.tokenizer_id,
+                content_sha256=content_sha256,
+                metadata=_pack_metadata(atoms),
+            )
+        except ValidationError as error:
+            raise _ChunkConstructionError(
+                chunk_id=generated_chunk_id,
+                node_id=diagnostic_node_id,
+            ) from error
 
 
 def _pack_metadata(atoms: tuple[AtomicUnit, ...]) -> JsonObject:

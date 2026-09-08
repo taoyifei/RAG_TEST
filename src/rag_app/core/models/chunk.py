@@ -381,6 +381,8 @@ class ChunkingReport(FrozenModel):
     represented_table_cell_count: StrictInt = Field(default=0, ge=0)
     list_label_count: StrictInt = Field(default=0, ge=0)
     represented_list_label_count: StrictInt = Field(default=0, ge=0)
+    whitespace_only_citable_node_count: StrictInt = Field(default=0, ge=0)
+    whitespace_only_citable_char_count: StrictInt = Field(default=0, ge=0)
     orphan_note_count: StrictInt = Field(default=0, ge=0)
     orphan_image_count: StrictInt = Field(default=0, ge=0)
     orphan_relation_count: StrictInt = Field(default=0, ge=0)
