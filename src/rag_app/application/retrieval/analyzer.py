@@ -6,8 +6,14 @@ import hashlib
 import re
 import unicodedata
 
+from rag_app.application.retrieval.semantics import parse_query_semantics
 from rag_app.core.identifiers import canonical_sha256
-from rag_app.core.models import QueryAnalysis, SearchRequest
+from rag_app.core.models import (
+    ConstraintKind,
+    QueryAnalysis,
+    QueryConstraint,
+    SearchRequest,
+)
 
 _QUOTED = re.compile(r'["“](.+?)["”]')
 _IDENTIFIER = re.compile(
@@ -51,6 +57,17 @@ _NEGATIONS = (
     "not",
     "without",
     "never",
+)
+_QUALIFIER = re.compile(
+    r"仅限|仅仅|只限|只有|至少|至多|最多|最少|不超过|不低于|"
+    r"不少于|不高于|超过|低于|高于|大于|小于|之前|之后|以前|"
+    r"以后|以上|以下|以内|以外|除外|期间|当前|目前|历史|全部|"
+    r"所有|任何|任意|每个|每一|仅|只|除|必须|应当|"
+    r"\b(?:only|all|any|every|before|after)\b",
+    flags=re.IGNORECASE,
+)
+_COUNT_NUMBER = re.compile(
+    r"(?:第)?(?P<number>[零一二三四五六七八九十百两]+)(?=种|类|项|步|条)"
 )
 _PHONE_DIGIT_COUNT = 7
 
@@ -113,9 +130,15 @@ class QueryAnalyzer:
             }
             for turn in request.conversation_context[-8:]
         )
+        constraints = _query_constraints(normalized)
+        semantics = parse_query_semantics(normalized).model_copy(
+            update={"constraints": constraints}
+        )
         return QueryAnalysis(
             original_query=request.text,
             normalized_query=normalized,
+            resolved_query=normalized,
+            semantics=semantics,
             quoted_phrases=quoted,
             identifiers=identifiers,
             numbers=numbers,
@@ -128,11 +151,106 @@ class QueryAnalyzer:
             reason_codes=tuple(reason_codes),
         )
 
+    def resolve(
+        self,
+        original: QueryAnalysis,
+        request: SearchRequest,
+        rewritten_text: str,
+    ) -> QueryAnalysis:
+        """把已通过 guard 的唯一改写合并回原分析。
+
+        Args:
+            original: 原始问题的权威分析与硬约束。
+            request: 原始 scope、过滤和会话上下文。
+            rewritten_text: 已由改写端口接受的唯一候选。
+
+        Returns:
+            原问题与硬约束不变、下游共同使用改写语义的分析。
+
+        """
+        rewritten = self.analyze(
+            request.model_copy(update={"text": rewritten_text})
+        )
+        semantics = rewritten.semantics.model_copy(
+            update={
+                "constraints": original.semantics.constraints,
+                "source": "LLM_REWRITE",
+                "reason_codes": (
+                    *rewritten.semantics.reason_codes,
+                    "QUERY_REWRITE_ACCEPTED",
+                ),
+            }
+        )
+        return rewritten.model_copy(
+            update={
+                "original_query": original.original_query,
+                "normalized_query": original.normalized_query,
+                "resolved_query": rewritten.normalized_query,
+                "semantics": semantics,
+                "quoted_phrases": original.quoted_phrases,
+                "identifiers": original.identifiers,
+                "numbers": original.numbers,
+                "units": original.units,
+                "date_version_signals": original.date_version_signals,
+                "negation_signals": original.negation_signals,
+                "conversation_fingerprint": original.conversation_fingerprint,
+                "reason_codes": tuple(
+                    dict.fromkeys(
+                        (*original.reason_codes, "QUERY_REWRITE_ACCEPTED")
+                    )
+                ),
+            }
+        )
+
 
 def _looks_like_phone(value: str) -> bool:
     compact = re.sub(r"\D", "", value)
     return (
         not re.search(r"[A-Za-z]", value) and len(compact) >= _PHONE_DIGIT_COUNT
+    )
+
+
+def _query_constraints(text: str) -> tuple[QueryConstraint, ...]:
+    """按规范化问题位置收集 guard 需要的硬约束。"""
+    matches: list[tuple[int, int, ConstraintKind, str]] = []
+    patterns = (
+        (ConstraintKind.IDENTIFIER, _IDENTIFIER, 0),
+        (ConstraintKind.IDENTIFIER, _STANDARD, 0),
+        (ConstraintKind.NUMBER, _NUMBER, 0),
+        (ConstraintKind.NUMBER, _COUNT_NUMBER, "number"),
+        (ConstraintKind.UNIT, _UNITS, 0),
+        (ConstraintKind.DATE_VERSION, _DATE_VERSION, 0),
+        (ConstraintKind.QUOTED_TEXT, _QUOTED, 1),
+        (ConstraintKind.QUALIFIER, _QUALIFIER, 0),
+    )
+    for kind, pattern, group in patterns:
+        for match in pattern.finditer(text):
+            start, end = match.span(group)
+            raw = match.group(group)
+            if kind is ConstraintKind.IDENTIFIER and _looks_like_phone(raw):
+                continue
+            matches.append((start, end, kind, raw))
+    for signal in _NEGATIONS:
+        matches.extend(
+            ((match.start(), match.end(), ConstraintKind.NEGATION, match[0]))
+            for match in re.finditer(re.escape(signal), text, re.IGNORECASE)
+        )
+    unique = {
+        (start, end, kind, raw.casefold()): QueryConstraint(
+            kind=kind,
+            raw_text=raw,
+            normalized_value=raw.casefold(),
+            start_char=start,
+            end_char=end,
+        )
+        for start, end, kind, raw in matches
+        if raw
+    }
+    return tuple(
+        unique[key]
+        for key in sorted(
+            unique, key=lambda item: (item[0], item[1], item[2].value)
+        )
     )
 
 

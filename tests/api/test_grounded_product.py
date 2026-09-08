@@ -149,15 +149,42 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
 
     first = query("MX-41")
     assert first["generation_mode"] == "llm", first
+    assert first["cache_hit"] is False
+    assert first["result_origin"] == "fresh"
+    assert first["generation_called_this_request"] is True
+    assert first["rewrite_called_this_request"] is False
     assert len(requests) == 1
+    first_payload = json.loads(requests[0].content)
+    assert first_payload["model"] == "qwen3.7-flash"
+    assert [message["role"] for message in first_payload["messages"]] == [
+        "system",
+        "user",
+    ]
+    grounded_input = json.loads(first_payload["messages"][1]["content"])
+    assert grounded_input["question"] == "MX-41"
+    assert [item["support_id"] for item in grounded_input["evidence"]] == [
+        item["evidence_id"] for item in first["evidence"]
+    ]
+    assert [item["text"] for item in grounded_input["evidence"]] == [
+        item["citation_text"] for item in first["evidence"]
+    ]
     cached = query("MX-41")
     assert cached["cache_hit"] is True
+    assert cached["result_origin"] == "cache"
+    assert cached["generation_mode"] == "llm"
+    assert cached["generation_called_this_request"] is False
+    assert cached["rewrite_called_this_request"] is False
+    assert cached["cache_key"] == first["cache_key"]
+    assert cached["answer"] == first["answer"]
     assert len(requests) == 1
     refused = query("MX-41 负责人的手机号是什么")
     assert refused["answer"] is None, refused
+    assert refused["generation_mode"] == "none"
+    assert refused["generation_called_this_request"] is False
     failing = True
     failure = query("设备 MX-41 的维护周期是多少？")
     assert failure["generation_mode"] == "extractive_fallback", failure
+    assert failure["generation_called_this_request"] is True
     assert len(requests) == 2
     page = harness.runtime.history.list_history()
     assert {item["status"] for item in page["items"]} >= {

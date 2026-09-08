@@ -256,7 +256,7 @@ class ProductGroundedModel:
                     text=text,
                     kind="rewrite",
                     identity=canonical_sha256(
-                        {"query": text, "policy": "bounded-rewrite-v2"}
+                        {"query": text, "policy": "bounded-rewrite-v3"}
                     ),
                 )
             )

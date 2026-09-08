@@ -1758,6 +1758,11 @@ export interface components {
             evidence: components["schemas"]["EvidenceItem"][];
             /** Evidence Count */
             evidence_count: number;
+            /**
+             * Generation Called This Request
+             * @default false
+             */
+            generation_called_this_request: boolean;
             /** Generation Mode */
             generation_mode: string;
             /** Generation Reason Code */
@@ -1789,6 +1794,17 @@ export interface components {
             rerank_execution_mode: string;
             /** Rerank Mode */
             rerank_mode: string;
+            /**
+             * Result Origin
+             * @default fresh
+             * @enum {string}
+             */
+            result_origin: "fresh" | "cache";
+            /**
+             * Rewrite Called This Request
+             * @default false
+             */
+            rewrite_called_this_request: boolean;
             /** Rewrite Reason Code */
             rewrite_reason_code?: string | null;
             /** Route Reason Code */

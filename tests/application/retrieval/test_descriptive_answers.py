@@ -27,6 +27,15 @@ def _paragraph(text: str) -> str:
     return f"<w:p><w:r><w:t>{escape(text)}</w:t></w:r></w:p>"
 
 
+def _list_paragraph(text: str) -> str:
+    return (
+        '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/>'
+        '<w:numId w:val="7"/></w:numPr></w:pPr><w:r><w:t>'
+        + escape(text)
+        + "</w:t></w:r></w:p>"
+    )
+
+
 def _candidates(blocks: str) -> tuple[RankedChunk, ...]:
     ir = parse_package(build_package(blocks)).document_ir
     return tuple(
@@ -145,7 +154,11 @@ def test_role_table_keeps_every_duty_from_the_selected_row(
     "question",
     [
         "维修组的工作模式是什么",
+        "维修组的工作模式是啥",
         "维修组有哪些工作模式",
+        "维修组是哪几种工作模式",
+        "维修组的工作模式分别指什么",
+        "请把维修组的工作模式列出来",
         "请列举维修组采用的模式",
     ],
 )
@@ -161,6 +174,21 @@ def test_enumeration_preserves_the_complete_source_set(
     )
     assert [item.citation_text for item in evidence] == [statement]
     assert all(mode in evidence[0].citation_text for mode in modes)
+
+
+def test_enumeration_reports_source_count_when_question_premise_differs() -> (
+    None
+):
+    statement = "维修组现有工作模式，分为“轮值维护”、“专项修理”。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(statement)),
+        _POLICY,
+        context=_context("维修组的三种工作模式是什么"),
+    )
+
+    assert [item.citation_text for item in evidence] == [statement]
+    support = dict(evidence[0].metadata)["answer_support"]
+    assert support["support_reason"] == "SOURCE_CORRECTS_COUNT_PREMISE"
 
 
 def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
@@ -209,3 +237,73 @@ def test_first_action_question_keeps_its_supported_source() -> None:
         context=_context("档案受潮后应先做什么？"),
     )
     assert [item.citation_text for item in evidence] == [statement]
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "设备入库流程有哪些步骤？",
+        "设备入库流程是啥",
+        "请把设备入库流程列出来",
+    ),
+)
+def test_procedure_lead_in_keeps_the_complete_ordered_list(
+    question: str,
+) -> None:
+    intro = "设备入库流程包括以下步骤："
+    steps = ("核对交接清单。", "完成双人复核。", "按顺序登记入库。")
+    candidates = _candidates(
+        _paragraph(intro) + "".join(_list_paragraph(step) for step in steps)
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates, _POLICY, context=_context(question)
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, *steps]
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "STRUCTURED_LIST_RELATION"
+        for item in evidence
+    )
+    assert not EvidenceAssembler().assemble(
+        candidates, _POLICY, context=_context("设备出库流程有哪些步骤？")
+    )
+
+
+def test_enumeration_lead_in_does_not_publish_without_its_list() -> None:
+    intro = "纸鸢团队的协作方式具体如下："
+    methods = ("结对处理。", "集中会审。", "轮流值守。")
+    candidates = _candidates(
+        _paragraph(intro)
+        + "".join(_list_paragraph(method) for method in methods)
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("纸鸢团队的协作方式是啥？"),
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, *methods]
+    assert not EvidenceAssembler().assemble(
+        candidates[:1],
+        _POLICY,
+        context=_context("纸鸢团队的协作方式是啥？"),
+    )
+
+
+def test_ordinal_request_selects_only_the_requested_list_item() -> None:
+    intro = "设备入库流程包括以下步骤："
+    steps = ("核对交接清单。", "完成双人复核。", "按顺序登记入库。")
+    candidates = _candidates(
+        _paragraph(intro) + "".join(_list_paragraph(step) for step in steps)
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("设备入库流程的第三步是什么？"),
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, steps[2]]

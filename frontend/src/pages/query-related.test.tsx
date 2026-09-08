@@ -31,6 +31,9 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
     active_index_revision_id: "irev_a",
     cache_hit: false,
     cache_key: "sha256:synthetic",
+    result_origin: "fresh",
+    generation_called_this_request: false,
+    rewrite_called_this_request: false,
     confidence: {
       status: "INSUFFICIENT_EVIDENCE",
       score: 0,
@@ -205,4 +208,71 @@ it("问答拒答不开放诊断候选，正常答案才展示正式引用", asyn
   await user.click(screen.getByRole("button", { name: "执行" }));
   expect(await screen.findByRole("region", { name: "引用依据" })).toBeVisible();
   expect(screen.queryByRole("region", { name: "检索候选" })).toBeNull();
+});
+
+it("准确区分本次模型生成、缓存、预算回退、无授权与澄清", async () => {
+  vi.spyOn(api, "answer")
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "模型答案",
+        related_contents: [],
+        display_message: null,
+        generation_mode: "llm",
+        result_origin: "fresh",
+        generation_called_this_request: true,
+        rewrite_called_this_request: false,
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "模型答案",
+        related_contents: [],
+        display_message: null,
+        generation_mode: "llm",
+        cache_hit: true,
+        result_origin: "cache",
+        generation_called_this_request: false,
+        rewrite_called_this_request: false,
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "证据摘录",
+        related_contents: [],
+        display_message: null,
+        generation_mode: "extractive_fallback",
+        generation_reason_code: "BLOCKED_BUDGET",
+        generation_called_this_request: false,
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        related_contents: [],
+        display_message: null,
+        generation_reason_code: "DATA_EGRESS_NOT_AUTHORIZED",
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        status: "AMBIGUOUS_NEEDS_CLARIFICATION",
+        related_contents: [],
+        display_message: null,
+      }),
+    );
+  render(<QueryPage mode="answer" />);
+  const user = await submit();
+  expect(
+    await screen.findByText(/本次答案由回答模型.*已通过来源校验/),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/本次结果来自查询缓存/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/因预算不可用.*回退/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/未获本次资料出网授权/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/请补充对象、范围或所问关系/)).toBeVisible();
 });

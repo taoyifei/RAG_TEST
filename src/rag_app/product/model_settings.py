@@ -148,9 +148,9 @@ class ProductModelSettings:
         identity: dict[str, object] = {
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v2",
-            "rewrite": "bounded-rewrite-v2",
+            "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v3",
-            "answer_selection": "descriptive-support-v2",
+            "answer_selection": "shared-query-semantics-v1",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

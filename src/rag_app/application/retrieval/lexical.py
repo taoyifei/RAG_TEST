@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 
-from rag_app.application.retrieval.answer_support import descriptive_request
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     ChannelHit,
     LexicalSearchRequest,
+    QueryAnalysis,
+    QuerySemantics,
     QueryVariant,
+    RequestedAnswerType,
 )
 from rag_app.core.ports import LexicalStorePort
 
@@ -20,20 +22,37 @@ _QUESTION_SYNTAX = re.compile(
 )
 
 
-def question_search_terms(query: str) -> str:
+def question_search_terms(
+    query: str, semantics: QuerySemantics | None = None
+) -> str:
     """仅分隔问句语法，保留对象、数字和否定供原检索与支持校验。
 
     Args:
         query: 保留业务对象及关系的原始问句。
+        semantics: Analyzer 已产生的共享语义；缺省时只做保守字面分隔。
 
     Returns:
         至多用于一次补充字面检索的对象词或分隔后的词组。
 
     """
-    descriptive = descriptive_request(query)
-    if descriptive is not None:
-        target, relation, answer_type = descriptive
-        return target if answer_type == "DUTIES" else f"{target} {relation}"
+    if (
+        semantics is not None
+        and semantics.target
+        and semantics.relation
+        and semantics.answer_type
+        in {
+            RequestedAnswerType.ENUMERATION,
+            RequestedAnswerType.COUNT,
+            RequestedAnswerType.ORDINAL_ITEM,
+            RequestedAnswerType.DUTIES,
+            RequestedAnswerType.PROCEDURE,
+        }
+    ):
+        return (
+            semantics.target
+            if semantics.answer_type is RequestedAnswerType.DUTIES
+            else f"{semantics.target} {semantics.relation}"
+        )
     return " ".join(_QUESTION_SYNTAX.sub(" ", query).split())
 
 
@@ -49,6 +68,7 @@ class LexicalChannel:
         variant: QueryVariant,
         *,
         limit: int,
+        analysis: QueryAnalysis | None = None,
     ) -> tuple[ChannelHit, ...]:
         """返回不携带正文的 FTS5 候选。
 
@@ -56,6 +76,7 @@ class LexicalChannel:
             snapshot: 请求级 immutable Active Revision。
             variant: 原始或唯一 normalized 变体。
             limit: 最大候选数。
+            analysis: 当前已接受改写后的共享分析。
 
         Returns:
             绑定变体通道名的 FTS5 身份候选。
@@ -68,7 +89,9 @@ class LexicalChannel:
                 limit=limit,
             )
         )
-        normalized_terms = question_search_terms(variant.text)
+        normalized_terms = question_search_terms(
+            variant.text, None if analysis is None else analysis.semantics
+        )
         used_question_terms = False
         if normalized_terms and normalized_terms != variant.text:
             supplemental = self._store.search_candidates(

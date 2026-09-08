@@ -416,6 +416,9 @@ class SearchAnswerResult(FrozenModel):
     degraded_reason_codes: tuple[str, ...] = ()
     cache_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_hit: bool = False
+    result_origin: Literal["fresh", "cache"] = "fresh"
+    generation_called_this_request: bool = False
+    rewrite_called_this_request: bool = False
     diagnostics_summary: RetrievalDiagnosticsSummary | None = None
     diagnostics: RetrievalDiagnostics | None = Field(
         default=None, exclude=True, repr=False

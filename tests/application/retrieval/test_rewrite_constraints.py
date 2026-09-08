@@ -101,3 +101,67 @@ def test_colloquial_grammar_and_topic_reordering_are_allowed(
     request = _request(before)
     assert rewrite_constraint_reason(request, after) is None
     assert request.text == before
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        ("开发中心的工作模式是啥", "开发中心的工作模式是什么"),
+        ("美的中心的工作模式是啥", "美的中心的工作模式是什么"),
+        (
+            "研发和质量组的工作模式是啥",
+            "研发和质量组的工作模式是什么",
+        ),
+        (
+            "“啥都有”研究组的工作模式是啥",
+            "“啥都有”研究组的工作模式是什么",
+        ),
+    ),
+)
+def test_descriptive_rewrite_preserves_entity_names(
+    before: str, after: str
+) -> None:
+    assert rewrite_constraint_reason(_request(before), after) is None
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        ("开发中心在哪里？", "开发心在哪里？"),
+        ("研发和质量组在哪里？", "研发质量组在哪里？"),
+        ("美的中心在哪里？", "美中心在哪里？"),
+        ("啥都有研究组在哪里？", "都有研究组在哪里？"),
+        ("里程碑小组在哪里？", "程碑小组在哪里？"),
+    ),
+)
+def test_fallback_rewrite_cannot_delete_entity_function_characters(
+    before: str, after: str
+) -> None:
+    """未知关系也按原词比较，不能靠全局删虚词掩盖实体漂移。"""
+    assert (
+        rewrite_constraint_reason(_request(before), after)
+        == "REWRITE_SCOPE_CHANGED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        (
+            "蓝鹊小组的三种工作模式是啥",
+            "蓝鹊小组的四种工作模式是什么",
+        ),
+        (
+            "蓝鹊小组的第三种工作模式是什么",
+            "蓝鹊小组的第二种工作模式是什么",
+        ),
+        (
+            "蓝鹊小组有多少种工作模式",
+            "蓝鹊小组有哪些工作模式",
+        ),
+    ),
+)
+def test_rewrite_cannot_change_count_or_answer_shape(
+    before: str, after: str
+) -> None:
+    assert rewrite_constraint_reason(_request(before), after) is not None

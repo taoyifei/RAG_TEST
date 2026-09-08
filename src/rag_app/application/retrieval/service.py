@@ -6,6 +6,7 @@ import hashlib
 import json
 import uuid
 from copy import copy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
 
@@ -21,7 +22,10 @@ from rag_app.application.retrieval.filters import apply_candidate_filters
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
 from rag_app.application.retrieval.hydration import CandidateHydrator
 from rag_app.application.retrieval.lexical import LexicalChannel
-from rag_app.application.retrieval.neighbors import NeighborExpander
+from rag_app.application.retrieval.neighbors import (
+    ExpansionOutcome,
+    NeighborExpander,
+)
 from rag_app.application.retrieval.planner import QueryPlanner
 from rag_app.application.retrieval.related import (
     DISPLAY_POLICY,
@@ -30,7 +34,10 @@ from rag_app.application.retrieval.related import (
     select_related_contents,
     validate_candidate,
 )
-from rag_app.application.retrieval.reranking import CircuitAwareReranker
+from rag_app.application.retrieval.reranking import (
+    CircuitAwareReranker,
+    RerankingOutcome,
+)
 from rag_app.core.errors import (
     ChannelRateLimited,
     ChannelUnavailable,
@@ -48,6 +55,7 @@ from rag_app.core.models import (
     ChannelHit,
     Chunk,
     CircuitSnapshot,
+    ConfidenceDecision,
     ConfidenceStatus,
     DiagnosticEvidenceItem,
     DiagnosticExpansionItem,
@@ -59,10 +67,12 @@ from rag_app.core.models import (
     ProviderCall,
     ProviderCallCount,
     ProviderFailureCategory,
+    QueryAnalysis,
     RankedChunk,
     RelatedContent,
     RetrievalDiagnostics,
     RetrievalDiagnosticsSummary,
+    RetrievalPlan,
     RetrievalPolicy,
     SearchAnswerResult,
     SearchRequest,
@@ -83,6 +93,17 @@ from rag_app.core.ports import (
     VectorStorePort,
 )
 from rag_app.core.ports.query_rewrite import QueryRewritePort
+
+
+@dataclass(frozen=True, slots=True)
+class _SelectionOutcome:
+    """一次候选融合到置信判断的内部结果。"""
+
+    fused: tuple[FusedCandidate, ...]
+    reranked: RerankingOutcome
+    expansion: ExpansionOutcome
+    evidence: tuple[EvidenceItem, ...]
+    confidence: ConfidenceDecision
 
 
 class RetrievalService:
@@ -123,7 +144,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "p11-related-content-v1",
+                "retrieval_implementation": "v3-00-7-semantic-query-v1",
             }
         )
         self._egress = egress_policy
@@ -221,6 +242,7 @@ class RetrievalService:
         )
         stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
         analysis = self._analyzer.analyze(request)
+        effective_analysis = analysis
         self._record(
             trace_id,
             "analyze",
@@ -230,6 +252,13 @@ class RetrievalService:
                 ).hexdigest(),
                 "query_length": len(request.text),
                 "identifier_count": len(analysis.identifiers),
+                "answer_type": analysis.semantics.answer_type.value,
+                "semantic_source": analysis.semantics.source,
+                "expected_count": analysis.semantics.expected_count,
+                "ordinal": analysis.semantics.ordinal,
+                "constraint_kinds": tuple(
+                    item.kind.value for item in analysis.semantics.constraints
+                ),
                 "reason_codes": analysis.reason_codes,
             },
         )
@@ -260,7 +289,13 @@ class RetrievalService:
         )
         stage_started = _finish_timing(stage_timings, "plan", stage_started)
         rewrite_identity = canonical_sha256(
-            tuple(variant.identity for variant in plan.variants)
+            {
+                "variants": tuple(
+                    variant.identity for variant in plan.variants
+                ),
+                "semantic_policy": "shared-query-semantics-v1",
+                "rewrite_policy": "bounded-rewrite-v3",
+            }
         )
         cache_identity = BaseResultCacheKey(
             project_id=request.scope.project_id,
@@ -296,6 +331,9 @@ class RetrievalService:
                 update={
                     "trace_id": trace_id,
                     "cache_hit": True,
+                    "result_origin": "cache",
+                    "generation_called_this_request": False,
+                    "rewrite_called_this_request": False,
                     "diagnostics": diagnostics,
                     "diagnostics_summary": _diagnostics_summary(diagnostics),
                 }
@@ -310,8 +348,14 @@ class RetrievalService:
             rewrite_attempted = rewritten.attempted
             provider_calls.extend(rewritten.calls)
             if rewritten.variant is not None:
-                plan = plan.model_copy(
-                    update={"variants": (plan.variants[0], rewritten.variant)}
+                effective_analysis = self._analyzer.resolve(
+                    analysis, request, rewritten.variant.text
+                )
+                plan = self._planner.plan(
+                    effective_analysis,
+                    (plan.variants[0], rewritten.variant),
+                    self._policy,
+                    dense_required=request.dense_required,
                 )
             self._record(
                 trace_id,
@@ -319,6 +363,15 @@ class RetrievalService:
                 {
                     "reason_code": rewritten.reason_code,
                     "attempted": rewritten.attempted,
+                    "accepted": rewritten.variant is not None,
+                    "resolved_query_sha256": hashlib.sha256(
+                        (effective_analysis.resolved_query or "").encode(
+                            "utf-8"
+                        )
+                    ).hexdigest(),
+                    "resolved_answer_type": (
+                        effective_analysis.semantics.answer_type.value
+                    ),
                 },
             )
         top_k = dict(plan.channel_top_k)
@@ -345,7 +398,10 @@ class RetrievalService:
                 try:
                     hits = apply_candidate_filters(
                         self._lexical.search(
-                            snapshot, variant, limit=top_k["lexical"]
+                            snapshot,
+                            variant,
+                            limit=top_k["lexical"],
+                            analysis=effective_analysis,
                         ),
                         request,
                     )
@@ -370,33 +426,6 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "lexical_channel", channel_started)
-        if (
-            self._rewriter is not None
-            and not rewrite_attempted
-            and not any(channel_hits.values())
-        ):
-            rewritten = self._rewriter.rewrite(
-                request, recall_insufficient=True
-            )
-            rewrite_reason = rewritten.reason_code
-            provider_calls.extend(rewritten.calls)
-            if rewritten.variant is not None:
-                channel_hits["lexical:rewrite"] = apply_candidate_filters(
-                    self._lexical.search(
-                        snapshot,
-                        rewritten.variant,
-                        limit=top_k.get("lexical", 20),
-                    ),
-                    request,
-                )
-            self._record(
-                trace_id,
-                "rewrite",
-                {
-                    "reason_code": rewritten.reason_code,
-                    "attempted": rewritten.attempted,
-                },
-            )
         selected_slot: str | None = None
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
@@ -413,7 +442,8 @@ class RetrievalService:
             try:
                 dense = self._dense.search(
                     snapshot,
-                    plan.variants[0].text,
+                    effective_analysis.resolved_query
+                    or effective_analysis.normalized_query,
                     self._egress,
                     limit=top_k["dense"],
                 )
@@ -469,118 +499,141 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "vector_channel", channel_started)
-        if len(channel_hits) > self._policy.max_channels:
-            raise ValueError("检索实际通道数超过 P07 policy。")
-        # 软删除可先于索引回收；读取正文前排除已知撤销身份。
-        # 无删除记录却缺失或损坏的候选仍失败关闭。
-        excluded_documents = frozenset(snapshot.excluded_document_ids)
-        channel_hits = {
-            name: tuple(
-                hit for hit in hits if hit.document_id not in excluded_documents
+        selection = self._rank_and_select(
+            request=request,
+            snapshot=snapshot,
+            analysis=effective_analysis,
+            plan=plan,
+            channel_hits=channel_hits,
+            selected_slot=selected_slot,
+            trace_id=trace_id,
+            provider_calls=provider_calls,
+            degraded=degraded,
+            stage_timings=stage_timings,
+            retrieval_phase="original",
+        )
+        fused = selection.fused
+        reranked = selection.reranked
+        expansion = selection.expansion
+        evidence = selection.evidence
+        confidence = selection.confidence
+        if (
+            self._rewriter is not None
+            and not rewrite_attempted
+            and confidence.status
+            in {
+                ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
+            }
+            and not any("POLICY_DENIED" in reason for reason in degraded)
+        ):
+            rewritten = self._rewriter.rewrite(
+                request, recall_insufficient=True
             )
-            for name, hits in channel_hits.items()
-        }
-        fused = reciprocal_rank_fusion(
-            channel_hits,
-            expected_revision_id=snapshot.revision.index_revision_id,
-            k=self._policy.rrf_k,
-            limit=self._policy.fusion_candidate_limit,
-        )
-        self._record(
-            trace_id,
-            "fuse",
-            {
-                "candidate_count": len(fused),
-                "rrf_k": self._policy.rrf_k,
-                "rank_contributions": [
-                    [
-                        [
-                            contribution.channel,
-                            contribution.rank,
-                            contribution.contribution,
-                        ]
-                        for contribution in candidate.contributions
-                    ]
-                    for candidate in fused
-                ],
-            },
-        )
-        stage_started = _finish_timing(stage_timings, "retrieve", stage_started)
-        hydration_started = perf_counter()
-        hydrated = self._hydrator.hydrate(snapshot, fused)
-        _finish_timing(stage_timings, "sqlite_hydration", hydration_started)
-        self._record(trace_id, "hydrate", {"candidate_count": len(hydrated)})
-        reranked = self._reranker.rerank(
-            analysis.normalized_query,
-            hydrated,
-            self._egress,
-            self._policy,
-            enabled=plan.use_reranker,
-            result_limit=request.limit,
-        )
-        provider_calls.extend(reranked.provider_calls)
-        self._record(
-            trace_id,
-            "rerank",
-            {
-                "mode": reranked.mode,
-                "reason_code": reranked.reason_code,
-                "candidate_count": len(reranked.candidates),
-            },
-        )
-        expansion = self._neighbors.expand(
-            snapshot, reranked.candidates, plan.neighbor_mode, self._policy
-        )
-        degraded.extend(expansion.degraded_reason_codes)
-        self._record(
-            trace_id,
-            "expand_neighbors",
-            {
-                "candidate_count": len(expansion.candidates),
-                "reason_codes": expansion.degraded_reason_codes,
-            },
-        )
-        evidence = self._evidence.assemble(
-            expansion.candidates,
-            self._policy,
-            allow_uncertain=self._grounded is not None,
-            context=EvidenceSelectionContext(
-                analysis=analysis,
-                query_kind=plan.query_kind,
-                rerank_mode=reranked.mode,
-                selected_slot=selected_slot,
-                selected_vector_space=(
-                    snapshot.topology.slot(selected_slot).vector_space_identity
-                    if selected_slot is not None
-                    else None
-                ),
-            ),
-        )
-        self._record(
-            trace_id, "assemble_evidence", {"evidence_count": len(evidence)}
-        )
-        confidence = self._confidence.evaluate(
-            analysis,
-            plan.query_kind,
-            expansion.candidates,
-            evidence,
-            tuple(degraded),
-            policy=self._policy,
-            rerank_mode=reranked.mode,
-            selected_vector_space=(
-                snapshot.topology.slot(selected_slot).vector_space_identity
-                if selected_slot is not None
-                else None
-            ),
-        )
-        stage_started = _finish_timing(
-            stage_timings, "rank_and_evidence", stage_started
-        )
-        self._record(
-            trace_id,
-            "confidence",
-            {"status": confidence.status.value, "score": confidence.score},
-        )
+            rewrite_reason = rewritten.reason_code
+            rewrite_attempted = rewritten.attempted
+            provider_calls.extend(rewritten.calls)
+            if rewritten.variant is not None:
+                effective_analysis = self._analyzer.resolve(
+                    analysis, request, rewritten.variant.text
+                )
+                plan = self._planner.plan(
+                    effective_analysis,
+                    (plan.variants[0], rewritten.variant),
+                    self._policy,
+                    dense_required=request.dense_required,
+                )
+                if "lexical" in plan.channels:
+                    try:
+                        rewrite_hits = apply_candidate_filters(
+                            self._lexical.search(
+                                snapshot,
+                                rewritten.variant,
+                                limit=top_k["lexical"],
+                                analysis=effective_analysis,
+                            ),
+                            request,
+                        )
+                    except (
+                        ChannelRateLimited,
+                        ChannelUnavailable,
+                    ) as error:
+                        degraded.append(error.code)
+                        rewrite_hits = ()
+                    channel_hits["lexical:rewrite"] = rewrite_hits
+                if "dense" in plan.channels:
+                    try:
+                        rewrite_dense = self._dense.search(
+                            snapshot,
+                            effective_analysis.resolved_query
+                            or effective_analysis.normalized_query,
+                            self._egress,
+                            limit=top_k["dense"],
+                        )
+                    except (DenseUnavailable, PolicyDenied) as error:
+                        if plan.dense_required:
+                            raise
+                        degraded.append(error.code)
+                    except IndexCompatibilityError as error:
+                        raise IndexCorrupt(
+                            "Dense route 与 Active Revision 不兼容。",
+                            stage="retrieval.dense",
+                        ) from error
+                    else:
+                        provider_calls.extend(
+                            rewrite_dense.routed.provider_calls
+                        )
+                        rewrite_slot = rewrite_dense.routed.selected_slot_id
+                        if (
+                            selected_slot is not None
+                            and rewrite_slot != selected_slot
+                        ):
+                            raise IndexCorrupt(
+                                "单请求补召回禁止切换 Dense slot。",
+                                stage="retrieval.dense",
+                            )
+                        selected_slot = rewrite_slot
+                        selected_vector = rewrite_dense.routed.vector_name
+                        channel_hits[f"dense:{rewrite_slot}:rewrite"] = (
+                            apply_candidate_filters(rewrite_dense.hits, request)
+                        )
+                selection = self._rank_and_select(
+                    request=request,
+                    snapshot=snapshot,
+                    analysis=effective_analysis,
+                    plan=plan,
+                    channel_hits=channel_hits,
+                    selected_slot=selected_slot,
+                    trace_id=trace_id,
+                    provider_calls=provider_calls,
+                    degraded=degraded,
+                    stage_timings=stage_timings,
+                    retrieval_phase="rewrite",
+                )
+                fused = selection.fused
+                reranked = selection.reranked
+                expansion = selection.expansion
+                evidence = selection.evidence
+                confidence = selection.confidence
+            self._record(
+                trace_id,
+                "rewrite",
+                {
+                    "reason_code": rewritten.reason_code,
+                    "attempted": rewritten.attempted,
+                    "accepted": rewritten.variant is not None,
+                    "trigger": "EVIDENCE_INSUFFICIENT",
+                    "resolved_query_sha256": hashlib.sha256(
+                        (effective_analysis.resolved_query or "").encode(
+                            "utf-8"
+                        )
+                    ).hexdigest(),
+                    "resolved_answer_type": (
+                        effective_analysis.semantics.answer_type.value
+                    ),
+                },
+            )
+        stage_started = perf_counter()
         generation_mode = "none"
         generation_reason: str | None = "GENERATOR_NOT_CONFIGURED"
         try:
@@ -673,7 +726,7 @@ class RetrievalService:
             related_contents = select_related_contents(
                 reranked.candidates,
                 request,
-                analysis,
+                effective_analysis,
                 revision_id=snapshot.revision.index_revision_id,
                 rerank_mode=reranked.mode,
             )
@@ -704,6 +757,15 @@ class RetrievalService:
             rewrite_reason_code=rewrite_reason,
             degraded_reason_codes=tuple(dict.fromkeys(degraded)),
             cache_key=cache_key,
+            result_origin="fresh",
+            generation_called_this_request=any(
+                call.operation == "generation" and call.call_count > 0
+                for call in provider_calls
+            ),
+            rewrite_called_this_request=any(
+                call.operation == "query.rewrite" and call.call_count > 0
+                for call in provider_calls
+            ),
             diagnostics_summary=_diagnostics_summary(diagnostics),
             diagnostics=diagnostics,
         )
@@ -721,6 +783,179 @@ class RetrievalService:
             self._cache.put(cache_key, result, ttl_seconds=30)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def _rank_and_select(  # noqa: PLR0913
+        self,
+        *,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        analysis: QueryAnalysis,
+        plan: RetrievalPlan,
+        channel_hits: dict[str, tuple[ChannelHit, ...]],
+        selected_slot: str | None,
+        trace_id: str,
+        provider_calls: list[ProviderCall],
+        degraded: list[str],
+        stage_timings: list[StageTiming],
+        retrieval_phase: str,
+    ) -> _SelectionOutcome:
+        """融合、重排并按同一个语义对象选择证据。
+
+        Args:
+            request: 原始用户查询与访问范围。
+            snapshot: 本次请求固定的 Active Revision。
+            analysis: 原问或已接受改写对应的共享分析。
+            plan: 与 analysis 同步生成的检索计划。
+            channel_hits: 当前有界通道候选。
+            selected_slot: 本请求唯一 Dense slot。
+            trace_id: 脱敏追踪标识。
+            provider_calls: 汇总真实调用的可变列表。
+            degraded: 汇总稳定降级码的可变列表。
+            stage_timings: 汇总实际耗时的可变列表。
+            retrieval_phase: original 或 rewrite，用于区分有界补召回。
+
+        Returns:
+            最终融合、重排、扩展、证据和置信结果。
+
+        """
+        started = perf_counter()
+        if len(channel_hits) > self._policy.max_channels:
+            raise ValueError("检索实际通道数超过 P07 policy。")
+        excluded_documents = frozenset(snapshot.excluded_document_ids)
+        filtered_channels = {
+            name: tuple(
+                hit for hit in hits if hit.document_id not in excluded_documents
+            )
+            for name, hits in channel_hits.items()
+        }
+        channel_hits.clear()
+        channel_hits.update(filtered_channels)
+        fused = reciprocal_rank_fusion(
+            channel_hits,
+            expected_revision_id=snapshot.revision.index_revision_id,
+            k=self._policy.rrf_k,
+            limit=self._policy.fusion_candidate_limit,
+        )
+        self._record(
+            trace_id,
+            "fuse",
+            {
+                "pass": retrieval_phase,
+                "candidate_count": len(fused),
+                "rrf_k": self._policy.rrf_k,
+                "rank_contributions": [
+                    [
+                        [
+                            contribution.channel,
+                            contribution.rank,
+                            contribution.contribution,
+                        ]
+                        for contribution in candidate.contributions
+                    ]
+                    for candidate in fused
+                ],
+            },
+        )
+        _finish_timing(stage_timings, f"{retrieval_phase}_retrieve", started)
+        hydration_started = perf_counter()
+        hydrated = self._hydrator.hydrate(snapshot, fused)
+        _finish_timing(
+            stage_timings,
+            f"{retrieval_phase}_sqlite_hydration",
+            hydration_started,
+        )
+        self._record(
+            trace_id,
+            "hydrate",
+            {"pass": retrieval_phase, "candidate_count": len(hydrated)},
+        )
+        rank_started = perf_counter()
+        resolved_query = analysis.resolved_query or analysis.normalized_query
+        reranked = self._reranker.rerank(
+            resolved_query,
+            hydrated,
+            self._egress,
+            self._policy,
+            enabled=plan.use_reranker,
+            result_limit=request.limit,
+        )
+        provider_calls.extend(reranked.provider_calls)
+        self._record(
+            trace_id,
+            "rerank",
+            {
+                "pass": retrieval_phase,
+                "mode": reranked.mode,
+                "reason_code": reranked.reason_code,
+                "candidate_count": len(reranked.candidates),
+            },
+        )
+        expansion = self._neighbors.expand(
+            snapshot, reranked.candidates, plan.neighbor_mode, self._policy
+        )
+        degraded.extend(expansion.degraded_reason_codes)
+        self._record(
+            trace_id,
+            "expand_neighbors",
+            {
+                "pass": retrieval_phase,
+                "candidate_count": len(expansion.candidates),
+                "reason_codes": expansion.degraded_reason_codes,
+            },
+        )
+        vector_space = (
+            snapshot.topology.slot(selected_slot).vector_space_identity
+            if selected_slot is not None
+            else None
+        )
+        evidence = self._evidence.assemble(
+            expansion.candidates,
+            self._policy,
+            allow_uncertain=self._grounded is not None,
+            context=EvidenceSelectionContext(
+                analysis=analysis,
+                query_kind=plan.query_kind,
+                rerank_mode=reranked.mode,
+                selected_slot=selected_slot,
+                selected_vector_space=vector_space,
+            ),
+        )
+        self._record(
+            trace_id,
+            "assemble_evidence",
+            {"pass": retrieval_phase, "evidence_count": len(evidence)},
+        )
+        confidence = self._confidence.evaluate(
+            analysis,
+            plan.query_kind,
+            expansion.candidates,
+            evidence,
+            tuple(degraded),
+            policy=self._policy,
+            rerank_mode=reranked.mode,
+            selected_vector_space=vector_space,
+        )
+        _finish_timing(
+            stage_timings,
+            f"{retrieval_phase}_rank_and_evidence",
+            rank_started,
+        )
+        self._record(
+            trace_id,
+            "confidence",
+            {
+                "pass": retrieval_phase,
+                "status": confidence.status.value,
+                "score": confidence.score,
+            },
+        )
+        return _SelectionOutcome(
+            fused=fused,
+            reranked=reranked,
+            expansion=expansion,
+            evidence=evidence,
+            confidence=confidence,
+        )
 
     def _validate_cached_sources(
         self,

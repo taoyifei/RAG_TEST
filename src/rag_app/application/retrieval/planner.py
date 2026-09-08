@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from rag_app.application.retrieval.answer_support import descriptive_request
 from rag_app.core.models import (
     QueryAnalysis,
     QueryKind,
     QueryVariant,
+    RequestedAnswerType,
     RetrievalPlan,
     RetrievalPolicy,
 )
@@ -63,9 +63,15 @@ class QueryPlanner:
             neighbor = "none"
         elif kind is QueryKind.COMPLEX:
             neighbor = "section"
-        descriptive = descriptive_request(analysis.normalized_query)
-        if descriptive is not None:
-            neighbor = "table" if descriptive[2] == "DUTIES" else "section"
+        if analysis.semantics.answer_type is RequestedAnswerType.DUTIES:
+            neighbor = "table"
+        elif analysis.semantics.answer_type in {
+            RequestedAnswerType.ENUMERATION,
+            RequestedAnswerType.COUNT,
+            RequestedAnswerType.ORDINAL_ITEM,
+            RequestedAnswerType.PROCEDURE,
+        }:
+            neighbor = "section"
         enabled = set(policy.enabled_channels)
         channels = tuple(channel for channel in channels if channel in enabled)
         if not channels:
@@ -89,7 +95,7 @@ class QueryPlanner:
 
 
 def _classify(analysis: QueryAnalysis) -> tuple[QueryKind, str]:
-    folded = analysis.normalized_query.casefold()
+    folded = (analysis.resolved_query or analysis.normalized_query).casefold()
     if analysis.structural_table_signals and (
         analysis.identifiers or analysis.numbers or analysis.units
     ):

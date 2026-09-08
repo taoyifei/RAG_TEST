@@ -2059,6 +2059,11 @@
             "title": "Evidence Count",
             "type": "integer"
           },
+          "generation_called_this_request": {
+            "default": false,
+            "title": "Generation Called This Request",
+            "type": "boolean"
+          },
           "generation_mode": {
             "pattern": "^(extractive|extractive_fallback|llm|none)$",
             "title": "Generation Mode",
@@ -2132,6 +2137,20 @@
           "rerank_mode": {
             "title": "Rerank Mode",
             "type": "string"
+          },
+          "result_origin": {
+            "default": "fresh",
+            "enum": [
+              "fresh",
+              "cache"
+            ],
+            "title": "Result Origin",
+            "type": "string"
+          },
+          "rewrite_called_this_request": {
+            "default": false,
+            "title": "Rewrite Called This Request",
+            "type": "boolean"
           },
           "rewrite_reason_code": {
             "anyOf": [

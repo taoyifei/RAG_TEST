@@ -35,7 +35,7 @@ def reciprocal_rank_fusion(
     if k <= 0 or limit <= 0:
         raise ValueError("RRF k 和 limit 必须为正数。")
     resolved_weights = dict(weights or {})
-    aggregate: dict[str, list[ChannelHit]] = {}
+    aggregate: dict[str, dict[str, ChannelHit]] = {}
     identities: dict[str, tuple[str, str, str, str, str]] = {}
     for hits in channels.values():
         best_per_chunk: dict[str, ChannelHit] = {}
@@ -62,9 +62,13 @@ def reciprocal_rank_fusion(
                     stage="retrieval.fuse",
                     details={"chunk_id": hit.chunk_id},
                 )
-            aggregate.setdefault(hit.chunk_id, []).append(hit)
+            family = _channel_family(hit.channel)
+            existing_hit = aggregate.setdefault(hit.chunk_id, {}).get(family)
+            if existing_hit is None or hit.rank < existing_hit.rank:
+                aggregate[hit.chunk_id][family] = hit
     fused: list[FusedCandidate] = []
-    for chunk_id, hits in aggregate.items():
+    for chunk_id, family_hits in aggregate.items():
+        hits = tuple(family_hits.values())
         contributions = tuple(
             RrfContribution(
                 channel=hit.channel,
@@ -99,6 +103,15 @@ def reciprocal_rank_fusion(
         )
     )
     return tuple(fused[:limit])
+
+
+def _channel_family(channel: str) -> str:
+    """同一逻辑通道的原问与改写只贡献一次 RRF 票。"""
+    if channel.startswith("lexical:"):
+        return "lexical"
+    if channel.startswith("dense:"):
+        return "dense"
+    return channel
 
 
 __all__ = ["reciprocal_rank_fusion"]

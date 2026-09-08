@@ -75,3 +75,24 @@ def test_rrf_rejects_cross_channel_identity_drift() -> None:
             },
             expected_revision_id=_REVISION,
         )
+
+
+def test_query_variants_do_not_cast_duplicate_rrf_votes() -> None:
+    original = _hit(1, "lexical:fts5", rank=2)
+    rewrite = _hit(1, "lexical:fts5:rewrite:question_terms", rank=1)
+    dense = _hit(1, "dense:dense_primary", rank=3)
+
+    fused = reciprocal_rank_fusion(
+        {
+            "lexical": (original,),
+            "lexical:rewrite": (rewrite,),
+            "dense": (dense,),
+        },
+        expected_revision_id=_REVISION,
+    )
+
+    assert len(fused) == 1
+    assert [item.channel for item in fused[0].contributions] == [
+        "lexical:fts5:rewrite:question_terms",
+        "dense:dense_primary",
+    ]

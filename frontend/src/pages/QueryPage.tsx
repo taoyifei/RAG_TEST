@@ -33,6 +33,43 @@ export function QueryPage({ mode }: { mode: "search" | "answer" }) {
   );
 }
 
+function answerDeliveryMessage(result: QueryResponse): string {
+  if (result.result_origin === "cache" || result.cache_hit) {
+    return "本次结果来自查询缓存；本次请求没有调用回答模型或问题改写模型。";
+  }
+  if (result.generation_mode === "llm") {
+    return result.generation_called_this_request === false
+      ? "答案由已核验的模型结果提供，但本次没有记录到新的模型调用。"
+      : "本次答案由回答模型基于所列证据生成，并已通过来源校验。";
+  }
+  if (result.generation_mode === "extractive") {
+    return "本次答案采用原文摘录；未使用回答模型生成。";
+  }
+  const reason = result.generation_reason_code ?? "";
+  if (result.generation_mode === "extractive_fallback") {
+    if (reason.includes("BUDGET")) {
+      return "回答模型因预算不可用，本次已安全回退为原文摘录。";
+    }
+    if (reason.includes("AUTHORIZED") || reason.includes("POLICY_DENIED")) {
+      return "回答模型未获本次资料出网授权，本次已安全回退为原文摘录。";
+    }
+    return "回答模型本次调用失败或输出未通过校验，已安全回退为原文摘录。";
+  }
+  if (result.status === "AMBIGUOUS_NEEDS_CLARIFICATION") {
+    return "当前问题含义不足以可靠确定，请补充对象、范围或所问关系。";
+  }
+  if (reason.includes("BUDGET")) {
+    return "回答模型预算不可用，且当前证据不足以提供原文摘录答案。";
+  }
+  if (reason.includes("AUTHORIZED") || reason.includes("POLICY_DENIED")) {
+    return "回答模型未获本次资料出网授权，且当前证据不足以提供答案。";
+  }
+  if (reason === "GENERATOR_NOT_CONFIGURED") {
+    return "本知识库未配置回答模型；当前资料也没有足以直接回答的证据。";
+  }
+  return "当前资料没有足以直接回答这个问题的证据。";
+}
+
 function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
   const { tokens, scope } = useConsole();
   const [query, setQuery] = useState("");
@@ -203,9 +240,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
                 : "本次未保存正文"}
             </small>
           </div>
-          {result.generation_mode === "extractive" && (
-            <p role="status">本次答案采用原文抽取；未使用回答模型生成。</p>
-          )}
+          <p role="status">{answerDeliveryMessage(result)}</p>
           <details className="panel">
             <summary>技术统计与检索状态</summary>
             <div className="metric-grid">
@@ -244,6 +279,12 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             <p>
               回答方式：{result.generation_mode} ·{" "}
               {result.degraded_reason_codes?.join("、") || "未报告降级"}
+            </p>
+            <p>
+              结果来源：{result.result_origin ?? "fresh"} · 本次回答模型调用：
+              {result.generation_called_this_request ? "是" : "否"} ·
+              本次问题改写模型调用：
+              {result.rewrite_called_this_request ? "是" : "否"}
             </p>
             <code>{result.trace_id}</code>
           </details>

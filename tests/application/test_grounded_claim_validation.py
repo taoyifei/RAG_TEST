@@ -372,7 +372,7 @@ def test_validation_upgrade_does_not_reuse_legacy_fallback_cache() -> None:
         {
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v1",
-            "rewrite": "bounded-rewrite-v2",
+            "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v2",
         }
     )

@@ -18,6 +18,7 @@ from rag_app.core.models import (
     EvidenceSelectionContext,
     QueryKind,
     RankedChunk,
+    RequestedAnswerType,
     RetrievalPolicy,
 )
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
@@ -25,6 +26,10 @@ from rag_app.core.models.common import freeze_json_object
 
 _MIN_TABLE_LABEL_LENGTH = 2
 _MAX_SEMANTIC_RANK = 10
+_LIST_LEAD_IN = re.compile(
+    r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
+    r"[^。；;\n]{0,16}[:：。]?$"
+)
 _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
@@ -62,6 +67,11 @@ class EvidenceAssembler:
         )
         if descriptive_table is not None:
             return descriptive_table
+        descriptive_list = _descriptive_list_evidence(
+            unique_chunks, policy, context
+        )
+        if descriptive_list is not None:
+            return descriptive_list
         table_spans = _table_intersections(unique_chunks, context)
         support_overrides = _context_supports(
             unique_chunks, context, table_spans
@@ -374,6 +384,199 @@ def _descriptive_table_evidence(
             }
         )
         for index, (candidate, span, quote) in enumerate(pieces, 1)
+    )
+
+
+def _descriptive_list_evidence(  # noqa: PLR0911
+    candidates: tuple[RankedChunk, ...],
+    policy: RetrievalPolicy,
+    context: EvidenceSelectionContext | None,
+) -> tuple[EvidenceItem, ...] | None:
+    """将关系导语与紧邻结构化列表作为一个完整证据集合。"""
+    if context is None:
+        return None
+    semantics = context.analysis.semantics
+    if (
+        semantics.answer_type
+        not in {
+            RequestedAnswerType.ENUMERATION,
+            RequestedAnswerType.COUNT,
+            RequestedAnswerType.ORDINAL_ITEM,
+            RequestedAnswerType.PROCEDURE,
+        }
+        or not semantics.target
+        or not semantics.relation
+    ):
+        return None
+    by_id = {item.hydrated.chunk.chunk_id: item for item in candidates}
+    matches: list[
+        tuple[RankedChunk, SourceSpan, str, tuple[RankedChunk, ...]]
+    ] = []
+    target = semantics.target.casefold()
+    relation = semantics.relation.casefold()
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        intro_ordinal = _last_source_ordinal(chunk)
+        list_candidates = tuple(
+            item
+            for item in candidates
+            if item.hydrated.chunk.role.value == "list"
+            and item.hydrated.chunk.version == chunk.version
+            and item.hydrated.chunk.section_id == chunk.section_id
+            and intro_ordinal is not None
+            and _first_source_ordinal(item.hydrated.chunk) == intro_ordinal + 1
+        )
+        if len(list_candidates) != 1:
+            continue
+        next_candidate = list_candidates[0]
+        for span in chunk.source_spans:
+            if (
+                not span.is_citable
+                or span.span_type is SourceSpanKind.SEPARATOR
+            ):
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            folded = quote.casefold()
+            if (
+                target in folded
+                and relation in folded
+                and _LIST_LEAD_IN.search(folded)
+            ):
+                matches.append(
+                    (
+                        candidate,
+                        span,
+                        quote,
+                        _contiguous_list_chunks(next_candidate, by_id),
+                    )
+                )
+    if not matches:
+        return None
+    if len(matches) != 1:
+        return ()
+    intro_candidate, intro_span, intro_quote, list_chunks = matches[0]
+    items = tuple(
+        (
+            candidate,
+            span,
+            candidate.hydrated.chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip(),
+        )
+        for candidate in list_chunks
+        for span in candidate.hydrated.chunk.source_spans
+        if span.is_citable
+        and span.span_type is not SourceSpanKind.SEPARATOR
+        and candidate.hydrated.chunk.citation_text[
+            span.chunk_start_char : span.chunk_end_char
+        ].strip()
+    )
+    ordinal = semantics.ordinal
+    if ordinal is not None:
+        if ordinal > len(items):
+            return ()
+        items = (items[ordinal - 1],)
+    pieces = ((intro_candidate, intro_span, intro_quote), *items)
+    if not items or not _list_pieces_fit(pieces, policy):
+        return ()
+    actual_count = sum(
+        1
+        for candidate in list_chunks
+        for span in candidate.hydrated.chunk.source_spans
+        if span.is_citable and span.span_type is not SourceSpanKind.SEPARATOR
+    )
+    support_reason = (
+        "SOURCE_CORRECTS_COUNT_PREMISE"
+        if semantics.expected_count is not None
+        and semantics.expected_count != actual_count
+        else "STRUCTURED_LIST_RELATION"
+    )
+    span_ids = [
+        span.node_id for _, span, _ in pieces if span.node_id is not None
+    ]
+    metadata = freeze_json_object(
+        {
+            "answer_support": {
+                "status": SupportStatus.SUPPORTED.value,
+                "query_target": semantics.target,
+                "requested_relation_or_attribute": semantics.relation,
+                "answer_type": semantics.answer_type.value,
+                "support_reason": support_reason,
+                "supporting_span_ids": span_ids,
+            }
+        }
+    )
+    return tuple(
+        _evidence_item(candidate, span, quote, f"S{index}").model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {**dict(span.metadata), **dict(metadata)}
+                )
+            }
+        )
+        for index, (candidate, span, quote) in enumerate(pieces, 1)
+    )
+
+
+def _contiguous_list_chunks(
+    first: RankedChunk, by_id: dict[str, RankedChunk]
+) -> tuple[RankedChunk, ...]:
+    """按双向 chunk 链收集同一结构组内已扩展的列表块。"""
+    result = [first]
+    current = first.hydrated.chunk
+    while current.next_chunk_id:
+        candidate = by_id.get(current.next_chunk_id)
+        if candidate is None:
+            break
+        following = candidate.hydrated.chunk
+        if (
+            following.role.value != "list"
+            or following.previous_chunk_id != current.chunk_id
+            or following.version != current.version
+            or following.section_id != current.section_id
+            or following.neighbor_group_id != current.neighbor_group_id
+        ):
+            break
+        result.append(candidate)
+        current = following
+    return tuple(result)
+
+
+def _first_source_ordinal(chunk: Chunk) -> int | None:
+    ordinals = [
+        span.source_anchor.ordinal
+        for span in chunk.source_spans
+        if span.source_anchor is not None and span.is_citable
+    ]
+    return min(ordinals) if ordinals else None
+
+
+def _last_source_ordinal(chunk: Chunk) -> int | None:
+    ordinals = [
+        span.source_anchor.ordinal
+        for span in chunk.source_spans
+        if span.source_anchor is not None and span.is_citable
+    ]
+    return max(ordinals) if ordinals else None
+
+
+def _list_pieces_fit(
+    pieces: tuple[tuple[RankedChunk, SourceSpan, str], ...],
+    policy: RetrievalPolicy,
+) -> bool:
+    counts = Counter(piece[0].hydrated.chunk.chunk_id for piece in pieces)
+    return (
+        len(pieces)
+        <= min(
+            policy.max_evidence_items,
+            policy.per_document_cap,
+            policy.per_section_cap,
+        )
+        and max(counts.values()) <= policy.max_evidence_items_per_chunk
+        and sum(max(1, (len(piece[2]) + 3) // 4) for piece in pieces)
+        <= policy.evidence_token_budget
     )
 
 
