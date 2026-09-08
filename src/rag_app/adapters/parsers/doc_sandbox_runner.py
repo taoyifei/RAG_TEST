@@ -7,6 +7,7 @@ import ctypes
 import errno
 import os
 import resource
+import socket
 import sys
 from pathlib import Path
 
@@ -18,6 +19,7 @@ _LANDLOCK_RULE_PATH_BENEATH = 1
 _PR_SET_NO_NEW_PRIVS = 38
 _SECCOMP_ACTION_ALLOW = 0x7FFF0000
 _SECCOMP_ACTION_ERRNO = 0x00050000
+_SECCOMP_COMPARE_NOT_EQUAL = 1
 _SANDBOX_UNAVAILABLE = 78
 _LANDLOCK_ABI_REFER = 2
 _LANDLOCK_ABI_TRUNCATE = 3
@@ -51,21 +53,9 @@ _WRITE_ACCESS_V1 = (
     | _ACCESS_MAKE_BLOCK
     | _ACCESS_MAKE_SYM
 )
+_TEMPORARY_SOCKET_ACCESS = _ACCESS_MAKE_SOCK | _ACCESS_REMOVE_FILE
+_LOCAL_SOCKET_SYSCALLS = ("socket", "socketpair")
 _DENIED_SYSCALLS = (
-    "socket",
-    "socketpair",
-    "connect",
-    "bind",
-    "listen",
-    "accept",
-    "accept4",
-    "sendto",
-    "sendmsg",
-    "sendmmsg",
-    "recvfrom",
-    "recvmsg",
-    "recvmmsg",
-    "shutdown",
     "ptrace",
     "mount",
     "umount2",
@@ -102,6 +92,17 @@ class _LandlockPathBeneathAttr(ctypes.Structure):
         ("allowed_access", ctypes.c_uint64),
         ("parent_fd", ctypes.c_int32),
         ("reserved", ctypes.c_uint32),
+    ]
+
+
+class _SeccompArgCompare(ctypes.Structure):
+    """libseccomp scmp_arg_cmp 的 ctypes 映射。"""
+
+    _fields_ = [
+        ("argument", ctypes.c_uint),
+        ("operation", ctypes.c_uint),
+        ("datum_a", ctypes.c_uint64),
+        ("datum_b", ctypes.c_uint64),
     ]
 
 
@@ -241,6 +242,14 @@ def _restrict_filesystem(paths: dict[str, Path]) -> None:
                     path,
                     _ACCESS_READ_FILE | _ACCESS_WRITE_FILE,
                 )
+        temporary_root = Path(os.sep) / "tmp"
+        if temporary_root.is_dir():
+            _add_path_rule(
+                libc,
+                ruleset_fd,
+                temporary_root,
+                _TEMPORARY_SOCKET_ACCESS,
+            )
         _add_path_rule(
             libc,
             ruleset_fd,
@@ -266,10 +275,14 @@ def _existing_system_paths() -> tuple[Path, ...]:
         Path("/lib"),
         Path("/lib64"),
         Path("/etc/fonts"),
+        Path("/etc/group"),
         Path("/etc/ld.so.cache"),
+        Path("/etc/libreoffice"),
         Path("/etc/locale.alias"),
         Path("/etc/locale.conf"),
         Path("/etc/localtime"),
+        Path("/etc/nsswitch.conf"),
+        Path("/etc/passwd"),
         Path("/proc/self"),
         Path("/sys/devices/system/cpu"),
     )
@@ -337,6 +350,14 @@ def _restrict_syscalls() -> None:
         ctypes.c_uint,
     ]
     library.seccomp_rule_add.restype = ctypes.c_int
+    library.seccomp_rule_add_array.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.c_uint,
+        ctypes.POINTER(_SeccompArgCompare),
+    ]
+    library.seccomp_rule_add_array.restype = ctypes.c_int
     library.seccomp_load.argtypes = [ctypes.c_void_p]
     library.seccomp_load.restype = ctypes.c_int
     library.seccomp_release.argtypes = [ctypes.c_void_p]
@@ -345,6 +366,27 @@ def _restrict_syscalls() -> None:
         raise OSError(errno.ENOMEM, "无法创建 seccomp filter")
     try:
         denied_action = _SECCOMP_ACTION_ERRNO | errno.EPERM
+        local_family_only = _SeccompArgCompare(
+            argument=0,
+            operation=_SECCOMP_COMPARE_NOT_EQUAL,
+            datum_a=socket.AF_UNIX,
+            datum_b=0,
+        )
+        for name in _LOCAL_SOCKET_SYSCALLS:
+            number = library.seccomp_syscall_resolve_name(name.encode("ascii"))
+            if number < 0:
+                continue
+            if (
+                library.seccomp_rule_add_array(
+                    context,
+                    denied_action,
+                    number,
+                    1,
+                    ctypes.byref(local_family_only),
+                )
+                != 0
+            ):
+                raise OSError(errno.EINVAL, "无法添加 socket seccomp 规则")
         for name in _DENIED_SYSCALLS:
             number = library.seccomp_syscall_resolve_name(name.encode("ascii"))
             if number < 0:

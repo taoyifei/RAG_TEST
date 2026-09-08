@@ -23,7 +23,7 @@ from rag_app.core.policies import ParsingPolicy
 _LIBREOFFICE_EXECUTABLE = "/usr/bin/libreoffice"
 _LIBREOFFICE_BINARY_VERSION = "25.2.3.2"
 _LIBREOFFICE_PACKAGE_VERSION = "4:25.2.3-2+deb13u6"
-_CONVERTER_RECIPE = "libreoffice-landlock-seccomp-v1"
+_CONVERTER_RECIPE = "libreoffice-landlock-seccomp-v2"
 _SANDBOX_UNAVAILABLE = 78
 _MAX_ADDRESS_SPACE_BYTES = 1536 * 1024 * 1024
 _MAX_CONCURRENT_CONVERSIONS = 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -169,3 +170,42 @@ def test_landlock_regular_file_access_excludes_directory_permission(
     assert access & doc_sandbox_runner._ACCESS_READ_FILE
     assert access & doc_sandbox_runner._ACCESS_EXECUTE
     assert not access & doc_sandbox_runner._ACCESS_READ_DIR
+
+
+def test_temporary_socket_access_does_not_allow_regular_file_writes() -> None:
+    access = doc_sandbox_runner._TEMPORARY_SOCKET_ACCESS
+
+    assert access & doc_sandbox_runner._ACCESS_MAKE_SOCK
+    assert access & doc_sandbox_runner._ACCESS_REMOVE_FILE
+    assert not access & doc_sandbox_runner._ACCESS_READ_FILE
+    assert not access & doc_sandbox_runner._ACCESS_READ_DIR
+    assert not access & doc_sandbox_runner._ACCESS_WRITE_FILE
+    assert not access & doc_sandbox_runner._ACCESS_MAKE_REG
+
+
+def test_seccomp_allows_local_ipc_and_denies_ip_sockets() -> None:
+    script = """
+import socket
+from rag_app.adapters.parsers import doc_sandbox_runner
+
+doc_sandbox_runner._restrict_syscalls()
+left, right = socket.socketpair(socket.AF_UNIX)
+left.close()
+right.close()
+for family in (socket.AF_INET, socket.AF_INET6):
+    try:
+        socket.socket(family, socket.SOCK_STREAM)
+    except PermissionError:
+        continue
+    raise SystemExit(3)
+"""
+
+    completed = subprocess.run(  # noqa: S603
+        (sys.executable, "-c", script),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0, completed.stderr
