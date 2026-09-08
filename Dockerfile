@@ -45,13 +45,19 @@ WORKDIR /app
 COPY requirements.runtime.lock ./
 COPY --from=python-build /wheels /wheels
 RUN apt-get update -o Acquire::Retries=5 \
-    && apt-get install --yes --no-install-recommends \
+    && for build_attempt in 1 2 3; do \
+    DEBIAN_FRONTEND=noninteractive apt-get install \
+    --yes --no-install-recommends \
     -o Acquire::Retries=5 \
     antiword=0.37-17 \
     fonts-noto-cjk=1:20240730+repack1-1 \
     libseccomp2=2.6.0-2 \
     libreoffice-core=4:25.2.3-2+deb13u6 \
     libreoffice-writer=4:25.2.3-2+deb13u6 \
+    && break; \
+    if [ "${build_attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep "$((build_attempt * 2))"; \
+    done \
     && apt-get purge --yes mount \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install \
