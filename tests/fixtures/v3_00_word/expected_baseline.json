@@ -966,7 +966,7 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_a54bdbf79a56b1d3c4c7e1d76bdecf86",
+      "chunk_id": "chunk_d82c50125d5ff116ff3e7586b00b50be",
       "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
@@ -1021,6 +1021,10 @@
             [
               "source_field",
               "alt_or_caption"
+            ],
+            [
+              "source_kind",
+              "derived_caption_or_association"
             ]
           ],
           "node_id": "node_a849c993945501f72328e9c1595c645d",
@@ -1045,7 +1049,7 @@
           },
           "source_end_char": 6,
           "source_start_char": 0,
-          "span_type": "original_text",
+          "span_type": "derived_caption_or_association",
           "structural_path": [
             "body",
             "p:4",
@@ -1064,7 +1068,7 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_4905996e8dfad314457825ab2393b99d",
+      "chunk_id": "chunk_2671e3a06f8e0ccde1f4841c59473fe1",
       "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
@@ -1119,6 +1123,10 @@
             [
               "source_field",
               "alt_or_caption"
+            ],
+            [
+              "source_kind",
+              "derived_caption_or_association"
             ]
           ],
           "node_id": "node_e13a5eb22ee56242a5c03f2a9a52bcbd",
@@ -1143,7 +1151,7 @@
           },
           "source_end_char": 6,
           "source_start_char": 0,
-          "span_type": "original_text",
+          "span_type": "derived_caption_or_association",
           "structural_path": [
             "body",
             "p:4",
