@@ -9,6 +9,8 @@ from typing import cast
 from rag_app.core.errors import Conflict, RevisionStateError
 from rag_app.core.models.management import QueuedIngestion
 
+_MAX_VALIDATION_CLOCK_SKEW_DAYS = 5 / 86_400
+
 
 def bind_publication(
     connection: Connection, request: QueuedIngestion, now: str
@@ -26,7 +28,7 @@ def bind_publication(
     """
     if not request.activate_profile:
         return
-    _assert_validations(connection, request.activation_validation_ids)
+    _assert_validations(connection, request.activation_validation_ids, now)
     kb_id = request.documents[0].document.knowledge_base_id
     current = _active_profile(connection, kb_id)
     kb = connection.execute(
@@ -156,7 +158,7 @@ def activate_bound_profile(
             "候选发布已取消或请求绑定失效。", stage="profile.activate"
         )
     request = QueuedIngestion.model_validate_json(request_row["request_json"])
-    _assert_validations(connection, request.activation_validation_ids)
+    _assert_validations(connection, request.activation_validation_ids, now)
     connection.execute(
         "UPDATE retrieval_profile_revisions SET status='retired' WHERE "
         "knowledge_base_id=? AND status='active'",
@@ -182,7 +184,7 @@ def _active_profile(connection: Connection, kb_id: str) -> Row | None:
 
 
 def _assert_validations(
-    connection: Connection, validation_ids: tuple[str, ...]
+    connection: Connection, validation_ids: tuple[str, ...], now: str
 ) -> None:
     row = connection.execute(
         "SELECT count(*) FROM provider_validation_runs v "
@@ -193,9 +195,14 @@ def _assert_validations(
         "AND v.configuration_version=c.configuration_version "
         "AND v.credential_key_version=d.key_version "
         "AND v.validation_mode IN ('live', 'mock') "
-        "AND julianday(v.finished_at) BETWEEN julianday('now')-1 "
-        "AND julianday('now')",
-        (json.dumps(validation_ids),),
+        "AND julianday(v.finished_at) BETWEEN julianday(?)-1 "
+        "AND julianday(?) + ?",
+        (
+            json.dumps(validation_ids),
+            now,
+            now,
+            _MAX_VALIDATION_CLOCK_SKEW_DAYS,
+        ),
     ).fetchone()
     if not validation_ids or row[0] != len(set(validation_ids)):
         raise Conflict(

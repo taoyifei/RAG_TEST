@@ -20,6 +20,8 @@ from rag_app.product.resolved_profile import (
     resolve_embedding,
 )
 
+_MAX_CLOCK_SKEW = timedelta(seconds=5)
+
 
 def endpoint_identity(connection: ProviderConnection) -> str:
     """对适配器实际端点计算非 Secret 身份。
@@ -130,5 +132,5 @@ def validation_is_current(
         and run.endpoint_identity == identity
         and run.validation_mode in {"live", "mock"}
         and finished.tzinfo is not None
-        and now - timedelta(hours=24) <= finished <= now
+        and now - timedelta(hours=24) <= finished <= now + _MAX_CLOCK_SKEW
     )
