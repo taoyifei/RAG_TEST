@@ -23,7 +23,7 @@ def _scan(image: str, created_at: str) -> dict[str, Any]:
     return {
         "SchemaVersion": 2,
         "ArtifactType": "container_image",
-        "ArtifactID": image,
+        "ArtifactID": "sha256:" + "c" * 64,
         "ArtifactName": "candidate",
         "CreatedAt": created_at,
         "Trivy": {"Version": "0.74.0"},
@@ -142,3 +142,13 @@ def test_new_scan_draft_keeps_analysis_and_drops_old_approval(
     assert draft["scan_artifact"]["manifest_scope"] == (
         "local_image_store_only"
     )
+    assert draft["scan_artifact"]["trivy_artifact_id"] == (
+        "sha256:" + "c" * 64
+    )
+    assert draft["technical_assessment_reuse"] == {
+        "status": "PORTED_UNDER_INVESTIGATION",
+        "matched_tuple_count": 1,
+        "source_scan": None,
+        "approval_state_transferred": False,
+        "requires_human_revalidation": True,
+    }

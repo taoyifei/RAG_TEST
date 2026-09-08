@@ -109,8 +109,21 @@ def build_investigation_draft(
     if extracted.get("reason") == "OS_SCAN_INCOMPLETE":
         raise ValueError("OS_SCAN_INCOMPLETE")
     previous: dict[tuple[str, ...], dict[str, object]] = {}
+    previous_scan: dict[str, object] | None = None
     if previous_review_path is not None and previous_review_path.is_file():
         old = _load(previous_review_path)
+        raw_previous_scan = old.get("scan")
+        if isinstance(raw_previous_scan, dict):
+            previous_scan = {
+                name: raw_previous_scan.get(name)
+                for name in (
+                    "image_id",
+                    "sha256",
+                    "scanned_at",
+                    "scanner_version",
+                    "db_updated_at",
+                )
+            }
         reviews = old.get("reviews")
         if isinstance(reviews, list):
             previous = {
@@ -131,9 +144,12 @@ def build_investigation_draft(
         "db_metadata": database_proof,
     }
     reviews_output: list[dict[str, object]] = []
+    reused_assessments = 0
     findings = cast(list[dict[str, object]], extracted.get("findings", []))
     for finding in findings:
         prior = previous.get(_key(finding), {})
+        if prior:
+            reused_assessments += 1
         review = {
             name: prior.get(name, "NOT_ASSESSED")
             for name in _TRANSFER_FIELDS
@@ -212,13 +228,24 @@ def build_investigation_draft(
         "scan": identity,
         "scan_path": scan_proof["path"],
         "scan_artifact": {
-            "artifact_id": extracted.get("artifact_id"),
+            "trivy_artifact_id": extracted.get("artifact_id"),
             "artifact_name": extracted.get("artifact_name"),
             "image_id": extracted.get("image_id"),
             "local_repo_digests": extracted.get("local_repo_digests"),
             "registry_manifest_digest": None,
             "manifest_scope": "local_image_store_only",
             "platform": extracted.get("platform"),
+        },
+        "technical_assessment_reuse": {
+            "status": (
+                "PORTED_UNDER_INVESTIGATION"
+                if reused_assessments
+                else "NOT_USED"
+            ),
+            "matched_tuple_count": reused_assessments,
+            "source_scan": previous_scan,
+            "approval_state_transferred": False,
+            "requires_human_revalidation": bool(reused_assessments),
         },
         "summary": summary,
         "reviews": reviews_output,

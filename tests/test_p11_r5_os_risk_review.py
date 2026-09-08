@@ -580,3 +580,28 @@ def test_existing_scan_review_reuses_s1_but_rejects_s2_and_changed_image(
             output_path=output,
             evidence_path=evidence,
         )
+
+
+def test_scan_candidate_does_not_confuse_trivy_artifact_with_image_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image_id = "sha256:" + "a" * 64
+    repository_digest = "example@" + image_id
+    candidate = {
+        "image_id": image_id,
+        "local_repo_digests": [repository_digest],
+        "platform": {"os": "linux", "architecture": "amd64"},
+    }
+    scan = {
+        "ArtifactID": "sha256:" + "b" * 64,
+        "Metadata": {
+            "ImageID": image_id,
+            "RepoDigests": [repository_digest],
+            "ImageConfig": {"os": "linux", "architecture": "amd64"},
+        },
+    }
+    monkeypatch.setattr(
+        release, "_candidate_image_identity", lambda _docker: candidate
+    )
+
+    assert release._validate_scan_candidate(scan, "docker") == candidate

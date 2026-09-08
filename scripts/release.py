@@ -349,9 +349,6 @@ def _validate_scan_candidate(
     )
     if scanned_repo_digests != candidate_repo_digests:
         raise RuntimeError("OS_SCAN_LOCAL_REPO_DIGEST_MISMATCH")
-    artifact_id = scan.get("ArtifactID")
-    if artifact_id is not None and artifact_id != candidate["image_id"]:
-        raise RuntimeError("OS_SCAN_ARTIFACT_IDENTITY_MISMATCH")
     return candidate
 
 
