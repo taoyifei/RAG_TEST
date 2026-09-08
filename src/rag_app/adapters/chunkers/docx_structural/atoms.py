@@ -110,19 +110,29 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
             )
         )
     exact_text = payload.exact_text
+    raw_origin = dict(node.metadata).get("origin")
+    origin = raw_origin if isinstance(raw_origin, str) else None
+    source_kinds = {
+        "ocr": SourceSpanKind.OCR_TEXT,
+        "diagram_relation": SourceSpanKind.DIAGRAM_RELATION,
+        "derived_caption_or_association": (
+            SourceSpanKind.DERIVED_CAPTION_OR_ASSOCIATION
+        ),
+    }
+    source_kind = (
+        source_kinds.get(origin, SourceSpanKind.ORIGINAL_TEXT)
+        if origin is not None
+        else SourceSpanKind.ORIGINAL_TEXT
+    )
     fragments.append(
         SourceFragment(
             text=exact_text,
-            span_type=SourceSpanKind.ORIGINAL_TEXT,
+            span_type=source_kind,
             node_id=node.node_id,
             source_anchor=node.anchor,
             source_start_char=0,
             source_end_char=len(exact_text),
-            metadata=(
-                node.metadata
-                if dict(node.metadata).get("origin") == "ocr"
-                else ()
-            ),
+            metadata=node.metadata if origin is not None else (),
         )
     )
     return tuple(fragments)

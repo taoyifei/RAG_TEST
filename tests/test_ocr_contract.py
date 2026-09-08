@@ -4,6 +4,8 @@ import base64
 import hashlib
 import io
 from pathlib import Path
+from threading import Event
+from time import monotonic, sleep
 from types import SimpleNamespace
 
 import httpx
@@ -48,6 +50,18 @@ class _Engine:
                 ),
             )
         )
+
+
+class _BlockingEngine(_Engine):
+    def __init__(self) -> None:
+        self.started = Event()
+        self.release = Event()
+
+    def recognize(self, image_bytes: bytes) -> OcrEngineResult:
+        self.started.set()
+        if not self.release.wait(timeout=1.0):
+            raise RuntimeError("合成 OCR 引擎未按测试约定释放。")
+        return super().recognize(image_bytes)
 
 
 def _png() -> bytes:
@@ -142,6 +156,37 @@ def test_ocr_api_rejects_wrong_token_and_declared_type() -> None:
     assert unauthorized.status_code == 401
     assert mismatch.status_code == 422
     assert mismatch.json()["detail"] == "IMAGE_TYPE_MISMATCH"
+
+
+def test_ocr_timeout_keeps_concurrency_slot_until_inference_stops() -> None:
+    image = _png()
+    engine = _BlockingEngine()
+    app = create_ocr_app(
+        engine=engine,
+        revision=_REVISION,
+        limits=OcrLimits(1024, 100, 0.01, 1),
+    )
+    client = TestClient(app)
+    payload = {
+        "media_sha256": hashlib.sha256(image).hexdigest(),
+        "ocr_revision": _REVISION,
+        "media_type": "image/png",
+        "content_base64": base64.b64encode(image).decode("ascii"),
+    }
+
+    timed_out = client.post("/v1/ocr", json=payload)
+    assert engine.started.is_set()
+    still_busy = client.post("/v1/ocr", json=payload)
+    assert timed_out.status_code == 504
+    assert still_busy.status_code == 429
+
+    engine.release.set()
+    deadline = monotonic() + 1.0
+    recovered = client.post("/v1/ocr", json=payload)
+    while recovered.status_code == 429 and monotonic() < deadline:
+        sleep(0.01)
+        recovered = client.post("/v1/ocr", json=payload)
+    assert recovered.status_code == 200
 
 
 def test_ocr_client_preserves_media_revision_cache_seam() -> None:
@@ -447,9 +492,7 @@ def test_paddle_engine_preserves_numpy_rec_boxes() -> None:
             }
         }
     )
-    engine = PaddleOcrEngine(
-        SimpleNamespace(predict=lambda _: (result,))
-    )
+    engine = PaddleOcrEngine(SimpleNamespace(predict=lambda _: (result,)))
 
     recognized = engine.recognize(_png())
 

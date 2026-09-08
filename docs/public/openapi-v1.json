@@ -976,6 +976,245 @@
         "title": "DiagnosticRerankItem",
         "type": "object"
       },
+      "DiagramRelationCandidate": {
+        "additionalProperties": false,
+        "description": "绑定图像 occurrence、模型和政策版本的结构化关系候选。",
+        "properties": {
+          "ambiguous": {
+            "default": false,
+            "title": "Ambiguous",
+            "type": "boolean"
+          },
+          "candidate_id": {
+            "pattern": "^drel_[0-9a-f]{32}$",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/RelationDirection"
+          },
+          "document_id": {
+            "pattern": "^doc_[0-9a-f]{32}$",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "evidence_source": {
+            "$ref": "#/components/schemas/RelationEvidenceSource"
+          },
+          "figure_occurrence_id": {
+            "pattern": "^node_[0-9a-f]{32}$",
+            "title": "Figure Occurrence Id",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "media_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Media Sha256",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "policy_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "relation_type": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,79}$",
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "review_revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Review Revision",
+            "type": "integer"
+          },
+          "review_state": {
+            "$ref": "#/components/schemas/RelationReviewState",
+            "default": "pending"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewer_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Sha256"
+          },
+          "schema_version": {
+            "default": "1",
+            "pattern": "^1$",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "source_node": {
+            "$ref": "#/components/schemas/DiagramRelationNode"
+          },
+          "target_node": {
+            "$ref": "#/components/schemas/DiagramRelationNode"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "knowledge_base_id",
+          "document_id",
+          "document_version_id",
+          "figure_occurrence_id",
+          "media_sha256",
+          "source_node",
+          "target_node",
+          "relation_type",
+          "direction",
+          "evidence_source",
+          "model_id",
+          "policy_version",
+          "created_at"
+        ],
+        "title": "DiagramRelationCandidate",
+        "type": "object"
+      },
+      "DiagramRelationNode": {
+        "additionalProperties": false,
+        "description": "一张图内由 Provider 或原生连接器定位的逻辑节点。",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "label": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+            "title": "Node Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "label"
+        ],
+        "title": "DiagramRelationNode",
+        "type": "object"
+      },
+      "DiagramRelationReview": {
+        "additionalProperties": false,
+        "description": "管理员对结构化图关系候选作出的显式发布决定。",
+        "properties": {
+          "state": {
+            "enum": [
+              "accepted",
+              "rejected",
+              "ambiguous"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "DiagramRelationReview",
+        "type": "object"
+      },
+      "DiagramRelationReviewResponse": {
+        "additionalProperties": false,
+        "description": "审阅后的候选与可能触发的新 Revision Job。",
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/DiagramRelationCandidate"
+          },
+          "content_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Identity"
+          },
+          "rebuild_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild Job Id"
+          }
+        },
+        "required": [
+          "candidate"
+        ],
+        "title": "DiagramRelationReviewResponse",
+        "type": "object"
+      },
       "Document": {
         "additionalProperties": false,
         "description": "逻辑文档及当前版本公共视图。",
@@ -2492,6 +2731,38 @@
         "title": "RelatedContent",
         "type": "object"
       },
+      "RelationDirection": {
+        "description": "候选边相对于 source/target 的方向。",
+        "enum": [
+          "source_to_target",
+          "target_to_source",
+          "bidirectional",
+          "unknown"
+        ],
+        "title": "RelationDirection",
+        "type": "string"
+      },
+      "RelationEvidenceSource": {
+        "description": "关系结论的真实来源，不把视觉推断伪装成原生结构。",
+        "enum": [
+          "native_drawing",
+          "visual_candidate",
+          "synthetic_contract"
+        ],
+        "title": "RelationEvidenceSource",
+        "type": "string"
+      },
+      "RelationReviewState": {
+        "description": "候选是否具备进入正式回答证据的资格。",
+        "enum": [
+          "pending",
+          "accepted",
+          "rejected",
+          "ambiguous"
+        ],
+        "title": "RelationReviewState",
+        "type": "string"
+      },
       "RenameDocumentRequest": {
         "additionalProperties": false,
         "description": "只修改文档显示信息的请求。",
@@ -3531,6 +3802,9 @@
         "description": "citation 字符的来源语义。",
         "enum": [
           "original_text",
+          "ocr_text",
+          "diagram_relation",
+          "derived_caption_or_association",
           "derived_numbering",
           "repeated_context",
           "separator"
@@ -8098,6 +8372,311 @@
         "summary": " Retry Job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations": {
+      "get": {
+        "operationId": "_relations_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiagramRelationCandidate"
+                  },
+                  "title": "Response  Relations Api V1 Knowledge Bases  Knowledge Base Id  Documents  Document Id  Diagram Relations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Relations",
+        "tags": [
+          "diagram-relations"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations/{candidate_id}:review": {
+      "post": {
+        "operationId": "_review_relation_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations__candidate_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagramRelationReview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagramRelationReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Review Relation",
+        "tags": [
+          "diagram-relations"
         ]
       }
     },

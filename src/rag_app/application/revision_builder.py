@@ -880,6 +880,18 @@ class RevisionBuilder:
                 with self._document_stage(context, "image_enrichment"):
                     result = self._document_enricher(result)
                     validate_document_ir(result.document_ir)
+                media_summary = _media_evidence_summary(result.document_ir)
+                if media_summary:
+                    self._record_event(
+                        job_id,
+                        revision_id,
+                        "media_evidence.evaluated",
+                        {
+                            "document_id": item.document.document_id,
+                            "attempt": attempt,
+                            **media_summary,
+                        },
+                    )
             version = result.document_ir.version
             created, existing = self._artifact_lifecycle.persist(
                 result.artifacts,
@@ -1393,6 +1405,39 @@ def _safe_embedding_slot_limits(
         }
         for slot in slots
     ]
+
+
+def _media_evidence_summary(document: DocumentIR) -> dict[str, object]:
+    """仅把计数、模式和政策身份写入安全 Ingestion Trace。"""
+    metadata = dict(document.metadata)
+    summary: dict[str, object] = {}
+    allowed = {
+        "status",
+        "media_count",
+        "recognized_count",
+        "pending_count",
+        "policy_version",
+        "adapter_identity",
+        "provider_id",
+        "cache_hit_count",
+        "candidate_count",
+        "accepted_count",
+        "published_count",
+        "review_states",
+        "source_mismatch_count",
+        "evidence_sources",
+    }
+    for source_key, output_key in (
+        ("ocr_enrichment", "ocr"),
+        ("diagram_relation_enrichment", "diagram_relations"),
+    ):
+        value = metadata.get(source_key)
+        if not isinstance(value, dict):
+            continue
+        summary[output_key] = {
+            str(key): item for key, item in value.items() if key in allowed
+        }
+    return summary
 
 
 def _validate_snapshot_scope(

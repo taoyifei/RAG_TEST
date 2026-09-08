@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import json
 import os
+import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -14,6 +16,8 @@ from pathlib import Path
 from threading import RLock
 from typing import cast
 from urllib.parse import urlparse
+
+import httpx
 
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.adapters.stores import (
@@ -36,6 +40,7 @@ from rag_app.application.provider_health import (
 from rag_app.application.retrieval import RetrievalService
 from rag_app.application.revision_builder import RevisionBuilder
 from rag_app.application.revision_validator import RevisionValidator
+from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
 from rag_app.composition.p06_runtime import resolved_contracts
 from rag_app.composition.p07_runtime import P07Runtime
 from rag_app.composition.p09_runtime import (
@@ -57,12 +62,14 @@ from rag_app.core.models import (
     EmbeddingSlotRole,
     EmbeddingTopology,
     KnowledgeBaseScope,
+    ParseResult,
     RetrievalPolicy,
     SystemStatus,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import ChunkValidationPort, ExactStorePort
+from rag_app.ocr import OcrClient
 from rag_app.product.auth import (
     AuthStore,
     ConsoleSessionService,
@@ -72,11 +79,16 @@ from rag_app.product.compatibility import CompatibilityManifest, load_manifest
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
+from rag_app.product.diagram_relations import ProductDiagramRelations
 from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import ProductModelSettings
 from rag_app.product.models import (
     ProviderValidationRun,
     RetrievalProfileRevision,
+)
+from rag_app.product.ocr_adapters import (
+    LocalOcrAdapterConfig,
+    LocalProductOcrAdapter,
 )
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
 from rag_app.product.provider_runtime import (
@@ -93,6 +105,9 @@ from rag_app.product.trace_coordinator import ProductTraceCoordinator
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
 from rag_app.tracing import TraceRecorder, TraceStore
+
+_MIN_LOCAL_OCR_TOKEN_LENGTH = 32
+_MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +134,13 @@ class ProductRuntimeSettings:
     trust_loopback_host_proxy: bool = False
     history_save_body: bool = True
     history_retention_days: int = 7
+    local_ocr_endpoints: tuple[str, ...] = ()
+    local_ocr_token_file: Path | None = None
+    local_ocr_revision: str = (
+        "paddleocr-3.5.0-ppocrv5-server-det-rec-paddle-static"
+    )
+    local_ocr_model: str = "pp-ocrv5-server"
+    local_ocr_timeout_seconds: float = 35.0
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -147,6 +169,7 @@ class ProductRuntimeSettings:
         master = os.environ.get("RAG_MASTER_KEY_FILE")
         manifest = os.environ.get("RAG_COMPATIBILITY_MANIFEST")
         migrations = os.environ.get("RAG_MIGRATIONS_DIR")
+        local_ocr_token = os.environ.get("RAG_OCR_API_TOKEN_FILE")
         return cls(
             data_dir=Path(os.environ.get("RAG_DATA_DIR", ".data/product")),
             frontend_dir=frontend,
@@ -189,6 +212,20 @@ class ProductRuntimeSettings:
             ),
             history_retention_days=int(
                 os.environ.get("RAG_HISTORY_RETENTION_DAYS", "7")
+            ),
+            local_ocr_endpoints=_parse_local_ocr_endpoints(
+                os.environ.get("RAG_OCR_ENDPOINTS")
+            ),
+            local_ocr_token_file=(
+                None if local_ocr_token is None else Path(local_ocr_token)
+            ),
+            local_ocr_revision=os.environ.get(
+                "RAG_OCR_REVISION",
+                "paddleocr-3.5.0-ppocrv5-server-det-rec-paddle-static",
+            ),
+            local_ocr_model=os.environ.get("RAG_OCR_MODEL", "pp-ocrv5-server"),
+            local_ocr_timeout_seconds=float(
+                os.environ.get("RAG_OCR_TIMEOUT_SECONDS", "35")
             ),
         )
 
@@ -881,7 +918,10 @@ class ProductRuntime:
     history: ProductQueryHistory
     models: ProductModelSettings
     ocr: ProductOcrEnrichment
+    relations: ProductDiagramRelations
     traces: ProductTraceCoordinator
+    content_identity: Callable[[str], str | None]
+    local_ocr_http_client: httpx.Client | None = None
     _closed: bool = False
 
     @property
@@ -952,6 +992,8 @@ class ProductRuntime:
         self.p09.jobs.close()
         self.profiles.close()
         self.providers.close()
+        if self.local_ocr_http_client is not None:
+            self.local_ocr_http_client.close()
         self.p09.close()
         self.traces.close()
 
@@ -1058,15 +1100,33 @@ def build_product_runtime(
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
     ):
         transport_factory = build_offline_mock_transport
+    local_ocr_adapter, local_ocr_http_client = _build_local_ocr_adapter(
+        settings
+    )
     providers = ProviderRuntimeRegistry(
         credentials,
         control,
         transport_factory=transport_factory,
         budget_ledger_path=data_dir / "provider-budget.sqlite3",
+        local_ocr_adapter=local_ocr_adapter,
     )
     ocr = ProductOcrEnrichment(
         connections, models, providers, data_dir / "provider-budget.sqlite3"
     )
+    relations = ProductDiagramRelations(connections)
+
+    def _content_identity(knowledge_base_id: str) -> str | None:
+        identities = {
+            "ocr": ocr.content_identity(knowledge_base_id),
+            "diagram_relations": relations.content_identity(knowledge_base_id),
+        }
+        if all(value is None for value in identities.values()):
+            return None
+        return canonical_sha256(identities)
+
+    def _enrich_media(parsed: ParseResult) -> ParseResult:
+        return relations.enrich_result(ocr.enrich_result(parsed))
+
     profiles = ProductProfileResolver(
         control,
         providers,
@@ -1092,8 +1152,8 @@ def build_product_runtime(
                 recover_jobs=recover_jobs,
                 trace_sink=traces,
                 query_history=traces,
-                document_enricher=ocr.enrich_result,
-                content_identity=ocr.content_identity,
+                document_enricher=_enrich_media,
+                content_identity=_content_identity,
                 retrieval_policy=RetrievalPolicy.model_validate(
                     resolve_retrieval_policy({}, {}),
                 ),
@@ -1124,8 +1184,113 @@ def build_product_runtime(
         history=history,
         models=models,
         ocr=ocr,
+        relations=relations,
         traces=traces,
+        content_identity=_content_identity,
+        local_ocr_http_client=local_ocr_http_client,
     )
+
+
+def _build_local_ocr_adapter(
+    settings: ProductRuntimeSettings,
+) -> tuple[LocalProductOcrAdapter | None, httpx.Client | None]:
+    """仅在端点与 0600 Bearer 文件都存在时构造内部 OCR。"""
+    if not settings.local_ocr_endpoints:
+        if settings.local_ocr_token_file is not None:
+            raise ValueError("配置本地 OCR Token 时必须同时配置端点。")
+        return None, None
+    if settings.local_ocr_token_file is None:
+        raise ValueError("启用本地 OCR 必须配置 RAG_OCR_API_TOKEN_FILE。")
+    token = _load_local_ocr_token(settings.local_ocr_token_file)
+    if settings.local_ocr_timeout_seconds <= 0:
+        raise ValueError("本地 OCR timeout 必须为正数。")
+    client = httpx.Client(
+        timeout=httpx.Timeout(settings.local_ocr_timeout_seconds)
+    )
+    pool = ResilientHttpPool(
+        settings.local_ocr_endpoints,
+        client=client,
+        policy=ResiliencePolicy(
+            max_attempts=2,
+            failure_threshold=2,
+            cooldown_seconds=30.0,
+            max_concurrency=1,
+        ),
+    )
+    adapter = LocalProductOcrAdapter(
+        LocalOcrAdapterConfig(
+            revision=settings.local_ocr_revision,
+            model=settings.local_ocr_model,
+        ),
+        OcrClient(
+            pool,
+            revision=settings.local_ocr_revision,
+            api_token=token,
+            max_input_bytes=10 * 1024 * 1024,
+        ),
+    )
+    return adapter, client
+
+
+def _load_local_ocr_token(path: Path) -> str:
+    """读取单个 0600 Secret 文件，不允许目录、symlink 或短令牌。"""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("本地 OCR Token 必须是非 symlink 普通文件。")
+    if stat.S_IMODE(path.stat().st_mode) != stat.S_IRUSR | stat.S_IWUSR:
+        raise ValueError("本地 OCR Token 文件权限必须严格为 0600。")
+    token = path.read_text(encoding="utf-8").strip()
+    if (
+        not _MIN_LOCAL_OCR_TOKEN_LENGTH
+        <= len(token)
+        <= _MAX_LOCAL_OCR_TOKEN_LENGTH
+    ):
+        raise ValueError("本地 OCR Token 长度必须在 32 到 4096。")
+    return token
+
+
+def _parse_local_ocr_endpoints(raw: str | None) -> tuple[str, ...]:
+    """解析可选内部端点，并拒绝凭据、路径和公网 IP 字面量。"""
+    if raw is None or not raw.strip():
+        return ()
+    try:
+        decoded = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            "RAG_OCR_ENDPOINTS 必须是 JSON 字符串数组。"
+        ) from error
+    if (
+        not isinstance(decoded, list)
+        or not decoded
+        or any(not isinstance(item, str) for item in decoded)
+    ):
+        raise ValueError("RAG_OCR_ENDPOINTS 必须是非空 JSON 字符串数组。")
+    endpoints = tuple(item.rstrip("/") for item in decoded)
+    if len(set(endpoints)) != len(endpoints):
+        raise ValueError("本地 OCR 端点不能重复。")
+    for endpoint in endpoints:
+        parsed = urlparse(endpoint)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "本地 OCR 端点必须是无凭据、路径或参数的 HTTP URL。"
+            )
+        try:
+            address = ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            continue
+        if not (
+            address.is_loopback or address.is_private or address.is_link_local
+        ):
+            raise ValueError("本地 OCR 端点禁止使用公网 IP。")
+    return endpoints
 
 
 def _product_topology(

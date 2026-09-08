@@ -11,14 +11,11 @@ from typing import NoReturn
 import pytest
 from PIL import Image
 
-from rag_app.adapters.providers.aliyun_chat import ChatUsage
-from rag_app.adapters.providers.aliyun_ocr import (
-    OcrRecognition,
-)
 from rag_app.adapters.providers.budget_errors import BudgetBlockedError
 from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
 from rag_app.adapters.providers.budget_models import BudgetCampaign
 from rag_app.composition.p06_runtime import P06Runtime
+from rag_app.core.errors import ConfigurationError
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     DocumentRef,
@@ -27,6 +24,12 @@ from rag_app.core.models import (
     ProviderCall,
 )
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
+from rag_app.product.ocr_contract import (
+    OcrAdapterIdentity,
+    ProductOcrInspection,
+    ProductOcrLine,
+    ProductOcrRecognition,
+)
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
 from tests.adapters.chunkers.test_docx_structural import _chunk
 from tests.adapters.parsers.docx.fixtures import parse_package
@@ -98,20 +101,25 @@ def _setup(
         )
     )
     calls: list[str] = []
+    identity = OcrAdapterIdentity(
+        adapter="aliyun-multimodal-ocr",
+        provider="aliyun-model-studio:connection",
+        revision="aliyun-ocr-adapter-v1",
+        model="qwen3.5-ocr",
+        policy_version="embedded-image-ocr-v1",
+    )
 
     def recognize(
         _content: bytes, *, media_type: str, media_sha256: str
-    ) -> OcrRecognition:
+    ) -> ProductOcrRecognition:
         calls.append(media_sha256)
-        return OcrRecognition(
+        return ProductOcrRecognition(
             text="巡检灯异常时，不得启动设备。",
             media_sha256=media_sha256,
             media_type=media_type,
             width=320,
             height=96,
-            model="qwen3.5-ocr",
-            policy_version="embedded-image-ocr-v1",
-            usage=ChatUsage(),
+            **identity.model_dump(),
             call=ProviderCall(
                 provider_id="offline-test",
                 operation="image.ocr",
@@ -121,13 +129,30 @@ def _setup(
             ),
         )
 
+    def inspect(
+        content: bytes, *, media_type: str, media_sha256: str
+    ) -> ProductOcrInspection:
+        return ProductOcrInspection(
+            media_sha256=media_sha256,
+            media_type=media_type,
+            size_bytes=len(content),
+            width=256,
+            height=64,
+        )
+
+    adapter = SimpleNamespace(
+        identity=identity,
+        inspect=inspect,
+        recognize=recognize,
+        close=lambda: None,
+    )
+
     service = ProductOcrEnrichment(
         runtime.connections,
         SimpleNamespace(get=lambda _: settings),
         SimpleNamespace(
-            ocr_adapter=lambda *_args, **_kwargs: SimpleNamespace(
-                recognize=recognize
-            )
+            ocr_adapter=lambda *_args, **_kwargs: adapter,
+            ocr_identity=lambda *_args, **_kwargs: identity,
         ),
         path,
         runtime.components.blob_store,
@@ -288,6 +313,50 @@ def test_budget_exhaustion_preserves_native_text_and_safe_reason(
         runtime.close()
 
 
+def test_unconfigured_local_ocr_is_explicit_and_keeps_native_text(
+    tmp_path: Path,
+) -> None:
+    runtime, parsed, service, calls = _setup(tmp_path)
+
+    def unavailable(*_args: object, **_kwargs: object) -> NoReturn:
+        raise ConfigurationError(
+            "本地 OCR 尚未配置。",
+            stage="product.ocr.config",
+            code="LOCAL_OCR_UNAVAILABLE",
+        )
+
+    settings = service.models.get(
+        parsed.document_ir.document.knowledge_base_id
+    ).model_copy(
+        update={
+            "ocr_connection_id": "local-ocr",
+            "ocr_model": "pp-ocrv5-server",
+        }
+    )
+    service.models = SimpleNamespace(get=lambda _: settings)
+    service.providers = SimpleNamespace(
+        ocr_adapter=unavailable,
+        ocr_identity=unavailable,
+    )
+    try:
+        enriched = service.enrich_result(parsed)
+        assert enriched.document_ir.nodes == parsed.document_ir.nodes
+        assert enriched.report.issues[-1].code == "LOCAL_OCR_UNAVAILABLE"
+        scan = service.scan_document(
+            parsed.document_ir, artifacts=parsed.artifacts
+        )
+        assert scan["media"][0]["adapter_available"] is False
+        assert scan["media"][0]["reason_code"] == "LOCAL_OCR_UNAVAILABLE"
+        assert service.content_identity(
+            parsed.document_ir.document.knowledge_base_id
+        ) == service.content_identity(
+            parsed.document_ir.document.knowledge_base_id
+        )
+        assert calls == []
+    finally:
+        runtime.close()
+
+
 def test_cache_and_campaign_cannot_cross_knowledge_base(tmp_path: Path) -> None:
     runtime, parsed, service, calls = _setup(tmp_path)
     try:
@@ -300,5 +369,185 @@ def test_cache_and_campaign_cannot_cross_knowledge_base(tmp_path: Path) -> None:
         assert result.document_ir.nodes == other.document_ir.nodes
         assert result.report.issues[-1].code == "OCR_MEDIA_NOT_APPROVED"
         assert len(calls) == 1
+    finally:
+        runtime.close()
+
+
+def test_cache_identity_separates_adapter_provider_and_revision(
+    tmp_path: Path,
+) -> None:
+    runtime, parsed, service, remote_calls = _setup(tmp_path)
+    local_calls: list[str] = []
+    local_identity = OcrAdapterIdentity(
+        adapter="local-paddleocr",
+        provider="rag-ocr",
+        revision="paddleocr-test-revision",
+        model="qwen3.5-ocr",
+        policy_version="embedded-image-ocr-v1",
+    )
+
+    def recognize(
+        _content: bytes, *, media_type: str, media_sha256: str
+    ) -> ProductOcrRecognition:
+        local_calls.append(media_sha256)
+        return ProductOcrRecognition(
+            text="本地识别结果。",
+            media_sha256=media_sha256,
+            media_type=media_type,
+            width=256,
+            height=64,
+            **local_identity.model_dump(),
+            confidence=0.88,
+            lines=(
+                ProductOcrLine(
+                    text="本地识别结果。",
+                    confidence=0.88,
+                    bbox=(2, 3, 120, 31),
+                ),
+            ),
+        )
+
+    def inspect(
+        content: bytes, *, media_type: str, media_sha256: str
+    ) -> ProductOcrInspection:
+        return ProductOcrInspection(
+            media_sha256=media_sha256,
+            media_type=media_type,
+            size_bytes=len(content),
+            width=256,
+            height=64,
+        )
+
+    local_adapter = SimpleNamespace(
+        identity=local_identity,
+        inspect=inspect,
+        recognize=recognize,
+        close=lambda: None,
+    )
+    try:
+        service.enrich_result(parsed)
+        assert len(remote_calls) == 1
+        service.providers = SimpleNamespace(
+            ocr_adapter=lambda *_args, **_kwargs: local_adapter,
+            ocr_identity=lambda *_args, **_kwargs: local_identity,
+        )
+        enriched = service.enrich_result(parsed)
+        assert len(local_calls) == 1
+        ocr_nodes = [
+            node
+            for node in enriched.document_ir.nodes
+            if dict(node.metadata).get("origin") == "ocr"
+        ]
+        assert {dict(node.metadata)["adapter"] for node in ocr_nodes} == {
+            "local-paddleocr"
+        }
+        assert all("bbox" not in dict(node.metadata) for node in ocr_nodes)
+        assert all(
+            dict(node.metadata)["confidence"] == 0.88 for node in ocr_nodes
+        )
+        assert all(
+            dict(node.metadata)["lines"][0]["bbox"] == [2, 3, 120, 31]
+            for node in ocr_nodes
+        )
+        with runtime.connections.transaction() as connection:
+            identities = {
+                (str(row[0]), str(row[1]), str(row[2]))
+                for row in connection.execute(
+                    "SELECT adapter, provider, ocr_revision "
+                    "FROM ocr_enrichment_cache"
+                ).fetchall()
+            }
+        assert identities == {
+            (
+                "aliyun-multimodal-ocr",
+                "aliyun-model-studio:connection",
+                "aliyun-ocr-adapter-v1",
+            ),
+            ("local-paddleocr", "rag-ocr", "paddleocr-test-revision"),
+        }
+    finally:
+        runtime.close()
+
+
+def test_each_adapter_identity_dimension_prevents_cache_cross_reuse(
+    tmp_path: Path,
+) -> None:
+    runtime, parsed, service, remote_calls = _setup(tmp_path)
+    identities = (
+        OcrAdapterIdentity(
+            adapter="other-adapter",
+            provider="aliyun-model-studio:connection",
+            revision="aliyun-ocr-adapter-v1",
+            model="qwen3.5-ocr",
+            policy_version="embedded-image-ocr-v1",
+        ),
+        OcrAdapterIdentity(
+            adapter="aliyun-multimodal-ocr",
+            provider="aliyun-model-studio:other-connection",
+            revision="aliyun-ocr-adapter-v1",
+            model="qwen3.5-ocr",
+            policy_version="embedded-image-ocr-v1",
+        ),
+        OcrAdapterIdentity(
+            adapter="aliyun-multimodal-ocr",
+            provider="aliyun-model-studio:connection",
+            revision="aliyun-ocr-adapter-v2",
+            model="qwen3.5-ocr",
+            policy_version="embedded-image-ocr-v1",
+        ),
+    )
+    try:
+        service.enrich_result(parsed)
+        assert len(remote_calls) == 1
+        for identity in identities:
+            calls: list[str] = []
+
+            def recognize(
+                _content: bytes,
+                *,
+                media_type: str,
+                media_sha256: str,
+                selected: OcrAdapterIdentity = identity,
+                captured_calls: list[str] = calls,
+            ) -> ProductOcrRecognition:
+                captured_calls.append(media_sha256)
+                return ProductOcrRecognition(
+                    text="独立缓存结果。",
+                    media_sha256=media_sha256,
+                    media_type=media_type,
+                    width=256,
+                    height=64,
+                    **selected.model_dump(),
+                )
+
+            adapter = SimpleNamespace(
+                identity=identity,
+                inspect=lambda content, **kwargs: ProductOcrInspection(
+                    media_sha256=kwargs["media_sha256"],
+                    media_type=kwargs["media_type"],
+                    size_bytes=len(content),
+                    width=256,
+                    height=64,
+                ),
+                recognize=recognize,
+                close=lambda: None,
+            )
+            service.providers = SimpleNamespace(
+                ocr_adapter=lambda *_args, _adapter=adapter, **_kwargs: (
+                    _adapter
+                ),
+                ocr_identity=lambda *_args, _identity=identity, **_kwargs: (
+                    _identity
+                ),
+            )
+            service.enrich_result(parsed)
+            assert len(calls) == 1
+        with runtime.connections.transaction() as connection:
+            row_count = int(
+                connection.execute(
+                    "SELECT count(*) FROM ocr_enrichment_cache"
+                ).fetchone()[0]
+            )
+        assert row_count == 4
     finally:
         runtime.close()

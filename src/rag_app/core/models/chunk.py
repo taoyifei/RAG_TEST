@@ -19,6 +19,9 @@ class SourceSpanKind(StrEnum):
     """citation 字符的来源语义。"""
 
     ORIGINAL_TEXT = "original_text"
+    OCR_TEXT = "ocr_text"
+    DIAGRAM_RELATION = "diagram_relation"
+    DERIVED_CAPTION_OR_ASSOCIATION = "derived_caption_or_association"
     DERIVED_NUMBERING = "derived_numbering"
     REPEATED_CONTEXT = "repeated_context"
     SEPARATOR = "separator"
@@ -118,7 +121,7 @@ def _validate_derived_span(span: SourceSpan) -> None:
 
 def _validate_mapped_span(span: SourceSpan) -> None:
     if span.source_start_char is None or span.source_end_char is None:
-        raise ValueError("原文和重复上下文必须提供 source 字符范围。")
+        raise ValueError("映射来源必须提供 source 字符范围。")
     if span.source_end_char <= span.source_start_char:
         raise ValueError("source 字符范围必须非空且前进。")
     if (

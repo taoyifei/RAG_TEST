@@ -332,6 +332,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Relations */
+        get: operations["_relations_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations/{candidate_id}:review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Relation */
+        post: operations["_review_relation_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations__candidate_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/ocr": {
         parameters: {
             query?: never;
@@ -1411,6 +1445,99 @@ export interface components {
             score?: number | null;
         };
         /**
+         * DiagramRelationCandidate
+         * @description 绑定图像 occurrence、模型和政策版本的结构化关系候选。
+         */
+        DiagramRelationCandidate: {
+            /**
+             * Ambiguous
+             * @default false
+             */
+            ambiguous: boolean;
+            /** Candidate Id */
+            candidate_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            direction: components["schemas"]["RelationDirection"];
+            /** Document Id */
+            document_id: string;
+            /** Document Version Id */
+            document_version_id: string;
+            evidence_source: components["schemas"]["RelationEvidenceSource"];
+            /** Figure Occurrence Id */
+            figure_occurrence_id: string;
+            /** Knowledge Base Id */
+            knowledge_base_id: string;
+            /** Media Sha256 */
+            media_sha256: string;
+            /** Model Id */
+            model_id: string;
+            /** Policy Version */
+            policy_version: string;
+            /** Relation Type */
+            relation_type: string;
+            /**
+             * Review Revision
+             * @default 0
+             */
+            review_revision: number;
+            /** @default pending */
+            review_state: components["schemas"]["RelationReviewState"];
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewer Sha256 */
+            reviewer_sha256?: string | null;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version: string;
+            source_node: components["schemas"]["DiagramRelationNode"];
+            target_node: components["schemas"]["DiagramRelationNode"];
+        };
+        /**
+         * DiagramRelationNode
+         * @description 一张图内由 Provider 或原生连接器定位的逻辑节点。
+         */
+        DiagramRelationNode: {
+            /** Bbox */
+            bbox?: [
+                number,
+                number,
+                number,
+                number
+            ] | null;
+            /** Label */
+            label: string;
+            /** Node Id */
+            node_id: string;
+        };
+        /**
+         * DiagramRelationReview
+         * @description 管理员对结构化图关系候选作出的显式发布决定。
+         */
+        DiagramRelationReview: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "accepted" | "rejected" | "ambiguous";
+        };
+        /**
+         * DiagramRelationReviewResponse
+         * @description 审阅后的候选与可能触发的新 Revision Job。
+         */
+        DiagramRelationReviewResponse: {
+            candidate: components["schemas"]["DiagramRelationCandidate"];
+            /** Content Identity */
+            content_identity?: string | null;
+            /** Rebuild Job Id */
+            rebuild_job_id?: string | null;
+        };
+        /**
          * Document
          * @description 逻辑文档及当前版本公共视图。
          */
@@ -2003,6 +2130,24 @@ export interface components {
             source_spans: components["schemas"]["SourceSpan"][];
         };
         /**
+         * RelationDirection
+         * @description 候选边相对于 source/target 的方向。
+         * @enum {string}
+         */
+        RelationDirection: "source_to_target" | "target_to_source" | "bidirectional" | "unknown";
+        /**
+         * RelationEvidenceSource
+         * @description 关系结论的真实来源，不把视觉推断伪装成原生结构。
+         * @enum {string}
+         */
+        RelationEvidenceSource: "native_drawing" | "visual_candidate" | "synthetic_contract";
+        /**
+         * RelationReviewState
+         * @description 候选是否具备进入正式回答证据的资格。
+         * @enum {string}
+         */
+        RelationReviewState: "pending" | "accepted" | "rejected" | "ambiguous";
+        /**
          * RenameDocumentRequest
          * @description 只修改文档显示信息的请求。
          */
@@ -2405,7 +2550,7 @@ export interface components {
          * @description citation 字符的来源语义。
          * @enum {string}
          */
-        SourceSpanKind: "original_text" | "derived_numbering" | "repeated_context" | "separator";
+        SourceSpanKind: "original_text" | "ocr_text" | "diagram_relation" | "derived_caption_or_association" | "derived_numbering" | "repeated_context" | "separator";
         /**
          * SpanKind
          * @description 可映射到 OpenTelemetry 的 span 类别。
@@ -5243,6 +5388,237 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _relations_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                knowledge_base_id: string;
+                document_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramRelationCandidate"][];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _review_relation_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations__candidate_id__review_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                knowledge_base_id: string;
+                document_id: string;
+                candidate_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiagramRelationReview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiagramRelationReviewResponse"];
                 };
             };
             /** @description 统一安全错误结构 */

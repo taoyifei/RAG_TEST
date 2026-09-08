@@ -416,12 +416,15 @@ def _image_atom(
         return None
     fragment = SourceFragment(
         text=text,
-        span_type=SourceSpanKind.ORIGINAL_TEXT,
+        span_type=SourceSpanKind.DERIVED_CAPTION_OR_ASSOCIATION,
         node_id=node.node_id,
         source_anchor=node.anchor,
         source_start_char=0,
         source_end_char=len(text),
-        metadata=(("source_field", "alt_or_caption"),),
+        metadata=(
+            ("source_field", "alt_or_caption"),
+            ("source_kind", "derived_caption_or_association"),
+        ),
     )
     group_id = _stable_label("group", section_id, node.node_id)
     return AtomicUnit(

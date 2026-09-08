@@ -50,6 +50,8 @@ def build_product_harness(  # noqa: PLR0913
     circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
     qdrant_url: str | None = None,
     qdrant_api_key_file: Path | None = None,
+    local_ocr_endpoints: tuple[str, ...] = (),
+    local_ocr_token_file: Path | None = None,
 ) -> ProductHarness:
     """构建不访问网络的完整产品测试环境。
 
@@ -60,6 +62,8 @@ def build_product_harness(  # noqa: PLR0913
         circuit_factory: 可选测试时钟 Circuit 工厂。
         qdrant_url: 可选真实 Qdrant Server URL。
         qdrant_api_key_file: Qdrant URL 模式的 0600 Key 文件。
+        local_ocr_endpoints: 可选内部 OCR 服务端点。
+        local_ocr_token_file: 可选内部 OCR Bearer 的 0600 文件。
 
     Returns:
         已登录的 Product Harness。
@@ -85,6 +89,8 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_mode="memory" if qdrant_url is None else "url",
         qdrant_url=qdrant_url,
         qdrant_api_key_file=qdrant_api_key_file,
+        local_ocr_endpoints=local_ocr_endpoints,
+        local_ocr_token_file=local_ocr_token_file,
     )
     runtime = build_product_runtime(
         settings,
