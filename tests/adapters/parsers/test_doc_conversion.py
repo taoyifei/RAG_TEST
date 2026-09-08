@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from rag_app.adapters.parsers import doc_conversion
+from rag_app.adapters.parsers import doc_conversion, doc_sandbox_runner
 from rag_app.adapters.parsers.doc_conversion import (
     DocConversion,
     DocConversionTimeoutError,
@@ -153,3 +153,19 @@ def test_converter_workspace_limit_kills_process_group(tmp_path: Path) -> None:
         )
 
     assert process.poll() is not None
+
+
+def test_landlock_regular_file_access_excludes_directory_permission(
+    tmp_path: Path,
+) -> None:
+    regular_file = tmp_path / "runtime-config"
+    regular_file.write_bytes(b"public")
+
+    access = doc_sandbox_runner._compatible_path_access(
+        regular_file,
+        doc_sandbox_runner._READ_ONLY_ACCESS,
+    )
+
+    assert access & doc_sandbox_runner._ACCESS_READ_FILE
+    assert access & doc_sandbox_runner._ACCESS_EXECUTE
+    assert not access & doc_sandbox_runner._ACCESS_READ_DIR

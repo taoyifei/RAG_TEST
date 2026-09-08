@@ -282,6 +282,7 @@ def _add_path_rule(
     path: Path,
     access: int,
 ) -> None:
+    access = _compatible_path_access(path, access)
     path_fd = os.open(path, os.O_PATH | os.O_CLOEXEC)
     try:
         attribute = _LandlockPathBeneathAttr(
@@ -304,14 +305,38 @@ def _add_path_rule(
         os.close(path_fd)
 
 
+def _compatible_path_access(path: Path, access: int) -> int:
+    """移除不适用于普通文件的 Landlock 目录权限。
+
+    Args:
+        path: 即将加入 ruleset 的已存在路径。
+        access: 调用方期望授予的 Landlock 权限位。
+
+    Returns:
+        与路径类型兼容的权限位。
+
+    """
+    if path.is_dir():
+        return access
+    return access & ~_ACCESS_READ_DIR
+
+
 def _restrict_syscalls() -> None:
     try:
         library = ctypes.CDLL("libseccomp.so.2", use_errno=True)
     except OSError as error:
         raise OSError(errno.ENOSYS, "libseccomp 不可用") from error
     library.seccomp_init.restype = ctypes.c_void_p
+    library.seccomp_init.argtypes = [ctypes.c_uint32]
     library.seccomp_syscall_resolve_name.argtypes = [ctypes.c_char_p]
     library.seccomp_syscall_resolve_name.restype = ctypes.c_int
+    library.seccomp_rule_add.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_int,
+        ctypes.c_uint,
+    ]
+    library.seccomp_rule_add.restype = ctypes.c_int
     library.seccomp_load.argtypes = [ctypes.c_void_p]
     library.seccomp_load.restype = ctypes.c_int
     library.seccomp_release.argtypes = [ctypes.c_void_p]
