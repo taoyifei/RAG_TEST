@@ -224,6 +224,8 @@ class _FakeProductRuntime:
         )
         if mode is self.drift_mode:
             active_revisions = ("irev_drift",)
+        total_duration_ns = (500 if not cold else 1_000) + mode_cost
+        retrieval_duration_ns = 400 if not cold else 800
         return QueryMeasurement(
             case_id=case.case_id,
             mode=mode,
@@ -244,7 +246,11 @@ class _FakeProductRuntime:
             answered=case.answerable,
             answer_correct=True if case.answerable else None,
             refusal_reason=None if case.answerable else "INSUFFICIENT_EVIDENCE",
-            total_duration_ns=(500 if not cold else 1_000) + mode_cost,
+            total_duration_ns=total_duration_ns,
+            retrieval_duration_ns=retrieval_duration_ns,
+            trace_capture_overhead_ns=(
+                total_duration_ns - retrieval_duration_ns
+            ),
             provider_duration_ns=200 if cold else 0,
             stage_durations=(
                 StageDuration(stage="retrieve", duration_ns=300 + mode_cost),
@@ -310,6 +316,9 @@ def test_metrics_cover_quality_performance_provider_cache_and_trace() -> None:
     assert safe_warm.cache_hit_count == len(_cases())
     assert diagnostic_cold.p95_added_vs_safe_ns == 200
     assert full_cold.p95_added_vs_safe_ns == 500
+    assert safe_cold.p95_trace_capture_overhead_ns == 200
+    assert diagnostic_cold.p95_trace_capture_overhead_ns == 400
+    assert full_cold.p95_trace_capture_overhead_ns == 700
     assert safe_cold.trace_artifact_count == 0
     assert full_cold.trace_artifact_count == len(_cases())
     assert full_cold.trace_storage_bytes > diagnostic_cold.trace_storage_bytes

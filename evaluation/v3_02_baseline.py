@@ -369,6 +369,8 @@ class QueryMeasurement(_FrozenModel):
     answer_correct: bool | None
     refusal_reason: str | None = None
     total_duration_ns: int = Field(ge=0)
+    retrieval_duration_ns: int = Field(ge=0)
+    trace_capture_overhead_ns: int = Field(ge=0)
     provider_duration_ns: int = Field(ge=0)
     stage_durations: tuple[StageDuration, ...]
     provider_call_count: int = Field(ge=0)
@@ -384,6 +386,13 @@ class QueryMeasurement(_FrozenModel):
 
     @model_validator(mode="after")
     def _validate_timing_and_execution(self) -> QueryMeasurement:
+        if self.retrieval_duration_ns > self.total_duration_ns:
+            raise ValueError("检索耗时不能大于含 Trace 捕获的总耗时。")
+        if (
+            self.trace_capture_overhead_ns
+            != self.total_duration_ns - self.retrieval_duration_ns
+        ):
+            raise ValueError("Trace 捕获开销必须等于总耗时减检索耗时。")
         if self.provider_duration_ns > self.total_duration_ns:
             raise ValueError("Provider 耗时不能大于总耗时。")
         if self.retrieval_execution_count > 1:
@@ -411,6 +420,8 @@ class ModeMetrics(_FrozenModel):
     p95_total_duration_ns: int = Field(ge=0)
     p50_non_provider_duration_ns: int = Field(ge=0)
     p95_non_provider_duration_ns: int = Field(ge=0)
+    p50_trace_capture_overhead_ns: int = Field(ge=0)
+    p95_trace_capture_overhead_ns: int = Field(ge=0)
     p50_added_vs_safe_ns: int
     p95_added_vs_safe_ns: int
     stage_duration_ns: dict[str, dict[str, int]]
@@ -824,6 +835,7 @@ class DeterministicProductBaselineRuntime:
         trace_id = _trace_id(
             case.case_id, mode, cache_condition, case.query_sha256
         )
+        started = time.perf_counter_ns()
         session = self._trace_recorder.begin_query(
             trace_id,
             mode,
@@ -831,7 +843,7 @@ class DeterministicProductBaselineRuntime:
             self._trace_identity(source_case),
             question_sha256=case.query_sha256.removeprefix("sha256:"),
         )
-        started = time.perf_counter_ns()
+        retrieval_started = time.perf_counter_ns()
         result = state.runtime.retrieval.search_and_answer(
             SearchRequest(
                 scope=KnowledgeBaseScope(
@@ -843,6 +855,7 @@ class DeterministicProductBaselineRuntime:
                 trace_id=trace_id,
             )
         )
+        retrieval_duration_ns = time.perf_counter_ns() - retrieval_started
         self._record_trace_consumer(session, result, mode)
         answered = result.status is ConfidenceStatus.ANSWERABLE
         session.finish(
@@ -897,6 +910,10 @@ class DeterministicProductBaselineRuntime:
             answer_correct=correct,
             refusal_reason=None if answered else result.reason_code,
             total_duration_ns=total_duration_ns,
+            retrieval_duration_ns=retrieval_duration_ns,
+            trace_capture_overhead_ns=(
+                total_duration_ns - retrieval_duration_ns
+            ),
             provider_duration_ns=min(provider_duration_ns, total_duration_ns),
             stage_durations=tuple(
                 StageDuration(
@@ -2142,6 +2159,12 @@ def _mode_metrics(  # noqa: PLR0913
         p95_total_duration_ns=timings[1],
         p50_non_provider_duration_ns=timings[2],
         p95_non_provider_duration_ns=timings[3],
+        p50_trace_capture_overhead_ns=_percentile(
+            [item.trace_capture_overhead_ns for item in measurements], 50
+        ),
+        p95_trace_capture_overhead_ns=_percentile(
+            [item.trace_capture_overhead_ns for item in measurements], 95
+        ),
         p50_added_vs_safe_ns=timings[0] - safe_timings[0],
         p95_added_vs_safe_ns=timings[1] - safe_timings[1],
         stage_duration_ns={
