@@ -342,7 +342,7 @@ machine、未重建最终候选镜像，也未复用 V3-01 旧 Trivy/人工批�
 
 - `.venv/bin/python scripts/dev.py check`：退出 0；compileall、Ruff、mypy
   （369 source files）、Google docstring（0 missing）通过；离线 pytest 为
-  `2717 passed, 89 deselected, 4 warnings in 745.41s`，并确认进程自然退出。
+  `2718 passed, 89 deselected, 4 warnings in 744.87s`，并确认进程自然退出。
 - `.venv/bin/python scripts/dev.py doctor`：PASS；Python 3.11.15、source-tree import、
   SQLite FTS5 与临时目录正常，Node 属于该命令声明的 later-phase optional skip。
 - `dev.py smoke`：`72 passed, 1 warning`；`dev.py product-check`：hardcode audit
@@ -381,6 +381,7 @@ Review allowlist 和逐成员 Secret scan。V3-01 最终候选镜像的 High/Cri
 - `c61d806`、`abed1ac`：接口文档与 migration/来源快照回归；
 - `6dc52c8`：备份恢复 SQLite 私有权限；
 - `6aa6b25`：无效 OCR 配置的 Trace writer 生命周期；
+- `d7508bc`：把 DEV runtime identity stdout 同步持久化为 0600 JSON 收据；
 - 本报告与持续 Trace 契约由最终文档提交封存；准确 SHA 见最终 Git/identity 输出。
 
 `V3_03_ENTRY=PASS` 只表示默认 Product Trace 核心闭环与 V3-02 本地门已完成。
