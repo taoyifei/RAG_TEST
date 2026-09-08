@@ -10,12 +10,18 @@
 
 ```bash
 cp .env.example .env
-docker compose build app
+python scripts/release.py build
 docker compose run --rm --no-deps app \
   init-secrets --directory /run/rag-secrets
-docker compose up -d
+docker compose up -d --no-build --pull never
 docker compose ps
 ```
+
+构建入口要求工作树干净且 HEAD 已提交。它从该提交的 Git 对象导出仓库外最小
+白名单 context，正常使用 BuildKit，并把 source SHA、逐文件摘要、字节数和 Git
+权限写入 `artifacts/release-context/`。Compose 不再提供工作树 build，避免把本地
+证据、备份或其他未批准文件交给 context sender；源码变化后先提交，再重跑上述
+构建命令。
 
 `init-secrets` 不能覆盖已有文件。它创建 `master-key`、
 `admin-bootstrap-token`、`qdrant-api-key` 和 `qdrant.yaml`，文件均为 0600。

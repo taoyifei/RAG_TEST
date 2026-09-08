@@ -8,7 +8,8 @@ setuptools 或 wheel；OCI revision、Compatibility Manifest、锁文件和 SBOM
 根 `compose.yaml` 是默认入口，只含 `app` 与固定版本
 `qdrant/qdrant:v1.18.3`。数据分别保存在 `rag_data`、`qdrant_data` 和
 `rag_secrets`。Qdrant 只在内部网络可见并使用文件托管 API Key；应用另有受限
-egress 网络访问已配置的模型服务。
+egress 网络访问已配置的模型服务。Compose 只启动候选镜像，不从工作树构建；
+正式构建必须使用下述 `release.py build` 白名单 context 入口。
 
 ## Loopback 与 TLS
 
@@ -38,6 +39,35 @@ python scripts/release.py acceptance
 可修复漏洞清单、Secret、镜像 SBOM 和许可证清单。`acceptance` 启动两个隔离
 Qdrant Server，验证双 Named Vector、故障数据、快照、恢复和重启持久性；它不调用
 真实模型服务。
+
+`verify` 每次都会产生新的完整扫描。发布管理员需要在同一不可变扫描上继续审核
+时，使用实际生成的路径执行：
+
+```bash
+python scripts/release.py review-os-scan \
+  --scan artifacts/<本次目录>/trivy-all.json \
+  --risk-review release/p11-os-risk-review.json \
+  --freshness-policy release/p11-scan-freshness-policy.proposed.json
+```
+
+该动作不重扫、不修改原 JSON，也不把旧批准迁移到新扫描。仓库中的 freshness
+文件只是 `PROPOSED` 建议；管理员尚未提供有效政策、逐项处置或批准时，命令和
+`SECURITY_READY` 都保持 `BLOCKED`。本地 image ID 与本地 RepoDigest 会单独记录，
+不会冒充远端 registry manifest digest。
+
+新的扫描需要逐项调查草案时，可只复用旧文件中的技术分析字段：
+
+```bash
+python scripts/os_risk_draft.py \
+  --scan artifacts/<本次目录>/trivy-all.json \
+  --db-metadata artifacts/<本次目录>/trivy-db-metadata.json \
+  --previous-review release/p11-os-risk-review.json \
+  --output release/p11-os-risk-review.json
+```
+
+生成器按 `CVE + package + installed_version` 重建全量清单，保留 source package、
+source version、PURL、arch、Target、layer 和原始条目索引，并强制将 owner、
+approver、expiry 与 risk acceptance 清空；输出始终为 `UNDER_INVESTIGATION`。
 
 基础镜像和扫描工具在 CI/报告中记录解析后的 Digest。发布前仍需检查
 `docs/progress/phase-11.md` 中未修复漏洞、CI、Live 与 Branch Protection 状态。

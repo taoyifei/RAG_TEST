@@ -15,9 +15,12 @@ import pytest
 from rag_app.product import release_evidence
 from rag_app.product.os_risk_review import (
     disposition_digest,
+    load_freshness_policy,
     load_review_inputs,
+    validate_scan_freshness,
 )
 from rag_app.product.release_evidence import combine, vulnerability_report
+from scripts import release
 
 _NOW = datetime(2026, 9, 6, 8, tzinfo=UTC)
 _SCAN_TIME = "2026-09-06T06:00:00Z"
@@ -40,6 +43,8 @@ def _case(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         "Metadata": {
             "ImageID": "sha256:" + "a" * 64,
             "OS": {"Family": "debian", "Name": "13.6"},
+            "RepoDigests": ["example@sha256:" + "a" * 64],
+            "ImageConfig": {"os": "linux", "architecture": "amd64"},
         },
         "Results": [
             {
@@ -54,6 +59,14 @@ def _case(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
                         "Version": "1",
                         "SrcVersion": "1",
                         "SrcRelease": "2",
+                        "Arch": "amd64",
+                        "Identifier": {
+                            "PURL": "pkg:deb/debian/lib-example@1-2"
+                        },
+                        "Layer": {
+                            "Digest": "sha256:" + "c" * 64,
+                            "DiffID": "sha256:" + "d" * 64,
+                        },
                     }
                 ],
                 "Vulnerabilities": [
@@ -62,6 +75,9 @@ def _case(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
                         "PkgName": "lib-example",
                         "InstalledVersion": "1-2",
                         "Severity": "HIGH",
+                        "Status": "affected",
+                        "PkgID": "lib-example@1-2",
+                        "Fingerprint": "sha256:" + "e" * 64,
                     }
                 ],
             }
@@ -133,6 +149,24 @@ def _approve(root: Path, overlay: dict[str, Any], **changes: object) -> None:
     review["approval_evidence"] = _proof(root, "approval.json", receipt)
 
 
+def _freshness_policy(root: Path, **changes: object) -> dict[str, str]:
+    policy = {
+        "schema_version": 1,
+        "kind": "os-scan-freshness-policy",
+        "status": "APPROVED",
+        "approval_source": "local_administrator",
+        "scope": "P11_RELEASE",
+        "maximum_scan_age_hours": 24,
+        "maximum_db_age_at_scan_hours": 24,
+        "approver": "test-only-human",
+        "approval_reference": "test-only-freshness-001",
+        "approved_at": "2026-09-06T05:00:00Z",
+        "expires_at": _EXPIRY,
+        **changes,
+    }
+    return _proof(root, "freshness-policy.json", policy)
+
+
 def _report(
     root: Path, scan: dict[str, Any], overlay: dict[str, Any]
 ) -> dict[str, Any]:
@@ -175,6 +209,16 @@ def test_full_scan_counts_and_unapproved_risk_are_preserved(
     assert report["approved_dispositions"] == 0
     assert report["under_investigation"] == 1
     assert scan == original
+    finding = report["findings"][0]
+    assert finding["purl"] == "pkg:deb/debian/lib-example@1-2"
+    assert finding["arch"] == "amd64"
+    assert finding["vulnerability_status"] == "affected"
+    assert finding["raw_mapping"] == {
+        "result_index": 0,
+        "vulnerability_index": 0,
+        "package_index": 0,
+        "fingerprint": "sha256:" + "e" * 64,
+    }
 
 
 def test_valid_human_acceptance_keeps_risk_visible_and_status_compatible(
@@ -382,6 +426,33 @@ def test_final_gate_inputs_require_unchanged_files_and_recheck_expiry(
         load_review_inputs(record, tmp_path)
 
 
+def test_scan_freshness_requires_approved_bounded_policy(
+    tmp_path: Path,
+) -> None:
+    scan, overlay = _case(tmp_path)
+    _approve(tmp_path, overlay)
+    report = _report(tmp_path, scan, overlay)
+    policy_ref = _freshness_policy(tmp_path)
+    record = {"details": {"freshness_policy": policy_ref}}
+    policy = load_freshness_policy(record, tmp_path)
+
+    freshness = validate_scan_freshness(
+        report["scan_identity"], policy, _NOW
+    )
+
+    assert freshness["status"] == "PASS"
+    policy["status"] = "PROPOSED"
+    with pytest.raises(ValueError, match="POLICY_NOT_APPROVED"):
+        validate_scan_freshness(report["scan_identity"], policy, _NOW)
+    policy["status"] = "APPROVED"
+    with pytest.raises(ValueError, match="REVIEW_SCAN_STALE"):
+        validate_scan_freshness(
+            report["scan_identity"],
+            {**policy, "maximum_scan_age_hours": 1},
+            _NOW,
+        )
+
+
 def test_final_gate_cannot_read_outside_evidence_root(tmp_path: Path) -> None:
     proof = {"path": "../outside.json", "sha256": "f" * 64}
     with pytest.raises(ValueError, match="REVIEW_EVIDENCE_OUTSIDE_ROOT"):
@@ -424,6 +495,7 @@ def test_final_build_report_rejects_expired_approval_without_any_file_change(
         "details": {
             "raw_scan": _proof(tmp_path, "scan.json", scan),
             "review_overlay": _proof(tmp_path, "overlay.json", overlay),
+            "freshness_policy": _freshness_policy(tmp_path),
         },
     }
     current = [_NOW]
@@ -441,3 +513,70 @@ def test_final_build_report_rejects_expired_approval_without_any_file_change(
     assert report["checks"]["os_risk"]["status"] == "BLOCKED"
     assert report["gates"]["SECURITY_READY"]["status"] == "BLOCKED"
     assert evidence == before
+
+
+def test_existing_scan_review_reuses_s1_but_rejects_s2_and_changed_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scan, overlay = _case(tmp_path)
+    _approve(tmp_path, overlay)
+    overlay_path = tmp_path / "overlay.json"
+    _proof(tmp_path, overlay_path.name, overlay)
+    policy_path = tmp_path / "freshness-policy.json"
+    _freshness_policy(tmp_path)
+    output = tmp_path / "review-output.json"
+    evidence = tmp_path / "evidence.json"
+    identity = {
+        "image": "image-recipe",
+        "image_id": scan["Metadata"]["ImageID"],
+    }
+    candidate = {
+        "image_id": scan["Metadata"]["ImageID"],
+        "platform": {"os": "linux", "architecture": "amd64"},
+    }
+    monkeypatch.setattr(release, "_ROOT", tmp_path)
+    monkeypatch.setattr(release, "_current_identity", lambda: identity)
+    monkeypatch.setattr(
+        release, "_validate_scan_candidate", lambda _scan, _docker: candidate
+    )
+    monkeypatch.setattr(release, "_required_executable", lambda _name: "docker")
+    clock = SimpleNamespace(now=lambda _tz: _NOW)
+    monkeypatch.setattr(release, "datetime", clock)
+    monkeypatch.setattr(release_evidence, "datetime", clock)
+
+    release._review_existing_os_scan(
+        scan_path=tmp_path / "scan.json",
+        review_overlay=overlay_path,
+        freshness_policy=policy_path,
+        output_path=output,
+        evidence_path=evidence,
+    )
+
+    recorded = json.loads(evidence.read_text(encoding="utf-8"))
+    assert recorded["checks"]["os_risk"]["status"] == "PASS"
+    s2 = copy.deepcopy(scan)
+    s2["CreatedAt"] = "2026-09-06T06:30:00Z"
+    _proof(tmp_path, "scan-s2.json", s2)
+    with pytest.raises(RuntimeError, match="SECURITY_READY=BLOCKED"):
+        release._review_existing_os_scan(
+            scan_path=tmp_path / "scan-s2.json",
+            review_overlay=overlay_path,
+            freshness_policy=policy_path,
+            output_path=output,
+            evidence_path=evidence,
+        )
+
+    def changed_image(
+        _scan: dict[str, object], _docker: str
+    ) -> dict[str, object]:
+        raise RuntimeError("OS_SCAN_IMAGE_IDENTITY_MISMATCH")
+
+    monkeypatch.setattr(release, "_validate_scan_candidate", changed_image)
+    with pytest.raises(RuntimeError, match="OS_SCAN_IMAGE_IDENTITY_MISMATCH"):
+        release._review_existing_os_scan(
+            scan_path=tmp_path / "scan.json",
+            review_overlay=overlay_path,
+            freshness_policy=policy_path,
+            output_path=output,
+            evidence_path=evidence,
+        )

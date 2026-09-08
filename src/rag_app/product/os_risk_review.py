@@ -29,6 +29,7 @@ _IDENTITY_FIELDS = (
 )
 _DEBIAN_RELEASES = {"12": "bookworm", "13": "trixie"}
 _TRACKER_URL = "https://security-tracker.debian.org/tracker/data/json"
+_FRESHNESS_POLICY_KIND = "os-scan-freshness-policy"
 
 
 @dataclass(frozen=True)
@@ -408,3 +409,89 @@ def load_review_inputs(
         json.loads(_read_proof(root, details.get("review_overlay")))
     )
     return raw, overlay, (root / _text(scan_ref.get("path"))).resolve()
+
+
+def load_freshness_policy(
+    record: Mapping[str, object], root: Path
+) -> dict[str, object]:
+    """读取最终发布记录绑定的扫描新鲜度政策。
+
+    Args:
+        record: `os_risk` 检查记录。
+        root: 允许读取的发布证据根目录。
+
+    Returns:
+        经过路径和摘要校验的政策对象。
+
+    Raises:
+        ValueError: 引用缺失、越界、摘要变化或不是 JSON 对象。
+        OSError: 政策文件无法读取。
+
+    """
+    details = _object(record.get("details"))
+    return _object(
+        json.loads(_read_proof(root, details.get("freshness_policy")))
+    )
+
+
+def validate_scan_freshness(
+    scan_identity: Mapping[str, object],
+    policy: Mapping[str, object],
+    now: datetime,
+) -> dict[str, object]:
+    """按管理员批准的有限政策验证扫描与漏洞库时效。
+
+    Args:
+        scan_identity: 已由完整扫描、DB metadata 与 overlay 交叉验证的身份。
+        policy: 本地管理员控制的扫描新鲜度政策。
+        now: 当前 UTC 时钟。
+
+    Returns:
+        供证据报告保存的政策与时间差摘要。
+
+    Raises:
+        ValueError: 政策未批准、已过期或扫描不满足政策。
+
+    """
+    if (
+        policy.get("schema_version") != 1
+        or policy.get("kind") != _FRESHNESS_POLICY_KIND
+        or policy.get("status") != "APPROVED"
+        or policy.get("approval_source") != "local_administrator"
+        or policy.get("scope") != _RELEASE_SCOPE
+    ):
+        raise ValueError("REVIEW_FRESHNESS_POLICY_NOT_APPROVED")
+    for name in ("approver", "approval_reference"):
+        _text(policy.get(name))
+    approved_at = _time(policy.get("approved_at"))
+    expires_at = _time(policy.get("expires_at"))
+    if not approved_at <= now < expires_at:
+        raise ValueError("REVIEW_FRESHNESS_POLICY_EXPIRED_OR_FUTURE")
+    maximum_scan_age = policy.get("maximum_scan_age_hours")
+    maximum_db_age = policy.get("maximum_db_age_at_scan_hours")
+    if (
+        isinstance(maximum_scan_age, bool)
+        or not isinstance(maximum_scan_age, int)
+        or maximum_scan_age <= 0
+        or isinstance(maximum_db_age, bool)
+        or not isinstance(maximum_db_age, int)
+        or maximum_db_age <= 0
+    ):
+        raise ValueError("REVIEW_FRESHNESS_POLICY_LIMIT_INVALID")
+    scanned_at = _time(scan_identity.get("scanned_at"))
+    db_updated_at = _time(scan_identity.get("db_updated_at"))
+    scan_age_seconds = (now - scanned_at).total_seconds()
+    db_age_at_scan_seconds = (scanned_at - db_updated_at).total_seconds()
+    if scan_age_seconds > maximum_scan_age * 3600:
+        raise ValueError("REVIEW_SCAN_STALE")
+    if db_age_at_scan_seconds > maximum_db_age * 3600:
+        raise ValueError("REVIEW_DB_STALE_AT_SCAN")
+    return {
+        "status": "PASS",
+        "policy_reference": policy["approval_reference"],
+        "policy_expires_at": expires_at.isoformat(),
+        "scan_age_seconds": scan_age_seconds,
+        "db_age_at_scan_seconds": db_age_at_scan_seconds,
+        "maximum_scan_age_hours": maximum_scan_age,
+        "maximum_db_age_at_scan_hours": maximum_db_age,
+    }

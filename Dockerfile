@@ -31,7 +31,10 @@ RUN python -c \
 FROM ${PYTHON_IMAGE} AS runtime
 
 ARG VCS_REF=development-unset
-LABEL org.opencontainers.image.revision="${VCS_REF}"
+ARG PYTHON_IMAGE
+LABEL org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
+    org.opencontainers.image.base.digest="sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534"
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \

@@ -12,12 +12,17 @@
 
 ```bash
 cp .env.example .env
-docker compose build app
+python scripts/release.py build
 docker compose run --rm --no-deps app \
   init-secrets --directory /run/rag-secrets
-docker compose up -d
+docker compose up -d --no-build --pull never
 docker compose ps
 ```
+
+`release.py build` 只接受干净的已提交 HEAD，从 Git 对象按 Dockerfile 必需
+白名单导出仓库外 BuildKit context，并在 `artifacts/release-context/` 保存不含
+正文 Secret 的文件摘要、权限和 source SHA manifest。根 Compose 只消费已构建
+镜像，不再递归发送工作树；修改源码后须重新提交并重建候选。
 
 初始化命令排他创建 0600 主密钥、Bootstrap Token、Qdrant API Key 与配置。
 先把 `rag_secrets` 卷和主密钥单独备份，再用下面的命令在当前终端读取一次
