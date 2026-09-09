@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, api, readSseResponse, setBrowserCsrfToken } from "./client";
+import {
+  ApiError,
+  api,
+  contentDispositionFilename,
+  readSseResponse,
+  setBrowserCsrfToken,
+} from "./client";
 
 afterEach(() => {
   setBrowserCsrfToken("");
@@ -8,6 +14,30 @@ afterEach(() => {
 });
 
 describe("API 客户端契约", () => {
+  it("下载文件名只接受服务端安全 basename", () => {
+    expect(
+      contentDispositionFilename(
+        "attachment; filename*=UTF-8''trace_bundle-1.zip",
+        "fallback.zip",
+      ),
+    ).toBe("trace_bundle-1.zip");
+    expect(
+      contentDispositionFilename(
+        'attachment; filename="../../secret.txt"',
+        "fallback.zip",
+      ),
+    ).toBe("fallback.zip");
+    expect(
+      contentDispositionFilename(
+        "attachment; filename*=UTF-8''bad%2Fname.zip",
+        "fallback.zip",
+      ),
+    ).toBe("fallback.zip");
+    expect(contentDispositionFilename(null, "../bad.bin")).toBe(
+      "download.bin",
+    );
+  });
+
   it("删除正确处理204空响应与202接受状态，并携带会话CSRF", async () => {
     setBrowserCsrfToken("synthetic-csrf");
     const fetchMock = vi

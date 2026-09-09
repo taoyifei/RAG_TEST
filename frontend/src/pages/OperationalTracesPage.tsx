@@ -12,6 +12,7 @@ import {
 } from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
 import { useConsole } from "../state/console-context";
+import { downloadFile } from "../utils/download";
 
 const PAGE_SIZE = 30;
 const INITIAL_SPAN_LIMIT = 120;
@@ -39,6 +40,7 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
   const [status, setStatus] = useState("");
   const [captureMode, setCaptureMode] = useState<TraceMode | "">("");
   const [complete, setComplete] = useState("");
+  const [feedback, setFeedback] = useState("");
   const [identity, setIdentity] = useState(
     deepLink.trace_id ??
       deepLink.job_id ??
@@ -59,6 +61,9 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [error, setError] = useState<unknown>();
   const [loading, setLoading] = useState(true);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [pruneBusy, setPruneBusy] = useState(false);
+  const [pruneStatus, setPruneStatus] = useState<string>();
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -96,7 +101,9 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
 
   function search(event: FormEvent) {
     event.preventDefault();
-    const traceIdentity = identity.startsWith("trace_") ? identity : undefined;
+    const traceIdentity = /^(?:trace_)?[0-9a-f]{32}$/.test(identity)
+      ? identity
+      : undefined;
     const jobIdentity = identity.startsWith("job_") ? identity : undefined;
     const documentIdentity = identity.startsWith("doc_") ? identity : undefined;
     const revisionIdentity = identity.startsWith("irev_")
@@ -119,6 +126,12 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
         complete === "complete"
           ? true
           : complete === "incomplete"
+            ? false
+            : undefined,
+      feedback_useful:
+        feedback === "useful"
+          ? true
+          : feedback === "not-useful"
             ? false
             : undefined,
       trace_id: traceIdentity,
@@ -147,11 +160,39 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
 
   async function exportSelected() {
     if (!checked.size) return;
+    setExportBusy(true);
+    setError(undefined);
     try {
-      const blob = await api.exportOperationalTraces([...checked].sort());
-      download(blob, "operational-traces.zip");
+      downloadFile(
+        await api.exportOperationalTraces([...checked].sort()),
+      );
     } catch (reason) {
       setError(reason);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function pruneExpired() {
+    if (
+      !window.confirm(
+        "只会清理已到期且不在导出中的 Operational Trace。确认继续吗？",
+      )
+    ) {
+      return;
+    }
+    setPruneBusy(true);
+    setError(undefined);
+    setPruneStatus(undefined);
+    try {
+      const value = await api.pruneOperationalTraces();
+      setPruneStatus(`已清理 ${value.pruned} 条到期 Operational Trace。`);
+      setChecked(new Set());
+      setReload((current) => current + 1);
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPruneBusy(false);
     }
   }
 
@@ -162,24 +203,33 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
           <h2>Operational Trace</h2>
           <p>技术诊断只显示安全身份、时序、候选决定与显式调试制品。</p>
         </div>
-        <button
-          className="secondary"
-          onClick={() => {
-            setLoading(true);
-            setReload((value) => value + 1);
-          }}
-        >
-          <RefreshCw aria-hidden="true" size={17} />
-          刷新
-        </button>
+        <div className="row-actions">
+          <button
+            className="secondary"
+            disabled={pruneBusy}
+            onClick={() => void pruneExpired()}
+          >
+            {pruneBusy ? "清理中…" : "清理已到期 Trace"}
+          </button>
+          <button
+            className="secondary"
+            onClick={() => {
+              setLoading(true);
+              setReload((value) => value + 1);
+            }}
+          >
+            <RefreshCw aria-hidden="true" size={17} />
+            刷新
+          </button>
+        </div>
       </div>
       <form className="panel trace-filters" onSubmit={search}>
         <label>
-          Trace 或 Job ID
+          Trace、Job、Document 或 Revision ID
           <input
             value={identity}
             onChange={(event) => setIdentity(event.target.value.trim())}
-            placeholder="trace_… / job_… / doc_… / irev_…"
+            placeholder="trace_32hex / 旧 32hex / job_… / doc_… / irev_…"
           />
         </label>
         <label>
@@ -238,9 +288,21 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
             <option value="incomplete">不完整</option>
           </select>
         </label>
+        <label>
+          用户反馈
+          <select
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+          >
+            <option value="">全部</option>
+            <option value="useful">有用</option>
+            <option value="not-useful">无用</option>
+          </select>
+        </label>
         <button className="primary">筛选 Trace</button>
       </form>
       {error !== undefined && <ErrorPanel error={error} />}
+      {pruneStatus && <p role="status">{pruneStatus}</p>}
       {loading && <p role="status">正在读取 Trace…</p>}
       {page && (
         <>
@@ -267,11 +329,33 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
               下一页
             </button>
             <button
+              type="button"
+              disabled={!page.items.length}
+              onClick={() =>
+                setChecked(
+                  new Set([
+                    ...checked,
+                    ...page.items.map((item) => item.trace_id),
+                  ]),
+                )
+              }
+            >
+              选择本页
+            </button>
+            <button
+              type="button"
               disabled={!checked.size}
+              onClick={() => setChecked(new Set())}
+            >
+              清空选择
+            </button>
+            <span role="status">已选择 {checked.size} 条</span>
+            <button
+              disabled={!checked.size || exportBusy}
               onClick={() => void exportSelected()}
             >
               <Download aria-hidden="true" size={16} />
-              导出已选（{checked.size}）
+              {exportBusy ? "正在导出…" : "导出已选技术 Trace"}
             </button>
           </div>
           <div className="table-wrap">
@@ -312,6 +396,12 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
                         {item.kind === "ingestion" ? "入库" : "查询"}
                       </strong>
                       <StatusBadge value={item.status} />
+                      {item.feedback_useful !== null &&
+                        item.feedback_useful !== undefined && (
+                          <small>
+                            用户反馈：{item.feedback_useful ? "有用" : "无用"}
+                          </small>
+                        )}
                     </td>
                     <td>
                       {item.duration_ms == null
@@ -381,6 +471,7 @@ function TraceDetailPanel({
   const [stage, setStage] = useState("");
   const [artifact, setArtifact] = useState<OperationalTraceArtifactContent>();
   const [artifactBusy, setArtifactBusy] = useState<string>();
+  const [exportBusy, setExportBusy] = useState(false);
   const decisions = detail.candidate_decisions.filter(
     (item) => !stage || item.stage === stage,
   );
@@ -406,11 +497,13 @@ function TraceDetailPanel({
   }
 
   async function exportOne() {
+    setExportBusy(true);
     try {
-      const blob = await api.exportOperationalTrace(detail.trace.trace_id);
-      download(blob, detail.trace.trace_id + ".json");
+      downloadFile(await api.exportOperationalTrace(detail.trace.trace_id));
     } catch (reason) {
       onError(reason);
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -426,9 +519,9 @@ function TraceDetailPanel({
           </p>
         </div>
         <div className="row-actions">
-          <button onClick={() => void exportOne()}>
+          <button disabled={exportBusy} onClick={() => void exportOne()}>
             <Download aria-hidden="true" size={16} />
-            导出 JSON
+            {exportBusy ? "导出中…" : "导出 JSON"}
           </button>
           <button onClick={onClose}>关闭详情</button>
         </div>
@@ -730,15 +823,6 @@ function formatArtifact(value: OperationalTraceArtifactContent): string {
     }
   }
   return value.body;
-}
-
-function download(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 function openRelated(

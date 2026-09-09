@@ -64,9 +64,16 @@ export interface HistoryEntry {
 
 export interface HistoryPageResult extends Page<HistoryEntry> {
   total: number;
+  total_is_exact?: boolean;
   body_enabled: boolean;
   retention_days: number;
   storage: string;
+  search_complete?: boolean;
+  scanned_count?: number;
+  next_cursor?: string | null;
+  truncation_reason?: "CANDIDATE_LIMIT" | "TIME_LIMIT";
+  candidate_scan_limit?: number;
+  time_scan_limit_ms?: number;
 }
 
 export interface HistoryFilters {
@@ -106,6 +113,7 @@ export interface OperationalTraceRoot {
   dropped_span_count: number;
   dropped_decision_count: number;
   writer_queue_high_water: number;
+  feedback_useful?: boolean | null;
 }
 
 export interface OperationalTraceSpan {
@@ -193,6 +201,21 @@ export interface OperationalTraceArtifactContent {
   mediaType: string;
   sha256: string;
   body: string;
+}
+
+export interface DownloadFile {
+  blob: Blob;
+  filename: string;
+}
+
+export interface ProductFeedback {
+  trace_id: string;
+  project_id: string;
+  knowledge_base_id: string;
+  useful: boolean;
+  reason_code?: string | null;
+  projection_state: "PENDING" | "APPLIED" | "NOT_APPLICABLE";
+  updated_at: string;
 }
 
 export interface Tokens {
@@ -471,6 +494,58 @@ async function rawRequest(
     throw new ApiError(response.status, payload);
   }
   return response;
+}
+
+async function downloadResponse(
+  response: Response,
+  fallbackFilename: string,
+): Promise<DownloadFile> {
+  return {
+    blob: await response.blob(),
+    filename: contentDispositionFilename(
+      response.headers.get("Content-Disposition"),
+      fallbackFilename,
+    ),
+  };
+}
+
+export function contentDispositionFilename(
+  header: string | null,
+  fallbackFilename: string,
+): string {
+  const fallback = safeFilename(fallbackFilename) ?? "download.bin";
+  if (!header) return fallback;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  const quoted = /filename="([^"]+)"/i.exec(header)?.[1];
+  const plain = /filename=([^;\s]+)/i.exec(header)?.[1];
+  let candidate = encoded ?? quoted ?? plain;
+  if (!candidate) return fallback;
+  if (encoded) {
+    try {
+      candidate = decodeURIComponent(candidate);
+    } catch {
+      return fallback;
+    }
+  }
+  return safeFilename(candidate) ?? fallback;
+}
+
+function safeFilename(value: string): string | undefined {
+  if (
+    value !== value.trim() ||
+    value === "." ||
+    value === ".." ||
+    value.length > 180 ||
+    /[\\/]/.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    }) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
 }
 
 export async function readSseResponse(
@@ -929,6 +1004,31 @@ export const api = {
     ),
   clearHistory: () =>
     request<void>("/api/v1/history", "", { method: "DELETE" }),
+  exportHistoryTrace: async (
+    traceId: string,
+    includeHistoryBody: boolean,
+  ) => {
+    const params = new URLSearchParams({
+      include_history_body: String(includeHistoryBody),
+    });
+    const response = await rawRequest(
+      `/api/v1/admin/history-traces/${encodeURIComponent(traceId)}/export?${params}`,
+    );
+    return downloadResponse(response, `${traceId}-support.zip`);
+  },
+  exportHistoryTraces: async (
+    traceIds: string[],
+    includeHistoryBody: boolean,
+  ) => {
+    const response = await rawRequest(
+      "/api/v1/admin/history-traces:export",
+      jsonInit("POST", {
+        trace_ids: traceIds,
+        include_history_body: includeHistoryBody,
+      }),
+    );
+    return downloadResponse(response, "history-traces-support.zip");
+  },
   listOperationalTraces: (
     filters: OperationalTraceFilters = {},
     signal?: AbortSignal,
@@ -969,15 +1069,21 @@ export const api = {
     const response = await rawRequest(
       `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}/export`,
     );
-    return response.blob();
+    return downloadResponse(response, `${traceId}.json`);
   },
   exportOperationalTraces: async (traceIds: string[]) => {
     const response = await rawRequest(
       "/api/v1/admin/operational-traces:export",
       jsonInit("POST", { trace_ids: traceIds }),
     );
-    return response.blob();
+    return downloadResponse(response, "operational-traces.zip");
   },
+  pruneOperationalTraces: () =>
+    request<{ pruned: number }>(
+      "/api/v1/admin/operational-traces:prune",
+      "",
+      { method: "POST" },
+    ),
   readEvidenceSource: async (
     token: string,
     projectId: string,
@@ -1082,6 +1188,7 @@ export const api = {
     signal?: AbortSignal,
     includeRelatedContent = false,
     historyMode?: "full" | "metadata_only",
+    conversationId?: string,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:search`,
@@ -1093,6 +1200,7 @@ export const api = {
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
           ...(historyMode ? { history_mode: historyMode } : {}),
+          ...(conversationId ? { conversation_id: conversationId } : {}),
         }),
         signal,
       },
@@ -1105,6 +1213,7 @@ export const api = {
     signal?: AbortSignal,
     includeRelatedContent = false,
     historyMode?: "full" | "metadata_only",
+    conversationId?: string,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
@@ -1116,6 +1225,7 @@ export const api = {
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
           ...(historyMode ? { history_mode: historyMode } : {}),
+          ...(conversationId ? { conversation_id: conversationId } : {}),
         }),
         signal,
       },
@@ -1129,6 +1239,7 @@ export const api = {
     includeRelatedContent = false,
     historyMode?: "full" | "metadata_only",
     handlers: AnswerStreamHandlers = {},
+    conversationId?: string,
   ) => {
     void token;
     const init = jsonInit("POST", {
@@ -1138,6 +1249,7 @@ export const api = {
       stream_protocol: "rag-answer-sse-v1",
       ...(includeRelatedContent ? { include_related_content: true } : {}),
       ...(historyMode ? { history_mode: historyMode } : {}),
+      ...(conversationId ? { conversation_id: conversationId } : {}),
     });
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
@@ -1154,6 +1266,47 @@ export const api = {
     request<RetrievalDiagnostics>(
       `/api/v1/admin/retrieval-diagnostics/${traceId}`,
       token,
+    ),
+  getFeedback: (
+    projectId: string,
+    kbId: string,
+    traceId: string,
+    signal?: AbortSignal,
+  ) =>
+    request<{ feedback: ProductFeedback | null }>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/queries/${encodeURIComponent(traceId)}/feedback`,
+      "",
+      { signal },
+    ),
+  putFeedback: (
+    projectId: string,
+    kbId: string,
+    traceId: string,
+    useful: boolean,
+    reasonCode?: string,
+  ) =>
+    request<ProductFeedback>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/queries/${encodeURIComponent(traceId)}/feedback`,
+      "",
+      jsonInit("PUT", {
+        useful,
+        ...(reasonCode ? { reason_code: reasonCode } : {}),
+      }),
+    ),
+  clearConversation: (
+    projectId: string,
+    kbId: string,
+    conversationId: string,
+  ) =>
+    request<{
+      conversation_id: string;
+      owner_id: string;
+      deleted: boolean;
+      deleted_turns: number;
+    }>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/conversations/${encodeURIComponent(conversationId)}`,
+      "",
+      { method: "DELETE" },
     ),
   system: (token: string) =>
     request<SystemStatus>("/api/v1/system/components", token),

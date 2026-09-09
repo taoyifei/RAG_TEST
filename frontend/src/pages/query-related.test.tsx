@@ -32,6 +32,9 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
     cache_hit: false,
     cache_key: "sha256:synthetic",
     result_origin: "fresh",
+    singleflight_role: "none",
+    singleflight_key_hash: null,
+    singleflight_wait_ms: 0,
     generation_called_this_request: false,
     rewrite_called_this_request: false,
     confidence: {
@@ -93,6 +96,7 @@ beforeEach(() => {
   consoleState.scope.kbId = "kb_a";
   consoleState.tokens.admin = "session";
   consoleState.tokens.query = "session";
+  vi.spyOn(api, "getFeedback").mockResolvedValue({ feedback: null });
 });
 
 it("拒答相关原文独立展示、纯文本转义，查看原文重新授权", async () => {
@@ -364,4 +368,55 @@ it("准确区分本次模型生成、缓存、预算回退、无授权与澄清"
   expect(await screen.findByText(/未获本次资料出网授权/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "执行" }));
   expect(await screen.findByText(/请补充对象、范围或所问关系/)).toBeVisible();
+});
+
+it("会话 ID 随请求传递，支持新建、清空和有限反馈", async () => {
+  const answer = vi.spyOn(api, "answerStream").mockResolvedValue(
+    response({
+      status: "ANSWERABLE",
+      answer: "已确认内容",
+      related_contents: [],
+    }),
+  );
+  const clear = vi.spyOn(api, "clearConversation").mockResolvedValue({
+    conversation_id: "synthetic",
+    owner_id: "owner",
+    deleted: true,
+    deleted_turns: 2,
+  });
+  const putFeedback = vi.spyOn(api, "putFeedback").mockResolvedValue({
+    trace_id: "trace_a",
+    project_id: "prj_a",
+    knowledge_base_id: "kb_a",
+    useful: false,
+    reason_code: "INCOMPLETE",
+    projection_state: "APPLIED",
+    updated_at: "2026-09-09T00:00:00Z",
+  });
+  render(<QueryPage mode="answer" />);
+  const conversation = screen.getByRole("region", { name: "当前会话" });
+  const firstId =
+    within(conversation).getByText(/^conversation-/).textContent ?? "";
+  const user = await submit();
+  expect(answer.mock.calls[0][8]).toBe(firstId);
+
+  await user.selectOptions(screen.getByLabelText("无用原因"), "INCOMPLETE");
+  await user.click(screen.getByRole("button", { name: "无用" }));
+  expect(putFeedback).toHaveBeenCalledWith(
+    "prj_a",
+    "kb_a",
+    "trace_a",
+    false,
+    "INCOMPLETE",
+  );
+  expect(await screen.findByText(/当前反馈：无用 · INCOMPLETE/)).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "新会话" }));
+  const secondId =
+    within(conversation).getByText(/^conversation-/).textContent ?? "";
+  expect(secondId).not.toBe(firstId);
+  expect(screen.getByText(/已开始新会话/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "清空当前会话" }));
+  expect(clear).toHaveBeenCalledWith("prj_a", "kb_a", secondId);
+  expect(await screen.findByText("已清空当前会话的 2 轮。")).toBeVisible();
 });

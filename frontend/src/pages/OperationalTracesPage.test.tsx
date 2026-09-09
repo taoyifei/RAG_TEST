@@ -11,6 +11,7 @@ import { OperationalTracesPage } from "./OperationalTracesPage";
 
 vi.mock("../state/console-context", () => ({
   useConsole: () => ({
+    setRevision: vi.fn(),
     scope: {
       projectId: "prj_test",
       kbId: "kb_test",
@@ -184,4 +185,83 @@ it("Job 深链只传稳定 job_id，不要求先知道 Trace ID", async () => {
       expect.any(AbortSignal),
     ),
   );
+});
+
+it("旧 32hex 深链可直接读取详情并精确筛选", async () => {
+  const legacyId = "a".repeat(32);
+  window.history.replaceState(
+    {},
+    "",
+    `/operational-traces?trace_id=${legacyId}`,
+  );
+  render(<OperationalTracesPage />);
+
+  await waitFor(() =>
+    expect(api.listOperationalTraces).toHaveBeenCalledWith(
+      expect.objectContaining({ trace_id: legacyId }),
+      expect.any(AbortSignal),
+    ),
+  );
+  await waitFor(() =>
+    expect(api.operationalTraceDetail).toHaveBeenCalledWith(
+      legacyId,
+      expect.any(AbortSignal),
+    ),
+  );
+  expect(
+    await screen.findByRole("region", { name: "Operational Trace 详情" }),
+  ).toBeVisible();
+});
+
+it("反馈筛选和选择计数进入 API，批量导出失败后解除 busy", async () => {
+  const user = userEvent.setup();
+  let rejectExport!: (error: Error) => void;
+  vi.spyOn(api, "exportOperationalTraces").mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectExport = reject;
+      }),
+  );
+  render(<OperationalTracesPage />);
+  await screen.findAllByText(root.trace_id);
+  await user.selectOptions(screen.getByLabelText("用户反馈"), "not-useful");
+  await user.click(screen.getByRole("button", { name: "筛选 Trace" }));
+  await waitFor(() =>
+    expect(api.listOperationalTraces).toHaveBeenLastCalledWith(
+      expect.objectContaining({ feedback_useful: false }),
+      expect.any(AbortSignal),
+    ),
+  );
+  await user.click(screen.getByRole("button", { name: "选择本页" }));
+  expect(screen.getByText("已选择 1 条")).toBeVisible();
+  await user.click(
+    screen.getByRole("button", { name: "导出已选技术 Trace" }),
+  );
+  expect(screen.getByRole("button", { name: "正在导出…" })).toBeDisabled();
+  rejectExport(new Error("合成批量导出失败"));
+  expect(await screen.findByText("合成批量导出失败")).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "导出已选技术 Trace" }),
+  ).toBeEnabled();
+});
+
+it("到期 prune 需确认，失败后解除 busy 且可重试", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  let rejectPrune!: (error: Error) => void;
+  vi.spyOn(api, "pruneOperationalTraces").mockImplementation(
+    () =>
+      new Promise((_resolve, reject) => {
+        rejectPrune = reject;
+      }),
+  );
+  render(<OperationalTracesPage />);
+  await screen.findAllByText(root.trace_id);
+  await user.click(screen.getByRole("button", { name: "清理已到期 Trace" }));
+  expect(screen.getByRole("button", { name: "清理中…" })).toBeDisabled();
+  rejectPrune(new Error("合成 prune 失败"));
+  expect(await screen.findByText("合成 prune 失败")).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "清理已到期 Trace" }),
+  ).toBeEnabled();
 });

@@ -776,7 +776,7 @@ button,
 input,
 select,
 textarea {
-  min-height: 40px;
+  min-height: 44px;
   font: inherit;
 }
 
@@ -1066,6 +1066,25 @@ label:has(input[type="checkbox"]) {
 .history-list article {
   align-items: start;
 }
+.history-select {
+  display: grid;
+  min-width: 44px;
+  min-height: 44px;
+  place-items: center;
+}
+.history-select input,
+.sensitive-export-choice input {
+  width: 20px;
+  min-height: 20px;
+}
+.sensitive-export-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.modal > label.sensitive-export-choice {
+  display: flex;
+}
 .history-summary {
   white-space: pre-line;
   overflow-wrap: anywhere;
@@ -1189,6 +1208,29 @@ label:has(input[type="checkbox"]) {
 }
 .query-options input {
   width: auto;
+}
+.conversation-controls,
+.query-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.conversation-controls > div:first-child,
+.query-feedback > div:first-child {
+  display: grid;
+  min-width: min(100%, 320px);
+  gap: 6px;
+}
+.query-feedback {
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.query-feedback label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
 }
 .scope-card {
   color: #344054;

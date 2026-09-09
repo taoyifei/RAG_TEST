@@ -7,6 +7,7 @@ import {
 } from "../api/client";
 import { EmptyState, ErrorPanel, Modal, StatusBadge } from "../components/ui";
 import { HistoryTrace, historyTime } from "../components/HistoryTrace";
+import { HistorySupportDownload } from "../components/HistorySupportDownload";
 import { useConsole } from "../state/console-context";
 
 const PAGE_SIZE = 20;
@@ -43,6 +44,7 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
   });
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [reload, setReload] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
@@ -87,6 +89,7 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
     setLoading(true);
     setError(undefined);
     setTraceId(undefined);
+    setChecked(new Set());
     setFilters({
       project_id: scope.projectId,
       knowledge_base_id: kbId,
@@ -111,6 +114,7 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
       await api.clearHistory();
       setClearOpen(false);
       setTraceId(undefined);
+      setChecked(new Set());
       turn(0);
       setReload((value) => value + 1);
     } catch (reason) {
@@ -209,11 +213,14 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
               上一页
             </button>
             <span>
-              共 {page.total} 条 · 第 {Math.floor(page.offset / PAGE_SIZE) + 1}{" "}
-              页
+              {page.total_is_exact === false ? "当前找到" : "共"} {page.total}{" "}
+              条 · 第 {Math.floor(page.offset / PAGE_SIZE) + 1} 页
             </span>
             <button
-              disabled={page.offset + page.items.length >= page.total}
+              disabled={
+                page.search_complete === false ||
+                page.offset + page.items.length >= page.total
+              }
               onClick={() => turn(page.offset + PAGE_SIZE)}
             >
               下一页
@@ -226,10 +233,58 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
             >
               刷新历史
             </button>
+            <button
+              type="button"
+              disabled={!page.items.length}
+              onClick={() =>
+                setChecked(
+                  new Set([
+                    ...checked,
+                    ...page.items.map((item) => item.trace_id),
+                  ]),
+                )
+              }
+            >
+              选择本页
+            </button>
+            <button
+              type="button"
+              disabled={!checked.size}
+              onClick={() => setChecked(new Set())}
+            >
+              清空选择
+            </button>
+            <span role="status">已选择 {checked.size} 条</span>
+            <HistorySupportDownload
+              traceIds={[...checked].sort()}
+              disabled={!checked.size}
+            >
+              下载已选支持包
+            </HistorySupportDownload>
           </div>
+          {page.search_complete === false && (
+            <p role="status">
+              关键词搜索已达到有界扫描上限，本次扫描{" "}
+              {page.scanned_count ?? 0} 条，当前结果不是全量；请缩小时间或
+              知识库范围后继续。
+            </p>
+          )}
           <div className="card-list history-list">
             {page.items.map((item) => (
               <article key={item.trace_id}>
+                <label className="history-select">
+                  <input
+                    type="checkbox"
+                    checked={checked.has(item.trace_id)}
+                    onChange={(event) => {
+                      const next = new Set(checked);
+                      if (event.target.checked) next.add(item.trace_id);
+                      else next.delete(item.trace_id);
+                      setChecked(next);
+                    }}
+                  />
+                  <span className="sr-only">选择 {item.trace_id}</span>
+                </label>
                 <div className="grow">
                   <h3>
                     {item.body_available
@@ -259,6 +314,9 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
                 <button onClick={() => setTraceId(item.trace_id)}>
                   查看详情与过程
                 </button>
+                <HistorySupportDownload traceIds={[item.trace_id]}>
+                  下载本条支持包
+                </HistorySupportDownload>
                 {go && (
                   <button
                     className="secondary"
@@ -299,8 +357,9 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
           onClose={() => !clearing && setClearOpen(false)}
         >
           <p>
-            将删除本机所有项目和知识库的问答历史及
-            Trace，无法撤销。源文档与索引保留。
+            将删除本机所有项目和知识库的问答历史及旧平面事件，无法撤销。
+            独立 Operational Trace、源文档与索引均保留；技术 Trace
+            只按其到期策略在管理员页面清理。
           </p>
           <button
             className="danger"

@@ -19,6 +19,14 @@ import {
 import { DiagnosticsView, HistoryTrace } from "../components/HistoryTrace";
 import { useConsole } from "../state/console-context";
 import { isOcrEvidence, OcrEvidenceSource } from "../components/DocumentImages";
+import { QueryFeedback } from "../components/QueryFeedback";
+
+function newConversationId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return `conversation-${crypto.randomUUID()}`;
+  }
+  return `conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
 
 export function QueryPage({
   mode,
@@ -42,6 +50,9 @@ export function QueryPage({
 }
 
 function answerDeliveryMessage(result: QueryResponse): string {
+  if (result.result_origin === "singleflight") {
+    return "本次复用了同一主体、权限、索引版本和会话下的等价在途计算；历史与 Trace 仍独立记录。";
+  }
   if (result.result_origin === "cache" || result.cache_hit) {
     return "本次结果来自查询缓存；本次请求没有调用回答模型或问题改写模型。";
   }
@@ -100,6 +111,10 @@ function ScopedQueryPage({
   const [historyTrace, setHistoryTrace] = useState<string>();
   const [streamClaims, setStreamClaims] = useState<StreamedAnswerClaim[]>([]);
   const [streamStage, setStreamStage] = useState<string>();
+  const [conversationId, setConversationId] = useState(newConversationId);
+  const [conversationBusy, setConversationBusy] = useState(false);
+  const [conversationStatus, setConversationStatus] = useState<string>();
+  const [conversationError, setConversationError] = useState<unknown>();
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const requestGeneration = useRef(0);
   const sourceRequest = useRef<AbortController | undefined>(undefined);
@@ -170,6 +185,7 @@ function ScopedQueryPage({
                   setStreamClaims((current) => [...current, claim]);
                 },
               },
+              conversationId,
             );
       if (controller.signal.aborted) return;
       setResult(response);
@@ -204,6 +220,41 @@ function ScopedQueryPage({
     setStreamStage("cancelled");
     setError(new Error("流式查询已停止；暂存内容不是最终答案。"));
   }
+  function startNewConversation() {
+    activeRequest.current?.abort();
+    setConversationId(newConversationId());
+    setConversationStatus("已开始新会话；先前会话仍按保留策略保存。");
+    setConversationError(undefined);
+    setResult(undefined);
+    setStreamClaims([]);
+    setStreamStage(undefined);
+    setHistoryTrace(undefined);
+  }
+  async function clearConversation() {
+    activeRequest.current?.abort();
+    setConversationBusy(true);
+    setConversationError(undefined);
+    try {
+      const cleared = await api.clearConversation(
+        scope.projectId,
+        scope.kbId,
+        conversationId,
+      );
+      setConversationStatus(
+        cleared.deleted
+          ? `已清空当前会话的 ${cleared.deleted_turns} 轮。`
+          : "当前会话没有已保存轮次。",
+      );
+      setResult(undefined);
+      setStreamClaims([]);
+      setStreamStage(undefined);
+      setHistoryTrace(undefined);
+    } catch (reason) {
+      setConversationError(reason);
+    } finally {
+      setConversationBusy(false);
+    }
+  }
   async function openRelated(item: RelatedContent) {
     sourceRequest.current?.abort();
     const controller = new AbortController();
@@ -237,6 +288,37 @@ function ScopedQueryPage({
           </p>
         </div>
       </div>
+      {mode === "answer" && (
+        <section className="panel conversation-controls" aria-label="当前会话">
+          <div>
+            <span className="eyebrow">当前会话</span>
+            <code>{conversationId}</code>
+            <small>
+              仅保存有界问题和已验证事实摘要；切换知识库或退出后不会串用。
+            </small>
+          </div>
+          <div className="row-actions">
+            <button
+              type="button"
+              disabled={busy || conversationBusy}
+              onClick={startNewConversation}
+            >
+              新会话
+            </button>
+            <button
+              type="button"
+              disabled={busy || conversationBusy}
+              onClick={() => void clearConversation()}
+            >
+              {conversationBusy ? "清空中…" : "清空当前会话"}
+            </button>
+          </div>
+          {conversationStatus && <p role="status">{conversationStatus}</p>}
+          {conversationError !== undefined && (
+            <ErrorPanel error={conversationError} />
+          )}
+        </section>
+      )}
       <form className="query-box" onSubmit={submit}>
         <label htmlFor={`${mode}-query`}>查询文本</label>
         <div>
@@ -245,6 +327,7 @@ function ScopedQueryPage({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="输入需要从资料中查证的问题"
+            maxLength={mode === "answer" ? 2000 : 8000}
             required
           />
           <button className="primary" type="submit" disabled={busy}>
@@ -319,6 +402,12 @@ function ScopedQueryPage({
             </small>
           </div>
           <p role="status">{answerDeliveryMessage(result)}</p>
+          <QueryFeedback
+            key={result.trace_id}
+            projectId={scope.projectId}
+            kbId={scope.kbId}
+            traceId={result.trace_id}
+          />
           <details className="panel">
             <summary>技术统计与检索状态</summary>
             <div className="metric-grid">
