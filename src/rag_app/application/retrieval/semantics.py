@@ -37,7 +37,8 @@ _ENUMERATION_QUESTION = re.compile(
     + _NUMERAL
     + r")种|哪(?:几|"
     + _NUMERAL
-    + r")种|分别(?:是|指)?(?:什么|啥)|请列举|请列出|列出来|列一下"
+    + r")种|分别(?:是|指)?(?:什么|啥)|"
+    r"(?:具体)?(?:是)?怎么(?:说|表述)(?:的)?|请列举|请列出|列出来|列一下"
 )
 _PROCEDURE_QUESTION = re.compile(
     r"是什么|是啥|(?:都)?有哪些|有哪(?:几|"
@@ -59,6 +60,9 @@ _TRAILING_TARGET_SYNTAX = re.compile(
 _TRAILING_PARTICLES = re.compile(
     r"(?:(?:嘛|吧)[，,]|[呢吗呀啊？?。！!，,\s])+$"
 )
+_SOURCE_QUALIFIED_DUTY = re.compile(
+    r"^(?P<source>.+?(?:规范|文档|制度|手册))(?:里|中)(?P<target>.+)$"
+)
 
 
 def parse_query_semantics(query: str) -> QuerySemantics:
@@ -76,10 +80,12 @@ def parse_query_semantics(query: str) -> QuerySemantics:
     if duty is not None and not _CONDITION_OR_ORDER.search(
         normalized[: duty.start()]
     ):
-        target = _clean_target(normalized[: duty.start()], duty=True)
+        prefix = normalized[: duty.start()]
+        target = _clean_target(prefix, duty=True)
         if target:
             return QuerySemantics(
                 target=target,
+                source_qualifier=_source_qualifier(prefix),
                 relation="职责",
                 answer_type=RequestedAnswerType.DUTIES,
                 source="RULE",
@@ -180,6 +186,16 @@ def _clean_target(value: str, *, duty: bool) -> str:
         target = re.split(r"(?:规范|文档|制度|手册)(?:里|中)", target)[-1]
         target = re.sub(r"(?:的)?(?:主要|核心|具体)$", "", target).strip()
     return target
+
+
+def _source_qualifier(value: str) -> str | None:
+    """提取“某规范中/里”的动态来源限定，不维护文档名白名单。"""
+    candidate = _LEADING_REQUEST.sub("", value.strip()).strip()
+    match = _SOURCE_QUALIFIED_DUTY.fullmatch(candidate)
+    if match is None:
+        return None
+    qualifier = match["source"].strip(" 的")
+    return qualifier or None
 
 
 def _number_value(value: str) -> int | None:

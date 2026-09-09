@@ -65,6 +65,7 @@ class QuerySemantics(FrozenModel):
     """检索、证据和回答共同消费的类型化问题语义。"""
 
     target: str | None = Field(default=None, repr=False)
+    source_qualifier: str | None = Field(default=None, repr=False)
     relation: str | None = None
     answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
     expected_count: StrictInt | None = Field(default=None, gt=0)

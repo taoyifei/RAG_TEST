@@ -48,8 +48,13 @@ def question_search_terms(
             RequestedAnswerType.PROCEDURE,
         }
     ):
+        source = (
+            ""
+            if semantics.source_qualifier is None
+            else semantics.source_qualifier + " "
+        )
         return (
-            semantics.target
+            source + semantics.target
             if semantics.answer_type is RequestedAnswerType.DUTIES
             else f"{semantics.target} {semantics.relation}"
         )

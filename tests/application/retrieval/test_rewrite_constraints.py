@@ -124,6 +124,27 @@ def test_descriptive_rewrite_preserves_entity_names(
     assert rewrite_constraint_reason(_request(before), after) is None
 
 
+def test_duty_rewrite_preserves_dynamic_source_qualifier() -> None:
+    before = "蓝熊规范中项目经理具体负责哪些工作"
+
+    assert (
+        rewrite_constraint_reason(
+            _request(before), "蓝熊规范中项目经理的职责是什么"
+        )
+        is None
+    )
+    assert (
+        rewrite_constraint_reason(
+            _request(before), "白鹭规范中项目经理的职责是什么"
+        )
+        == "REWRITE_SCOPE_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(_request(before), "项目经理的职责是什么")
+        == "REWRITE_SCOPE_CHANGED"
+    )
+
+
 @pytest.mark.parametrize(
     ("before", "after"),
     (

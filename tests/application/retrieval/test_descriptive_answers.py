@@ -16,6 +16,7 @@ from rag_app.core.models import (
 )
 from tests.adapters.chunkers.test_docx_structural import _chunk
 from tests.adapters.parsers.docx.fixtures import build_package, parse_package
+from tests.adapters.parsers.docx.fixtures import context as parse_context
 from tests.application.retrieval.test_evidence_table_coordinates import _context
 
 _POLICY = RetrievalPolicy(
@@ -36,11 +37,22 @@ def _list_paragraph(text: str) -> str:
     )
 
 
-def _candidates(blocks: str) -> tuple[RankedChunk, ...]:
-    ir = parse_package(build_package(blocks)).document_ir
+def _candidates(
+    blocks: str,
+    *,
+    display_name: str = "合成制度.docx",
+    document_id: str | None = None,
+) -> tuple[RankedChunk, ...]:
+    ir = parse_package(
+        build_package(blocks),
+        name=display_name,
+        parse_context=parse_context(
+            document_id=document_id, display_name=display_name
+        ),
+    ).document_ir
     return tuple(
         RankedChunk(
-            hydrated=HydratedChunk(chunk=chunk, display_name="合成制度.docx"),
+            hydrated=HydratedChunk(chunk=chunk, display_name=display_name),
             fusion_rank=i,
             contributions=(
                 RrfContribution(
@@ -189,6 +201,56 @@ def test_enumeration_reports_source_count_when_question_premise_differs() -> (
     assert [item.citation_text for item in evidence] == [statement]
     support = dict(evidence[0].metadata)["answer_support"]
     assert support["support_reason"] == "SOURCE_CORRECTS_COUNT_PREMISE"
+
+
+def test_source_qualifier_disambiguates_same_role_across_documents() -> None:
+    def table(duties: tuple[str, ...]) -> str:
+        return (
+            "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>"
+            "<w:tr><w:tc>"
+            + _paragraph("角色名称")
+            + "</w:tc><w:tc>"
+            + _paragraph("核心职责")
+            + "</w:tc></w:tr><w:tr><w:tc>"
+            + _paragraph("项目经理")
+            + "</w:tc><w:tc>"
+            + "".join(_paragraph(item) for item in duties)
+            + "</w:tc></w:tr></w:tbl>"
+        )
+
+    selected = ("统筹蓝熊计划。", "跟踪蓝熊风险。")
+    candidates = (
+        *_candidates(
+            table(selected),
+            display_name="蓝熊交付规范.docx",
+            document_id="doc_" + "4" * 32,
+        ),
+        *_candidates(
+            table(("统筹白鹭计划。", "跟踪白鹭风险。")),
+            display_name="白鹭研发制度.docx",
+            document_id="doc_" + "5" * 32,
+        ),
+    )
+    assembler = EvidenceAssembler()
+
+    evidence = assembler.assemble(
+        candidates,
+        _POLICY,
+        context=_context("蓝熊规范中项目经理负责什么"),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "项目经理",
+        *selected,
+    ]
+    assert not assembler.assemble(
+        candidates, _POLICY, context=_context("项目经理负责什么")
+    )
+    assert not assembler.assemble(
+        candidates,
+        _POLICY,
+        context=_context("不存在规范中项目经理负责什么"),
+    )
 
 
 def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:

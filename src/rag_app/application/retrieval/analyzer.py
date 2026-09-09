@@ -175,6 +175,10 @@ class QueryAnalyzer:
         semantics = rewritten.semantics.model_copy(
             update={
                 "constraints": original.semantics.constraints,
+                "source_qualifier": (
+                    original.semantics.source_qualifier
+                    or rewritten.semantics.source_qualifier
+                ),
                 "source": "LLM_REWRITE",
                 "reason_codes": (
                     *rewritten.semantics.reason_codes,

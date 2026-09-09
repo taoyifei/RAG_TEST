@@ -134,6 +134,8 @@ def _semantic_change_reason(
             after.ordinal,
         ):
             return "REWRITE_CONSTRAINT_CHANGED"
+        if before.source_qualifier != after.source_qualifier:
+            return "REWRITE_SCOPE_CHANGED"
         if (
             before.answer_type is not RequestedAnswerType.DUTIES
             and before.target

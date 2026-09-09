@@ -8,6 +8,7 @@ from rag_app.application.retrieval.answer_support import (
     evaluate_span_support,
 )
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
+from rag_app.application.retrieval.lexical import question_search_terms
 from rag_app.core.models import (
     KnowledgeBaseScope,
     QueryAnalysis,
@@ -157,6 +158,14 @@ def test_search_request_bounds_conversation_context() -> None:
             None,
         ),
         (
+            "蓝鹊小组的三种工作模式具体是怎么说的",
+            "蓝鹊小组",
+            "工作模式",
+            RequestedAnswerType.ENUMERATION,
+            3,
+            None,
+        ),
+        (
             "设备入库流程有哪些步骤？",
             "设备入库",
             "流程",
@@ -210,6 +219,18 @@ def test_plain_process_keywords_remain_literal_lookup() -> None:
             analysis, "青岛啤酒采购流程使用公开合成文本。"
         ).status
         is SupportStatus.SUPPORTED
+    )
+
+
+def test_duty_query_preserves_dynamic_source_qualifier() -> None:
+    analysis = _analyze("蓝熊规范中项目经理具体负责哪些工作")
+
+    assert analysis.semantics.target == "项目经理"
+    assert analysis.semantics.source_qualifier == "蓝熊规范"
+    assert analysis.semantics.answer_type is RequestedAnswerType.DUTIES
+    assert (
+        question_search_terms(analysis.normalized_query, analysis.semantics)
+        == "蓝熊规范 项目经理"
     )
 
 

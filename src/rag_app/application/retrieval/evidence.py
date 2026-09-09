@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import asdict
 
@@ -25,6 +26,7 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
 
 _MIN_TABLE_LABEL_LENGTH = 2
+_MIN_SOURCE_QUALIFIER_TERM_LENGTH = 2
 _MAX_SEMANTIC_RANK = 10
 _LIST_LEAD_IN = re.compile(
     r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
@@ -335,7 +337,11 @@ def _descriptive_table_evidence(
     request = evaluate_span_support(context.analysis, "")
     if request.answer_type != "DUTIES":
         return None
-    groups = _descriptive_table_groups(candidates, request.query_target)
+    groups = _descriptive_table_groups(
+        candidates,
+        request.query_target,
+        context.analysis.semantics.source_qualifier,
+    )
     if not groups:
         return None
     # 多个文档的同名角色不能悄悄拼成一个角色，保留明确的来源歧义。
@@ -578,14 +584,23 @@ def _list_pieces_fit(
 
 
 def _descriptive_table_groups(
-    candidates: tuple[RankedChunk, ...], target: str
+    candidates: tuple[RankedChunk, ...],
+    target: str,
+    source_qualifier: str | None,
 ) -> list[tuple[_TablePiece, ...]]:
     tables: dict[
         _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
     ] = defaultdict(lambda: defaultdict(dict))
     for candidate in candidates:
         chunk = candidate.hydrated.chunk
-        if chunk.role.value != "table" or not _regular_table_grid(chunk):
+        if (
+            chunk.role.value != "table"
+            or not _regular_table_grid(chunk)
+            or (
+                source_qualifier is not None
+                and not _source_qualifier_matches(candidate, source_qualifier)
+            )
+        ):
             continue
         for span in chunk.source_spans:
             location = _table_location(chunk, span)
@@ -634,6 +649,29 @@ def _descriptive_table_groups(
             return [()]
         groups.append(pieces)
     return groups
+
+
+def _source_qualifier_matches(
+    candidate: RankedChunk, source_qualifier: str
+) -> bool:
+    """用动态来源限定筛选文档标签；短词或歧义继续拒答。"""
+    qualifier = unicodedata.normalize("NFKC", source_qualifier).casefold()
+    chunk = candidate.hydrated.chunk
+    label = unicodedata.normalize(
+        "NFKC",
+        " ".join((candidate.hydrated.display_name, *chunk.heading_path)),
+    ).casefold()
+    if qualifier in label:
+        return True
+    core = re.sub(r"(?:规范|文档|制度|手册)$", "", qualifier).strip()
+    terms = re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", core)
+    if not terms or any(
+        len(term) < _MIN_SOURCE_QUALIFIER_TERM_LENGTH
+        and re.fullmatch(r"[\u3400-\u9fff]", term)
+        for term in terms
+    ):
+        return False
+    return all(term in label for term in terms)
 
 
 def _table_piece_order(piece: _TablePiece) -> tuple[int, int]:
