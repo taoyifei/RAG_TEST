@@ -4,6 +4,7 @@ import json
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -41,6 +42,62 @@ def test_wsl_browser_acceptance_uses_requested_candidate_server(
     assert len(calls) == 1
     assert calls[0]["P10_BASE_URL"] == "http://127.0.0.1:38119"
     assert "P10_BASE_URL/w" in calls[0]["WSLENV"]
+
+
+def test_wsl_browser_acceptance_isolates_viewport_rate_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server_commands: list[tuple[str, ...]] = []
+    waited_ports: list[int] = []
+    browser_environments: list[dict[str, str]] = []
+    servers = [Mock(), Mock()]
+
+    def start_server(command: Sequence[str], **_kwargs: object) -> Mock:
+        server_commands.append(tuple(command))
+        return servers[len(server_commands) - 1]
+
+    def browser_run(
+        command: Sequence[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        browser_environments.append(environment)
+        return subprocess.CompletedProcess(command, 0)
+
+    def wait_for_server(port: int) -> bool:
+        waited_ports.append(port)
+        return True
+
+    monkeypatch.delenv("P10_EXTERNAL_SERVER", raising=False)
+    monkeypatch.setenv("P10_BASE_URL", "http://127.0.0.1:39999")
+    monkeypatch.setattr(dev, "_run_web_script", lambda _script: 0)
+    monkeypatch.setattr(dev.shutil, "which", lambda _name: "node.exe")
+    monkeypatch.setattr(Path, "is_file", lambda _path: True)
+    monkeypatch.setattr(dev, "_windows_path", str)
+    monkeypatch.setattr(dev.subprocess, "Popen", start_server)
+    monkeypatch.setattr(dev.subprocess, "run", browser_run)
+    monkeypatch.setattr(dev, "_wait_for_p10", wait_for_server)
+
+    assert dev._web_e2e(None) == 0
+    observed_ports = [
+        command[command.index("--port") + 1] for command in server_commands
+    ]
+    assert observed_ports == [
+        "8091",
+        "8092",
+    ]
+    assert waited_ports == [8091, 8092]
+    assert len(browser_environments) == 1
+    environment = browser_environments[0]
+    assert "P10_BASE_URL" not in environment
+    assert environment["P10_DESKTOP_BASE_URL"].endswith(":8091")
+    assert environment["P10_MOBILE_BASE_URL"].endswith(":8092")
+    assert "P10_DESKTOP_BASE_URL/w" in environment["WSLENV"]
+    assert "P10_MOBILE_BASE_URL/w" in environment["WSLENV"]
+    assert all(server.terminate.call_count == 1 for server in servers)
+    assert all(
+        server.wait.call_args.kwargs == {"timeout": 10} for server in servers
+    )
 
 
 def test_check_uses_existing_offline_quality_tools() -> None:

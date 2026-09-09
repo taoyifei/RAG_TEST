@@ -414,45 +414,59 @@ def _web_e2e(profile: Path | None) -> int:
     chrome = Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
     if node is None or not chrome.is_file():
         return _run_web_script("e2e")
-    server_command = [
-        sys.executable,
-        "scripts/serve_p10.py",
-        "--port",
-        "8091",
-        "--frontend-dir",
-        "frontend/dist",
-    ]
-    if profile is not None:
-        server_command.extend(("--profile", str(profile)))
     external = os.environ.get("P10_EXTERNAL_SERVER") == "1"
-    server = (
-        None
-        if external
-        else subprocess.Popen(  # noqa: S603
-            server_command,
-            cwd=_REPOSITORY_ROOT,
-            env=_offline_environment(),
-        )
-    )
+    ports = () if external else (8091, 8092)
+    servers: list[subprocess.Popen[bytes]] = []
     try:
-        if not external and not _wait_for_p10(8091):
-            print("BLOCKED web-e2e: P10 loopback 服务未就绪。", file=sys.stderr)
+        for port in ports:
+            server_command = [
+                sys.executable,
+                "scripts/serve_p10.py",
+                "--port",
+                str(port),
+                "--frontend-dir",
+                "frontend/dist",
+            ]
+            if profile is not None:
+                server_command.extend(("--profile", str(profile)))
+            servers.append(
+                subprocess.Popen(  # noqa: S603
+                    server_command,
+                    cwd=_REPOSITORY_ROOT,
+                    env=_offline_environment(),
+                )
+            )
+        if not external and not all(_wait_for_p10(port) for port in ports):
+            print(
+                "BLOCKED web-e2e: P10 loopback 服务未就绪。",
+                file=sys.stderr,
+            )
             return 2
         environment = _offline_environment()
-        environment.update(
-            {
-                "P10_EXTERNAL_SERVER": "1",
-                "P10_BROWSER_CHANNEL": "chrome",
-                "P10_BASE_URL": os.environ.get(
-                    "P10_BASE_URL", "http://127.0.0.1:8091"
-                )
-                if external
-                else "http://127.0.0.1:8091",
-            }
-        )
+        for name in (
+            "P10_BASE_URL",
+            "P10_DESKTOP_BASE_URL",
+            "P10_MOBILE_BASE_URL",
+        ):
+            environment.pop(name, None)
+        environment["P10_EXTERNAL_SERVER"] = "1"
+        environment["P10_BROWSER_CHANNEL"] = "chrome"
+        if external:
+            environment["P10_BASE_URL"] = os.environ.get(
+                "P10_BASE_URL", "http://127.0.0.1:8091"
+            )
+            browser_urls = "P10_BASE_URL/w"
+        else:
+            environment.update(
+                {
+                    "P10_DESKTOP_BASE_URL": "http://127.0.0.1:8091",
+                    "P10_MOBILE_BASE_URL": "http://127.0.0.1:8092",
+                }
+            )
+            browser_urls = "P10_DESKTOP_BASE_URL/w:P10_MOBILE_BASE_URL/w"
         wsl_environment = environment.get("WSLENV", "")
         p10_environment = (
-            "P10_EXTERNAL_SERVER/w:P10_BROWSER_CHANNEL/w:P10_BASE_URL/w"
+            "P10_EXTERNAL_SERVER/w:P10_BROWSER_CHANNEL/w:" + browser_urls
         )
         environment["WSLENV"] = (
             f"{p10_environment}:{wsl_environment}"
@@ -473,8 +487,9 @@ def _web_e2e(profile: Path | None) -> int:
         )
         return completed.returncode
     finally:
-        if server is not None:
+        for server in reversed(servers):
             server.terminate()
+        for server in reversed(servers):
             try:
                 server.wait(timeout=10)
             except subprocess.TimeoutExpired:
