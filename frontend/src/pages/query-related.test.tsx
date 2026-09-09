@@ -96,7 +96,7 @@ beforeEach(() => {
 });
 
 it("拒答相关原文独立展示、纯文本转义，查看原文重新授权", async () => {
-  const answer = vi.spyOn(api, "answer").mockResolvedValue(response());
+  const answer = vi.spyOn(api, "answerStream").mockResolvedValue(response());
   const read = vi
     .spyOn(api, "readRelatedSource")
     .mockRejectedValue(new Error("原文当前不可读取。"));
@@ -119,7 +119,7 @@ it("拒答相关原文独立展示、纯文本转义，查看原文重新授权"
 });
 
 it("空结果不渲染空卡片标题；正常答案独立提供原始答案文本", async () => {
-  vi.spyOn(api, "answer")
+  vi.spyOn(api, "answerStream")
     .mockResolvedValueOnce(response({ related_contents: [] }))
     .mockResolvedValueOnce(
       response({
@@ -140,21 +140,110 @@ it("空结果不渲染空卡片标题；正常答案独立提供原始答案文�
 
 it("知识库切换和晚到响应不能重新显示旧原文", async () => {
   let resolve!: (value: QueryResponse) => void;
-  vi.spyOn(api, "answer").mockImplementation(
-    () =>
+  let oldHandlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
+  vi.spyOn(api, "answerStream").mockImplementation(
+    (...args) => {
+      oldHandlers = args[7] ?? {};
+      return (
       new Promise((done) => {
         resolve = done;
-      }),
+      })
+      );
+    },
   );
   const view = render(<QueryPage mode="answer" />);
   await submit();
   consoleState.scope.kbId = "kb_b";
   view.rerender(<QueryPage mode="answer" />);
   await act(async () => {
+    oldHandlers.onClaim?.({
+      claim_index: 0,
+      text: "旧知识库暂存事实",
+      supports: [{ support_id: "S1", quote: "旧知识库原文" }],
+      active_index_revision_id: "irev_old",
+    });
     resolve(response());
     await Promise.resolve();
   });
   expect(screen.queryByText(excerpt)).toBeNull();
+  expect(screen.queryByText("旧知识库暂存事实")).toBeNull();
+});
+
+it("合法 claim 立即显示为暂存内容，final 到达后由正式答案替代", async () => {
+  let resolve!: (value: QueryResponse) => void;
+  let handlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
+  vi.spyOn(api, "answerStream").mockImplementation((...args) => {
+    handlers = args[7] ?? {};
+    return new Promise((done) => {
+      resolve = done;
+    });
+  });
+  render(<QueryPage mode="answer" />);
+  await submit();
+
+  act(() => {
+    handlers.onClaim?.({
+      claim_index: 0,
+      text: "资料员每周核对设备清单。",
+      supports: [
+        { support_id: "support-1", quote: "每周核对设备清单" },
+      ],
+      active_index_revision_id: "irev_stream",
+    });
+  });
+  expect(
+    screen.getByRole("region", { name: "已核验暂存内容" }),
+  ).toHaveTextContent("资料员每周核对设备清单。");
+  expect(screen.queryByRole("region", { name: "正式答案" })).toBeNull();
+
+  await act(async () => {
+    resolve(
+      response({
+        status: "ANSWERABLE",
+        answer: "资料员每周核对设备清单。 [support-1]",
+        related_contents: [],
+      }),
+    );
+    await Promise.resolve();
+  });
+  expect(
+    await screen.findByRole("region", { name: "正式答案" }),
+  ).toHaveTextContent("资料员每周核对设备清单。 [support-1]");
+  expect(
+    screen.queryByRole("region", { name: "已核验暂存内容" }),
+  ).toBeNull();
+});
+
+it("停止按钮中断当前 fetch，且停止后的晚到 claim 不再显示", async () => {
+  let signal!: AbortSignal;
+  let handlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
+  vi.spyOn(api, "answerStream").mockImplementation((...args) => {
+    signal = args[4] as AbortSignal;
+    handlers = args[7] ?? {};
+    return new Promise((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => reject(new DOMException("synthetic abort", "AbortError")),
+        { once: true },
+      );
+    });
+  });
+  render(<QueryPage mode="answer" />);
+  const user = await submit();
+  await user.click(screen.getByRole("button", { name: "停止" }));
+  expect(signal.aborted).toBe(true);
+  expect(await screen.findByRole("button", { name: "执行" })).toBeEnabled();
+  expect(screen.getByText(/暂存内容不是最终答案/)).toBeVisible();
+
+  act(() => {
+    handlers.onClaim?.({
+      claim_index: 0,
+      text: "停止后到达的内容",
+      supports: [{ support_id: "S1", quote: "不得显示" }],
+      active_index_revision_id: "irev_stopped",
+    });
+  });
+  expect(screen.queryByText("停止后到达的内容")).toBeNull();
 });
 
 it("搜索拒答保留未发布候选检查，管理员身份变化清除原文", async () => {
@@ -190,7 +279,7 @@ it("搜索拒答保留未发布候选检查，管理员身份变化清除原文"
 });
 
 it("问答拒答不开放诊断候选，正常答案才展示正式引用", async () => {
-  vi.spyOn(api, "answer")
+  vi.spyOn(api, "answerStream")
     .mockResolvedValueOnce(response({ evidence: [diagnosticEvidence] }))
     .mockResolvedValueOnce(
       response({
@@ -211,7 +300,7 @@ it("问答拒答不开放诊断候选，正常答案才展示正式引用", asyn
 });
 
 it("准确区分本次模型生成、缓存、预算回退、无授权与澄清", async () => {
-  vi.spyOn(api, "answer")
+  vi.spyOn(api, "answerStream")
     .mockResolvedValueOnce(
       response({
         status: "ANSWERABLE",

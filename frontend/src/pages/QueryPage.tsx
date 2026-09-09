@@ -8,6 +8,7 @@ import {
   type RetrievalDiagnostics,
   type RelatedContent,
   type SourceChunk,
+  type StreamedAnswerClaim,
 } from "../api/client";
 import {
   EmptyState,
@@ -97,7 +98,10 @@ function ScopedQueryPage({
   const [saveBody, setSaveBody] = useState(true);
   const [savedBody, setSavedBody] = useState(true);
   const [historyTrace, setHistoryTrace] = useState<string>();
+  const [streamClaims, setStreamClaims] = useState<StreamedAnswerClaim[]>([]);
+  const [streamStage, setStreamStage] = useState<string>();
   const activeRequest = useRef<AbortController | undefined>(undefined);
+  const requestGeneration = useRef(0);
   const sourceRequest = useRef<AbortController | undefined>(undefined);
   useEffect(
     () => () => {
@@ -110,6 +114,8 @@ function ScopedQueryPage({
     event.preventDefault();
     activeRequest.current?.abort();
     const controller = new AbortController();
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
     activeRequest.current = controller;
     setBusy(true);
     sourceRequest.current?.abort();
@@ -121,6 +127,8 @@ function ScopedQueryPage({
     setDiagnostics(undefined);
     setDiagnosticsError(undefined);
     setHistoryTrace(undefined);
+    setStreamClaims([]);
+    setStreamStage(mode === "answer" ? "accepted" : undefined);
     try {
       const response =
         mode === "search"
@@ -133,7 +141,7 @@ function ScopedQueryPage({
               true,
               saveBody ? "full" : "metadata_only",
             )
-          : await api.answer(
+          : await api.answerStream(
               tokens.query,
               scope.projectId,
               scope.kbId,
@@ -141,9 +149,32 @@ function ScopedQueryPage({
               controller.signal,
               true,
               saveBody ? "full" : "metadata_only",
+              {
+                onStage: (stage) => {
+                  if (
+                    activeRequest.current === controller &&
+                    requestGeneration.current === generation &&
+                    !controller.signal.aborted
+                  ) {
+                    setStreamStage(stage);
+                  }
+                },
+                onClaim: (claim) => {
+                  if (
+                    activeRequest.current !== controller ||
+                    requestGeneration.current !== generation ||
+                    controller.signal.aborted
+                  ) {
+                    return;
+                  }
+                  setStreamClaims((current) => [...current, claim]);
+                },
+              },
             );
       if (controller.signal.aborted) return;
       setResult(response);
+      setStreamClaims([]);
+      setStreamStage("final");
       setSavedBody(saveBody);
       if (mode === "search") {
         void api
@@ -165,6 +196,13 @@ function ScopedQueryPage({
     } finally {
       if (activeRequest.current === controller) setBusy(false);
     }
+  }
+  function stopAnswer() {
+    const controller = activeRequest.current;
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    setStreamStage("cancelled");
+    setError(new Error("流式查询已停止；暂存内容不是最终答案。"));
   }
   async function openRelated(item: RelatedContent) {
     sourceRequest.current?.abort();
@@ -209,10 +247,15 @@ function ScopedQueryPage({
             placeholder="输入需要从资料中查证的问题"
             required
           />
-          <button className="primary" disabled={busy}>
+          <button className="primary" type="submit" disabled={busy}>
             <Search aria-hidden="true" size={18} />
             {busy ? "执行中…" : "执行"}
           </button>
+          {mode === "answer" && busy && (
+            <button className="secondary" type="button" onClick={stopAnswer}>
+              停止
+            </button>
+          )}
         </div>
         <label className="query-options">
           <input
@@ -230,6 +273,20 @@ function ScopedQueryPage({
         </button>
       )}
       {sourceError !== undefined && <ErrorPanel error={sourceError} />}
+      {mode === "answer" && busy && streamStage && (
+        <p role="status">流式阶段：{streamStage}</p>
+      )}
+      {mode === "answer" && !result && streamClaims.length > 0 && (
+        <section className="answer" aria-label="已核验暂存内容">
+          <span className="eyebrow">已核验暂存内容</span>
+          <p>以下事实已通过来源校验，仍以最终答案为唯一权威结果。</p>
+          <ol>
+            {streamClaims.map((claim) => (
+              <li key={claim.claim_index}>{claim.text}</li>
+            ))}
+          </ol>
+        </section>
+      )}
       {result && (
         <>
           {mode === "answer" && result.answer && (

@@ -408,6 +408,24 @@ export class ApiError extends Error {
   }
 }
 
+export interface StreamedAnswerClaim {
+  claim_index: number;
+  text: string;
+  supports: { support_id: string; quote: string }[];
+  active_index_revision_id: string;
+}
+
+export interface AnswerStreamHandlers {
+  onMeta?: (traceId: string) => void;
+  onStage?: (stage: string) => void;
+  onClaim?: (claim: StreamedAnswerClaim) => void;
+}
+
+export interface AnswerStreamScope {
+  projectId: string;
+  knowledgeBaseId: string;
+}
+
 async function request<T>(
   path: string,
   token: string,
@@ -457,22 +475,208 @@ async function rawRequest(
 
 export async function readSseResponse(
   response: Response,
+  handlers: AnswerStreamHandlers = {},
+  expectedScope?: AnswerStreamScope,
 ): Promise<QueryResponse> {
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
     throw new ApiError(response.status, payload);
   }
-  const body = await response.text();
-  for (const frame of body.split("\n\n")) {
-    const lines = frame.split("\n");
-    const event = lines.find((line) => line.startsWith("event: "))?.slice(7);
-    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
-    if (!event || !data) continue;
-    const payload = JSON.parse(data) as QueryResponse | ErrorPayload;
-    if (event === "error") throw new ApiError(500, payload as ErrorPayload);
-    if (event === "final") return payload as QueryResponse;
+  if (!response.body) throw new Error("SSE 响应缺少正文");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const maxFrameChars = 256 * 1024;
+  const maxResponseChars = 4 * 1024 * 1024;
+  let buffer = "";
+  let responseChars = 0;
+  let eventName = "message";
+  let dataLines: string[] = [];
+  let frameChars = 0;
+  let lastSequence = -1;
+  let lastClaimIndex = -1;
+  let traceId = response.headers.get("X-Trace-Id") ?? "";
+  let finalResult: QueryResponse | undefined;
+  let streamCompleted = false;
+
+  const dispatch = () => {
+    if (!dataLines.length) {
+      eventName = "message";
+      frameChars = 0;
+      return;
+    }
+    const data = dataLines.join("\n");
+    dataLines = [];
+    const payload = JSON.parse(data) as Record<string, unknown>;
+    const versioned = payload.protocol === "rag-answer-sse-v1";
+    if (finalResult) {
+      throw new Error("SSE Final 后包含额外协议事件");
+    }
+    if (expectedScope && !versioned) {
+      throw new Error("SSE 事件缺少协商的协议版本");
+    }
+    if (versioned) {
+      if (payload.type !== eventName) {
+        throw new Error("SSE 事件名称与类型不匹配");
+      }
+      const sequence = payload.sequence;
+      if (
+        typeof sequence !== "number" ||
+        !Number.isInteger(sequence) ||
+        sequence !== lastSequence + 1
+      ) {
+        throw new Error("SSE 事件序号不连续");
+      }
+      if (
+        expectedScope &&
+        (payload.project_id !== expectedScope.projectId ||
+          payload.knowledge_base_id !== expectedScope.knowledgeBaseId)
+      ) {
+        throw new Error("SSE 事件知识库范围不匹配");
+      }
+      if (typeof payload.trace_id !== "string") {
+        throw new Error("SSE 事件缺少 trace_id");
+      }
+      if (traceId && payload.trace_id !== traceId) {
+        throw new Error("SSE 事件 trace_id 不匹配");
+      }
+      traceId = payload.trace_id;
+      lastSequence = sequence;
+    }
+    if (eventName === "meta") {
+      if (
+        versioned &&
+        payload.delivery !== "incremental_or_final_only"
+      ) {
+        throw new Error("SSE meta 结构无效");
+      }
+      const value = payload.trace_id;
+      if (typeof value === "string") handlers.onMeta?.(value);
+    } else if (eventName === "stage") {
+      if (typeof payload.stage === "string") handlers.onStage?.(payload.stage);
+    } else if (eventName === "claim") {
+      const claim = payload.claim as Record<string, unknown> | undefined;
+      const supports = claim?.supports;
+      if (
+        !versioned ||
+        typeof payload.claim_index !== "number" ||
+        !Number.isInteger(payload.claim_index) ||
+        payload.claim_index < 0 ||
+        payload.claim_index !== lastClaimIndex + 1 ||
+        typeof payload.active_index_revision_id !== "string" ||
+        !/^irev_[0-9a-f]{32}$/.test(payload.active_index_revision_id) ||
+        payload.provisional !== true ||
+        typeof claim?.text !== "string" ||
+        claim.text.length === 0 ||
+        !Array.isArray(supports) ||
+        supports.length === 0 ||
+        !supports.every(
+          (item) =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as Record<string, unknown>).support_id === "string" &&
+            typeof (item as Record<string, unknown>).quote === "string",
+        )
+      ) {
+        throw new Error("SSE claim 结构无效");
+      }
+      lastClaimIndex = payload.claim_index;
+      handlers.onClaim?.({
+        claim_index: payload.claim_index,
+        text: claim.text,
+        supports: supports as { support_id: string; quote: string }[],
+        active_index_revision_id: payload.active_index_revision_id,
+      });
+    } else if (eventName === "error") {
+      if (
+        versioned &&
+        (typeof payload.code !== "string" ||
+          typeof payload.message !== "string" ||
+          typeof payload.stage !== "string" ||
+          typeof payload.retryable !== "boolean" ||
+          typeof payload.partial !== "boolean")
+      ) {
+        throw new Error("SSE error 结构无效");
+      }
+      const nested = payload.error as ErrorPayload["error"] | undefined;
+      const detail = nested ?? {
+        code: typeof payload.code === "string" ? payload.code : undefined,
+        message:
+          typeof payload.message === "string" ? payload.message : undefined,
+        stage: typeof payload.stage === "string" ? payload.stage : undefined,
+        retryable:
+          typeof payload.retryable === "boolean"
+            ? payload.retryable
+            : undefined,
+        trace_id:
+          typeof payload.trace_id === "string" ? payload.trace_id : undefined,
+      };
+      throw new ApiError(500, { error: detail });
+    } else if (eventName === "cancelled") {
+      throw new Error("流式查询已取消");
+    } else if (eventName === "final") {
+      if (finalResult) throw new Error("SSE 响应包含重复 final 事件");
+      if (
+        versioned &&
+        (typeof payload.status !== "string" ||
+          typeof payload.reason_code !== "string" ||
+          !(typeof payload.answer === "string" || payload.answer === null) ||
+          !Array.isArray(payload.evidence) ||
+          typeof payload.active_index_revision_id !== "string")
+      ) {
+        throw new Error("SSE final 结构无效");
+      }
+      finalResult = payload as unknown as QueryResponse;
+    }
+    eventName = "message";
+    frameChars = 0;
+  };
+
+  const consumeLine = (rawLine: string) => {
+    frameChars += rawLine.length + 1;
+    if (frameChars > maxFrameChars) {
+      throw new Error("SSE 单事件超过客户端上限");
+    }
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (!line) {
+      dispatch();
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const separator = line.indexOf(":");
+    const field = separator < 0 ? line : line.slice(0, separator);
+    let value = separator < 0 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") eventName = value;
+    if (field === "data") dataLines.push(value);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      const decoded = decoder.decode(value, { stream: !done });
+      responseChars += decoded.length;
+      if (responseChars > maxResponseChars) {
+        throw new Error("SSE 响应超过客户端上限");
+      }
+      buffer += decoded;
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        consumeLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+      }
+      if (!done) continue;
+      if (buffer) consumeLine(buffer);
+      dispatch();
+      break;
+    }
+    if (!finalResult) throw new Error("SSE 响应缺少合法终态");
+    streamCompleted = true;
+    return finalResult;
+  } finally {
+    if (!streamCompleted) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  throw new Error("SSE 响应缺少 final 事件");
 }
 
 function jsonInit(
@@ -923,13 +1127,17 @@ export const api = {
     query: string,
     signal?: AbortSignal,
     includeRelatedContent = false,
+    historyMode?: "full" | "metadata_only",
+    handlers: AnswerStreamHandlers = {},
   ) => {
     void token;
     const init = jsonInit("POST", {
       query,
       limit: 10,
       stream: true,
+      stream_protocol: "rag-answer-sse-v1",
       ...(includeRelatedContent ? { include_related_content: true } : {}),
+      ...(historyMode ? { history_mode: historyMode } : {}),
     });
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
@@ -937,7 +1145,10 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
       { ...init, headers, signal, credentials: "same-origin" },
     );
-    return readSseResponse(response);
+    return readSseResponse(response, handlers, {
+      projectId,
+      knowledgeBaseId: kbId,
+    });
   },
   diagnostics: (token: string, traceId: string) =>
     request<RetrievalDiagnostics>(

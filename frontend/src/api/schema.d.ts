@@ -1981,6 +1981,8 @@ export interface components {
              * @default false
              */
             stream: boolean;
+            /** Stream Protocol */
+            stream_protocol?: "rag-answer-sse-v1" | null;
             /**
              * Trace Mode
              * @default SAFE
