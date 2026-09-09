@@ -37,7 +37,7 @@ def test_offline_probe_completes_internal_product_workflow(
             if request.url.path == "/api/v1/system/components":
                 response = httpx.Response(
                     200,
-                    json=[{"component_id": "offline"}],
+                    json={"components": [{"component_id": "offline"}]},
                 )
             elif request.url.path == "/api/v1/jobs/job_test":
                 response = httpx.Response(

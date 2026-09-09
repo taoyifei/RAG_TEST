@@ -375,7 +375,7 @@ def test_compose_smoke_runs_http_probe_inside_isolated_app(
     assert result.trace_id == "trace_" + "f" * 32
     probe = next(command for command in commands if "exec" in command)
     assert probe[probe.index("exec") + 1 :] == (
-        "--no-TTY",
+        "--no-tty",
         "app",
         "python",
         "-m",

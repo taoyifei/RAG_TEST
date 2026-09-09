@@ -1108,7 +1108,7 @@ def _run_container_http_smoke(
         (
             *compose,
             "exec",
-            "--no-TTY",
+            "--no-tty",
             "app",
             "python",
             "-m",

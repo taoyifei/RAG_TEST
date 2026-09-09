@@ -90,7 +90,10 @@ def run_offline_product_probe(
             components = client.get("/api/v1/system/components")
             components.raise_for_status()
             component_items = components.json()
-            if not isinstance(component_items, list) or not component_items:
+            if (
+                not isinstance(component_items, (dict, list))
+                or not component_items
+            ):
                 raise OfflineProductProbeError(
                     "clean-room Product 离线 smoke 无组件结果。"
                 )
