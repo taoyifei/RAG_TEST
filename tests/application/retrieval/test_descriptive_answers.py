@@ -37,6 +37,13 @@ def _list_paragraph(text: str) -> str:
     )
 
 
+def _heading(text: str) -> str:
+    return (
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+        f"<w:r><w:t>{escape(text)}</w:t></w:r></w:p>"
+    )
+
+
 def _candidates(
     blocks: str,
     *,
@@ -219,11 +226,32 @@ def test_source_qualifier_disambiguates_same_role_across_documents() -> None:
         )
 
     selected = ("统筹蓝熊计划。", "跟踪蓝熊风险。")
+    selected_document = _candidates(
+        table(selected)
+        + _heading("交付阶段")
+        + table(
+            (
+                "阶段职责：" + "核对阶段交付物。" * 100,
+                "保存阶段记录。" * 100,
+            )
+        ),
+        display_name="蓝熊交付规范.docx",
+        document_id="doc_" + "4" * 32,
+    )
+    phase_table = tuple(
+        candidate
+        for candidate in selected_document
+        if candidate.hydrated.chunk.role.value == "table"
+        and candidate.hydrated.chunk.heading_path == ("交付阶段",)
+    )
+    assert len(phase_table) > 1
+    # 模拟结构扩展只取回阶段表的一部分；该局部缺口不能抹掉完整总表。
+    partial_phase_chunk_id = phase_table[-1].hydrated.chunk.chunk_id
     candidates = (
-        *_candidates(
-            table(selected),
-            display_name="蓝熊交付规范.docx",
-            document_id="doc_" + "4" * 32,
+        *(
+            candidate
+            for candidate in selected_document
+            if candidate.hydrated.chunk.chunk_id != partial_phase_chunk_id
         ),
         *_candidates(
             table(("统筹白鹭计划。", "跟踪白鹭风险。")),
@@ -250,6 +278,16 @@ def test_source_qualifier_disambiguates_same_role_across_documents() -> None:
         candidates,
         _POLICY,
         context=_context("不存在规范中项目经理负责什么"),
+    )
+    same_scope_candidates = _candidates(
+        table(("统筹第一套计划。",)) + table(("统筹第二套计划。",)),
+        display_name="蓝熊交付规范.docx",
+        document_id="doc_" + "6" * 32,
+    )
+    assert not assembler.assemble(
+        same_scope_candidates,
+        _POLICY,
+        context=_context("蓝熊规范中项目经理负责什么"),
     )
 
 

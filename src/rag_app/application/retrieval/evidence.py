@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 from rag_app.application.retrieval.answer_support import (
     AnswerSupport,
@@ -36,6 +36,16 @@ _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
 _TablePiece = tuple[RankedChunk, SourceSpan, str]
+
+
+@dataclass(frozen=True)
+class _DescriptiveTableGroup:
+    """保存一个职责表候选及其完整性和结构作用域。"""
+
+    pieces: tuple[_TablePiece, ...]
+    cell_complete: bool
+    document_version_id: str | None
+    heading_depth: int | None
 
 
 class EvidenceAssembler:
@@ -344,14 +354,17 @@ def _descriptive_table_evidence(
     )
     if not groups:
         return None
+    if context.analysis.semantics.source_qualifier is not None:
+        groups = _narrow_source_qualified_table_groups(groups)
     # 多个文档的同名角色不能悄悄拼成一个角色，保留明确的来源歧义。
     if (
         len(groups) != 1
-        or not groups[0]
-        or not _complete_table_pieces(groups[0])
+        or not groups[0].pieces
+        or not groups[0].cell_complete
+        or not _complete_table_pieces(groups[0].pieces)
     ):
         return ()
-    pieces = groups[0]
+    pieces = groups[0].pieces
     counts = Counter(piece[0].hydrated.chunk.chunk_id for piece in pieces)
     if (
         len(pieces)
@@ -587,7 +600,7 @@ def _descriptive_table_groups(
     candidates: tuple[RankedChunk, ...],
     target: str,
     source_qualifier: str | None,
-) -> list[tuple[_TablePiece, ...]]:
+) -> tuple[_DescriptiveTableGroup, ...]:
     tables: dict[
         _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
     ] = defaultdict(lambda: defaultdict(dict))
@@ -616,7 +629,7 @@ def _descriptive_table_groups(
                     span,
                     quote,
                 )
-    groups: list[tuple[_TablePiece, ...]] = []
+    groups: list[_DescriptiveTableGroup] = []
     for cells in tables.values():
         columns = {
             column
@@ -645,10 +658,55 @@ def _descriptive_table_groups(
         if not values:
             continue
         pieces = (*subject, *sorted(values, key=_table_piece_order))
-        if not _all_cell_nodes_present(pieces, row, column):
-            return [()]
-        groups.append(pieces)
-    return groups
+        document_versions = {
+            piece[0].hydrated.chunk.version.document_version_id
+            for piece in pieces
+        }
+        heading_depths = {
+            len(piece[0].hydrated.chunk.heading_path) for piece in pieces
+        }
+        groups.append(
+            _DescriptiveTableGroup(
+                pieces=pieces,
+                cell_complete=_all_cell_nodes_present(pieces, row, column),
+                document_version_id=(
+                    next(iter(document_versions))
+                    if len(document_versions) == 1
+                    else None
+                ),
+                heading_depth=(
+                    next(iter(heading_depths))
+                    if len(heading_depths) == 1
+                    else None
+                ),
+            )
+        )
+    return tuple(groups)
+
+
+def _narrow_source_qualified_table_groups(
+    groups: tuple[_DescriptiveTableGroup, ...],
+) -> tuple[_DescriptiveTableGroup, ...]:
+    """在明确限定的单一文档内选择唯一最宽职责表。
+
+    标题层级更浅的表覆盖范围更广，可回答只限定文档、未限定阶段的
+    角色职责问法。多个文档、未知层级或同层并列都保持歧义并拒答。
+    """
+    if len(groups) <= 1:
+        return groups
+    document_versions = {group.document_version_id for group in groups}
+    if None in document_versions or len(document_versions) != 1:
+        return groups
+    if any(group.heading_depth is None for group in groups):
+        return groups
+    minimum_depth = min(
+        group.heading_depth
+        for group in groups
+        if group.heading_depth is not None
+    )
+    return tuple(
+        group for group in groups if group.heading_depth == minimum_depth
+    )
 
 
 def _source_qualifier_matches(
