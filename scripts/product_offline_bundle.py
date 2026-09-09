@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import gzip
 import hashlib
-import io
 import json
 import os
 import re
@@ -15,15 +14,11 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import time
 import uuid
-import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
-
-import httpx
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPOSITORY_ROOT) not in sys.path:
@@ -52,8 +47,6 @@ _DEFAULT_APP_IMAGE = "docx-rag:v1-candidate"
 _DEFAULT_QDRANT_IMAGE = "qdrant/qdrant:v1.18.3"
 _PRODUCT_MANIFEST_PATH = "/app/product-assets.json"
 _HASH_BLOCK_BYTES = 1024 * 1024
-_MIN_BOOTSTRAP_TOKEN_LENGTH = 20
-_MAX_BOOTSTRAP_TOKEN_LENGTH = 1024
 _FULL_REVISION = re.compile(r"^[0-9a-f]{40}$")
 _IMAGE_ID = re.compile(r"^sha256:[0-9a-f]{64}$")
 _CONTAINER_ID = re.compile(r"^[0-9a-f]{12,64}$")
@@ -96,10 +89,6 @@ networks:
   rag-egress:
     internal: true
 """
-_DOCX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-)
-_SMOKE_MARKER = "V305-OFFLINE-ALPHA-739"
 
 
 class ProductBundleError(RuntimeError):
@@ -1079,32 +1068,12 @@ def _run_compose_smoke(
             cwd=extracted,
             environment=environment,
         )
-        _wait_for_live(origin)
-        bootstrap_token = (
-            _capture(
-                (
-                    *compose,
-                    "run",
-                    "--rm",
-                    "--no-deps",
-                    "--entrypoint",
-                    "cat",
-                    "app",
-                    "/run/rag-secrets/admin-bootstrap-token",
-                ),
-                cwd=extracted,
-                environment=environment,
-            )
-            .decode("utf-8")
-            .strip()
+        return _run_container_http_smoke(
+            compose=compose,
+            request_origin=origin,
+            cwd=extracted,
+            environment=environment,
         )
-        if not (
-            _MIN_BOOTSTRAP_TOKEN_LENGTH
-            <= len(bootstrap_token)
-            <= _MAX_BOOTSTRAP_TOKEN_LENGTH
-        ) or any(character.isspace() for character in bootstrap_token):
-            raise ProductBundleError("clean-room Bootstrap Token 格式无效。")
-        return _run_http_smoke(origin, bootstrap_token)
     finally:
         _run_checked(
             (*compose, "down", "--volumes", "--remove-orphans"),
@@ -1113,267 +1082,70 @@ def _run_compose_smoke(
         )
 
 
-def _run_http_smoke(
-    origin: str,
-    bootstrap_token: str,
-) -> _CleanRoomSmokeIdentity:
-    try:
-        with httpx.Client(base_url=origin, timeout=10) as client:
-            index_response = client.get("/")
-            index_response.raise_for_status()
-            if 'id="root"' not in index_response.text:
-                raise ProductBundleError(
-                    "clean-room 登录页未返回 React 根节点。"
-                )
-            login = client.post(
-                "/api/v1/console/session",
-                json={"bootstrap_token": bootstrap_token},
-                headers={"Origin": origin},
-            )
-            login.raise_for_status()
-            session = login.json()
-            if not isinstance(session, dict) or not isinstance(
-                session.get("csrf_token"),
-                str,
-            ):
-                raise ProductBundleError(
-                    "clean-room Product 登录未返回会话身份。"
-                )
-            csrf_token = cast(str, session["csrf_token"])
-            components = client.get("/api/v1/system/components")
-            components.raise_for_status()
-            if not components.json():
-                raise ProductBundleError(
-                    "clean-room Product 离线 smoke 无组件结果。"
-                )
-            write_headers = {
-                "Origin": origin,
-                "X-CSRF-Token": csrf_token,
-            }
-            project = client.post(
-                "/api/v1/projects",
-                json={"name": "V3-05 clean-room 项目"},
-                headers={
-                    **write_headers,
-                    "Idempotency-Key": "v305-clean-room-project",
-                },
-            )
-            project.raise_for_status()
-            project_id = _required_json_id(
-                project,
-                "project_id",
-                prefix="prj_",
-            )
-            knowledge_base = client.post(
-                f"/api/v1/projects/{project_id}/knowledge-bases",
-                json={"name": "V3-05 clean-room 知识库"},
-                headers={
-                    **write_headers,
-                    "Idempotency-Key": "v305-clean-room-kb",
-                },
-            )
-            knowledge_base.raise_for_status()
-            knowledge_base_id = _required_json_id(
-                knowledge_base,
-                "knowledge_base_id",
-                prefix="kb_",
-            )
-            base = (
-                f"/api/v1/projects/{project_id}/knowledge-bases/"
-                f"{knowledge_base_id}"
-            )
-            upload = client.post(
-                f"{base}/documents",
-                params={"display_name": "v305-clean-room.docx"},
-                content=_minimal_smoke_docx(),
-                headers={
-                    **write_headers,
-                    "Content-Type": _DOCX_MEDIA_TYPE,
-                    "Idempotency-Key": "v305-clean-room-document",
-                },
-            )
-            upload.raise_for_status()
-            job_id = _required_json_id(upload, "job_id", prefix="job_")
-            completed = _wait_for_product_job(client, job_id)
-            revision_id = completed.get("revision_id")
-            if (
-                completed.get("state") != "succeeded"
-                or not isinstance(revision_id, str)
-                or not revision_id.startswith("irev_")
-            ):
-                raise ProductBundleError("clean-room Product DOCX 入库未成功。")
-            query = client.post(
-                f"{base}:search",
-                json={
-                    "query": _SMOKE_MARKER,
-                    "limit": 5,
-                    "include_related_content": True,
-                },
-                headers=write_headers,
-            )
-            query.raise_for_status()
-            result = _json_object(query, "离线检索")
-            trace_id = result.get("trace_id")
-            if (
-                result.get("project_id") != project_id
-                or result.get("knowledge_base_id") != knowledge_base_id
-                or result.get("active_index_revision_id") != revision_id
-                or not isinstance(trace_id, str)
-                or not trace_id.startswith("trace_")
-            ):
-                raise ProductBundleError(
-                    "clean-room Product 离线检索身份不一致。"
-                )
-            evidence = result.get("evidence")
-            related = result.get("related_contents")
-            if not (
-                (isinstance(evidence, list) and evidence)
-                or (isinstance(related, list) and related)
-            ):
-                raise ProductBundleError(
-                    "clean-room Product 离线检索未命中合成 DOCX。"
-                )
-            return _CleanRoomSmokeIdentity(
-                active_revision_id=revision_id,
-                trace_id=trace_id,
-            )
-    except (httpx.HTTPError, json.JSONDecodeError) as error:
-        raise ProductBundleError(
-            "clean-room Product HTTP smoke 失败。"
-        ) from error
-
-
-def _required_json_id(
-    response: httpx.Response,
-    field: str,
+def _run_container_http_smoke(
     *,
-    prefix: str,
-) -> str:
-    """读取 clean-room 响应中的非敏感 Product 身份。
+    compose: Sequence[str],
+    request_origin: str,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> _CleanRoomSmokeIdentity:
+    """在隔离 App 容器内执行完整 HTTP 验收。
 
     Args:
-        response: 已确认成功的 HTTP 响应。
-        field: 预期身份字段名。
-        prefix: 预期 Product ID 前缀。
+        compose: 已限定随机项目与 clean-room 配置的 Compose 命令。
+        request_origin: Product 写请求允许的回环 Origin。
+        cwd: 已验证的离线包解包目录。
+        environment: 含随机回环端口的 Compose 环境。
 
     Returns:
-        已校验的身份字符串。
+        活动索引 Revision 与查询 Trace 身份。
+
+    Raises:
+        ProductBundleError: 容器内探针失败或返回非规范身份。
 
     """
-    value = _json_object(response, field).get(field)
-    if not isinstance(value, str) or not value.startswith(prefix):
-        raise ProductBundleError(f"clean-room Product 缺少 {field}。")
-    return value
-
-
-def _json_object(response: httpx.Response, label: str) -> dict[str, object]:
-    """要求 HTTP 响应正文是 JSON object。
-
-    Args:
-        response: 待读取的 HTTP 响应。
-        label: 失败信息使用的安全步骤名。
-
-    Returns:
-        JSON object 的有界类型视图。
-
-    """
-    value = response.json()
-    if not isinstance(value, dict):
-        raise ProductBundleError(f"clean-room Product {label} 响应无效。")
-    return cast(dict[str, object], value)
-
-
-def _wait_for_product_job(
-    client: httpx.Client,
-    job_id: str,
-) -> dict[str, object]:
-    """有界等待 clean-room 合成 DOCX 入库终态。
-
-    Args:
-        client: 已登录且保存 Session Cookie 的 HTTP 客户端。
-        job_id: 合成 DOCX 入库任务 ID。
-
-    Returns:
-        入库任务的终态 JSON object。
-
-    """
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        response = client.get(f"/api/v1/jobs/{job_id}")
-        response.raise_for_status()
-        job = _json_object(response, "入库任务")
-        if job.get("state") not in {"queued", "running"}:
-            return job
-        time.sleep(0.1)
-    raise ProductBundleError("clean-room Product 入库任务未在时限内结束。")
-
-
-def _minimal_smoke_docx() -> bytes:
-    """生成只含固定离线检索标记的确定性最小 DOCX。
-
-    Returns:
-        可由当前 OOXML Parser 读取的确定性 ZIP 字节。
-
-    """
-    content_types = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
-        'content-types">\n'
-        '  <Default Extension="rels" ContentType="application/vnd.'
-        'openxmlformats-package.relationships+xml"/>\n'
-        '  <Default Extension="xml" ContentType="application/xml"/>\n'
-        '  <Override PartName="/word/document.xml" ContentType="application/'
-        'vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
-        "\n</Types>\n"
+    raw = _capture(
+        (
+            *compose,
+            "exec",
+            "--no-TTY",
+            "app",
+            "python",
+            "-m",
+            "rag_app.product.offline_probe",
+            "--base-url",
+            "http://127.0.0.1:8088",
+            "--request-origin",
+            request_origin,
+            "--bootstrap-token-file",
+            "/run/rag-secrets/admin-bootstrap-token",
+        ),
+        cwd=cwd,
+        environment=environment,
     )
-    relationships = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/'
-        'relationships">\n'
-        '  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/'
-        'officeDocument/2006/relationships/officeDocument" '
-        'Target="word/document.xml"/>\n'
-        "</Relationships>\n"
-    )
-    document = (
-        '<?xml version="1.0" encoding="UTF-8"?>\n'
-        '<w:document xmlns:w="http://schemas.openxmlformats.org/'
-        'wordprocessingml/2006/main">\n'
-        "  <w:body><w:p><w:r><w:t>离线验收标记是 "
-        f"{_SMOKE_MARKER}。"
-        "</w:t></w:r></w:p><w:sectPr/></w:body>\n"
-        "</w:document>\n"
-    )
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        for name, content in (
-            ("[Content_Types].xml", content_types),
-            ("_rels/.rels", relationships),
-            ("word/document.xml", document),
-        ):
-            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.create_system = 3
-            info.external_attr = 0o600 << 16
-            archive.writestr(info, content)
-    return buffer.getvalue()
-
-
-def _wait_for_live(origin: str) -> None:
-    deadline = time.monotonic() + 120
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        try:
-            response = httpx.get(f"{origin}/live", timeout=2)
-            response.raise_for_status()
-            payload = response.json()
-            if payload == {"status": "live"}:
-                return
-        except (httpx.HTTPError, json.JSONDecodeError) as error:
-            last_error = error
-        time.sleep(0.25)
-    raise ProductBundleError("clean-room Product /live 未在时限内通过。") from (
-        last_error
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProductBundleError(
+            "clean-room 容器内探针未返回有效 JSON。"
+        ) from error
+    if not isinstance(payload, dict) or set(payload) != {
+        "active_revision_id",
+        "trace_id",
+    }:
+        raise ProductBundleError("clean-room 容器内探针身份字段无效。")
+    active_revision_id = payload.get("active_revision_id")
+    trace_id = payload.get("trace_id")
+    if (
+        not isinstance(active_revision_id, str)
+        or not active_revision_id.startswith("irev_")
+        or not isinstance(trace_id, str)
+        or not trace_id.startswith("trace_")
+    ):
+        raise ProductBundleError("clean-room 容器内探针身份无效。")
+    return _CleanRoomSmokeIdentity(
+        active_revision_id=active_revision_id,
+        trace_id=trace_id,
     )
 
 

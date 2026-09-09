@@ -327,6 +327,73 @@ def test_clean_room_acceptance_returns_runtime_receipt(
     assert receipt.steps[-1] == "compose_cleanup"
 
 
+def test_compose_smoke_runs_http_probe_inside_isolated_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+    environments: list[dict[str, str]] = []
+
+    def run_checked(
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        assert cwd == tmp_path
+        commands.append(tuple(arguments))
+        environments.append(dict(environment or {}))
+
+    def capture(
+        arguments: Sequence[str],
+        *,
+        cwd: Path,
+        environment: Mapping[str, str] | None = None,
+    ) -> bytes:
+        run_checked(arguments, cwd=cwd, environment=environment)
+        return json.dumps(
+            {
+                "active_revision_id": "irev_clean_room",
+                "trace_id": "trace_" + "f" * 32,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+    monkeypatch.setattr(bundle, "_free_loopback_port", lambda: 38123)
+    monkeypatch.setattr(bundle, "_run_checked", run_checked)
+    monkeypatch.setattr(bundle, "_capture", capture)
+
+    result = bundle._run_compose_smoke(
+        docker="docker",
+        extracted=tmp_path,
+        app_image=_APP_IMAGE,
+        qdrant_image=_QDRANT_IMAGE,
+    )
+
+    assert result.active_revision_id == "irev_clean_room"
+    assert result.trace_id == "trace_" + "f" * 32
+    probe = next(command for command in commands if "exec" in command)
+    assert probe[probe.index("exec") + 1 :] == (
+        "--no-TTY",
+        "app",
+        "python",
+        "-m",
+        "rag_app.product.offline_probe",
+        "--base-url",
+        "http://127.0.0.1:8088",
+        "--request-origin",
+        "http://127.0.0.1:38123",
+        "--bootstrap-token-file",
+        "/run/rag-secrets/admin-bootstrap-token",
+    )
+    assert not any("cat" in command for command in commands)
+    assert any("down" in command for command in commands)
+    assert all(
+        environment["RAG_PORT"] == "38123" for environment in environments
+    )
+
+
 def test_verify_cli_writes_exclusive_canonical_report(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
