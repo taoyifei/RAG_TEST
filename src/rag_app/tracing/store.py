@@ -5,15 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
 import threading
 import uuid
 import zlib
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from rag_app.tracing.models import (
@@ -35,6 +36,7 @@ from rag_app.tracing.models import (
 
 __all__ = [
     "ArtifactExpiredError",
+    "ArtifactIntegrityError",
     "ArtifactNotFoundError",
     "TraceArtifactLimitError",
     "TraceNotFoundError",
@@ -49,7 +51,9 @@ _DEFAULT_EXPORT_LIMIT = 16 * 1024 * 1024
 _DEFAULT_SPAN_LIMIT = 512
 _DEFAULT_DECISION_LIMIT = 4096
 _DEFAULT_STAGE_DECISION_LIMIT = 512
+_EXPORT_LEASE_SECONDS = 15 * 60
 _LATEST_SCHEMA_VERSION = 2
+_TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
 _PRODUCT_TRACE_COLUMNS = {
     "kind": "TEXT NOT NULL DEFAULT 'query'",
     "project_id": "TEXT",
@@ -177,6 +181,15 @@ CREATE TABLE IF NOT EXISTS candidate_decisions (
     PRIMARY KEY (trace_id, sequence),
     FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS trace_export_leases (
+    lease_id TEXT NOT NULL,
+    trace_id TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    PRIMARY KEY (lease_id, trace_id)
+);
+CREATE INDEX IF NOT EXISTS trace_export_leases_trace_idx
+ON trace_export_leases(trace_id, expires_at);
 """
 
 
@@ -194,6 +207,10 @@ class ArtifactNotFoundError(LookupError):
 
 class ArtifactExpiredError(LookupError):
     """artifact 所属 Trace 已到期。"""
+
+
+class ArtifactIntegrityError(ValueError):
+    """artifact 压缩载荷或摘要与持久元数据不一致。"""
 
 
 class TraceArtifactLimitError(ValueError):
@@ -265,6 +282,7 @@ class TraceStore:
         self._busy_timeout_ms = busy_timeout_ms
         self._connection: sqlite3.Connection | None = None
         self._lock = threading.RLock()
+        self._batch_depth = 0
         self._active_exports: Counter[str] = Counter()
 
     @property
@@ -547,7 +565,7 @@ class TraceStore:
                     trace.writer_queue_high_water,
                 ),
             )
-            connection.commit()
+            self._commit_write(connection)
 
     def finish_trace(
         self,
@@ -595,7 +613,7 @@ class TraceStore:
                     trace_id,
                 ),
             )
-            connection.commit()
+            self._commit_write(connection)
 
     def update_trace_identity(
         self,
@@ -653,6 +671,73 @@ class TraceStore:
                 ).fetchone()
                 if existing is None:
                     raise TraceNotFoundError(trace_id)
+            self._commit_write(connection)
+
+    def write_completed_trace(  # noqa: PLR0913
+        self,
+        trace: TraceRecord,
+        spans: Sequence[SpanRecord],
+        decisions: Sequence[CandidateDecision],
+        finish: TraceFinish,
+        *,
+        revision_id: str | None = None,
+        index_fingerprint: str | None = None,
+        serving_fingerprint: str | None = None,
+        active_collection: str | None = None,
+    ) -> None:
+        """以单事务持久化一条已完成的非 FULL Trace。
+
+        Args:
+            trace: 待建立的根 Trace。
+            spans: 按父子建立及更新顺序排列的 span。
+            decisions: 按 sequence 排列的候选决策。
+            finish: 根 Trace 的最终状态。
+            revision_id: 可选活动 Revision ID。
+            index_fingerprint: 可选索引指纹。
+            serving_fingerprint: 可选查询服务指纹。
+            active_collection: 可选活动集合身份。
+
+        Returns:
+            整个批次提交后无返回值。
+
+        Raises:
+            ValueError: FULL Trace 误入异步批量路径。
+            RuntimeError: Store 已处于另一个批量事务。
+
+        """
+        if trace.mode is TraceMode.FULL:
+            raise ValueError("FULL Trace 不能使用异步批量写入。")
+        with self._lock:
+            connection = self._require_connection()
+            if self._batch_depth:
+                raise RuntimeError("Trace Store 不支持嵌套批量事务。")
+            self._batch_depth = 1
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self.create_trace(trace)
+                self.update_trace_identity(
+                    trace.trace_id,
+                    revision_id=revision_id,
+                    index_fingerprint=index_fingerprint,
+                    serving_fingerprint=serving_fingerprint,
+                    active_collection=active_collection,
+                )
+                for span in spans:
+                    self.put_span(span)
+                for decision in decisions:
+                    self.add_candidate_decision(decision)
+                self.finish_trace(trace.trace_id, finish)
+                connection.commit()
+            except Exception:
+                if connection.in_transaction:
+                    connection.rollback()
+                raise
+            finally:
+                self._batch_depth = 0
+
+    def _commit_write(self, connection: sqlite3.Connection) -> None:
+        """普通写立即提交，批量路径则交给最外层原子提交。"""
+        if self._batch_depth == 0:
             connection.commit()
 
     def put_span(self, span: SpanRecord) -> None:
@@ -683,7 +768,7 @@ class TraceStore:
                         reason="SPAN_LIMIT",
                         dropped_spans=1,
                     )
-                    connection.commit()
+                    self._commit_write(connection)
                     raise TraceArtifactLimitError("Trace span 数超过硬上限。")
             connection.execute(
                 """
@@ -723,7 +808,7 @@ class TraceStore:
                     span.output_artifact_id,
                 ),
             )
-            connection.commit()
+            self._commit_write(connection)
 
     def add_candidate_decision(
         self,
@@ -756,7 +841,7 @@ class TraceStore:
                     reason="DECISION_LIMIT",
                     dropped_decisions=1,
                 )
-                connection.commit()
+                self._commit_write(connection)
                 raise TraceArtifactLimitError(
                     "Trace candidate decision 数超过硬上限。"
                 )
@@ -785,7 +870,7 @@ class TraceStore:
                     decision.contribution,
                 ),
             )
-            connection.commit()
+            self._commit_write(connection)
 
     def add_artifact(
         self,
@@ -1018,13 +1103,15 @@ class TraceStore:
         try:
             payload = zlib.decompress(compressed)
         except zlib.error as error:
-            raise ValueError("Trace artifact 压缩内容损坏。") from error
+            raise ArtifactIntegrityError(
+                "Trace artifact 压缩内容损坏。"
+            ) from error
         metadata = _artifact_metadata_from_row(row)
         if (
             len(payload) != metadata.original_bytes
             or hashlib.sha256(payload).hexdigest() != metadata.sha256
         ):
-            raise ValueError("Trace artifact 完整性校验失败。")
+            raise ArtifactIntegrityError("Trace artifact 完整性校验失败。")
         return ArtifactContent(metadata=metadata, payload=payload)
 
     def list_traces(self, filters: TraceListFilter) -> TracePage:
@@ -1188,10 +1275,17 @@ class TraceStore:
         """
         with self._lock:
             connection = self._require_connection()
+            now_text = _timestamp(now)
+            connection.execute(
+                "DELETE FROM trace_export_leases WHERE expires_at<=?",
+                (now_text,),
+            )
             protected = frozenset(self._active_exports)
             expired = connection.execute(
-                "SELECT trace_id FROM traces WHERE expires_at<=?",
-                (_timestamp(now),),
+                "SELECT t.trace_id FROM traces t WHERE t.expires_at<=? "
+                "AND NOT EXISTS(SELECT 1 FROM trace_export_leases l "
+                "WHERE l.trace_id=t.trace_id AND l.expires_at>?)",
+                (now_text, now_text),
             ).fetchall()
             removable = [
                 (str(row["trace_id"]),)
@@ -1199,6 +1293,7 @@ class TraceStore:
                 if str(row["trace_id"]) not in protected
             ]
             if not removable:
+                connection.commit()
                 return 0
             cursor = connection.executemany(
                 "DELETE FROM traces WHERE trace_id=?",
@@ -1248,15 +1343,72 @@ class TraceStore:
     @contextmanager
     def _export_guard(self, trace_id: str) -> Iterator[None]:
         """导出期间阻止 prune 删除同一 Trace。"""
+        with self.export_guard((trace_id,)):
+            yield
+
+    @contextmanager
+    def export_guard(self, trace_ids: tuple[str, ...]) -> Iterator[None]:
+        """以进程内计数和持久 lease 保护一组在途导出。
+
+        Args:
+            trace_ids: 严格的新式或旧式 Trace ID；重复项不允许。
+
+        Yields:
+            lease 生效后的导出临界区。
+
+        Returns:
+            管理进程内计数与持久 lease 的上下文迭代器。
+
+        Raises:
+            ValueError: ID 无效、为空或包含重复项。
+            TraceStoreClosedError: Store 已关闭。
+
+        """
+        if not trace_ids:
+            raise ValueError("Trace 导出 guard 至少需要一个 ID。")
+        if len(trace_ids) != len(set(trace_ids)):
+            raise ValueError("Trace 导出 guard 不接受重复 ID。")
+        if any(
+            _TRACE_ID_PATTERN.fullmatch(value) is None for value in trace_ids
+        ):
+            raise ValueError("Trace ID 必须是新式或旧式 32 位十六进制。")
+        lease_id = f"texp_{uuid.uuid4().hex}"
+        expires_at = _timestamp(
+            datetime.now(UTC) + timedelta(seconds=_EXPORT_LEASE_SECONDS)
+        )
         with self._lock:
-            self._active_exports[trace_id] += 1
+            connection = self._require_connection()
+            try:
+                connection.executemany(
+                    "INSERT INTO trace_export_leases("
+                    "lease_id, trace_id, expires_at) VALUES (?, ?, ?)",
+                    (
+                        (lease_id, trace_id, expires_at)
+                        for trace_id in trace_ids
+                    ),
+                )
+                connection.commit()
+            except sqlite3.Error:
+                connection.rollback()
+                raise
+            for trace_id in trace_ids:
+                self._active_exports[trace_id] += 1
         try:
             yield
         finally:
             with self._lock:
-                self._active_exports[trace_id] -= 1
-                if self._active_exports[trace_id] <= 0:
-                    del self._active_exports[trace_id]
+                try:
+                    connection = self._require_connection()
+                    connection.execute(
+                        "DELETE FROM trace_export_leases WHERE lease_id=?",
+                        (lease_id,),
+                    )
+                    connection.commit()
+                finally:
+                    for trace_id in trace_ids:
+                        self._active_exports[trace_id] -= 1
+                        if self._active_exports[trace_id] <= 0:
+                            del self._active_exports[trace_id]
 
     def close(self) -> None:
         """幂等关闭数据库连接。

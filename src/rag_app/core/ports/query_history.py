@@ -13,7 +13,7 @@ from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
 class QueryHistoryPort(Protocol):
     """允许宿主选择正文保存，不把正文放入安全事件端口。"""
 
-    def start(
+    def start(  # noqa: PLR0913
         self,
         trace_id: str,
         scope: KnowledgeBaseScope,
@@ -21,6 +21,7 @@ class QueryHistoryPort(Protocol):
         *,
         owner_id: str,
         save_body: bool,
+        conversation_context_digest: str | None = None,
     ) -> None:
         """在读取索引和调用模型前同步创建 STARTED 记录。
 
@@ -30,6 +31,7 @@ class QueryHistoryPort(Protocol):
             question: 当前用户问题。
             owner_id: 当前会话或 Token 主体。
             save_body: 是否允许保存加密正文。
+            conversation_context_digest: 可选上下文规范摘要，不含正文。
 
         Returns:
             写入成功时无返回值。

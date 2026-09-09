@@ -9,6 +9,7 @@ from starlette.routing import compile_path
 
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied
+from rag_app.tracing.store import TraceNotFoundError
 
 _BASE = "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}"
 _READ_PATHS = (
@@ -47,7 +48,7 @@ class TokenRoute:
     knowledge_base_id: str | None
 
 
-def resolve_token_route(
+def resolve_token_route(  # noqa: PLR0912
     request: Request, runtime: ProductRuntime
 ) -> TokenRoute:
     """先解析资源归属，再提供 Scope；不读取 Artifact 内容。
@@ -70,6 +71,9 @@ def resolve_token_route(
         ("POST", _BASE + ":answer", "query:read"),
         ("GET", _BASE + "/history", "query:read"),
         ("GET", _BASE + "/history/{trace_id}", "query:read"),
+        ("DELETE", _BASE + "/conversations/{conversation_id}", "query:read"),
+        ("GET", _BASE + "/queries/{trace_id}/feedback", "query:read"),
+        ("PUT", _BASE + "/queries/{trace_id}/feedback", "query:read"),
         ("GET", "/api/v1/system/components", "system:read"),
         ("GET", "/api/v1/admin/operational-traces", "trace:summary"),
         (
@@ -112,9 +116,22 @@ def resolve_token_route(
                 job = runtime.p09.store.get_job(params["job_id"])
                 project_id, kb_id = job.project_id, job.knowledge_base_id
             if "trace_id" in params and "operational-traces" in template:
-                detail = runtime.traces.detail(params["trace_id"])
-                project_id = detail.trace.project_id
-                kb_id = detail.trace.knowledge_base_id
+                detail = runtime.traces.legacy_detail(params["trace_id"])
+                root = detail.get("trace")
+                if not isinstance(root, dict):
+                    raise PolicyDenied(
+                        "Trace 根身份无效。", stage="token.scope"
+                    )
+                project_id = root.get("project_id")
+                kb_id = root.get("knowledge_base_id")
+                if not isinstance(project_id, str) or not isinstance(
+                    kb_id, str
+                ):
+                    record_scope = runtime.history.record_scope(
+                        params["trace_id"]
+                    )
+                    if record_scope is not None:
+                        project_id, kb_id = record_scope
             elif "operational-traces" in template:
                 project_id = request.query_params.get("project_id")
                 kb_id = request.query_params.get("knowledge_base_id")
@@ -139,7 +156,7 @@ def resolve_token_route(
                     version_id,
                     params["artifact_id"],
                 )
-        except NotFound:
+        except (NotFound, TraceNotFoundError):
             raise PolicyDenied(
                 "资源范围不匹配。", stage="token.scope"
             ) from None

@@ -20,9 +20,10 @@ from rag_app.tracing.models import (
 from rag_app.tracing.recorder import (
     TraceRecorder,
     TraceRecorderConfig,
+    TraceSpanSpec,
     TraceUnavailableError,
 )
-from rag_app.tracing.store import TraceStore
+from rag_app.tracing.store import TraceNotFoundError, TraceStore
 
 
 def _trace(trace_id: str, mode: TraceMode) -> TraceRecord:
@@ -171,6 +172,85 @@ def test_diagnostic_keeps_candidate_scores_without_full_artifact(
     assert detail.artifacts == ()
     assert detail.candidate_decisions[0].details["raw_score"] == 0.75
     assert b"must-not-persist" not in store.export_trace(trace_id)
+    recorder.close()
+
+
+def test_buffered_trace_is_committed_once_with_original_duration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """非 FULL 请求结束前不可见，结束后由 writer 一次提交完整快照。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    writes: list[tuple[str, str]] = []
+    original_write = store.write_completed_trace
+
+    def observe_write(*args: object, **kwargs: object) -> None:
+        trace = args[0]
+        assert isinstance(trace, TraceRecord)
+        writes.append((trace.trace_id, threading.current_thread().name))
+        original_write(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(store, "write_completed_trace", observe_write)
+    recorder = TraceRecorder(store)
+    trace_id = "c" * 32
+    session = recorder.begin_query(
+        trace_id,
+        TraceMode.DIAGNOSTIC,
+        datetime(2026, 7, 29, 8, 0, tzinfo=UTC),
+        TraceIdentity(
+            pipeline_fingerprint="sha256:" + "1" * 64,
+            serving_fingerprint="sha256:" + "2" * 64,
+            release_revision="release-1",
+            active_collection="pending",
+            index_manifest_sha256="3" * 64,
+            payload_schema_version=2,
+        ),
+        buffer_writes=True,
+        completed_elapsed_ms=37,
+    )
+    session.completed_span(
+        TraceSpanSpec(
+            name="retrieval.snapshot",
+            kind=SpanKind.RETRIEVER,
+            parent_span_id=session.root.span_id,
+            reason_code=DecisionCode.RETRIEVAL_OK,
+            duration_ms=5,
+        )
+    )
+    session.decision(
+        stage="retrieve.q0:fts",
+        chunk_id="chunk-1",
+        selected=True,
+        reason_code=DecisionCode.RETRIEVAL_OK,
+        details={"rank": 1},
+    )
+    session.update_identity(
+        revision_id="irev-current",
+        index_fingerprint="sha256:" + "4" * 64,
+        active_collection="irev-current",
+    )
+
+    with pytest.raises(TraceNotFoundError):
+        store.get_trace(trace_id)
+
+    session.finish(
+        status=TraceStatus.ANSWERED,
+        reason_code=DecisionCode.ANSWERED,
+    )
+    recorder.flush()
+    detail = store.get_trace(trace_id)
+
+    assert writes == [(trace_id, "rag-trace-writer")]
+    assert detail.trace.status is TraceStatus.ANSWERED
+    assert detail.trace.duration_ms == 37
+    assert detail.trace.revision_id == "irev-current"
+    assert detail.trace.index_fingerprint == "sha256:" + "4" * 64
+    assert [span.name for span in detail.spans] == [
+        "rag.query",
+        "retrieval.snapshot",
+    ]
+    assert len(detail.candidate_decisions) == 1
     recorder.close()
 
 

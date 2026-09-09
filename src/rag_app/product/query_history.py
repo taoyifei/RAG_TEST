@@ -8,9 +8,16 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import uuid
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import cast
+
+from cryptography.exceptions import InvalidTag
 
 from rag_app.adapters.stores import SqliteConnectionFactory
 from rag_app.core.capabilities import (
@@ -18,20 +25,52 @@ from rag_app.core.capabilities import (
     ComponentKind,
     ProviderMode,
 )
-from rag_app.core.errors import NotFound, ProviderUnavailable, RagError
+from rag_app.core.errors import (
+    Conflict,
+    NotFound,
+    ProviderUnavailable,
+    RagError,
+)
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
 from rag_app.product.crypto import SecretAad, SecretCipher
+from rag_app.product.feedback import normalize_trace_id
 
 _LOGGER = logging.getLogger(__name__)
 _MAX_PAGE_SIZE = 200
 _MAX_RETENTION_DAYS = 365
+_MAX_KEYWORD_SCAN_RECORDS = 1_000
+_MAX_KEYWORD_SCAN_SECONDS = 0.25
+_EXPORT_LEASE_SECONDS = 15 * 60
+_SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
 _SECRET_TEXT = re.compile(
     r"(?i)(?:\b(?:authorization|cookie|api[_-]?key)\s*[:=]\s*"
     r"[^\r\n]+|\bBearer\s+\S+|\bsk-[a-zA-Z0-9_-]{12,})"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryExportSnapshot:
+    """支持包使用的单条 History 一致读快照。"""
+
+    trace_id: str
+    history_status: str
+    project_id: str | None
+    knowledge_base_id: str | None
+    payload: dict[str, object]
+    body_included: bool
+    body_unavailable_reason: str | None
+
+
+class HistorySnapshotLimitError(ValueError):
+    """History 快照在生成归档前已命中成员或累计字节上限。"""
+
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
 
 
 class ProductQueryHistory:
@@ -60,6 +99,7 @@ class ProductQueryHistory:
         self.retention_days = retention_days
         self._instance_id = uuid.uuid4().hex
         self._process_id = os.getpid()
+        self._write_lock = threading.RLock()
 
     def recover(self) -> None:
         """启动时将未终态请求标记中断，清理已到期记录。
@@ -73,30 +113,51 @@ class ProductQueryHistory:
         """
         now = datetime.now(UTC).isoformat()
         try:
-            with self._connections.transaction(write=True) as connection:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
                 rows = connection.execute(
-                    "SELECT DISTINCT process_id FROM query_history "
-                    "WHERE status='STARTED'"
+                    "SELECT trace_id, process_id, metadata_json "
+                    "FROM query_history WHERE status='STARTED'"
                 ).fetchall()
+                process_state: dict[int, bool] = {}
                 for row in rows:
-                    if not _process_alive(int(row[0])):
+                    process_id = int(row["process_id"])
+                    if process_id not in process_state:
+                        process_state[process_id] = _process_alive(process_id)
+                    alive = process_state[process_id]
+                    if not alive:
+                        metadata = cast(
+                            dict[str, object],
+                            json.loads(str(row["metadata_json"])),
+                        )
+                        metadata["reason_code"] = "PROCESS_INTERRUPTED"
                         connection.execute(
                             "UPDATE query_history SET status='INTERRUPTED', "
                             "finished_at=?, metadata_json=? "
-                            "WHERE status='STARTED' AND process_id=?",
+                            "WHERE status='STARTED' AND trace_id=?",
                             (
                                 now,
                                 json.dumps(
-                                    {"reason_code": "PROCESS_INTERRUPTED"}
+                                    metadata,
+                                    ensure_ascii=False,
+                                    separators=(",", ":"),
+                                    sort_keys=True,
                                 ),
-                                row[0],
+                                row["trace_id"],
                             ),
                         )
             self.clear(expired_only=True)
-        except (sqlite3.Error, ProviderUnavailable) as error:
+        except (
+            InvalidTag,
+            ProviderUnavailable,
+            sqlite3.Error,
+            ValueError,
+        ) as error:
             raise self._unavailable("startup") from error
 
-    def start(
+    def start(  # noqa: PLR0913
         self,
         trace_id: str,
         scope: KnowledgeBaseScope,
@@ -104,6 +165,7 @@ class ProductQueryHistory:
         *,
         owner_id: str,
         save_body: bool,
+        conversation_context_digest: str | None = None,
     ) -> None:
         """在模型和快照之前同步写入请求；不可用时不回退内存。
 
@@ -113,24 +175,34 @@ class ProductQueryHistory:
             question: 当前问题正文。
             owner_id: 管理员会话或 Token 主体。
             save_body: 本次是否允许加密保存正文。
+            conversation_context_digest: 可选的会话上下文 SHA256；不保存
+                上下文正文。
 
         Returns:
             STARTED 落盘完成时无返回值。
 
         """
+        if (
+            conversation_context_digest is not None
+            and _SHA256_PATTERN.fullmatch(conversation_context_digest) is None
+        ):
+            raise ValueError("会话上下文摘要必须是 64 位小写十六进制 SHA256。")
         now = datetime.now(UTC)
         body_saved = self.save_body and save_body
         ciphertext, nonce = self._encode(
             trace_id, {"question": question}, enabled=body_saved
         )
         try:
-            with self._connections.transaction(write=True) as connection:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
                 connection.execute(
                     "INSERT INTO query_history (trace_id, project_id, "
                     "knowledge_base_id, owner_id, created_at, expires_at, "
                     "status, question_sha256, body_saved, ciphertext, nonce, "
-                    "instance_id, process_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 'STARTED', ?, ?, ?, ?, ?, ?)",
+                    "instance_id, process_id, metadata_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 'STARTED', ?, ?, ?, ?, ?, ?, ?)",
                     (
                         trace_id,
                         scope.project_id,
@@ -144,6 +216,19 @@ class ProductQueryHistory:
                         nonce,
                         self._instance_id,
                         self._process_id,
+                        json.dumps(
+                            {
+                                "conversation_context_digest": (
+                                    conversation_context_digest
+                                ),
+                                "conversation_context_present": (
+                                    conversation_context_digest is not None
+                                ),
+                            },
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ),
                     ),
                 )
         except (sqlite3.Error, ProviderUnavailable) as error:
@@ -172,7 +257,10 @@ class ProductQueryHistory:
 
         """
         try:
-            with self._connections.transaction(write=True) as connection:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
                 row = connection.execute(
                     "SELECT * FROM query_history WHERE trace_id=?",
                     (trace_id,),
@@ -186,6 +274,10 @@ class ProductQueryHistory:
                     cancelled,
                     cancelled_calls,
                 )
+                start_metadata = cast(
+                    dict[str, object], json.loads(row["metadata_json"])
+                )
+                metadata = {**start_metadata, **metadata}
                 payload = self._decode(row)
                 if result is not None:
                     payload["answer"] = result.answer
@@ -221,20 +313,51 @@ class ProductQueryHistory:
             事件落盘后无返回值。
 
         """
+        self.record_many((event,))
+
+    def record_many(self, events: Sequence[TraceEvent]) -> None:
+        """在一个事务中保存同一查询的有界兼容事件批次。
+
+        Args:
+            events: 同属一个 Trace 的安全事件序列。
+
+        Returns:
+            无返回值。
+
+        """
+        if not events:
+            return
+        trace_id = events[0].trace_id
+        if any(event.trace_id != trace_id for event in events):
+            raise ValueError("兼容事件批次必须属于同一 Trace。")
         try:
-            with self._connections.transaction(write=True) as connection:
-                connection.execute(
-                    "INSERT INTO query_trace_events (trace_id, occurred_at, "
-                    "event_name, payload_json) VALUES (?, ?, ?, ?)",
-                    (
-                        event.trace_id,
-                        event.occurred_at.isoformat(),
-                        event.event_name,
-                        event.model_dump_json(),
-                    ),
-                )
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
+                self._insert_events(connection, events)
         except (sqlite3.Error, ProviderUnavailable) as error:
-            raise self._unavailable(event.trace_id) from error
+            raise self._unavailable(trace_id) from error
+
+    @staticmethod
+    def _insert_events(
+        connection: sqlite3.Connection,
+        events: Sequence[TraceEvent],
+    ) -> None:
+        """把同一查询的兼容事件批量写入调用方事务。"""
+        connection.executemany(
+            "INSERT INTO query_trace_events (trace_id, occurred_at, "
+            "event_name, payload_json) VALUES (?, ?, ?, ?)",
+            (
+                (
+                    event.trace_id,
+                    event.occurred_at.isoformat(),
+                    event.event_name,
+                    event.model_dump_json(),
+                )
+                for event in events
+            ),
+        )
 
     def events(self, trace_id: str) -> tuple[TraceEvent, ...]:
         """按原顺序读取跨重启仍存在的安全事件。
@@ -247,12 +370,75 @@ class ProductQueryHistory:
 
         """
         with self._connections.transaction() as connection:
+            stored_trace_id = _stored_event_trace_id(connection, trace_id)
+            if stored_trace_id is None:
+                return ()
             rows = connection.execute(
                 "SELECT payload_json FROM query_trace_events "
                 "WHERE trace_id=? ORDER BY sequence",
-                (trace_id,),
+                (stored_trace_id,),
             ).fetchall()
-        return tuple(TraceEvent.model_validate_json(row[0]) for row in rows)
+        return tuple(
+            TraceEvent.model_validate(
+                {
+                    **_validated_event_payload(str(row[0]), trace_id),
+                    "trace_id": normalize_trace_id(trace_id),
+                }
+            )
+            for row in rows
+        )
+
+    def event_payloads(
+        self,
+        trace_id: str,
+        *,
+        max_total_bytes: int | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        """读取兼容旧 32hex ID 的安全 flat event JSON。
+
+        Args:
+            trace_id: 新式或旧式共享 Trace ID。
+            max_total_bytes: 可选的原始 JSON 累计字节上限。
+
+        Returns:
+            与数据库 sequence 相同顺序的 JSON object。
+
+        Raises:
+            ProviderUnavailable: 事件库不可读、JSON 损坏或身份不一致。
+
+        """
+        if max_total_bytes is not None and max_total_bytes <= 0:
+            raise ValueError("flat event 字节上限必须为正数。")
+        try:
+            with self._connections.transaction() as connection:
+                stored_trace_id = _stored_event_trace_id(connection, trace_id)
+                if stored_trace_id is None:
+                    return ()
+                rows = connection.execute(
+                    "SELECT payload_json FROM query_trace_events "
+                    "WHERE trace_id=? ORDER BY sequence",
+                    (stored_trace_id,),
+                ).fetchall()
+                payloads: list[dict[str, object]] = []
+                total_bytes = 0
+                for row in rows:
+                    raw_payload = str(row["payload_json"])
+                    total_bytes += len(raw_payload.encode("utf-8"))
+                    if (
+                        max_total_bytes is not None
+                        and total_bytes > max_total_bytes
+                    ):
+                        raise HistorySnapshotLimitError(
+                            "EXPORT_TOTAL_BYTES_EXCEEDED"
+                        )
+                    payloads.append(
+                        _validated_event_payload(raw_payload, trace_id)
+                    )
+            return tuple(payloads)
+        except HistorySnapshotLimitError:
+            raise
+        except (sqlite3.Error, ValueError) as error:
+            raise self._unavailable(trace_id) from error
 
     def diagnostics(self, trace_id: str) -> RetrievalDiagnostics:
         """兼容 SDK 原有诊断读取语义，数据来自权威主库。
@@ -265,10 +451,13 @@ class ProductQueryHistory:
 
         """
         with self._connections.transaction() as connection:
+            stored_trace_id = _stored_history_trace_id(connection, trace_id)
+            if stored_trace_id is None:
+                raise NotFound("检索过程不存在或已过期。", stage="history.read")
             row = connection.execute(
                 "SELECT metadata_json FROM query_history "
                 "WHERE trace_id=? AND expires_at>?",
-                (trace_id, datetime.now(UTC).isoformat()),
+                (stored_trace_id, datetime.now(UTC).isoformat()),
             ).fetchone()
         if row is None:
             raise NotFound("检索过程不存在或已过期。", stage="history.read")
@@ -324,32 +513,128 @@ class ProductQueryHistory:
                 conditions.append("created_at" + operator + "?")
                 parameters.append(value)
         # 列名和运算符均来自以上固定集合，用户值只进入绑定参数。
-        query = (
+        where_clause = " AND ".join(conditions)
+        ordered_query = (
             "SELECT * FROM query_history WHERE "  # noqa: S608
-            + " AND ".join(conditions)
+            + where_clause
             + " ORDER BY created_at DESC, trace_id DESC"
         )
         with self._connections.transaction() as connection:
-            # 加密正文不能交给明文 FTS；游标逐条解密，不保存另一个搜索副本。
-            items = []
-            total = 0
-            for row in connection.execute(query, parameters):
-                item = self._view(connection, row, detail=False)
-                question = str(item.get("question") or "")
-                if keyword and keyword.casefold() not in question.casefold():
-                    continue
-                if offset <= total < offset + page_size:
-                    items.append(item)
-                total += 1
-        return {
+            if not keyword:
+                total = int(
+                    connection.execute(
+                        "SELECT COUNT(*) FROM query_history WHERE "  # noqa: S608
+                        + where_clause,
+                        parameters,
+                    ).fetchone()[0]
+                )
+                rows = connection.execute(
+                    ordered_query + " LIMIT ? OFFSET ?",
+                    (*parameters, page_size, offset),
+                ).fetchall()
+                items = [
+                    self._view(connection, row, detail=False) for row in rows
+                ]
+                search_complete = True
+                scanned_count = len(rows)
+                truncation_reason = None
+            else:
+                (
+                    items,
+                    total,
+                    search_complete,
+                    scanned_count,
+                    truncation_reason,
+                ) = self._keyword_page(
+                    connection,
+                    ordered_query,
+                    parameters,
+                    keyword=keyword,
+                    page_size=page_size,
+                    offset=offset,
+                )
+        result: dict[str, object] = {
             "items": items,
             "total": total,
+            "total_is_exact": search_complete,
             "offset": offset,
             "page_size": page_size,
             "body_enabled": self.save_body,
             "retention_days": self.retention_days,
             "storage": "local_encrypted_sqlite",
+            "search_complete": search_complete,
+            "scanned_count": scanned_count,
+            "next_cursor": None,
         }
+        if truncation_reason is not None:
+            result.update(
+                {
+                    "truncation_reason": truncation_reason,
+                    "candidate_scan_limit": _MAX_KEYWORD_SCAN_RECORDS,
+                    "time_scan_limit_ms": int(
+                        _MAX_KEYWORD_SCAN_SECONDS * 1_000
+                    ),
+                }
+            )
+        return result
+
+    def _keyword_page(  # noqa: PLR0913
+        self,
+        connection: sqlite3.Connection,
+        ordered_query: str,
+        parameters: Sequence[object],
+        *,
+        keyword: str,
+        page_size: int,
+        offset: int,
+    ) -> tuple[list[dict[str, object]], int, bool, int, str | None]:
+        """在固定候选数和墙钟预算内搜索获准解密的正文。
+
+        Args:
+            connection: 当前一致读事务。
+            ordered_query: 仅由固定列构成并已带排序的 SQL。
+            parameters: SQL 绑定参数。
+            keyword: 调用方提供的正文关键词。
+            page_size: 返回页大小。
+            offset: 匹配结果偏移量。
+
+        Returns:
+            页面、已知匹配数、是否扫完、扫描数和截断原因。
+
+        """
+        items: list[dict[str, object]] = []
+        matched_count = 0
+        scanned_count = 0
+        search_complete = True
+        truncation_reason: str | None = None
+        deadline = monotonic() + _MAX_KEYWORD_SCAN_SECONDS
+        normalized_keyword = keyword.casefold()
+        rows = connection.execute(ordered_query, parameters)
+        for row in rows:
+            if scanned_count >= _MAX_KEYWORD_SCAN_RECORDS:
+                search_complete = False
+                truncation_reason = "CANDIDATE_LIMIT"
+                break
+            if scanned_count and monotonic() >= deadline:
+                search_complete = False
+                truncation_reason = "TIME_LIMIT"
+                break
+            scanned_count += 1
+            # _view 会先重验 Revision、Document 和 Version，再决定是否解密。
+            item = self._view(connection, row, detail=False)
+            question = str(item.get("question") or "")
+            if normalized_keyword not in question.casefold():
+                continue
+            if offset <= matched_count < offset + page_size:
+                items.append(item)
+            matched_count += 1
+        return (
+            items,
+            matched_count,
+            search_complete,
+            scanned_count,
+            truncation_reason,
+        )
 
     def detail(
         self,
@@ -372,9 +657,12 @@ class ProductQueryHistory:
 
         """
         with self._connections.transaction() as connection:
+            stored_trace_id = _stored_history_trace_id(connection, trace_id)
+            if stored_trace_id is None:
+                raise NotFound("历史不存在或无权查看。", stage="history.read")
             row = connection.execute(
                 "SELECT * FROM query_history WHERE trace_id=? AND expires_at>?",
-                (trace_id, datetime.now(UTC).isoformat()),
+                (stored_trace_id, datetime.now(UTC).isoformat()),
             ).fetchone()
             if row is None or any(
                 expected is not None and row[name] != expected
@@ -386,13 +674,183 @@ class ProductQueryHistory:
             ):
                 raise NotFound("历史不存在或无权查看。", stage="history.read")
             item = self._view(connection, row, detail=True)
-        item["events"] = [
-            event.model_dump(mode="json") for event in self.events(trace_id)
-        ]
+        item["events"] = list(self.event_payloads(stored_trace_id))
         return item
 
+    @contextmanager
+    def export_snapshots(  # noqa: PLR0913
+        self,
+        trace_ids: Sequence[str],
+        *,
+        include_body: bool,
+        body_authorized: bool,
+        now: datetime | None = None,
+        max_item_bytes: int | None = None,
+        max_total_bytes: int | None = None,
+    ) -> Iterator[dict[str, HistoryExportSnapshot]]:
+        """在持久 lease 内物化一组问答历史快照。
+
+        Args:
+            trace_ids: 已经过严格格式校验且没有重复项的 Trace ID。
+            include_body: 调用方是否显式请求正文。
+            body_authorized: 当前主体是否为获准导出正文的管理员。
+            now: 可选的冻结导出时间，测试可据此验证稳定输出。
+            max_item_bytes: 可选的单条 canonical History JSON 字节上限。
+            max_total_bytes: 可选的全部 History JSON 累计字节上限。
+
+        Yields:
+            以 Trace ID 为键的历史快照；缺失记录也有明确占位。
+
+        Returns:
+            管理持久导出 lease 的上下文迭代器。
+
+        Raises:
+            HistorySnapshotLimitError: 快照命中调用方提供的字节上限。
+            ProviderUnavailable: journal、lease 或历史读取不可用。
+
+        """
+        if not trace_ids:
+            raise ValueError("History 导出至少需要一个 Trace ID。")
+        if len(trace_ids) != len(set(trace_ids)):
+            raise ValueError("History 导出不接受重复 Trace ID。")
+        if any(
+            _TRACE_ID_PATTERN.fullmatch(trace_id) is None
+            for trace_id in trace_ids
+        ):
+            raise ValueError("History 导出 Trace ID 格式无效。")
+        normalized_trace_ids = tuple(
+            normalize_trace_id(trace_id) for trace_id in trace_ids
+        )
+        if len(normalized_trace_ids) != len(set(normalized_trace_ids)):
+            raise ValueError("History 导出不接受等价的新旧重复 ID。")
+        for limit in (max_item_bytes, max_total_bytes):
+            if limit is not None and limit <= 0:
+                raise ValueError("History 导出字节上限必须为正数。")
+        lease_now = datetime.now(UTC)
+        frozen_now = (now or lease_now).astimezone(UTC)
+        export_id = f"hexp_{uuid.uuid4().hex}"
+        expires_at = lease_now + timedelta(seconds=_EXPORT_LEASE_SECONDS)
+        requested_sha256 = hashlib.sha256(
+            json.dumps(
+                list(trace_ids),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        snapshots: dict[str, HistoryExportSnapshot] = {}
+        try:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
+                _purge_export_journal(connection, lease_now)
+                connection.execute(
+                    "INSERT INTO history_export_journal("
+                    "export_id, requested_sha256, state, created_at, "
+                    "expires_at) "
+                    "VALUES (?, ?, 'ACTIVE', ?, ?)",
+                    (
+                        export_id,
+                        requested_sha256,
+                        lease_now.isoformat(),
+                        expires_at.isoformat(),
+                    ),
+                )
+                connection.executemany(
+                    "INSERT INTO history_export_leases("
+                    "export_id, trace_id, expires_at) VALUES (?, ?, ?)",
+                    (
+                        (export_id, alias, expires_at.isoformat())
+                        for canonical in normalized_trace_ids
+                        for alias in (
+                            canonical,
+                            canonical.removeprefix("trace_"),
+                        )
+                    ),
+                )
+                total_bytes = 0
+                for trace_id in trace_ids:
+                    snapshot = self._export_snapshot(
+                        connection,
+                        trace_id,
+                        include_body=include_body,
+                        body_authorized=body_authorized,
+                        now=frozen_now,
+                        max_payload_bytes=max_item_bytes,
+                    )
+                    item_bytes = len(_canonical_json_bytes(snapshot.payload))
+                    if (
+                        max_item_bytes is not None
+                        and item_bytes > max_item_bytes
+                    ):
+                        raise HistorySnapshotLimitError(
+                            "EXPORT_MEMBER_BYTES_EXCEEDED"
+                        )
+                    total_bytes += item_bytes
+                    if (
+                        max_total_bytes is not None
+                        and total_bytes > max_total_bytes
+                    ):
+                        raise HistorySnapshotLimitError(
+                            "EXPORT_TOTAL_BYTES_EXCEEDED"
+                        )
+                    snapshots[trace_id] = snapshot
+        except HistorySnapshotLimitError:
+            raise
+        except (sqlite3.Error, ProviderUnavailable, ValueError) as error:
+            raise self._unavailable("history-export") from error
+
+        completed = False
+        try:
+            yield snapshots
+            completed = True
+        finally:
+            self._finish_export(
+                export_id,
+                completed=completed,
+                now=datetime.now(UTC),
+            )
+
+    def record_scope(self, trace_id: str) -> tuple[str, str] | None:
+        """返回未按保留期过滤的 History 项目与知识库身份。
+
+        Args:
+            trace_id: 当前或旧格式 Trace ID。
+
+        Returns:
+            Project 与知识库 ID；记录不存在时为 None。
+
+        """
+        try:
+            with self._connections.transaction() as connection:
+                stored_trace_id = _stored_history_trace_id(connection, trace_id)
+                if stored_trace_id is None:
+                    return None
+                row = connection.execute(
+                    "SELECT project_id, knowledge_base_id FROM query_history "
+                    "WHERE trace_id=?",
+                    (stored_trace_id,),
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise self._unavailable(trace_id) from error
+        if row is None:
+            return None
+        return str(row["project_id"]), str(row["knowledge_base_id"])
+
+    def has_record(self, trace_id: str) -> bool:
+        """判断 History 是否仍保存指定 ID，不按正文或到期策略过滤。
+
+        Args:
+            trace_id: 当前或旧格式 Trace ID。
+
+        Returns:
+            任一等价 History 记录存在时为 True。
+
+        """
+        return self.record_scope(trace_id) is not None
+
     def clear(self, *, expired_only: bool = False) -> int:
-        """清理历史和对应事件；不触碰源文件或模型账本。
+        """清理历史和旧平面事件；不触碰独立 Operational Trace。
 
         Args:
             expired_only: 是否仅清理已到期记录。
@@ -401,24 +859,194 @@ class ProductQueryHistory:
             实际清理的历史记录数。
 
         """
-        with self._connections.transaction(write=True) as connection:
+        with (
+            self._write_lock,
+            self._connections.transaction(write=True) as connection,
+        ):
+            now = datetime.now(UTC)
+            _purge_export_journal(connection, now)
+            if _export_conflicts_with_clear(
+                connection,
+                now=now,
+                expired_only=expired_only,
+            ):
+                raise Conflict(
+                    "问答历史支持包正在导出，请稍后重试清理。",
+                    stage="history.clear",
+                    retryable=True,
+                )
             if expired_only:
-                now = datetime.now(UTC).isoformat()
+                now_text = now.isoformat()
                 connection.execute(
                     "DELETE FROM query_trace_events WHERE trace_id IN "
                     "(SELECT trace_id FROM query_history WHERE expires_at<=?)",
-                    (now,),
+                    (now_text,),
                 )
                 cursor = connection.execute(
-                    "DELETE FROM query_history WHERE expires_at<=?", (now,)
+                    "DELETE FROM query_history WHERE expires_at<=?", (now_text,)
                 )
             else:
-                connection.execute(
-                    "DELETE FROM query_trace_events WHERE trace_id IN "
-                    "(SELECT trace_id FROM query_history)"
-                )
+                connection.execute("DELETE FROM query_trace_events")
                 cursor = connection.execute("DELETE FROM query_history")
         return cursor.rowcount
+
+    def _export_snapshot(  # noqa: PLR0913
+        self,
+        connection: sqlite3.Connection,
+        trace_id: str,
+        *,
+        include_body: bool,
+        body_authorized: bool,
+        now: datetime,
+        max_payload_bytes: int | None,
+    ) -> HistoryExportSnapshot:
+        """从当前写事务物化一条不泄漏正文的导出视图。"""
+        stored_history_id = _stored_history_trace_id(connection, trace_id)
+        row = (
+            None
+            if stored_history_id is None
+            else connection.execute(
+                "SELECT * FROM query_history WHERE trace_id=?",
+                (stored_history_id,),
+            ).fetchone()
+        )
+        stored_event_id = _stored_event_trace_id(connection, trace_id)
+        event_rows = (
+            ()
+            if stored_event_id is None
+            else connection.execute(
+                "SELECT payload_json FROM query_trace_events "
+                "WHERE trace_id=? ORDER BY sequence",
+                (stored_event_id,),
+            )
+        )
+        events: list[dict[str, object]] = []
+        event_bytes = 0
+        for event in event_rows:
+            raw_event = str(event["payload_json"])
+            event_bytes += len(raw_event.encode("utf-8"))
+            if (
+                max_payload_bytes is not None
+                and event_bytes > max_payload_bytes
+            ):
+                raise HistorySnapshotLimitError("EXPORT_MEMBER_BYTES_EXCEEDED")
+            events.append(_validated_event_payload(raw_event, trace_id))
+        if row is None:
+            reason = "HISTORY_MISSING"
+            return HistoryExportSnapshot(
+                trace_id=trace_id,
+                history_status="MISSING",
+                project_id=None,
+                knowledge_base_id=None,
+                payload={
+                    "trace_id": trace_id,
+                    "history_status": "MISSING",
+                    "body_included": False,
+                    "body_unavailable_reason": reason,
+                    "events": events,
+                },
+                body_included=False,
+                body_unavailable_reason=reason,
+            )
+
+        raw_metadata = str(row["metadata_json"])
+        if (
+            max_payload_bytes is not None
+            and len(raw_metadata.encode("utf-8")) > max_payload_bytes
+        ):
+            raise HistorySnapshotLimitError("EXPORT_MEMBER_BYTES_EXCEEDED")
+        metadata = cast(dict[str, object], json.loads(raw_metadata))
+        source_reason = _source_unavailable_reason(connection, row, metadata)
+        expired = datetime.fromisoformat(str(row["expires_at"])) <= now
+        body_reason = _body_unavailable_reason(
+            requested=include_body,
+            authorized=body_authorized,
+            policy_enabled=self.save_body,
+            body_saved=bool(row["body_saved"]),
+            expired=expired,
+            source_reason=source_reason,
+        )
+        body_included = body_reason is None
+        history_status = "EXPIRED" if expired else "AVAILABLE"
+        payload: dict[str, object] = {
+            name: row[name]
+            for name in (
+                "trace_id",
+                "project_id",
+                "knowledge_base_id",
+                "created_at",
+                "finished_at",
+                "status",
+                "duration_ms",
+                "expires_at",
+                "question_sha256",
+            )
+        }
+        payload.update(metadata)
+        payload.update(
+            {
+                "history_status": history_status,
+                "body_saved": bool(row["body_saved"]),
+                "body_included": body_included,
+                "body_unavailable_reason": body_reason,
+                "events": events,
+            }
+        )
+        if body_included:
+            ciphertext = row["ciphertext"]
+            if (
+                max_payload_bytes is not None
+                and isinstance(ciphertext, str)
+                and len(ciphertext.encode("ascii")) > max_payload_bytes * 2
+            ):
+                raise HistorySnapshotLimitError("EXPORT_MEMBER_BYTES_EXCEEDED")
+            decoded = self._decode(row)
+            payload.update(
+                {
+                    "question": decoded.get("question"),
+                    "answer": decoded.get("answer"),
+                    "result": decoded.get("result"),
+                }
+            )
+        return HistoryExportSnapshot(
+            trace_id=trace_id,
+            history_status=history_status,
+            project_id=str(row["project_id"]),
+            knowledge_base_id=str(row["knowledge_base_id"]),
+            payload=payload,
+            body_included=body_included,
+            body_unavailable_reason=body_reason,
+        )
+
+    def _finish_export(
+        self,
+        export_id: str,
+        *,
+        completed: bool,
+        now: datetime,
+    ) -> None:
+        """释放持久 lease，并保留无正文的完成 journal。"""
+        try:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
+                connection.execute(
+                    "DELETE FROM history_export_leases WHERE export_id=?",
+                    (export_id,),
+                )
+                connection.execute(
+                    "UPDATE history_export_journal SET state=?, finished_at=?, "
+                    "failure_code=? WHERE export_id=?",
+                    (
+                        "COMPLETED" if completed else "FAILED",
+                        now.astimezone(UTC).isoformat(),
+                        None if completed else "EXPORT_ABORTED",
+                        export_id,
+                    ),
+                )
+        except sqlite3.Error as error:
+            raise self._unavailable("history-export-release") from error
 
     def close(self) -> None:
         """仅将本实例剩余请求收尾，不中断共用数据库的其他进程。
@@ -431,18 +1059,38 @@ class ProductQueryHistory:
 
         """
         try:
-            with self._connections.transaction(write=True) as connection:
-                connection.execute(
-                    "UPDATE query_history SET status='INTERRUPTED', "
-                    "finished_at=?, metadata_json=? "
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
+                rows = connection.execute(
+                    "SELECT trace_id, metadata_json FROM query_history "
                     "WHERE status='STARTED' AND instance_id=?",
-                    (
-                        datetime.now(UTC).isoformat(),
-                        json.dumps({"reason_code": "PROCESS_INTERRUPTED"}),
-                        self._instance_id,
-                    ),
-                )
-        except (sqlite3.Error, ProviderUnavailable):
+                    (self._instance_id,),
+                ).fetchall()
+                finished_at = datetime.now(UTC).isoformat()
+                for row in rows:
+                    metadata = cast(
+                        dict[str, object],
+                        json.loads(str(row["metadata_json"])),
+                    )
+                    metadata["reason_code"] = "PROCESS_INTERRUPTED"
+                    connection.execute(
+                        "UPDATE query_history SET status='INTERRUPTED', "
+                        "finished_at=?, metadata_json=? "
+                        "WHERE status='STARTED' AND trace_id=?",
+                        (
+                            finished_at,
+                            json.dumps(
+                                metadata,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                sort_keys=True,
+                            ),
+                            row["trace_id"],
+                        ),
+                    )
+        except (sqlite3.Error, ProviderUnavailable, ValueError):
             self._unavailable("shutdown")
 
     def _view(
@@ -520,6 +1168,34 @@ class ProductQueryHistory:
         )
 
 
+def _stored_history_trace_id(
+    connection: sqlite3.Connection, trace_id: str
+) -> str | None:
+    """按 canonical 优先级解析新旧 History ID 的实际存储形式。"""
+    canonical = normalize_trace_id(trace_id)
+    legacy = canonical.removeprefix("trace_")
+    row = connection.execute(
+        "SELECT trace_id FROM query_history WHERE trace_id IN (?, ?) "
+        "ORDER BY CASE WHEN trace_id=? THEN 0 ELSE 1 END LIMIT 1",
+        (canonical, legacy, canonical),
+    ).fetchone()
+    return None if row is None else str(row["trace_id"])
+
+
+def _stored_event_trace_id(
+    connection: sqlite3.Connection, trace_id: str
+) -> str | None:
+    """按 canonical 优先级解析新旧 flat event ID 的实际存储形式。"""
+    canonical = normalize_trace_id(trace_id)
+    legacy = canonical.removeprefix("trace_")
+    row = connection.execute(
+        "SELECT trace_id FROM query_trace_events WHERE trace_id IN (?, ?) "
+        "ORDER BY CASE WHEN trace_id=? THEN 0 ELSE 1 END LIMIT 1",
+        (canonical, legacy, canonical),
+    ).fetchone()
+    return None if row is None else str(row["trace_id"])
+
+
 def _aad(trace_id: str) -> SecretAad:
     return SecretAad(
         credential_id=trace_id,
@@ -549,11 +1225,55 @@ def _redact_payload(value: object) -> object:
     return value
 
 
-def _sources_readable(
+def _canonical_json_bytes(value: object) -> bytes:
+    """按支持包一致口径计算 History 快照字节。"""
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def _validated_event_payload(
+    raw_payload: str,
+    expected_trace_id: str,
+) -> dict[str, object]:
+    """校验旧事件 schema，同时仅为模型校验临时补齐 trace_ 前缀。"""
+    return _validated_event_object(json.loads(raw_payload), expected_trace_id)
+
+
+def _validated_event_object(
+    payload: object,
+    expected_trace_id: str,
+) -> dict[str, object]:
+    """校验数据库行或新式兼容投影中的单个安全事件。"""
+    if not isinstance(payload, dict):
+        raise ValueError("flat event Trace 身份不一致。")
+    stored_trace_id = payload.get("trace_id")
+    if not isinstance(stored_trace_id, str):
+        raise ValueError("flat event Trace 身份不一致。")
+    try:
+        identities_match = normalize_trace_id(
+            stored_trace_id
+        ) == normalize_trace_id(expected_trace_id)
+    except ValueError as error:
+        raise ValueError("flat event Trace 身份不一致。") from error
+    if not identities_match:
+        raise ValueError("flat event Trace 身份不一致。")
+    candidate = dict(payload)
+    candidate["trace_id"] = normalize_trace_id(expected_trace_id)
+    validated = TraceEvent.model_validate(candidate).model_dump(mode="json")
+    validated["trace_id"] = expected_trace_id
+    return cast(dict[str, object], validated)
+
+
+def _source_unavailable_reason(
     connection: sqlite3.Connection,
     row: sqlite3.Row,
     metadata: dict[str, object],
-) -> bool:
+) -> str | None:
+    """区分范围失效与引用文档失效，避免导出端猜测。"""
     scope = connection.execute(
         "SELECT 1 FROM knowledge_bases k JOIN projects p "
         "ON p.project_id=k.project_id WHERE k.project_id=? "
@@ -562,7 +1282,7 @@ def _sources_readable(
         (row["project_id"], row["knowledge_base_id"]),
     ).fetchone()
     if scope is None:
-        return False
+        return "SCOPE_UNAVAILABLE"
     for document_id in cast(list[str], metadata.get("document_ids", [])):
         found = connection.execute(
             "SELECT 1 FROM documents WHERE document_id=? AND project_id=? "
@@ -571,8 +1291,76 @@ def _sources_readable(
             (document_id, row["project_id"], row["knowledge_base_id"]),
         ).fetchone()
         if found is None:
-            return False
-    return True
+            return "SOURCE_UNAVAILABLE"
+    return None
+
+
+def _sources_readable(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    metadata: dict[str, object],
+) -> bool:
+    return _source_unavailable_reason(connection, row, metadata) is None
+
+
+def _body_unavailable_reason(  # noqa: PLR0913
+    *,
+    requested: bool,
+    authorized: bool,
+    policy_enabled: bool,
+    body_saved: bool,
+    expired: bool,
+    source_reason: str | None,
+) -> str | None:
+    """按固定优先级返回正文未进入支持包的稳定原因。"""
+    if not requested:
+        return "NOT_REQUESTED"
+    if not authorized:
+        return "PRINCIPAL_NOT_AUTHORIZED"
+    if not policy_enabled:
+        return "POLICY_DISABLED"
+    if not body_saved:
+        return "BODY_NOT_SAVED"
+    if expired:
+        return "HISTORY_EXPIRED"
+    return source_reason
+
+
+def _purge_export_journal(
+    connection: sqlite3.Connection,
+    now: datetime,
+) -> None:
+    """删除已过期 journal；外键级联清除崩溃遗留 lease。"""
+    connection.execute(
+        "DELETE FROM history_export_journal WHERE expires_at<=?",
+        (now.astimezone(UTC).isoformat(),),
+    )
+
+
+def _export_conflicts_with_clear(
+    connection: sqlite3.Connection,
+    *,
+    now: datetime,
+    expired_only: bool,
+) -> bool:
+    """仅在清理会触碰 lease 所保护的 History/flat event 时冲突。"""
+    now_text = now.astimezone(UTC).isoformat()
+    if expired_only:
+        row = connection.execute(
+            "SELECT 1 FROM history_export_leases l "
+            "JOIN query_history h ON h.trace_id=l.trace_id "
+            "WHERE l.expires_at>? AND h.expires_at<=? LIMIT 1",
+            (now_text, now_text),
+        ).fetchone()
+        return row is not None
+    row = connection.execute(
+        "SELECT 1 FROM history_export_leases l WHERE l.expires_at>? AND ("
+        "EXISTS(SELECT 1 FROM query_history h WHERE h.trace_id=l.trace_id) "
+        "OR EXISTS(SELECT 1 FROM query_trace_events e "
+        "WHERE e.trace_id=l.trace_id)) LIMIT 1",
+        (now_text,),
+    ).fetchone()
+    return row is not None
 
 
 def _completion(

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
+import sqlite3
 import threading
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from enum import Enum
+from time import monotonic
+from typing import Literal
 
 from rag_app.adapters.stores import SqliteConnectionFactory
 from rag_app.core.capabilities import (
@@ -21,7 +27,11 @@ from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
-from rag_app.product.query_history import ProductQueryHistory
+from rag_app.product.feedback import normalize_trace_id
+from rag_app.product.query_history import (
+    HistorySnapshotLimitError,
+    ProductQueryHistory,
+)
 from rag_app.tracing.models import (
     ArtifactContent,
     SpanKind,
@@ -42,9 +52,19 @@ from rag_app.tracing.recorder import (
     TraceSpanSpec,
     TraceUnavailableError,
 )
-from rag_app.tracing.store import TraceNotFoundError, TraceStore
+from rag_app.tracing.store import (
+    ArtifactIntegrityError,
+    TraceNotFoundError,
+    TraceStore,
+    TraceStoreClosedError,
+)
 
 _LOGGER = logging.getLogger(__name__)
+_DEFAULT_COMPAT_EXPORT_BYTES = 16 * 1024 * 1024
+_MAX_PENDING_QUERY_EVENTS = 512
+_QUERY_QUIESCENCE_SECONDS = 1.0
+_QUERY_IDLE_GRACE_SECONDS = 0.25
+_SESSION_SHARD_COUNT = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +76,92 @@ class _QueryTraceSettlement:
     cancelled: bool
     cancelled_calls: tuple[ProviderCall, ...]
     history_written: bool
+
+
+@dataclass(slots=True)
+class _BufferedQueryCapture:
+    """延后非 FULL Trace 构造并限制请求私有兼容事件。"""
+
+    trace_id: str
+    mode: TraceMode
+    created_at: datetime
+    started_tick: float
+    identity: TraceIdentity
+    question_sha256: str
+    admission_attributes: dict[str, object]
+    events: list[TraceEvent] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    def append(self, event: TraceEvent) -> bool:
+        """在固定上限内追加一个事件；达到上限时返回假。
+
+        Args:
+            event: 当前请求的安全兼容事件。
+
+        Returns:
+            事件已追加时为 True；容量耗尽时为 False。
+
+        """
+        with self._lock:
+            if len(self.events) >= _MAX_PENDING_QUERY_EVENTS:
+                return False
+            self.events.append(event)
+            return True
+
+    def snapshot(self) -> tuple[TraceEvent, ...]:
+        """在终态边界冻结当前事件序列。
+
+        Args:
+            无参数；读取当前请求捕获。
+
+        Returns:
+            当前已接收事件的不可变快照。
+
+        """
+        with self._lock:
+            return tuple(self.events)
+
+
+@dataclass(frozen=True, slots=True)
+class OperationalTraceSnapshot:
+    """统一解析后的当前、遗留、仅 History 或缺失 Trace 快照。"""
+
+    trace_id: str
+    state: Literal["current", "legacy-flat", "history-only", "missing"]
+    schema_version: str | None
+    capture_complete: bool
+    project_id: str | None
+    knowledge_base_id: str | None
+    detail: dict[str, object] | None
+    payload: bytes | None
+    missing_reason: str | None
+
+
+class OperationalTracePayloadLimitError(ValueError):
+    """兼容批量解析在保留下一条前命中累计 payload 上限。"""
+
+
+def _snapshot_authorization_identity(
+    snapshot: OperationalTraceSnapshot,
+) -> tuple[object, ...]:
+    """返回 payload 物化前后必须保持不变的授权身份。
+
+    Args:
+        snapshot: metadata-only 或已物化的同一 Trace 快照。
+
+    Returns:
+        存储世代、scope 与捕获语义组成的不可变比较元组。
+
+    """
+    return (
+        snapshot.trace_id,
+        snapshot.state,
+        snapshot.schema_version,
+        snapshot.capture_complete,
+        snapshot.project_id,
+        snapshot.knowledge_base_id,
+        snapshot.missing_reason,
+    )
 
 
 class ProductTraceCoordinator:
@@ -90,7 +196,15 @@ class ProductTraceCoordinator:
         self.release_revision = release_revision
         self.profile_id = profile_id
         self._lock = threading.RLock()
-        self._sessions: dict[str, TraceSession] = {}
+        self._query_idle = threading.Condition(self._lock)
+        self._last_query_finished_at = monotonic()
+        self._session_shards: tuple[
+            dict[str, TraceSession | _BufferedQueryCapture], ...
+        ] = tuple({} for _ in range(_SESSION_SHARD_COUNT))
+        self._session_locks = tuple(
+            threading.Lock() for _ in range(_SESSION_SHARD_COUNT)
+        )
+        self._active_buffered_queries = 0
         self._ingestion_spans: dict[
             tuple[str, str, str, int], TraceSpanHandle
         ] = {}
@@ -113,7 +227,7 @@ class ProductTraceCoordinator:
         with self._lock:
             self._prepared_modes[trace_id] = mode
 
-    def start(
+    def start(  # noqa: PLR0913
         self,
         trace_id: str,
         scope: KnowledgeBaseScope,
@@ -121,6 +235,7 @@ class ProductTraceCoordinator:
         *,
         owner_id: str,
         save_body: bool,
+        conversation_context_digest: str | None = None,
     ) -> None:
         """先建立权威 History，再以相同 ID 开始 Operational Trace。
 
@@ -130,6 +245,7 @@ class ProductTraceCoordinator:
             question: 待查询问题；技术 Trace 只保存摘要。
             owner_id: 当前主体 ID；技术 Trace 只保存摘要。
             save_body: 是否按 History 政策加密保存正文。
+            conversation_context_digest: 可选的会话上下文 SHA256；不保存正文。
 
         Returns:
             无返回值。
@@ -142,6 +258,7 @@ class ProductTraceCoordinator:
             question,
             owner_id=owner_id,
             save_body=save_body,
+            conversation_context_digest=conversation_context_digest,
         )
         identity = self._identity(
             kind="query",
@@ -150,36 +267,58 @@ class ProductTraceCoordinator:
             owner_id=owner_id,
             request_id=trace_id,
         )
+        question_sha256 = hashlib.sha256(question.encode()).hexdigest()
+        created_at = datetime.now(UTC)
+        started_tick = monotonic()
+        admission_attributes: dict[str, object] = {
+            "project_id": scope.project_id,
+            "knowledge_base_id": scope.knowledge_base_id,
+            "owner_sha256": identity.owner_sha256,
+            "conversation_context_present": (
+                conversation_context_digest is not None
+            ),
+        }
+        if conversation_context_digest is not None:
+            admission_attributes["conversation_context_digest"] = (
+                conversation_context_digest
+            )
+        if mode is not TraceMode.FULL:
+            capture = _BufferedQueryCapture(
+                trace_id=trace_id,
+                mode=mode,
+                created_at=created_at,
+                started_tick=started_tick,
+                identity=identity,
+                question_sha256=question_sha256,
+                admission_attributes=admission_attributes,
+            )
+            with self._query_idle:
+                self._active_buffered_queries += 1
+                self._query_idle.notify_all()
+            self._set_session(trace_id, capture)
+            return
         try:
             session = self.recorder.begin_query(
                 trace_id,
                 mode,
-                datetime.now(UTC),
+                created_at,
                 identity,
-                question_sha256=hashlib.sha256(question.encode()).hexdigest(),
+                question_sha256=question_sha256,
             )
         except Exception as error:
             self.recorder.capture_failed(trace_id)
-            if mode is TraceMode.FULL:
-                self._finish_history_after_start_failure(trace_id, error)
-                raise
-            self._record_capture_degradation(trace_id)
-            return
-        with self._lock:
-            self._sessions[trace_id] = session
+            self._finish_history_after_start_failure(trace_id, error)
+            raise
         session.completed_span(
             TraceSpanSpec(
                 name="request.admission",
                 kind=SpanKind.HTTP,
                 parent_span_id=session.root.span_id,
                 reason_code=DecisionCode.ADMISSION_ALLOWED,
-                attributes={
-                    "project_id": scope.project_id,
-                    "knowledge_base_id": scope.knowledge_base_id,
-                    "owner_sha256": identity.owner_sha256,
-                },
+                attributes=admission_attributes,
             )
         )
+        self._set_session(trace_id, session)
 
     def finish(
         self,
@@ -219,33 +358,55 @@ class ProductTraceCoordinator:
                     "History 终态写入失败但保留原查询终态 trace_id=%s",
                     trace_id,
                 )
-        with self._lock:
-            session = self._sessions.pop(trace_id, None)
-        if session is not None:
-            try:
-                self._finalize_query_trace(
-                    session,
-                    _QueryTraceSettlement(
-                        result=result,
-                        error=error or history_failure,
-                        cancelled=cancelled,
-                        cancelled_calls=cancelled_calls,
-                        history_written=history_failure is None,
+        finished_tick = monotonic()
+        stored_session = self._pop_session(trace_id)
+        with self._query_idle:
+            if isinstance(stored_session, _BufferedQueryCapture):
+                self._active_buffered_queries -= 1
+                if self._active_buffered_queries < 0:
+                    raise RuntimeError("活跃缓冲查询计数不能为负数。")
+            self._last_query_finished_at = finished_tick
+            self._query_idle.notify_all()
+        if stored_session is not None:
+            settlement = _QueryTraceSettlement(
+                result=result,
+                error=error or history_failure,
+                cancelled=cancelled,
+                cancelled_calls=cancelled_calls,
+                history_written=history_failure is None,
+            )
+            if isinstance(stored_session, _BufferedQueryCapture):
+                flat_events = stored_session.snapshot()
+                elapsed_ms = max(
+                    0,
+                    round((finished_tick - stored_session.started_tick) * 1000),
+                )
+                self.recorder.submit_finalization(
+                    trace_id,
+                    lambda: self._finalize_buffered_query(
+                        stored_session,
+                        flat_events,
+                        settlement,
+                        elapsed_ms,
                     ),
                 )
-            except TraceUnavailableError as trace_failure:
-                if error is not None or cancelled:
-                    _LOGGER.error(
-                        "FULL Trace 结算失败但保留原查询终态 trace_id=%s",
-                        trace_id,
-                    )
-                else:
-                    raise ProviderUnavailable(
-                        "FULL Trace 终态无法持久化。",
-                        code="TRACE_PERSISTENCE_UNAVAILABLE",
-                        stage="trace.finish",
-                        trace_id=trace_id,
-                    ) from trace_failure
+            else:
+                session = stored_session
+                try:
+                    self._finalize_query_trace(session, settlement)
+                except TraceUnavailableError as trace_failure:
+                    if error is not None or cancelled:
+                        _LOGGER.error(
+                            "FULL Trace 结算失败但保留原查询终态 trace_id=%s",
+                            trace_id,
+                        )
+                    else:
+                        raise ProviderUnavailable(
+                            "FULL Trace 终态无法持久化。",
+                            code="TRACE_PERSISTENCE_UNAVAILABLE",
+                            stage="trace.finish",
+                            trace_id=trace_id,
+                        ) from trace_failure
         if history_failure is not None and error is None and not cancelled:
             raise history_failure
 
@@ -259,6 +420,15 @@ class ProductTraceCoordinator:
             无返回值。
 
         """
+        stored_session = self._session_for_event(event)
+        if isinstance(stored_session, _BufferedQueryCapture):
+            if not stored_session.append(event):
+                self.recorder.mark_capture_incomplete(
+                    event.trace_id,
+                    reason="FLAT_EVENT_LIMIT",
+                    dropped_spans=1,
+                )
+            return
         try:
             self.history.record(event)
         except RagError:
@@ -267,13 +437,19 @@ class ProductTraceCoordinator:
                 event.trace_id,
                 reason=DecisionCode.TRACE_CAPTURE_FAILED.value,
             )
-        session = self._session_for_event(event)
-        if session is None:
+        if stored_session is None:
             return
+        self._record_operational_event(stored_session, event)
+
+    def _record_operational_event(
+        self,
+        session: TraceSession,
+        event: TraceEvent,
+    ) -> None:
+        """把一个安全事件投影到当前层级 Operational Trace。"""
         if event.event_name == "retrieval.snapshot":
             attributes = dict(event.attributes)
-            self.recorder.update_trace_identity(
-                event.trace_id,
+            session.update_identity(
                 revision_id=_text(attributes.get("revision_id")),
                 index_fingerprint=_text(attributes.get("index_fingerprint")),
                 serving_fingerprint=_text(
@@ -296,7 +472,20 @@ class ProductTraceCoordinator:
             按发生顺序排列的旧平面事件。
 
         """
+        self.recorder.flush()
         return self.history.events(trace_id)
+
+    def flush(self) -> None:
+        """排空此前已提交的非 FULL Trace 与兼容事件投影。
+
+        Args:
+            无参数；等待当前 recorder 队列。
+
+        Returns:
+            无返回值。
+
+        """
+        self.recorder.flush()
 
     def diagnostics(self, trace_id: str) -> RetrievalDiagnostics:
         """继续从加密 History 元数据读取检索诊断。
@@ -320,6 +509,11 @@ class ProductTraceCoordinator:
             有界且稳定排序的 Trace 页面。
 
         """
+        if filters.trace_id is not None:
+            filters = replace(
+                filters,
+                trace_id=normalize_trace_id(filters.trace_id),
+            )
         self.recorder.flush()
         return self.store.list_traces(filters)
 
@@ -334,7 +528,7 @@ class ProductTraceCoordinator:
 
         """
         self.recorder.flush()
-        return self.store.get_trace(trace_id)
+        return self.store.get_trace(normalize_trace_id(trace_id))
 
     def artifact(self, trace_id: str, artifact_id: str) -> ArtifactContent:
         """惰性读取并验证 FULL Artifact。
@@ -348,10 +542,20 @@ class ProductTraceCoordinator:
 
         """
         self.recorder.flush()
-        return self.store.get_artifact(trace_id, artifact_id)
+        try:
+            return self.store.get_artifact(
+                normalize_trace_id(trace_id), artifact_id
+            )
+        except ArtifactIntegrityError as error:
+            raise ProviderUnavailable(
+                "Operational Trace Artifact 完整性校验失败。",
+                code="TRACE_ARTIFACT_CORRUPT",
+                stage="trace.artifact",
+                retryable=False,
+            ) from error
 
     def export(self, trace_id: str) -> bytes:
-        """导出单条 canonical JSON。
+        """经统一兼容解析导出单条 canonical JSON。
 
         Args:
             trace_id: 待导出的 Operational Trace ID。
@@ -360,8 +564,170 @@ class ProductTraceCoordinator:
             UTF-8 canonical JSON 字节。
 
         """
-        self.recorder.flush()
-        return self.store.export_trace(trace_id)
+        with self.export_snapshots(
+            (trace_id,),
+            include_payload=True,
+            max_total_payload_bytes=_DEFAULT_COMPAT_EXPORT_BYTES,
+        ) as snapshots:
+            snapshot = snapshots[0]
+            if snapshot.state == "missing" or snapshot.payload is None:
+                raise TraceNotFoundError(trace_id)
+            return snapshot.payload
+
+    @contextmanager
+    def export_guard(self, trace_ids: Sequence[str]) -> Iterator[None]:
+        """以稳定错误语义暴露底层 Trace 导出 lease。
+
+        Args:
+            trace_ids: 已验证且不重复的 Trace ID。
+
+        Yields:
+            Trace prune 不会删除这些 ID 的临界区。
+
+        Returns:
+            管理持久 Trace 导出 lease 的上下文迭代器。
+
+        Raises:
+            ValueError: ID 为空、重复或格式无效。
+            ProviderUnavailable: Trace Store 无法建立或释放 lease。
+
+        """
+        canonical_ids = tuple(normalize_trace_id(value) for value in trace_ids)
+        if len(canonical_ids) != len(set(canonical_ids)):
+            raise ValueError("Trace 导出 guard 不接受等价的新旧重复 ID。")
+        try:
+            with self.store.export_guard(canonical_ids):
+                yield
+        except (sqlite3.Error, TraceStoreClosedError) as error:
+            raise ProviderUnavailable(
+                "Operational Trace 暂时无法建立导出快照。",
+                code="TRACE_PERSISTENCE_UNAVAILABLE",
+                stage="trace.export",
+                retryable=True,
+            ) from error
+
+    @contextmanager
+    def export_snapshots(
+        self,
+        trace_ids: Sequence[str],
+        *,
+        include_payload: bool = True,
+        max_total_payload_bytes: int | None = None,
+        authorize: Callable[[OperationalTraceSnapshot], None] | None = None,
+    ) -> Iterator[tuple[OperationalTraceSnapshot, ...]]:
+        """在 Trace lease 内用唯一解析器冻结一组兼容快照。
+
+        Args:
+            trace_ids: 已校验、无重复的 Trace ID，保持调用方顺序。
+            include_payload: 是否同时生成 canonical 导出字节。
+            max_total_payload_bytes: 可选的累计 payload 字节硬上限。
+            authorize: 可选逐条授权回调；全部 metadata 通过后才读取 payload。
+
+        Yields:
+            与输入顺序相同的 Trace 快照。
+
+        Returns:
+            管理 Trace lease 与快照生命周期的上下文迭代器。
+
+        Raises:
+            ValueError: ID 为空、重复或格式无效。
+            ProviderUnavailable: Trace/History Store 无法稳定读取。
+
+        """
+        ordered = tuple(trace_ids)
+        if max_total_payload_bytes is not None and max_total_payload_bytes <= 0:
+            raise ValueError("Trace 导出累计字节上限必须为正数。")
+        try:
+            with self.export_guard(ordered):
+                self.recorder.flush()
+                metadata_snapshots = tuple(
+                    self._resolve_trace(
+                        trace_id,
+                        include_payload=False,
+                        max_payload_bytes=None,
+                    )
+                    for trace_id in ordered
+                )
+                if authorize is not None:
+                    for snapshot in metadata_snapshots:
+                        authorize(snapshot)
+                if not include_payload:
+                    yield metadata_snapshots
+                    return
+                snapshots: list[OperationalTraceSnapshot] = []
+                total_payload_bytes = 0
+                for metadata in metadata_snapshots:
+                    snapshot = self._resolve_trace(
+                        metadata.trace_id,
+                        include_payload=True,
+                        max_payload_bytes=max_total_payload_bytes,
+                    )
+                    if _snapshot_authorization_identity(snapshot) != (
+                        _snapshot_authorization_identity(metadata)
+                    ):
+                        raise ProviderUnavailable(
+                            "Operational Trace 在导出授权后发生变化，请重试。",
+                            code="TRACE_SNAPSHOT_CHANGED",
+                            stage="trace.export",
+                            retryable=True,
+                        )
+                    if snapshot.payload is not None:
+                        total_payload_bytes += len(snapshot.payload)
+                    if (
+                        max_total_payload_bytes is not None
+                        and total_payload_bytes > max_total_payload_bytes
+                    ):
+                        raise OperationalTracePayloadLimitError(
+                            "Trace 导出超过累计字节上限。"
+                        )
+                    snapshots.append(snapshot)
+                yield tuple(snapshots)
+        except (sqlite3.Error, TraceStoreClosedError) as error:
+            raise ProviderUnavailable(
+                "Operational Trace 暂时无法读取。",
+                code="TRACE_PERSISTENCE_UNAVAILABLE",
+                stage="trace.export",
+                retryable=True,
+            ) from error
+
+    def set_feedback(self, trace_id: str, *, useful: bool) -> bool:
+        """只更新当前层级 Trace；兼容记录明确返回未投影。
+
+        Args:
+            trace_id: 待关联反馈的公开 Trace ID。
+            useful: 用户是否认为回答有用。
+
+        Returns:
+            当前 Trace 成功更新时为 True；遗留或仅 History 时为 False。
+
+        Raises:
+            TraceNotFoundError: 两个存储都不存在该 ID。
+            ProviderUnavailable: Store 无法稳定读取或写入。
+
+        """
+        with self.export_snapshots(
+            (trace_id,), include_payload=False
+        ) as snapshots:
+            snapshot = snapshots[0]
+            if snapshot.state == "missing":
+                raise TraceNotFoundError(trace_id)
+            if snapshot.state != "current":
+                return False
+            try:
+                self.store.set_feedback(
+                    normalize_trace_id(trace_id), useful=useful
+                )
+            except (sqlite3.Error, TraceStoreClosedError) as error:
+                raise ProviderUnavailable(
+                    "Operational Trace 反馈暂时无法保存。",
+                    code="TRACE_PERSISTENCE_UNAVAILABLE",
+                    stage="trace.feedback",
+                    trace_id=(
+                        trace_id if trace_id.startswith("trace_") else None
+                    ),
+                    retryable=True,
+                ) from error
+            return True
 
     def metrics(self) -> dict[str, int]:
         """返回 Trace writer 性能计数。
@@ -385,13 +751,66 @@ class ProductTraceCoordinator:
             当前层级详情或标记为不完整的旧事件视图。
 
         """
+        with self.export_snapshots(
+            (trace_id,), include_payload=False
+        ) as snapshots:
+            snapshot = snapshots[0]
+            if snapshot.detail is None:
+                raise TraceNotFoundError(trace_id)
+            return snapshot.detail
+
+    def _resolve_trace(
+        self,
+        trace_id: str,
+        *,
+        include_payload: bool,
+        max_payload_bytes: int | None,
+    ) -> OperationalTraceSnapshot:
+        """在调用方持有 lease 时解析一条 Trace 的实际存储世代。"""
+        canonical_trace_id = normalize_trace_id(trace_id)
         try:
-            detail = self.detail(trace_id)
+            current = self.store.get_trace(canonical_trace_id)
         except TraceNotFoundError:
-            events = self.history.events(trace_id)
-            if not events:
-                raise
-            return {
+            current = None
+        if current is not None:
+            detail = _detail_dict(current)
+            try:
+                payload = (
+                    self.store.export_trace(canonical_trace_id)
+                    if include_payload
+                    else None
+                )
+            except ArtifactIntegrityError as error:
+                raise ProviderUnavailable(
+                    "Operational Trace Artifact 完整性校验失败。",
+                    code="TRACE_ARTIFACT_CORRUPT",
+                    stage="trace.export",
+                    retryable=False,
+                ) from error
+            return OperationalTraceSnapshot(
+                trace_id=trace_id,
+                state="current",
+                schema_version=current.trace.schema_version,
+                capture_complete=current.trace.capture_complete,
+                project_id=current.trace.project_id,
+                knowledge_base_id=current.trace.knowledge_base_id,
+                detail=detail,
+                payload=payload,
+                missing_reason=None,
+            )
+
+        try:
+            events = self.history.event_payloads(
+                trace_id,
+                max_total_bytes=max_payload_bytes if include_payload else None,
+            )
+        except HistorySnapshotLimitError as error:
+            raise OperationalTracePayloadLimitError(
+                "Trace flat events 超过累计字节上限。"
+            ) from error
+        scope = self.history.record_scope(trace_id)
+        if events:
+            detail = {
                 "trace": {
                     "trace_id": trace_id,
                     "schema_version": "legacy-flat-1",
@@ -401,11 +820,61 @@ class ProductTraceCoordinator:
                 "spans": (),
                 "candidate_decisions": (),
                 "artifacts": (),
-                "legacy_flat_events": [
-                    event.model_dump(mode="json") for event in events
-                ],
+                "legacy_flat_events": list(events),
             }
-        return _detail_dict(detail)
+            return OperationalTraceSnapshot(
+                trace_id=trace_id,
+                state="legacy-flat",
+                schema_version="legacy-flat-1",
+                capture_complete=False,
+                project_id=None if scope is None else scope[0],
+                knowledge_base_id=None if scope is None else scope[1],
+                detail=detail,
+                payload=(
+                    _canonical_json_bytes(detail) if include_payload else None
+                ),
+                missing_reason="legacy_flat_events",
+            )
+        if scope is not None:
+            root: dict[str, object] = {
+                "trace_id": trace_id,
+                "schema_version": "missing-pre-v3",
+                "capture_complete": False,
+                "status": "NOT_CAPTURED_BEFORE_V3",
+                "project_id": scope[0],
+                "knowledge_base_id": scope[1],
+            }
+            detail = {
+                "trace": root,
+                "spans": (),
+                "candidate_decisions": (),
+                "artifacts": (),
+                "legacy_flat_events": (),
+            }
+            return OperationalTraceSnapshot(
+                trace_id=trace_id,
+                state="history-only",
+                schema_version="missing-pre-v3",
+                capture_complete=False,
+                project_id=scope[0],
+                knowledge_base_id=scope[1],
+                detail=detail,
+                payload=(
+                    _canonical_json_bytes(root) if include_payload else None
+                ),
+                missing_reason="NOT_CAPTURED_BEFORE_V3",
+            )
+        return OperationalTraceSnapshot(
+            trace_id=trace_id,
+            state="missing",
+            schema_version=None,
+            capture_complete=False,
+            project_id=None,
+            knowledge_base_id=None,
+            detail=None,
+            payload=None,
+            missing_reason="TRACE_AND_HISTORY_MISSING",
+        )
 
     def close(self) -> None:
         """按 writer flush、Store、History 的顺序幂等关闭。
@@ -423,6 +892,47 @@ class ProductTraceCoordinator:
     def _take_mode(self, trace_id: str) -> TraceMode:
         with self._lock:
             return self._prepared_modes.pop(trace_id, TraceMode.SAFE)
+
+    @staticmethod
+    def _session_slot(trace_id: str) -> int:
+        """把一个 Trace ID 映射到进程内会话分片。"""
+        return hash(trace_id) & (_SESSION_SHARD_COUNT - 1)
+
+    def _get_session(
+        self, trace_id: str
+    ) -> TraceSession | _BufferedQueryCapture | None:
+        """只锁定目标分片读取会话。"""
+        slot = self._session_slot(trace_id)
+        with self._session_locks[slot]:
+            return self._session_shards[slot].get(trace_id)
+
+    def _set_session(
+        self,
+        trace_id: str,
+        session: TraceSession | _BufferedQueryCapture,
+    ) -> None:
+        """只锁定目标分片登记会话。"""
+        slot = self._session_slot(trace_id)
+        with self._session_locks[slot]:
+            self._session_shards[slot][trace_id] = session
+
+    def _setdefault_session(
+        self,
+        trace_id: str,
+        session: TraceSession,
+    ) -> TraceSession | _BufferedQueryCapture:
+        """只锁定目标分片登记或返回并发建立的会话。"""
+        slot = self._session_slot(trace_id)
+        with self._session_locks[slot]:
+            return self._session_shards[slot].setdefault(trace_id, session)
+
+    def _pop_session(
+        self, trace_id: str
+    ) -> TraceSession | _BufferedQueryCapture | None:
+        """只锁定目标分片移除会话。"""
+        slot = self._session_slot(trace_id)
+        with self._session_locks[slot]:
+            return self._session_shards[slot].pop(trace_id, None)
 
     def _identity(  # noqa: PLR0913
         self,
@@ -460,9 +970,10 @@ class ProductTraceCoordinator:
             source_revision=self.release_revision,
         )
 
-    def _session_for_event(self, event: TraceEvent) -> TraceSession | None:
-        with self._lock:
-            current = self._sessions.get(event.trace_id)
+    def _session_for_event(
+        self, event: TraceEvent
+    ) -> TraceSession | _BufferedQueryCapture | None:
+        current = self._get_session(event.trace_id)
         if current is not None:
             return current
         if not event.event_name.startswith("ingestion."):
@@ -491,9 +1002,7 @@ class ProductTraceCoordinator:
         except Exception:
             self.recorder.capture_failed(event.trace_id)
             return None
-        with self._lock:
-            existing = self._sessions.setdefault(event.trace_id, session)
-        return existing
+        return self._setdefault_session(event.trace_id, session)
 
     def _job_scope(
         self, job_id: str
@@ -590,8 +1099,7 @@ class ProductTraceCoordinator:
                 error_code=_text(attributes.get("error_code")),
                 attributes=attributes,
             )
-            with self._lock:
-                self._sessions.pop(event.trace_id, None)
+            self._pop_session(event.trace_id)
             return
         session.completed_span(
             TraceSpanSpec(
@@ -603,6 +1111,78 @@ class ProductTraceCoordinator:
                 duration_ms=_duration(attributes),
             )
         )
+
+    def _finalize_buffered_query(
+        self,
+        capture: _BufferedQueryCapture,
+        events: Sequence[TraceEvent],
+        settlement: _QueryTraceSettlement,
+        elapsed_ms: int,
+    ) -> None:
+        """在单 writer 线程内投影并提交一条非 FULL 查询 Trace。"""
+        self._wait_for_query_quiescence()
+        try:
+            session = self.recorder.begin_query(
+                capture.trace_id,
+                capture.mode,
+                capture.created_at,
+                capture.identity,
+                question_sha256=capture.question_sha256,
+                buffer_writes=True,
+                completed_elapsed_ms=elapsed_ms,
+            )
+            session.completed_span(
+                TraceSpanSpec(
+                    name="request.admission",
+                    kind=SpanKind.HTTP,
+                    parent_span_id=session.root.span_id,
+                    reason_code=DecisionCode.ADMISSION_ALLOWED,
+                    attributes=capture.admission_attributes,
+                )
+            )
+        except Exception:
+            self.recorder.capture_failed(capture.trace_id)
+            self.recorder.mark_capture_incomplete(
+                capture.trace_id,
+                reason=DecisionCode.TRACE_CAPTURE_FAILED.value,
+            )
+            self._record_capture_degradation(capture.trace_id)
+            return
+        try:
+            self.history.record_many(events)
+        except RagError:
+            self.recorder.capture_failed(capture.trace_id)
+            self.recorder.mark_capture_incomplete(
+                capture.trace_id,
+                reason=DecisionCode.TRACE_CAPTURE_FAILED.value,
+            )
+        for event in events:
+            self._record_operational_event(session, event)
+        self._finalize_query_trace(session, settlement)
+
+    def _wait_for_query_quiescence(self) -> None:
+        """等待突发批次和短静默窗结束，超时后继续避免持续流量饿死。"""
+        deadline = monotonic() + _QUERY_QUIESCENCE_SECONDS
+        with self._query_idle:
+            while True:
+                now = monotonic()
+                deadline_remaining = deadline - now
+                if deadline_remaining <= 0:
+                    return
+                active = self._active_buffered_queries > 0
+                idle_remaining = (
+                    self._last_query_finished_at
+                    + _QUERY_IDLE_GRACE_SECONDS
+                    - now
+                )
+                if not active and idle_remaining <= 0:
+                    return
+                wait_seconds = (
+                    deadline_remaining
+                    if active
+                    else min(deadline_remaining, idle_remaining)
+                )
+                self._query_idle.wait(timeout=wait_seconds)
 
     def _finalize_query_trace(
         self,
@@ -899,6 +1479,16 @@ def _detail_dict(detail: TraceDetail) -> dict[str, object]:
         "artifacts": [_enum_dict(asdict(item)) for item in detail.artifacts],
         "legacy_flat_events": (),
     }
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    """把兼容占位和 flat event 视图编码为稳定 UTF-8 JSON。"""
+    return json.dumps(
+        _enum_dict(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def _enum_dict(value: object) -> object:

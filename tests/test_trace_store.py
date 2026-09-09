@@ -21,8 +21,10 @@ from rag_app.tracing.models import (
     TraceStatus,
 )
 from rag_app.tracing.store import (
+    ArtifactIntegrityError,
     ArtifactNotFoundError,
     TraceArtifactLimitError,
+    TraceNotFoundError,
     TraceStore,
 )
 
@@ -213,6 +215,37 @@ def test_store_persists_trace_tree_decisions_and_compressed_artifact(
     store.close()
 
 
+def test_completed_trace_batch_rolls_back_without_partial_root(
+    tmp_path: Path,
+) -> None:
+    """批量 Trace 中任一非法成员都必须回滚根记录与既有成员。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    trace_id = "7" * 32
+    trace = _trace(trace_id, mode=TraceMode.SAFE)
+    invalid_span = replace(
+        _span(trace_id),
+        span_id="c" * 16,
+        parent_span_id="a" * 16,
+        sequence=2,
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.write_completed_trace(
+            trace,
+            (_span(trace_id), invalid_span),
+            (),
+            TraceFinish(
+                status=TraceStatus.ANSWERED,
+                finished_at=trace.created_at + timedelta(milliseconds=12),
+            ),
+        )
+
+    with pytest.raises(TraceNotFoundError):
+        store.get_trace(trace_id)
+    store.close()
+
+
 def test_artifact_is_bound_to_trace_and_limit_is_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -241,6 +274,30 @@ def test_artifact_is_bound_to_trace_and_limit_is_fail_closed(
         )
 
     assert store.get_trace("a" * 32).trace.capture_complete is False
+    store.close()
+
+
+def test_corrupt_artifact_fails_integrity_check(tmp_path: Path) -> None:
+    """持久载荷损坏不能以原 Artifact 正文返回。"""
+    database = tmp_path / "traces.sqlite3"
+    store = TraceStore(database)
+    store.initialize()
+    store.create_trace(_trace("a" * 32))
+    artifact = store.add_artifact(
+        "a" * 32,
+        kind="debug.input",
+        media_type="text/plain",
+        payload=b"private payload",
+    )
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "UPDATE artifacts SET compressed_payload=? "
+            "WHERE trace_id=? AND artifact_id=?",
+            (b"not-zlib", "a" * 32, artifact.artifact_id),
+        )
+
+    with pytest.raises(ArtifactIntegrityError):
+        store.get_artifact("a" * 32, artifact.artifact_id)
     store.close()
 
 
@@ -357,3 +414,29 @@ def test_restart_recovers_running_root_and_span_as_interrupted(
     assert detail.spans[0].finished_at == recovered_at
     assert reopened.recover_running(now=recovered_at) == 0
     reopened.close()
+
+
+def test_prune_respects_persistent_export_lease(tmp_path: Path) -> None:
+    """在途导出 lease 释放前，prune 不删除已到期 Trace。"""
+    now = datetime(2026, 9, 9, 12, 0, tzinfo=UTC)
+    database = tmp_path / "lease.sqlite3"
+    exporter = TraceStore(database)
+    exporter.initialize()
+    trace = _trace(
+        "d" * 32,
+        mode=TraceMode.SAFE,
+        created_at=now - timedelta(days=31),
+    )
+    exporter.create_trace(trace)
+    pruner = TraceStore(database)
+    pruner.initialize()
+
+    with exporter.export_guard((trace.trace_id,)):
+        assert pruner.prune(now=now) == 0
+        assert pruner.get_trace(trace.trace_id).trace.trace_id == trace.trace_id
+
+    assert pruner.prune(now=now) == 1
+    with pytest.raises(TraceNotFoundError):
+        pruner.get_trace(trace.trace_id)
+    pruner.close()
+    exporter.close()
