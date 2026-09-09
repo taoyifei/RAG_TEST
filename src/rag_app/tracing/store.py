@@ -51,6 +51,7 @@ _DEFAULT_EXPORT_LIMIT = 16 * 1024 * 1024
 _DEFAULT_SPAN_LIMIT = 512
 _DEFAULT_DECISION_LIMIT = 4096
 _DEFAULT_STAGE_DECISION_LIMIT = 512
+_TRACE_WAL_CHECKPOINT_BYTES = 64 * 1024 * 1024
 _EXPORT_LEASE_SECONDS = 15 * 60
 _LATEST_SCHEMA_VERSION = 2
 _TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
@@ -322,6 +323,18 @@ class TraceStore:
             connection.execute(f"PRAGMA busy_timeout={self._busy_timeout_ms}")
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
+            page_size_row = connection.execute("PRAGMA page_size").fetchone()
+            if page_size_row is None:
+                raise RuntimeError("Trace Store 无法读取 SQLite page size。")
+            page_size = int(page_size_row[0])
+            checkpoint_pages = max(
+                1,
+                _TRACE_WAL_CHECKPOINT_BYTES // page_size,
+            )
+            connection.execute(f"PRAGMA wal_autocheckpoint={checkpoint_pages}")
+            connection.execute(
+                f"PRAGMA journal_size_limit={_TRACE_WAL_CHECKPOINT_BYTES}"
+            )
             connection.executescript(_SCHEMA)
             self._migrate_product_schema(connection)
             connection.commit()
@@ -1264,7 +1277,7 @@ class TraceStore:
             connection.commit()
 
     def prune(self, *, now: datetime) -> int:
-        """删除已超过各自 mode 到期时点的 Trace。
+        """删除到期 Trace，并在同一维护窗回收已提交 WAL 页。
 
         Args:
             now: 带时区的固定清理时点。
@@ -1294,13 +1307,28 @@ class TraceStore:
             ]
             if not removable:
                 connection.commit()
+                self._checkpoint_wal(connection)
                 return 0
             cursor = connection.executemany(
                 "DELETE FROM traces WHERE trace_id=?",
                 removable,
             )
             connection.commit()
+            self._checkpoint_wal(connection)
             return cursor.rowcount
+
+    @staticmethod
+    def _checkpoint_wal(connection: sqlite3.Connection) -> None:
+        """非阻塞 checkpoint 已提交 WAL，不进入请求写事务。
+
+        Args:
+            connection: 已提交当前维护事务的 Trace Store 连接。
+
+        Returns:
+            无返回值；外部 reader 忙碌时保留未回收页供下次维护。
+
+        """
+        connection.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
 
     def export_trace(self, trace_id: str) -> bytes:
         """导出单条 Trace 的 canonical JSON。

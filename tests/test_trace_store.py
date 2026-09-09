@@ -212,6 +212,47 @@ def test_store_persists_trace_tree_decisions_and_compressed_artifact(
         "question": "synthetic question"
     }
     store.close()
+
+
+def test_prune_owns_manual_wal_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """周期 checkpoint 必须随受保护的 prune 维护执行。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    checkpoints: list[sqlite3.Connection] = []
+    original_checkpoint = store._checkpoint_wal
+
+    def observe_checkpoint(connection: sqlite3.Connection) -> None:
+        checkpoints.append(connection)
+        original_checkpoint(connection)
+
+    monkeypatch.setattr(store, "_checkpoint_wal", observe_checkpoint)
+
+    assert store.prune(now=datetime.now(UTC)) == 0
+    assert len(checkpoints) == 1
+    store.close()
+
+
+def test_store_raises_automatic_wal_checkpoint_to_bounded_64_mib(
+    tmp_path: Path,
+) -> None:
+    """普通写避免 4 MiB 抖动，同时保留 64 MiB 自动回收后备。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    connection = store._require_connection()
+    page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
+    autocheckpoint = int(
+        connection.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+    )
+    journal_size_limit = int(
+        connection.execute("PRAGMA journal_size_limit").fetchone()[0]
+    )
+
+    assert autocheckpoint * page_size == 64 * 1024 * 1024
+    assert journal_size_limit == 64 * 1024 * 1024
+    store.close()
     store.close()
 
 
