@@ -251,6 +251,31 @@ class ProductTraceCoordinator:
             无返回值。
 
         """
+        self.recorder.begin_query_window(trace_id)
+        try:
+            self._start_query(
+                trace_id,
+                scope,
+                question,
+                owner_id=owner_id,
+                save_body=save_body,
+                conversation_context_digest=conversation_context_digest,
+            )
+        except BaseException:
+            self.recorder.end_query_window(trace_id)
+            raise
+
+    def _start_query(  # noqa: PLR0913
+        self,
+        trace_id: str,
+        scope: KnowledgeBaseScope,
+        question: str,
+        *,
+        owner_id: str,
+        save_body: bool,
+        conversation_context_digest: str | None,
+    ) -> None:
+        """在已登记维护互斥窗内建立 History 与 Trace 会话。"""
         mode = self._take_mode(trace_id)
         self.history.start(
             trace_id,
@@ -342,6 +367,27 @@ class ProductTraceCoordinator:
             无返回值。
 
         """
+        try:
+            self._finish_query(
+                trace_id,
+                result=result,
+                error=error,
+                cancelled=cancelled,
+                cancelled_calls=cancelled_calls,
+            )
+        finally:
+            self.recorder.end_query_window(trace_id)
+
+    def _finish_query(
+        self,
+        trace_id: str,
+        *,
+        result: SearchAnswerResult | None,
+        error: RagError | None,
+        cancelled: bool,
+        cancelled_calls: tuple[ProviderCall, ...],
+    ) -> None:
+        """结算查询持久化；维护互斥窗由公开入口统一释放。"""
         history_failure: RagError | None = None
         try:
             self.history.finish(

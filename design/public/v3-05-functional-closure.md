@@ -47,7 +47,7 @@ Profile 资源有硬上限和退役生命周期；当前 React、OpenAPI、migra
 | 用户已指出：缓存/并发 | 进程缓存无数量/字节上限，等价并发重复 Provider 计算 | 512 entries/约 64 MiB LRU+TTL；SAFE 非流式 singleflight | key 绑定 owner、权限、scope、Revision、serving、query/context/filter/limit/生成行为；2/8/32 并发、取消和失败 |
 | 用户已指出：资源退役 | invalidate 后旧 service 一直保留到 Runtime shutdown | generation lease/refcount；最后一个在途 lease 释放后关闭旧 cache/client/provider | 100 次轮换有界；轮换后新请求不能加入旧代际 singleflight |
 | 用户已指出：离线资产 | V3-04 镜像缺 Product 完整资产清单；legacy `deployment/ASSETS.sha256` 与 React dist 不是同一语义 | 保留 legacy 清单；镜像构建后生成 `/app/product-assets.json`，覆盖 frontend/OpenAPI/compatibility/migrations | 镜像内 `--network none` 自检、成员篡改失败、同镜像离线包、无 build/source bind |
-| 本轮额外发现：Trace 性能 | SAFE 每个事件同步写两个 SQLite 路径，高并发 P95 显著退化 | 非 FULL 请求私有有界缓冲；完成时单 writer/单事务写 canonical Trace 与兼容事件；FULL 仍同步 fail-closed | exact duration、事务回滚、队列有界、capture complete、0 dropped 与冻结非劣阈值 |
+| 本轮额外发现：Trace 性能 | SAFE 每个事件同步写两个 SQLite 路径，且周期 prune 会与活跃查询争用磁盘和 CPU，高并发 P95 显著退化 | 非 FULL 请求私有有界缓冲；完成时单 writer/单事务写 canonical Trace 与兼容事件；prune 仅在无活跃查询且经过短静默窗后运行；FULL 仍同步 fail-closed | exact duration、事务回滚、维护互斥竞态、队列有界、capture complete、0 dropped 与冻结非劣阈值 |
 | 本轮额外发现：Docker clean-room | Docker Desktop 在所有网络均为 `internal` 时不建立宿主端口映射，即使容器 `/live` 为 200 | HTTP 探针在隔离 App 容器内通过回环执行；Bootstrap Token 不再读回宿主进程 | base URL/Origin 只允许 loopback；无源码 mount、无外联、真实登录/入库/查询 |
 
 ## History 与 Trace 导出合同

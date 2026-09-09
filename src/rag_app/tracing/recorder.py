@@ -49,6 +49,8 @@ _STOP: Final = object()
 _DEFAULT_QUEUE_SIZE = 256
 _DEFAULT_WAIT_SECONDS = 5.0
 _DEFAULT_PRUNE_INTERVAL_SECONDS = 300.0
+_DEFAULT_MAINTENANCE_IDLE_GRACE_SECONDS = 0.25
+_MAINTENANCE_RETRY_SECONDS = 0.25
 _DEFAULT_FULL_RESERVATION_BYTES = 1024 * 1024
 _BUFFERED_SPAN_LIMIT = 512
 _BUFFERED_DECISION_LIMIT = 4096
@@ -66,6 +68,9 @@ class TraceRecorderConfig:
     queue_size: int = _DEFAULT_QUEUE_SIZE
     wait_seconds: float = _DEFAULT_WAIT_SECONDS
     prune_interval_seconds: float = _DEFAULT_PRUNE_INTERVAL_SECONDS
+    maintenance_idle_grace_seconds: float = (
+        _DEFAULT_MAINTENANCE_IDLE_GRACE_SECONDS
+    )
     full_artifact_reservation_bytes: int = _DEFAULT_FULL_RESERVATION_BYTES
 
     def __post_init__(self) -> None:
@@ -79,6 +84,7 @@ class TraceRecorderConfig:
             self.queue_size <= 0
             or self.wait_seconds <= 0
             or self.prune_interval_seconds <= 0
+            or self.maintenance_idle_grace_seconds <= 0
             or self.full_artifact_reservation_bytes <= 0
         ):
             raise ValueError("Trace writer 边界必须为正数。")
@@ -841,6 +847,9 @@ class TraceRecorder:
         )
         self._wait_seconds = resolved_config.wait_seconds
         self._prune_interval_seconds = resolved_config.prune_interval_seconds
+        self._maintenance_idle_grace_seconds = (
+            resolved_config.maintenance_idle_grace_seconds
+        )
         self._full_reservation_bytes = (
             resolved_config.full_artifact_reservation_bytes
         )
@@ -854,6 +863,12 @@ class TraceRecorder:
         self._queue_high_water = 0
         self._accepting = True
         self._closed = False
+        self._maintenance_condition = threading.Condition(threading.Lock())
+        self._active_query_windows: set[str] = set()
+        self._maintenance_active = False
+        self._last_query_window_finished_at = (
+            time.monotonic() - self._maintenance_idle_grace_seconds
+        )
         self._writer = threading.Thread(
             target=self._run,
             name="rag-trace-writer",
@@ -918,6 +933,50 @@ class TraceRecorder:
             )
         except Exception as error:
             raise TraceUnavailableError("FULL Trace Store 不可用。") from error
+
+    def begin_query_window(self, trace_id: str) -> None:
+        """在延迟敏感查询开始前取得后台维护互斥窗。
+
+        已经开始的清理会先完成；登记成功后，新的到期清理只能等到所有
+        活跃查询结束并经过短静默窗后执行。互斥窗只协调后台维护，不保存
+        查询正文，也不持有 Store 锁。
+
+        Args:
+            trace_id: 当前请求的公开 Trace ID。
+
+        Returns:
+            无返回值。
+
+        Raises:
+            RuntimeError: 同一 Trace ID 重复开始查询互斥窗。
+
+        """
+        with self._maintenance_condition:
+            while self._maintenance_active:
+                self._maintenance_condition.wait()
+            if trace_id in self._active_query_windows:
+                raise RuntimeError("同一 Trace 不能重复开始查询互斥窗。")
+            self._active_query_windows.add(trace_id)
+
+    def end_query_window(self, trace_id: str) -> None:
+        """结束查询互斥窗并唤醒等待静默期的后台维护。
+
+        未登记的 Trace ID 按幂等清理处理，避免异常终态的二次释放覆盖
+        原始业务错误。
+
+        Args:
+            trace_id: 当前请求的公开 Trace ID。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._maintenance_condition:
+            if trace_id not in self._active_query_windows:
+                return
+            self._active_query_windows.remove(trace_id)
+            self._last_query_window_finished_at = time.monotonic()
+            self._maintenance_condition.notify_all()
 
     def begin_query(  # noqa: PLR0913
         self,
@@ -1481,8 +1540,7 @@ class TraceRecorder:
             try:
                 item = self._queue.get(timeout=timeout)
             except queue.Empty:
-                self._prune()
-                next_prune = time.monotonic() + self._prune_interval_seconds
+                next_prune = time.monotonic() + self._prune()
                 continue
             try:
                 if item is _STOP:
@@ -1493,8 +1551,7 @@ class TraceRecorder:
                 self._flush_incomplete()
                 self._execute(item)
                 if time.monotonic() >= next_prune:
-                    self._prune()
-                    next_prune = time.monotonic() + self._prune_interval_seconds
+                    next_prune = time.monotonic() + self._prune()
             finally:
                 self._queue.task_done()
 
@@ -1561,7 +1618,32 @@ class TraceRecorder:
                     trace_id,
                 )
 
-    def _prune(self) -> None:
+    def _prune(self) -> float:
+        """仅在查询静默窗外清理，并返回下次尝试的等待秒数。
+
+        Args:
+            无参数；检查 recorder 内的活跃查询集合。
+
+        Returns:
+            清理完成后的正常周期，或当前不宜清理时的有界重试间隔。
+
+        """
+        now = time.monotonic()
+        with self._maintenance_condition:
+            idle_remaining = max(
+                0.0,
+                self._last_query_window_finished_at
+                + self._maintenance_idle_grace_seconds
+                - now,
+            )
+            if self._active_query_windows or self._maintenance_active:
+                return min(
+                    self._prune_interval_seconds,
+                    _MAINTENANCE_RETRY_SECONDS,
+                )
+            if idle_remaining > 0:
+                return min(self._prune_interval_seconds, idle_remaining)
+            self._maintenance_active = True
         try:
             self._store.prune(now=datetime.now(UTC))
         except Exception:
@@ -1569,6 +1651,11 @@ class TraceRecorder:
                 "Trace Store 到期清理失败 code=%s",
                 DecisionCode.TRACE_CAPTURE_FAILED.value,
             )
+        finally:
+            with self._maintenance_condition:
+                self._maintenance_active = False
+                self._maintenance_condition.notify_all()
+        return self._prune_interval_seconds
 
     def _audit(self, trace_id: str, code: DecisionCode) -> None:
         if self._audit_failure is None:

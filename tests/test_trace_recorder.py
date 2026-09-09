@@ -254,6 +254,95 @@ def test_buffered_trace_is_committed_once_with_original_duration(
     recorder.close()
 
 
+def test_prune_waits_until_query_window_and_idle_grace_finish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """后台清理不得与活跃查询重叠，并应在静默窗后恢复。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    initial_prune_finished = threading.Event()
+    recurring_prune_started = threading.Event()
+    prune_count = 0
+    original_prune = store.prune
+
+    def observe_prune(*args: object, **kwargs: object) -> int:
+        nonlocal prune_count
+        result = original_prune(*args, **kwargs)  # type: ignore[arg-type]
+        prune_count += 1
+        if prune_count == 1:
+            initial_prune_finished.set()
+        else:
+            recurring_prune_started.set()
+        return result
+
+    monkeypatch.setattr(store, "prune", observe_prune)
+    recorder = TraceRecorder(
+        store,
+        config=TraceRecorderConfig(
+            prune_interval_seconds=0.01,
+            maintenance_idle_grace_seconds=0.05,
+        ),
+    )
+    assert initial_prune_finished.wait(timeout=0.5)
+    trace_id = "1" * 32
+    recorder.begin_query_window(trace_id)
+
+    assert recurring_prune_started.wait(timeout=0.12) is False
+
+    recorder.end_query_window(trace_id)
+    assert recurring_prune_started.wait(timeout=0.5) is True
+    recorder.close()
+
+
+def test_query_waits_for_prune_that_already_started(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """清理已经取得互斥权时，新查询必须等其完成后再进入。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    prune_started = threading.Event()
+    prune_finished = threading.Event()
+    release_prune = threading.Event()
+    original_prune = store.prune
+
+    def blocking_prune(*args: object, **kwargs: object) -> int:
+        prune_started.set()
+        assert release_prune.wait(timeout=1)
+        result = original_prune(*args, **kwargs)  # type: ignore[arg-type]
+        prune_finished.set()
+        return result
+
+    monkeypatch.setattr(store, "prune", blocking_prune)
+    recorder = TraceRecorder(
+        store,
+        config=TraceRecorderConfig(
+            prune_interval_seconds=0.01,
+            maintenance_idle_grace_seconds=0.01,
+        ),
+    )
+    assert prune_started.wait(timeout=0.5)
+    query_entered = threading.Event()
+    trace_id = "2" * 32
+
+    def begin_query() -> None:
+        recorder.begin_query_window(trace_id)
+        query_entered.set()
+
+    query_thread = threading.Thread(target=begin_query)
+    query_thread.start()
+    assert query_entered.wait(timeout=0.05) is False
+
+    release_prune.set()
+    assert prune_finished.wait(timeout=0.5)
+    assert query_entered.wait(timeout=0.5)
+    recorder.end_query_window(trace_id)
+    query_thread.join(timeout=0.5)
+    assert query_thread.is_alive() is False
+    recorder.close()
+
+
 def test_bounded_writer_queue_records_drop_without_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
