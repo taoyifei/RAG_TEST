@@ -343,6 +343,49 @@ def test_query_waits_for_prune_that_already_started(
     recorder.close()
 
 
+def test_writer_flush_restarts_maintenance_idle_grace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flush 返回后不得让已到期清理抢在下一波查询之前运行。"""
+    store = TraceStore(tmp_path / "traces.sqlite3")
+    store.initialize()
+    initial_prune_finished = threading.Event()
+    recurring_prune_started = threading.Event()
+    prune_count = 0
+    original_prune = store.prune
+
+    def observe_prune(*args: object, **kwargs: object) -> int:
+        nonlocal prune_count
+        result = original_prune(*args, **kwargs)  # type: ignore[arg-type]
+        prune_count += 1
+        if prune_count == 1:
+            initial_prune_finished.set()
+        else:
+            recurring_prune_started.set()
+        return result
+
+    monkeypatch.setattr(store, "prune", observe_prune)
+    recorder = TraceRecorder(
+        store,
+        config=TraceRecorderConfig(
+            prune_interval_seconds=0.01,
+            maintenance_idle_grace_seconds=0.08,
+        ),
+    )
+    assert initial_prune_finished.wait(timeout=0.5)
+
+    recorder.flush()
+    assert recurring_prune_started.wait(timeout=0.03) is False
+    trace_id = "3" * 32
+    recorder.begin_query_window(trace_id)
+    assert recurring_prune_started.wait(timeout=0.1) is False
+
+    recorder.end_query_window(trace_id)
+    assert recurring_prune_started.wait(timeout=0.5)
+    recorder.close()
+
+
 def test_bounded_writer_queue_records_drop_without_raising(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

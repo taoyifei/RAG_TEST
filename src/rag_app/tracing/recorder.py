@@ -866,7 +866,7 @@ class TraceRecorder:
         self._maintenance_condition = threading.Condition(threading.Lock())
         self._active_query_windows: set[str] = set()
         self._maintenance_active = False
-        self._last_query_window_finished_at = (
+        self._last_latency_sensitive_activity_at = (
             time.monotonic() - self._maintenance_idle_grace_seconds
         )
         self._writer = threading.Thread(
@@ -975,7 +975,7 @@ class TraceRecorder:
             if trace_id not in self._active_query_windows:
                 return
             self._active_query_windows.remove(trace_id)
-            self._last_query_window_finished_at = time.monotonic()
+            self._last_latency_sensitive_activity_at = time.monotonic()
             self._maintenance_condition.notify_all()
 
     def begin_query(  # noqa: PLR0913
@@ -1593,8 +1593,23 @@ class TraceRecorder:
                 DecisionCode.TRACE_CAPTURE_FAILED,
             )
         finally:
+            self._record_writer_activity()
             if command.completion is not None:
                 command.completion.set()
+
+    def _record_writer_activity(self) -> None:
+        """让后台维护等待 writer 最近一次持久化后的短静默窗。
+
+        Args:
+            无参数；记录当前 writer 的单调时钟时点。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._maintenance_condition:
+            self._last_latency_sensitive_activity_at = time.monotonic()
+            self._maintenance_condition.notify_all()
 
     def _flush_incomplete(self) -> None:
         """由 writer 可靠落盘队列降级摘要，不回写敏感内容。"""
@@ -1632,7 +1647,7 @@ class TraceRecorder:
         with self._maintenance_condition:
             idle_remaining = max(
                 0.0,
-                self._last_query_window_finished_at
+                self._last_latency_sensitive_activity_at
                 + self._maintenance_idle_grace_seconds
                 - now,
             )
