@@ -10,6 +10,7 @@ import os
 import platform
 import resource
 import subprocess
+import sys
 import threading
 import time
 from collections import Counter, defaultdict
@@ -52,6 +53,7 @@ _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
 _CORPUS_MARKER = "V305-PERFORMANCE-ALPHA-739"
+_ISOLATED_CHILD_ENV = "RAG_V305_PERFORMANCE_ISOLATED_CHILD"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1392,8 +1394,55 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
     }
 
 
+def _run_isolated_performance_gate(tmp_path: Path) -> None:
+    """在独立 pytest 进程运行矩阵，隔离前序测试的进程状态。
+
+    Args:
+        tmp_path: 父测试用于接收子进程收据的隔离目录。
+
+    Returns:
+        子进程完整执行冻结矩阵并通过时无返回值。
+
+    """
+    configured_output = os.environ.get("RAG_V305_PERFORMANCE_OUTPUT")
+    report_path = (
+        (tmp_path / "product-http.json").resolve()
+        if configured_output is None
+        else Path(configured_output).resolve()
+    )
+    environment = os.environ.copy()
+    environment[_ISOLATED_CHILD_ENV] = "1"
+    environment["RAG_V305_PERFORMANCE_OUTPUT"] = str(report_path)
+    environment.pop("PYTEST_CURRENT_TEST", None)
+    completed = subprocess.run(  # noqa: S603 - 仅调用当前可信解释器。
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            f"{Path(__file__).resolve()}::"
+            "test_v3_05_product_http_performance_gate",
+            "-q",
+        ),
+        cwd=_ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=1800,
+    )
+    failure_output = "\n".join(
+        part[-8000:] for part in (completed.stdout, completed.stderr) if part
+    )
+    assert completed.returncode == 0, failure_output
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert isinstance(report, dict) and report.get("passed") is True
+
+
 def test_v3_05_product_http_performance_gate(tmp_path: Path) -> None:
     """执行默认矩阵、可选写收据，并使冻结非劣门槛 fail-closed。"""
+    if os.environ.get(_ISOLATED_CHILD_ENV) != "1":
+        _run_isolated_performance_gate(tmp_path)
+        return
     report = _run_matrix(tmp_path)
     output_name = os.environ.get("RAG_V305_PERFORMANCE_OUTPUT")
     if output_name:
