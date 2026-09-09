@@ -288,7 +288,6 @@ def _table_intersections(
         defaultdict(lambda: defaultdict(dict))
     )
     members: dict[_TableKey, set[str]] = defaultdict(set)
-    invalid: set[_TableKey] = set()
     for candidate in candidates:
         chunk = candidate.hydrated.chunk
         if chunk.role.value != "table":
@@ -298,9 +297,9 @@ def _table_intersections(
             if location is None:
                 continue
             table_key, row, column = location
+            if not _table_coordinate_is_trusted(chunk, span, row, column):
+                continue
             members[table_key].add(chunk.chunk_id)
-            if not _regular_table_grid(chunk):
-                invalid.add(table_key)
             quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
             ].strip()
@@ -309,8 +308,6 @@ def _table_intersections(
     query = context.analysis.normalized_query.casefold()
     selected: dict[str, set[_SpanKey]] = {}
     for table_key, cells in tables.items():
-        if table_key in invalid:
-            continue
         rows = {
             row
             for (row, column), values in cells.items()
@@ -912,6 +909,101 @@ def _regular_table_grid(chunk: Chunk) -> bool:
             if match is None or int(match[1]) != physical_column:
                 return False
     return True
+
+
+def _table_coordinate_is_trusted(
+    chunk: Chunk,
+    span: SourceSpan,
+    row: int,
+    column: int,
+) -> bool:
+    """仅信任能由节点映射核对的合并或偏移表格逻辑坐标。"""
+    atoms = dict(chunk.metadata).get("atoms", [])
+    if not isinstance(atoms, list):
+        return False
+    # 旧测试或 Adapter 没有坐标元数据时沿用 SourceAnchor；
+    # Product Parser 会提供 atoms。
+    if not atoms:
+        return True
+    if span.node_id is None:
+        return False
+    source_mappings = [_source_node_mapping(atom) for atom in atoms]
+    if all(mapping is None for mapping in source_mappings):
+        return _regular_table_grid(chunk)
+    if any(not isinstance(mapping, dict) for mapping in source_mappings):
+        return False
+    matches = tuple(
+        _table_atom_matches_coordinate(atom, span.node_id, row, column)
+        for atom in atoms
+    )
+    return None not in matches and any(matches)
+
+
+def _source_node_mapping(atom: object) -> object:
+    """读取单个 atom 的节点映射，并保留缺失与非法状态的区别。"""
+    if not isinstance(atom, dict):
+        return False
+    metadata = atom.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get("cell_source_node_ids")
+
+
+def _table_atom_matches_coordinate(
+    atom: object,
+    node_id: str,
+    row: int,
+    column: int,
+) -> bool | None:
+    """验证单个表格 atom，并返回节点是否命中目标逻辑坐标。"""
+    if not isinstance(atom, dict):
+        return None
+    metadata = atom.get("metadata", {})
+    if not isinstance(metadata, dict):
+        return None
+    row_index = metadata.get("row_index")
+    coordinates = metadata.get("cell_coordinates")
+    source_nodes = metadata.get("cell_source_node_ids")
+    if (
+        not isinstance(row_index, int)
+        or not isinstance(coordinates, list)
+        or not isinstance(source_nodes, dict)
+    ):
+        return None
+    matched = False
+    for physical_column, coordinate in enumerate(coordinates):
+        logical_cell = _validated_logical_cell(
+            coordinate,
+            row_index,
+            source_nodes.get(str(physical_column)),
+        )
+        if logical_cell is None:
+            return None
+        logical_row, logical_column, nodes = logical_cell
+        if node_id in nodes and (logical_row, logical_column) == (row, column):
+            matched = True
+    return matched
+
+
+def _validated_logical_cell(
+    coordinate: object,
+    row_index: int,
+    nodes: object,
+) -> tuple[int, int, list[str]] | None:
+    """解析并验证一个物理单元格声明的逻辑坐标和来源节点。"""
+    coordinate_match = re.fullmatch(
+        r"r(\d+):c(\d+):rs(\d+):cs(\d+)", str(coordinate)
+    )
+    if (
+        coordinate_match is None
+        or int(coordinate_match[1]) != row_index
+        or int(coordinate_match[3]) < 1
+        or int(coordinate_match[4]) < 1
+        or not isinstance(nodes, list)
+        or any(not isinstance(node, str) for node in nodes)
+    ):
+        return None
+    return int(coordinate_match[1]), int(coordinate_match[2]), nodes
 
 
 def _span_is_eligible(

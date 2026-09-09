@@ -48,6 +48,16 @@ def test_analyzer_does_not_treat_plain_numbers_as_identifiers(
     assert _analyze(value).identifiers == ()
 
 
+def test_analyzer_preserves_mixed_script_identifier() -> None:
+    analysis = _analyze("MiXeD-部件-7 向量检索")
+
+    assert analysis.identifiers == ("MiXeD-部件-7",)
+    assert any(
+        constraint.normalized_value == "mixed-部件-7"
+        for constraint in analysis.semantics.constraints
+    )
+
+
 @pytest.mark.parametrize(
     ("text", "expected"),
     (

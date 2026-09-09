@@ -17,10 +17,11 @@ from rag_app.core.models import (
 
 _QUOTED = re.compile(r'["“](.+?)["”]')
 _IDENTIFIER = re.compile(
-    r"(?<!\w)(?=[A-Za-z0-9_.\-/]{3,80}(?!\w))"
-    r"(?=[A-Za-z0-9_.\-/]*[A-Za-z])"
-    r"(?=[A-Za-z0-9_.\-/]*\d)"
-    r"[A-Za-z0-9]+(?:[_.\-/][A-Za-z0-9]+)+(?!\w)"
+    r"(?<!\w)(?=[A-Za-z0-9\u3400-\u9fff_.\-/]{3,80}(?!\w))"
+    r"(?=[A-Za-z0-9\u3400-\u9fff_.\-/]*[A-Za-z])"
+    r"(?=[A-Za-z0-9\u3400-\u9fff_.\-/]*\d)"
+    r"[A-Za-z0-9\u3400-\u9fff]+"
+    r"(?:[_.\-/][A-Za-z0-9\u3400-\u9fff]+)+(?!\w)"
 )
 _STANDARD = re.compile(
     r"(?<!\w)[A-Za-z]{1,8}(?:\s*/\s*[A-Za-z]{1,8})?\s*\d{2,}"

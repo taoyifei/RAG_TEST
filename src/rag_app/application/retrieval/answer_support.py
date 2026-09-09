@@ -92,7 +92,12 @@ _REQUEST_WORDS = re.compile(
 _QUESTION = re.compile(
     r"谁|什么|啥|多少|多大|如何|怎么|怎样|哪|何时|是否|能否|几|[?？]"
 )
+_LOOKUP_SCAFFOLDING = re.compile(
+    r"查找|搜索|检索|表格|记录|文档|内容|信息|条目"
+)
 _MIN_ENUMERATION_ITEMS = 2
+_MIN_DOMINANT_FRAGMENT_SHARE = 0.45
+_MIN_IDENTIFIER_CONTEXT_OVERLAP = 0.25
 
 
 def _normalized(text: str) -> str:
@@ -132,21 +137,39 @@ def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
             semantics.answer_type.value,
         )
     query = _normalized(analysis.resolved_query or analysis.normalized_query)
-    if re.search(r"谁(?!的)|哪位|找.{0,4}人员", query):
+    requested: tuple[str, str, str] | None
+    identifier_only = (
+        analysis.identifiers
+        and not _QUESTION.search(query)
+        and not _literal_terms(
+            _identifier_residual(query, analysis.identifiers)
+        )
+    )
+    if identifier_only:
+        requested = (query, "字面查找", "FACT")
+    elif re.search(r"谁(?!的)|哪位|找.{0,4}人员", query):
         return _REQUEST_WORDS.sub("", query), "责任角色", "PERSON_OR_ROLE"
-    if re.search(r"数值.*单位|单位.*数值", query):
+    elif re.search(r"数值.*单位|单位.*数值", query):
         return _REQUEST_WORDS.sub("", query), "数值与单位", "MEASUREMENT"
+    else:
+        requested = _attribute_or_descriptive_request(query)
+    if requested is not None:
+        return requested
+    relation = "事实关系" if _QUESTION.search(query) else "字面查找"
+    return _REQUEST_WORDS.sub("", query), relation, "FACT"
+
+
+def _attribute_or_descriptive_request(
+    query: str,
+) -> tuple[str, str, str] | None:
+    """识别属性或描述类请求，供通用回退路径复用。"""
     for answer_type, pattern in _ATTRIBUTES:
         match = re.search(pattern, query)
         if match:
             target = _REQUEST_WORDS.sub("", query[: match.start()])
             target = re.sub(r"(?:保持|允许|储存)$", "", target)
             return target, match[0], answer_type
-    descriptive = descriptive_request(query)
-    if descriptive is not None:
-        return descriptive
-    relation = "事实关系" if _QUESTION.search(query) else "字面查找"
-    return _REQUEST_WORDS.sub("", query), relation, "FACT"
+    return descriptive_request(query)
 
 
 def descriptive_request(query: str) -> tuple[str, str, str] | None:
@@ -180,17 +203,112 @@ def descriptive_request(query: str) -> tuple[str, str, str] | None:
     )
 
 
-def _literal_lookup_supports(query: str, text: str) -> bool:
+def _literal_lookup_supports(
+    query: str,
+    text: str,
+    *,
+    allow_partial: bool,
+) -> bool:
     """关键词查找只返回实际出现的词，不推导未提出的属性值。"""
     query = _normalized(query)
+    text = _normalized(text)
     if _QUESTION.search(query):
         return False
-    terms = re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", query)
-    actual = re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", text)
+    terms = _literal_terms(query)
+    actual = _literal_terms(text)
     if terms and Counter(terms) <= Counter(actual):
         return True
-    # 分隔的关键词可对应各自的真实表格单元格，不能补出未出现的值。
-    return len(query.split()) > 1 and text.strip() in query.split()
+    if not allow_partial:
+        return False
+    total = len(terms)
+    if total == 0:
+        return False
+    fragments = re.findall(
+        r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]+", query
+    )
+    return any(
+        fragment in text
+        and len(_literal_terms(fragment)) / total
+        >= _MIN_DOMINANT_FRAGMENT_SHARE
+        for fragment in fragments
+    )
+
+
+def _literal_terms(text: str) -> list[str]:
+    """返回用于有界字面覆盖判断的英文词、标识符和单个汉字。"""
+    return re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", text)
+
+
+def _identifier_literal_supports(
+    analysis: QueryAnalysis,
+    clause: str,
+) -> bool:
+    """要求标识符完整命中，并用剩余词面排除同 ID 的无关来源。"""
+    query = _normalized(_analysis_query(analysis))
+    text = _normalized(clause)
+    identifiers = tuple(_normalized(item) for item in analysis.identifiers)
+    if not identifiers or any(item not in text for item in identifiers):
+        return False
+    if analysis.negation_signals and any(
+        _normalized(signal) not in text for signal in analysis.negation_signals
+    ):
+        return False
+    residual = _identifier_residual(query, identifiers)
+    residual_terms = _literal_terms(residual)
+    if not residual_terms:
+        return True
+    actual = Counter(_literal_terms(text))
+    required = Counter(residual_terms)
+    overlap = sum((required & actual).values()) / len(residual_terms)
+    return overlap >= _MIN_IDENTIFIER_CONTEXT_OVERLAP
+
+
+def _identifier_residual(
+    query: str,
+    identifiers: tuple[str, ...],
+) -> str:
+    """移除已验证标识符和无语义的查找载体词。"""
+    residual = query
+    for identifier in identifiers:
+        residual = residual.replace(_normalized(identifier), " ")
+    return _LOOKUP_SCAFFOLDING.sub(" ", residual)
+
+
+def _literal_clause_supports(
+    analysis: QueryAnalysis,
+    clause: str,
+) -> bool:
+    """在硬约束存在时禁止用局部字面片段补成完整证据。"""
+    allow_partial = not (
+        analysis.negation_signals
+        or analysis.numbers
+        or analysis.units
+        or analysis.date_version_signals
+        or analysis.quoted_phrases
+    )
+    return _literal_lookup_supports(
+        _analysis_query(analysis), clause, allow_partial=allow_partial
+    )
+
+
+def _identifier_relation_supports(
+    target: str,
+    answer_type: str,
+    clause: str,
+    analysis: QueryAnalysis,
+) -> bool:
+    """核验含标识符事实，避免同一标识符的无关关系借值。"""
+    if not all(item.casefold() in clause for item in analysis.identifiers):
+        return False
+    query = _normalized(_analysis_query(analysis))
+    if answer_type != "FACT":
+        return bool(_RELATION.search(clause)) or query in clause
+    if _identifier_literal_supports(analysis, clause):
+        return True
+    identifier_targets = {_normalized(item) for item in analysis.identifiers}
+    if target in identifier_targets and not analysis.negation_signals:
+        return True
+    return query in clause
 
 
 def _target_matches(target: str, text: str, *, strict: bool) -> bool:
@@ -327,10 +445,12 @@ def _clause_supports(  # noqa: PLR0911
             and _typed_value_matches(answer_type, relation, part)
             for part in re.split(r"[，,]", clause)
         )
-    if relation == "字面查找" and _literal_lookup_supports(
-        _analysis_query(analysis), clause
-    ):
-        return True
+    if relation == "字面查找":
+        return (
+            _identifier_literal_supports(analysis, clause)
+            if analysis.identifiers
+            else _literal_clause_supports(analysis, clause)
+        )
     if not _target_matches(target, clause, strict=False):
         return False
     if answer_type == "PERSON_OR_ROLE":
@@ -361,11 +481,11 @@ def _clause_supports(  # noqa: PLR0911
             )
         )
     if analysis.identifiers:
-        return all(
-            item.casefold() in clause for item in analysis.identifiers
-        ) and (
-            bool(_RELATION.search(clause))
-            or _normalized(_analysis_query(analysis)) in clause
+        return _identifier_relation_supports(
+            target,
+            answer_type,
+            clause,
+            analysis,
         )
     if analysis.quoted_phrases:
         return all(
