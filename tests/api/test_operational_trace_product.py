@@ -246,7 +246,9 @@ def test_diagnostic_and_full_trace_keep_content_boundaries(
             f"/api/v1/projects/{project_id}/knowledge-bases/"
             f"{knowledge_base_id}:answer"
         )
-        content_marker = "公开问题标记-不得进入技术追踪"
+        # 使用来源中真实存在的对象与属性验证 Trace 脱敏，避免把无来源短语
+        # 当成应由精确标识符绕过的回答条件。
+        content_marker = "设备维护周期"
         diagnostic = harness.client.post(
             endpoint,
             json={
