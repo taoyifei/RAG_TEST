@@ -55,7 +55,15 @@ def test_image_contains_product_runtime_resources_and_default_command() -> None:
     assert "npm run build" in dockerfile
     assert "python -m pip wheel" in dockerfile
     assert "COPY --chown=rag:rag migrations/ ./migrations/" in dockerfile
+    assert (
+        "COPY --chown=rag:rag docs/public/openapi-v1.json "
+        "./openapi/openapi-v1.json"
+    ) in dockerfile
     assert "compatibility-manifest.json" in dockerfile
+    assert "write_product_asset_manifest" in dockerfile
+    assert "/app/product-assets.json" in dockerfile
+    assert "product-asset-selfcheck" in dockerfile
+    assert "deployment/ASSETS.sha256" not in dockerfile
     assert "org.opencontainers.image.base.name" in dockerfile
     assert "org.opencontainers.image.base.digest" in dockerfile
     assert "USER rag:rag" in dockerfile

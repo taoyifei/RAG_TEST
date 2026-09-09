@@ -81,6 +81,7 @@ RUN apt-get update -o Acquire::Retries=5 \
     && chown -R rag:rag /data /run/rag-secrets
 
 COPY --from=frontend-build --chown=rag:rag /build/frontend/dist/ ./frontend/
+COPY --chown=rag:rag docs/public/openapi-v1.json ./openapi/openapi-v1.json
 COPY --chown=rag:rag migrations/ ./migrations/
 COPY --chown=rag:rag compatibility-manifest.json ./compatibility-manifest.json
 COPY --chown=rag:rag evaluation/__init__.py evaluation/p11_pilot.py evaluation/p11_pilot_data.py evaluation/p11_pilot_runtime.py ./evaluation/
@@ -88,7 +89,12 @@ COPY --chown=rag:rag evaluation/v2/*.py ./evaluation/v2/
 COPY --chown=rag:rag evaluation/gates/p08-gates.json ./evaluation/gates/p08-gates.json
 COPY --chown=rag:rag evaluation/datasets/p11-pilot/ ./evaluation/datasets/p11-pilot/
 RUN python -c \
-    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")'
+    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")' \
+    && python -c \
+    'import pathlib, sys; from rag_app.product.asset_manifest import write_product_asset_manifest; write_product_asset_manifest(root=pathlib.Path("/app"), manifest_path=pathlib.Path("/app/product-assets.json"), source_revision=sys.argv[1])' \
+    "${VCS_REF}" \
+    && chown rag:rag /app/product-assets.json \
+    && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"
 
 USER rag:rag
 EXPOSE 8088
