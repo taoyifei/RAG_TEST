@@ -716,7 +716,15 @@ class RetrievalService:
                 )
 
                 def publish_claim(claim: AnswerClaim) -> None:
-                    """在每个公开 claim 前重新核对当前来源可见性。"""
+                    """在每个公开 claim 前重新核对当前来源可见性。
+
+                    Args:
+                        claim: 已通过生成层证据规则的完整事实。
+
+                    Returns:
+                        无返回值；来源有效时交给流式发布回调。
+
+                    """
                     self._validate_stream_sources(
                         evidence,
                         request,

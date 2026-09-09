@@ -297,6 +297,15 @@ def _sse_data_events(chunks: Iterator[bytes]) -> Iterator[str]:
     data_lines: list[str] = []
 
     def consume_line(line: str) -> str | None:
+        """合并一个 SSE 行，并在空行处返回完整 data。
+
+        Args:
+            line: 已严格解码但尚未移除 CR 的单行文本。
+
+        Returns:
+            帧已闭合时返回合并后的 data，否则返回 ``None``。
+
+        """
         normalized = line.removesuffix("\r")
         if not normalized:
             if not data_lines:
@@ -353,7 +362,15 @@ class _ChatStreamAccumulator:
     done_seen: bool = False
 
     def consume(self, data: str) -> None:  # noqa: PLR0912
-        """消费一个完整 SSE data 字段。"""
+        """消费一个完整 SSE data 字段。
+
+        Args:
+            data: 一个已经完成 SSE 行合并的 data 值。
+
+        Returns:
+            无返回值；校验并累计当前事件。
+
+        """
         if self.done_seen:
             raise ChatResponseError("CHAT_DATA_AFTER_DONE", self.usage)
         if data == "[DONE]":
@@ -421,7 +438,15 @@ class _ChatStreamAccumulator:
             self.on_delta(content)
 
     def complete(self) -> ChatContent:
-        """要求 stop、DONE 与非空内容，usage 缺失保持 unknown。"""
+        """要求 stop、DONE 与非空内容，usage 缺失保持 unknown。
+
+        Args:
+            无参数；收束当前流的累计状态。
+
+        Returns:
+            完成协议校验的模型内容与可见 usage。
+
+        """
         content = "".join(self.content_parts)
         if not self.done_seen:
             raise ChatResponseError("CHAT_STREAM_MISSING_DONE", self.usage)
@@ -641,6 +666,15 @@ class AliyunChatAdapter:
         emitted: list[AnswerClaim] = []
 
         def consume_delta(fragment: str) -> None:
+            """把一个模型正文增量交给 claim 解析器。
+
+            Args:
+                fragment: 尚未公开的模型 content delta。
+
+            Returns:
+                无返回值；完整合法 claim 会同步交给应用回调。
+
+            """
             if cancellation.is_cancelled():
                 raise QueryCancelled("PROVIDER_STREAM_CANCELLED")
             for raw_claim in parser.feed(fragment):
@@ -734,6 +768,15 @@ class AliyunChatAdapter:
         payload = chat_payload(messages, self.config, stream=True)
 
         def consume(chunks: Iterator[bytes]) -> ChatContent:
+            """在 HTTP 响应作用域内消费并收束 Provider SSE。
+
+            Args:
+                chunks: 有累计字节上限的原始响应分片。
+
+            Returns:
+                完成协议校验的模型内容。
+
+            """
             accumulator = _ChatStreamAccumulator(
                 expected_model=self.config.model,
                 on_delta=on_delta,

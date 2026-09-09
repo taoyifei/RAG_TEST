@@ -445,7 +445,16 @@ class GroundedAnsweringService:
                         claim: AnswerClaim,
                         published_claims: list[AnswerClaim] = published,
                     ) -> None:
-                        """逐条执行完整业务证据门，再允许 HTTP 层发布。"""
+                        """逐条执行完整业务证据门，再允许 HTTP 层发布。
+
+                        Args:
+                            claim: Adapter 刚形成的完整来源匹配事实。
+                            published_claims: 本次尝试已成功交付的事实列表。
+
+                        Returns:
+                            无返回值；发布回调返回后才记录为已交付。
+
+                        """
                         _raise_if_cancelled(cancellation)
                         validate_grounded_draft(
                             AnswerDraft(

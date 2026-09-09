@@ -555,7 +555,15 @@ class _BudgetObservedStream(httpx.SyncByteStream):
             )
 
     def close(self) -> None:
-        """关闭底层响应；成功响应未读完时按取消结算。"""
+        """关闭底层响应；成功响应未读完时按取消结算。
+
+        Args:
+            无参数；关闭当前响应流。
+
+        Returns:
+            无返回值；账本终态只结算一次。
+
+        """
         try:
             self._stream.close()
         finally:

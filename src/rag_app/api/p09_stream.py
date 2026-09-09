@@ -101,7 +101,15 @@ class P09AnswerStream:
             raise ValueError("流式事件队列必须位于固定容量上限内。")
 
     def start(self) -> Iterator[bytes]:
-        """在返回 StreamingResponse 前完成固定容量准入。"""
+        """在返回 StreamingResponse 前完成固定容量准入。
+
+        Args:
+            无参数；启动当前请求的唯一 worker。
+
+        Returns:
+            只产生有限 SSE 字节帧的同步迭代器。
+
+        """
         remaining = max(
             0.001,
             self.total_seconds - (time.monotonic() - self.started),
@@ -120,7 +128,15 @@ class P09AnswerStream:
         return self._iterate()
 
     def cancel(self) -> None:
-        """由 HTTP 响应生命周期显式传播完成、断连或发送失败。"""
+        """由 HTTP 响应生命周期显式传播完成、断连或发送失败。
+
+        Args:
+            无参数；取消当前请求。
+
+        Returns:
+            无返回值；重复调用保持幂等。
+
+        """
         self.cancellation.cancel()
 
     def _put(self, event: AnswerStreamPublicEvent) -> None:

@@ -959,13 +959,29 @@ class RagSdk:
         sequence = 0
 
         def publish(event: AnswerStreamPublicEvent) -> None:
-            """在每次发布前尊重取消，不让后续阶段越过停止边界。"""
+            """在每次发布前尊重取消，不让后续阶段越过停止边界。
+
+            Args:
+                event: 已验证、绑定当前请求范围的类型化事件。
+
+            Returns:
+                无返回值；同步交付完成后返回。
+
+            """
             if cancellation.is_cancelled():
                 raise QueryCancelled("QUERY_CANCELLED")
             emit(event)
 
         def begin() -> None:
-            """历史已建立后再交付首字节，确保取消也有唯一终态。"""
+            """历史已建立后再交付首字节，确保取消也有唯一终态。
+
+            Args:
+                无参数；发布固定 meta 与 accepted 阶段。
+
+            Returns:
+                无返回值；两个事件均确认交付后返回。
+
+            """
             nonlocal sequence
             publish(
                 AnswerStreamMetaEvent(
@@ -988,6 +1004,16 @@ class RagSdk:
             sequence += 1
 
         def stage(name: str, attributes: dict[str, object]) -> None:
+            """把共享 Application 阶段转换成类型化事件。
+
+            Args:
+                name: 允许公开的固定阶段名称。
+                attributes: 不含正文的有限阶段属性。
+
+            Returns:
+                无返回值；事件确认交付后返回。
+
+            """
             nonlocal sequence
             if name not in {
                 "snapshot",
@@ -1018,6 +1044,16 @@ class RagSdk:
         claim_index = 0
 
         def claim(value: AnswerClaim, revision_id: str) -> None:
+            """发布绑定当前快照的下一条已核验事实。
+
+            Args:
+                value: 已通过实际来源规则的完整事实。
+                revision_id: 本请求冻结的活动索引版本 ID。
+
+            Returns:
+                无返回值；事件确认交付后返回。
+
+            """
             nonlocal claim_index, sequence
             event = AnswerStreamClaimEvent(
                 trace_id=request_trace_id,
@@ -1033,7 +1069,15 @@ class RagSdk:
             publish(event)
 
         def finish(value: SearchAnswerResult) -> None:
-            """确认 final 已交付，再由共享链写成功缓存和历史。"""
+            """确认 final 已交付，再由共享链写成功缓存和历史。
+
+            Args:
+                value: 已完成证据与回答校验的权威结果。
+
+            Returns:
+                无返回值；唯一 final 确认交付后返回。
+
+            """
             publish(
                 AnswerStreamFinalEvent(
                     trace_id=request_trace_id,
