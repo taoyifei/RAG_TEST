@@ -1,5 +1,15 @@
 """导出 Core 公共模型。"""
 
+from rag_app.core.models.answer_stream import (
+    ANSWER_STREAM_PROTOCOL,
+    AnswerStreamCancelledEvent,
+    AnswerStreamClaimEvent,
+    AnswerStreamErrorEvent,
+    AnswerStreamFinalEvent,
+    AnswerStreamMetaEvent,
+    AnswerStreamPublicEvent,
+    AnswerStreamStageEvent,
+)
 from rag_app.core.models.chunk import (
     Chunk,
     ChunkingContext,
@@ -174,6 +184,7 @@ from rag_app.core.models.search import (
 from rag_app.core.policies import ParsePolicy, ParsingPolicy
 
 __all__ = [
+    "ANSWER_STREAM_PROTOCOL",
     "ActiveRevisionEmbeddingState",
     "ActiveRevisionQuerySnapshot",
     "AnalyzedLexicalDocument",
@@ -181,6 +192,13 @@ __all__ = [
     "AnswerClaim",
     "AnswerDraft",
     "AnswerResult",
+    "AnswerStreamCancelledEvent",
+    "AnswerStreamClaimEvent",
+    "AnswerStreamErrorEvent",
+    "AnswerStreamFinalEvent",
+    "AnswerStreamMetaEvent",
+    "AnswerStreamPublicEvent",
+    "AnswerStreamStageEvent",
     "ArtifactDescriptor",
     "BaseResultCacheKey",
     "BlobCatalogEntry",

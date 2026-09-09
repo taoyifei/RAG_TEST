@@ -375,39 +375,58 @@ class AuthStore:
             row = connection.execute(
                 "SELECT * FROM api_access_tokens WHERE token_hash=?", (digest,)
             ).fetchone()
-            if row is None or row["revoked_at"] is not None:
+            if row is None:
                 raise PolicyDenied("接口访问 Token 无效。", stage="token.auth")
             summary = _token_summary(row)
-            if summary.expires_at is not None and datetime.fromisoformat(
-                summary.expires_at
-            ) <= datetime.now(UTC):
-                raise PolicyDenied(
-                    "接口访问 Token 已过期。", stage="token.auth"
-                )
-            if required_scope not in summary.scopes:
-                raise PolicyDenied(
-                    "接口访问 Token Scope 不足。", stage="token.scope"
-                )
-            if (
-                summary.project_id is not None
-                and summary.project_id != project_id
-            ):
-                raise PolicyDenied(
-                    "接口访问 Token 项目范围不匹配。", stage="token.scope"
-                )
-            if (
-                summary.knowledge_base_id is not None
-                and summary.knowledge_base_id != knowledge_base_id
-            ):
-                raise PolicyDenied(
-                    "接口访问 Token 知识库范围不匹配。", stage="token.scope"
-                )
+            _validate_access_summary(
+                summary,
+                required_scope=required_scope,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+            )
             used_at = _now()
             connection.execute(
                 "UPDATE api_access_tokens SET last_used_at=? WHERE token_id=?",
                 (used_at, summary.token_id),
             )
         return summary.model_copy(update={"last_used_at": used_at})
+
+    def validate_access_token_id(
+        self,
+        token_id: str,
+        *,
+        required_scope: str,
+        project_id: str | None = None,
+        knowledge_base_id: str | None = None,
+    ) -> None:
+        """按首次鉴权绑定的 Token ID 复核在途流的当前权限。
+
+        Args:
+            token_id: 首次明文 Token 鉴权得到的不可伪造绑定 ID。
+            required_scope: 当前流固定的路由权限。
+            project_id: 当前流固定的项目范围。
+            knowledge_base_id: 当前流固定的知识库范围。
+
+        Returns:
+            权限仍有效时无返回值。
+
+        Raises:
+            PolicyDenied: Token 已删除、吊销、过期或范围不再匹配。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM api_access_tokens WHERE token_id=?",
+                (token_id,),
+            ).fetchone()
+        if row is None:
+            raise PolicyDenied("接口访问 Token 无效。", stage="token.auth")
+        _validate_access_summary(
+            _token_summary(row),
+            required_scope=required_scope,
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+        )
 
 
 class ConsoleSessionService:
@@ -512,6 +531,35 @@ class ConsoleSessionService:
         return self._store.resume_session(
             session_token,
             ttl_seconds=self._ttl_seconds,
+        )
+
+
+def _validate_access_summary(
+    summary: AccessTokenSummary,
+    *,
+    required_scope: str,
+    project_id: str | None,
+    knowledge_base_id: str | None,
+) -> None:
+    """复用首次鉴权与在途流复核的 Token 生命周期和范围合同。"""
+    if summary.revoked_at is not None:
+        raise PolicyDenied("接口访问 Token 无效。", stage="token.auth")
+    if summary.expires_at is not None and datetime.fromisoformat(
+        summary.expires_at
+    ) <= datetime.now(UTC):
+        raise PolicyDenied("接口访问 Token 已过期。", stage="token.auth")
+    if required_scope not in summary.scopes:
+        raise PolicyDenied("接口访问 Token Scope 不足。", stage="token.scope")
+    if summary.project_id is not None and summary.project_id != project_id:
+        raise PolicyDenied(
+            "接口访问 Token 项目范围不匹配。", stage="token.scope"
+        )
+    if (
+        summary.knowledge_base_id is not None
+        and summary.knowledge_base_id != knowledge_base_id
+    ):
+        raise PolicyDenied(
+            "接口访问 Token 知识库范围不匹配。", stage="token.scope"
         )
 
 

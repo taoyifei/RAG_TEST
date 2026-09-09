@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from time import monotonic, sleep
@@ -328,6 +329,30 @@ def test_admin_review_builds_new_revision_without_mutating_old_index(
         assert [item.text for item in relation_nodes] == [
             "甲组 --reports_to--> 乙组"
         ]
+        streamed = harness.client.post(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer",
+            json={
+                "query": "甲组 reports_to 乙组",
+                "stream": True,
+                "stream_protocol": "rag-answer-sse-v1",
+            },
+            headers=harness.write_headers,
+        )
+        streamed.raise_for_status()
+        lines = streamed.text.splitlines()
+        final = next(
+            json.loads(lines[index + 1].removeprefix("data: "))
+            for index, line in enumerate(lines[:-1])
+            if line == "event: final"
+        )
+        assert "甲组 --reports_to--> 乙组" in final["answer"]
+        assert any(
+            span["span_type"] == "diagram_relation"
+            and dict(span["metadata"])["review_state"] == "accepted"
+            for evidence in final["evidence"]
+            for span in evidence["source_spans"]
+        )
     finally:
         harness.close()
 

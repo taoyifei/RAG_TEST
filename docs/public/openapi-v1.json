@@ -2355,6 +2355,18 @@
             "title": "Stream",
             "type": "boolean"
           },
+          "stream_protocol": {
+            "anyOf": [
+              {
+                "const": "rag-answer-sse-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Protocol"
+          },
           "trace_mode": {
             "default": "SAFE",
             "enum": [

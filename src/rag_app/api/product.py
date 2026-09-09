@@ -427,6 +427,14 @@ def _authenticate_request(
         return _auth_error(403, "TOKEN_DENIED")
     request.state.product_principal = "external_token"
     request.state.access_token_id = principal.token_id
+    request.state.stream_authorization_guard = lambda: (
+        runtime.auth.validate_access_token_id(
+            principal.token_id,
+            required_scope=route.scope,
+            project_id=route.project_id,
+            knowledge_base_id=route.knowledge_base_id,
+        )
+    )
     _replace_authorization(request, expected)
     return None
 
@@ -448,6 +456,9 @@ def _authenticate_session(
     except PolicyDenied:
         return _auth_error(401, "CONSOLE_SESSION_REQUIRED")
     request.state.product_principal = "admin_session"
+    request.state.stream_authorization_guard = lambda: (
+        runtime.auth.validate_session(cookie)
+    )
     _replace_authorization(request, expected)
     return None
 

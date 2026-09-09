@@ -23,6 +23,7 @@ from rag_app.core.models import ParseResult, RetrievalPolicy, SystemStatus
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import TracePort
 from rag_app.core.ports.query_history import QueryHistoryPort
+from rag_app.query_executor import QueryExecutor
 from rag_app.sdk import RagSdk
 from rag_app.tracing.models import TraceMode
 
@@ -36,6 +37,7 @@ class P09Runtime:
     lifecycle: LifecycleService
     sdk: RagSdk
     jobs: DurableJobRunner
+    query_executor: QueryExecutor
     data_dir: Path
     prepare_trace: Callable[[str, TraceMode], None] | None = None
     _closed: bool = False
@@ -66,6 +68,7 @@ class P09Runtime:
         if self._closed:
             return
         self._closed = True
+        self.query_executor.close()
         self.sdk.close()
 
     def __enter__(self) -> P09Runtime:
@@ -189,6 +192,7 @@ def build_p09_runtime(
         store.pending_ingestion_jobs,
         max_workers=max_job_workers,
     )
+    query_executor = QueryExecutor()
     console = ConsoleInspectionService(
         revisions=persistence.control,
         jobs=store,
@@ -231,6 +235,7 @@ def build_p09_runtime(
         lifecycle=lifecycle,
         sdk=sdk,
         jobs=jobs,
+        query_executor=query_executor,
         data_dir=resolved_data_dir,
         prepare_trace=None if hooks is None else hooks.prepare_trace,
     )

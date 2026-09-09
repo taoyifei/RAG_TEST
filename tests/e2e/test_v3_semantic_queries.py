@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
 from rag_app.application.revision_builder import IngestionDocument
+from rag_app.clients.resilience import StreamCancellation
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
@@ -24,7 +26,7 @@ from rag_app.core.models import (
     SearchRequest,
 )
 from rag_app.core.policies import EgressPolicy
-from rag_app.core.ports import GenerationRequest
+from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from tests.adapters.parsers.docx_fixtures import build_docx
 
@@ -206,6 +208,24 @@ class _EvidenceEchoGenerator:
     """仅按收到的证据构造可验证 claim，不按问题返回预置答案。"""
 
     def generate(self, request: GenerationRequest) -> AnswerDraft:
+        return self._draft(request)
+
+    def generate_stream(
+        self,
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        """用同一确定性草稿模拟 Provider 的逐条完整 claim。"""
+        assert not cancellation.is_cancelled()
+        draft = self._draft(request)
+        on_claim(draft.claims[0])
+        return draft
+
+    @staticmethod
+    def _draft(request: GenerationRequest) -> AnswerDraft:
+        """只从本次真实召回证据构造最终草稿。"""
         evidence = request.evidence[0]
         return AnswerDraft(
             text=evidence.citation_text,
@@ -223,6 +243,51 @@ class _EvidenceEchoGenerator:
             ),
             generation_mode="llm",
         )
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "蓝鹊小组的三种工作模式是什么",
+        "蓝鹊小组的三种工作模式是啥",
+        "蓝鹊小组有哪些工作模式？",
+        "蓝鹊小组是哪三种工作模式",
+        "蓝鹊小组的工作模式分别指什么",
+        "请把蓝鹊小组的工作模式列出来",
+    ),
+)
+def test_synonymous_questions_are_equivalent_for_sync_and_streaming(
+    tmp_path: Path, question: str
+) -> None:
+    """同步与流式复用同一语义、检索、证据门和最终收束。"""
+    scope = _scope_with_document(tmp_path)
+    generator = _EvidenceEchoGenerator()
+
+    with build_p07_runtime(
+        _PROFILE, data_dir=tmp_path, policy=_PRODUCT_EVIDENCE_POLICY
+    ) as runtime:
+        service = runtime.retrieval.with_generation(
+            generator,
+            serving_identity=canonical_sha256("semantic-stream-equivalence"),
+        )
+        request = SearchRequest(scope=scope, text=question)
+        regular = service.search_and_answer(request, cache_result=False)
+        emitted: list[AnswerClaim] = []
+        streamed = service.search_and_answer(
+            request,
+            on_claim=lambda claim, _revision_id: emitted.append(claim),
+            cancellation=StreamCancellation(),
+            cache_result=False,
+        )
+
+    assert regular.status is ConfidenceStatus.ANSWERABLE
+    assert regular.generation_mode == "llm"
+    assert streamed.answer is not None
+    assert len(emitted) == 1
+    assert emitted[0].text == streamed.evidence[0].citation_text
+    assert streamed.model_dump(exclude={"trace_id"}) == regular.model_dump(
+        exclude={"trace_id"}
+    )
 
 
 def test_evidence_shortfall_rewrite_reaches_lexical_dense_and_evidence(

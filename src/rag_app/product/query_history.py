@@ -156,6 +156,7 @@ class ProductQueryHistory:
         result: SearchAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
+        cancelled_calls: tuple[ProviderCall, ...] = (),
     ) -> None:
         """记录实际终态、候选决定和计量；从不持久化模型思考过程。
 
@@ -164,6 +165,7 @@ class ProductQueryHistory:
             result: 实际查询结果，可为空。
             error: 安全异常，可为空。
             cancelled: 是否发生取消。
+            cancelled_calls: 取消前已经结算的脱敏 Provider 调用。
 
         Returns:
             最终状态落盘后无返回值。
@@ -178,7 +180,12 @@ class ProductQueryHistory:
                 if row is None:
                     raise self._unavailable(trace_id)
                 now = datetime.now(UTC)
-                status, metadata = _completion(result, error, cancelled)
+                status, metadata = _completion(
+                    result,
+                    error,
+                    cancelled,
+                    cancelled_calls,
+                )
                 payload = self._decode(row)
                 if result is not None:
                     payload["answer"] = result.answer
@@ -569,7 +576,10 @@ def _sources_readable(
 
 
 def _completion(
-    result: SearchAnswerResult | None, error: RagError | None, cancelled: bool
+    result: SearchAnswerResult | None,
+    error: RagError | None,
+    cancelled: bool,
+    cancelled_calls: tuple[ProviderCall, ...] = (),
 ) -> tuple[str, dict[str, object]]:
     metadata: dict[str, object] = {}
     calls: tuple[ProviderCall, ...] = ()
@@ -603,6 +613,7 @@ def _completion(
     elif cancelled:
         status = "CANCELLED"
         metadata["reason_code"] = "REQUEST_CANCELLED"
+        calls = cancelled_calls
     else:
         status = "FAILED"
         metadata["reason_code"] = error.code if error else "INTERNAL_ERROR"

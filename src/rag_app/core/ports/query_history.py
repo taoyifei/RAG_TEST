@@ -6,6 +6,7 @@ from typing import Protocol
 
 from rag_app.core.errors import RagError
 from rag_app.core.models import KnowledgeBaseScope
+from rag_app.core.models.provider import ProviderCall
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
 
 
@@ -43,6 +44,7 @@ class QueryHistoryPort(Protocol):
         result: SearchAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
+        cancelled_calls: tuple[ProviderCall, ...] = (),
     ) -> None:
         """写入实际终态和受保护正文。
 
@@ -51,6 +53,7 @@ class QueryHistoryPort(Protocol):
             result: 实际查询结果。
             error: 实际安全错误。
             cancelled: 是否已被取消。
+            cancelled_calls: 取消前已经发生并结算的脱敏 Provider 调用。
 
         Returns:
             持久化结束时无返回值。

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from rag_app.adapters.providers.aliyun_chat import AliyunChatConfig, ChatMessage
@@ -21,13 +21,14 @@ from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
 from rag_app.core.errors import PolicyDenied, RagError
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    AnswerClaim,
     AnswerDraft,
     ProviderCall,
     ProviderHealth,
     QueryVariant,
     SearchRequest,
 )
-from rag_app.core.ports import GenerationRequest
+from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
@@ -153,6 +154,38 @@ class ProductGroundedModel:
             尚待应用层验证的生成草稿。
 
         """
+        hashes = self._source_hashes(request)
+        with self._scope("generation", hashes):
+            return self.adapter.generate(request)
+
+    def generate_stream(
+        self,
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        """在同一来源授权内消费 Provider SSE 并转发完整 claim。
+
+        Args:
+            request: 与同步生成完全相同的有限证据请求。
+            on_claim: 接收已通过 adapter 来源形状检查的 claim。
+            cancellation: 断连时关闭当前上游响应的令牌。
+
+        Returns:
+            完整 AnswerDraft，仍须由 Application 执行业务事实校验。
+
+        """
+        hashes = self._source_hashes(request)
+        with self._scope("generation", hashes):
+            return self.adapter.generate_stream(
+                request,
+                on_claim=on_claim,
+                cancellation=cancellation,
+            )
+
+    def _source_hashes(self, request: GenerationRequest) -> tuple[str, ...]:
+        """重新核对本次证据仍属于当前活动知识库版本。"""
         hashes: set[str] = set()
         with self.connections.transaction() as connection:
             for item in request.evidence:
@@ -176,8 +209,7 @@ class ProductGroundedModel:
                         code="GENERATION_SOURCE_UNAVAILABLE",
                     )
                 hashes.add(str(row[0]))
-        with self._scope("generation", tuple(sorted(hashes))):
-            return self.adapter.generate(request)
+        return tuple(sorted(hashes))
 
     def rewrite(  # noqa: PLR0911
         self, request: SearchRequest, *, recall_insufficient: bool = False

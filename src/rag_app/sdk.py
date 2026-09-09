@@ -3,21 +3,33 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Literal
+from typing import Literal, cast
 
 from rag_app.application.console import ConsoleInspectionService
 from rag_app.application.lifecycle import LifecycleService
 from rag_app.application.retrieval import RetrievalService
-from rag_app.core.errors import CapabilityUnavailable, NotFound, RagError
+from rag_app.core.errors import (
+    CapabilityUnavailable,
+    NotFound,
+    QueryCancelled,
+    RagError,
+)
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import (
+    AnswerClaim,
+    AnswerStreamClaimEvent,
+    AnswerStreamFinalEvent,
+    AnswerStreamMetaEvent,
+    AnswerStreamPublicEvent,
+    AnswerStreamStageEvent,
     ArtifactDescriptor,
     ChunkPage,
     JobPage,
     KnowledgeBaseScope,
     KnowledgeBaseStatus,
     ProjectStatus,
+    ProviderCall,
     RevisionDocumentReport,
     RevisionInspection,
     SearchRequest,
@@ -31,7 +43,7 @@ from rag_app.core.models.management import (
     SystemStatus,
 )
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
-from rag_app.core.ports import BlobReadResult
+from rag_app.core.ports import BlobReadResult, CancellationPort
 from rag_app.core.ports.query_history import QueryHistoryPort
 
 
@@ -745,6 +757,26 @@ class RagSdk:
             include_related_content=include_related_content,
             trace_id=trace_id or new_id("trace"),
         )
+        return self._run_search(
+            request,
+            owner_id=owner_id,
+            save_body=history_mode == "full",
+        )
+
+    def _run_search(  # noqa: PLR0913
+        self,
+        request: SearchRequest,
+        *,
+        owner_id: str,
+        save_body: bool,
+        on_stage: Callable[[str, dict[str, object]], None] | None = None,
+        on_claim: Callable[[AnswerClaim, str], None] | None = None,
+        cancellation: CancellationPort | None = None,
+        cache_result: bool = True,
+        on_started: Callable[[], None] | None = None,
+        before_success: Callable[[SearchAnswerResult], None] | None = None,
+    ) -> SearchAnswerResult:
+        """统一执行历史单次结算与共享检索/生成链。"""
         request_trace_id = request.trace_id
         if request_trace_id is None:
             raise RuntimeError("查询缺少 trace_id。")
@@ -752,16 +784,31 @@ class RagSdk:
             self._query_history.start(
                 request_trace_id,
                 request.scope,
-                text,
+                request.text,
                 owner_id=owner_id,
-                save_body=history_mode == "full",
+                save_body=save_body,
             )
         result: SearchAnswerResult | None = None
         failure: RagError | None = None
         cancelled = False
+        cancelled_calls: tuple[ProviderCall, ...] = ()
         try:
-            result = self._execute_search(request)
+            if on_started is not None:
+                on_started()
+            candidate = self._execute_search(
+                request,
+                on_stage=on_stage,
+                on_claim=on_claim,
+                on_final=before_success,
+                cancellation=cancellation,
+                cache_result=cache_result,
+            )
+            result = candidate
             return result
+        except QueryCancelled as error:
+            cancelled = True
+            cancelled_calls = error.provider_calls
+            raise
         except RagError as error:
             error.trace_id = request_trace_id
             failure = error
@@ -785,16 +832,33 @@ class RagSdk:
                     result=result,
                     error=failure,
                     cancelled=cancelled,
+                    cancelled_calls=cancelled_calls,
                 )
 
-    def _execute_search(self, request: SearchRequest) -> SearchAnswerResult:
+    def _execute_search(  # noqa: PLR0913
+        self,
+        request: SearchRequest,
+        *,
+        on_stage: Callable[[str, dict[str, object]], None] | None = None,
+        on_claim: Callable[[AnswerClaim, str], None] | None = None,
+        on_final: Callable[[SearchAnswerResult], None] | None = None,
+        cancellation: CancellationPort | None = None,
+        cache_result: bool = True,
+    ) -> SearchAnswerResult:
         retrieval = self._retrieval
         if self._retrieval_resolver is not None:
             retrieval = self._retrieval_resolver(
                 request.scope.knowledge_base_id,
                 self._retrieval,
             )
-        result = retrieval.search_and_answer(request)
+        result = retrieval.search_and_answer(
+            request,
+            on_stage=on_stage,
+            on_claim=on_claim,
+            on_final=on_final,
+            cancellation=cancellation,
+            cache_result=cache_result,
+        )
         if result.diagnostics is not None and self._query_history is None:
             self._diagnostics[result.trace_id] = result.diagnostics
         return result
@@ -844,6 +908,152 @@ class RagSdk:
             history_mode=history_mode,
             owner_id=owner_id,
             trace_id=trace_id,
+        )
+
+    def answer_stream(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        text: str,
+        *,
+        emit: Callable[[AnswerStreamPublicEvent], None],
+        cancellation: CancellationPort,
+        limit: int = 10,
+        include_related_content: bool = False,
+        history_mode: Literal["full", "metadata_only"] = "metadata_only",
+        owner_id: str = "sdk",
+        trace_id: str | None = None,
+    ) -> SearchAnswerResult:
+        """以类型化事件运行与同步 Answer 完全相同的 Application 链。
+
+        Args:
+            project_id: 已鉴权项目 ID。
+            knowledge_base_id: 已鉴权知识库 ID。
+            text: 用户问题。
+            emit: 同步接收严格事件模型的有界发布回调。
+            cancellation: 断连、停止或换库时的协作取消端口。
+            limit: 最大候选数。
+            include_related_content: 是否返回独立相关内容。
+            history_mode: 正文历史保存选择。
+            owner_id: 宿主鉴权后的非秘密身份。
+            trace_id: 宿主预分配的安全关联 ID。
+
+        Returns:
+            唯一 final 所绑定的完整 SearchAnswerResult。
+
+        """
+        self._require_open()
+        request = SearchRequest(
+            scope=KnowledgeBaseScope(
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+            ),
+            text=text,
+            limit=limit,
+            include_related_content=include_related_content,
+            trace_id=trace_id or new_id("trace"),
+        )
+        request_trace_id = request.trace_id
+        if request_trace_id is None:
+            raise RuntimeError("流式查询缺少 trace_id。")
+        sequence = 0
+
+        def publish(event: AnswerStreamPublicEvent) -> None:
+            """在每次发布前尊重取消，不让后续阶段越过停止边界。"""
+            if cancellation.is_cancelled():
+                raise QueryCancelled("QUERY_CANCELLED")
+            emit(event)
+
+        def begin() -> None:
+            """历史已建立后再交付首字节，确保取消也有唯一终态。"""
+            nonlocal sequence
+            publish(
+                AnswerStreamMetaEvent(
+                    trace_id=request_trace_id,
+                    sequence=sequence,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                )
+            )
+            sequence += 1
+            publish(
+                AnswerStreamStageEvent.create(
+                    trace_id=request_trace_id,
+                    sequence=sequence,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                    stage="accepted",
+                )
+            )
+            sequence += 1
+
+        def stage(name: str, attributes: dict[str, object]) -> None:
+            nonlocal sequence
+            if name not in {
+                "snapshot",
+                "retrieval",
+                "generation",
+                "validation",
+            }:
+                raise ValueError("Application 发布了未知流式阶段。")
+            event = AnswerStreamStageEvent.create(
+                trace_id=request_trace_id,
+                sequence=sequence,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+                stage=cast(
+                    Literal[
+                        "snapshot",
+                        "retrieval",
+                        "generation",
+                        "validation",
+                    ],
+                    name,
+                ),
+                attributes=attributes,
+            )
+            sequence += 1
+            publish(event)
+
+        claim_index = 0
+
+        def claim(value: AnswerClaim, revision_id: str) -> None:
+            nonlocal claim_index, sequence
+            event = AnswerStreamClaimEvent(
+                trace_id=request_trace_id,
+                sequence=sequence,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+                claim_index=claim_index,
+                claim=value,
+                active_index_revision_id=revision_id,
+            )
+            claim_index += 1
+            sequence += 1
+            publish(event)
+
+        def finish(value: SearchAnswerResult) -> None:
+            """确认 final 已交付，再由共享链写成功缓存和历史。"""
+            publish(
+                AnswerStreamFinalEvent(
+                    trace_id=request_trace_id,
+                    sequence=sequence,
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                    result=value,
+                )
+            )
+
+        return self._run_search(
+            request,
+            owner_id=owner_id,
+            save_body=history_mode == "full",
+            on_stage=stage,
+            on_claim=claim,
+            cancellation=cancellation,
+            cache_result=True,
+            on_started=begin,
+            before_success=finish,
         )
 
     def retrieval_diagnostics(self, trace_id: str) -> RetrievalDiagnostics:

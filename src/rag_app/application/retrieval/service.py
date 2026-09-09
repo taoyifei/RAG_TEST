@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections.abc import Callable
+from contextlib import suppress
 from copy import copy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,12 +47,15 @@ from rag_app.core.errors import (
     IndexCompatibilityError,
     IndexCorrupt,
     PolicyDenied,
+    QueryCancelled,
     RagError,
+    StreamDeliveryError,
 )
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    AnswerClaim,
     BaseResultCacheKey,
     ChannelHit,
     Chunk,
@@ -82,6 +87,7 @@ from rag_app.core.models import (
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
+    CancellationPort,
     EvidenceSourcePort,
     ExactStorePort,
     GeneratorPort,
@@ -188,13 +194,26 @@ class RetrievalService:
         )
         return configured
 
-    def search_and_answer(  # noqa: PLR0912, PLR0915
-        self, request: SearchRequest
+    def search_and_answer(  # noqa: PLR0912, PLR0913, PLR0915
+        self,
+        request: SearchRequest,
+        *,
+        on_stage: Callable[[str, dict[str, object]], None] | None = None,
+        on_claim: Callable[[AnswerClaim, str], None] | None = None,
+        on_final: Callable[[SearchAnswerResult], None] | None = None,
+        cancellation: CancellationPort | None = None,
+        cache_result: bool = True,
     ) -> SearchAnswerResult:
         """执行一次 revision-sticky、bounded、fail-closed 查询。
 
         Args:
             request: scope、query、过滤和有限 conversation context。
+            on_stage: 可选的无正文阶段事件回调。
+            on_claim: 可选的已校验 claim 与快照版本回调。
+            on_final: 可选的唯一权威终态发布回调。
+            cancellation: 可选协作取消端口。
+            cache_result: 是否立即写入最终结果缓存；流式路径延后到 final
+                已交付后。
 
         Returns:
             实际 route/rerank、证据、置信和 extractive answer。
@@ -209,6 +228,7 @@ class RetrievalService:
         stage_started = perf_counter()
         stage_timings: list[StageTiming] = []
         provider_calls: list[ProviderCall] = []
+        _raise_if_cancelled(cancellation, provider_calls)
         snapshot = self._source.active_query_snapshot(
             request.scope,
             serving_fingerprint=self._serving_fingerprint,
@@ -240,7 +260,20 @@ class RetrievalService:
                 "serving_fingerprint": snapshot.serving_fingerprint,
             },
         )
+        _emit_stage(
+            on_stage,
+            "snapshot",
+            {
+                "active_index_revision_id": (
+                    snapshot.revision.index_revision_id
+                ),
+                "index_fingerprint": snapshot.revision.index_fingerprint,
+                "serving_fingerprint": snapshot.serving_fingerprint,
+            },
+            provider_calls,
+        )
         stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
+        _raise_if_cancelled(cancellation, provider_calls)
         analysis = self._analyzer.analyze(request)
         effective_analysis = analysis
         self._record(
@@ -327,7 +360,13 @@ class RetrievalService:
                 cache_hit=True,
                 stage_timings=tuple(stage_timings),
             )
-            return cached.model_copy(
+            _emit_stage(
+                on_stage,
+                "retrieval",
+                {"cache_hit": True},
+                provider_calls,
+            )
+            cached_result = cached.model_copy(
                 update={
                     "trace_id": trace_id,
                     "cache_hit": True,
@@ -338,11 +377,24 @@ class RetrievalService:
                     "diagnostics_summary": _diagnostics_summary(diagnostics),
                 }
             )
+            if on_final is not None:
+                _raise_if_cancelled(cancellation, provider_calls)
+                _validate_stream_final_sources(
+                    self,
+                    cached_result.evidence,
+                    request,
+                    snapshot,
+                    provider_calls,
+                )
+                _raise_if_cancelled(cancellation, provider_calls)
+                _emit_final(on_final, cached_result, provider_calls)
+            return cached_result
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
         rewrite_attempted = False
         rewrite_reason = "REWRITE_NOT_CONFIGURED"
         if self._rewriter is not None:
+            _raise_if_cancelled(cancellation, provider_calls)
             rewritten = self._rewriter.rewrite(request)
             rewrite_reason = rewritten.reason_code
             rewrite_attempted = rewritten.attempted
@@ -378,6 +430,7 @@ class RetrievalService:
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
         if "exact" in plan.channels:
+            _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             try:
                 hits = apply_candidate_filters(
@@ -393,6 +446,7 @@ class RetrievalService:
             self._record(trace_id, "exact", {"hit_count": len(hits)})
             _finish_timing(stage_timings, "exact_channel", channel_started)
         if "lexical" in plan.channels:
+            _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             for variant in plan.variants:
                 try:
@@ -430,6 +484,7 @@ class RetrievalService:
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
         if "dense" in plan.channels:
+            _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             route_attributes: dict[str, object] = {
                 "selected_slot": None,
@@ -517,6 +572,7 @@ class RetrievalService:
         expansion = selection.expansion
         evidence = selection.evidence
         confidence = selection.confidence
+        _raise_if_cancelled(cancellation, provider_calls)
         if (
             self._rewriter is not None
             and not rewrite_attempted
@@ -527,6 +583,7 @@ class RetrievalService:
             }
             and not any("POLICY_DENIED" in reason for reason in degraded)
         ):
+            _raise_if_cancelled(cancellation, provider_calls)
             rewritten = self._rewriter.rewrite(
                 request, recall_insufficient=True
             )
@@ -544,6 +601,7 @@ class RetrievalService:
                     dense_required=request.dense_required,
                 )
                 if "lexical" in plan.channels:
+                    _raise_if_cancelled(cancellation, provider_calls)
                     try:
                         rewrite_hits = apply_candidate_filters(
                             self._lexical.search(
@@ -562,6 +620,7 @@ class RetrievalService:
                         rewrite_hits = ()
                     channel_hits["lexical:rewrite"] = rewrite_hits
                 if "dense" in plan.channels:
+                    _raise_if_cancelled(cancellation, provider_calls)
                     try:
                         rewrite_dense = self._dense.search(
                             snapshot,
@@ -633,13 +692,48 @@ class RetrievalService:
                     ),
                 },
             )
+        _emit_stage(
+            on_stage,
+            "retrieval",
+            {
+                "cache_hit": False,
+                "evidence_count": len(evidence),
+                "status": confidence.status.value,
+            },
+            provider_calls,
+        )
+        _raise_if_cancelled(cancellation, provider_calls)
         stage_started = perf_counter()
         generation_mode = "none"
         generation_reason: str | None = "GENERATOR_NOT_CONFIGURED"
         try:
             if self._grounded is not None:
+                _emit_stage(
+                    on_stage,
+                    "generation",
+                    {"mode": "configured"},
+                    provider_calls,
+                )
+
+                def publish_claim(claim: AnswerClaim) -> None:
+                    """在每个公开 claim 前重新核对当前来源可见性。"""
+                    self._validate_stream_sources(
+                        evidence,
+                        request,
+                        snapshot,
+                    )
+                    if on_claim is not None:
+                        on_claim(
+                            claim,
+                            snapshot.revision.index_revision_id,
+                        )
+
                 generated = self._grounded.answer(
-                    analysis.original_query, evidence, confidence
+                    analysis.original_query,
+                    evidence,
+                    confidence,
+                    on_claim=None if on_claim is None else publish_claim,
+                    cancellation=cancellation,
                 )
                 answer = generated.answer
                 generation_mode = generated.mode
@@ -661,10 +755,21 @@ class RetrievalService:
                 ):
                     degraded.append(generation_reason)
             else:
+                _emit_stage(
+                    on_stage,
+                    "generation",
+                    {"mode": "final_only"},
+                    provider_calls,
+                )
                 answer = self._answering.answer(
                     analysis.original_query, evidence, confidence
                 )
                 generation_mode = "extractive" if answer is not None else "none"
+        except QueryCancelled as error:
+            error.provider_calls = (*provider_calls, *error.provider_calls)
+            raise
+        except StreamDeliveryError:
+            raise
         except (RagError, ValueError) as error:
             degraded.append(f"GENERATOR_FAILURE:{type(error).__name__}")
             confidence = confidence.model_copy(
@@ -678,6 +783,24 @@ class RetrievalService:
                 }
             )
             answer = None
+        if on_claim is not None:
+            # 没有增量 claim 的拒答、摘录或 final-only 路径也必须在 final
+            # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
+            try:
+                self._validate_stream_sources(evidence, request, snapshot)
+            except RagError as error:
+                error.provider_calls = (*provider_calls, *error.provider_calls)
+                raise
+        _raise_if_cancelled(cancellation, provider_calls)
+        _emit_stage(
+            on_stage,
+            "validation",
+            {
+                "published": answer is not None,
+                "generation_mode": generation_mode,
+            },
+            provider_calls,
+        )
         self._record(
             trace_id,
             "generate",
@@ -769,20 +892,62 @@ class RetrievalService:
             diagnostics_summary=_diagnostics_summary(diagnostics),
             diagnostics=diagnostics,
         )
+        if on_final is not None:
+            # validation 阶段之后仍可能发生删除或撤权；在真正发送 final 的
+            # 最后边界使用本请求冻结的快照再核验一次，禁止改读新激活版本。
+            _validate_stream_final_sources(
+                self,
+                evidence,
+                request,
+                snapshot,
+                provider_calls,
+            )
+            _raise_if_cancelled(cancellation, provider_calls)
+            _emit_final(on_final, result, provider_calls)
+        if cache_result:
+            if on_final is None:
+                self.commit_result_cache(result, cancellation=cancellation)
+            else:
+                with suppress(Exception):
+                    # final 已确认交付后，缓存故障或瞬时断连都不能把已经
+                    # 公开的权威结果改写成失败/取消终态。
+                    self.commit_result_cache(result)
+        self._record(trace_id, "complete", {"status": result.status.value})
+        return result
+
+    def commit_result_cache(
+        self,
+        result: SearchAnswerResult,
+        *,
+        cancellation: CancellationPort | None = None,
+    ) -> None:
+        """仅在最终发布边界之后写入可复用结果。
+
+        Args:
+            result: 已通过完整回答与引用校验的最终结果。
+            cancellation: 非流式路径在写入前使用的取消令牌；流式 final
+                已交付后不再传入。
+
+        Returns:
+            无返回值；不满足稳定缓存条件时保持未写入。
+
+        """
+        if result.result_origin != "fresh":
+            return
         if (
             result.status is ConfidenceStatus.ANSWERABLE
-            and not rerank_dependency_failed(reranked.mode)
+            and not rerank_dependency_failed(result.rerank_execution_mode)
             and result.generation_mode != "extractive_fallback"
         ):
-            self._cache.put(cache_key, result, ttl_seconds=300)
+            _raise_if_cancelled(cancellation)
+            self._cache.put(result.cache_key, result, ttl_seconds=300)
         elif (
             result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
             and not result.degraded_reason_codes
-            and not rerank_dependency_failed(reranked.mode)
+            and not rerank_dependency_failed(result.rerank_execution_mode)
         ):
-            self._cache.put(cache_key, result, ttl_seconds=30)
-        self._record(trace_id, "complete", {"status": result.status.value})
-        return result
+            _raise_if_cancelled(cancellation)
+            self._cache.put(result.cache_key, result, ttl_seconds=30)
 
     def _rank_and_select(  # noqa: PLR0913
         self,
@@ -1012,6 +1177,50 @@ class RetrievalService:
                     "缓存原文内容失配。", stage="retrieval.cache"
                 )
 
+    def _validate_stream_sources(
+        self,
+        evidence: tuple[EvidenceItem, ...],
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+    ) -> None:
+        """每次流式发布前回读当前文档状态和不可变来源范围。"""
+        rows = self._source.hydrate_chunks(
+            snapshot,
+            tuple(dict.fromkeys(item.chunk_id for item in evidence)),
+        )
+        by_id = {row.chunk.chunk_id: row for row in rows}
+        for item in evidence:
+            row = by_id.get(item.chunk_id)
+            if row is None:
+                raise IndexCorrupt(
+                    "回答来源已不可用。",
+                    stage="answer.source_recheck",
+                )
+            validate_candidate(
+                RankedChunk(hydrated=row, fusion_rank=1),
+                request,
+                snapshot.revision.index_revision_id,
+            )
+            if (item.document_id, item.document_version_id) != (
+                row.chunk.version.document_id,
+                row.chunk.version.document_version_id,
+            ):
+                raise IndexCorrupt(
+                    "回答来源版本已失配。",
+                    stage="answer.source_recheck",
+                )
+            if any(
+                not any(
+                    _formal_span_is_current(row.chunk, original, span, item)
+                    for original in row.chunk.source_spans
+                )
+                for span in item.source_spans
+            ):
+                raise IndexCorrupt(
+                    "回答来源范围已失配。",
+                    stage="answer.source_recheck",
+                )
+
     def _record(
         self, trace_id: str, stage: str, attributes: dict[str, object]
     ) -> None:
@@ -1095,6 +1304,68 @@ def _finish_timing(
         StageTiming(stage=stage, elapsed_ms=(finished - started) * 1000.0)
     )
     return finished
+
+
+def _raise_if_cancelled(
+    cancellation: CancellationPort | None,
+    provider_calls: list[ProviderCall] | tuple[ProviderCall, ...] = (),
+) -> None:
+    """在下一阶段或持久副作用前停止已经取消的查询。"""
+    if cancellation is not None and cancellation.is_cancelled():
+        raise QueryCancelled(
+            "QUERY_CANCELLED",
+            provider_calls=tuple(provider_calls),
+        )
+
+
+def _emit_stage(
+    callback: Callable[[str, dict[str, object]], None] | None,
+    name: str,
+    attributes: dict[str, object],
+    provider_calls: list[ProviderCall] | tuple[ProviderCall, ...],
+) -> None:
+    """发布阶段时保留回调竞态前已经发生的 Provider 调用。"""
+    if callback is None:
+        return
+    try:
+        callback(name, attributes)
+    except QueryCancelled as error:
+        error.provider_calls = (*provider_calls, *error.provider_calls)
+        raise
+    except RagError as error:
+        error.provider_calls = (*provider_calls, *error.provider_calls)
+        raise
+
+
+def _validate_stream_final_sources(
+    service: RetrievalService,
+    evidence: tuple[EvidenceItem, ...],
+    request: SearchRequest,
+    snapshot: ActiveRevisionQuerySnapshot,
+    provider_calls: list[ProviderCall] | tuple[ProviderCall, ...],
+) -> None:
+    """在 final 边界复核冻结来源，并保留已经发生的调用账。"""
+    try:
+        service._validate_stream_sources(evidence, request, snapshot)
+    except RagError as error:
+        error.provider_calls = (*provider_calls, *error.provider_calls)
+        raise
+
+
+def _emit_final(
+    callback: Callable[[SearchAnswerResult], None],
+    result: SearchAnswerResult,
+    provider_calls: list[ProviderCall] | tuple[ProviderCall, ...],
+) -> None:
+    """发布唯一 final，并把发布边界故障绑定到实际调用账。"""
+    try:
+        callback(result)
+    except QueryCancelled as error:
+        error.provider_calls = (*provider_calls, *error.provider_calls)
+        raise
+    except RagError as error:
+        error.provider_calls = (*provider_calls, *error.provider_calls)
+        raise
 
 
 def _diagnostics(  # noqa: PLR0913

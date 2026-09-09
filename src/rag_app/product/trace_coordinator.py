@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
 
@@ -45,6 +45,17 @@ from rag_app.tracing.recorder import (
 from rag_app.tracing.store import TraceNotFoundError, TraceStore
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class _QueryTraceSettlement:
+    """一次查询终态写入 Trace 所需的不可变上下文。"""
+
+    result: SearchAnswerResult | None
+    error: RagError | None
+    cancelled: bool
+    cancelled_calls: tuple[ProviderCall, ...]
+    history_written: bool
 
 
 class ProductTraceCoordinator:
@@ -177,6 +188,7 @@ class ProductTraceCoordinator:
         result: SearchAnswerResult | None,
         error: RagError | None,
         cancelled: bool,
+        cancelled_calls: tuple[ProviderCall, ...] = (),
     ) -> None:
         """一次结算 History 与 Operational Trace，并保留原查询错误。
 
@@ -185,6 +197,7 @@ class ProductTraceCoordinator:
             result: 可选的统一查询结果。
             error: 可选的原业务错误。
             cancelled: 请求是否被取消。
+            cancelled_calls: 取消前已经结算的脱敏 Provider 调用。
 
         Returns:
             无返回值。
@@ -197,6 +210,7 @@ class ProductTraceCoordinator:
                 result=result,
                 error=error,
                 cancelled=cancelled,
+                cancelled_calls=cancelled_calls,
             )
         except RagError as failure:
             history_failure = failure
@@ -211,10 +225,13 @@ class ProductTraceCoordinator:
             try:
                 self._finalize_query_trace(
                     session,
-                    result=result,
-                    error=error or history_failure,
-                    cancelled=cancelled,
-                    history_written=history_failure is None,
+                    _QueryTraceSettlement(
+                        result=result,
+                        error=error or history_failure,
+                        cancelled=cancelled,
+                        cancelled_calls=cancelled_calls,
+                        history_written=history_failure is None,
+                    ),
                 )
             except TraceUnavailableError as trace_failure:
                 if error is not None or cancelled:
@@ -590,12 +607,11 @@ class ProductTraceCoordinator:
     def _finalize_query_trace(
         self,
         session: TraceSession,
-        *,
-        result: SearchAnswerResult | None,
-        error: RagError | None,
-        cancelled: bool,
-        history_written: bool,
+        settlement: _QueryTraceSettlement,
     ) -> None:
+        result = settlement.result
+        error = settlement.error
+        cancelled_calls = settlement.cancelled_calls
         if result is not None and result.diagnostics is not None:
             diagnostics = result.diagnostics
             _record_stage_timings(session, diagnostics)
@@ -609,6 +625,9 @@ class ProductTraceCoordinator:
                     "retrieval_diagnostics",
                     diagnostics.model_dump(mode="json"),
                 )
+        elif cancelled_calls:
+            for call in cancelled_calls:
+                _provider_span(session, call)
         session.completed_span(
             TraceSpanSpec(
                 name="history.settlement",
@@ -616,13 +635,13 @@ class ProductTraceCoordinator:
                 parent_span_id=session.root.span_id,
                 reason_code=(
                     DecisionCode.PUBLISHED
-                    if history_written
+                    if settlement.history_written
                     else DecisionCode.TRACE_CAPTURE_FAILED
                 ),
-                attributes={"written": history_written},
+                attributes={"written": settlement.history_written},
             )
         )
-        if cancelled:
+        if settlement.cancelled:
             status = TraceStatus.CANCELLED
             reason = DecisionCode.CANCELLED
         elif error is not None:
@@ -644,8 +663,12 @@ class ProductTraceCoordinator:
             ),
             error_code=None if error is None else error.code,
             attributes={
-                "history_written": history_written,
-                "provider_call_count": _provider_call_count(result, error),
+                "history_written": settlement.history_written,
+                "provider_call_count": _provider_call_count(
+                    result,
+                    error,
+                    cancelled_calls,
+                ),
             },
         )
 
@@ -826,6 +849,10 @@ def _record_stage_timings(
 def _provider_span(session: TraceSession, call: ProviderCall) -> None:
     attributes = call.model_dump(mode="json")
     attributes.pop("request_id", None)
+    succeeded = (call.status_category or "").casefold() in {
+        "success",
+        "completed",
+    }
     phase = session.start_span(
         f"provider-phase.{call.operation}",
         _provider_kind(call.operation),
@@ -840,15 +867,14 @@ def _provider_span(session: TraceSession, call: ProviderCall) -> None:
             parent_span_id=phase.span_id,
             reason_code=(
                 DecisionCode.PROVIDER_CALLED
-                if call.call_count > 0
-                and call.status_category not in {"error", "failed"}
+                if call.call_count > 0 and succeeded
                 else DecisionCode.PROVIDER_FAILED
             ),
             attributes=attributes,
             duration_ms=call.elapsed_ms,
         )
     )
-    failed = call.status_category in {"error", "failed"}
+    failed = not succeeded
     session.finish_span(
         phase,
         TraceSpanFinish(
@@ -979,13 +1005,19 @@ def _text(value: object) -> str | None:
 
 
 def _provider_call_count(
-    result: SearchAnswerResult | None, error: RagError | None
+    result: SearchAnswerResult | None,
+    error: RagError | None,
+    cancelled_calls: tuple[ProviderCall, ...] = (),
 ) -> int:
     if result is not None and result.diagnostics is not None:
         return sum(
             item.call_count for item in result.diagnostics.provider_calls
         )
-    calls = () if error is None else error.provider_calls
+    calls = (
+        cancelled_calls
+        if cancelled_calls
+        else (() if error is None else error.provider_calls)
+    )
     return sum(call.call_count for call in calls)
 
 

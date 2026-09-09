@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from rag_app.core.models import KnowledgeBaseStatus, ProjectStatus
 from rag_app.core.models.search import (
@@ -67,9 +67,17 @@ class QueryRequest(RequestModel):
     query: str = Field(min_length=1, max_length=8000)
     limit: int = Field(default=10, ge=1, le=50)
     stream: bool = False
+    stream_protocol: Literal["rag-answer-sse-v1"] | None = None
     include_related_content: bool = False
     history_mode: Literal["full", "metadata_only"] | None = None
     trace_mode: Literal["SAFE", "DIAGNOSTIC", "FULL"] = "SAFE"
+
+    @model_validator(mode="after")
+    def _validate_stream_negotiation(self) -> QueryRequest:
+        """新协议只能在显式启用流式响应时协商。"""
+        if self.stream_protocol is not None and not self.stream:
+            raise ValueError("stream_protocol 需要 stream=true。")
+        return self
 
 
 class QueryResponse(SearchAnswerResult):
