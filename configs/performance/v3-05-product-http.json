@@ -27,9 +27,10 @@
     ],
     "trace_baseline": "test-only-history-preserving-null-adapter"
   },
+  "minimum_comparison_waves_per_cell": 20,
   "minimum_waves_per_cell": 5,
   "minimum_samples_per_cell": 32,
-  "schema_version": "v3-05-product-http-thresholds-v2",
+  "schema_version": "v3-05-product-http-thresholds-v3",
   "thresholds": {
     "cache_max_entries": 512,
     "identical_cold_max_fresh_executions": 1,

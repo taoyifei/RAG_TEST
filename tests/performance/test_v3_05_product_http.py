@@ -222,7 +222,7 @@ def _load_thresholds() -> dict[str, object]:
     payload = json.loads(_THRESHOLDS.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise AssertionError("V3-05 性能门槛必须是 JSON object。")
-    if payload.get("schema_version") != ("v3-05-product-http-thresholds-v2"):
+    if payload.get("schema_version") != ("v3-05-product-http-thresholds-v3"):
         raise AssertionError("V3-05 性能门槛版本错误。")
     if payload.get("capture_modes") != [
         "NONE",
@@ -237,6 +237,8 @@ def _load_thresholds() -> dict[str, object]:
         raise AssertionError("V3-05 每格最小样本数被修改。")
     if payload.get("minimum_waves_per_cell") != 5:
         raise AssertionError("V3-05 每格最小波次数被修改。")
+    if payload.get("minimum_comparison_waves_per_cell") != 20:
+        raise AssertionError("V3-05 NONE/SAFE 比较波次数被修改。")
     return cast(dict[str, object], payload)
 
 
@@ -1332,6 +1334,10 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
         thresholds["minimum_waves_per_cell"],
         "minimum_waves_per_cell",
     )
+    minimum_comparison_waves = _integer(
+        thresholds["minimum_comparison_waves_per_cell"],
+        "minimum_comparison_waves_per_cell",
+    )
     cells: list[dict[str, object]] = []
     stream_probes: list[dict[str, object]] = []
     cancellation: dict[str, object] | None = None
@@ -1341,7 +1347,7 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
             tmp_path,
             concurrencies,
             minimum_samples,
-            minimum_waves,
+            minimum_comparison_waves,
         )
     )
     cells.extend(paired_cells)
@@ -1383,7 +1389,7 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
         },
         "passed": passed
         and all(bool(item["final_seen"]) for item in stream_probes),
-        "report_schema": "v3-05-product-http-performance-v2",
+        "report_schema": "v3-05-product-http-performance-v3",
         "source_revision": revision,
         "stream_probes": stream_probes,
         "thresholds": thresholds,
