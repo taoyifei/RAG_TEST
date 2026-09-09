@@ -19,19 +19,22 @@ def test_frontend_has_one_react_entry_and_no_marketing_slogan() -> None:
     assert "上传文档" in dashboard
 
 
-def test_frontend_handles_final_error_and_abort_signals() -> None:
+def test_frontend_handles_versioned_stream_final_error_and_abort() -> None:
     client = (_ROOT / "frontend/src/api/client.ts").read_text(encoding="utf-8")
     app = (_ROOT / "frontend/src/pages/QueryPage.tsx").read_text(
         encoding="utf-8"
     )
 
-    assert 'event === "final"' in client
-    assert 'event === "error"' in client
+    assert 'eventName === "claim"' in client
+    assert 'eventName === "final"' in client
+    assert 'eventName === "error"' in client
+    assert 'new TextDecoder("utf-8", { fatal: true })' in client
+    assert "await reader.cancel()" in client
     assert "AbortSignal" in client
-    assert "SSE 响应缺少 final 事件" in client
-    assert "查询已中断，请重新提交查询。" in app
-    assert "await api.answer(" in app
-    assert "await api.answerStream(" not in app
+    assert "SSE 响应缺少合法终态" in client
+    assert "暂存内容不是最终答案" in app
+    assert "await api.answerStream(" in app
+    assert "await api.answer(" not in app
 
 
 def test_evidence_drawer_has_focus_and_escape_handling() -> None:
