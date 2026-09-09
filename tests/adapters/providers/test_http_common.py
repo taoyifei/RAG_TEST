@@ -14,6 +14,8 @@ from rag_app.adapters.providers.http_common import (
 from rag_app.adapters.providers.transport_diagnostics import (
     transport_diagnostics,
 )
+from rag_app.clients.resilience import StreamCancellation
+from rag_app.core.errors import ProviderInvalidResponse
 from rag_app.core.models import ProviderCall, ProviderFailureCategory
 
 
@@ -154,6 +156,69 @@ def _request(client: ProviderHttpClient) -> object:
         input_count=1,
         estimated_tokens=4,
     )
+
+
+def _stream_request(client: ProviderHttpClient) -> object:
+    return client.request_stream(
+        "POST",
+        "/chat/completions",
+        payload={"private": "text"},
+        headers={"Authorization": "Bearer secret-value"},
+        provider_id="test-provider",
+        operation="generation",
+        model="test-model",
+        input_count=1,
+        estimated_tokens=4,
+        consumer=b"".join,
+        cancellation=StreamCancellation(),
+    )
+
+
+def test_stream_success_is_observed_without_deferred_completion() -> None:
+    events: list[ProviderCall] = []
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=b"data: [DONE]\\n\\n",
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+        ),
+        observer=events.append,
+    )
+
+    result = _stream_request(client)
+    client.close()
+
+    assert events == [result.call]
+
+
+def test_stream_total_byte_limit_cannot_be_bypassed_by_small_events() -> None:
+    events: list[ProviderCall] = []
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=b"data: {}\\n\\ndata: {}\\n\\n",
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+        ),
+        max_response_bytes=8,
+        observer=events.append,
+    )
+
+    with pytest.raises(ProviderInvalidResponse) as captured:
+        _stream_request(client)
+    client.close()
+
+    assert captured.value.code == "RESPONSE_TOO_LARGE"
+    assert events[0].reason_code == "RESPONSE_TOO_LARGE"
 
 
 def test_invalid_json_and_content_type_are_contract_failures() -> None:

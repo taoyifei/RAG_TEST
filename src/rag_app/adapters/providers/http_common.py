@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import random
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Generic, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -24,10 +24,12 @@ from rag_app.core.errors import (
     ProviderInvalidResponse,
     ProviderRateLimited,
     ProviderUnavailable,
+    QueryCancelled,
     RagError,
 )
 from rag_app.core.models import ProviderCall, ProviderFailureCategory
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.ports import CancellationPort
 
 _DEFAULT_RETRY_STATUSES = frozenset({408, 429, 502, 503, 504})
 _AUTH_OR_MODEL_STATUSES = frozenset({401, 403, 404})
@@ -37,6 +39,7 @@ _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
+_StreamValue = TypeVar("_StreamValue")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,6 +47,14 @@ class ProviderHttpResult:
     """成功 JSON 响应和脱敏调用审计。"""
 
     payload: object
+    call: ProviderCall
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderHttpStreamResult(Generic[_StreamValue]):
+    """完成消费后的类型化流结果和脱敏调用审计。"""
+
+    value: _StreamValue
     call: ProviderCall
 
 
@@ -71,6 +82,23 @@ class ProviderHttpError(RuntimeError):
         self.reason_code = reason_code
         self.call = call
         super().__init__(f"PROVIDER_HTTP_FAILURE: {reason_code}")
+
+
+def _bounded_stream_bytes(
+    chunks: Iterator[bytes],
+    max_bytes: int,
+) -> Iterator[bytes]:
+    """限制一个 Provider 流的累计原始字节，不能靠小事件绕过上限。"""
+    total = 0
+    for chunk in chunks:
+        total += len(chunk)
+        if total > max_bytes:
+            raise ProviderInvalidResponse(
+                "Provider 流式响应超过大小上限。",
+                stage="provider.http.stream",
+                code="RESPONSE_TOO_LARGE",
+            )
+        yield chunk
 
 
 class ProviderHttpClient:
@@ -204,9 +232,8 @@ class ProviderHttpClient:
                         "rag_provider_max_attempts": self._max_attempts,
                         **(
                             {"rag_chat_operation": operation}
-                            if operation in {
-                                "generation", "query.rewrite", "image.ocr"
-                            }
+                            if operation
+                            in {"generation", "query.rewrite", "image.ocr"}
                             else {}
                         ),
                     },
@@ -359,6 +386,320 @@ class ProviderHttpClient:
                 self._observe(call)
             return ProviderHttpResult(payload=response_payload, call=call)
         raise AssertionError("有限尝试循环必须返回或抛出。")
+
+    def request_stream(  # noqa: PLR0912, PLR0913, PLR0915
+        self,
+        method: str,
+        path: str,
+        *,
+        payload: object,
+        headers: Mapping[str, str],
+        provider_id: str,
+        operation: str,
+        model: str,
+        input_count: int,
+        estimated_tokens: int,
+        consumer: Callable[[Iterator[bytes]], _StreamValue],
+        cancellation: CancellationPort,
+    ) -> ProviderHttpStreamResult[_StreamValue]:
+        """发送并在当前调用线程消费一个可取消的有限 SSE 响应。
+
+        只允许在尚未收到响应头时按既有策略重试；开始消费响应后不重放
+        生成，以免把两个答案拼接为同一流。
+
+        Args:
+            method: HTTP 方法。
+            path: 受控相对路径。
+            payload: 已由 adapter 构造的固定 JSON 请求。
+            headers: 不进入错误与审计的认证请求头。
+            provider_id: 可审计 Provider ID。
+            operation: 本次生成用途。
+            model: 固定模型身份。
+            input_count: 有限消息条目数。
+            estimated_tokens: 本地输入估算。
+            consumer: 在响应作用域内消费原始字节的函数。
+            cancellation: 可由 HTTP 断连线程触发的取消令牌。
+
+        Returns:
+            consumer 的完整结果与唯一调用审计。
+
+        Raises:
+            ProviderHttpError: HTTP、传输或响应合同失败。
+            QueryCancelled: 调用方取消且已尝试关闭上游响应。
+
+        """
+        if self._closed:
+            raise RuntimeError("ProviderHttpClient 已关闭。")
+        if not path.startswith("/") or path.startswith("//") or "?" in path:
+            raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
+        started = self._monotonic()
+        last_retry_after_ms: int | None = None
+        encountered_rate_limit = False
+        for attempt in range(1, self._max_attempts + 1):
+            if cancellation.is_cancelled():
+                raise QueryCancelled("PROVIDER_STREAM_CANCELLED")
+            attempt_started = self._monotonic()
+            response: httpx.Response | None = None
+            try:
+                stream_context = self._client.stream(
+                    method,
+                    self._base_url + path,
+                    json=payload,
+                    headers=headers,
+                    extensions={
+                        "rag_provider_retry_index": attempt - 1,
+                        "rag_provider_max_attempts": self._max_attempts,
+                        "rag_chat_operation": operation,
+                    },
+                )
+                with stream_context as response:
+                    registration = cancellation.register(response.close)
+                    try:
+                        if cancellation.is_cancelled():
+                            raise QueryCancelled("PROVIDER_STREAM_CANCELLED")
+                        status = response.status_code
+                        encountered_rate_limit = encountered_rate_limit or (
+                            status == _HTTP_RATE_LIMITED
+                        )
+                        if status in self._retry_statuses:
+                            retry_after = _retry_after_seconds(
+                                response.headers.get("retry-after"),
+                                self._wall_clock(),
+                            )
+                            last_retry_after_ms = (
+                                None
+                                if retry_after is None
+                                else round(retry_after * 1000)
+                            )
+                            if attempt < self._max_attempts:
+                                self._sleep_before_retry(attempt, retry_after)
+                                continue
+                        category = _status_category(status)
+                        if category is not None:
+                            call = self._call(
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                category.name,
+                                f"HTTP_{status}",
+                                input_count,
+                                estimated_tokens,
+                                last_retry_after_ms,
+                                encountered_rate_limit,
+                            )
+                            self._observe(call)
+                            raise ProviderHttpError(
+                                category, f"HTTP_{status}", call
+                            )
+                        content_type = response.headers.get("content-type", "")
+                        if "text/event-stream" not in content_type.casefold():
+                            raise self._contract_failure(
+                                "INVALID_STREAM_CONTENT_TYPE",
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                input_count,
+                                estimated_tokens,
+                                encountered_rate_limit,
+                            )
+                        try:
+                            value = consumer(
+                                _bounded_stream_bytes(
+                                    response.iter_bytes(),
+                                    self._max_response_bytes,
+                                )
+                            )
+                        except QueryCancelled as error:
+                            call = self._call(
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                "CANCELLED",
+                                "STREAM_CANCELLED",
+                                input_count,
+                                estimated_tokens,
+                                last_retry_after_ms,
+                                encountered_rate_limit,
+                            )
+                            self._observe(call)
+                            error.provider_calls = (
+                                *error.provider_calls,
+                                call,
+                            )
+                            raise
+                        except RagError as error:
+                            call = self._call(
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                "RESPONSE_CONTRACT",
+                                error.code,
+                                input_count,
+                                estimated_tokens,
+                                last_retry_after_ms,
+                                encountered_rate_limit,
+                            )
+                            self._observe(call)
+                            error.provider_call = call
+                            error.provider_calls = (call,)
+                            raise
+                        except httpx.TransportError as error:
+                            if cancellation.is_cancelled():
+                                call = self._call(
+                                    provider_id,
+                                    operation,
+                                    model,
+                                    path,
+                                    attempt,
+                                    started,
+                                    "CANCELLED",
+                                    "STREAM_CANCELLED",
+                                    input_count,
+                                    estimated_tokens,
+                                    last_retry_after_ms,
+                                    encountered_rate_limit,
+                                )
+                                self._observe(call)
+                                raise QueryCancelled(
+                                    "PROVIDER_STREAM_CANCELLED",
+                                    provider_calls=(call,),
+                                ) from error
+                            diagnostics, category = self._transport_details(
+                                error, attempt_started
+                            )
+                            call = self._call(
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                category.name,
+                                "STREAM_INTERRUPTED",
+                                input_count,
+                                estimated_tokens,
+                                last_retry_after_ms,
+                                encountered_rate_limit,
+                            ).model_copy(
+                                update={
+                                    "transport_diagnostics": freeze_json_object(
+                                        diagnostics
+                                    )
+                                }
+                            )
+                            self._observe(call)
+                            raise ProviderHttpError(
+                                category, "STREAM_INTERRUPTED", call
+                            ) from error
+                        except (OverflowError, TypeError, ValueError) as error:
+                            call = self._call(
+                                provider_id,
+                                operation,
+                                model,
+                                path,
+                                attempt,
+                                started,
+                                "RESPONSE_CONTRACT",
+                                "INVALID_STREAM_SCHEMA",
+                                input_count,
+                                estimated_tokens,
+                                last_retry_after_ms,
+                                encountered_rate_limit,
+                            )
+                            self._observe(call)
+                            raise ProviderHttpError(
+                                ProviderFailureCategory.RESPONSE_CONTRACT,
+                                "INVALID_STREAM_SCHEMA",
+                                call,
+                            ) from error
+                        call = self._call(
+                            provider_id,
+                            operation,
+                            model,
+                            path,
+                            attempt,
+                            started,
+                            "SUCCESS",
+                            "OK",
+                            input_count,
+                            estimated_tokens,
+                            last_retry_after_ms,
+                            encountered_rate_limit,
+                        )
+                        if not self._defer_success_observation:
+                            self._observe(call)
+                        return ProviderHttpStreamResult(value=value, call=call)
+                    finally:
+                        cancellation.unregister(registration)
+            except QueryCancelled:
+                raise
+            except ProviderHttpError:
+                raise
+            except httpx.TransportError as error:
+                if cancellation.is_cancelled():
+                    call = self._call(
+                        provider_id,
+                        operation,
+                        model,
+                        path,
+                        attempt,
+                        started,
+                        "CANCELLED",
+                        "STREAM_CANCELLED",
+                        input_count,
+                        estimated_tokens,
+                        last_retry_after_ms,
+                        encountered_rate_limit,
+                    )
+                    self._observe(call)
+                    raise QueryCancelled(
+                        "PROVIDER_STREAM_CANCELLED",
+                        provider_calls=(call,),
+                    ) from error
+                diagnostics, category = self._transport_details(
+                    error, attempt_started
+                )
+                call = self._call(
+                    provider_id,
+                    operation,
+                    model,
+                    path,
+                    attempt,
+                    started,
+                    category.name,
+                    "HTTP_TRANSPORT",
+                    input_count,
+                    estimated_tokens,
+                    last_retry_after_ms,
+                    encountered_rate_limit,
+                ).model_copy(
+                    update={
+                        "transport_diagnostics": freeze_json_object(diagnostics)
+                    }
+                )
+                if (
+                    category is not ProviderFailureCategory.TRANSIENT
+                    or attempt == self._max_attempts
+                ):
+                    self._observe(call)
+                    raise ProviderHttpError(
+                        category, "HTTP_TRANSPORT", call
+                    ) from None
+                self._sleep_before_retry(attempt, None)
+                continue
+        raise AssertionError("有限流式尝试必须返回或抛出。")
 
     def _transport_details(
         self, error: httpx.TransportError, started: float

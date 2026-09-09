@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import sqlite3
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict, replace
@@ -43,6 +45,39 @@ _IDENTITY = {
     "credential_key_version": 1,
 }
 _REQUEST = provider_request_identity(_URL, "qwen3.7-flash", _IDENTITY)
+
+
+class _StreamingBody(httpx.SyncByteStream):
+    """按指定边界提供 SSE 字节，并记录响应是否被关闭。"""
+
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self.chunks = chunks
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield from self.chunks
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _streaming_payload() -> dict[str, object]:
+    return {
+        "model": "qwen3.7-flash",
+        "messages": [{"role": "user", "content": "允许的新问题"}],
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "enable_thinking": False,
+        "max_tokens": 1536,
+    }
+
+
+def _sse(payload: object) -> bytes:
+    return (
+        "data: "
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        + "\r\n\r\n"
+    ).encode()
 
 
 def _campaign(**changes: object) -> BudgetCampaign:
@@ -400,3 +435,122 @@ def test_chat_partial_input_usage_does_not_claim_known_total():
     response = httpx.Response(200, json={"usage": {"prompt_tokens": 37}})
     assert _response_observation(response, chat=True)[0] is None
     assert _response_observation(response, chat=False)[0] == 37
+
+
+def test_streaming_budget_records_final_usage_only_after_eof(
+    tmp_path: Path,
+) -> None:
+    ledger = ProviderBudgetLedger(tmp_path / "budget.sqlite3")
+    ledger.create_campaign(_campaign(request_limit=1))
+    stream = _StreamingBody(
+        (
+            _sse({"choices": [{"delta": {"content": "公开片段"}}]}),
+            _sse(
+                {
+                    "choices": [],
+                    "usage": {"total_tokens": 17},
+                    "request_id": "request-stream-eof",
+                }
+            ),
+            b"data: [DONE]\r\n\r\n",
+        )
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=stream,
+        )
+
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                httpx.MockTransport(handler),
+                ledger_path=ledger.path,
+                identity=_IDENTITY,
+            )
+        ) as client,
+        provider_budget_scope(
+            ledger,
+            campaign_id="kb-test",
+            authorization_id="approved-test",
+            scope="kb-scope",
+            step_id="generation-stream",
+        ),
+        provider_data_scope(
+            project_id="project-1",
+            knowledge_base_id="kb-1",
+            source_hashes=(_SOURCE,),
+        ),
+        client.stream(
+            "POST",
+            _URL,
+            json=_streaming_payload(),
+            extensions={"rag_chat_operation": "generation"},
+        ) as response,
+    ):
+        assert b"[DONE]" in b"".join(response.iter_raw())
+
+    attempt = ledger.attempts("kb-test")[0]
+    assert attempt["status"] == "HTTP_SUCCESS"
+    assert attempt["observed_tokens"] == 17
+    assert attempt["request_id"] == "request-stream-eof"
+    assert stream.closed is True
+
+
+def test_streaming_budget_early_close_is_cancelled_with_unknown_usage(
+    tmp_path: Path,
+) -> None:
+    ledger = ProviderBudgetLedger(tmp_path / "budget.sqlite3")
+    ledger.create_campaign(_campaign(request_limit=1))
+    prefix = _sse({"choices": [{"delta": {"content": "公开片段"}}]})
+    stream = _StreamingBody(
+        (
+            prefix,
+            _sse({"choices": [], "usage": {"total_tokens": 17}}),
+            b"data: [DONE]\n\n",
+        )
+    )
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=stream,
+        )
+
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                httpx.MockTransport(handler),
+                ledger_path=ledger.path,
+                identity=_IDENTITY,
+            )
+        ) as client,
+        provider_budget_scope(
+            ledger,
+            campaign_id="kb-test",
+            authorization_id="approved-test",
+            scope="kb-scope",
+            step_id="generation-stream",
+        ),
+        provider_data_scope(
+            project_id="project-1",
+            knowledge_base_id="kb-1",
+            source_hashes=(_SOURCE,),
+        ),
+        client.stream(
+            "POST",
+            _URL,
+            json=_streaming_payload(),
+            extensions={"rag_chat_operation": "generation"},
+        ) as response,
+    ):
+        assert next(response.iter_raw()) == prefix
+
+    attempt = ledger.attempts("kb-test")[0]
+    assert attempt["status"] == "CANCELLED"
+    assert attempt["observed_tokens"] is None
+    assert ledger.summary("kb-test")["unknown_usage_attempts"] == 1
+    assert stream.closed is True

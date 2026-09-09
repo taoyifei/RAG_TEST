@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 
 __all__ = ["IncrementalClaimsParser"]
 
 _CLAIMS_KEY = '"claims"'
 _JSON_WHITESPACE = frozenset(" \t\r\n")
+
+
+def _unique_object(pairs: Iterable[tuple[str, object]]) -> dict[str, object]:
+    """拒绝 JSON 对象内的重复字段，避免后值静默覆盖前值。"""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("DUPLICATE_STREAMED_CLAIM_FIELD")
+        result[key] = value
+    return result
 
 
 class IncrementalClaimsParser:
@@ -208,7 +219,7 @@ class IncrementalClaimsParser:
         self._expect_claim = False
         self._allow_array_end = True
         try:
-            parsed = json.loads(raw_claim)
+            parsed = json.loads(raw_claim, object_pairs_hook=_unique_object)
         except json.JSONDecodeError as error:
             raise ValueError("INVALID_STREAMED_CLAIM_JSON") from error
         if not isinstance(parsed, dict):
