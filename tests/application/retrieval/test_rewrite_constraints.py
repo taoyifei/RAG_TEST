@@ -103,6 +103,37 @@ def test_colloquial_grammar_and_topic_reordering_are_allowed(
     assert request.text == before
 
 
+def test_pronoun_can_resolve_only_to_scoped_conversation_object() -> None:
+    """指代可使用会话对象，但不能借上下文加入新事实或其它对象。"""
+    request = _request("它的维护周期是多少？").model_copy(
+        update={
+            "conversation_context": (
+                "上一问：设备 MX-41 是什么？\n"
+                "已验证事实：MX-41 是公开合成设备。",
+            )
+        }
+    )
+
+    assert (
+        rewrite_constraint_reason(request, "MX-41 的维护周期是多少？") is None
+    )
+    assert (
+        rewrite_constraint_reason(request, "MX-42 的维护周期是多少？")
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(request, "MX-41 的维护周期是 14 天吗？")
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(
+            _request("它的维护周期是多少？"),
+            "MX-41 的维护周期是多少？",
+        )
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+
+
 @pytest.mark.parametrize(
     ("before", "after"),
     (

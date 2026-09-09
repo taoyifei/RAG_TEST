@@ -18,6 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
+from rag_app.api.conversation_feedback import (
+    register_conversation_feedback_routes,
+)
 from rag_app.api.model_settings import register_model_settings_routes
 from rag_app.api.operational_trace import register_operational_trace_routes
 from rag_app.api.p09 import create_p09_app
@@ -471,6 +474,7 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     register_provider_budget_routes(app, runtime)
     register_query_history_routes(app, runtime)
     register_operational_trace_routes(app, runtime)
+    register_conversation_feedback_routes(app, runtime)
     register_model_settings_routes(app, runtime)
 
 
@@ -771,6 +775,7 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             profile_revision_id,
             confirmed_impact=body.confirmed_impact,
         )
+        runtime.profiles.invalidate(profile.knowledge_base_id)
         if profile.activation_job_id is not None and profile.status == "draft":
             runtime.jobs.submit(profile.activation_job_id)
         return {

@@ -46,6 +46,7 @@ class P09AnswerStreamRequest:
     include_related_content: bool
     history_mode: str
     owner_id: str
+    conversation_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -179,6 +180,7 @@ class P09AnswerStream:
                 ),
                 owner_id=self.request.owner_id,
                 trace_id=self.request.trace_id,
+                conversation_id=self.request.conversation_id,
             )
         except QueryCancelled:
             return

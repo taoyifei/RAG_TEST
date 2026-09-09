@@ -108,6 +108,14 @@ class SearchRequest(FrozenModel):
     access_filters: JsonObject = ()
     dense_required: bool = False
     include_related_content: bool = False
+    owner_identity: str = Field(default="sdk", min_length=1, max_length=256)
+    singleflight_enabled: bool = True
+    expected_active_revision_id: str | None = Field(
+        default=None, pattern=r"^irev_[0-9a-f]{32}$"
+    )
+    expected_serving_fingerprint: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
 
     trace_id: str | None = Field(default=None, pattern=r"^trace_[0-9a-f]{32}$")
 
@@ -345,12 +353,25 @@ class BaseResultCacheKey(FrozenModel):
     active_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     index_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     serving_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    retrieval_profile_identity: str = Field(
+        default="default-offline-profile", min_length=1, max_length=256
+    )
     query_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    owner_identity_hash: str = Field(
+        default="0" * 64, pattern=r"^[0-9a-f]{64}$"
+    )
     metadata_filter_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     access_filter_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     conversation_identity: str = Field(min_length=1)
     rewrite_policy_identity: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    query_semantics_identity: str = Field(
+        default="sha256:" + "0" * 64,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     cache_schema: StrictInt = Field(gt=0)
+    limit: StrictInt = Field(default=10, gt=0, le=50)
+    dense_required: bool = False
+    generation_behavior: str = Field(default="extractive", min_length=1)
     include_related_content: bool = False
     related_policy_version: str = "1"
 
@@ -416,9 +437,14 @@ class SearchAnswerResult(FrozenModel):
     degraded_reason_codes: tuple[str, ...] = ()
     cache_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_hit: bool = False
-    result_origin: Literal["fresh", "cache"] = "fresh"
+    result_origin: Literal["fresh", "cache", "singleflight"] = "fresh"
     generation_called_this_request: bool = False
     rewrite_called_this_request: bool = False
+    singleflight_role: Literal["none", "leader", "follower"] = "none"
+    singleflight_key_hash: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    singleflight_wait_ms: StrictInt = Field(default=0, ge=0)
     diagnostics_summary: RetrievalDiagnosticsSummary | None = None
     diagnostics: RetrievalDiagnostics | None = Field(
         default=None, exclude=True, repr=False

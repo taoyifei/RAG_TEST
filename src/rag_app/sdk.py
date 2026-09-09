@@ -15,7 +15,7 @@ from rag_app.core.errors import (
     RagError,
 )
 from rag_app.core.events import TraceEvent
-from rag_app.core.identifiers import new_id
+from rag_app.core.identifiers import canonical_sha256, new_id
 from rag_app.core.models import (
     AnswerClaim,
     AnswerStreamClaimEvent,
@@ -43,7 +43,11 @@ from rag_app.core.models.management import (
     SystemStatus,
 )
 from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
-from rag_app.core.ports import BlobReadResult, CancellationPort
+from rag_app.core.ports import (
+    BlobReadResult,
+    CancellationPort,
+    ConversationPort,
+)
 from rag_app.core.ports.query_history import QueryHistoryPort
 
 
@@ -70,6 +74,7 @@ class RagSdk:
         ]
         | None = None,
         query_history: QueryHistoryPort | None = None,
+        conversation: ConversationPort | None = None,
     ) -> None:
         """保存 Application Services，不持有具体 Store 类型。
 
@@ -88,6 +93,7 @@ class RagSdk:
             revision_builder_resolver: 可选按知识库选择 Revision
                 构建服务的解析器。
             query_history: 宿主注入的持久历史，SDK 默认只保存元数据。
+            conversation: 可选有界多轮上下文端口。
 
         Returns:
             无返回值。
@@ -106,6 +112,7 @@ class RagSdk:
         self._retrieval_resolver = retrieval_resolver
         self._revision_builder_resolver = revision_builder_resolver
         self._query_history = query_history
+        self._conversation = conversation
         self._closed = False
         self._diagnostics: dict[str, RetrievalDiagnostics] = {}
 
@@ -730,6 +737,8 @@ class RagSdk:
         history_mode: Literal["full", "metadata_only"] = "metadata_only",
         owner_id: str = "sdk",
         trace_id: str | None = None,
+        conversation_id: str | None = None,
+        singleflight_enabled: bool = True,
     ) -> SearchAnswerResult:
         """执行 revision-sticky 检索并保存安全诊断。
 
@@ -742,6 +751,8 @@ class RagSdk:
             history_mode: 是否允许宿主保存本次问答正文。
             owner_id: 经过宿主鉴权的调用方身份，不包含凭据。
             trace_id: 宿主在请求开始时分配的安全关联 ID。
+            conversation_id: 可选、严格绑定当前 owner/Project/KB 的会话 ID。
+            singleflight_enabled: 是否允许合并 SAFE 的非流式等价计算。
 
         Returns:
             P08.5 实际路由与最小证据结果。
@@ -755,15 +766,84 @@ class RagSdk:
             text=text,
             limit=limit,
             include_related_content=include_related_content,
+            owner_identity=owner_id,
+            singleflight_enabled=singleflight_enabled,
             trace_id=trace_id or new_id("trace"),
         )
         return self._run_search(
             request,
             owner_id=owner_id,
             save_body=history_mode == "full",
+            conversation_id=conversation_id,
         )
 
     def _run_search(  # noqa: PLR0913
+        self,
+        request: SearchRequest,
+        *,
+        owner_id: str,
+        save_body: bool,
+        on_stage: Callable[[str, dict[str, object]], None] | None = None,
+        on_claim: Callable[[AnswerClaim, str], None] | None = None,
+        cancellation: CancellationPort | None = None,
+        cache_result: bool = True,
+        on_started: Callable[[], None] | None = None,
+        before_success: Callable[[SearchAnswerResult], None] | None = None,
+        conversation_id: str | None = None,
+    ) -> SearchAnswerResult:
+        """在同一会话 lease 内读取上下文、执行并提交唯一 final。"""
+        if conversation_id is None:
+            return self._run_search_once(
+                request,
+                owner_id=owner_id,
+                save_body=save_body,
+                on_stage=on_stage,
+                on_claim=on_claim,
+                cancellation=cancellation,
+                cache_result=cache_result,
+                on_started=on_started,
+                before_success=before_success,
+            )
+        if self._conversation is None:
+            raise CapabilityUnavailable(
+                "当前 Runtime 未启用多轮会话。",
+                stage="conversation.runtime",
+                code="CONVERSATION_UNAVAILABLE",
+            )
+        with self._conversation.lease(
+            request.scope,
+            conversation_id,
+            owner_id=owner_id,
+        ):
+            context = self._conversation.context(
+                request.scope,
+                conversation_id,
+                owner_id=owner_id,
+            )
+            scoped_request = request.model_copy(
+                update={"conversation_context": context}
+            )
+            result = self._run_search_once(
+                scoped_request,
+                owner_id=owner_id,
+                save_body=save_body,
+                on_stage=on_stage,
+                on_claim=on_claim,
+                cancellation=cancellation,
+                cache_result=cache_result,
+                on_started=on_started,
+                before_success=before_success,
+            )
+            self._conversation.commit(
+                request.scope,
+                conversation_id,
+                request.text,
+                result,
+                owner_id=owner_id,
+            )
+            return result
+
+    def _run_search_once(  # noqa: PLR0913
         self,
         request: SearchRequest,
         *,
@@ -787,6 +867,13 @@ class RagSdk:
                 request.text,
                 owner_id=owner_id,
                 save_body=save_body,
+                conversation_context_digest=(
+                    canonical_sha256(request.conversation_context).removeprefix(
+                        "sha256:"
+                    )
+                    if request.conversation_context
+                    else None
+                ),
             )
         result: SearchAnswerResult | None = None
         failure: RagError | None = None
@@ -882,6 +969,8 @@ class RagSdk:
         history_mode: Literal["full", "metadata_only"] = "metadata_only",
         owner_id: str = "sdk",
         trace_id: str | None = None,
+        conversation_id: str | None = None,
+        singleflight_enabled: bool = True,
     ) -> SearchAnswerResult:
         """执行与 Search 共用的检索和受控回答链。
 
@@ -894,6 +983,8 @@ class RagSdk:
             history_mode: 正文保存选择。
             owner_id: 宿主鉴权后的非秘密身份。
             trace_id: 宿主在请求开始分配的 ID。
+            conversation_id: 可选 scoped 多轮会话 ID。
+            singleflight_enabled: 是否允许 SAFE 非流式 singleflight。
 
         Returns:
             含回答或明确拒答的结果。
@@ -908,6 +999,8 @@ class RagSdk:
             history_mode=history_mode,
             owner_id=owner_id,
             trace_id=trace_id,
+            conversation_id=conversation_id,
+            singleflight_enabled=singleflight_enabled,
         )
 
     def answer_stream(  # noqa: PLR0913
@@ -923,6 +1016,7 @@ class RagSdk:
         history_mode: Literal["full", "metadata_only"] = "metadata_only",
         owner_id: str = "sdk",
         trace_id: str | None = None,
+        conversation_id: str | None = None,
     ) -> SearchAnswerResult:
         """以类型化事件运行与同步 Answer 完全相同的 Application 链。
 
@@ -937,6 +1031,7 @@ class RagSdk:
             history_mode: 正文历史保存选择。
             owner_id: 宿主鉴权后的非秘密身份。
             trace_id: 宿主预分配的安全关联 ID。
+            conversation_id: 可选 scoped 多轮会话 ID。
 
         Returns:
             唯一 final 所绑定的完整 SearchAnswerResult。
@@ -951,6 +1046,8 @@ class RagSdk:
             text=text,
             limit=limit,
             include_related_content=include_related_content,
+            owner_identity=owner_id,
+            singleflight_enabled=False,
             trace_id=trace_id or new_id("trace"),
         )
         request_trace_id = request.trace_id
@@ -1098,6 +1195,7 @@ class RagSdk:
             cache_result=True,
             on_started=begin,
             before_success=finish,
+            conversation_id=conversation_id,
         )
 
     def retrieval_diagnostics(self, trace_id: str) -> RetrievalDiagnostics:

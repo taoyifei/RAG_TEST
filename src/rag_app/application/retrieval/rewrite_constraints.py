@@ -57,6 +57,9 @@ _SUBJECT = re.compile(
     r"([^，,。；;！!？?\n]{1,80}?)"
     r"(?:的)?(?:职责|负责(?!人)|承担|审批|批准|审核|核准)"
 )
+_CONTEXT_REFERENCE = re.compile(
+    r"这个|那个|它|其中|上述|前者|后者|刚才提到的|前面提到的"
+)
 
 
 def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
@@ -73,22 +76,32 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
     analyzer = QueryAnalyzer()
     original = analyzer.analyze(request)
     rewritten = analyzer.analyze(request.model_copy(update={"text": text}))
-    fields = (
-        "identifiers",
-        "numbers",
-        "units",
-        "date_version_signals",
-        "negation_signals",
-        "quoted_phrases",
+    uses_context = bool(
+        request.conversation_context and _CONTEXT_REFERENCE.search(request.text)
+    )
+    context = (
+        analyzer.analyze(
+            request.model_copy(
+                update={
+                    "text": "\n".join(request.conversation_context[-8:]),
+                    "conversation_context": (),
+                }
+            )
+        )
+        if uses_context
+        else None
     )
     before = _normalize(request.text)
     after = _normalize(text)
-    hard_changed = any(
-        Counter(getattr(original, field)) != Counter(getattr(rewritten, field))
-        for field in fields
+    hard_changed = _hard_fields_changed(
+        original,
+        rewritten,
+        context,
+        before=before,
+        after=after,
     ) or any(
         _atoms(pattern, before) != _atoms(pattern, after)
-        for pattern in (_NUMBER, _NEGATION, _QUALIFIER)
+        for pattern in (_NEGATION, _QUALIFIER)
     )
     # 字面信号允许调序，不能新增、删除或替换。
     if hard_changed:
@@ -96,11 +109,24 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
     semantic_reason = _semantic_change_reason(original, rewritten)
     if semantic_reason is not None:
         return semantic_reason
-    before_terms = _topics(before)
+    before_terms = _topics(
+        _CONTEXT_REFERENCE.sub("", before) if uses_context else before
+    )
     after_terms = _topics(after)
     if not before_terms or not after_terms:
         return None if before == after else "REWRITE_SCOPE_CHANGED"
-    if not _same_topics(before_terms, after_terms):
+    if uses_context:
+        context_terms = _topics(
+            _normalize("\n".join(request.conversation_context[-8:]))
+        )
+        topics_match = _contextual_topics_match(
+            before_terms,
+            after_terms,
+            context_terms,
+        )
+    else:
+        topics_match = _same_topics(before_terms, after_terms)
+    if not topics_match:
         return "REWRITE_SCOPE_CHANGED"
     before_subject = _subject_topics(before)
     after_subject = _subject_topics(after)
@@ -111,6 +137,58 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
     ):
         return "REWRITE_SCOPE_CHANGED"
     return None
+
+
+def _hard_fields_changed(
+    original: QueryAnalysis,
+    rewritten: QueryAnalysis,
+    context: QueryAnalysis | None,
+    *,
+    before: str,
+    after: str,
+) -> bool:
+    """保留硬约束，只允许从同 scope 会话补入一个完整对象标识。"""
+    exact_fields = (
+        "units",
+        "date_version_signals",
+        "negation_signals",
+        "quoted_phrases",
+    )
+    if any(
+        Counter(getattr(original, field)) != Counter(getattr(rewritten, field))
+        for field in exact_fields
+    ):
+        return True
+    before_identifiers = Counter(original.identifiers)
+    after_identifiers = Counter(rewritten.identifiers)
+    if context is None:
+        identifiers_changed = before_identifiers != after_identifiers
+        approved_identifiers: Counter[str] = Counter()
+    else:
+        available = Counter(context.identifiers)
+        approved_identifiers = after_identifiers - before_identifiers
+        identifiers_changed = bool(
+            (before_identifiers - after_identifiers)
+            or (approved_identifiers - available)
+        )
+    if identifiers_changed:
+        return True
+    before_atoms = _atoms(_NUMBER, before)
+    after_atoms = _atoms(_NUMBER, after)
+    if before_atoms - after_atoms:
+        return True
+    added_atoms = after_atoms - before_atoms
+    approved_text = _normalize("".join(approved_identifiers.elements()))
+    if any(atom not in approved_text for atom in added_atoms.elements()):
+        return True
+    before_numbers = Counter(original.numbers)
+    after_numbers = Counter(rewritten.numbers)
+    if before_numbers - after_numbers:
+        return True
+    added_numbers = after_numbers - before_numbers
+    return any(
+        number not in approved_text for number in added_numbers.elements()
+    )
 
 
 def _semantic_change_reason(
@@ -177,6 +255,18 @@ def _same_topics(before: tuple[str, ...], after: tuple[str, ...]) -> bool:
     return all(_covered(term, after) for term in before) and all(
         _covered(term, before) for term in after
     )
+
+
+def _contextual_topics_match(
+    before: tuple[str, ...],
+    after: tuple[str, ...],
+    context: tuple[str, ...],
+) -> bool:
+    """允许指代被已鉴权上下文对象替换，但拒绝上下文外新增主题。"""
+    if not all(_covered(term, after) for term in before):
+        return False
+    available = (*context, *before)
+    return all(_covered(term, available) for term in after)
 
 
 def _covered(term: str, available: tuple[str, ...]) -> bool:

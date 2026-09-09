@@ -84,6 +84,7 @@ def register_model_settings_routes(  # noqa: PLR0915
                 }
             )
         runtime.models.save(knowledge_base_id, settings)
+        runtime.profiles.invalidate(knowledge_base_id)
         return _get(knowledge_base_id)
 
     ocr_path = (

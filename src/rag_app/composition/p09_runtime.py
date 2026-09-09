@@ -21,7 +21,7 @@ from rag_app.composition.profiles import (
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import ParseResult, RetrievalPolicy, SystemStatus
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.ports import TracePort
+from rag_app.core.ports import ConversationPort, TracePort
 from rag_app.core.ports.query_history import QueryHistoryPort
 from rag_app.query_executor import QueryExecutor
 from rag_app.sdk import RagSdk
@@ -98,6 +98,7 @@ class P09RuntimeHooks:
     recover_jobs: bool = True
     trace_sink: TracePort | None = None
     query_history: QueryHistoryPort | None = None
+    conversation: ConversationPort | None = None
     retrieval_policy: RetrievalPolicy | None = None
     document_enricher: Callable[[ParseResult], ParseResult] | None = None
     content_identity: Callable[[str], str | None] | None = None
@@ -222,6 +223,7 @@ def build_p09_runtime(
         close=_close,
         console=console,
         query_history=None if hooks is None else hooks.query_history,
+        conversation=None if hooks is None else hooks.conversation,
         retrieval_resolver=(
             None if hooks is None else hooks.retrieval_resolver
         ),

@@ -7,14 +7,15 @@ import ipaddress
 import json
 import os
 import stat
+import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import cast
+from typing import Generic, TypeVar, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -57,18 +58,26 @@ from rag_app.composition.profiles import (
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
+    AnswerClaim,
     DocumentEmbeddingBudget,
     EmbeddingSlotIdentity,
     EmbeddingSlotRole,
     EmbeddingTopology,
+    Job,
     KnowledgeBaseScope,
     ParseResult,
     RetrievalPolicy,
+    SearchAnswerResult,
+    SearchRequest,
     SystemStatus,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
-from rag_app.core.ports import ChunkValidationPort, ExactStorePort
+from rag_app.core.ports import (
+    CancellationPort,
+    ChunkValidationPort,
+    ExactStorePort,
+)
 from rag_app.ocr import OcrClient
 from rag_app.product.auth import (
     AuthStore,
@@ -77,11 +86,16 @@ from rag_app.product.auth import (
 )
 from rag_app.product.compatibility import CompatibilityManifest, load_manifest
 from rag_app.product.control_store import ProductControlStore
+from rag_app.product.conversations import ProductConversationStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
 from rag_app.product.diagram_relations import ProductDiagramRelations
+from rag_app.product.feedback import ProductFeedbackStore
 from rag_app.product.grounded_runtime import ProductGroundedModel
-from rag_app.product.model_settings import ProductModelSettings
+from rag_app.product.model_settings import (
+    KnowledgeBaseModelSettings,
+    ProductModelSettings,
+)
 from rag_app.product.models import (
     ProviderValidationRun,
     RetrievalProfileRevision,
@@ -101,6 +115,10 @@ from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_retrieval_policy,
 )
+from rag_app.product.singleflight import (
+    ProductQuerySingleflight,
+    SingleflightMetrics,
+)
 from rag_app.product.trace_coordinator import ProductTraceCoordinator
 from rag_app.product.verification import profile_specs
 from rag_app.sdk import RagSdk
@@ -108,6 +126,7 @@ from rag_app.tracing import TraceRecorder, TraceStore
 
 _MIN_LOCAL_OCR_TOKEN_LENGTH = 32
 _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
+_ResourceT = TypeVar("_ResourceT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,11 +268,213 @@ class _ResolvedProductServices:
             无返回值。
 
         """
-        self.cache.close()
+        closers: list[Callable[[], None]] = [self.cache.close]
         for resource in reversed(self.remote_resources):
             closer = getattr(resource, "close", None)
             if callable(closer):
-                closer()
+                closers.append(closer)
+        _close_callbacks(tuple(closers))
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedServiceGenerationContract:
+    """一次 Profile 资源代际冻结后的安全服务合同。"""
+
+    policy: RetrievalPolicy
+    egress: EgressPolicy
+    serving_fingerprint: str
+    resource_identity: str
+
+
+@dataclass(slots=True)
+class _ResourceGeneration(Generic[_ResourceT]):
+    """一个可退役资源及其受 resolver 锁保护的租约状态。"""
+
+    knowledge_base_id: str
+    resource: _ResourceT
+    close_callback: Callable[[], None]
+    lease_count: int = 0
+    retired: bool = False
+    closed: bool = False
+
+
+class _RetrievalLeaseProxy:
+    """把旧 resolver 回调适配为覆盖完整查询调用的 lease。"""
+
+    def __init__(
+        self,
+        resolver: ProductProfileResolver,
+        knowledge_base_id: str,
+        fallback: RetrievalService,
+    ) -> None:
+        self._resolver = resolver
+        self._knowledge_base_id = knowledge_base_id
+        self._fallback = fallback
+
+    def search_and_answer(  # noqa: PLR0913
+        self,
+        request: SearchRequest,
+        *,
+        on_stage: Callable[[str, dict[str, object]], None] | None = None,
+        on_claim: Callable[[AnswerClaim, str], None] | None = None,
+        on_final: Callable[[SearchAnswerResult], None] | None = None,
+        cancellation: CancellationPort | None = None,
+        cache_result: bool = True,
+    ) -> SearchAnswerResult:
+        """在整个同步或流式检索调用期间持有当前 generation。
+
+        Args:
+            request: 已绑定 scope、owner 和回答行为的查询请求。
+            on_stage: 可选的安全阶段事件回调。
+            on_claim: 可选的已验证 claim 回调。
+            on_final: 可选的唯一 final 回调。
+            cancellation: 可选协作取消端口。
+            cache_result: 是否在权威完成边界写入结果缓存。
+
+        Returns:
+            当前请求独立 Trace ID 对应的最终查询结果。
+
+        """
+        with self._resolver.retrieval_service_lease(
+            self._knowledge_base_id,
+            self._fallback,
+        ) as service:
+            if (
+                not request.singleflight_enabled
+                or on_stage is not None
+                or on_claim is not None
+                or on_final is not None
+            ):
+                return service.search_and_answer(
+                    request,
+                    on_stage=on_stage,
+                    on_claim=on_claim,
+                    on_final=on_final,
+                    cancellation=cancellation,
+                    cache_result=cache_result,
+                )
+            identity = service.execution_identity(request)
+            trace_id = request.trace_id or f"trace_{uuid.uuid4().hex}"
+            frozen_request = request.model_copy(
+                update={
+                    "trace_id": trace_id,
+                    "expected_active_revision_id": (
+                        identity.active_revision_id
+                    ),
+                    "expected_serving_fingerprint": (
+                        identity.serving_fingerprint
+                    ),
+                }
+            )
+            result = self._resolver.singleflight.execute(
+                identity.key_hash,
+                request_trace_id=trace_id,
+                cancellation=cancellation,
+                compute=lambda group_cancellation: service.search_and_answer(
+                    frozen_request,
+                    cancellation=group_cancellation,
+                    cache_result=cache_result,
+                ),
+            )
+            if result.singleflight_role == "follower":
+                service.validate_shared_result(
+                    result,
+                    frozen_request,
+                    identity,
+                )
+            service.record_singleflight_observation(result, identity)
+            return result
+
+
+class _LifecycleLeaseProxy:
+    """把旧 Lifecycle resolver 回调适配为单次操作 lease。"""
+
+    def __init__(
+        self,
+        lease_factory: Callable[[], AbstractContextManager[LifecycleService]],
+    ) -> None:
+        self._lease_factory = lease_factory
+
+    def create_document(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        *,
+        display_name: str,
+        content: bytes,
+        media_type: str,
+        idempotency_key: str,
+    ) -> Job:
+        """在冻结并入队新文档期间持有当前 generation。
+
+        Args:
+            project_id: 目标项目 ID。
+            knowledge_base_id: 目标知识库 ID。
+            display_name: 用户可见文档名。
+            content: 待上传文档字节。
+            media_type: 已验证媒体类型。
+            idempotency_key: 调用方幂等键。
+
+        Returns:
+            已持久化并绑定 Profile 的入库 Job。
+
+        """
+        with self._lease_factory() as service:
+            return service.create_document(
+                project_id,
+                knowledge_base_id,
+                display_name=display_name,
+                content=content,
+                media_type=media_type,
+                idempotency_key=idempotency_key,
+            )
+
+    def create_document_version(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        document_id: str,
+        *,
+        content: bytes,
+        media_type: str,
+        idempotency_key: str,
+    ) -> Job:
+        """在冻结并入队文档新版本期间持有当前 generation。
+
+        Args:
+            project_id: 目标项目 ID。
+            knowledge_base_id: 目标知识库 ID。
+            document_id: 既有逻辑文档 ID。
+            content: 待上传的新版本字节。
+            media_type: 已验证媒体类型。
+            idempotency_key: 调用方幂等键。
+
+        Returns:
+            已持久化并绑定 Profile 的新版本入库 Job。
+
+        """
+        with self._lease_factory() as service:
+            return service.create_document_version(
+                project_id,
+                knowledge_base_id,
+                document_id,
+                content=content,
+                media_type=media_type,
+                idempotency_key=idempotency_key,
+            )
+
+    def run_ingestion(self, job_id: str) -> None:
+        """在后台构建与激活的完整调用期间持有冻结 generation。
+
+        Args:
+            job_id: 已冻结 Profile 的入库 Job ID。
+
+        Returns:
+            无返回值。
+
+        """
+        with self._lease_factory() as service:
+            service.run_ingestion(job_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -356,7 +577,12 @@ class ProductProfileResolver:
         self._providers = providers
         self._models = models
         self._ocr = ocr
-        self._grounded_models: dict[str, ProductGroundedModel] = {}
+        self._grounded_models: dict[
+            str, _ResourceGeneration[ProductGroundedModel]
+        ] = {}
+        self._retired_models: dict[
+            int, _ResourceGeneration[ProductGroundedModel]
+        ] = {}
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
@@ -364,9 +590,27 @@ class ProductProfileResolver:
         )
         self._last_profile: dict[str, str | None] = {}
         self._runtime: P09Runtime | None = None
-        self._services: dict[str, _ResolvedProductServices] = {}
-        self._retired_services: list[_ResolvedProductServices] = []
+        self._services: dict[
+            str, _ResourceGeneration[_ResolvedProductServices]
+        ] = {}
+        self._retired_services: dict[
+            int, _ResourceGeneration[_ResolvedProductServices]
+        ] = {}
+        self.singleflight = ProductQuerySingleflight()
         self._lock = RLock()
+        self._closed = False
+
+    def singleflight_metrics(self) -> SingleflightMetrics:
+        """返回不含查询、scope 或 key 的 singleflight 安全计数。
+
+        Args:
+            无参数；读取当前 resolver 计数。
+
+        Returns:
+            有界 singleflight 协调器的安全指标快照。
+
+        """
+        return self.singleflight.metrics()
 
     def bind_runtime(self, runtime: P09Runtime) -> None:
         """在基础持久运行时构造后绑定共享 Store。
@@ -411,16 +655,17 @@ class ProductProfileResolver:
             for run in validations.values()
         ):
             raise ValueError("候选方案的验证已失效，请重新验证。")
-        self._resolve(profile).lifecycle.queue_profile_rebuild(
-            profile.knowledge_base_id,
-            expected_profile,
-            expected_index,
-            tuple(
-                run.validation_id
-                for run in validations.values()
-                if run is not None
-            ),
-        )
+        with self._profile_services_lease(profile) as services:
+            services.lifecycle.queue_profile_rebuild(
+                profile.knowledge_base_id,
+                expected_profile,
+                expected_index,
+                tuple(
+                    run.validation_id
+                    for run in validations.values()
+                    if run is not None
+                ),
+            )
 
     def active_profile(
         self, knowledge_base_id: str
@@ -434,11 +679,12 @@ class ProductProfileResolver:
             Active Profile；未配置时为 None。
 
         """
-        profile = self._control.active_profile(knowledge_base_id)
-        self._last_profile[knowledge_base_id] = (
-            None if profile is None else profile.profile_revision_id
-        )
-        return profile
+        with self._lock:
+            profile = self._control.active_profile(knowledge_base_id)
+            self._last_profile[knowledge_base_id] = (
+                None if profile is None else profile.profile_revision_id
+            )
+            return profile
 
     def retrieval_service(
         self,
@@ -455,29 +701,80 @@ class ProductProfileResolver:
             当前 Profile 对应的检索服务；未配置时返回离线基线。
 
         """
-        profile = self.active_profile(knowledge_base_id)
-        service = (
-            fallback if profile is None else self._resolve(profile).retrieval
+        return cast(
+            RetrievalService,
+            _RetrievalLeaseProxy(self, knowledge_base_id, fallback),
         )
-        if self._models is None:
-            return service
-        settings = self._models.get(knowledge_base_id)
-        if not settings.generation_connection_id:
-            return service
-        identity = self._models.serving_identity(settings)
-        key = knowledge_base_id + identity
+
+    @contextmanager
+    def retrieval_service_lease(
+        self,
+        knowledge_base_id: str,
+        fallback: RetrievalService,
+    ) -> Iterator[RetrievalService]:
+        """冻结并租用一次查询所需的检索与生成资源。
+
+        Args:
+            knowledge_base_id: 当前 Query 的知识库。
+            fallback: 未配置 Product Profile 时的离线检索服务。
+
+        Yields:
+            在上下文退出前不会被 invalidate 提前关闭的查询服务。
+
+        Returns:
+            管理查询与回答资源 generation lease 的上下文迭代器。
+
+        Raises:
+            RuntimeError: Resolver 已关闭。
+
+        """
+        service_generation: (
+            _ResourceGeneration[_ResolvedProductServices] | None
+        ) = None
+        model_generation: _ResourceGeneration[ProductGroundedModel] | None = (
+            None
+        )
+        generation_identity: str | None = None
         with self._lock:
-            if key not in self._grounded_models:
-                self._grounded_models[key] = ProductGroundedModel(
-                    settings,
-                    knowledge_base_id,
-                    self._models.connections,
-                    self._providers,
+            self._ensure_open_locked()
+            profile = self.active_profile(knowledge_base_id)
+            service = fallback
+            if profile is not None:
+                service_generation = self._service_generation_locked(profile)
+                service = service_generation.resource.retrieval
+            if self._models is not None:
+                settings = self._models.get(knowledge_base_id)
+                if settings.generation_connection_id:
+                    generation_identity = self._models.serving_identity(
+                        settings
+                    )
+                    model_generation = self._model_generation_locked(
+                        knowledge_base_id,
+                        generation_identity,
+                        settings,
+                    )
+            if service_generation is not None:
+                self._acquire_generation_locked(service_generation)
+            if model_generation is not None:
+                self._acquire_generation_locked(model_generation)
+        try:
+            if model_generation is not None:
+                if generation_identity is None:
+                    raise RuntimeError(
+                        "回答模型 generation 缺少 serving identity。"
+                    )
+                model = model_generation.resource
+                service = service.with_generation(
+                    model,
+                    serving_identity=generation_identity,
+                    rewriter=model,
                 )
-            model = self._grounded_models[key]
-        return service.with_generation(
-            model, serving_identity=identity, rewriter=model
-        )
+            yield service
+        finally:
+            self._release_query_generations(
+                service_generation,
+                model_generation,
+            )
 
     def revision_lifecycle(
         self,
@@ -494,10 +791,49 @@ class ProductProfileResolver:
             当前 Profile 对应的构建服务；未配置时返回离线基线。
 
         """
-        profile = self.active_profile(knowledge_base_id)
-        if profile is None:
-            return fallback
-        return self._resolve(profile).lifecycle
+        return cast(
+            LifecycleService,
+            _LifecycleLeaseProxy(
+                lambda: self.revision_lifecycle_lease(
+                    knowledge_base_id,
+                    fallback,
+                )
+            ),
+        )
+
+    @contextmanager
+    def revision_lifecycle_lease(
+        self,
+        knowledge_base_id: str,
+        fallback: LifecycleService,
+    ) -> Iterator[LifecycleService]:
+        """租用新文档或版本入队时对应的 Active Profile 服务。
+
+        Args:
+            knowledge_base_id: 新 Revision 所属知识库。
+            fallback: 未激活 Product Profile 时的离线 Lifecycle。
+
+        Yields:
+            当前入队操作使用且不会被提前关闭的 Lifecycle。
+
+        Returns:
+            管理入库排队资源 generation lease 的上下文迭代器。
+
+        """
+        generation: _ResourceGeneration[_ResolvedProductServices] | None = None
+        with self._lock:
+            self._ensure_open_locked()
+            profile = self.active_profile(knowledge_base_id)
+            service = fallback
+            if profile is not None:
+                generation = self._service_generation_locked(profile)
+                self._acquire_generation_locked(generation)
+                service = generation.resource.lifecycle
+        try:
+            yield service
+        finally:
+            if generation is not None:
+                self._release_service_generation(generation)
 
     def job_lifecycle(
         self,
@@ -514,26 +850,64 @@ class ProductProfileResolver:
             入队时选择的精确 Profile 服务。
 
         """
-        runtime = self._require_runtime()
-        profile_id = runtime.store.ingestion_profile_revision_id(job_id)
-        if profile_id is None:
-            return fallback
-        return self._resolve(self._control.get_profile(profile_id)).lifecycle
+        return cast(
+            LifecycleService,
+            _LifecycleLeaseProxy(
+                lambda: self.job_lifecycle_lease(job_id, fallback)
+            ),
+        )
 
-    def invalidate(self) -> None:
-        """退役全部 Profile 缓存，供 Credential 轮换后重建。
+    @contextmanager
+    def job_lifecycle_lease(
+        self,
+        job_id: str,
+        fallback: LifecycleService,
+    ) -> Iterator[LifecycleService]:
+        """按持久 Job 冻结的 Profile 租用完整后台构建资源。
 
         Args:
-            无参数；清理 Resolver 自有资源。
+            job_id: 即将被 Worker 领取的持久 Job。
+            fallback: 未绑定 Product Profile 时的离线 Lifecycle。
+
+        Yields:
+            覆盖完整 ingestion 调用且不会被提前关闭的 Lifecycle。
 
         Returns:
-            无返回值。
+            管理后台入库资源 generation lease 的上下文迭代器。
+
+        """
+        generation: _ResourceGeneration[_ResolvedProductServices] | None = None
+        with self._lock:
+            self._ensure_open_locked()
+            runtime = self._require_runtime()
+            profile_id = runtime.store.ingestion_profile_revision_id(job_id)
+            service = fallback
+            if profile_id is not None:
+                profile = self._control.get_profile(profile_id)
+                generation = self._service_generation_locked(profile)
+                self._acquire_generation_locked(generation)
+                service = generation.resource.lifecycle
+        try:
+            yield service
+        finally:
+            if generation is not None:
+                self._release_service_generation(generation)
+
+    def invalidate(self, knowledge_base_id: str | None = None) -> None:
+        """退役指定知识库或全部 Profile 与回答模型 generation。
+
+        Args:
+            knowledge_base_id: 只失效该知识库；None 表示全部失效。
+
+        Returns:
+            无返回值；零租约资源已在返回前关闭。
 
         """
         with self._lock:
-            # 已分发查询和作业仍持有旧服务；在 Runtime 停止后统一关闭。
-            self._retired_services.extend(self._services.values())
-            self._services.clear()
+            if self._closed:
+                return
+            closers = self._retire_resources_locked(knowledge_base_id)
+        _close_callbacks(closers)
 
     def close(self) -> None:
         """在 Runtime 请求生命周期结束后关闭当前和退役服务。
@@ -545,34 +919,239 @@ class ProductProfileResolver:
             无返回值。
 
         """
-        self.invalidate()
         with self._lock:
-            for item in self._retired_services:
-                item.close()
-            self._retired_services.clear()
-            for model in self._grounded_models.values():
-                model.close()
-            self._grounded_models.clear()
+            if self._closed:
+                return
+            self._closed = True
+            closers = self._retire_resources_locked(None)
+        _close_callbacks(closers)
 
     def _resolve(
         self, profile: RetrievalProfileRevision
     ) -> _ResolvedProductServices:
+        """保留组合层检查使用的未租约服务快照。
+
+        实际 Query、入队和 Worker 不调用此兼容入口，统一经 lease 代理执行。
+        """
         with self._lock:
-            cache_key = self._control.quality.binding_identity(
-                profile.profile_revision_id
+            self._ensure_open_locked()
+            return self._service_generation_locked(profile).resource
+
+    @contextmanager
+    def _profile_services_lease(
+        self, profile: RetrievalProfileRevision
+    ) -> Iterator[_ResolvedProductServices]:
+        """租用调用方已经冻结的 Profile generation。"""
+        with self._lock:
+            self._ensure_open_locked()
+            generation = self._service_generation_locked(profile)
+            self._acquire_generation_locked(generation)
+        try:
+            yield generation.resource
+        finally:
+            self._release_service_generation(generation)
+
+    def _service_generation_locked(
+        self, profile: RetrievalProfileRevision
+    ) -> _ResourceGeneration[_ResolvedProductServices]:
+        """在 resolver 锁内读取或构造一个可租用服务 generation。"""
+        contract = self._service_generation_contract(profile)
+        existing = self._services.get(contract.resource_identity)
+        if existing is not None:
+            return existing
+        resolved = self._build(profile, contract)
+        generation = _ResourceGeneration(
+            knowledge_base_id=profile.knowledge_base_id,
+            resource=resolved,
+            close_callback=resolved.close,
+        )
+        self._services[contract.resource_identity] = generation
+        return generation
+
+    def _service_generation_contract(
+        self,
+        profile: RetrievalProfileRevision,
+    ) -> _ResolvedServiceGenerationContract:
+        """冻结连接、凭据、校准和授权共同决定的资源代际。
+
+        Args:
+            profile: 当前请求已经读取的不可变 Profile Revision。
+
+        Returns:
+            不含 Secret 字节、但会随任一资源绑定变化的服务合同。
+
+        """
+        policy, egress, base_serving = self.serving_contract(profile)
+        binding_identity = self._control.quality.binding_identity(
+            profile.profile_revision_id
+        )
+        quality_identity = canonical_sha256(
+            self._control.quality.states(profile.profile_revision_id)
+        )
+        resource_identity = canonical_sha256(
+            {
+                "profile_revision_id": profile.profile_revision_id,
+                "binding_identity": binding_identity,
+                "quality_identity": quality_identity,
+                "serving_contract": base_serving,
+            }
+        )
+        return _ResolvedServiceGenerationContract(
+            policy=policy,
+            egress=egress,
+            serving_fingerprint=canonical_sha256(
+                {
+                    "serving_contract": base_serving,
+                    "resource_generation": resource_identity,
+                }
+            ),
+            resource_identity=resource_identity,
+        )
+
+    def _model_generation_locked(
+        self,
+        knowledge_base_id: str,
+        identity: str,
+        settings: KnowledgeBaseModelSettings,
+    ) -> _ResourceGeneration[ProductGroundedModel]:
+        """在 resolver 锁内读取或构造回答模型 generation。"""
+        if self._models is None:
+            raise RuntimeError("Product Model Settings 尚未绑定。")
+        key = knowledge_base_id + identity
+        existing = self._grounded_models.get(key)
+        if existing is not None:
+            return existing
+        model = ProductGroundedModel(
+            settings,
+            knowledge_base_id,
+            self._models.connections,
+            self._providers,
+        )
+        generation = _ResourceGeneration(
+            knowledge_base_id=knowledge_base_id,
+            resource=model,
+            close_callback=model.close,
+        )
+        self._grounded_models[key] = generation
+        return generation
+
+    def _acquire_generation_locked(
+        self, generation: _ResourceGeneration[_ResourceT]
+    ) -> None:
+        """在同一把 resolver 锁内增加有效 generation 的引用。"""
+        if generation.retired or generation.closed:
+            raise RuntimeError("不能租用已经退役的 Product generation。")
+        generation.lease_count += 1
+
+    def _release_service_generation(
+        self,
+        generation: _ResourceGeneration[_ResolvedProductServices],
+    ) -> None:
+        """释放服务 generation，最后一个退役引用负责锁外关闭。"""
+        with self._lock:
+            closer = self._release_generation_locked(
+                generation,
+                self._retired_services,
             )
-            cache_key = profile.profile_revision_id + cache_key
-            cache_key += canonical_sha256(
-                self._control.quality.states(profile.profile_revision_id)
+        if closer is not None:
+            closer()
+
+    def _release_query_generations(
+        self,
+        services: _ResourceGeneration[_ResolvedProductServices] | None,
+        model: _ResourceGeneration[ProductGroundedModel] | None,
+    ) -> None:
+        """原子结算查询的两类租约，再在锁外关闭退役资源。"""
+        closers: list[Callable[[], None]] = []
+        with self._lock:
+            if model is not None:
+                closer = self._release_generation_locked(
+                    model,
+                    self._retired_models,
+                )
+                if closer is not None:
+                    closers.append(closer)
+            if services is not None:
+                closer = self._release_generation_locked(
+                    services,
+                    self._retired_services,
+                )
+                if closer is not None:
+                    closers.append(closer)
+        _close_callbacks(tuple(closers))
+
+    def _release_generation_locked(
+        self,
+        generation: _ResourceGeneration[_ResourceT],
+        retired: dict[int, _ResourceGeneration[_ResourceT]],
+    ) -> Callable[[], None] | None:
+        """在 resolver 锁内结算一次租约并转移 close 所有权。"""
+        if generation.lease_count <= 0:
+            raise RuntimeError("Product generation lease 发生重复释放。")
+        generation.lease_count -= 1
+        if not generation.retired or generation.lease_count:
+            return None
+        retired.pop(id(generation), None)
+        if generation.closed:
+            return None
+        generation.closed = True
+        return generation.close_callback
+
+    def _retire_resources_locked(
+        self, knowledge_base_id: str | None
+    ) -> tuple[Callable[[], None], ...]:
+        """在 resolver 锁内退役匹配资源并收集锁外 closer。"""
+        closers: list[Callable[[], None]] = []
+        for key, generation in tuple(self._services.items()):
+            if (
+                knowledge_base_id is not None
+                and generation.knowledge_base_id != knowledge_base_id
+            ):
+                continue
+            self._services.pop(key)
+            closer = self._retire_generation_locked(
+                generation,
+                self._retired_services,
             )
-            # 临时校准和有效授权都属于实际服务合同，不能复用普通请求缓存。
-            cache_key += self.serving_contract(profile)[2]
-            existing = self._services.get(cache_key)
-            if existing is not None:
-                return existing
-            resolved = self._build(profile)
-            self._services[cache_key] = resolved
-            return resolved
+            if closer is not None:
+                closers.append(closer)
+        for key, model_generation in tuple(self._grounded_models.items()):
+            if (
+                knowledge_base_id is not None
+                and model_generation.knowledge_base_id != knowledge_base_id
+            ):
+                continue
+            self._grounded_models.pop(key)
+            closer = self._retire_generation_locked(
+                model_generation,
+                self._retired_models,
+            )
+            if closer is not None:
+                closers.append(closer)
+        if knowledge_base_id is None:
+            self._last_profile.clear()
+        else:
+            self._last_profile.pop(knowledge_base_id, None)
+        return tuple(closers)
+
+    def _retire_generation_locked(
+        self,
+        generation: _ResourceGeneration[_ResourceT],
+        retired: dict[int, _ResourceGeneration[_ResourceT]],
+    ) -> Callable[[], None] | None:
+        """标记 generation；无在途引用时立即转移 close 所有权。"""
+        if generation.retired:
+            return None
+        generation.retired = True
+        if generation.lease_count:
+            retired[id(generation)] = generation
+            return None
+        generation.closed = True
+        return generation.close_callback
+
+    def _ensure_open_locked(self) -> None:
+        if self._closed:
+            raise RuntimeError("Product Profile Resolver 已关闭。")
 
     @contextmanager
     def _controlled_pilot(
@@ -738,7 +1317,9 @@ class ProductProfileResolver:
         return policy, egress, identity
 
     def _build(
-        self, profile: RetrievalProfileRevision
+        self,
+        profile: RetrievalProfileRevision,
+        contract: _ResolvedServiceGenerationContract,
     ) -> _ResolvedProductServices:
         runtime = self._require_runtime()
         persistence = runtime.retrieval_runtime.persistence
@@ -853,7 +1434,6 @@ class ProductProfileResolver:
             else self._ocr.content_identity,
         )
         cache = InMemoryRetrievalCache()
-        policy, egress, serving_fingerprint = self.serving_contract(profile)
         retrieval = RetrievalService(
             source=persistence.control,
             exact_store=cast(ExactStorePort, components.lexical_store),
@@ -880,9 +1460,9 @@ class ProductProfileResolver:
             generator=components.generator,
             trace=components.trace_sink,
             cache=cache,
-            serving_fingerprint=serving_fingerprint,
-            egress_policy=egress,
-            policy=policy,
+            serving_fingerprint=contract.serving_fingerprint,
+            egress_policy=contract.egress,
+            policy=contract.policy,
             expected_index_fingerprint=profile.index_semantic_fingerprint,
             expected_profile_revision_id=profile.profile_revision_id,
         )
@@ -901,6 +1481,19 @@ class ProductProfileResolver:
         return self._runtime
 
 
+def _close_callbacks(callbacks: tuple[Callable[[], None], ...]) -> None:
+    """尝试关闭全部资源，并在清理完成后传播首个异常。"""
+    first_error: Exception | None = None
+    for callback in callbacks:
+        try:
+            callback()
+        except Exception as error:  # 关闭其余资源后仍会传播该错误。
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
+
+
 @dataclass(slots=True)
 class ProductRuntime:
     """拥有 P09 数据面与 P10.5 产品控制面的唯一组合根。"""
@@ -916,6 +1509,8 @@ class ProductRuntime:
     compatibility: CompatibilityManifest
     settings: ProductRuntimeSettings
     history: ProductQueryHistory
+    conversations: ProductConversationStore
+    feedback: ProductFeedbackStore
     models: ProductModelSettings
     ocr: ProductOcrEnrichment
     relations: ProductDiagramRelations
@@ -1057,6 +1652,7 @@ def build_product_runtime(
     auth_cipher = SecretCipher(_authentication_key(bootstrap_token))
     auth = AuthStore(connections, auth_cipher)
     sessions = ConsoleSessionService(auth, bootstrap_token)
+    conversations = ProductConversationStore(connections, auth_cipher)
     history = ProductQueryHistory(
         connections,
         credential_cipher or auth_cipher,
@@ -1099,6 +1695,8 @@ def build_product_runtime(
         release_revision=SOURCE_REVISION,
         profile_id=product_profile.profile_id,
     )
+    feedback = ProductFeedbackStore(connections, traces.set_feedback)
+    feedback.recover()
     if (
         transport_factory is None
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
@@ -1153,6 +1751,7 @@ def build_product_runtime(
                 recover_jobs=recover_jobs,
                 trace_sink=traces,
                 query_history=traces,
+                conversation=conversations,
                 document_enricher=_enrich_media,
                 content_identity=_content_identity,
                 retrieval_policy=RetrievalPolicy.model_validate(
@@ -1185,6 +1784,8 @@ def build_product_runtime(
         compatibility=compatibility,
         settings=settings,
         history=history,
+        conversations=conversations,
+        feedback=feedback,
         models=models,
         ocr=ocr,
         relations=relations,

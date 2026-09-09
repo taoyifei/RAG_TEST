@@ -14,6 +14,7 @@ from rag_app.core.ports.console_inspection import (
     ConsoleJobStorePort,
     ConsoleRevisionStorePort,
 )
+from rag_app.core.ports.conversation import ConversationPort
 from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
@@ -52,6 +53,7 @@ __all__ = [
     "ChunkerPort",
     "ConsoleJobStorePort",
     "ConsoleRevisionStorePort",
+    "ConversationPort",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",

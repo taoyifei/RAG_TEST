@@ -66,6 +66,7 @@ _ERROR_STATUS = {
     "VALIDATION_FAILED": 422,
     "TRACE_PERSISTENCE_UNAVAILABLE": 503,
     "TRACE_FULL_UNAVAILABLE": 503,
+    "TRACE_ARTIFACT_CORRUPT": 503,
 }
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorEnvelope, "description": "统一安全错误结构"}
@@ -635,6 +636,8 @@ def _register_query_routes(
             history_mode=_history_mode(request, body),
             owner_id=_history_owner(request),
             trace_id=trace_id,
+            conversation_id=body.conversation_id,
+            singleflight_enabled=body.trace_mode == "SAFE",
         )
         return _query_payload(
             runtime,
@@ -678,6 +681,7 @@ def _register_query_routes(
                     include_related_content=body.include_related_content,
                     history_mode=_history_mode(request, body),
                     owner_id=_history_owner(request),
+                    conversation_id=body.conversation_id,
                 ),
                 render_final=lambda result: _query_payload(
                     runtime,
@@ -726,6 +730,8 @@ def _register_query_routes(
             history_mode=_history_mode(request, body),
             owner_id=_history_owner(request),
             trace_id=trace_id,
+            conversation_id=body.conversation_id,
+            singleflight_enabled=body.trace_mode == "SAFE",
         )
         return _query_payload(
             runtime,

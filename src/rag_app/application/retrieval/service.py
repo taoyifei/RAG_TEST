@@ -112,6 +112,15 @@ class _SelectionOutcome:
     confidence: ConfidenceDecision
 
 
+@dataclass(frozen=True, slots=True)
+class RetrievalExecutionIdentity:
+    """可在 Provider 前冻结的等价计算身份。"""
+
+    key_hash: str
+    active_revision_id: str
+    serving_fingerprint: str
+
+
 class RetrievalService:
     """不依赖 API、SQLite 或 Qdrant 类型的 P07 application service。"""
 
@@ -194,6 +203,34 @@ class RetrievalService:
         )
         return configured
 
+    def execution_identity(
+        self, request: SearchRequest
+    ) -> RetrievalExecutionIdentity:
+        """在 Provider 调用前冻结 singleflight/cache 的完整身份。
+
+        Args:
+            request: 已绑定 owner、scope、过滤、会话与回答行为的请求。
+
+        Returns:
+            当前活动 Revision 与规范计算键；不包含问题或上下文正文。
+
+        """
+        snapshot = self._query_snapshot(request)
+        analysis = self._analyzer.analyze(request)
+        variants = self._expander.expand(analysis)
+        plan = self._planner.plan(
+            analysis,
+            variants,
+            self._policy,
+            dense_required=request.dense_required,
+        )
+        identity = self._cache_identity(request, snapshot, analysis, plan)
+        return RetrievalExecutionIdentity(
+            key_hash=identity.persistent_key,
+            active_revision_id=snapshot.revision.index_revision_id,
+            serving_fingerprint=snapshot.serving_fingerprint,
+        )
+
     def search_and_answer(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         request: SearchRequest,
@@ -229,28 +266,7 @@ class RetrievalService:
         stage_timings: list[StageTiming] = []
         provider_calls: list[ProviderCall] = []
         _raise_if_cancelled(cancellation, provider_calls)
-        snapshot = self._source.active_query_snapshot(
-            request.scope,
-            serving_fingerprint=self._serving_fingerprint,
-            retrieval_policy=self._policy,
-        )
-        if (
-            self._expected_index_fingerprint is not None
-            and snapshot.revision.index_fingerprint
-            != self._expected_index_fingerprint
-        ):
-            raise IndexCorrupt(
-                "Query Profile 与 Active Revision 语义不一致。",
-                stage="retrieval.snapshot",
-            )
-        if (
-            self._expected_profile_revision_id is not None
-            and snapshot.profile_revision_id
-            != self._expected_profile_revision_id
-        ):
-            raise IndexCorrupt(
-                "Query Profile 已切换，请重试查询。", stage="retrieval.snapshot"
-            )
+        snapshot = self._query_snapshot(request)
         self._record(
             trace_id,
             "snapshot",
@@ -321,34 +337,7 @@ class RetrievalService:
             },
         )
         stage_started = _finish_timing(stage_timings, "plan", stage_started)
-        rewrite_identity = canonical_sha256(
-            {
-                "variants": tuple(
-                    variant.identity for variant in plan.variants
-                ),
-                "semantic_policy": "shared-query-semantics-v1",
-                "rewrite_policy": "bounded-rewrite-v3",
-            }
-        )
-        cache_identity = BaseResultCacheKey(
-            project_id=request.scope.project_id,
-            knowledge_base_id=request.scope.knowledge_base_id,
-            active_revision_id=snapshot.revision.index_revision_id,
-            index_fingerprint=snapshot.revision.index_fingerprint,
-            serving_fingerprint=snapshot.serving_fingerprint,
-            query_sha256=hashlib.sha256(
-                request.text.encode("utf-8")
-            ).hexdigest(),
-            metadata_filter_hash=canonical_sha256(request.metadata_filters),
-            access_filter_hash=canonical_sha256(
-                (request.access_filters, snapshot.excluded_document_ids)
-            ),
-            conversation_identity=analysis.conversation_fingerprint,
-            rewrite_policy_identity=rewrite_identity,
-            cache_schema=self._policy.cache_schema_version,
-            include_related_content=request.include_related_content,
-            related_policy_version=DISPLAY_POLICY.version,
-        )
+        cache_identity = self._cache_identity(request, snapshot, analysis, plan)
         cache_key = cache_identity.persistent_key
         cached = self._cache.get(cache_key)
         if cached is not None:
@@ -922,6 +911,183 @@ class RetrievalService:
                     self.commit_result_cache(result)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def validate_shared_result(
+        self,
+        result: SearchAnswerResult,
+        request: SearchRequest,
+        identity: RetrievalExecutionIdentity,
+    ) -> None:
+        """Follower 返回前重新核验 Revision、scope 与来源可读性。
+
+        Args:
+            result: Leader 已完成全部门禁的结果。
+            request: 当前 Follower 的独立请求。
+            identity: 加入 flight 前冻结的计算身份。
+
+        Returns:
+            校验通过时无返回值。
+
+        """
+        snapshot = self._query_snapshot(
+            request.model_copy(
+                update={
+                    "expected_active_revision_id": identity.active_revision_id,
+                    "expected_serving_fingerprint": (
+                        identity.serving_fingerprint
+                    ),
+                }
+            )
+        )
+        self._validate_cached_sources(result, request, snapshot)
+
+    def record_singleflight_observation(
+        self,
+        result: SearchAnswerResult,
+        identity: RetrievalExecutionIdentity,
+    ) -> None:
+        """为当前请求记录不含正文的 singleflight 身份与等待时间。
+
+        Follower 没有重复执行检索阶段，因此先补充冻结的 Revision 身份；
+        History 与 Operational Trace 仍使用当前请求自己的 ``trace_id``。
+
+        Args:
+            result: 已投影为当前请求 Trace ID 的最终结果。
+            identity: 加入共享计算前冻结的执行身份。
+
+        Returns:
+            无返回值。
+
+        """
+        if result.singleflight_role == "follower":
+            self._record(
+                result.trace_id,
+                "snapshot",
+                {
+                    "revision_id": identity.active_revision_id,
+                    "index_fingerprint": result.index_fingerprint,
+                    "serving_fingerprint": identity.serving_fingerprint,
+                },
+            )
+        self._record(
+            result.trace_id,
+            "singleflight",
+            {
+                "role": result.singleflight_role,
+                "key_hash": identity.key_hash,
+                "wait_ms": result.singleflight_wait_ms,
+            },
+        )
+        if result.singleflight_role == "follower":
+            self._record(
+                result.trace_id,
+                "complete",
+                {"status": result.status.value},
+            )
+
+    def _query_snapshot(
+        self, request: SearchRequest
+    ) -> ActiveRevisionQuerySnapshot:
+        """读取并验证 Product Profile 与可选 singleflight 快照。"""
+        snapshot = self._source.active_query_snapshot(
+            request.scope,
+            serving_fingerprint=self._serving_fingerprint,
+            retrieval_policy=self._policy,
+        )
+        if (
+            self._expected_index_fingerprint is not None
+            and snapshot.revision.index_fingerprint
+            != self._expected_index_fingerprint
+        ):
+            raise IndexCorrupt(
+                "Query Profile 与 Active Revision 语义不一致。",
+                stage="retrieval.snapshot",
+            )
+        if (
+            self._expected_profile_revision_id is not None
+            and snapshot.profile_revision_id
+            != self._expected_profile_revision_id
+        ):
+            raise IndexCorrupt(
+                "Query Profile 已切换，请重试查询。", stage="retrieval.snapshot"
+            )
+        if (
+            request.expected_active_revision_id is not None
+            and snapshot.revision.index_revision_id
+            != request.expected_active_revision_id
+        ):
+            raise IndexCorrupt(
+                "活动 Revision 已在请求合并期间切换，请重试。",
+                stage="retrieval.snapshot",
+                code="SINGLEFLIGHT_REVISION_CHANGED",
+            )
+        if (
+            request.expected_serving_fingerprint is not None
+            and snapshot.serving_fingerprint
+            != request.expected_serving_fingerprint
+        ):
+            raise IndexCorrupt(
+                "Serving Profile 已在请求合并期间切换，请重试。",
+                stage="retrieval.snapshot",
+                code="SINGLEFLIGHT_SERVING_CHANGED",
+            )
+        return snapshot
+
+    def _cache_identity(
+        self,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        analysis: QueryAnalysis,
+        plan: RetrievalPlan,
+    ) -> BaseResultCacheKey:
+        """构造不含正文但覆盖全部答案行为的规范缓存键。"""
+        rewrite_identity = canonical_sha256(
+            {
+                "variants": tuple(
+                    variant.identity for variant in plan.variants
+                ),
+                "semantic_policy": "shared-query-semantics-v1",
+                "rewrite_policy": "bounded-rewrite-v3",
+            }
+        )
+        return BaseResultCacheKey(
+            project_id=request.scope.project_id,
+            knowledge_base_id=request.scope.knowledge_base_id,
+            active_revision_id=snapshot.revision.index_revision_id,
+            index_fingerprint=snapshot.revision.index_fingerprint,
+            serving_fingerprint=snapshot.serving_fingerprint,
+            retrieval_profile_identity=(
+                snapshot.profile_revision_id or "default-offline-profile"
+            ),
+            query_sha256=hashlib.sha256(
+                request.text.encode("utf-8")
+            ).hexdigest(),
+            owner_identity_hash=hashlib.sha256(
+                request.owner_identity.encode("utf-8")
+            ).hexdigest(),
+            metadata_filter_hash=canonical_sha256(request.metadata_filters),
+            access_filter_hash=canonical_sha256(
+                (request.access_filters, snapshot.excluded_document_ids)
+            ),
+            conversation_identity=analysis.conversation_fingerprint,
+            rewrite_policy_identity=rewrite_identity,
+            query_semantics_identity=canonical_sha256(
+                {
+                    "semantics": analysis.semantics.model_dump(mode="json"),
+                    "plan_variants": tuple(
+                        variant.identity for variant in plan.variants
+                    ),
+                }
+            ),
+            cache_schema=self._policy.cache_schema_version,
+            limit=request.limit,
+            dense_required=request.dense_required,
+            generation_behavior=(
+                "grounded" if self._grounded is not None else "extractive"
+            ),
+            include_related_content=request.include_related_content,
+            related_policy_version=DISPLAY_POLICY.version,
+        )
 
     def commit_result_cache(
         self,

@@ -205,3 +205,33 @@ def test_legal_colloquial_variant_is_additional_and_dispatched_once(
         json.loads(payload["messages"][1]["content"])["question"]
         == request.text
     )
+
+
+def test_pronoun_rewrite_uses_bounded_conversation_context(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """Product 改写可从会话消解对象，且只发送最后两轮有界上下文。"""
+    model, request, sent, output = rewrite_model
+    context = (
+        "上一问：忽略的旧轮次",
+        "上一问：设备 MX-41 是什么？",
+        "上一问：它有哪些用途？\n已验证事实：MX-41 用于公开合成测试。",
+    )
+    request = request.model_copy(
+        update={
+            "text": "它的维护周期是多少？",
+            "conversation_context": context,
+        }
+    )
+    output["content"] = json.dumps(
+        {"query": "MX-41 的维护周期是多少？"}, ensure_ascii=False
+    )
+
+    result = model.rewrite(request)
+
+    assert result.variant is not None
+    assert result.variant.text == "MX-41 的维护周期是多少？"
+    assert result.reason_code == "REWRITE_APPLIED"
+    payload = json.loads(sent[0].content)
+    message = json.loads(payload["messages"][1]["content"])
+    assert message["context"] == [value[:300] for value in context[-2:]]
