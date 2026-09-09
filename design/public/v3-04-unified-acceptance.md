@@ -234,6 +234,7 @@ hash、原始/派生/媒体附件 hash、相对路径和结果映射保存在本
 | V3-01 DOC 转换 | `word-document-v1` 2.x 与沙箱 recipe 绑定 | 受影响 DOC 重新转换并构建新 revision；原生 DOCX 不因转换器重建 |
 | V3-02 OCR/关系 | adapter/config/model/policy/revision 纳入缓存身份 | 仅实际启用 OCR 或发布关系时生成新 revision；默认关闭能力不伪激活 |
 | V3-03 SSE/前端 | 协议和客户端代码变化，成功缓存语义不变 | 重建后端/前端并重启；无需索引重建 |
+| V3-04 发布审计修复 | OpenAPI 构建链把 `js-yaml` 从 4.3.1 定向 override 到 4.3.2；生成 schema 不变 | 重建应用镜像；无需索引重建或缓存迁移 |
 
 任何环境都不能给旧镜像换标签冒充新 revision。发布时必须核对本地代码 HEAD、
 wheel/进程 revision、image ID/OCI revision、配置、active index 和 cache identity。
@@ -270,6 +271,19 @@ product-check/product-smoke`、前端 `api:check/lint/typecheck/test/build`、�
 desktop/mobile Chromium、`git diff --check` 和私有文件泄漏审计。最终命令、
 passed/deselected/skipped、耗时和 commit SHA 以提交后生成的
 `artifacts/v3-04/release/` 收据及最终交付为准。
+
+首次对 `1a6165f` 候选执行 `release.py verify` 时，Python dependency audit 通过，
+随后 npm audit 因 `openapi-typescript 7.13.0` 的
+`@redocly/openapi-core 1.34.19` 精确依赖 `js-yaml 4.3.1` 而报告 2 个 High，并在
+Secret/Trivy/SBOM 前失败即停。修复只增加父依赖范围内的 `js-yaml 4.3.2`
+override 和对应 lock 节点；`npm ci`、依赖树、audit、完整前端及浏览器门禁须在
+最终候选重新通过。该失败尝试不作为最终发布安全门通过证据。
+
+应用候选镜像本身不包含完整离线部署资产。裸 `asset-selfcheck` 缺
+`/app/deployment/ASSETS.sha256`，挂载当前 deployment 目录后又检测到新构建
+frontend 与旧资产 manifest 不同；因此完整离线部署 bundle 自检不纳入
+`BUILD_CONTEXT_GATE=PASS`，仍属于未运行成功的独立交付门禁，不能由 app image
+构建或源码浏览器测试替代。
 
 最终提交后沿用 V3-00.5 的 immutable minimal context 执行 `release.py build`，
 并用同一风险判定执行 `release.py verify`。若精确 image ID 没有匹配且有效的人工
