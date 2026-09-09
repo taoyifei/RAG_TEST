@@ -63,6 +63,7 @@ _TRAILING_PARTICLES = re.compile(
 _SOURCE_QUALIFIED_DUTY = re.compile(
     r"^(?P<source>.+?(?:规范|文档|制度|手册))(?:里|中)(?P<target>.+)$"
 )
+_MIN_SOURCE_QUALIFIER_TERM_LENGTH = 2
 
 
 def parse_query_semantics(query: str) -> QuerySemantics:
@@ -198,6 +199,39 @@ def _source_qualifier(value: str) -> str | None:
     return qualifier or None
 
 
+def source_qualifier_matches(
+    display_name: str,
+    heading_path: tuple[str, ...],
+    source_qualifier: str,
+) -> bool:
+    """匹配动态来源限定与文档标签，短词或歧义继续拒绝。
+
+    Args:
+        display_name: 当前文档的安全显示名。
+        heading_path: 当前候选的结构标题路径。
+        source_qualifier: 从原问保留下来的来源限定。
+
+    Returns:
+        完整限定或全部安全核心词能在文档标签中定位时为 True。
+
+    """
+    qualifier = unicodedata.normalize("NFKC", source_qualifier).casefold()
+    label = unicodedata.normalize(
+        "NFKC", " ".join((display_name, *heading_path))
+    ).casefold()
+    if qualifier in label:
+        return True
+    core = re.sub(r"(?:规范|文档|制度|手册)$", "", qualifier).strip()
+    terms = re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", core)
+    if not terms or any(
+        len(term) < _MIN_SOURCE_QUALIFIER_TERM_LENGTH
+        and re.fullmatch(r"[\u3400-\u9fff]", term)
+        for term in terms
+    ):
+        return False
+    return all(term in label for term in terms)
+
+
 def _number_value(value: str) -> int | None:
     """解析问句中小规模阿拉伯数字或常用中文序数。"""
     if value.isdigit():
@@ -227,4 +261,4 @@ def _number_value(value: str) -> int | None:
     return digits.get(value)
 
 
-__all__ = ["parse_query_semantics"]
+__all__ = ["parse_query_semantics", "source_qualifier_matches"]

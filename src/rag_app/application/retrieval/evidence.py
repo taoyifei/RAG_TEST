@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 
 from rag_app.application.retrieval.answer_support import (
     AnswerSupport,
@@ -13,6 +12,7 @@ from rag_app.application.retrieval.answer_support import (
     evaluate_linked_support,
     evaluate_span_support,
 )
+from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.models import (
     Chunk,
     EvidenceItem,
@@ -26,7 +26,6 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
 
 _MIN_TABLE_LABEL_LENGTH = 2
-_MIN_SOURCE_QUALIFIER_TERM_LENGTH = 2
 _MAX_SEMANTIC_RANK = 10
 _LIST_LEAD_IN = re.compile(
     r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
@@ -36,16 +35,6 @@ _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
 _TablePiece = tuple[RankedChunk, SourceSpan, str]
-
-
-@dataclass(frozen=True)
-class _DescriptiveTableGroup:
-    """保存一个职责表候选及其完整性和结构作用域。"""
-
-    pieces: tuple[_TablePiece, ...]
-    cell_complete: bool
-    document_version_id: str | None
-    heading_depth: int | None
 
 
 class EvidenceAssembler:
@@ -354,17 +343,14 @@ def _descriptive_table_evidence(
     )
     if not groups:
         return None
-    if context.analysis.semantics.source_qualifier is not None:
-        groups = _narrow_source_qualified_table_groups(groups)
     # 多个文档的同名角色不能悄悄拼成一个角色，保留明确的来源歧义。
     if (
         len(groups) != 1
-        or not groups[0].pieces
-        or not groups[0].cell_complete
-        or not _complete_table_pieces(groups[0].pieces)
+        or not groups[0]
+        or not _complete_table_pieces(groups[0])
     ):
         return ()
-    pieces = groups[0].pieces
+    pieces = groups[0]
     counts = Counter(piece[0].hydrated.chunk.chunk_id for piece in pieces)
     if (
         len(pieces)
@@ -600,7 +586,7 @@ def _descriptive_table_groups(
     candidates: tuple[RankedChunk, ...],
     target: str,
     source_qualifier: str | None,
-) -> tuple[_DescriptiveTableGroup, ...]:
+) -> list[tuple[_TablePiece, ...]]:
     tables: dict[
         _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
     ] = defaultdict(lambda: defaultdict(dict))
@@ -611,7 +597,11 @@ def _descriptive_table_groups(
             or not _regular_table_grid(chunk)
             or (
                 source_qualifier is not None
-                and not _source_qualifier_matches(candidate, source_qualifier)
+                and not source_qualifier_matches(
+                    candidate.hydrated.display_name,
+                    chunk.heading_path,
+                    source_qualifier,
+                )
             )
         ):
             continue
@@ -629,7 +619,7 @@ def _descriptive_table_groups(
                     span,
                     quote,
                 )
-    groups: list[_DescriptiveTableGroup] = []
+    groups: list[tuple[_TablePiece, ...]] = []
     for cells in tables.values():
         columns = {
             column
@@ -658,78 +648,10 @@ def _descriptive_table_groups(
         if not values:
             continue
         pieces = (*subject, *sorted(values, key=_table_piece_order))
-        document_versions = {
-            piece[0].hydrated.chunk.version.document_version_id
-            for piece in pieces
-        }
-        heading_depths = {
-            len(piece[0].hydrated.chunk.heading_path) for piece in pieces
-        }
-        groups.append(
-            _DescriptiveTableGroup(
-                pieces=pieces,
-                cell_complete=_all_cell_nodes_present(pieces, row, column),
-                document_version_id=(
-                    next(iter(document_versions))
-                    if len(document_versions) == 1
-                    else None
-                ),
-                heading_depth=(
-                    next(iter(heading_depths))
-                    if len(heading_depths) == 1
-                    else None
-                ),
-            )
-        )
-    return tuple(groups)
-
-
-def _narrow_source_qualified_table_groups(
-    groups: tuple[_DescriptiveTableGroup, ...],
-) -> tuple[_DescriptiveTableGroup, ...]:
-    """在明确限定的单一文档内选择唯一最宽职责表。
-
-    标题层级更浅的表覆盖范围更广，可回答只限定文档、未限定阶段的
-    角色职责问法。多个文档、未知层级或同层并列都保持歧义并拒答。
-    """
-    if len(groups) <= 1:
-        return groups
-    document_versions = {group.document_version_id for group in groups}
-    if None in document_versions or len(document_versions) != 1:
-        return groups
-    if any(group.heading_depth is None for group in groups):
-        return groups
-    minimum_depth = min(
-        group.heading_depth
-        for group in groups
-        if group.heading_depth is not None
-    )
-    return tuple(
-        group for group in groups if group.heading_depth == minimum_depth
-    )
-
-
-def _source_qualifier_matches(
-    candidate: RankedChunk, source_qualifier: str
-) -> bool:
-    """用动态来源限定筛选文档标签；短词或歧义继续拒答。"""
-    qualifier = unicodedata.normalize("NFKC", source_qualifier).casefold()
-    chunk = candidate.hydrated.chunk
-    label = unicodedata.normalize(
-        "NFKC",
-        " ".join((candidate.hydrated.display_name, *chunk.heading_path)),
-    ).casefold()
-    if qualifier in label:
-        return True
-    core = re.sub(r"(?:规范|文档|制度|手册)$", "", qualifier).strip()
-    terms = re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", core)
-    if not terms or any(
-        len(term) < _MIN_SOURCE_QUALIFIER_TERM_LENGTH
-        and re.fullmatch(r"[\u3400-\u9fff]", term)
-        for term in terms
-    ):
-        return False
-    return all(term in label for term in terms)
+        if not _all_cell_nodes_present(pieces, row, column):
+            return [()]
+        groups.append(pieces)
+    return groups
 
 
 def _table_piece_order(piece: _TablePiece) -> tuple[int, int]:

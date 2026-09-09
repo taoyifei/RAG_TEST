@@ -1334,7 +1334,7 @@ def _retrieval_serving_fingerprint(
     return canonical_sha256(
         {
             "configured_serving": configured,
-            "retrieval_implementation": "v3-04-semantic-query-v3",
+            "retrieval_implementation": "v3-04-semantic-query-v4",
         }
     )
 

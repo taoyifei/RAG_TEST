@@ -150,7 +150,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-04-semantic-query-v3",
+                "retrieval_implementation": "v3-04-semantic-query-v4",
             }
         )
         self._egress = egress_policy
@@ -1064,7 +1064,11 @@ class RetrievalService:
             },
         )
         expansion = self._neighbors.expand(
-            snapshot, reranked.candidates, plan.neighbor_mode, self._policy
+            snapshot,
+            reranked.candidates,
+            plan.neighbor_mode,
+            self._policy,
+            source_qualifier=analysis.semantics.source_qualifier,
         )
         degraded.extend(expansion.degraded_reason_codes)
         self._record(
