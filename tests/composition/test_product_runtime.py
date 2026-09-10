@@ -115,8 +115,7 @@ def test_product_runtime_without_provider_keeps_fts_exact_flow(
         assert result.diagnostics is not None
         assert result.data_plane is not None
         assert (
-            result.data_plane.retrieval_data_plane
-            == "default_local_fallback"
+            result.data_plane.retrieval_data_plane == "default_local_fallback"
         )
         assert result.data_plane.embedding_provider_id == "deterministic"
         assert "DETERMINISTIC_EMBEDDING" in (
@@ -321,8 +320,7 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
         assert result.data_plane.retrieval_data_plane == "active_remote_profile"
         assert result.data_plane.embedding_provider_id == "jina-embedding"
         assert (
-            result.data_plane.embedding_model
-            == "jina-embeddings-v5-text-small"
+            result.data_plane.embedding_model == "jina-embeddings-v5-text-small"
         )
         assert result.data_plane.reranker_provider_id == "jina-reranker"
         assert result.data_plane.reranker_model == "jina-reranker-v3.5"
@@ -353,9 +351,10 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
         assert invalid_status.status_code == 200, invalid_status.text
         invalid_plane = invalid_status.json()["retrieval_data_plane"]
         assert invalid_plane["profile_state"] == "CONFIGURATION_INVALID"
-        assert "PROFILE_RUNTIME_CONFIGURATION_INVALID" in invalid_plane[
-            "fallback_reason_codes"
-        ]
+        assert (
+            "PROFILE_RUNTIME_CONFIGURATION_INVALID"
+            in invalid_plane["fallback_reason_codes"]
+        )
     finally:
         harness.close()
 

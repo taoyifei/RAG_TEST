@@ -593,7 +593,18 @@ def prepare_workspace(
     qdrant_url: str,
     output: Path,
 ) -> dict[str, object]:
-    """通过目标 Product API 建立公开评测语料。"""
+    """通过目标 Product API 建立公开评测语料。
+
+    Args:
+        target_root: 待加载实现的仓库根目录。
+        workspace: 存放关闭态 Product 数据面的独占目录。
+        qdrant_url: 仅允许回环地址的 Qdrant 端点。
+        output: 写入去敏 seed manifest 的新文件路径。
+
+    Returns:
+        固定数据集、Parser、Chunk 与 Revision 身份的 seed manifest。
+
+    """
     validate_dataset()
     qdrant_url = _require_loopback_qdrant(qdrant_url)
     bindings = _activate_target(target_root)
@@ -647,7 +658,16 @@ def prepare_workspace(
 
 
 def clone_workspace(source: Path, destination: Path) -> None:
-    """复制已关闭的 seed，供单个目标与捕获模式独占。"""
+    """复制已关闭的 seed，供单个目标与捕获模式独占。
+
+    Args:
+        source: 已完成关闭并通过完整性检查的 seed 工作区。
+        destination: 不得预先存在的独占运行目录。
+
+    Returns:
+        无返回值；成功时创建字节一致的工作区副本。
+
+    """
     source = source.resolve(strict=True)
     if destination.exists():
         raise FileExistsError(f"目标工作区已存在：{destination}")
@@ -1447,7 +1467,21 @@ def run_evaluation(  # noqa: PLR0913, PLR0915, PLR0917
     trace_mode: Literal["SAFE", "DIAGNOSTIC"],
     output: Path,
 ) -> dict[str, object]:
-    """在独占 seed 副本上执行一个 split 的真实 Product API。"""
+    """在独占 seed 副本上执行一个 split 的真实 Product API。
+
+    Args:
+        target_root: 待评实现的仓库根目录。
+        workspace: 从固定 seed 克隆出的独占关闭态工作区。
+        seed_manifest_path: 与工作区身份一致的 seed manifest 路径。
+        qdrant_url: 仅允许回环地址的 Qdrant 端点。
+        split: 本次只能执行 ``tuning`` 或 ``holdout`` 之一。
+        trace_mode: Product API 的 ``SAFE`` 或 ``DIAGNOSTIC`` 捕获模式。
+        output: 写入去敏评测报告的新文件路径。
+
+    Returns:
+        包含质量、性能、资源、缓存、并发与终态对账的报告。
+
+    """
     validate_dataset()
     qdrant_url = _require_loopback_qdrant(qdrant_url)
     seed = _read_json(seed_manifest_path)
@@ -1577,7 +1611,17 @@ def compare_reports(
     candidate_paths: Sequence[Path],
     output: Path,
 ) -> dict[str, object]:
-    """验证至少三次独立 B/C 运行，并生成不含正文的差异。"""
+    """验证至少三次独立 B/C 运行，并生成不含正文的差异。
+
+    Args:
+        baseline_paths: 同一固定身份下的独立基线报告路径。
+        candidate_paths: 与基线逐次对应的候选报告路径。
+        output: 写入去敏比较摘要的新文件路径。
+
+    Returns:
+        包含身份校验、质量差异、性能中位数与门禁结论的摘要。
+
+    """
     if len(baseline_paths) != len(candidate_paths):
         raise ValueError("B/C 独立运行次数必须相同。")
     if len(baseline_paths) < _MIN_PERFORMANCE_REPLICATES:

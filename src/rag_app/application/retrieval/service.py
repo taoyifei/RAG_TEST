@@ -232,6 +232,9 @@ class RetrievalService:
     def data_plane_context(self) -> QueryDataPlaneContext:
         """返回当前服务的非敏感数据面配置快照。
 
+        Args:
+            无参数；读取当前服务已经绑定的数据面上下文。
+
         Returns:
             可由组合根按单次请求派生的冻结上下文。
 

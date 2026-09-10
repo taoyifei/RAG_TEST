@@ -888,7 +888,15 @@ CASES = (*TUNING_CASES, *HOLDOUT_CASES)
 
 
 def dataset_payload() -> dict[str, object]:
-    """返回用于摘要、Review 与 runner 的规范数据集投影。"""
+    """返回用于摘要、Review 与 runner 的规范数据集投影。
+
+    Args:
+        无参数；数据来自本模块冻结的公开合成定义。
+
+    Returns:
+        可稳定序列化的版本、门禁、文档与题目投影。
+
+    """
     return {
         "schema_version": "1",
         "dataset_id": DATASET_ID,
@@ -902,7 +910,15 @@ def dataset_payload() -> dict[str, object]:
 
 
 def dataset_sha256() -> str:
-    """返回不依赖运行目录的公开数据集摘要。"""
+    """返回不依赖运行目录的公开数据集摘要。
+
+    Args:
+        无参数；摘要基于规范数据集投影计算。
+
+    Returns:
+        带 ``sha256:`` 前缀的稳定内容摘要。
+
+    """
     serialized = json.dumps(
         dataset_payload(),
         ensure_ascii=False,
@@ -913,7 +929,15 @@ def dataset_sha256() -> str:
 
 
 def validate_dataset() -> dict[str, object]:
-    """验证 split、case 身份、分组隔离和 V3-07 切片数量。"""
+    """验证 split、case 身份、分组隔离和 V3-07 切片数量。
+
+    Args:
+        无参数；验证本模块冻结的全部公开合成定义。
+
+    Returns:
+        可安全公开的数据集摘要与切片计数。
+
+    """
     document_keys = [item.document_key for item in DOCUMENTS]
     case_ids = [item.case_id for item in CASES]
     if len(document_keys) != len(set(document_keys)):
