@@ -205,6 +205,14 @@ def test_search_request_bounds_conversation_context() -> None:
             None,
             None,
         ),
+        (
+            "露舟巡检全流程有哪些阶段？",
+            "露舟巡检全流程",
+            "主要阶段",
+            RequestedAnswerType.ENUMERATION,
+            None,
+            None,
+        ),
     ),
 )
 def test_analyzer_builds_shared_descriptive_semantics(  # noqa: PLR0913, PLR0917

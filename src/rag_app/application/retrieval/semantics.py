@@ -115,7 +115,7 @@ _FACT_ATTRIBUTE_SUFFIX = re.compile(
 )
 _GENERIC_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:都)?(?:有|包含)?"
-    r"(?:哪些|有啥|哪几项|哪几个阶段|分别是什么)$"
+    r"(?:哪些(?:阶段|环节)?|有啥|哪几项|哪几个阶段|分别是什么)$"
 )
 _STAGE_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:从[^，,]{1,40}(?:到|至)[^，,]{1,40})?[，,]?"
