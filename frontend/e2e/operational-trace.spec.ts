@@ -40,10 +40,22 @@ test("默认 Product Trace 支持诊断、惰性 Artifact、导出与关联导�
 
   const answer = await page.request.post(`${base}:answer`, {
     headers,
-    data: { query: "TR-21 的维护周期", trace_mode: "FULL" },
+    data: { query: "TR-21 的维护周期是多少？", trace_mode: "FULL" },
   });
   expect(answer.ok(), await answer.text()).toBeTruthy();
-  const result = (await answer.json()) as { trace_id: string };
+  const result = (await answer.json()) as {
+    trace_id: string;
+    status: string;
+    answer: string | null;
+    requested_answer_type: string;
+    generation_mode: string;
+    data_plane: { retrieval_data_plane: string };
+  };
+  expect(result.status).toBe("ANSWERABLE");
+  expect(result.answer).toContain("14 天");
+  expect(result.requested_answer_type).toBe("FACT");
+  expect(result.generation_mode).toBe("extractive");
+  expect(result.data_plane.retrieval_data_plane).toBe("default_local_fallback");
   const traceUrl = new URL(scopeUrl);
   traceUrl.pathname = "/operational-traces";
   traceUrl.searchParams.set("trace_id", result.trace_id);

@@ -22,6 +22,44 @@ from scripts.release import (
 )
 
 
+def test_candidate_browser_acceptance_resets_limiter_between_projects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[str, ...], str | None]] = []
+    waits: list[int] = []
+
+    def run(
+        command: Sequence[str],
+        *,
+        environment: dict[str, str] | None = None,
+    ) -> None:
+        calls.append(
+            (
+                tuple(command),
+                None
+                if environment is None
+                else environment.get("P10_BROWSER_PROJECT"),
+            )
+        )
+
+    monkeypatch.setattr(release, "_run", run)
+    monkeypatch.setattr(release, "_wait_candidate", waits.append)
+
+    release._candidate_browser_acceptance(
+        ("docker", "compose", "--project-name", "synthetic"),
+        {"RAG_PORT": "38119"},
+        38119,
+    )
+
+    assert [project for _, project in calls] == [
+        "chromium-desktop",
+        None,
+        "chromium-mobile",
+    ]
+    assert calls[1][0][-2:] == ("restart", "app")
+    assert waits == [38119]
+
+
 def test_license_inventory_is_sorted_and_does_not_invent_license(
     tmp_path: Path,
 ) -> None:
