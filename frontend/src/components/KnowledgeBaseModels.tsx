@@ -276,6 +276,7 @@ function operationLabel(operation: string): string {
   return (
     {
       generation: "回答生成",
+      "query.interpret": "问题意图解释",
       "query.rewrite": "问题改写",
       "image.ocr": "图片识别",
     }[operation] ?? operation

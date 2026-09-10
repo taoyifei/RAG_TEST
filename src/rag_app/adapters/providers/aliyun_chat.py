@@ -529,7 +529,7 @@ class AliyunChatAdapter:
             mode=ProviderMode.REMOTE,
             capabilities=ComponentCapabilities(
                 permits_network=True,
-                roles=("generation", "query.rewrite"),
+                roles=("generation", "query.interpret", "query.rewrite"),
             ),
         )
 
@@ -550,14 +550,16 @@ class AliyunChatAdapter:
         self,
         messages: tuple[ChatMessage, ...],
         *,
-        operation: Literal["generation", "query.rewrite"] = "generation",
+        operation: Literal[
+            "generation", "query.interpret", "query.rewrite"
+        ] = "generation",
         max_output_tokens: int | None = None,
     ) -> ChatCompletion:
         """发送一次有界消息；不隐式改写、修复或自动更换模型。
 
         Args:
             messages: 已经受应用证据预算限制的消息。
-            operation: 区分生成与至多一次问题改写的计量用途。
+            operation: 区分生成、问题解释与至多一次改写的计量用途。
             max_output_tokens: 可选的更低输出上限。
 
         Returns:
@@ -575,7 +577,11 @@ class AliyunChatAdapter:
                 stage="provider.aliyun.chat",
                 code="GENERATION_EGRESS_NOT_AUTHORIZED",
             )
-        if operation not in ("generation", "query.rewrite"):
+        if operation not in (
+            "generation",
+            "query.interpret",
+            "query.rewrite",
+        ):
             raise ValueError("Chat 用途不在允许范围。")
         payload = chat_payload(
             messages, self.config, max_output_tokens=max_output_tokens
@@ -816,7 +822,9 @@ class AliyunChatAdapter:
         self,
         payload: Mapping[str, object],
         *,
-        operation: Literal["generation", "query.rewrite", "image.ocr"],
+        operation: Literal[
+            "generation", "query.interpret", "query.rewrite", "image.ocr"
+        ],
         input_count: int,
         estimated_tokens: int,
     ) -> ChatCompletion:

@@ -23,7 +23,9 @@ _BUSINESS_FIELDS = frozenset(
         "operation_request_limits",
     }
 )
-_CHAT_OPERATIONS = frozenset({"generation", "query.rewrite", "image.ocr"})
+_CHAT_OPERATIONS = frozenset(
+    {"generation", "query.interpret", "query.rewrite", "image.ocr"}
+)
 
 
 @dataclass(frozen=True)

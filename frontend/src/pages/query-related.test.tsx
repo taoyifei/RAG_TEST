@@ -36,6 +36,7 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
     singleflight_key_hash: null,
     singleflight_wait_ms: 0,
     generation_called_this_request: false,
+    interpret_called_this_request: false,
     rewrite_called_this_request: false,
     confidence: {
       status: "INSUFFICIENT_EVIDENCE",

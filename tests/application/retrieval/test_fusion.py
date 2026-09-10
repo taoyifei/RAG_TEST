@@ -3,6 +3,9 @@ from __future__ import annotations
 import pytest
 
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
+from rag_app.application.retrieval.service import (
+    _required_structural_candidate_ids,
+)
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import ChannelHit
 
@@ -64,6 +67,41 @@ def test_rrf_deduplicates_a_channel_and_prefers_must_keep_on_tie() -> None:
 
     assert fused[0].must_keep
     assert len(fused[0].contributions) == 1
+
+
+def test_rrf_retains_required_structural_closure_before_limit() -> None:
+    required = _hit(9, "structural:canonical-v1", 20)
+    fused = reciprocal_rank_fusion(
+        {
+            "lexical": tuple(
+                _hit(index, "lexical", index) for index in range(1, 5)
+            ),
+            "structural": (required,),
+        },
+        expected_revision_id=_REVISION,
+        limit=2,
+        required_candidate_ids=frozenset({required.chunk_id}),
+    )
+
+    assert fused[0].chunk_id == required.chunk_id
+
+
+def test_structural_table_closure_keeps_every_split_candidate() -> None:
+    structural = tuple(
+        _hit(index, "structural:canonical-v1", index).model_copy(
+            update={"match_type": "STRUCTURAL_TABLE_ROW"}
+        )
+        for index in range(1, 5)
+    )
+    section = _hit(5, "structural:canonical-v1", 5).model_copy(
+        update={"match_type": "STRUCTURAL_SECTION_HEADING_BODY"}
+    )
+
+    required = _required_structural_candidate_ids(
+        {"structural": (*structural, section)}
+    )
+
+    assert required == tuple(item.chunk_id for item in (*structural, section))
 
 
 def test_rrf_rejects_cross_channel_identity_drift() -> None:

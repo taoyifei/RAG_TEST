@@ -182,6 +182,14 @@ def test_search_request_bounds_conversation_context() -> None:
             3,
         ),
         (
+            "项目交付流程的第九阶段是什么？",
+            "项目交付",
+            "流程",
+            RequestedAnswerType.ORDINAL_ITEM,
+            None,
+            9,
+        ),
+        (
             "设备入库流程有多少步骤？",
             "设备入库",
             "流程",
@@ -257,3 +265,188 @@ def test_analyzer_strips_only_boundary_discourse_particles() -> None:
 
     assert analysis.semantics.target == "蓝鹊小组"
     assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
+
+
+@pytest.mark.parametrize(
+    ("question", "target", "relation", "answer_type"),
+    (
+        ("什么是OPC", "OPC", "定义", RequestedAnswerType.DEFINITION),
+        ("OPC是什么", "OPC", "定义", RequestedAnswerType.DEFINITION),
+        ("啥是OPC", "OPC", "定义", RequestedAnswerType.DEFINITION),
+        ("OPC是啥", "OPC", "定义", RequestedAnswerType.DEFINITION),
+        (
+            "蓝熊工作规范的目的是什么",
+            "蓝熊工作规范",
+            "目的",
+            RequestedAnswerType.PURPOSE,
+        ),
+        (
+            "流程控制的作用是什么",
+            "流程控制",
+            "作用",
+            RequestedAnswerType.PURPOSE,
+        ),
+        (
+            "项目负责人是干嘛的",
+            "项目负责人",
+            "职责",
+            RequestedAnswerType.DUTIES,
+        ),
+        (
+            "测试负责人干啥的",
+            "测试负责人",
+            "职责",
+            RequestedAnswerType.DUTIES,
+        ),
+        (
+            "项目报备登记表谁负责",
+            "项目报备登记表",
+            "责任角色",
+            RequestedAnswerType.RESPONSIBLE_PARTY,
+        ),
+        (
+            "谁牵头蓝熊迁移",
+            "蓝熊迁移",
+            "责任角色",
+            RequestedAnswerType.RESPONSIBLE_PARTY,
+        ),
+        (
+            "项目交付全流程有哪些",
+            "项目交付全流程",
+            "主要阶段",
+            RequestedAnswerType.ENUMERATION,
+        ),
+        (
+            "第五章管理要求是什么",
+            "第五章管理要求",
+            "章节内容",
+            RequestedAnswerType.SECTION_SUMMARY,
+        ),
+    ),
+)
+def test_analyzer_supports_general_typed_question_semantics(
+    question: str,
+    target: str,
+    relation: str,
+    answer_type: RequestedAnswerType,
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.target == target
+    assert semantics.relation == relation
+    assert semantics.answer_type is answer_type
+    assert semantics.source == "RULE"
+
+
+def test_typed_semantics_preserve_internal_question_characters() -> None:
+    semantics = _analyze("谁的咖啡由谁负责").semantics
+
+    assert semantics.target == "谁的咖啡"
+    assert semantics.answer_type is RequestedAnswerType.RESPONSIBLE_PARTY
+
+
+def test_document_target_does_not_invent_an_explicit_source_qualifier() -> None:
+    semantics = _analyze("蓝熊工作规范的目的是什么").semantics
+
+    assert semantics.source_qualifier is None
+
+
+def test_duty_question_preserves_leading_project_context() -> None:
+    semantics = _analyze(
+        "做蓝熊交付项目时，测试负责人平时主要管哪些事？"
+    ).semantics
+
+    assert semantics.target == "测试负责人"
+    assert semantics.context_qualifier == "蓝熊交付项目"
+    assert semantics.source_qualifier is None
+
+
+@pytest.mark.parametrize(
+    ("question", "target", "relation", "answer_type", "source"),
+    (
+        (
+            "蓝熊工作规范主要是为了什么？",
+            "蓝熊工作规范",
+            "目的",
+            RequestedAnswerType.PURPOSE,
+            None,
+        ),
+        (
+            "蓝熊规范里，项目经理平时都要干些啥？",
+            "项目经理",
+            "职责",
+            RequestedAnswerType.DUTIES,
+            "蓝熊规范",
+        ),
+        (
+            "蓝熊规范里，交付登记表这件事到底谁负责？",
+            "交付登记表",
+            "责任角色",
+            RequestedAnswerType.RESPONSIBLE_PARTY,
+            "蓝熊规范",
+        ),
+        (
+            "设备迁移从启动一直到归档，都要走哪些阶段？",
+            "设备迁移",
+            "主要阶段",
+            RequestedAnswerType.ENUMERATION,
+            None,
+        ),
+        (
+            "快速验证做完以后，必须交哪些东西才能闭环？",
+            "快速验证",
+            "交付物",
+            RequestedAnswerType.ENUMERATION,
+            None,
+        ),
+        (
+            "我手上有个 CSV，要怎么把测试用例导进去？",
+            "测试用例",
+            "导入",
+            RequestedAnswerType.PROCEDURE,
+            None,
+        ),
+        (
+            "蓝熊手册中，测试用例如何导入？",
+            "测试用例",
+            "导入",
+            RequestedAnswerType.PROCEDURE,
+            "蓝熊手册",
+        ),
+        (
+            "蓝熊模式文档里，快速验证说白了是啥？",
+            "快速验证",
+            "定义",
+            RequestedAnswerType.DEFINITION,
+            "蓝熊模式文档",
+        ),
+        (
+            "测试负责人平时主要管哪些事？",
+            "测试负责人",
+            "职责",
+            RequestedAnswerType.DUTIES,
+            None,
+        ),
+        (
+            "做交付项目时，测试负责人平时主要管哪些事？",
+            "测试负责人",
+            "职责",
+            RequestedAnswerType.DUTIES,
+            None,
+        ),
+    ),
+)
+def test_analyzer_handles_natural_spoken_typed_questions(
+    question: str,
+    target: str,
+    relation: str,
+    answer_type: RequestedAnswerType,
+    source: str | None,
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.target == target
+    assert semantics.relation == relation
+    assert semantics.answer_type is answer_type
+    assert semantics.source_qualifier == source
+    assert semantics.source == "RULE"

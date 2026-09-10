@@ -233,7 +233,12 @@ class ProviderHttpClient:
                         **(
                             {"rag_chat_operation": operation}
                             if operation
-                            in {"generation", "query.rewrite", "image.ocr"}
+                            in {
+                                "generation",
+                                "query.interpret",
+                                "query.rewrite",
+                                "image.ocr",
+                            }
                             else {}
                         ),
                     },

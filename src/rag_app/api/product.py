@@ -139,6 +139,7 @@ class ValidationRequest(_RequestModel):
         "embedding.query",
         "reranking",
         "generation",
+        "query.interpret",
         "query.rewrite",
         "image.ocr",
     ]

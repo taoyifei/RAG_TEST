@@ -10,6 +10,7 @@ from rag_app.core.models import (
     Chunk,
     LexicalSearchRequest,
     SearchHit,
+    StructuralSearchRequest,
 )
 
 
@@ -63,6 +64,20 @@ class LexicalStorePort(Protocol):
 
         Returns:
             受 scope/revision 约束的 1-based rank 候选。
+
+        """
+        ...
+
+    def search_structural_candidates(
+        self, request: StructuralSearchRequest
+    ) -> tuple[ChannelHit, ...]:
+        """按 canonical 文档、标题、表格和列表字段返回有界候选。
+
+        Args:
+            request: revision、共享 typed semantics 和数量上限。
+
+        Returns:
+            具有独立结构 rank 与原因码的候选。
 
         """
         ...

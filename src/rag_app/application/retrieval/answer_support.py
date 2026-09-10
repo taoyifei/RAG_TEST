@@ -86,8 +86,12 @@ _ROLE = re.compile(
 _RELATION = re.compile(
     r"为|是|由|需|应|先|后|存放|位于|保持|允许|禁止|不得|备份|预热|采用|使用|负责|进行|核对|不直接"
 )
-_REQUEST_WORDS = re.compile(
-    r"^请问|^请|想|自己的|自己|应该|应当|应|办理|需要|的|是多少|多少|多大|是什么|什么|是否|怎样|如何|怎么|哪里|哪位|工作人员|找谁|谁|何时|以后|最迟|现在|[？?，,。\s]"
+_LEADING_REQUEST_WORDS = re.compile(
+    r"^(?:请问|请|我想知道|我想了解|想知道|想了解|告诉我|帮我查(?:一下)?)"
+)
+_TRAILING_REQUEST_WORDS = re.compile(
+    r"(?:(?:的)?(?:是多少|是什么|是啥|有多少|多大|是否|怎样|如何|怎么|"
+    r"哪里|哪位|何时)|[？?，,。\s])+$"
 )
 _QUESTION = re.compile(
     r"谁|什么|啥|多少|多大|如何|怎么|怎样|哪|何时|是否|能否|几|[?？]"
@@ -98,6 +102,32 @@ _LOOKUP_SCAFFOLDING = re.compile(
 _MIN_ENUMERATION_ITEMS = 2
 _MIN_DOMINANT_FRAGMENT_SHARE = 0.45
 _MIN_IDENTIFIER_CONTEXT_OVERLAP = 0.25
+_TYPED_ANSWER_TYPES = frozenset(
+    {
+        RequestedAnswerType.DEFINITION,
+        RequestedAnswerType.PURPOSE,
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.COUNT,
+        RequestedAnswerType.ORDINAL_ITEM,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.RESPONSIBLE_PARTY,
+        RequestedAnswerType.PROCEDURE,
+        RequestedAnswerType.SECTION_SUMMARY,
+    }
+)
+_TYPED_ANSWER_VALUES = frozenset(item.value for item in _TYPED_ANSWER_TYPES)
+_TABLE_HEADER_TYPES = {
+    "DEFINITION": re.compile(r"定义|释义|说明|含义|描述|交付件说明|内容说明"),
+    "PURPOSE": re.compile(r"目的|目标|作用|用途|宗旨"),
+    "DUTIES": re.compile(r"职责|工作内容|岗位任务|负责事项|主要工作|任务说明"),
+    "RESPONSIBLE_PARTY": re.compile(
+        r"责任角色|责任人|负责人|主责|牵头|经办|承办|受理角色|受理人|"
+        r"负责部门|责任部门|责任单位"
+    ),
+}
+_NAMED_ARTIFACT_TARGET = re.compile(
+    r"(?:登记表|申请表|清单|台账|文档|报告|记录|方案|计划|表|单)$"
+)
 
 
 def _normalized(text: str) -> str:
@@ -122,14 +152,7 @@ def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
     if (
         semantics.target
         and semantics.relation
-        and semantics.answer_type
-        in {
-            RequestedAnswerType.ENUMERATION,
-            RequestedAnswerType.COUNT,
-            RequestedAnswerType.ORDINAL_ITEM,
-            RequestedAnswerType.DUTIES,
-            RequestedAnswerType.PROCEDURE,
-        }
+        and semantics.answer_type in _TYPED_ANSWER_TYPES
     ):
         return (
             _normalized(semantics.target),
@@ -148,15 +171,15 @@ def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
     if identifier_only:
         requested = (query, "字面查找", "FACT")
     elif re.search(r"谁(?!的)|哪位|找.{0,4}人员", query):
-        return _REQUEST_WORDS.sub("", query), "责任角色", "PERSON_OR_ROLE"
+        return _responsible_target(query), "责任角色", "PERSON_OR_ROLE"
     elif re.search(r"数值.*单位|单位.*数值", query):
-        return _REQUEST_WORDS.sub("", query), "数值与单位", "MEASUREMENT"
+        return _strip_request_boundaries(query), "数值与单位", "MEASUREMENT"
     else:
         requested = _attribute_or_descriptive_request(query)
     if requested is not None:
         return requested
     relation = "事实关系" if _QUESTION.search(query) else "字面查找"
-    return _REQUEST_WORDS.sub("", query), relation, "FACT"
+    return _strip_request_boundaries(query), relation, "FACT"
 
 
 def _attribute_or_descriptive_request(
@@ -166,7 +189,13 @@ def _attribute_or_descriptive_request(
     for answer_type, pattern in _ATTRIBUTES:
         match = re.search(pattern, query)
         if match:
-            target = _REQUEST_WORDS.sub("", query[: match.start()])
+            target = _strip_request_boundaries(query[: match.start()])
+            target = re.sub(
+                r"(?:应该|应当|需要|需|要)?"
+                r"(?:保持|允许|储存)?(?:什么|多少|多大)$",
+                "",
+                target,
+            ).strip()
             target = re.sub(r"(?:保持|允许|储存)$", "", target)
             return target, match[0], answer_type
     return descriptive_request(query)
@@ -186,14 +215,7 @@ def descriptive_request(query: str) -> tuple[str, str, str] | None:
     if (
         not semantics.target
         or not semantics.relation
-        or semantics.answer_type
-        not in {
-            RequestedAnswerType.ENUMERATION,
-            RequestedAnswerType.COUNT,
-            RequestedAnswerType.ORDINAL_ITEM,
-            RequestedAnswerType.DUTIES,
-            RequestedAnswerType.PROCEDURE,
-        }
+        or semantics.answer_type not in _TYPED_ANSWER_TYPES
     ):
         return None
     return (
@@ -201,6 +223,39 @@ def descriptive_request(query: str) -> tuple[str, str, str] | None:
         _normalized(semantics.relation),
         semantics.answer_type.value,
     )
+
+
+def _strip_request_boundaries(value: str) -> str:
+    """仅裁剪问句首尾语法，绝不删除实体内部字符。"""
+    target = value.strip()
+    previous = None
+    while target and target != previous:
+        previous = target
+        target = _LEADING_REQUEST_WORDS.sub("", target).strip()
+        target = _TRAILING_REQUEST_WORDS.sub("", target).strip()
+        target = re.sub(r"(?:的|由|归)$", "", target).strip()
+    return target
+
+
+def _responsible_target(query: str) -> str:
+    """从责任人问法的边界提取对象，保留对象内部的“谁/的”。"""
+    suffix = re.fullmatch(
+        r"(?P<target>.+?)(?:(?:由|归)?谁(?:来)?(?:负责|牵头|管理|受理)|"
+        r"(?:应|要|该|需要)?找谁|"
+        r"(?:的)?(?:责任角色|责任人|负责人|牵头人)(?:是|为)?(?:谁|哪位))"
+        r"[？?，,。\s]*",
+        query,
+    )
+    if suffix is not None:
+        return _strip_request_boundaries(suffix["target"])
+    prefix = re.fullmatch(
+        r"(?:由)?谁(?:来)?(?:负责|牵头|管理|受理)(?P<target>.+?)"
+        r"[？?，,。\s]*",
+        query,
+    )
+    if prefix is not None:
+        return _strip_request_boundaries(prefix["target"])
+    return _strip_request_boundaries(query)
 
 
 def _literal_lookup_supports(
@@ -414,13 +469,7 @@ def _clause_supports(  # noqa: PLR0911
     clause: str,
     analysis: QueryAnalysis,
 ) -> bool:
-    if _UNKNOWN.search(clause) or answer_type in {
-        "ENUMERATION",
-        "COUNT",
-        "ORDINAL_ITEM",
-        "DUTIES",
-        "PROCEDURE",
-    }:
+    if _UNKNOWN.search(clause) or answer_type in _TYPED_ANSWER_VALUES:
         return not _UNKNOWN.search(clause) and _descriptive_clause_supports(
             target, relation, answer_type, clause, analysis
         )
@@ -505,7 +554,7 @@ def _clause_supports(  # noqa: PLR0911
         return bool(re.search(r"存放|位于|在|区域|于", clause))
     method = re.search(r"(?:如何|怎么|怎样)(.+)", query)
     if method is not None:
-        action = _REQUEST_WORDS.sub("", method[1])
+        action = _strip_request_boundaries(method[1])
         general_goal = re.fullmatch(r"(?:保护|处理|操作)(.*)", action)
         return (
             action in clause
@@ -521,7 +570,7 @@ def _clause_supports(  # noqa: PLR0911
     return target in clause
 
 
-def _descriptive_clause_supports(
+def _descriptive_clause_supports(  # noqa: PLR0911
     target: str,
     relation: str,
     answer_type: str,
@@ -546,6 +595,71 @@ def _descriptive_clause_supports(
             re.search(
                 r"(?:负责(?!人|者)|职责(?:是|为|包括|[:：])|承担|牵头).+",
                 clause.replace(target, "", 1),
+            )
+        )
+    if answer_type == "RESPONSIBLE_PARTY":
+        actions = tuple(
+            word
+            for word in (
+                "复核",
+                "审核",
+                "签字",
+                "销毁",
+                "登记",
+                "更正",
+                "拍照",
+                "提出",
+                "受理",
+                "牵头",
+                "管理",
+            )
+            if word in _normalized(_analysis_query(analysis))
+        )
+        remainder = clause.replace(target, "", 1)
+        return (
+            _target_matches(
+                target,
+                clause,
+                strict=_NAMED_ARTIFACT_TARGET.search(target) is not None,
+            )
+            and all(word in clause for word in actions)
+            and bool(
+                re.search(
+                    r"(?:由|归|责任(?:角色|人)|负责人|牵头人|主责(?:角色|部门)?)"
+                    r"[^，。；;]{0,30}(?:负责|牵头|管理|受理|是|为|[:：])?"
+                    r"[^，。；;]+",
+                    remainder,
+                )
+            )
+        )
+    if answer_type == "DEFINITION":
+        if analysis.identifiers and all(
+            item.casefold() in clause for item in analysis.identifiers
+        ):
+            return True
+        remainder = clause.replace(target, "", 1).strip(" ：:")
+        return _target_matches(target, clause, strict=True) and bool(
+            re.match(
+                r"(?:是指|指的是|定义为|是|指|即|称为|表示)"
+                r"(?!什么|啥)[^，。；;]{2,}",
+                remainder,
+            )
+        )
+    if answer_type == "PURPOSE":
+        remainder = clause.replace(target, "", 1)
+        return _target_matches(target, clause, strict=True) and bool(
+            re.search(
+                r"(?:目的|目标|作用|用途|宗旨)"
+                r"(?:是|为|在于|包括|[:：])?[^，。；;]{2,}"
+                r"|(?:旨在|用于|用来)[^，。；;]{2,}",
+                remainder,
+            )
+        )
+    if answer_type == "SECTION_SUMMARY":
+        remainder = clause.replace(target, "", 1).strip(" ：:")
+        return _target_matches(target, clause, strict=True) and bool(
+            re.search(
+                r"(?:规定|要求|包括|包含|说明|应当|必须|[:：]).+", remainder
             )
         )
     if answer_type == "PROCEDURE":
@@ -634,6 +748,9 @@ def _table_value_supports(
         return bool(
             re.search(r"受理|负责|审核|复核|角色|责任人", header)
         ) and bool(text.strip())
+    header_type = _TABLE_HEADER_TYPES.get(answer_type)
+    if header_type is not None:
+        return bool(header_type.search(header) and text.strip())
     if answer_type not in _VALUES:
         return bool(text.strip())
     if _typed_value_matches(answer_type, relation, text):
@@ -668,7 +785,7 @@ def evaluate_linked_support(
     if _normalized(subject).strip("。:： ") != target:
         return None
     normalized_attribute = _normalized(attribute).strip()
-    if answer_type == "PERSON_OR_ROLE":
+    if answer_type in {"PERSON_OR_ROLE", "RESPONSIBLE_PARTY"}:
         prefix_matches = normalized_attribute.startswith("由")
     else:
         pattern = next(

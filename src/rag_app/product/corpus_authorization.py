@@ -28,7 +28,9 @@ from rag_app.product.model_settings import (
 from rag_app.product.ocr_adapters import LOCAL_OCR_CONNECTION_ID
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
 
-CorpusOperation = Literal["generation", "query.rewrite", "image.ocr"]
+CorpusOperation = Literal[
+    "generation", "query.interpret", "query.rewrite", "image.ocr"
+]
 CorpusAuthorizationState = Literal[
     "NOT_REQUIRED",
     "MISSING",
@@ -58,7 +60,7 @@ _MAX_AUTHORIZATION_DAYS = 365
 class CorpusAuthorizationApproval(FrozenModel):
     """管理员明确批准当前活动语料所需的有界输入。"""
 
-    operations: tuple[CorpusOperation, ...] = Field(min_length=1, max_length=3)
+    operations: tuple[CorpusOperation, ...] = Field(min_length=1, max_length=4)
     expires_at: str
     request_limit: StrictInt = Field(ge=1, le=10_000)
     estimated_token_limit: StrictInt = Field(ge=1, le=100_000_000)
@@ -104,9 +106,7 @@ class CorpusAuthorizationManifest(FrozenModel):
     active_document_count: StrictInt = Field(gt=0)
     provider_connection_id: str
     provider_model: str
-    operation_binding_identity: str = Field(
-        pattern=r"^sha256:[0-9a-f]{64}$"
-    )
+    operation_binding_identity: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     operations: tuple[CorpusOperation, ...] = Field(min_length=1)
     authorization_id: str
     budget_campaign_id: str
@@ -218,9 +218,7 @@ class CorpusAuthorizationStore:
             estimated_token_limit=approval.estimated_token_limit,
             approved_request_identities=request_identities,
             provider_request_limits={"aliyun": approval.request_limit},
-            provider_token_limits={
-                "aliyun": approval.estimated_token_limit
-            },
+            provider_token_limits={"aliyun": approval.estimated_token_limit},
             step_request_limits=dict(approval.operation_request_limits),
             scope_mode="knowledge_base",
             project_id=project_id,
@@ -304,7 +302,9 @@ class CorpusAuthorizationStore:
             )
         return self.status(knowledge_base_id)
 
-    def status(self, knowledge_base_id: str) -> CorpusAuthorizationStatus:
+    def status(  # noqa: PLR0911
+        self, knowledge_base_id: str
+    ) -> CorpusAuthorizationStatus:
         """把最新清单与当前活动语料、模型和账本重新对账。
 
         Args:
@@ -495,6 +495,7 @@ class CorpusAuthorizationStore:
         if settings.generation_connection_id:
             operations.append("generation")
             if settings.rewrite_enabled:
+                operations.append("query.interpret")
                 operations.append("query.rewrite")
         if settings.ocr_enabled and settings.ocr_connection_id != (
             LOCAL_OCR_CONNECTION_ID
@@ -509,11 +510,18 @@ class CorpusAuthorizationStore:
     ) -> tuple[tuple[CorpusOperation, str, str], ...]:
         bindings: list[tuple[CorpusOperation, str, str]] = []
         for operation in operations:
-            if operation in {"generation", "query.rewrite"}:
+            if operation in {
+                "generation",
+                "query.interpret",
+                "query.rewrite",
+            }:
                 connection_id = settings.generation_connection_id
                 model = settings.generation_model
-                if operation == "query.rewrite" and not settings.rewrite_enabled:
-                    raise ValueError("问题改写尚未启用。")
+                if (
+                    operation in {"query.interpret", "query.rewrite"}
+                    and not settings.rewrite_enabled
+                ):
+                    raise ValueError("问题语义解释与改写尚未启用。")
             else:
                 connection_id = settings.ocr_connection_id
                 model = settings.ocr_model
@@ -538,13 +546,16 @@ class CorpusAuthorizationStore:
         manifest: CorpusAuthorizationManifest,
         snapshot: Mapping[str, object],
     ) -> tuple[CorpusAuthorizationState, str]:
-        if manifest.active_index_revision_id != snapshot[
-            "active_index_revision_id"
-        ]:
+        if (
+            manifest.active_index_revision_id
+            != snapshot["active_index_revision_id"]
+        ):
             return "STALE_REVISION", "CORPUS_AUTHORIZATION_STALE_REVISION"
         if (
-            manifest.active_document_digest != snapshot["active_document_digest"]
-            or manifest.active_document_count != snapshot["active_document_count"]
+            manifest.active_document_digest
+            != snapshot["active_document_digest"]
+            or manifest.active_document_count
+            != snapshot["active_document_count"]
             or not snapshot["index_aligned"]
         ):
             return "STALE_CORPUS", "CORPUS_AUTHORIZATION_STALE_CORPUS"
@@ -607,7 +618,10 @@ class CorpusAuthorizationStore:
         )
         if not exhausted:
             for operation, limit in campaign.operation_request_limits.items():
-                if sum(item["operation"] == operation for item in reserved) >= limit:
+                if (
+                    sum(item["operation"] == operation for item in reserved)
+                    >= limit
+                ):
                     exhausted = True
                     break
         return (

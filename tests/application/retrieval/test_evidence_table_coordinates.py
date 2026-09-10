@@ -401,3 +401,91 @@ def test_identifier_table_measurement_without_question_mark_uses_column() -> (
     )
 
     assert [item.citation_text for item in evidence] == ["27 mm"]
+
+
+def test_responsible_party_uses_semantic_header_mapping() -> None:
+    candidate = _table(
+        rows=(
+            ("交付件名称", "主责岗位", "交付说明"),
+            ("星环登记表", "资料协调员", "记录设备进场状态"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(),
+        context=_context("星环登记表谁负责"),
+    )
+
+    assert [item.citation_text for item in evidence] == ["资料协调员"]
+    support = dict(evidence[0].metadata)["answer_support"]
+    assert support["answer_type"] == "RESPONSIBLE_PARTY"
+    assert support["support_reason"] == "SOURCE_RELATION_AND_VALUE"
+
+
+def test_definition_closes_a_complete_delivery_record_row() -> None:
+    candidate = _table(
+        rows=(
+            ("交付件名称", "责任角色", "交付件说明"),
+            ("星环登记表", "资料协调员", "记录设备进场状态"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=_context("星环登记表是什么"),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "星环登记表",
+        "责任角色",
+        "资料协调员",
+        "交付件说明",
+        "记录设备进场状态",
+    ]
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "TABLE_ROW_RECORD"
+        for item in evidence
+    )
+
+
+def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
+    None
+):
+    candidate = _table(
+        rows=(
+            ("术语", " 定义 "),
+            (" OPC ", " 对象过程控制。 "),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=_context("OPC 是啥？"),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "OPC",
+        "定义",
+        "对象过程控制。",
+    ]
+    for item in evidence:
+        span = item.source_spans[0]
+        assert span.chunk_start_char == 0
+        assert span.chunk_end_char == len(item.citation_text)
+        assert span.source_end_char - span.source_start_char == len(
+            item.citation_text
+        )

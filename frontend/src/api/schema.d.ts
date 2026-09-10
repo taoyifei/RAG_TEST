@@ -1480,7 +1480,7 @@ export interface components {
                 [key: string]: number;
             };
             /** Operations */
-            operations: ("generation" | "query.rewrite" | "image.ocr")[];
+            operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
             /** Request Limit */
             request_limit: number;
         };
@@ -1512,7 +1512,7 @@ export interface components {
             /** Operation Binding Identity */
             operation_binding_identity: string;
             /** Operations */
-            operations: ("generation" | "query.rewrite" | "image.ocr")[];
+            operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
             /**
              * Policy Revision
              * @default corpus-authorization-v1
@@ -1560,7 +1560,7 @@ export interface components {
              * Required Operations
              * @default []
              */
-            required_operations: ("generation" | "query.rewrite" | "image.ocr")[];
+            required_operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
         };
         /**
          * CreateKnowledgeBaseRequest
@@ -2302,6 +2302,10 @@ export interface components {
             generation_provider_id?: string | null;
             /** Index Fingerprint */
             index_fingerprint?: string | null;
+            /** Interpret Model */
+            interpret_model?: string | null;
+            /** Interpret Provider Id */
+            interpret_provider_id?: string | null;
             /** Model Authorization State */
             model_authorization_state: string;
             /** Model Configuration State */
@@ -2415,6 +2419,13 @@ export interface components {
             index_fingerprint: string;
             /** Index Revision Id */
             index_revision_id: string;
+            /**
+             * Interpret Called This Request
+             * @default false
+             */
+            interpret_called_this_request: boolean;
+            /** Interpret Reason Code */
+            interpret_reason_code?: string | null;
             /** Knowledge Base Id */
             knowledge_base_id: string;
             /** Project Id */
@@ -3311,7 +3322,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.rewrite" | "image.ocr";
+            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.interpret" | "query.rewrite" | "image.ocr";
             /** Request Policy */
             request_policy?: {
                 [key: string]: unknown;

@@ -181,6 +181,7 @@ from rag_app.core.models.search import (
     SearchAnswerResult,
     SearchRequest,
     StageTiming,
+    StructuralSearchRequest,
 )
 from rag_app.core.policies import ParsePolicy, ParsingPolicy
 
@@ -287,12 +288,12 @@ __all__ = [
     "ProjectStatus",
     "ProviderCall",
     "ProviderCallCount",
-    "QueryDataPlane",
     "ProviderFailureCategory",
     "ProviderHealth",
     "ProviderHealthStatus",
     "QueryAnalysis",
     "QueryConstraint",
+    "QueryDataPlane",
     "QueryEmbeddingRequest",
     "QueryKind",
     "QuerySemantics",
@@ -330,6 +331,7 @@ __all__ = [
     "SourceSpanKind",
     "StageTiming",
     "StoryKind",
+    "StructuralSearchRequest",
     "SystemStatus",
     "TextPayload",
     "TokenCountResult",

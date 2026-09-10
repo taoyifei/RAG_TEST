@@ -56,6 +56,7 @@ class CircuitAwareReranker:
         *,
         enabled: bool,
         result_limit: int,
+        required_candidate_ids: frozenset[str] = frozenset(),
     ) -> RerankingOutcome:
         """重排 bounded fusion prefix 或稳定保留 RRF 顺序。
 
@@ -66,6 +67,7 @@ class CircuitAwareReranker:
             policy: rerank 数量、文本和 bypass 策略。
             enabled: Planner 是否要求 rerank。
             result_limit: 用户请求的最终候选数。
+            required_candidate_ids: 必须保留到结构证据闭合的候选 ID。
 
         Returns:
             实际 Provider 或明确 bypass 后的候选与模式。
@@ -74,7 +76,16 @@ class CircuitAwareReranker:
         limited = candidates[: policy.rerank_candidate_limit]
         output_limit = min(result_limit, len(limited))
         if not enabled or not limited:
-            return _bypass(limited[:output_limit], "RERANK_DISABLED_BY_PLAN")
+            return _bypass(
+                _restore_protected(
+                    limited[:output_limit],
+                    limited,
+                    limit=output_limit,
+                    must_keep_limit=policy.must_keep_limit,
+                    required_candidate_ids=required_candidate_ids,
+                ),
+                "RERANK_DISABLED_BY_PLAN",
+            )
         descriptor = self._reranker.descriptor
         key = CircuitKey(descriptor.name, "reranking", descriptor.version)
         if descriptor.capabilities.permits_network:
@@ -84,11 +95,24 @@ class CircuitAwareReranker:
                 if not policy.bypass_policy_denied:
                     raise
                 return _bypass(
-                    limited[:output_limit], "RERANK_BYPASSED_POLICY_DENIED"
+                    _restore_protected(
+                        limited[:output_limit],
+                        limited,
+                        limit=output_limit,
+                        must_keep_limit=policy.must_keep_limit,
+                        required_candidate_ids=required_candidate_ids,
+                    ),
+                    "RERANK_BYPASSED_POLICY_DENIED",
                 )
         if not self._circuit.allow_call(key):
             return _bypass(
-                limited[:output_limit],
+                _restore_protected(
+                    limited[:output_limit],
+                    limited,
+                    limit=output_limit,
+                    must_keep_limit=policy.must_keep_limit,
+                    required_candidate_ids=required_candidate_ids,
+                ),
                 "RERANK_BYPASSED_CIRCUIT_OPEN",
                 category=_circuit_failure_category(
                     self._circuit.snapshot(key).reason_code
@@ -116,16 +140,23 @@ class CircuitAwareReranker:
             )
             self._circuit.record_failure(key, category)
             return _bypass(
-                limited[:output_limit],
+                _restore_protected(
+                    limited[:output_limit],
+                    limited,
+                    limit=output_limit,
+                    must_keep_limit=policy.must_keep_limit,
+                    required_candidate_ids=required_candidate_ids,
+                ),
                 "RERANK_BYPASSED_PROVIDER_UNAVAILABLE",
                 category=category,
             )
         self._circuit.record_success(key)
-        protected = _restore_must_keep(
+        protected = _restore_protected(
             ordered,
             limited,
             limit=output_limit,
             must_keep_limit=policy.must_keep_limit,
+            required_candidate_ids=required_candidate_ids,
         )
         return RerankingOutcome(
             candidates=tuple(
@@ -140,10 +171,10 @@ class CircuitAwareReranker:
 
 def _bounded_text(candidate: RankedChunk, limit: int) -> str:
     chunk = candidate.hydrated.chunk
+    display_name = candidate.hydrated.display_name
     heading = " / ".join(chunk.heading_path)
-    value = (
-        f"{heading}\n{chunk.citation_text}" if heading else chunk.citation_text
-    )
+    labels = "\n".join(value for value in (display_name, heading) if value)
+    value = f"{labels}\n{chunk.citation_text}"
     if len(value) <= limit:
         return value
     head = int(limit * 0.7)
@@ -194,18 +225,33 @@ def _validate_and_order(
     )
 
 
-def _restore_must_keep(
+def _restore_protected(
     selected: tuple[RankedChunk, ...],
     all_candidates: tuple[RankedChunk, ...],
     *,
     limit: int,
     must_keep_limit: int,
+    required_candidate_ids: frozenset[str],
 ) -> tuple[RankedChunk, ...]:
+    """先恢复结构闭合成员，再恢复既有 exact must-keep。"""
     result = list(selected[:limit])
     present = {item.hydrated.chunk.chunk_id for item in result}
-    protected = [item for item in all_candidates if item.must_keep][
-        :must_keep_limit
+    required = [
+        item
+        for item in all_candidates
+        if item.hydrated.chunk.chunk_id in required_candidate_ids
+    ][:limit]
+    required_ids = {item.hydrated.chunk.chunk_id for item in required}
+    protected = [
+        *required,
+        *[
+            item
+            for item in all_candidates
+            if item.must_keep
+            and item.hydrated.chunk.chunk_id not in required_ids
+        ][:must_keep_limit],
     ]
+    protected_ids = {item.hydrated.chunk.chunk_id for item in protected}
     for candidate in protected:
         if candidate.hydrated.chunk.chunk_id in present:
             continue
@@ -213,7 +259,7 @@ def _restore_must_keep(
             (
                 index
                 for index in range(len(result) - 1, -1, -1)
-                if not result[index].must_keep
+                if result[index].hydrated.chunk.chunk_id not in protected_ids
             ),
             None,
         )

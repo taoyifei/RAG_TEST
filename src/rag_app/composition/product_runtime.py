@@ -38,7 +38,10 @@ from rag_app.application.provider_health import (
     LocalUsageBudget,
     ProviderCircuitBreaker,
 )
-from rag_app.application.retrieval import QueryDataPlaneContext, RetrievalService
+from rag_app.application.retrieval import (
+    QueryDataPlaneContext,
+    RetrievalService,
+)
 from rag_app.application.revision_builder import RevisionBuilder
 from rag_app.application.revision_validator import RevisionValidator
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
@@ -55,8 +58,8 @@ from rag_app.composition.profiles import (
     RagProfile,
     default_offline_profile,
 )
-from rag_app.core.events import TraceEvent
 from rag_app.core.errors import RagError
+from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
@@ -86,12 +89,12 @@ from rag_app.product.auth import (
     load_bootstrap_token,
 )
 from rag_app.product.compatibility import CompatibilityManifest, load_manifest
+from rag_app.product.control_store import ProductControlStore
+from rag_app.product.conversations import ProductConversationStore
 from rag_app.product.corpus_authorization import (
     CorpusAuthorizationStatus,
     CorpusAuthorizationStore,
 )
-from rag_app.product.control_store import ProductControlStore
-from rag_app.product.conversations import ProductConversationStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
 from rag_app.product.diagram_relations import ProductDiagramRelations
@@ -804,10 +807,14 @@ class ProductProfileResolver:
                         "回答模型 generation 缺少 serving identity。"
                     )
                 model = model_generation.resource
+                rewrite_enabled = bool(
+                    getattr(settings, "rewrite_enabled", False)
+                )
                 service = service.with_generation(
                     model,
                     serving_identity=generation_identity,
-                    rewriter=model,
+                    interpreter=model if rewrite_enabled else None,
+                    rewriter=model if rewrite_enabled else None,
                 )
             with_data_plane = getattr(service, "with_data_plane", None)
             if data_plane_context is not None and callable(with_data_plane):
@@ -863,9 +870,7 @@ class ProductProfileResolver:
             authorization_state = authorization_status.model_authorization_state
             corpus_state = authorization_status.corpus_authorization_state
             budget_state = authorization_status.budget_state
-            fallback_reasons.extend(
-                authorization_status.fallback_reason_codes
-            )
+            fallback_reasons.extend(authorization_status.fallback_reason_codes)
         generation_provider_id = None
         if settings.generation_connection_id:
             try:
@@ -890,6 +895,12 @@ class ProductProfileResolver:
             ),
             generation_provider_id=generation_provider_id,
             generation_model=settings.generation_model,
+            interpret_provider_id=(
+                generation_provider_id if settings.rewrite_enabled else None
+            ),
+            interpret_model=(
+                settings.generation_model if settings.rewrite_enabled else None
+            ),
             rewrite_provider_id=(
                 generation_provider_id if settings.rewrite_enabled else None
             ),
@@ -1730,7 +1741,7 @@ class ProductRuntime:
         self.close()
 
 
-def build_product_runtime(
+def build_product_runtime(  # noqa: PLR0915
     settings: ProductRuntimeSettings,
     *,
     transport_factory: TransportFactory | None = None,

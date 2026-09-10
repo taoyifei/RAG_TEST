@@ -28,7 +28,11 @@ from rag_app.core.models.provider import (
     EmbeddingTopology,
     ProviderCall,
 )
-from rag_app.core.models.query import QueryAnalysis, QueryKind
+from rag_app.core.models.query import (
+    QueryAnalysis,
+    QueryKind,
+    RequestedAnswerType,
+)
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
 
@@ -64,7 +68,12 @@ class RetrievalPolicy(FrozenModel):
     )
     dense_calibrated_vector_spaces: tuple[str, ...] = ()
     bypass_policy_denied: bool = True
-    enabled_channels: tuple[str, ...] = ("exact", "lexical", "dense")
+    enabled_channels: tuple[str, ...] = (
+        "exact",
+        "structural",
+        "lexical",
+        "dense",
+    )
     rerank_enabled: bool = True
     neighbor_expansion_enabled: bool = True
     provisional: bool = True
@@ -72,7 +81,7 @@ class RetrievalPolicy(FrozenModel):
     @field_validator("enabled_channels")
     @classmethod
     def _validate_channels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        allowed = {"exact", "lexical", "dense"}
+        allowed = {"exact", "structural", "lexical", "dense"}
         if (
             not value
             or len(value) != len(set(value))
@@ -176,6 +185,23 @@ class ExactSearchRequest(FrozenModel):
     revision: IndexRevisionRef
     identifiers: tuple[str, ...] = ()
     quoted_phrases: tuple[str, ...] = ()
+    limit: StrictInt = Field(default=20, gt=0, le=100)
+
+
+class StructuralSearchRequest(FrozenModel):
+    """基于既有 canonical 结构字段的有界检索请求。"""
+
+    revision: IndexRevisionRef
+    query: str = Field(min_length=1, max_length=8000, repr=False)
+    target: str | None = Field(default=None, max_length=512, repr=False)
+    relation: str | None = Field(default=None, max_length=160)
+    answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
+    source_qualifier: str | None = Field(
+        default=None, max_length=512, repr=False
+    )
+    context_qualifier: str | None = Field(
+        default=None, max_length=512, repr=False
+    )
     limit: StrictInt = Field(default=20, gt=0, le=100)
 
 
@@ -371,6 +397,8 @@ class QueryDataPlane(FrozenModel):
     rerank_mode: str
     generation_provider_id: str | None = None
     generation_model: str | None = None
+    interpret_provider_id: str | None = None
+    interpret_model: str | None = None
     rewrite_provider_id: str | None = None
     rewrite_model: str | None = None
     dense_calibration_state: str
@@ -469,12 +497,14 @@ class SearchAnswerResult(FrozenModel):
         pattern=r"^(extractive|extractive_fallback|llm|none)$"
     )
     generation_reason_code: str | None = None
+    interpret_reason_code: str | None = None
     rewrite_reason_code: str | None = None
     degraded_reason_codes: tuple[str, ...] = ()
     cache_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_hit: bool = False
     result_origin: Literal["fresh", "cache", "singleflight"] = "fresh"
     generation_called_this_request: bool = False
+    interpret_called_this_request: bool = False
     rewrite_called_this_request: bool = False
     singleflight_role: Literal["none", "leader", "follower"] = "none"
     singleflight_key_hash: str | None = Field(
@@ -511,4 +541,5 @@ __all__ = [
     "SearchAnswerResult",
     "SearchRequest",
     "StageTiming",
+    "StructuralSearchRequest",
 ]

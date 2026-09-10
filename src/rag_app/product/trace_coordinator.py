@@ -1568,9 +1568,13 @@ def _event_reason(stage: str, attributes: dict[str, object]) -> DecisionCode:
             if attributes.get("result") == "hit"
             else DecisionCode.CACHE_MISS
         )
-    elif stage == "rewrite":
+    elif stage in {"interpret", "rewrite"}:
         if attributes.get("accepted") is True:
-            reason = DecisionCode.REWRITE_OK
+            reason = (
+                DecisionCode.INTERPRET_OK
+                if stage == "interpret"
+                else DecisionCode.REWRITE_OK
+            )
         elif attributes.get("attempted") is True:
             reason = DecisionCode.MODEL_ABSTAINED
         else:
@@ -1619,7 +1623,7 @@ def _span_kind(stage: str) -> SpanKind:
         return SpanKind.EMBEDDING
     if "rerank" in stage:
         return SpanKind.RERANKER
-    if stage in {"generate", "rewrite"}:
+    if stage in {"generate", "interpret", "rewrite"}:
         return SpanKind.LLM
     if stage in {"confidence", "validate", "repair"}:
         return SpanKind.GUARDRAIL

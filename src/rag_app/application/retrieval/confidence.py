@@ -55,7 +55,15 @@ class ConfidenceEvaluator:
 
         """
         resolved_policy = policy or RetrievalPolicy()
-        evidence_chunk_ids = {item.chunk_id for item in evidence}
+        support_states = tuple(
+            (item, _support_status(analysis, item)) for item in evidence
+        )
+        answer_support_set = tuple(
+            item
+            for item, state in support_states
+            if state == SupportStatus.SUPPORTED.value
+        )
+        evidence_chunk_ids = {item.chunk_id for item in answer_support_set}
         supported_candidates = tuple(
             item
             for item in candidates
@@ -81,23 +89,25 @@ class ConfidenceEvaluator:
                 default=0,
             )
         )
-        diversity = float(len({item.document_id for item in evidence}))
-        evidence_count = float(len(evidence))
+        diversity = float(
+            len({item.document_id for item in answer_support_set})
+        )
+        evidence_count = float(len(answer_support_set))
         rank_stability = _rank_stability(supported_candidates)
         rerank_margin = _rerank_margin(supported_candidates)
         identifier_coverage = _identifier_coverage(
             analysis, supported_candidates
         )
         citable_coverage = float(
-            bool(evidence)
+            bool(answer_support_set)
             and all(
                 item.source_spans
                 and all(span.is_citable for span in item.source_spans)
-                for item in evidence
+                for item in answer_support_set
             )
         )
-        metadata_only = bool(evidence) and all(
-            "METADATA_ONLY" in item.quality_flags for item in evidence
+        metadata_only = bool(answer_support_set) and all(
+            "METADATA_ONLY" in item.quality_flags for item in answer_support_set
         )
         dense_only = any(
             contribution.channel.startswith("dense:")
@@ -127,20 +137,16 @@ class ConfidenceEvaluator:
             if any(
                 contribution.channel == "exact"
                 or contribution.channel.startswith("lexical")
+                or contribution.channel.startswith("structural:")
                 for contribution in item.contributions
             )
         }
         qualified_support = _qualified_support(
-            evidence, qualified_ids, analysis
+            answer_support_set, qualified_ids, analysis
         )
-        support_states = tuple(
-            _support_status(analysis, item) for item in evidence
-        )
-        answer_supported = bool(support_states) and all(
-            state == SupportStatus.SUPPORTED.value for state in support_states
-        )
+        answer_supported = bool(answer_support_set)
         independent_supports = len(evidence_chunk_ids)
-        if not evidence:
+        if not answer_support_set:
             status = _empty_status(query_kind, degraded)
             score = 0.0
         elif metadata_only:
@@ -205,6 +211,7 @@ class ConfidenceEvaluator:
                 ("identifier_coverage", identifier_coverage),
                 ("citable_span_coverage", citable_coverage),
                 ("evidence_count", evidence_count),
+                ("model_evidence_candidate_count", float(len(evidence))),
                 ("source_diversity", diversity),
                 ("degraded_count", float(len(degraded))),
                 ("independent_support_count", float(independent_supports)),
@@ -250,10 +257,18 @@ def _qualified_support(
         ) not in {
             "LINKED_SUBJECT_ATTRIBUTE",
             "TABLE_ROW_ATTRIBUTE",
+            "TABLE_ROW_RECORD",
+            "SECTION_STAGE_SET",
             "STRUCTURED_LIST_RELATION",
             "SOURCE_CORRECTS_COUNT_PREMISE",
         }:
-            return False
+            if not (
+                item.table_context
+                and isinstance(support, dict)
+                and support.get("support_reason") == "SOURCE_RELATION_AND_VALUE"
+            ):
+                return False
+            continue
         nodes = support.get("supporting_span_ids", [])
         if not isinstance(nodes, list) or not any(
             node in qualified_nodes for node in nodes

@@ -81,6 +81,7 @@ export function operationLabel(operation: string): string {
         "embedding.query": "查询向量",
         reranking: "结果重排",
         generation: "回答生成",
+        "query.interpret": "问题意图解释",
         "query.rewrite": "问题改写",
         "image.ocr": "图片文字识别",
       } as Record<string, string>

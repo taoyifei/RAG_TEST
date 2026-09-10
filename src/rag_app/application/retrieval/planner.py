@@ -63,15 +63,26 @@ class QueryPlanner:
             neighbor = "none"
         elif kind is QueryKind.COMPLEX:
             neighbor = "section"
-        if analysis.semantics.answer_type is RequestedAnswerType.DUTIES:
+        if analysis.semantics.answer_type in {
+            RequestedAnswerType.DEFINITION,
+            RequestedAnswerType.DUTIES,
+            RequestedAnswerType.RESPONSIBLE_PARTY,
+        }:
             neighbor = "table"
         elif analysis.semantics.answer_type in {
+            RequestedAnswerType.PURPOSE,
             RequestedAnswerType.ENUMERATION,
             RequestedAnswerType.COUNT,
             RequestedAnswerType.ORDINAL_ITEM,
             RequestedAnswerType.PROCEDURE,
+            RequestedAnswerType.SECTION_SUMMARY,
         }:
             neighbor = "section"
+        if analysis.semantics.answer_type not in {
+            RequestedAnswerType.UNKNOWN,
+            RequestedAnswerType.FACT,
+        }:
+            channels = ("structural", *channels)
         enabled = set(policy.enabled_channels)
         channels = tuple(channel for channel in channels if channel in enabled)
         if not channels:

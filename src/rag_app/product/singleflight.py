@@ -510,6 +510,7 @@ def _follower_result(
             "trace_id": trace_id,
             "result_origin": "singleflight",
             "generation_called_this_request": False,
+            "interpret_called_this_request": False,
             "rewrite_called_this_request": False,
             "diagnostics": follower_diagnostics,
             "diagnostics_summary": follower_summary,

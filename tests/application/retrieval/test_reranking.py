@@ -189,3 +189,26 @@ def test_reranker_restores_must_keep_exact_candidate() -> None:
         item.hydrated.chunk.chunk_id for item in outcome.candidates
     }
     assert len(outcome.candidates) == 3
+
+
+def test_reranker_restores_all_required_structural_candidates() -> None:
+    candidates = tuple(
+        make_ranked_chunk(index, f"text {index}") for index in range(1, 7)
+    )
+    required_ids = frozenset(
+        candidate.hydrated.chunk.chunk_id for candidate in candidates[-3:]
+    )
+
+    outcome = CircuitAwareReranker(_Reranker()).rerank(
+        "阶段是什么",
+        candidates,
+        EgressPolicy(),
+        RetrievalPolicy(),
+        enabled=True,
+        result_limit=3,
+        required_candidate_ids=required_ids,
+    )
+
+    assert {
+        candidate.hydrated.chunk.chunk_id for candidate in outcome.candidates
+    } == required_ids

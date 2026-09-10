@@ -290,7 +290,13 @@ class ProviderRuntimeRegistry:
                 _path(connection.provider_type, operation),
                 json=request_payload,
                 extensions={"rag_chat_operation": operation}
-                if operation in {"generation", "query.rewrite", "image.ocr"}
+                if operation
+                in {
+                    "generation",
+                    "query.interpret",
+                    "query.rewrite",
+                    "image.ocr",
+                }
                 else None,
             )
             diagnostics.http_status = response.status_code
@@ -590,7 +596,7 @@ class ProviderRuntimeRegistry:
 
         Args:
             connection_id: 已保存且启用的 Provider Connection。
-            operation: generation、query.rewrite 或 image.ocr。
+            operation: generation、query.interpret、query.rewrite 或 image.ocr。
             model: 当前批准的目录模型。
 
         Returns:
@@ -600,7 +606,12 @@ class ProviderRuntimeRegistry:
             ValueError: 操作或模型不是当前连接支持的远程模型用途。
 
         """
-        if operation not in {"generation", "query.rewrite", "image.ocr"}:
+        if operation not in {
+            "generation",
+            "query.interpret",
+            "query.rewrite",
+            "image.ocr",
+        }:
             raise ValueError("资料授权只支持生成、改写和图片识别用途。")
         connection = self._control.get_connection(connection_id)
         if not connection.enabled:
@@ -884,7 +895,7 @@ def _payload(
     *,
     resolved: ResolvedEmbeddingSpec | None = None,
 ) -> dict[str, object]:
-    if operation in {"generation", "query.rewrite"}:
+    if operation in {"generation", "query.interpret", "query.rewrite"}:
         return chat_payload(
             (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
             AliyunChatConfig(model=model, max_output_tokens=256),
@@ -941,7 +952,12 @@ def _validation_spec(
     dimension: int | None,
     policy: dict[str, object] | None,
 ) -> ResolvedEmbeddingSpec | None:
-    if operation in {"generation", "query.rewrite", "image.ocr"}:
+    if operation in {
+        "generation",
+        "query.interpret",
+        "query.rewrite",
+        "image.ocr",
+    }:
         if policy:
             raise ValueError("生成和 OCR 探针使用固定公开合成内容。")
         return None
@@ -989,7 +1005,12 @@ def _validate_payload(  # noqa: PLR0912
     expected_model: str,
     expected_dimension: int | None,
 ) -> tuple[int | None, int | None]:
-    if operation in {"generation", "query.rewrite", "image.ocr"}:
+    if operation in {
+        "generation",
+        "query.interpret",
+        "query.rewrite",
+        "image.ocr",
+    }:
         decoded = decode_chat_content(payload, expected_model=expected_model)
         return None, decoded.usage.total_tokens or None
     if not isinstance(payload, dict):
@@ -1068,7 +1089,7 @@ def _estimated_tokens(
     connection: ProviderConnection,
     operation: str,
 ) -> int:
-    if operation in {"generation", "query.rewrite"}:
+    if operation in {"generation", "query.interpret", "query.rewrite"}:
         return message_token_estimate(
             (ChatMessage(role="user", content=_SYNTHETIC_TEXT),)
         )
@@ -1113,7 +1134,12 @@ def _base_url(connection: ProviderConnection) -> str:
 def _path(provider_type: str, operation: str) -> str:
     if provider_type == "jina":
         return "/v1/rerank" if operation == "reranking" else "/v1/embeddings"
-    if operation in {"generation", "query.rewrite", "image.ocr"}:
+    if operation in {
+        "generation",
+        "query.interpret",
+        "query.rewrite",
+        "image.ocr",
+    }:
         return CHAT_COMPLETIONS_PATH
     return "/api/v1/services/embeddings/text-embedding/text-embedding"
 

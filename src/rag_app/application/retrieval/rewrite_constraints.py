@@ -60,6 +60,10 @@ _SUBJECT = re.compile(
 _CONTEXT_REFERENCE = re.compile(
     r"这个|那个|它|其中|上述|前者|后者|刚才提到的|前面提到的"
 )
+_INTERPRETATION_FILLER = re.compile(
+    r"怎么回事|咋回事|什么情况|啥情况|这(?:一)?块|这(?:件)?事|"
+    r"这方面|情况|回事|的|是|为"
+)
 
 
 def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
@@ -73,6 +77,47 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
         拒绝原因；满足约束时返回 None。指代信息不足时保守保留原问题。
 
     """
+    return _surface_constraint_reason(
+        request, text, validate_known_semantics=True
+    )
+
+
+def interpretation_constraint_reason(
+    request: SearchRequest,
+    text: str,
+    *,
+    permitted_topic_terms: tuple[str, ...] = (),
+) -> str | None:
+    """校验解释器的独立问句，同时允许低置信语义升级。
+
+    Args:
+        request: 原问题、范围与有限会话上下文。
+        text: 模型返回的独立问题。
+        permitted_topic_terms: 已由严格 JSON 字段另行校验的对象、来源与关系词。
+
+    Returns:
+        表面范围或硬约束被改变时的拒绝原因，否则返回 None。
+
+    """
+    reason = (
+        _interpretation_surface_reason(request, text, permitted_topic_terms)
+        if permitted_topic_terms
+        else _surface_constraint_reason(
+            request, text, validate_known_semantics=False
+        )
+    )
+    return (
+        None if reason is None else reason.replace("REWRITE_", "INTERPRET_", 1)
+    )
+
+
+def _surface_constraint_reason(
+    request: SearchRequest,
+    text: str,
+    *,
+    validate_known_semantics: bool,
+) -> str | None:
+    """共用原词、范围与硬约束校验。"""
     analyzer = QueryAnalyzer()
     original = analyzer.analyze(request)
     rewritten = analyzer.analyze(request.model_copy(update={"text": text}))
@@ -106,9 +151,10 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
     # 字面信号允许调序，不能新增、删除或替换。
     if hard_changed:
         return "REWRITE_CONSTRAINT_CHANGED"
-    semantic_reason = _semantic_change_reason(original, rewritten)
-    if semantic_reason is not None:
-        return semantic_reason
+    if validate_known_semantics:
+        semantic_reason = _semantic_change_reason(original, rewritten)
+        if semantic_reason is not None:
+            return semantic_reason
     before_terms = _topics(
         _CONTEXT_REFERENCE.sub("", before) if uses_context else before
     )
@@ -137,6 +183,77 @@ def rewrite_constraint_reason(request: SearchRequest, text: str) -> str | None:
     ):
         return "REWRITE_SCOPE_CHANGED"
     return None
+
+
+def _interpretation_surface_reason(
+    request: SearchRequest,
+    text: str,
+    permitted_topic_terms: tuple[str, ...],
+) -> str | None:
+    """允许把口语问法规范化，但不允许增删业务主题或硬约束。"""
+    analyzer = QueryAnalyzer()
+    original = analyzer.analyze(request)
+    interpreted = analyzer.analyze(request.model_copy(update={"text": text}))
+    uses_context = bool(
+        request.conversation_context and _CONTEXT_REFERENCE.search(request.text)
+    )
+    context = (
+        analyzer.analyze(
+            request.model_copy(
+                update={
+                    "text": "\n".join(request.conversation_context[-8:]),
+                    "conversation_context": (),
+                }
+            )
+        )
+        if uses_context
+        else None
+    )
+    before = _normalize(request.text)
+    after = _normalize(text)
+    if _hard_fields_changed(
+        original,
+        interpreted,
+        context,
+        before=before,
+        after=after,
+    ) or any(
+        _atoms(pattern, before) != _atoms(pattern, after)
+        for pattern in (_NEGATION, _QUALIFIER)
+    ):
+        return "REWRITE_CONSTRAINT_CHANGED"
+    before_terms = _interpretation_topics(before, permitted_topic_terms)
+    after_terms = _interpretation_topics(after, permitted_topic_terms)
+    if uses_context:
+        context_terms = _interpretation_topics(
+            _normalize("\n".join(request.conversation_context[-8:])),
+            permitted_topic_terms,
+        )
+        topics_match = _contextual_topics_match(
+            before_terms,
+            after_terms,
+            context_terms,
+        )
+    else:
+        topics_match = _same_topics(before_terms, after_terms)
+    return None if topics_match else "REWRITE_SCOPE_CHANGED"
+
+
+def _interpretation_topics(
+    text: str, permitted_topic_terms: tuple[str, ...]
+) -> tuple[str, ...]:
+    """移除已单独核验字段和纯口语框架，留下必须双向守恒的主题。"""
+    normalized = _normalize(text)
+    for term in sorted(
+        {_normalize(value) for value in permitted_topic_terms if value},
+        key=len,
+        reverse=True,
+    ):
+        normalized = normalized.replace(term, " ")
+    return _topics(_INTERPRETATION_FILLER.sub(" ", normalized))
+
+
+__all__ = ["interpretation_constraint_reason", "rewrite_constraint_reason"]
 
 
 def _hard_fields_changed(
@@ -198,11 +315,15 @@ def _semantic_change_reason(
     before = original.semantics
     after = rewritten.semantics
     descriptive = {
+        RequestedAnswerType.DEFINITION,
+        RequestedAnswerType.PURPOSE,
         RequestedAnswerType.ENUMERATION,
         RequestedAnswerType.COUNT,
         RequestedAnswerType.ORDINAL_ITEM,
         RequestedAnswerType.DUTIES,
+        RequestedAnswerType.RESPONSIBLE_PARTY,
         RequestedAnswerType.PROCEDURE,
+        RequestedAnswerType.SECTION_SUMMARY,
     }
     if before.answer_type in descriptive or after.answer_type in descriptive:
         if before.answer_type is not after.answer_type:
@@ -215,7 +336,11 @@ def _semantic_change_reason(
         if before.source_qualifier != after.source_qualifier:
             return "REWRITE_SCOPE_CHANGED"
         if (
-            before.answer_type is not RequestedAnswerType.DUTIES
+            before.answer_type
+            not in {
+                RequestedAnswerType.DUTIES,
+                RequestedAnswerType.RESPONSIBLE_PARTY,
+            }
             and before.target
             and after.target
             and before.target != after.target

@@ -12,6 +12,7 @@ from rag_app.core.models import (
     ConstraintKind,
     QueryAnalysis,
     QueryConstraint,
+    QuerySemantics,
     SearchRequest,
 )
 
@@ -179,6 +180,10 @@ class QueryAnalyzer:
                     original.semantics.source_qualifier
                     or rewritten.semantics.source_qualifier
                 ),
+                "context_qualifier": (
+                    original.semantics.context_qualifier
+                    or rewritten.semantics.context_qualifier
+                ),
                 "source": "LLM_REWRITE",
                 "reason_codes": (
                     *rewritten.semantics.reason_codes,
@@ -202,6 +207,61 @@ class QueryAnalyzer:
                 "reason_codes": tuple(
                     dict.fromkeys(
                         (*original.reason_codes, "QUERY_REWRITE_ACCEPTED")
+                    )
+                ),
+            }
+        )
+
+    def apply_interpretation(
+        self,
+        original: QueryAnalysis,
+        request: SearchRequest,
+        standalone_query: str,
+        semantics: QuerySemantics,
+    ) -> QueryAnalysis:
+        """把已校验的模型解释合并回唯一共享 QueryAnalysis。
+
+        Args:
+            original: 原问题的权威文本、范围和硬约束。
+            request: 原始请求，用于重新提取独立问句的检索信号。
+            standalone_query: 已通过表面与硬约束校验的独立问题。
+            semantics: 已通过严格字段校验的类型化语义。
+
+        Returns:
+            Planner、Evidence、Confidence 与 Generator 共同消费的分析。
+
+        """
+        interpreted = self.analyze(
+            request.model_copy(update={"text": standalone_query})
+        )
+        resolved_semantics = semantics.model_copy(
+            update={
+                "constraints": original.semantics.constraints,
+                "context_qualifier": original.semantics.context_qualifier,
+                "source": "LLM_INTERPRET",
+                "reason_codes": tuple(
+                    dict.fromkeys(
+                        (*semantics.reason_codes, "QUERY_INTERPRET_ACCEPTED")
+                    )
+                ),
+            }
+        )
+        return interpreted.model_copy(
+            update={
+                "original_query": original.original_query,
+                "normalized_query": original.normalized_query,
+                "resolved_query": interpreted.normalized_query,
+                "semantics": resolved_semantics,
+                "quoted_phrases": original.quoted_phrases,
+                "identifiers": original.identifiers,
+                "numbers": original.numbers,
+                "units": original.units,
+                "date_version_signals": original.date_version_signals,
+                "negation_signals": original.negation_signals,
+                "conversation_fingerprint": original.conversation_fingerprint,
+                "reason_codes": tuple(
+                    dict.fromkeys(
+                        (*original.reason_codes, "QUERY_INTERPRET_ACCEPTED")
                     )
                 ),
             }

@@ -702,6 +702,7 @@
             "propertyNames": {
               "enum": [
                 "generation",
+                "query.interpret",
                 "query.rewrite",
                 "image.ocr"
               ]
@@ -713,12 +714,13 @@
             "items": {
               "enum": [
                 "generation",
+                "query.interpret",
                 "query.rewrite",
                 "image.ocr"
               ],
               "type": "string"
             },
-            "maxItems": 3,
+            "maxItems": 4,
             "minItems": 1,
             "title": "Operations",
             "type": "array"
@@ -798,6 +800,7 @@
             "items": {
               "enum": [
                 "generation",
+                "query.interpret",
                 "query.rewrite",
                 "image.ocr"
               ],
@@ -918,6 +921,7 @@
             "items": {
               "enum": [
                 "generation",
+                "query.interpret",
                 "query.rewrite",
                 "image.ocr"
               ],
@@ -2912,6 +2916,28 @@
             ],
             "title": "Index Fingerprint"
           },
+          "interpret_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpret Model"
+          },
+          "interpret_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpret Provider Id"
+          },
           "model_authorization_state": {
             "title": "Model Authorization State",
             "type": "string"
@@ -3228,6 +3254,22 @@
             "pattern": "^irev_[0-9a-f]{32}$",
             "title": "Index Revision Id",
             "type": "string"
+          },
+          "interpret_called_this_request": {
+            "default": false,
+            "title": "Interpret Called This Request",
+            "type": "boolean"
+          },
+          "interpret_reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpret Reason Code"
           },
           "knowledge_base_id": {
             "pattern": "^kb_[0-9a-f]{32}$",
@@ -5642,6 +5684,7 @@
               "embedding.query",
               "reranking",
               "generation",
+              "query.interpret",
               "query.rewrite",
               "image.ocr"
             ],

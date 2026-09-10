@@ -1645,6 +1645,7 @@ def _usage_summary(
         "embedding.query",
         "reranking",
         "generation",
+        "query.interpret",
         "query.rewrite",
     }
     items = []
@@ -1669,6 +1670,10 @@ def _usage_summary(
                 reason = (
                     result.rewrite_reason_code if result is not None else None
                 ) or "REWRITE_NOT_CONFIGURED"
+            elif operation == "query.interpret":
+                reason = (
+                    result.interpret_reason_code if result is not None else None
+                ) or "INTERPRET_NOT_CONFIGURED"
             else:
                 reason = "LOCAL_OR_NOT_REQUIRED_BY_PLAN"
         observed = [call.observed_tokens for call in actual]
