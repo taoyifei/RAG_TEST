@@ -51,7 +51,8 @@ export default defineConfig({
     : [8091, 8092].map((port) => ({
         // 两个视口项目使用独立临时 Product Runtime，避免跨项目共享
         // 生产等价限流桶和数据状态；每个项目内部仍串行执行真实门禁。
-        command: `../.venv/bin/python ../scripts/serve_p10.py --port ${port} --frontend-dir dist`,
+        // dev.py 会把当前解释器目录放在 PATH 首位；CI 不要求仓库内另建 .venv。
+        command: `python ../scripts/serve_p10.py --port ${port} --frontend-dir dist`,
         cwd: ".",
         url: `http://127.0.0.1:${port}/ready`,
         reuseExistingServer: false,
