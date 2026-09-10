@@ -35,11 +35,14 @@ docker compose run --rm --no-deps --entrypoint sh app \
 
 打开 `http://127.0.0.1:8088/`，输入 Bootstrap Token。随后在“模型服务”依次
 保存 Jina 与阿里云百炼连接。百炼须显式选择端点模式，业务空间模式使用控制台实际 API Host。完成出网与预算授权后测试连接，创建项目和知识库、激活主备检索方案，上传
-DOC 或 DOCX 后即可问答。DOCX 直接进入当前 OOXML Parser；旧版 DOC 在隔离
+DOC 或 DOCX，并在“知识库模型”中批准当前活动语料清单后即可使用所选远程模型问答。
+DOCX 直接进入当前 OOXML Parser；旧版 DOC 在隔离
 转换器可用时先转为清洗后的派生 DOCX，再进入同一表格、媒体、Artifact 与 Chunk
 链。只有转换器不可用时才显式降级为 antiword 纯文本，并记录结构降级。发送到远程 Provider 的只有管理员明确授权的查询、文档切片
-和重排候选；页面会显示操作、Token 与切换用量。没有凭据时仍可完成本地 Exact/FTS
-检索，但不得把它称为 Live Ready。
+和重排候选；页面会显示操作、Token 与切换用量。没有活动 Retrieval Profile 或远程
+授权时，系统明确显示 `default_local_fallback`，仍可通过 Exact/FTS/结构通道和本地
+renderer 回答来源明确的定义、目的、职责、责任人、表格与列表问题，但不得把它称为
+Live Ready。
 
 完整步骤见 `docs/public/quickstart.md`，部署与 TLS 见
 `docs/public/deployment.md`，数据出网边界见
@@ -47,11 +50,20 @@ DOC 或 DOCX 后即可问答。DOCX 直接进入当前 OOXML Parser；旧版 DOC
 
 ## 回答、图片识别与历史
 
-在“模型服务”保存百炼连接后，进入知识库的“知识库模型”选择回答模型、
-一次按需问题改写和图片文字识别模型。远程调用仍需要与该知识库、来源和模型
-绑定的有效预算授权；不会借用公开合成验收的额度。默认未配置时使用证据摘录，
-配置后以有限来源片段生成回答，并校验引用、对象、数字与否定；模型失败时明确
-显示摘录回退及原因。回答和改写配置只改变服务及缓存身份。
+在“模型服务”保存连接后，进入知识库的“知识库模型”选择回答、按需问题解释/改写
+和图片文字识别模型。页面同时显示当前活动 Profile、Index Revision、Embedding、
+Reranker、向量覆盖、校准、资料授权和预算状态。远程调用还需要管理员批准服务端根据
+当前活动 Revision 计算的语料清单；新版本、删除、恢复、Revision 或模型变化都会使旧
+批准失效，不会静默跟随。默认未配置或未授权时使用结构化本地回答；配置有效时只以
+最小充分支持集生成回答，并校验引用、对象、数字、单位、否定、数量和版本。模型失败
+但证据闭合时发布 `extractive_fallback` 并保留退化原因；证据不闭合时才拒答或要求
+澄清。
+
+查询从原问、有限会话上下文和类型化语义开始，原问始终保留，最多接受一个通过硬约束
+校验的解释/改写变体。Exact、FTS、结构和可用的 Dense 通道经融合、重排、邻居展开后，
+先选择最小充分支持集再生成答案；无关候选不会再整体否决一条完整正确证据。完整合同见
+[检索与问答](docs/public/search-and-answer.md)，公开与私有回归边界见
+[评测与质量声明](docs/public/evaluation-and-quality-claims.md)。
 
 文档列表分别展示登记状态和当前索引可检索性。任务失败可查看安全原因，
 无当前版本的失败文档也可逻辑删除；删除立即隔离新查询、缓存和原文下载。
@@ -66,7 +78,9 @@ DOCX 原生文字与表格优先。文档“图片识别”先扫描内嵌媒体
 问题及答案，默认保留七天；“Operational Trace”在独立数据库中只保存安全身份、
 时序、候选决定和显式调试制品。管理员可下载单条或批量 History + Trace 支持包；
 包含问答与引用正文必须显式确认并在下载时重新鉴权。清理问答历史只删除 History
-和旧平面事件，不删除独立 Operational Trace。
+和旧平面事件，不删除独立 Operational Trace。SAFE Trace 记录有界候选身份、选择和
+原因码但不记录分数或正文；管理员可为单次请求显式选择 DIAGNOSTIC 查看有界排名、
+分数、贡献和支持状态，FULL 才允许保存受容量保护的完整诊断 Artifact。
 
 问答页使用绑定 owner、Project、KB 的有界会话，只在唯一成功 final 后保存问题和
 已验证事实摘要；支持有用/无用及有限原因码反馈。非流式 SAFE 等价请求可共享底层
@@ -89,6 +103,7 @@ python scripts/dev.py check
 python scripts/dev.py smoke
 python scripts/dev.py product-check
 python scripts/dev.py web-e2e
+python evaluation/v3_07_query_quality_runner.py validate
 python scripts/release.py build
 python scripts/release.py verify
 python scripts/release.py acceptance

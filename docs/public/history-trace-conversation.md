@@ -8,10 +8,32 @@ Product Query History 和 Operational Trace 使用不同存储，但共享同一
 | 记录 | 保存内容 | 默认保留与访问 |
 | --- | --- | --- |
 | Query History | 加密问题、答案、结果、引用、usage 和用户历史元数据 | 默认 7 天；读取正文时重新检查 owner、Project、KB、活动 Revision 与来源 |
-| Operational Trace | 根 Trace、Span、候选决定、Provider 安全元数据、Reason 与显式 Artifact | 独立 TTL；不保存问题、答案、Prompt、模型 delta、Cookie、Authorization 或思考过程 |
+| Operational Trace | 根 Trace、Span、候选漏斗、Provider 安全元数据、Reason 与显式 Artifact | 独立 TTL；SAFE/DIAGNOSTIC 不保存问题、答案、Prompt、模型 delta、Cookie、Authorization 或思考过程 |
 
 `trace_<32hex>` 是当前公开格式。读取与导出同时接受旧 `<32hex>`；同一批请求中
 同时给出两种等价写法会作为重复项返回 422。
+
+## 捕获模式与终态
+
+查询请求的 `trace_mode` 默认为 `SAFE`。普通用户只能使用 SAFE；DIAGNOSTIC/FULL 必须由
+管理员为本次请求显式选择，运行时未启用 Operational Trace 时也不能提高捕获级别。
+
+- SAFE 记录 stage、候选/Chunk ID、是否入选、reason code、计数、类型化语义、实际数据面
+  和最终状态；不记录正文、可逆分数、向量、Prompt 或 Provider body。
+- DIAGNOSTIC 在同样的容量边界内额外记录 rank、score、contribution 与 support status，
+  用于区分召回、融合、重排、邻居、Evidence 或发布门损失。
+- FULL 额外保存完整有界检索诊断 Artifact；查询开始前若无法取得容量就失败关闭，不会
+  降级为未声明的 SAFE。
+
+`query.semantics` Span 记录请求答案类型、语义来源和 interpret/rewrite 的原因及实际调用；
+`query.data_plane` 记录本次冻结的 Profile、Revision、Provider、模型、授权与预算状态；
+`query.final_status` 记录是否发布、generation mode、退化原因和 Evidence 数量。候选漏斗
+和这些投影均不包含 query 或私有正文。
+
+已发布的 `llm`、`extractive` 或 `extractive_fallback` 回答在 History 与 Operational
+Trace 都结算为 `ANSWERED`；正常无答案为 `REFUSED`；内部/持久化错误为 `FAILED`。取消和
+重启恢复分别为 `CANCELLED` / `INTERRUPTED`。History 写入失败本身会进入 Trace，不会把
+已发布答案伪装成另一种查询结论。
 
 ## 支持包和技术导出
 
