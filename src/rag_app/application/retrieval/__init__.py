@@ -7,11 +7,15 @@ from rag_app.application.retrieval.expansion import (
 )
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
 from rag_app.application.retrieval.planner import QueryPlanner
-from rag_app.application.retrieval.service import RetrievalService
+from rag_app.application.retrieval.service import (
+    QueryDataPlaneContext,
+    RetrievalService,
+)
 
 __all__ = [
     "NoopExpander",
     "QueryAnalyzer",
+    "QueryDataPlaneContext",
     "QueryPlanner",
     "RetrievalService",
     "RuleBasedNormalizer",

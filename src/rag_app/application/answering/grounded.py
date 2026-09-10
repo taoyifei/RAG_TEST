@@ -22,6 +22,7 @@ from rag_app.core.models import (
     ConfidenceStatus,
     EvidenceItem,
     ProviderCall,
+    QueryAnalysis,
 )
 from rag_app.core.ports import (
     CancellationPort,
@@ -122,6 +123,7 @@ class GroundedOutcome:
     mode: Literal["llm", "extractive", "extractive_fallback", "none"]
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str | None = None
+    published_support_ids: tuple[str, ...] = ()
 
 
 def _terms(text: str) -> set[str]:
@@ -391,12 +393,14 @@ class GroundedAnsweringService:
         self.generator = generator
         self.fallback = ExtractiveAnsweringService(fallback)
 
-    def answer(  # noqa: PLR0912, PLR0915
+    def answer(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         query: str,
         evidence: tuple[EvidenceItem, ...],
         confidence: ConfidenceDecision,
         *,
+        answer_support_set: tuple[EvidenceItem, ...] | None = None,
+        analysis: QueryAnalysis | None = None,
         on_claim: Callable[[AnswerClaim], None] | None = None,
         cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
@@ -406,6 +410,8 @@ class GroundedAnsweringService:
             query: 用户的原始问题。
             evidence: 已通过资源和引用检查的有限资料。
             confidence: 检索置信状态，不允许越过硬性拒绝。
+            answer_support_set: 已直接支持所问关系的最小集合，供本地回退使用。
+            analysis: 检索、Evidence 与回答共同消费的最终查询分析。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
@@ -426,6 +432,9 @@ class GroundedAnsweringService:
             )
         calls: list[ProviderCall] = []
         reason: str | None = None
+        fallback_evidence = (
+            evidence if answer_support_set is None else answer_support_set
+        )
         for attempt in range(2):
             _raise_if_cancelled(cancellation)
             published: list[AnswerClaim] = []
@@ -435,6 +444,11 @@ class GroundedAnsweringService:
                     evidence=evidence,
                     citation_protocol="support-id-v1-claims",
                     repair_reason=reason if attempt else None,
+                    typed_semantics=(
+                        None if analysis is None else analysis.semantics
+                    ),
+                    answer_support_set=fallback_evidence,
+                    model_evidence_candidates=evidence,
                 )
                 stream_generate = getattr(
                     self.generator, "generate_stream", None
@@ -490,9 +504,8 @@ class GroundedAnsweringService:
                     draft = self.generator.generate(generation_request)
                 calls.extend(draft.provider_calls)
                 if draft.reason_code == "GENERATION_ABSTAINED":
-                    return GroundedOutcome(
-                        None, "none", tuple(calls), draft.reason_code
-                    )
+                    reason = draft.reason_code
+                    break
                 validate_grounded_draft(draft, evidence)
                 if published and draft.claims != tuple(published):
                     raise ValidationFailed(
@@ -510,7 +523,17 @@ class GroundedAnsweringService:
                     for claim in draft.claims
                 )
                 return GroundedOutcome(
-                    answer, "llm", tuple(calls), "CLAIMS_VALIDATED"
+                    answer,
+                    "llm",
+                    tuple(calls),
+                    "CLAIMS_VALIDATED",
+                    tuple(
+                        dict.fromkeys(
+                            support.support_id
+                            for claim in draft.claims
+                            for support in claim.supports
+                        )
+                    ),
                 )
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)
@@ -528,7 +551,7 @@ class GroundedAnsweringService:
                 if published:
                     raise _partial_stream_error(calls) from error
                 if reason == "GENERATION_ABSTAINED":
-                    return GroundedOutcome(None, "none", tuple(calls), reason)
+                    break
             except RagError as error:
                 calls.extend(
                     error.provider_calls
@@ -548,12 +571,20 @@ class GroundedAnsweringService:
                 if published:
                     raise _partial_stream_error(calls) from error
                 reason = "GENERATION_OUTPUT_INVALID"
-        fallback_answer = self.fallback.answer(query, evidence, confidence)
+        fallback_answer = self.fallback.answer(
+            query,
+            fallback_evidence,
+            confidence,
+            analysis=analysis,
+        )
         return GroundedOutcome(
             fallback_answer,
             "extractive_fallback" if fallback_answer else "none",
             tuple(calls),
             reason,
+            tuple(item.evidence_id for item in fallback_evidence)
+            if fallback_answer
+            else (),
         )
 
 

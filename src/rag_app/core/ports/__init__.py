@@ -34,6 +34,10 @@ from rag_app.core.ports.lifecycle_store import (
 from rag_app.core.ports.metadata_store import MetadataRecord, MetadataStorePort
 from rag_app.core.ports.parser import ParserPort
 from rag_app.core.ports.query_embedding import QueryEmbeddingPort
+from rag_app.core.ports.query_interpret import (
+    InterpretOutcome,
+    QueryInterpretPort,
+)
 from rag_app.core.ports.reranker import RerankerPort
 from rag_app.core.ports.retrieval_cache import RetrievalCachePort
 from rag_app.core.ports.revision_store import RevisionStorePort
@@ -62,6 +66,7 @@ __all__ = [
     "ExactStorePort",
     "GenerationRequest",
     "GeneratorPort",
+    "InterpretOutcome",
     "LexicalAnalyzerPort",
     "LexicalStorePort",
     "LifecycleStorePort",
@@ -69,6 +74,7 @@ __all__ = [
     "MetadataStorePort",
     "ParserPort",
     "QueryEmbeddingPort",
+    "QueryInterpretPort",
     "RerankerPort",
     "RetrievalCachePort",
     "RevisionStorePort",

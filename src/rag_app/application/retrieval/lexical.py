@@ -20,6 +20,20 @@ _QUESTION_SYNTAX = re.compile(
     r"是什么|有哪些|哪几种|分别是|哪些|什么|是多少|怎么|如何|"
     r"需要承担|主要负责|负责什么|采用|包括|的|里|[？?]"
 )
+_TYPED_SEARCH_TYPES = frozenset(
+    {
+        RequestedAnswerType.FACT,
+        RequestedAnswerType.DEFINITION,
+        RequestedAnswerType.PURPOSE,
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.COUNT,
+        RequestedAnswerType.ORDINAL_ITEM,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.RESPONSIBLE_PARTY,
+        RequestedAnswerType.PROCEDURE,
+        RequestedAnswerType.SECTION_SUMMARY,
+    }
+)
 
 
 def question_search_terms(
@@ -39,26 +53,34 @@ def question_search_terms(
         semantics is not None
         and semantics.target
         and semantics.relation
-        and semantics.answer_type
-        in {
-            RequestedAnswerType.ENUMERATION,
-            RequestedAnswerType.COUNT,
-            RequestedAnswerType.ORDINAL_ITEM,
-            RequestedAnswerType.DUTIES,
-            RequestedAnswerType.PROCEDURE,
-        }
+        and semantics.answer_type in _TYPED_SEARCH_TYPES
     ):
         source = (
             ""
             if semantics.source_qualifier is None
             else semantics.source_qualifier + " "
         )
-        return (
-            source + semantics.target
-            if semantics.answer_type is RequestedAnswerType.DUTIES
-            else f"{semantics.target} {semantics.relation}"
-        )
+        relation = _search_relation(semantics)
+        return source + semantics.target + relation
     return " ".join(_QUESTION_SYNTAX.sub(" ", query).split())
+
+
+def _search_relation(semantics: QuerySemantics) -> str:
+    """把问句修饰后的事实属性还原为可检索的通用关系词。"""
+    if semantics.answer_type in {
+        RequestedAnswerType.DEFINITION,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.RESPONSIBLE_PARTY,
+        RequestedAnswerType.SECTION_SUMMARY,
+    }:
+        return ""
+    relation = semantics.relation or ""
+    if semantics.answer_type is RequestedAnswerType.FACT:
+        if relation.endswith("版本"):
+            relation = "版本"
+        elif relation.endswith("周期"):
+            relation = "周期"
+    return " " + relation if relation else ""
 
 
 class LexicalChannel:

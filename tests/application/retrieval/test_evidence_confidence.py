@@ -85,9 +85,7 @@ def test_evidence_publishes_each_table_cell_but_not_separator() -> None:
     )
     candidate = candidate.model_copy(
         update={
-            "hydrated": candidate.hydrated.model_copy(
-                update={"chunk": chunk}
-            )
+            "hydrated": candidate.hydrated.model_copy(update={"chunk": chunk})
         }
     )
 
@@ -149,8 +147,10 @@ def test_cross_separator_quote_is_rejected() -> None:
     evidence = EvidenceAssembler().assemble(
         (make_ranked_chunk(1, "source"),), RetrievalPolicy()
     )
-    separator = evidence[0].source_spans[0].model_copy(
-        update={"span_type": SourceSpanKind.SEPARATOR}
+    separator = (
+        evidence[0]
+        .source_spans[0]
+        .model_copy(update={"span_type": SourceSpanKind.SEPARATOR})
     )
     invalid = evidence[0].model_copy(update={"source_spans": (separator,)})
 
@@ -159,3 +159,59 @@ def test_cross_separator_quote_is_rejected() -> None:
             AnswerDraft(text="source", cited_evidence_ids=("S1",)),
             (invalid,),
         )
+
+
+def test_unrelated_candidates_do_not_veto_a_complete_support_set() -> None:
+    analysis = _analysis("星环工程的目的是什么")
+    candidates = (
+        make_ranked_chunk(1, "星环工程的目的是统一设备交接记录。"),
+        make_ranked_chunk(2, "白鹭设备每周执行一次巡检。"),
+        make_ranked_chunk(3, "松涛仓库位于园区北侧。"),
+        make_ranked_chunk(4, "云雀小组采用轮值模式。"),
+    )
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        RetrievalPolicy(per_section_cap=4),
+    )
+
+    decision = ConfidenceEvaluator().evaluate(
+        analysis,
+        QueryKind.SIMPLE_FACT,
+        candidates,
+        evidence,
+        (),
+    )
+
+    assert decision.status is ConfidenceStatus.ANSWERABLE
+    assert dict(decision.feature_values)["independent_support_count"] == 1.0
+    assert (
+        dict(decision.feature_values)["model_evidence_candidate_count"] == 4.0
+    )
+
+
+def test_all_unrelated_candidates_still_refuse() -> None:
+    analysis = _analysis("星环工程的目的是什么")
+    candidates = tuple(
+        make_ranked_chunk(index, text)
+        for index, text in enumerate(
+            (
+                "白鹭设备每周执行一次巡检。",
+                "松涛仓库位于园区北侧。",
+                "云雀小组采用轮值模式。",
+                "青禾团队保存纸质归档。",
+            ),
+            1,
+        )
+    )
+    evidence = EvidenceAssembler().assemble(candidates, RetrievalPolicy())
+
+    decision = ConfidenceEvaluator().evaluate(
+        analysis,
+        QueryKind.SIMPLE_FACT,
+        candidates,
+        evidence,
+        (),
+    )
+
+    assert decision.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert dict(decision.feature_values)["independent_support_count"] == 0.0

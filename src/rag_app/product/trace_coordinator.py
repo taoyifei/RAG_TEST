@@ -26,7 +26,11 @@ from rag_app.core.events import TraceEvent
 from rag_app.core.models import KnowledgeBaseScope
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.provider import ProviderCall
-from rag_app.core.models.search import RetrievalDiagnostics, SearchAnswerResult
+from rag_app.core.models.search import (
+    DiagnosticEvidenceItem,
+    RetrievalDiagnostics,
+    SearchAnswerResult,
+)
 from rag_app.product.feedback import normalize_trace_id
 from rag_app.product.query_history import (
     HistorySnapshotLimitError,
@@ -1241,11 +1245,11 @@ class ProductTraceCoordinator:
         if result is not None and result.diagnostics is not None:
             diagnostics = result.diagnostics
             _record_stage_timings(session, diagnostics)
-            if session.trace.mode is not TraceMode.SAFE:
-                _record_diagnostics(session, diagnostics)
-            else:
-                for call in diagnostics.provider_call_details:
-                    _provider_span(session, call)
+            _record_diagnostics(
+                session,
+                diagnostics,
+                include_scores=session.trace.mode is not TraceMode.SAFE,
+            )
             if session.trace.mode is TraceMode.FULL:
                 session.artifact(
                     "retrieval_diagnostics",
@@ -1254,6 +1258,66 @@ class ProductTraceCoordinator:
         elif cancelled_calls:
             for call in cancelled_calls:
                 _provider_span(session, call)
+        if result is not None:
+            session.completed_span(
+                TraceSpanSpec(
+                    name="query.semantics",
+                    kind=SpanKind.GUARDRAIL,
+                    parent_span_id=session.root.span_id,
+                    reason_code=DecisionCode.PUBLISHED,
+                    attributes={
+                        "requested_answer_type": (
+                            result.requested_answer_type.value
+                        ),
+                        "query_semantic_source": (result.query_semantic_source),
+                        "interpret_reason_code": (result.interpret_reason_code),
+                        "rewrite_reason_code": result.rewrite_reason_code,
+                        "interpret_called_this_request": (
+                            result.interpret_called_this_request
+                        ),
+                        "rewrite_called_this_request": (
+                            result.rewrite_called_this_request
+                        ),
+                    },
+                )
+            )
+        if result is not None and result.data_plane is not None:
+            session.completed_span(
+                TraceSpanSpec(
+                    name="query.data_plane",
+                    kind=SpanKind.GUARDRAIL,
+                    parent_span_id=session.root.span_id,
+                    reason_code=DecisionCode.AUTHORIZED_SCOPE,
+                    attributes={
+                        "data_plane": result.data_plane.model_dump(mode="json")
+                    },
+                )
+            )
+        if result is not None:
+            session.completed_span(
+                TraceSpanSpec(
+                    name="query.final_status",
+                    kind=SpanKind.GUARDRAIL,
+                    parent_span_id=session.root.span_id,
+                    reason_code=(
+                        DecisionCode.ANSWERED
+                        if result.answer is not None
+                        else DecisionCode.REFUSED
+                    ),
+                    attributes={
+                        "confidence_status": result.status.value,
+                        "answer_published": result.answer is not None,
+                        "generation_mode": result.generation_mode,
+                        "generation_reason_code": (
+                            result.generation_reason_code
+                        ),
+                        "degraded_reason_codes": list(
+                            result.degraded_reason_codes
+                        ),
+                        "evidence_count": len(result.evidence),
+                    },
+                )
+            )
         session.completed_span(
             TraceSpanSpec(
                 name="history.settlement",
@@ -1340,9 +1404,23 @@ class ProductTraceCoordinator:
 
 
 def _record_diagnostics(
-    session: TraceSession, diagnostics: RetrievalDiagnostics
+    session: TraceSession,
+    diagnostics: RetrievalDiagnostics,
+    *,
+    include_scores: bool,
 ) -> None:
-    """从当前链既有诊断生成候选漏斗和 Provider child spans。"""
+    """从当前链既有诊断生成候选漏斗和 Provider child spans。
+
+    Args:
+        session: 当前 Operational Trace 会话。
+        diagnostics: 已完成查询的有界诊断模型。
+        include_scores: DIAGNOSTIC/FULL 可记录排名、分数与贡献；SAFE
+            只保留身份、通道、选择结果和原因码。
+
+    Returns:
+        无返回值。
+
+    """
     fused_ids = set(diagnostics.fused_chunk_ids)
     reranked_ids = {item.chunk_id for item in diagnostics.reranked}
     evidence_by_chunk = {item.chunk_id: item for item in diagnostics.evidence}
@@ -1361,8 +1439,8 @@ def _record_diagnostics(
                 details={},
                 candidate_id=chunk_id,
                 channel=channel,
-                rank=rank,
-                score_type="channel_rank",
+                rank=rank if include_scores else None,
+                score_type="channel_rank" if include_scores else None,
             )
     for fusion_item in diagnostics.fusion:
         for contribution in fusion_item.contributions:
@@ -1374,9 +1452,11 @@ def _record_diagnostics(
                 details={},
                 candidate_id=fusion_item.chunk_id,
                 channel=contribution.channel,
-                rank=contribution.rank,
-                score_type="rrf_contribution",
-                contribution=contribution.contribution,
+                rank=contribution.rank if include_scores else None,
+                score_type=("rrf_contribution" if include_scores else None),
+                contribution=(
+                    contribution.contribution if include_scores else None
+                ),
             )
         session.decision(
             stage="fusion",
@@ -1387,16 +1467,20 @@ def _record_diagnostics(
                 if fusion_item.chunk_id in reranked_ids
                 else DecisionCode.RERANK_DROP
             ),
-            details={
-                "contributions": [
-                    contribution.model_dump(mode="json")
-                    for contribution in fusion_item.contributions
-                ]
-            },
+            details=(
+                {
+                    "contributions": [
+                        contribution.model_dump(mode="json")
+                        for contribution in fusion_item.contributions
+                    ]
+                }
+                if include_scores
+                else {}
+            ),
             candidate_id=fusion_item.chunk_id,
-            rank=fusion_item.rank,
-            score_type="rrf",
-            score=fusion_item.score,
+            rank=fusion_item.rank if include_scores else None,
+            score_type="rrf" if include_scores else None,
+            score=fusion_item.score if include_scores else None,
         )
     for rerank_item in diagnostics.reranked:
         session.decision(
@@ -1410,9 +1494,9 @@ def _record_diagnostics(
             ),
             details={},
             candidate_id=rerank_item.chunk_id,
-            rank=rerank_item.rank,
-            score_type="rerank",
-            score=rerank_item.score,
+            rank=rerank_item.rank if include_scores else None,
+            score_type="rerank" if include_scores else None,
+            score=rerank_item.score if include_scores else None,
         )
     for expansion_item in diagnostics.expanded:
         selected = expansion_item.chunk_id in evidence_by_chunk
@@ -1433,8 +1517,29 @@ def _record_diagnostics(
                     else DecisionCode.EVIDENCE_BUDGET_DROP
                 )
             ),
-            details={"expansion_reason": expansion_item.reason},
+            details=(
+                {"expansion_reason": expansion_item.reason}
+                if include_scores
+                else {}
+            ),
             candidate_id=expansion_item.chunk_id,
+        )
+    for evidence_item in diagnostics.model_evidence_candidates:
+        session.decision(
+            stage="answer_support_selection",
+            chunk_id=evidence_item.chunk_id,
+            selected=evidence_item.selected_for_answer,
+            reason_code=_answer_support_decision_code(evidence_item),
+            details=(
+                {
+                    "support_status": evidence_item.support_status,
+                    "selection_reason": evidence_item.selection_reason,
+                }
+                if include_scores
+                else {}
+            ),
+            candidate_id=evidence_item.chunk_id,
+            evidence_id=evidence_item.evidence_id,
         )
     for evidence_item in diagnostics.evidence:
         session.decision(
@@ -1442,12 +1547,38 @@ def _record_diagnostics(
             chunk_id=evidence_item.chunk_id,
             selected=True,
             reason_code=DecisionCode.EVIDENCE_SELECTED,
-            details={"source_range_count": len(evidence_item.source_ranges)},
+            details=(
+                {"source_range_count": len(evidence_item.source_ranges)}
+                if include_scores
+                else {}
+            ),
             candidate_id=evidence_item.chunk_id,
             evidence_id=evidence_item.evidence_id,
         )
     for call in diagnostics.provider_call_details:
         _provider_span(session, call)
+
+
+def _answer_support_decision_code(
+    evidence: DiagnosticEvidenceItem,
+) -> DecisionCode:
+    """把支持集选择原因映射为 SAFE 模式也可见的机械原因码。
+
+    Args:
+        evidence: RetrievalDiagnostics 中的 DiagnosticEvidenceItem。
+
+    Returns:
+        不依赖自由文本 details 的稳定候选选择原因。
+
+    """
+    if evidence.selected_for_answer:
+        return DecisionCode.EVIDENCE_SELECTED
+    reason = evidence.selection_reason
+    if reason == "AMBIGUOUS_SAME_TARGET_ACROSS_DOCUMENTS":
+        return DecisionCode.TIE
+    if reason == "NOT_IN_MINIMUM_SUPPORT_SET":
+        return DecisionCode.DROPPED_FINAL_LIMIT
+    return DecisionCode.VALIDATION_FAILED
 
 
 def _record_stage_timings(
@@ -1556,9 +1687,13 @@ def _event_reason(stage: str, attributes: dict[str, object]) -> DecisionCode:
             if attributes.get("result") == "hit"
             else DecisionCode.CACHE_MISS
         )
-    elif stage == "rewrite":
+    elif stage in {"interpret", "rewrite"}:
         if attributes.get("accepted") is True:
-            reason = DecisionCode.REWRITE_OK
+            reason = (
+                DecisionCode.INTERPRET_OK
+                if stage == "interpret"
+                else DecisionCode.REWRITE_OK
+            )
         elif attributes.get("attempted") is True:
             reason = DecisionCode.MODEL_ABSTAINED
         else:
@@ -1607,7 +1742,7 @@ def _span_kind(stage: str) -> SpanKind:
         return SpanKind.EMBEDDING
     if "rerank" in stage:
         return SpanKind.RERANKER
-    if stage in {"generate", "rewrite"}:
+    if stage in {"generate", "interpret", "rewrite"}:
         return SpanKind.LLM
     if stage in {"confidence", "validate", "repair"}:
         return SpanKind.GUARDRAIL

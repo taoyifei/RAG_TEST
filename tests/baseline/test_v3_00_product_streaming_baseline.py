@@ -17,15 +17,7 @@ import httpx
 import pytest
 import uvicorn
 
-from rag_app.adapters.providers.budget_ledger import (
-    BudgetCampaign,
-    ProviderBudgetLedger,
-)
-from rag_app.adapters.providers.budget_transport import (
-    provider_request_identity,
-)
 from rag_app.api.product import create_product_app
-from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.product.auth import SESSION_COOKIE
 from tests.adapters.parsers.docx.fixtures import build_package
 from tests.product_support import (
@@ -38,18 +30,6 @@ from tests.product_support import (
 _DOCX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _GenerationScope:
-    """一次合成回答授权所需的完整隔离范围。"""
-
-    tmp_path: Path
-    runtime: ProductRuntime
-    project_id: str
-    knowledge_base_id: str
-    document_id: str
-    connection_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,61 +215,30 @@ def _upload_document(case: _StreamingCase) -> str:
 
 
 def _authorize_generation(
-    scope: _GenerationScope,
+    case: _StreamingCase,
     *,
     request_limit: int = 1,
 ) -> None:
-    control = scope.runtime.control
-    sdk = scope.runtime.sdk
-    connection = control.get_connection(scope.connection_id)
-    document = sdk.get_document(
-        scope.project_id,
-        scope.knowledge_base_id,
-        scope.document_id,
+    """通过当前管理员 API 批准活动合成语料与 generation 预算。"""
+    response = case.harness.client.post(
+        f"/api/v1/knowledge-bases/{case.knowledge_base_id}/"
+        "corpus-authorization:approve",
+        headers=case.harness.write_headers,
+        json={
+            "operations": ["generation"],
+            "expires_at": (
+                datetime.now(UTC) + timedelta(minutes=10)
+            ).isoformat(),
+            "request_limit": request_limit,
+            "estimated_token_limit": 10_000,
+            "operation_request_limits": {"generation": request_limit},
+        },
     )
-    if document.current_version_id is None:
-        raise AssertionError("合成文档缺少活动版本。")
-    version = sdk.get_document_version(
-        scope.project_id,
-        scope.knowledge_base_id,
-        scope.document_id,
-        document.current_version_id,
-    )
-    ProviderBudgetLedger(
-        scope.tmp_path / "data" / "provider-budget.sqlite3"
-    ).create_campaign(
-        BudgetCampaign(
-            campaign_id="v3-00-stream-baseline",
-            authorization_id="v3-00-synthetic-only",
-            scope="synthetic-stream-baseline",
-            request_limit=request_limit,
-            estimated_token_limit=10_000,
-            scope_mode="knowledge_base",
-            project_id=scope.project_id,
-            knowledge_base_id=scope.knowledge_base_id,
-            approved_source_hashes=(version.content_sha256,),
-            allowed_models=("qwen3.7-flash",),
-            allowed_operations=("generation",),
-            operation_request_limits={"generation": request_limit},
-            expires_at=(datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
-            approved_request_identities=(
-                provider_request_identity(
-                    "https://llm-syntheticworkspace.cn-beijing.maas."
-                    "aliyuncs.com/compatible-mode/v1/chat/completions",
-                    "qwen3.7-flash",
-                    {
-                        "connection_id": scope.connection_id,
-                        "configuration_version": (
-                            connection.configuration_version
-                        ),
-                        "credential_key_version": control.credential_version(
-                            connection.credential_id
-                        ),
-                    },
-                ),
-            ),
-        )
-    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["corpus_authorization_state"] == "APPROVED"
+    assert payload["model_authorization_state"] == "APPROVED"
+    assert payload["budget_state"] == "AVAILABLE"
 
 
 def _prepare_case(
@@ -312,27 +261,16 @@ def _prepare_case(
         document_id,
     )
     _, _, _, connection_id = create_provider_connections(harness)
-    _authorize_generation(
-        _GenerationScope(
-            tmp_path=tmp_path,
-            runtime=harness.runtime,
-            project_id=project_id,
-            knowledge_base_id=knowledge_base_id,
-            document_id=document_id,
-            connection_id=connection_id,
-        ),
-        request_limit=generation_request_limit,
-    )
     settings = harness.client.put(
         f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
         headers=harness.write_headers,
         json={
             "generation_connection_id": connection_id,
             "generation_model": "qwen3.7-flash",
-            "budget_campaign_id": "v3-00-stream-baseline",
         },
     )
     settings.raise_for_status()
+    _authorize_generation(case, request_limit=generation_request_limit)
     return case
 
 

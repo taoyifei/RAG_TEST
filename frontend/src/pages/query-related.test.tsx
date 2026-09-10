@@ -36,6 +36,7 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
     singleflight_key_hash: null,
     singleflight_wait_ms: 0,
     generation_called_this_request: false,
+    interpret_called_this_request: false,
     rewrite_called_this_request: false,
     confidence: {
       status: "INSUFFICIENT_EVIDENCE",
@@ -45,6 +46,8 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
       feature_values: [],
     },
     query_kind: "simple_fact",
+    requested_answer_type: "FACT",
+    query_semantic_source: "RULE",
     index_fingerprint: "sha256:synthetic",
     serving_fingerprint: "sha256:synthetic",
     route_reason_code: "LEXICAL_ONLY",
@@ -142,19 +145,48 @@ it("空结果不渲染空卡片标题；正常答案独立提供原始答案文�
   ).toHaveAttribute("data-raw-answer", "已确认内容");
 });
 
+it("deterministic slot 即使被选择也只显示本地确定性检索", async () => {
+  vi.spyOn(api, "answerStream").mockResolvedValue(
+    response({
+      selected_embedding_slot: "primary",
+      selected_vector_name: "dense_primary",
+      data_plane: {
+        retrieval_data_plane: "default_local_fallback",
+        active_index_revision_id: `irev_${"a".repeat(32)}`,
+        index_fingerprint: `sha256:${"b".repeat(64)}`,
+        serving_fingerprint: `sha256:${"c".repeat(64)}`,
+        embedding_provider_id: "deterministic",
+        embedding_model: "deterministic-sha256-v1",
+        selected_vector_space: "primary:deterministic",
+        reranker_provider_id: "lexical_overlap",
+        reranker_model: "1",
+        rerank_mode: "provider",
+        dense_calibration_state: "UNCALIBRATED",
+        model_configuration_state: "NOT_CONFIGURED",
+        model_authorization_state: "NOT_REQUIRED",
+        corpus_authorization_state: "NOT_REQUIRED",
+        budget_state: "NOT_REQUIRED",
+        fallback_reason_codes: ["DETERMINISTIC_EMBEDDING"],
+      },
+    }),
+  );
+  render(<QueryPage mode="answer" />);
+  const user = await submit();
+  await user.click(await screen.findByText("技术统计与检索状态"));
+  expect(await screen.findByText("本地确定性检索")).toBeVisible();
+  expect(screen.queryByText("向量与原文检索")).toBeNull();
+  expect(screen.queryByText("活动真实 Dense 检索")).toBeNull();
+});
+
 it("知识库切换和晚到响应不能重新显示旧原文", async () => {
   let resolve!: (value: QueryResponse) => void;
   let oldHandlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
-  vi.spyOn(api, "answerStream").mockImplementation(
-    (...args) => {
-      oldHandlers = args[7] ?? {};
-      return (
-      new Promise((done) => {
-        resolve = done;
-      })
-      );
-    },
-  );
+  vi.spyOn(api, "answerStream").mockImplementation((...args) => {
+    oldHandlers = args[7] ?? {};
+    return new Promise((done) => {
+      resolve = done;
+    });
+  });
   const view = render(<QueryPage mode="answer" />);
   await submit();
   consoleState.scope.kbId = "kb_b";
@@ -189,9 +221,7 @@ it("合法 claim 立即显示为暂存内容，final 到达后由正式答案替
     handlers.onClaim?.({
       claim_index: 0,
       text: "资料员每周核对设备清单。",
-      supports: [
-        { support_id: "support-1", quote: "每周核对设备清单" },
-      ],
+      supports: [{ support_id: "support-1", quote: "每周核对设备清单" }],
       active_index_revision_id: "irev_stream",
     });
   });
@@ -213,9 +243,7 @@ it("合法 claim 立即显示为暂存内容，final 到达后由正式答案替
   expect(
     await screen.findByRole("region", { name: "正式答案" }),
   ).toHaveTextContent("资料员每周核对设备清单。 [support-1]");
-  expect(
-    screen.queryByRole("region", { name: "已核验暂存内容" }),
-  ).toBeNull();
+  expect(screen.queryByRole("region", { name: "已核验暂存内容" })).toBeNull();
 });
 
 it("停止按钮中断当前 fetch，且停止后的晚到 claim 不再显示", async () => {
@@ -368,6 +396,40 @@ it("准确区分本次模型生成、缓存、预算回退、无授权与澄清"
   expect(await screen.findByText(/未获本次资料出网授权/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "执行" }));
   expect(await screen.findByText(/请补充对象、范围或所问关系/)).toBeVisible();
+});
+
+it("结构化展示职责并为能力阻断提供独立修复入口", async () => {
+  const go = vi.fn();
+  vi.spyOn(api, "answerStream")
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "质量主管｜1. 核对标准 [S1]\n质量主管｜2. 组织验收 [S2]",
+        requested_answer_type: "DUTIES",
+        related_contents: [],
+        display_message: null,
+        generation_mode: "extractive",
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        status: "CONFIGURATION_REQUIRED",
+        answer: null,
+        related_contents: [],
+        display_message: null,
+        generation_reason_code: "CONFIGURATION_REQUIRED",
+      }),
+    );
+  render(<QueryPage mode="answer" go={go} />);
+  const user = await submit();
+  const list = await screen.findByRole("list", { name: "结构化答案" });
+  expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+  expect(screen.getByText(/本地结构化回答器/)).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/回答模型尚未完成配置/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "配置回答模型" }));
+  expect(go).toHaveBeenCalledWith("/documents");
 });
 
 it("会话 ID 随请求传递，支持新建、清空和有限反馈", async () => {

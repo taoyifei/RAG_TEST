@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
-from rag_app.core.models import AnswerDraft, EvidenceItem, ProviderHealth
+from rag_app.core.models import (
+    AnswerDraft,
+    EvidenceItem,
+    ProviderHealth,
+    QuerySemantics,
+)
 from rag_app.core.models.common import FrozenModel
 
 
@@ -18,6 +23,22 @@ class GenerationRequest(FrozenModel):
     evidence: tuple[EvidenceItem, ...]
     citation_protocol: str = Field(min_length=1)
     repair_reason: str | None = Field(default=None, max_length=200)
+    typed_semantics: QuerySemantics | None = None
+    answer_support_set: tuple[EvidenceItem, ...] = ()
+    model_evidence_candidates: tuple[EvidenceItem, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_evidence_sets(self) -> Self:
+        """保证直接支持集和模型候选均来自有界 evidence 包。"""
+        evidence_ids = {item.support_id for item in self.evidence}
+        for name, items in (
+            ("answer_support_set", self.answer_support_set),
+            ("model_evidence_candidates", self.model_evidence_candidates),
+        ):
+            ids = [item.support_id for item in items]
+            if len(ids) != len(set(ids)) or not set(ids) <= evidence_ids:
+                raise ValueError(f"{name} 必须是 evidence 的无重复子集。")
+        return self
 
 
 class GeneratorPort(Protocol):

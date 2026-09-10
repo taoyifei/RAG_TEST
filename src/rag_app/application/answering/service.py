@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from rag_app.application.answering.structured import (
+    DeterministicAnswerRenderer,
+)
 from rag_app.application.answering.validation import validate_extractive_draft
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    QueryAnalysis,
 )
 from rag_app.core.ports import GenerationRequest, GeneratorPort
 
@@ -16,12 +20,15 @@ class ExtractiveAnsweringService:
 
     def __init__(self, generator: GeneratorPort) -> None:
         self._generator = generator
+        self._structured = DeterministicAnswerRenderer()
 
     def answer(
         self,
         query: str,
         evidence: tuple[EvidenceItem, ...],
         confidence: ConfidenceDecision,
+        *,
+        analysis: QueryAnalysis | None = None,
     ) -> str | None:
         """生成并验证纯 Evidence 原文回答。
 
@@ -29,6 +36,7 @@ class ExtractiveAnsweringService:
             query: 原始用户查询。
             evidence: 已通过 source-span 预算的证据。
             confidence: 决定是否允许调用 Generator 的结果。
+            analysis: 检索、证据与回答共享的最终类型化语义。
 
         Returns:
             通过引用校验的 extractive 回答，拒答时为 None。
@@ -36,6 +44,8 @@ class ExtractiveAnsweringService:
         """
         if confidence.status is not ConfidenceStatus.ANSWERABLE or not evidence:
             return None
+        if analysis is not None:
+            return self._structured.render(analysis, evidence).text
         draft = self._generator.generate(
             GenerationRequest(
                 query=query,

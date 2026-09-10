@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
@@ -38,7 +38,10 @@ from rag_app.application.provider_health import (
     LocalUsageBudget,
     ProviderCircuitBreaker,
 )
-from rag_app.application.retrieval import RetrievalService
+from rag_app.application.retrieval import (
+    QueryDataPlaneContext,
+    RetrievalService,
+)
 from rag_app.application.revision_builder import RevisionBuilder
 from rag_app.application.revision_validator import RevisionValidator
 from rag_app.clients.resilience import ResiliencePolicy, ResilientHttpPool
@@ -55,6 +58,7 @@ from rag_app.composition.profiles import (
     RagProfile,
     default_offline_profile,
 )
+from rag_app.core.errors import RagError
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
@@ -87,6 +91,10 @@ from rag_app.product.auth import (
 from rag_app.product.compatibility import CompatibilityManifest, load_manifest
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.conversations import ProductConversationStore
+from rag_app.product.corpus_authorization import (
+    CorpusAuthorizationStatus,
+    CorpusAuthorizationStore,
+)
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import MasterKey, SecretCipher, load_master_key
 from rag_app.product.diagram_relations import ProductDiagramRelations
@@ -552,6 +560,7 @@ class ProductProfileResolver:
         providers: ProviderRuntimeRegistry,
         *,
         models: ProductModelSettings | None = None,
+        corpus_authorizations: CorpusAuthorizationStore | None = None,
         ocr: ProductOcrEnrichment | None = None,
         circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
         acceptance_egress_resolver: Callable[
@@ -565,6 +574,7 @@ class ProductProfileResolver:
             control: Retrieval Profile Store。
             providers: 页面托管 Credential 的 Provider 工厂。
             models: 可选的知识库回答和 OCR 配置存储。
+            corpus_authorizations: 可选的活动语料批准与预算状态存储。
             ocr: 可选的同库图片增补服务。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
@@ -576,6 +586,7 @@ class ProductProfileResolver:
         self._control = control
         self._providers = providers
         self._models = models
+        self._corpus_authorizations = corpus_authorizations
         self._ocr = ocr
         self._grounded_models: dict[
             str, _ResourceGeneration[ProductGroundedModel]
@@ -735,6 +746,9 @@ class ProductProfileResolver:
             None
         )
         generation_identity: str | None = None
+        settings = KnowledgeBaseModelSettings()
+        model_configuration_failed = False
+        authorization_status: CorpusAuthorizationStatus | None = None
         with self._lock:
             self._ensure_open_locked()
             profile = self.active_profile(knowledge_base_id)
@@ -744,15 +758,44 @@ class ProductProfileResolver:
                 service = service_generation.resource.retrieval
             if self._models is not None:
                 settings = self._models.get(knowledge_base_id)
-                if settings.generation_connection_id:
-                    generation_identity = self._models.serving_identity(
-                        settings
+                if self._corpus_authorizations is not None:
+                    authorization_status = self._corpus_authorizations.status(
+                        knowledge_base_id
                     )
-                    model_generation = self._model_generation_locked(
-                        knowledge_base_id,
-                        generation_identity,
-                        settings,
-                    )
+                model_authorized = authorization_status is None or (
+                    authorization_status.corpus_authorization_state
+                    == "APPROVED"
+                    and authorization_status.model_authorization_state
+                    == "APPROVED"
+                    and authorization_status.budget_state == "AVAILABLE"
+                )
+                if settings.generation_connection_id and model_authorized:
+                    try:
+                        generation_identity = self._models.serving_identity(
+                            settings
+                        )
+                        model_generation = self._model_generation_locked(
+                            knowledge_base_id,
+                            generation_identity,
+                            settings,
+                        )
+                    except (RagError, ValueError, KeyError):
+                        model_generation = None
+                        model_configuration_failed = True
+            base_data_plane_context = getattr(
+                service, "data_plane_context", None
+            )
+            data_plane_context = (
+                self._query_data_plane_context(
+                    base_data_plane_context,
+                    profile,
+                    settings,
+                    authorization_status=authorization_status,
+                    model_configuration_failed=model_configuration_failed,
+                )
+                if isinstance(base_data_plane_context, QueryDataPlaneContext)
+                else None
+            )
             if service_generation is not None:
                 self._acquire_generation_locked(service_generation)
             if model_generation is not None:
@@ -764,17 +807,113 @@ class ProductProfileResolver:
                         "回答模型 generation 缺少 serving identity。"
                     )
                 model = model_generation.resource
+                rewrite_enabled = bool(
+                    getattr(settings, "rewrite_enabled", False)
+                )
                 service = service.with_generation(
                     model,
                     serving_identity=generation_identity,
-                    rewriter=model,
+                    interpreter=model if rewrite_enabled else None,
+                    rewriter=model if rewrite_enabled else None,
                 )
+            with_data_plane = getattr(service, "with_data_plane", None)
+            if data_plane_context is not None and callable(with_data_plane):
+                service = with_data_plane(data_plane_context)
             yield service
         finally:
             self._release_query_generations(
                 service_generation,
                 model_generation,
             )
+
+    def _query_data_plane_context(
+        self,
+        base: QueryDataPlaneContext,
+        profile: RetrievalProfileRevision | None,
+        settings: KnowledgeBaseModelSettings,
+        *,
+        authorization_status: CorpusAuthorizationStatus | None,
+        model_configuration_failed: bool,
+    ) -> QueryDataPlaneContext:
+        """从当前 Profile、模型设置与批准账本解析单次查询状态。
+
+        Args:
+            base: 实际 RetrievalService 记录的组件身份。
+            profile: 本请求冻结的活动 Profile；未配置时为空。
+            settings: 本请求读取的知识库模型设置。
+            authorization_status: 当前清单与账本的动态对账结果。
+            model_configuration_failed: 模型适配器是否无法安全构造。
+
+        Returns:
+            不含 Secret 且不会触发 Provider 调用的数据面上下文。
+
+        """
+        fallback_reasons = list(base.fallback_reason_codes)
+        if profile is not None:
+            fallback_reasons = [
+                reason
+                for reason in fallback_reasons
+                if reason != "NO_ACTIVE_RETRIEVAL_PROFILE"
+            ]
+        configuration_state = (
+            "CONFIGURED"
+            if settings.generation_connection_id
+            else "NOT_CONFIGURED"
+        )
+        authorization_state = (
+            "MISSING" if settings.generation_connection_id else "NOT_REQUIRED"
+        )
+        corpus_state = authorization_state
+        budget_state = authorization_state
+        if authorization_status is not None:
+            configuration_state = authorization_status.model_configuration_state
+            authorization_state = authorization_status.model_authorization_state
+            corpus_state = authorization_status.corpus_authorization_state
+            budget_state = authorization_status.budget_state
+            fallback_reasons.extend(authorization_status.fallback_reason_codes)
+        generation_provider_id = None
+        if settings.generation_connection_id:
+            try:
+                generation_provider_id = self._control.get_connection(
+                    settings.generation_connection_id
+                ).provider_type
+            except RagError:
+                model_configuration_failed = True
+        if model_configuration_failed:
+            configuration_state = "INVALID"
+            authorization_state = "BLOCKED"
+            fallback_reasons.append("MODEL_RUNTIME_CONFIGURATION_INVALID")
+        return replace(
+            base,
+            retrieval_data_plane=(
+                "active_remote_profile"
+                if profile is not None
+                else "default_local_fallback"
+            ),
+            active_retrieval_profile_revision_id=(
+                None if profile is None else profile.profile_revision_id
+            ),
+            generation_provider_id=generation_provider_id,
+            generation_model=settings.generation_model,
+            interpret_provider_id=(
+                generation_provider_id if settings.rewrite_enabled else None
+            ),
+            interpret_model=(
+                settings.generation_model if settings.rewrite_enabled else None
+            ),
+            rewrite_provider_id=(
+                generation_provider_id if settings.rewrite_enabled else None
+            ),
+            rewrite_model=(
+                settings.generation_model if settings.rewrite_enabled else None
+            ),
+            model_configuration_state=configuration_state,
+            model_authorization_state=authorization_state,
+            corpus_authorization_state=corpus_state,
+            budget_state=budget_state,
+            fallback_reason_codes=tuple(dict.fromkeys(fallback_reasons)),
+            report_model_capability_blockers=True,
+        )
 
     def revision_lifecycle(
         self,
@@ -1512,6 +1651,7 @@ class ProductRuntime:
     conversations: ProductConversationStore
     feedback: ProductFeedbackStore
     models: ProductModelSettings
+    corpus_authorizations: CorpusAuthorizationStore
     ocr: ProductOcrEnrichment
     relations: ProductDiagramRelations
     traces: ProductTraceCoordinator
@@ -1602,7 +1742,7 @@ class ProductRuntime:
         self.close()
 
 
-def build_product_runtime(
+def build_product_runtime(  # noqa: PLR0915
     settings: ProductRuntimeSettings,
     *,
     transport_factory: TransportFactory | None = None,
@@ -1709,6 +1849,13 @@ def build_product_runtime(
         budget_ledger_path=data_dir / "provider-budget.sqlite3",
         local_ocr_adapter=local_ocr_adapter,
     )
+    corpus_authorizations = CorpusAuthorizationStore(
+        connections,
+        control,
+        models,
+        providers,
+        data_dir / "provider-budget.sqlite3",
+    )
     ocr = ProductOcrEnrichment(
         connections, models, providers, data_dir / "provider-budget.sqlite3"
     )
@@ -1730,6 +1877,7 @@ def build_product_runtime(
         control,
         providers,
         models=models,
+        corpus_authorizations=corpus_authorizations,
         ocr=ocr,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
@@ -1787,6 +1935,7 @@ def build_product_runtime(
         conversations=conversations,
         feedback=feedback,
         models=models,
+        corpus_authorizations=corpus_authorizations,
         ocr=ocr,
         relations=relations,
         traces=traces,

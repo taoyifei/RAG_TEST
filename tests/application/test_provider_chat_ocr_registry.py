@@ -21,6 +21,7 @@ from tests.product_support import build_product_harness
     ("operation", "model"),
     [
         ("generation", "qwen3.7-flash"),
+        ("query.interpret", "qwen3.7-flash"),
         ("query.rewrite", "qwen3.7-flash"),
         ("image.ocr", "qwen3.5-ocr"),
     ],

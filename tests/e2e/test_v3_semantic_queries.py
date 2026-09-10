@@ -19,14 +19,18 @@ from rag_app.core.models import (
     ConfidenceStatus,
     DocumentRef,
     KnowledgeBaseScope,
+    QueryAnalysis,
     QueryEmbeddingRequest,
+    QuerySemantics,
     QueryVariant,
+    RequestedAnswerType,
     RetrievalPolicy,
     RoutedEmbeddingResult,
     SearchRequest,
 )
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import CancellationPort, GenerationRequest
+from rag_app.core.ports.query_interpret import InterpretOutcome
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from tests.adapters.parsers.docx_fixtures import build_docx
 
@@ -204,6 +208,31 @@ class _EvidenceTriggeredRewriter:
         )
 
 
+class _StructuredInterpreter:
+    """模拟一次已授权解释，只返回语义，不携带任何答案。"""
+
+    def __init__(self) -> None:
+        self.analyses: list[QueryAnalysis] = []
+
+    def interpret(
+        self, request: SearchRequest, analysis: QueryAnalysis
+    ) -> InterpretOutcome:
+        self.analyses.append(analysis)
+        assert request.text == "甲部门这块是怎么回事？"
+        return InterpretOutcome(
+            standalone_query="甲部门的职责是什么？",
+            semantics=QuerySemantics(
+                target="甲部门",
+                relation="职责",
+                answer_type=RequestedAnswerType.DUTIES,
+                source="LLM_INTERPRET",
+                reason_codes=("STRUCTURED_QUERY_INTERPRET",),
+            ),
+            reason_code="INTERPRET_APPLIED",
+            attempted=True,
+        )
+
+
 class _EvidenceEchoGenerator:
     """仅按收到的证据构造可验证 claim，不按问题返回预置答案。"""
 
@@ -342,3 +371,46 @@ def test_evidence_shortfall_rewrite_reaches_lexical_dense_and_evidence(
             for contribution in item.contributions
         }
         assert len(families) == len(item.contributions)
+
+
+def test_interpretation_is_consumed_once_by_structural_retrieval_and_evidence(
+    tmp_path: Path,
+) -> None:
+    """解释结果进入同一分析，结构通道和证据门共同消费。"""
+    scope = _scope_with_blocks(
+        tmp_path,
+        (
+            "<w:p><w:r><w:t>"
+            "甲部门的职责包括设备巡检、故障复核和维护记录归档。"
+            "</w:t></w:r></w:p>"
+        ),
+        namespace="interpreted-duties",
+    )
+    interpreter = _StructuredInterpreter()
+
+    with build_p07_runtime(
+        _PROFILE, data_dir=tmp_path, policy=_PRODUCT_EVIDENCE_POLICY
+    ) as runtime:
+        service = runtime.retrieval.with_generation(
+            _EvidenceEchoGenerator(),
+            serving_identity=canonical_sha256("structured-interpret-test"),
+            interpreter=interpreter,
+        )
+        result = service.search_and_answer(
+            SearchRequest(scope=scope, text="甲部门这块是怎么回事？"),
+            cache_result=False,
+        )
+
+    assert len(interpreter.analyses) == 1
+    original = interpreter.analyses[0]
+    assert original.semantics.source == "ORIGINAL_FALLBACK"
+    assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
+    assert result.answer is not None
+    assert result.interpret_reason_code == "INTERPRET_APPLIED"
+    assert result.interpret_called_this_request is False
+    assert result.diagnostics is not None
+    assert any(
+        contribution.channel == "structural:canonical-v1"
+        for item in result.diagnostics.fusion
+        for contribution in item.contributions
+    )

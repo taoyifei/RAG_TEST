@@ -21,9 +21,9 @@ class CatalogProvider(BaseModel):
     endpoint_profiles: tuple[str, ...] = ("default",)
 
 
-CATALOG_VERSION: Final = "2026-09-04.1"
+CATALOG_VERSION: Final = "2026-09-10.1"
 # 新增生成能力不改变已落盘的 Embedding 数学合同和向量缓存身份。
-CAPABILITY_CATALOG_VERSION: Final = "2026-09-07.1"
+CAPABILITY_CATALOG_VERSION: Final = "2026-09-10.1"
 _PROVIDERS: Final = (
     CatalogProvider(
         provider_type="jina",
@@ -47,6 +47,7 @@ _PROVIDERS: Final = (
             "embedding.document",
             "embedding.query",
             "generation",
+            "query.interpret",
             "query.rewrite",
             "image.ocr",
         ),
@@ -55,6 +56,7 @@ _PROVIDERS: Final = (
             "embedding.document": ("qwen3.7-text-embedding",),
             "embedding.query": ("qwen3.7-text-embedding",),
             "generation": ("qwen3.7-flash",),
+            "query.interpret": ("qwen3.7-flash",),
             "query.rewrite": ("qwen3.7-flash",),
             "image.ocr": ("qwen3.5-ocr",),
         },

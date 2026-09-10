@@ -8,13 +8,14 @@ from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import ChannelHit, FusedCandidate, RrfContribution
 
 
-def reciprocal_rank_fusion(
+def reciprocal_rank_fusion(  # noqa: PLR0913
     channels: Mapping[str, Sequence[ChannelHit]],
     *,
     expected_revision_id: str,
     k: int = 60,
     weights: Mapping[str, float] | None = None,
     limit: int = 48,
+    required_candidate_ids: frozenset[str] = frozenset(),
 ) -> tuple[FusedCandidate, ...]:
     """只使用 1-based rank 融合有界候选。
 
@@ -24,6 +25,7 @@ def reciprocal_rank_fusion(
         k: P07 provisional RRF 常数。
         weights: 可选正权重；缺失通道默认一。
         limit: 最大融合候选数。
+        required_candidate_ids: 必须进入后续结构闭合的有界候选 ID。
 
     Returns:
         带逐通道贡献且 tie 稳定的候选。
@@ -102,6 +104,16 @@ def reciprocal_rank_fusion(
             item.chunk_id,
         )
     )
+    if required_candidate_ids:
+        required = [
+            item for item in fused if item.chunk_id in required_candidate_ids
+        ]
+        other = [
+            item
+            for item in fused
+            if item.chunk_id not in required_candidate_ids
+        ]
+        fused = [*required, *other]
     return tuple(fused[:limit])
 
 
@@ -109,6 +121,8 @@ def _channel_family(channel: str) -> str:
     """同一逻辑通道的原问与改写只贡献一次 RRF 票。"""
     if channel.startswith("lexical:"):
         return "lexical"
+    if channel.startswith("structural:"):
+        return "structural"
     if channel.startswith("dense:"):
         return "dense"
     return channel

@@ -1426,10 +1426,7 @@ def _candidate_acceptance() -> None:
                 environment=environment,
             )
             _wait_candidate(port)
-            _run(
-                (sys.executable, "scripts/dev.py", "web-e2e"),
-                environment=environment,
-            )
+            _candidate_browser_acceptance(compose, environment, port)
             before = _candidate_inventory(compose)
             _run(
                 (*compose, "restart", "app", "qdrant"), environment=environment
@@ -1464,6 +1461,26 @@ def _candidate_acceptance() -> None:
                 (*compose, "down", "--volumes", "--remove-orphans"),
                 environment=environment,
             )
+
+
+def _candidate_browser_acceptance(
+    compose: Sequence[str],
+    environment: dict[str, str],
+    port: int,
+) -> None:
+    """按视口隔离候选浏览器验收的进程内安全限流桶。"""
+    for project in ("chromium-desktop", "chromium-mobile"):
+        project_environment = {
+            **environment,
+            "P10_BROWSER_PROJECT": project,
+        }
+        _run(
+            (sys.executable, "scripts/dev.py", "web-e2e"),
+            environment=project_environment,
+        )
+        if project == "chromium-desktop":
+            _run((*compose, "restart", "app"), environment=environment)
+            _wait_candidate(port)
 
 
 def _wait_candidate(port: int) -> None:

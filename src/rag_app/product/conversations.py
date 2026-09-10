@@ -253,8 +253,6 @@ class ProductConversationStore:
             ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
         }:
             return False
-        if result.generation_mode == "extractive_fallback":
-            return False
         terminal_status = "ANSWERED" if result.answer is not None else "REFUSED"
         claims = _project_claims(result)
         payload = {

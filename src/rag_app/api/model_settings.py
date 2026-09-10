@@ -1,5 +1,7 @@
 """本机管理员选择知识库模型的最小接口。"""
 
+import sqlite3
+from dataclasses import dataclass
 from threading import RLock
 from typing import Literal
 
@@ -7,12 +9,23 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import Field
 
 from rag_app.composition.product_runtime import ProductRuntime
+from rag_app.core.errors import RagError
+from rag_app.core.models import (
+    EmbeddingSlotIdentity,
+    EmbeddingTopology,
+    RetrievalPolicy,
+)
 from rag_app.core.models.common import FrozenModel
+from rag_app.product.corpus_authorization import (
+    CorpusAuthorizationApproval,
+    CorpusAuthorizationStatus,
+)
 from rag_app.product.diagram_relations import (
     DiagramRelationCandidate,
     RelationReviewState,
 )
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
+from rag_app.product.models import RetrievalProfileRevision
 from rag_app.product.ocr_adapters import LOCAL_OCR_CONNECTION_ID
 
 
@@ -38,6 +51,28 @@ class DiagramRelationReviewResponse(FrozenModel):
     content_identity: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _RetrievalStatusSnapshot:
+    """检索状态接口一次事务内读取的持久化快照。"""
+
+    revision: sqlite3.Row
+    coverage_rows: tuple[sqlite3.Row, ...]
+    latest_draft: RetrievalProfileRevision | None
+    activation_state: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ProfileStatusProjection:
+    """活动或草稿 Profile 的非敏感展示投影。"""
+
+    profile_state: str
+    calibration_state: str
+    serving_fingerprint: str
+    reranker_provider_id: str
+    reranker_model: str | None
+    reason_codes: tuple[str, ...] = ()
+
+
 def register_model_settings_routes(  # noqa: PLR0915
     app: FastAPI, runtime: ProductRuntime
 ) -> None:
@@ -52,6 +87,9 @@ def register_model_settings_routes(  # noqa: PLR0915
 
     """
     path = "/api/v1/knowledge-bases/{knowledge_base_id}/model-settings"
+    authorization_path = (
+        "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization"
+    )
 
     @app.get(path, tags=["models"])
     def _get(knowledge_base_id: str) -> dict[str, object]:
@@ -69,6 +107,12 @@ def register_model_settings_routes(  # noqa: PLR0915
                 not local_ocr_selected or runtime.providers.local_ocr_available
             ),
             "local_ocr_available": runtime.providers.local_ocr_available,
+            "corpus_authorization": runtime.corpus_authorizations.status(
+                knowledge_base_id
+            ).model_dump(mode="json"),
+            "retrieval_data_plane": _retrieval_data_plane_status(
+                runtime, knowledge_base_id
+            ),
         }
 
     @app.put(path, tags=["models"])
@@ -86,6 +130,44 @@ def register_model_settings_routes(  # noqa: PLR0915
         runtime.models.save(knowledge_base_id, settings)
         runtime.profiles.invalidate(knowledge_base_id)
         return _get(knowledge_base_id)
+
+    @app.get(
+        authorization_path,
+        tags=["models"],
+        response_model=CorpusAuthorizationStatus,
+    )
+    def _authorization_status(
+        knowledge_base_id: str,
+    ) -> CorpusAuthorizationStatus:
+        """读取当前活动语料、模型用途和累计预算的动态对账状态。"""
+        return runtime.corpus_authorizations.status(knowledge_base_id)
+
+    @app.post(
+        authorization_path + ":approve",
+        tags=["models"],
+        response_model=CorpusAuthorizationStatus,
+    )
+    def _approve_authorization(
+        knowledge_base_id: str,
+        approval: CorpusAuthorizationApproval,
+        request: Request,
+    ) -> CorpusAuthorizationStatus:
+        """仅接受管理员会话对服务端冻结的活动语料作明确批准。"""
+        if getattr(request.state, "product_principal", None) != "admin_session":
+            raise HTTPException(403, "资料授权只能由控制台管理员会话批准。")
+        session_id = getattr(request.state, "product_session_id", None)
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(403, "管理员会话身份不可用。")
+        try:
+            status = runtime.corpus_authorizations.approve(
+                knowledge_base_id,
+                approval,
+                approved_by_session_id=session_id,
+            )
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        runtime.profiles.invalidate(knowledge_base_id)
+        return status
 
     ocr_path = (
         "/api/v1/knowledge-bases/{knowledge_base_id}"
@@ -285,6 +367,265 @@ def register_model_settings_routes(  # noqa: PLR0915
             rebuild_job_id=job_id,
             content_identity=current_identity,
         )
+
+
+def _read_retrieval_status_snapshot(
+    runtime: ProductRuntime,
+    knowledge_base_id: str,
+    profiles: tuple[RetrievalProfileRevision, ...],
+) -> _RetrievalStatusSnapshot:
+    """在一个事务中读取 Revision、覆盖率与草稿激活状态。"""
+    with runtime.connections.transaction() as connection:
+        revision = connection.execute(
+            "SELECT kb.active_revision_id,r.index_fingerprint,"
+            "r.embedding_topology_json,r.expected_chunk_count "
+            "FROM knowledge_bases kb LEFT JOIN index_revisions r "
+            "ON r.index_revision_id=kb.active_revision_id "
+            "WHERE kb.knowledge_base_id=? AND kb.deleted_at IS NULL",
+            (knowledge_base_id,),
+        ).fetchone()
+        if revision is None:
+            raise HTTPException(404, "知识库不存在。")
+        coverage_rows = ()
+        if revision["active_revision_id"] is not None:
+            coverage_rows = tuple(
+                connection.execute(
+                    "SELECT slot_id,expected_chunk_count,"
+                    "valid_vector_count,state "
+                    "FROM revision_embedding_coverage WHERE revision_id=? "
+                    "ORDER BY slot_id",
+                    (revision["active_revision_id"],),
+                ).fetchall()
+            )
+        latest_draft = next(
+            (item for item in profiles if item.status == "draft"), None
+        )
+        activation_state = _profile_activation_state(connection, latest_draft)
+    return _RetrievalStatusSnapshot(
+        revision=revision,
+        coverage_rows=coverage_rows,
+        latest_draft=latest_draft,
+        activation_state=activation_state,
+    )
+
+
+def _profile_activation_state(
+    connection: sqlite3.Connection,
+    profile: RetrievalProfileRevision | None,
+) -> str | None:
+    """读取草稿最近一次激活任务状态。"""
+    if profile is None or not profile.activation_job_id:
+        return None
+    job = connection.execute(
+        "SELECT state FROM ingestion_jobs WHERE job_id=?",
+        (profile.activation_job_id,),
+    ).fetchone()
+    return None if job is None else str(job[0])
+
+
+def _primary_embedding(revision: sqlite3.Row) -> EmbeddingSlotIdentity | None:
+    """从活动 Revision 读取实际 primary 向量空间。"""
+    topology = (
+        None
+        if revision["embedding_topology_json"] is None
+        else EmbeddingTopology.model_validate_json(
+            str(revision["embedding_topology_json"])
+        )
+    )
+    return None if topology is None else topology.slot(topology.primary_slot_id)
+
+
+def _coverage_is_complete(snapshot: _RetrievalStatusSnapshot) -> bool:
+    """判断活动 Revision 的每个向量槽是否完整。"""
+    expected_chunks = int(snapshot.revision["expected_chunk_count"] or 0)
+    return bool(snapshot.coverage_rows) and all(
+        int(row["expected_chunk_count"]) == expected_chunks
+        and int(row["valid_vector_count"]) == expected_chunks
+        and str(row["state"]) == "complete"
+        for row in snapshot.coverage_rows
+    )
+
+
+def _fallback_reasons(
+    active: RetrievalProfileRevision | None,
+    primary: EmbeddingSlotIdentity | None,
+) -> list[str]:
+    """说明为什么当前查询显示为本地确定性数据面。"""
+    if active is not None:
+        return []
+    reasons = ["NO_ACTIVE_RETRIEVAL_PROFILE"]
+    if primary is not None and primary.provider_id.casefold().startswith(
+        "deterministic"
+    ):
+        reasons.append("DETERMINISTIC_EMBEDDING")
+    return reasons
+
+
+def _active_profile_projection(
+    runtime: ProductRuntime,
+    active: RetrievalProfileRevision,
+    revision: sqlite3.Row,
+    default_serving_fingerprint: str,
+) -> _ProfileStatusProjection:
+    """对账活动 Profile 的策略、校准、索引与 Reranker。"""
+    try:
+        policy = RetrievalPolicy.model_validate(dict(active.retrieval_policy))
+        calibration_state = policy.dense_semantic_calibration_state
+        serving_fingerprint = runtime.profiles.serving_contract(active)[2]
+        reranker_provider_id = "lexical_overlap"
+        reranker_model = "1"
+        if active.reranker_connection_id:
+            provider_connection = runtime.control.get_connection(
+                active.reranker_connection_id
+            )
+            reranker_provider_id = provider_connection.provider_type
+            reranker_model = active.reranker_model
+    except (RagError, ValueError, KeyError):
+        return _ProfileStatusProjection(
+            profile_state="CONFIGURATION_INVALID",
+            calibration_state="UNCALIBRATED",
+            serving_fingerprint=default_serving_fingerprint,
+            reranker_provider_id="lexical_overlap",
+            reranker_model="1",
+            reason_codes=("PROFILE_RUNTIME_CONFIGURATION_INVALID",),
+        )
+    profile_state = "ACTIVE"
+    reasons: list[str] = []
+    if revision["index_fingerprint"] != active.index_semantic_fingerprint:
+        profile_state = "PROFILE_INDEX_MISMATCH"
+        reasons.append("PROFILE_INDEX_MISMATCH")
+    if runtime.control.profile_validation_issues(active.profile_revision_id):
+        reasons.append("PROFILE_VALIDATION_STALE")
+    if calibration_state == "UNCALIBRATED":
+        reasons.append("DENSE_CALIBRATION_MISSING")
+    return _ProfileStatusProjection(
+        profile_state=profile_state,
+        calibration_state=calibration_state,
+        serving_fingerprint=serving_fingerprint,
+        reranker_provider_id=reranker_provider_id,
+        reranker_model=reranker_model,
+        reason_codes=tuple(reasons),
+    )
+
+
+def _inactive_profile_projection(
+    snapshot: _RetrievalStatusSnapshot,
+    serving_fingerprint: str,
+) -> _ProfileStatusProjection:
+    """把未激活、重建中或失败的草稿映射为稳定状态。"""
+    profile_state = "NOT_CONFIGURED"
+    reasons: tuple[str, ...] = ()
+    if snapshot.latest_draft is not None:
+        if snapshot.activation_state in {"queued", "running"}:
+            profile_state = "REBUILD_PENDING"
+            reasons = ("PROFILE_REBUILD_PENDING",)
+        elif snapshot.activation_state and snapshot.activation_state.startswith(
+            "failed"
+        ):
+            profile_state = "REBUILD_FAILED"
+            reasons = ("PROFILE_REBUILD_FAILED",)
+        else:
+            profile_state = "DRAFT_NOT_ACTIVE"
+            reasons = ("PROFILE_DRAFT_NOT_ACTIVE",)
+    return _ProfileStatusProjection(
+        profile_state=profile_state,
+        calibration_state="UNCALIBRATED",
+        serving_fingerprint=serving_fingerprint,
+        reranker_provider_id="lexical_overlap",
+        reranker_model="1",
+        reason_codes=reasons,
+    )
+
+
+def _profile_projection(
+    runtime: ProductRuntime,
+    active: RetrievalProfileRevision | None,
+    snapshot: _RetrievalStatusSnapshot,
+    serving_fingerprint: str,
+) -> _ProfileStatusProjection:
+    """选择活动或草稿 Profile 的展示投影。"""
+    if active is None:
+        return _inactive_profile_projection(snapshot, serving_fingerprint)
+    return _active_profile_projection(
+        runtime,
+        active,
+        snapshot.revision,
+        serving_fingerprint,
+    )
+
+
+def _retrieval_data_plane_status(
+    runtime: ProductRuntime, knowledge_base_id: str
+) -> dict[str, object]:
+    """在不出网的前提下对账当前 Profile、Revision 和向量覆盖。
+
+    Args:
+        runtime: 当前唯一产品运行时。
+        knowledge_base_id: 用户正在查看的知识库。
+
+    Returns:
+        可在首次问答前展示的非敏感实际检索数据面状态。
+
+    """
+    profiles = runtime.control.list_profiles(knowledge_base_id)
+    active = next((item for item in profiles if item.status == "active"), None)
+    snapshot = _read_retrieval_status_snapshot(
+        runtime,
+        knowledge_base_id,
+        profiles,
+    )
+    primary = _primary_embedding(snapshot.revision)
+    reasons = _fallback_reasons(active, primary)
+    coverage_complete = _coverage_is_complete(snapshot)
+    if (
+        snapshot.revision["active_revision_id"] is not None
+        and not coverage_complete
+    ):
+        reasons.append("VECTOR_COVERAGE_INCOMPLETE")
+    projection = _profile_projection(
+        runtime,
+        active,
+        snapshot,
+        runtime.sdk.health().serving_fingerprint,
+    )
+    reasons.extend(projection.reason_codes)
+    return {
+        "retrieval_data_plane": (
+            "active_remote_profile"
+            if active is not None
+            else "default_local_fallback"
+        ),
+        "profile_state": projection.profile_state,
+        "active_retrieval_profile_revision_id": (
+            None if active is None else active.profile_revision_id
+        ),
+        "pending_profile_revision_id": (
+            None
+            if snapshot.latest_draft is None
+            else snapshot.latest_draft.profile_revision_id
+        ),
+        "activation_job_id": (
+            None
+            if snapshot.latest_draft is None
+            else snapshot.latest_draft.activation_job_id
+        ),
+        "active_index_revision_id": snapshot.revision["active_revision_id"],
+        "index_fingerprint": snapshot.revision["index_fingerprint"],
+        "serving_fingerprint": projection.serving_fingerprint,
+        "embedding_provider_id": (
+            None if primary is None else primary.provider_id
+        ),
+        "embedding_model": None if primary is None else primary.model,
+        "selected_vector_space": (
+            None if primary is None else primary.vector_space_identity
+        ),
+        "reranker_provider_id": projection.reranker_provider_id,
+        "reranker_model": projection.reranker_model,
+        "dense_calibration_state": projection.calibration_state,
+        "vector_coverage_complete": coverage_complete,
+        "fallback_reason_codes": tuple(dict.fromkeys(reasons)),
+        "remediation_path": "/retrieval-profiles",
+    }
 
 
 def _inflight_ocr_job(

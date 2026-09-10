@@ -8,9 +8,10 @@ import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Literal
 
 from rag_app.application.answering import ExtractiveAnsweringService
 from rag_app.application.answering.grounded import GroundedAnsweringService
@@ -40,6 +41,7 @@ from rag_app.application.retrieval.reranking import (
     CircuitAwareReranker,
     RerankingOutcome,
 )
+from rag_app.application.retrieval.structural import StructuralChannel
 from rag_app.core.errors import (
     ChannelRateLimited,
     ChannelUnavailable,
@@ -50,6 +52,7 @@ from rag_app.core.errors import (
     QueryCancelled,
     RagError,
     StreamDeliveryError,
+    ValidationFailed,
 )
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
@@ -73,6 +76,8 @@ from rag_app.core.models import (
     ProviderCallCount,
     ProviderFailureCategory,
     QueryAnalysis,
+    QueryDataPlane,
+    QueryVariant,
     RankedChunk,
     RelatedContent,
     RetrievalDiagnostics,
@@ -93,6 +98,7 @@ from rag_app.core.ports import (
     GeneratorPort,
     LexicalStorePort,
     QueryEmbeddingPort,
+    QueryInterpretPort,
     RerankerPort,
     RetrievalCachePort,
     TracePort,
@@ -109,6 +115,9 @@ class _SelectionOutcome:
     reranked: RerankingOutcome
     expansion: ExpansionOutcome
     evidence: tuple[EvidenceItem, ...]
+    model_evidence_candidates: tuple[EvidenceItem, ...]
+    evidence_decisions: tuple[tuple[str, str], ...]
+    ambiguous_support: bool
     confidence: ConfidenceDecision
 
 
@@ -119,6 +128,30 @@ class RetrievalExecutionIdentity:
     key_hash: str
     active_revision_id: str
     serving_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class QueryDataPlaneContext:
+    """组合根为单次查询提供的非敏感配置与授权真相。"""
+
+    retrieval_data_plane: Literal[
+        "active_remote_profile", "default_local_fallback"
+    ] = "default_local_fallback"
+    active_retrieval_profile_revision_id: str | None = None
+    reranker_provider_id: str | None = None
+    reranker_model: str | None = None
+    generation_provider_id: str | None = None
+    generation_model: str | None = None
+    rewrite_provider_id: str | None = None
+    rewrite_model: str | None = None
+    interpret_provider_id: str | None = None
+    interpret_model: str | None = None
+    model_configuration_state: str = "NOT_CONFIGURED"
+    model_authorization_state: str = "NOT_REQUIRED"
+    corpus_authorization_state: str = "NOT_REQUIRED"
+    budget_state: str = "NOT_REQUIRED"
+    fallback_reason_codes: tuple[str, ...] = ("NO_ACTIVE_RETRIEVAL_PROFILE",)
+    report_model_capability_blockers: bool = False
 
 
 class RetrievalService:
@@ -147,11 +180,14 @@ class RetrievalService:
         self._expected_profile_revision_id = expected_profile_revision_id
         self._exact = ExactChannel(exact_store)
         self._lexical = LexicalChannel(lexical_store)
+        self._structural = StructuralChannel(lexical_store)
         self._dense = DenseChannel(query_embedding, vector_store)
         self._reranker = CircuitAwareReranker(reranker)
+        reranker_descriptor = reranker.descriptor
         self._answering = ExtractiveAnsweringService(generator)
         self._generator = generator
         self._grounded: GroundedAnsweringService | None = None
+        self._interpreter: QueryInterpretPort | None = None
         self._rewriter: QueryRewritePort | None = None
         self._trace = trace
         self._cache = cache
@@ -159,7 +195,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-04-semantic-query-v4",
+                "retrieval_implementation": "v3-07-structured-answer-v4",
             }
         )
         self._egress = egress_policy
@@ -171,12 +207,46 @@ class RetrievalService:
         self._neighbors = NeighborExpander(source)
         self._evidence = EvidenceAssembler()
         self._confidence = ConfidenceEvaluator()
+        self._data_plane_context = QueryDataPlaneContext(
+            reranker_provider_id=reranker_descriptor.name,
+            reranker_model=reranker_descriptor.version,
+        )
+
+    def with_data_plane(
+        self, context: QueryDataPlaneContext
+    ) -> RetrievalService:
+        """为单次请求附加真实配置、授权与降级状态。
+
+        Args:
+            context: Product 组合根从当前持久状态解析的非敏感上下文。
+
+        Returns:
+            共用检索资源、但不会污染其它请求状态的轻量副本。
+
+        """
+        configured = copy(self)
+        configured._data_plane_context = context
+        return configured
+
+    @property
+    def data_plane_context(self) -> QueryDataPlaneContext:
+        """返回当前服务的非敏感数据面配置快照。
+
+        Args:
+            无参数；读取当前服务已经绑定的数据面上下文。
+
+        Returns:
+            可由组合根按单次请求派生的冻结上下文。
+
+        """
+        return self._data_plane_context
 
     def with_generation(
         self,
         generator: GeneratorPort,
         *,
         serving_identity: str,
+        interpreter: QueryInterpretPort | None = None,
         rewriter: QueryRewritePort | None = None,
     ) -> RetrievalService:
         """为单次知识库解析创建轻量配置副本，共用原索引与检索通道。
@@ -184,6 +254,7 @@ class RetrievalService:
         Args:
             generator: 已绑定知识库与出站授权的生成器。
             serving_identity: 模型及查询策略缓存身份。
+            interpreter: 可选的一次结构化问题解释端口。
             rewriter: 可选的一次问题改写端口。
 
         Returns:
@@ -194,7 +265,27 @@ class RetrievalService:
         configured._grounded = GroundedAnsweringService(
             generator, self._generator
         )
+        configured._interpreter = interpreter
         configured._rewriter = rewriter
+        descriptor = getattr(
+            generator, "descriptor", self._generator.descriptor
+        )
+        configured._data_plane_context = replace(
+            self._data_plane_context,
+            generation_provider_id=descriptor.name,
+            generation_model=descriptor.version,
+            interpret_provider_id=(
+                descriptor.name if interpreter is not None else None
+            ),
+            interpret_model=(
+                descriptor.version if interpreter is not None else None
+            ),
+            rewrite_provider_id=(
+                descriptor.name if rewriter is not None else None
+            ),
+            rewrite_model=descriptor.version if rewriter is not None else None,
+            model_configuration_state="CONFIGURED",
+        )
         configured._serving_fingerprint = canonical_sha256(
             {
                 "retrieval": self._serving_fingerprint,
@@ -361,9 +452,16 @@ class RetrievalService:
                     "cache_hit": True,
                     "result_origin": "cache",
                     "generation_called_this_request": False,
+                    "interpret_called_this_request": False,
                     "rewrite_called_this_request": False,
                     "diagnostics": diagnostics,
                     "diagnostics_summary": _diagnostics_summary(diagnostics),
+                    "data_plane": self._query_data_plane(
+                        snapshot,
+                        selected_slot=cached.selected_embedding_slot,
+                        rerank_mode=cached.rerank_execution_mode,
+                        degraded=cached.degraded_reason_codes,
+                    ),
                 }
             )
             if on_final is not None:
@@ -380,9 +478,67 @@ class RetrievalService:
             return cached_result
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
+        interpret_attempted = False
+        interpret_reason = "INTERPRET_NOT_CONFIGURED"
+        if self._interpreter is not None:
+            _raise_if_cancelled(cancellation, provider_calls)
+            interpreted = self._interpreter.interpret(request, analysis)
+            interpret_attempted = interpreted.attempted
+            interpret_reason = interpreted.reason_code
+            provider_calls.extend(interpreted.calls)
+            if (
+                interpreted.standalone_query is not None
+                and interpreted.semantics is not None
+            ):
+                effective_analysis = self._analyzer.apply_interpretation(
+                    analysis,
+                    request,
+                    interpreted.standalone_query,
+                    interpreted.semantics,
+                )
+                interpreted_variant = QueryVariant(
+                    text=interpreted.standalone_query,
+                    kind="rewrite",
+                    identity=canonical_sha256(
+                        {
+                            "query": interpreted.standalone_query,
+                            "policy": "bounded-interpret-v1",
+                        }
+                    ),
+                )
+                interpreted_variants = (
+                    variants
+                    if interpreted.standalone_query
+                    in {variant.text for variant in variants}
+                    else (variants[0], interpreted_variant)
+                )
+                plan = self._planner.plan(
+                    effective_analysis,
+                    interpreted_variants,
+                    self._policy,
+                    dense_required=request.dense_required,
+                )
+            self._record(
+                trace_id,
+                "interpret",
+                {
+                    "reason_code": interpreted.reason_code,
+                    "attempted": interpreted.attempted,
+                    "accepted": interpreted.semantics is not None,
+                    "resolved_query_sha256": hashlib.sha256(
+                        (effective_analysis.resolved_query or "").encode(
+                            "utf-8"
+                        )
+                    ).hexdigest(),
+                    "resolved_answer_type": (
+                        effective_analysis.semantics.answer_type.value
+                    ),
+                    "semantic_source": effective_analysis.semantics.source,
+                },
+            )
         rewrite_attempted = False
         rewrite_reason = "REWRITE_NOT_CONFIGURED"
-        if self._rewriter is not None:
+        if self._rewriter is not None and not interpret_attempted:
             _raise_if_cancelled(cancellation, provider_calls)
             rewritten = self._rewriter.rewrite(request)
             rewrite_reason = rewritten.reason_code
@@ -424,7 +580,7 @@ class RetrievalService:
             try:
                 hits = apply_candidate_filters(
                     self._exact.search(
-                        snapshot, analysis, limit=top_k["exact"]
+                        snapshot, effective_analysis, limit=top_k["exact"]
                     ),
                     request,
                 )
@@ -434,6 +590,33 @@ class RetrievalService:
             channel_hits["exact"] = hits
             self._record(trace_id, "exact", {"hit_count": len(hits)})
             _finish_timing(stage_timings, "exact_channel", channel_started)
+        if "structural" in plan.channels:
+            _raise_if_cancelled(cancellation, provider_calls)
+            channel_started = perf_counter()
+            try:
+                hits = apply_candidate_filters(
+                    self._structural.search(
+                        snapshot,
+                        effective_analysis,
+                        limit=top_k["structural"],
+                    ),
+                    request,
+                )
+            except (ChannelRateLimited, ChannelUnavailable) as error:
+                degraded.append(error.code)
+                hits = ()
+            channel_hits["structural"] = hits
+            self._record(
+                trace_id,
+                "structural",
+                {
+                    "hit_count": len(hits),
+                    "match_types": tuple(
+                        hit.match_type for hit in hits if hit.match_type
+                    ),
+                },
+            )
+            _finish_timing(stage_timings, "structural_channel", channel_started)
         if "lexical" in plan.channels:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
@@ -560,6 +743,8 @@ class RetrievalService:
         reranked = selection.reranked
         expansion = selection.expansion
         evidence = selection.evidence
+        model_evidence_candidates = selection.model_evidence_candidates
+        evidence_decisions = selection.evidence_decisions
         confidence = selection.confidence
         _raise_if_cancelled(cancellation, provider_calls)
         if (
@@ -589,6 +774,25 @@ class RetrievalService:
                     self._policy,
                     dense_required=request.dense_required,
                 )
+                top_k = dict(plan.channel_top_k)
+                if "structural" in plan.channels:
+                    _raise_if_cancelled(cancellation, provider_calls)
+                    try:
+                        structural_hits = apply_candidate_filters(
+                            self._structural.search(
+                                snapshot,
+                                effective_analysis,
+                                limit=top_k["structural"],
+                            ),
+                            request,
+                        )
+                    except (
+                        ChannelRateLimited,
+                        ChannelUnavailable,
+                    ) as error:
+                        degraded.append(error.code)
+                        structural_hits = ()
+                    channel_hits["structural:rewrite"] = structural_hits
                 if "lexical" in plan.channels:
                     _raise_if_cancelled(cancellation, provider_calls)
                     try:
@@ -662,6 +866,8 @@ class RetrievalService:
                 reranked = selection.reranked
                 expansion = selection.expansion
                 evidence = selection.evidence
+                model_evidence_candidates = selection.model_evidence_candidates
+                evidence_decisions = selection.evidence_decisions
                 confidence = selection.confidence
             self._record(
                 trace_id,
@@ -694,7 +900,14 @@ class RetrievalService:
         _raise_if_cancelled(cancellation, provider_calls)
         stage_started = perf_counter()
         generation_mode = "none"
-        generation_reason: str | None = "GENERATOR_NOT_CONFIGURED"
+        generation_reason: str | None = _generation_unavailable_reason(
+            self._data_plane_context
+        )
+        generation_evidence = (
+            model_evidence_candidates
+            if self._grounded is not None
+            else evidence
+        )
         try:
             if self._grounded is not None:
                 _emit_stage(
@@ -715,7 +928,7 @@ class RetrievalService:
 
                     """
                     self._validate_stream_sources(
-                        evidence,
+                        generation_evidence,
                         request,
                         snapshot,
                     )
@@ -726,9 +939,11 @@ class RetrievalService:
                         )
 
                 generated = self._grounded.answer(
-                    analysis.original_query,
-                    evidence,
+                    effective_analysis.original_query,
+                    generation_evidence,
                     confidence,
+                    answer_support_set=evidence,
+                    analysis=effective_analysis,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -737,6 +952,12 @@ class RetrievalService:
                 generation_reason = generated.reason_code
                 provider_calls.extend(generated.calls)
                 if answer is not None:
+                    published = _published_evidence(
+                        generation_evidence,
+                        generated.published_support_ids,
+                    )
+                    if published:
+                        evidence = published
                     confidence = confidence.model_copy(
                         update={"status": ConfidenceStatus.ANSWERABLE}
                     )
@@ -759,13 +980,32 @@ class RetrievalService:
                     provider_calls,
                 )
                 answer = self._answering.answer(
-                    analysis.original_query, evidence, confidence
+                    effective_analysis.original_query,
+                    evidence,
+                    confidence,
+                    analysis=effective_analysis,
                 )
                 generation_mode = "extractive" if answer is not None else "none"
+                if answer is not None:
+                    blocker = _configured_generation_blocker(
+                        self._data_plane_context
+                    )
+                    if blocker is None:
+                        generation_reason = "STRUCTURED_RENDERED"
+                    else:
+                        generation_mode = "extractive_fallback"
+                        generation_reason = blocker
+                        degraded.append(blocker)
         except QueryCancelled as error:
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except StreamDeliveryError:
+            raise
+        except ValidationFailed as error:
+            # 模型输出校验已在 GroundedAnsweringService 内完成修复或回退；
+            # 这里逸出的 ValidationFailed 代表本地 renderer/最终发布合同损坏，
+            # 不能伪装成远程 Provider 不可用。
+            error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except (RagError, ValueError) as error:
             degraded.append(f"GENERATOR_FAILURE:{type(error).__name__}")
@@ -780,6 +1020,34 @@ class RetrievalService:
                 }
             )
             answer = None
+        if (
+            answer is None
+            and not evidence
+            and any(
+                _diagnostic_support_status(item) in {"UNCERTAIN", "UNSUPPORTED"}
+                for item in model_evidence_candidates
+            )
+            and confidence.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+        ):
+            blocked_status = _model_capability_status(
+                self._data_plane_context,
+                generation_reason,
+            )
+            if blocked_status is not None:
+                status, blocked_reason = blocked_status
+                confidence = confidence.model_copy(
+                    update={
+                        "status": status,
+                        "score": 0.0,
+                        "reason_codes": tuple(
+                            dict.fromkeys(
+                                (*confidence.reason_codes, blocked_reason)
+                            )
+                        ),
+                    }
+                )
+                degraded.append(blocked_reason)
+                generation_reason = blocked_reason
         if on_claim is not None:
             # 没有增量 claim 的拒答、摘录或 final-only 路径也必须在 final
             # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
@@ -807,14 +1075,22 @@ class RetrievalService:
                 "provider_calls": [
                     call.model_dump(mode="json")
                     for call in provider_calls
-                    if call.operation in {"generation", "query.rewrite"}
+                    if call.operation
+                    in {"generation", "query.interpret", "query.rewrite"}
                 ],
             },
         )
         self._record(
             trace_id,
             "validate",
-            {"published": answer is not None, "support_count": len(evidence)},
+            {
+                "published": answer is not None,
+                "support_count": len(evidence),
+                "model_evidence_candidate_count": len(
+                    model_evidence_candidates
+                ),
+                "evidence_decisions": evidence_decisions,
+            },
         )
         _finish_timing(stage_timings, "answer", stage_started)
         diagnostics = _diagnostics(
@@ -823,6 +1099,8 @@ class RetrievalService:
             reranked=reranked.candidates,
             expanded=expansion.candidates,
             evidence=evidence,
+            model_evidence_candidates=model_evidence_candidates,
+            evidence_decisions=evidence_decisions,
             answer_published=answer is not None,
             provider_calls=tuple(provider_calls),
             stage_timings=tuple(stage_timings),
@@ -836,6 +1114,8 @@ class RetrievalService:
             and confidence.status
             in (
                 ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                ConfidenceStatus.CONFIGURATION_REQUIRED,
+                ConfidenceStatus.BUDGET_BLOCKED,
                 ConfidenceStatus.PROVIDER_UNAVAILABLE,
             )
             and not any("POLICY_DENIED" in reason for reason in degraded)
@@ -865,6 +1145,8 @@ class RetrievalService:
             display_message=display_message,
             confidence=confidence,
             query_kind=plan.query_kind,
+            requested_answer_type=effective_analysis.semantics.answer_type,
+            query_semantic_source=effective_analysis.semantics.source,
             active_index_revision_id=snapshot.revision.index_revision_id,
             index_fingerprint=snapshot.revision.index_fingerprint,
             serving_fingerprint=snapshot.serving_fingerprint,
@@ -874,6 +1156,7 @@ class RetrievalService:
             rerank_execution_mode=reranked.mode,
             generation_mode=generation_mode,
             generation_reason_code=generation_reason,
+            interpret_reason_code=interpret_reason,
             rewrite_reason_code=rewrite_reason,
             degraded_reason_codes=tuple(dict.fromkeys(degraded)),
             cache_key=cache_key,
@@ -882,11 +1165,21 @@ class RetrievalService:
                 call.operation == "generation" and call.call_count > 0
                 for call in provider_calls
             ),
+            interpret_called_this_request=any(
+                call.operation == "query.interpret" and call.call_count > 0
+                for call in provider_calls
+            ),
             rewrite_called_this_request=any(
                 call.operation == "query.rewrite" and call.call_count > 0
                 for call in provider_calls
             ),
             diagnostics_summary=_diagnostics_summary(diagnostics),
+            data_plane=self._query_data_plane(
+                snapshot,
+                selected_slot=selected_slot,
+                rerank_mode=reranked.mode,
+                degraded=tuple(dict.fromkeys(degraded)),
+            ),
             diagnostics=diagnostics,
         )
         if on_final is not None:
@@ -911,6 +1204,70 @@ class RetrievalService:
                     self.commit_result_cache(result)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def _query_data_plane(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        selected_slot: str | None,
+        rerank_mode: str,
+        degraded: tuple[str, ...],
+    ) -> QueryDataPlane:
+        """由本次冻结快照和实际路由生成统一数据面真相。
+
+        Args:
+            snapshot: 请求开始时冻结的活动 Revision。
+            selected_slot: Dense 实际选择的 slot；未执行时为空。
+            rerank_mode: 本次实际重排或旁路模式。
+            degraded: 本次执行收集的稳定降级原因。
+
+        Returns:
+            不含正文和 Secret 的公开数据面合同。
+
+        """
+        context = self._data_plane_context
+        slot_id = selected_slot or snapshot.topology.primary_slot_id
+        slot = snapshot.topology.slot(slot_id)
+        fallbacks = list(context.fallback_reason_codes)
+        if selected_slot is None:
+            fallbacks.append("DENSE_NOT_SELECTED_BY_PLAN")
+        if slot.provider_id.casefold().startswith("deterministic"):
+            fallbacks.append("DETERMINISTIC_EMBEDDING")
+        fallbacks.extend(degraded)
+        return QueryDataPlane(
+            retrieval_data_plane=context.retrieval_data_plane,
+            active_retrieval_profile_revision_id=(
+                snapshot.profile_revision_id
+                or context.active_retrieval_profile_revision_id
+            ),
+            active_index_revision_id=snapshot.revision.index_revision_id,
+            index_fingerprint=snapshot.revision.index_fingerprint,
+            serving_fingerprint=snapshot.serving_fingerprint,
+            embedding_provider_id=slot.provider_id,
+            embedding_model=slot.model,
+            selected_vector_space=(
+                slot.vector_space_identity
+                if selected_slot is not None
+                else None
+            ),
+            reranker_provider_id=context.reranker_provider_id,
+            reranker_model=context.reranker_model,
+            rerank_mode=rerank_mode,
+            generation_provider_id=context.generation_provider_id,
+            generation_model=context.generation_model,
+            interpret_provider_id=context.interpret_provider_id,
+            interpret_model=context.interpret_model,
+            rewrite_provider_id=context.rewrite_provider_id,
+            rewrite_model=context.rewrite_model,
+            dense_calibration_state=(
+                snapshot.retrieval_policy.dense_semantic_calibration_state
+            ),
+            model_configuration_state=context.model_configuration_state,
+            model_authorization_state=context.model_authorization_state,
+            corpus_authorization_state=context.corpus_authorization_state,
+            budget_state=context.budget_state,
+            fallback_reason_codes=tuple(dict.fromkeys(fallbacks)),
+        )
 
     def validate_shared_result(
         self,
@@ -1046,8 +1403,10 @@ class RetrievalService:
                 "variants": tuple(
                     variant.identity for variant in plan.variants
                 ),
-                "semantic_policy": "shared-query-semantics-v1",
+                "semantic_policy": "shared-query-semantics-v3-07",
                 "rewrite_policy": "bounded-rewrite-v3",
+                "answer_support_policy": "minimum-supported-set-v3-07",
+                "structured_renderer_policy": "source-span-renderer-v1",
             }
         )
         return BaseResultCacheKey(
@@ -1169,11 +1528,15 @@ class RetrievalService:
         }
         channel_hits.clear()
         channel_hits.update(filtered_channels)
+        structural_closure_ids = _required_structural_candidate_ids(
+            channel_hits
+        )
         fused = reciprocal_rank_fusion(
             channel_hits,
             expected_revision_id=snapshot.revision.index_revision_id,
             k=self._policy.rrf_k,
             limit=self._policy.fusion_candidate_limit,
+            required_candidate_ids=frozenset(structural_closure_ids),
         )
         self._record(
             trace_id,
@@ -1216,7 +1579,8 @@ class RetrievalService:
             self._egress,
             self._policy,
             enabled=plan.use_reranker,
-            result_limit=request.limit,
+            result_limit=max(request.limit, len(structural_closure_ids)),
+            required_candidate_ids=frozenset(structural_closure_ids),
         )
         provider_calls.extend(reranked.provider_calls)
         self._record(
@@ -1251,10 +1615,10 @@ class RetrievalService:
             if selected_slot is not None
             else None
         )
-        evidence = self._evidence.assemble(
+        evidence_selection = self._evidence.assemble_sets(
             expansion.candidates,
             self._policy,
-            allow_uncertain=self._grounded is not None,
+            include_model_candidates=True,
             context=EvidenceSelectionContext(
                 analysis=analysis,
                 query_kind=plan.query_kind,
@@ -1263,10 +1627,24 @@ class RetrievalService:
                 selected_vector_space=vector_space,
             ),
         )
+        evidence = evidence_selection.answer_support_set
         self._record(
             trace_id,
             "assemble_evidence",
-            {"pass": retrieval_phase, "evidence_count": len(evidence)},
+            {
+                "pass": retrieval_phase,
+                "retrieval_candidate_count": len(
+                    evidence_selection.retrieval_candidates
+                ),
+                "model_evidence_candidate_count": len(
+                    evidence_selection.model_evidence_candidates
+                ),
+                "answer_support_count": len(evidence),
+                "ambiguous_support": evidence_selection.ambiguous,
+                "rejected_candidate_reasons": (
+                    evidence_selection.rejected_candidate_reasons
+                ),
+            },
         )
         confidence = self._confidence.evaluate(
             analysis,
@@ -1278,6 +1656,21 @@ class RetrievalService:
             rerank_mode=reranked.mode,
             selected_vector_space=vector_space,
         )
+        if evidence_selection.ambiguous:
+            confidence = confidence.model_copy(
+                update={
+                    "status": ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
+                    "score": 0.0,
+                    "reason_codes": tuple(
+                        dict.fromkeys(
+                            (
+                                *confidence.reason_codes,
+                                "AMBIGUOUS_SAME_TARGET_ACROSS_DOCUMENTS",
+                            )
+                        )
+                    ),
+                }
+            )
         _finish_timing(
             stage_timings,
             f"{retrieval_phase}_rank_and_evidence",
@@ -1297,6 +1690,11 @@ class RetrievalService:
             reranked=reranked,
             expansion=expansion,
             evidence=evidence,
+            model_evidence_candidates=(
+                evidence_selection.model_evidence_candidates
+            ),
+            evidence_decisions=evidence_selection.rejected_candidate_reasons,
+            ambiguous_support=evidence_selection.ambiguous,
             confidence=confidence,
         )
 
@@ -1411,6 +1809,40 @@ class RetrievalService:
                 attributes=freeze_json_object(normalized),
             )
         )
+
+
+def _required_structural_candidate_ids(
+    channel_hits: dict[str, tuple[ChannelHit, ...]],
+) -> tuple[str, ...]:
+    """保留完整阶段组、表格行及每类首个强结构候选到证据验证。"""
+    # 一个 canonical 表格行可能被 Chunker 拆成角色、表头和多个职责片段。
+    # EvidenceAssembler 才能根据真实 table 坐标判断哪些片段属于同一行；
+    # 因此重排前必须保留全部强表格候选，不能只保留首个命中。
+    closure_types = {
+        "STRUCTURAL_STAGE_HEADING",
+        "STRUCTURAL_GLOSSARY_ROW",
+        "STRUCTURAL_TABLE_ROW",
+    }
+    singleton_types = {
+        "STRUCTURAL_SECTION_HEADING_BODY",
+        "STRUCTURAL_CONTIGUOUS_LIST",
+    }
+    selected: list[str] = []
+    seen_singletons: set[str] = set()
+    for name, hits in channel_hits.items():
+        if not name.startswith("structural"):
+            continue
+        for hit in hits:
+            match_type = hit.match_type or ""
+            if match_type in closure_types:
+                selected.append(hit.chunk_id)
+            elif (
+                match_type in singleton_types
+                and match_type not in seen_singletons
+            ):
+                selected.append(hit.chunk_id)
+                seen_singletons.add(match_type)
+    return tuple(dict.fromkeys(selected))
 
 
 def _formal_span_is_current(
@@ -1546,6 +1978,162 @@ def _emit_final(
         raise
 
 
+def _published_evidence(
+    candidates: tuple[EvidenceItem, ...],
+    support_ids: tuple[str, ...],
+) -> tuple[EvidenceItem, ...]:
+    """按已验证 claim 的 Support ID 投影实际发布引用。"""
+    if not support_ids:
+        return ()
+    by_id = {item.evidence_id: item for item in candidates}
+    if any(support_id not in by_id for support_id in support_ids):
+        raise IndexCorrupt(
+            "已验证回答引用了不存在的模型证据。",
+            stage="answer.publish",
+        )
+    return tuple(by_id[support_id] for support_id in support_ids)
+
+
+def _configured_generation_blocker(
+    context: QueryDataPlaneContext,
+) -> str | None:
+    """返回已配置远程生成未能挂载时的稳定阻断原因。
+
+    Args:
+        context: 组合根在请求开始时冻结的模型、授权和预算状态。
+
+    Returns:
+        已配置但被阻断时的具体原因；未配置或可用时为空。
+
+    """
+    if context.model_configuration_state == "NOT_CONFIGURED":
+        return None
+    if context.model_configuration_state == "INVALID":
+        return "CONFIGURATION_REQUIRED"
+    if context.corpus_authorization_state not in {
+        "APPROVED",
+        "NOT_REQUIRED",
+    } or context.model_authorization_state not in {
+        "APPROVED",
+        "NOT_REQUIRED",
+    }:
+        return next(
+            (
+                reason
+                for reason in context.fallback_reason_codes
+                if reason
+                not in {
+                    "NO_ACTIVE_RETRIEVAL_PROFILE",
+                    "DETERMINISTIC_EMBEDDING",
+                }
+            ),
+            "DATA_EGRESS_NOT_AUTHORIZED",
+        )
+    if context.budget_state in {"EXHAUSTED", "BLOCKED"}:
+        return "BLOCKED_BUDGET"
+    return None
+
+
+def _generation_unavailable_reason(
+    context: QueryDataPlaneContext,
+) -> str:
+    """为未挂载远程生成器的本地路径给出真实原因。
+
+    Args:
+        context: 当前请求的数据面上下文。
+
+    Returns:
+        明确阻断原因；没有配置模型时返回稳定的未配置原因。
+
+    """
+    return _configured_generation_blocker(context) or "GENERATOR_NOT_CONFIGURED"
+
+
+def _model_capability_status(
+    context: QueryDataPlaneContext,
+    reason: str | None,
+) -> tuple[ConfidenceStatus, str] | None:
+    """在有模型候选但无本地支持时投影能力阻断终态。
+
+    Args:
+        context: 请求开始时冻结的配置、授权和预算状态。
+        reason: 实际生成尝试或未挂载生成器的稳定原因。
+
+    Returns:
+        能力确实被阻断时的公开状态与原因；模型正常拒答或输出校验失败
+        时为空，由 Evidence 语义继续保持证据不足。
+
+    """
+    normalized = (reason or "").upper()
+    projected: tuple[ConfidenceStatus, str] | None = None
+    if "BUDGET" in normalized:
+        projected = (
+            ConfidenceStatus.BUDGET_BLOCKED,
+            reason or "BLOCKED_BUDGET",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "CONFIGURATION",
+            "CREDENTIAL",
+            "AUTHENTICATION",
+            "GENERATOR_NOT_CONFIGURED",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.CONFIGURATION_REQUIRED,
+            reason or "CONFIGURATION_REQUIRED",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "POLICY_DENIED",
+            "NOT_AUTHORIZED",
+            "AUTHORIZATION_DENIED",
+            "AUTHORIZATION_REQUIRED",
+            "SOURCE_UNAVAILABLE",
+            "CORPUS_AUTHORIZATION",
+            "BUSINESS_AUTHORIZATION",
+            "BUSINESS_SOURCE",
+            "BUSINESS_MODEL_OPERATION",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.POLICY_DENIED,
+            reason or "POLICY_DENIED",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "PROVIDER_UNAVAILABLE",
+            "PROVIDER_RATE_LIMITED",
+            "PROVIDER_TIMEOUT",
+            "HTTP_429",
+            "CONNECT_TIMEOUT",
+            "READ_TIMEOUT",
+            "UPSTREAM",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.PROVIDER_UNAVAILABLE,
+            reason or "PROVIDER_UNAVAILABLE",
+        )
+    if projected is not None:
+        return projected
+    blocker = _configured_generation_blocker(context)
+    if blocker is not None:
+        return _model_capability_status(context, blocker)
+    if (
+        context.model_configuration_state == "NOT_CONFIGURED"
+        and context.report_model_capability_blockers
+    ):
+        return (
+            ConfidenceStatus.CONFIGURATION_REQUIRED,
+            "CONFIGURATION_REQUIRED",
+        )
+    return None
+
+
 def _diagnostics(  # noqa: PLR0913
     *,
     channel_hits: dict[str, tuple[ChannelHit, ...]],
@@ -1553,6 +2141,8 @@ def _diagnostics(  # noqa: PLR0913
     reranked: tuple[RankedChunk, ...],
     expanded: tuple[RankedChunk, ...],
     evidence: tuple[EvidenceItem, ...],
+    model_evidence_candidates: tuple[EvidenceItem, ...],
+    evidence_decisions: tuple[tuple[str, str], ...],
     answer_published: bool,
     provider_calls: tuple[ProviderCall, ...],
     stage_timings: tuple[StageTiming, ...],
@@ -1563,6 +2153,8 @@ def _diagnostics(  # noqa: PLR0913
         totals = call_totals.setdefault(call.operation, [0, 0])
         totals[0] += call.call_count
         totals[1] += call.retry_count
+    selected_evidence_ids = {item.evidence_id for item in evidence}
+    rejected_by_chunk = dict(evidence_decisions)
     return RetrievalDiagnostics(
         channel_chunk_ids=tuple(
             (name, tuple(item.chunk_id for item in hits))
@@ -1593,11 +2185,32 @@ def _diagnostics(  # noqa: PLR0913
             )
             for item in expanded
         ),
+        model_evidence_candidates=tuple(
+            DiagnosticEvidenceItem(
+                evidence_id=item.evidence_id,
+                chunk_id=item.chunk_id,
+                source_ranges=item.source_spans,
+                support_status=_diagnostic_support_status(item),
+                selected_for_answer=(item.evidence_id in selected_evidence_ids),
+                selection_reason=(
+                    "ANSWER_SUPPORT_SELECTED"
+                    if item.evidence_id in selected_evidence_ids
+                    else rejected_by_chunk.get(
+                        item.chunk_id,
+                        "NOT_PUBLISHED",
+                    )
+                ),
+            )
+            for item in model_evidence_candidates
+        ),
         evidence=tuple(
             DiagnosticEvidenceItem(
                 evidence_id=item.evidence_id,
                 chunk_id=item.chunk_id,
                 source_ranges=item.source_spans,
+                support_status=_diagnostic_support_status(item),
+                selected_for_answer=True,
+                selection_reason="PUBLISHED_CITATION",
             )
             for item in evidence
         ),
@@ -1618,6 +2231,23 @@ def _diagnostics(  # noqa: PLR0913
         stage_timings=stage_timings,
         degraded_reason_codes=degraded,
     )
+
+
+def _diagnostic_support_status(item: EvidenceItem) -> str | None:
+    """提取 Evidence 已持久化的支持状态，不读取或复制正文。
+
+    Args:
+        item: 已经过 Evidence 选择的候选或发布证据。
+
+    Returns:
+        稳定支持状态；旧 Evidence 没有该元数据时为空。
+
+    """
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    status = support.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _diagnostics_summary(

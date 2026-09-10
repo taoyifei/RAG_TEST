@@ -30,7 +30,12 @@ from rag_app.api.p09_schemas import (
 )
 from rag_app.api.p09_stream import P09AnswerStream, P09AnswerStreamRequest
 from rag_app.composition.p09_runtime import P09Runtime
-from rag_app.core.errors import PolicyDenied, ProviderUnavailable, RagError
+from rag_app.core.errors import (
+    PolicyDenied,
+    ProviderUnavailable,
+    RagError,
+    ValidationFailed,
+)
 from rag_app.core.identifiers import deterministic_id, new_id
 from rag_app.core.models import (
     Document,
@@ -893,7 +898,11 @@ def _register_error_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         del request
         return _error_response(
-            status_code=_ERROR_STATUS.get(error.code, 500),
+            status_code=(
+                422
+                if isinstance(error, ValidationFailed)
+                else _ERROR_STATUS.get(error.code, 500)
+            ),
             code=error.code,
             message=error.safe_message,
             stage=error.stage,

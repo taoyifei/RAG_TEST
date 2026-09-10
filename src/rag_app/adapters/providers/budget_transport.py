@@ -75,9 +75,12 @@ _ALIYUN_WORKSPACE_HOST = re.compile(
 )
 _MAX_USAGE = 2**63 - 1
 _MAX_OBSERVATION_BYTES = 4 * 1024 * 1024
-_CHAT_OPERATIONS = frozenset({"generation", "query.rewrite", "image.ocr"})
+_CHAT_OPERATIONS = frozenset(
+    {"generation", "query.interpret", "query.rewrite", "image.ocr"}
+)
 _CHAT_LIMITS = {
     "generation": (6144, 1536),
+    "query.interpret": (1536, 384),
     "query.rewrite": (1024, 256),
     "image.ocr": (2560, 4096),
 }

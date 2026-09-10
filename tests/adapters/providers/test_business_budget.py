@@ -95,9 +95,15 @@ def _campaign(**changes: object) -> BudgetCampaign:
             approved_media_hashes=("2" * 64,),
             approved_request_identities=(_REQUEST,),
             allowed_models=("qwen3.7-flash", "qwen3.5-ocr"),
-            allowed_operations=("generation", "query.rewrite", "image.ocr"),
+            allowed_operations=(
+                "generation",
+                "query.interpret",
+                "query.rewrite",
+                "image.ocr",
+            ),
             operation_request_limits={
                 "generation": 2,
+                "query.interpret": 1,
                 "query.rewrite": 1,
                 "image.ocr": 1,
             },
@@ -203,13 +209,15 @@ def test_business_scope_rejects_unapproved_data_before_reservation(
     assert ledger.summary("kb-test")["reserved"] == 0
 
 
-def test_rewrite_allows_question_without_source_and_expiry_blocks(
+@pytest.mark.parametrize("operation", ["query.interpret", "query.rewrite"])
+def test_query_language_operation_requires_fresh_authorization(
     tmp_path: Path,
+    operation: str,
 ):
     ledger = ProviderBudgetLedger(tmp_path / "budget.sqlite3")
     campaign = _campaign()
     ledger.create_campaign(campaign)
-    _reserve(ledger, _request(operation="query.rewrite", source_hashes=()))
+    _reserve(ledger, _request(operation=operation, source_hashes=()))
     expired = replace(
         campaign,
         campaign_id="expired",

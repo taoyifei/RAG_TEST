@@ -366,6 +366,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Authorization Status
+         * @description 读取当前活动语料、模型用途和累计预算的动态对账状态。
+         */
+        get: operations["_authorization_status_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization:approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Authorization
+         * @description 仅接受管理员会话对服务端冻结的活动语料作明确批准。
+         */
+        post: operations["_approve_authorization_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations": {
         parameters: {
             query?: never;
@@ -1343,7 +1383,7 @@ export interface components {
          * @description 查询可以发布或必须失败关闭的稳定结果。
          * @enum {string}
          */
-        ConfidenceStatus: "ANSWERABLE" | "INSUFFICIENT_EVIDENCE" | "PROVIDER_UNAVAILABLE" | "POLICY_DENIED" | "INDEX_NOT_READY" | "INDEX_CORRUPT" | "AMBIGUOUS_NEEDS_CLARIFICATION";
+        ConfidenceStatus: "ANSWERABLE" | "INSUFFICIENT_EVIDENCE" | "CONFIGURATION_REQUIRED" | "BUDGET_BLOCKED" | "PROVIDER_UNAVAILABLE" | "POLICY_DENIED" | "INDEX_NOT_READY" | "INDEX_CORRUPT" | "AMBIGUOUS_NEEDS_CLARIFICATION";
         /**
          * ConnectionPatchRequest
          * @description 版本受控的非 Secret 连接编辑，未知字段一律拒绝。
@@ -1427,6 +1467,102 @@ export interface components {
             owner_id: string;
         };
         /**
+         * CorpusAuthorizationApproval
+         * @description 管理员明确批准当前活动语料所需的有界输入。
+         */
+        CorpusAuthorizationApproval: {
+            /** Estimated Token Limit */
+            estimated_token_limit: number;
+            /** Expires At */
+            expires_at: string;
+            /** Operation Request Limits */
+            operation_request_limits: {
+                [key: string]: number;
+            };
+            /** Operations */
+            operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
+            /** Request Limit */
+            request_limit: number;
+        };
+        /**
+         * CorpusAuthorizationManifest
+         * @description 不暴露正文与逐文档哈希的不可变活动语料批准记录。
+         */
+        CorpusAuthorizationManifest: {
+            /** Active Document Count */
+            active_document_count: number;
+            /** Active Document Digest */
+            active_document_digest: string;
+            /** Active Index Revision Id */
+            active_index_revision_id: string;
+            /** Approved By Session Id */
+            approved_by_session_id: string;
+            /** Authorization Id */
+            authorization_id: string;
+            /** Budget Campaign Id */
+            budget_campaign_id: string;
+            /** Created At */
+            created_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Knowledge Base Id */
+            knowledge_base_id: string;
+            /** Manifest Id */
+            manifest_id: string;
+            /** Operation Binding Identity */
+            operation_binding_identity: string;
+            /** Operations */
+            operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
+            /**
+             * Policy Revision
+             * @default corpus-authorization-v1
+             */
+            policy_revision: string;
+            /** Project Id */
+            project_id: string;
+            /** Provider Connection Id */
+            provider_connection_id: string;
+            /** Provider Model */
+            provider_model: string;
+        };
+        /**
+         * CorpusAuthorizationStatus
+         * @description 查询与管理员页面共享的动态资料、模型和预算状态。
+         */
+        CorpusAuthorizationStatus: {
+            /**
+             * Budget State
+             * @enum {string}
+             */
+            budget_state: "NOT_REQUIRED" | "MISSING" | "AVAILABLE" | "EXHAUSTED" | "BLOCKED";
+            /**
+             * Corpus Authorization State
+             * @enum {string}
+             */
+            corpus_authorization_state: "NOT_REQUIRED" | "MISSING" | "APPROVED" | "STALE_REVISION" | "STALE_CORPUS" | "EXPIRED";
+            /**
+             * Fallback Reason Codes
+             * @default []
+             */
+            fallback_reason_codes: string[];
+            manifest?: components["schemas"]["CorpusAuthorizationManifest"] | null;
+            /**
+             * Model Authorization State
+             * @enum {string}
+             */
+            model_authorization_state: "NOT_REQUIRED" | "MISSING" | "APPROVED" | "PARTIAL" | "STALE_MODEL" | "EXPIRED" | "BLOCKED";
+            /**
+             * Model Configuration State
+             * @enum {string}
+             */
+            model_configuration_state: "NOT_CONFIGURED" | "CONFIGURED" | "INVALID";
+            /**
+             * Required Operations
+             * @default []
+             */
+            required_operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
+        };
+        /**
          * CreateKnowledgeBaseRequest
          * @description 创建知识库请求。
          */
@@ -1475,7 +1611,7 @@ export interface components {
          * @description 只描述可观察机械决策，不承载自由文本判断。
          * @enum {string}
          */
-        DecisionCode: "STARTED" | "ADMISSION_ALLOWED" | "AUTHORIZED_SCOPE" | "CONTEXT_LOADED" | "NO_HISTORY" | "NO_CONTEXT_SIGNAL" | "HISTORY_BUDGET_EMPTY" | "REWRITE_TRIGGER_PRONOUN" | "REWRITE_TRIGGER_TEMPORAL" | "REWRITE_TRIGGER_ORDINAL" | "REWRITE_TRIGGER_CONTINUATION" | "REWRITE_OK" | "REWRITE_MODEL_UNAVAILABLE" | "REWRITE_INVALID_SCHEMA" | "REWRITE_SAME_AS_ORIGINAL" | "REWRITE_ANCHOR_DRIFT" | "REWRITE_TOKEN_LIMIT" | "NO_RULES" | "UNIQUE_MATCH" | "BELOW_THRESHOLD" | "TIE" | "FALLBACK_FULL_CORPUS" | "RETRIEVAL_OK" | "RETRIEVAL_EMPTY" | "CACHE_HIT" | "CACHE_MISS" | "SINGLEFLIGHT_LEADER" | "SINGLEFLIGHT_FOLLOWER" | "EXACT_MATCH" | "LEXICAL_MATCH" | "DENSE_MATCH" | "FUSION_SELECTED" | "HYDRATED" | "RERANK_SELECTED" | "NEIGHBOR_EXPANDED" | "EVIDENCE_SELECTED" | "CONFIDENCE_ACCEPTED" | "GENERATION_CALLED" | "PROVIDER_CALLED" | "PUBLISHED" | "SELECTED" | "DROPPED_FINAL_LIMIT" | "ACCEPTED" | "MISSING_PAYLOAD" | "DUPLICATE" | "SOURCE_MISMATCH" | "VERSION_MISMATCH" | "SCOPE_MISMATCH" | "SOURCE_DELETED" | "SOURCE_UNAUTHORIZED" | "NEIGHBOR_GROUP_MISMATCH" | "CAPACITY_LIMIT" | "PROMPT_INJECTION" | "TOKEN_BUDGET" | "MAX_ITEMS" | "INVALID_PAYLOAD" | "MODEL_UNAVAILABLE" | "MODEL_ABSTAINED" | "ABSTENTION_REVIEW_TRIGGERED" | "ABSTENTION_REVIEW_ANSWERED" | "ABSTENTION_REVIEW_EMPTY" | "ABSTENTION_REVIEW_INVALID" | "VALIDATION_OK" | "INVALID_JSON" | "INVALID_TOP_LEVEL_SCHEMA" | "INVALID_REFUSAL_SCHEMA" | "INVALID_ANSWER_SCHEMA" | "INVALID_CLAIM_SCHEMA" | "EMPTY_CLAIM_OR_SUPPORT" | "INVALID_SUPPORT_SCHEMA" | "INVALID_EVIDENCE_ID" | "EMPTY_QUOTE" | "QUOTE_NOT_FOUND" | "AMBIGUOUS_QUOTE_LOCATION" | "CROSS_SPAN_QUOTE" | "DUPLICATE_SUPPORT" | "LOW_CONFIDENCE_OCR_ONLY" | "UNSUPPORTED_NUMBER" | "DUPLICATE_CLAIM" | "REPAIR_OK" | "REPAIR_FAILED" | "VALIDATION_FAILED" | "ANSWERED" | "REFUSED" | "CANCELLED" | "INTERRUPTED" | "PROVIDER_FAILED" | "INGESTION_STAGE_SUCCEEDED" | "INGESTION_STAGE_FAILED" | "INGESTION_STAGE_CANCELLED" | "ERROR" | "SKIPPED" | "TRACE_QUEUE_FULL" | "TRACE_CAPTURE_FAILED" | "TRACE_ARTIFACT_LIMIT" | "TRACE_EXPORT_FAILED" | "RERANK_DROP" | "EVIDENCE_BUDGET_DROP" | "PROMPT_INJECTION_ONLY";
+        DecisionCode: "STARTED" | "ADMISSION_ALLOWED" | "AUTHORIZED_SCOPE" | "CONTEXT_LOADED" | "NO_HISTORY" | "NO_CONTEXT_SIGNAL" | "HISTORY_BUDGET_EMPTY" | "INTERPRET_OK" | "REWRITE_TRIGGER_PRONOUN" | "REWRITE_TRIGGER_TEMPORAL" | "REWRITE_TRIGGER_ORDINAL" | "REWRITE_TRIGGER_CONTINUATION" | "REWRITE_OK" | "REWRITE_MODEL_UNAVAILABLE" | "REWRITE_INVALID_SCHEMA" | "REWRITE_SAME_AS_ORIGINAL" | "REWRITE_ANCHOR_DRIFT" | "REWRITE_TOKEN_LIMIT" | "NO_RULES" | "UNIQUE_MATCH" | "BELOW_THRESHOLD" | "TIE" | "FALLBACK_FULL_CORPUS" | "RETRIEVAL_OK" | "RETRIEVAL_EMPTY" | "CACHE_HIT" | "CACHE_MISS" | "SINGLEFLIGHT_LEADER" | "SINGLEFLIGHT_FOLLOWER" | "EXACT_MATCH" | "LEXICAL_MATCH" | "DENSE_MATCH" | "FUSION_SELECTED" | "HYDRATED" | "RERANK_SELECTED" | "NEIGHBOR_EXPANDED" | "EVIDENCE_SELECTED" | "CONFIDENCE_ACCEPTED" | "GENERATION_CALLED" | "PROVIDER_CALLED" | "PUBLISHED" | "SELECTED" | "DROPPED_FINAL_LIMIT" | "ACCEPTED" | "MISSING_PAYLOAD" | "DUPLICATE" | "SOURCE_MISMATCH" | "VERSION_MISMATCH" | "SCOPE_MISMATCH" | "SOURCE_DELETED" | "SOURCE_UNAUTHORIZED" | "NEIGHBOR_GROUP_MISMATCH" | "CAPACITY_LIMIT" | "PROMPT_INJECTION" | "TOKEN_BUDGET" | "MAX_ITEMS" | "INVALID_PAYLOAD" | "MODEL_UNAVAILABLE" | "MODEL_ABSTAINED" | "ABSTENTION_REVIEW_TRIGGERED" | "ABSTENTION_REVIEW_ANSWERED" | "ABSTENTION_REVIEW_EMPTY" | "ABSTENTION_REVIEW_INVALID" | "VALIDATION_OK" | "INVALID_JSON" | "INVALID_TOP_LEVEL_SCHEMA" | "INVALID_REFUSAL_SCHEMA" | "INVALID_ANSWER_SCHEMA" | "INVALID_CLAIM_SCHEMA" | "EMPTY_CLAIM_OR_SUPPORT" | "INVALID_SUPPORT_SCHEMA" | "INVALID_EVIDENCE_ID" | "EMPTY_QUOTE" | "QUOTE_NOT_FOUND" | "AMBIGUOUS_QUOTE_LOCATION" | "CROSS_SPAN_QUOTE" | "DUPLICATE_SUPPORT" | "LOW_CONFIDENCE_OCR_ONLY" | "UNSUPPORTED_NUMBER" | "DUPLICATE_CLAIM" | "REPAIR_OK" | "REPAIR_FAILED" | "VALIDATION_FAILED" | "ANSWERED" | "REFUSED" | "CANCELLED" | "INTERRUPTED" | "PROVIDER_FAILED" | "INGESTION_STAGE_SUCCEEDED" | "INGESTION_STAGE_FAILED" | "INGESTION_STAGE_CANCELLED" | "ERROR" | "SKIPPED" | "TRACE_QUEUE_FULL" | "TRACE_CAPTURE_FAILED" | "TRACE_ARTIFACT_LIMIT" | "TRACE_EXPORT_FAILED" | "RERANK_DROP" | "EVIDENCE_BUDGET_DROP" | "PROMPT_INJECTION_ONLY";
         /**
          * DiagnosticEvidenceItem
          * @description Evidence 的安全身份和 canonical source range。
@@ -1486,10 +1622,19 @@ export interface components {
             /** Evidence Id */
             evidence_id: string;
             /**
+             * Selected For Answer
+             * @default false
+             */
+            selected_for_answer: boolean;
+            /** Selection Reason */
+            selection_reason?: string | null;
+            /**
              * Source Ranges
              * @default []
              */
             source_ranges: components["schemas"]["SourceSpan"][];
+            /** Support Status */
+            support_status?: string | null;
         };
         /**
          * DiagnosticExpansionItem
@@ -2137,6 +2282,64 @@ export interface components {
             retry_count: number;
         };
         /**
+         * QueryDataPlane
+         * @description 一次查询实际冻结的数据面、模型与授权状态。
+         */
+        QueryDataPlane: {
+            /** Active Index Revision Id */
+            active_index_revision_id?: string | null;
+            /** Active Retrieval Profile Revision Id */
+            active_retrieval_profile_revision_id?: string | null;
+            /** Budget State */
+            budget_state: string;
+            /** Corpus Authorization State */
+            corpus_authorization_state: string;
+            /** Dense Calibration State */
+            dense_calibration_state: string;
+            /** Embedding Model */
+            embedding_model?: string | null;
+            /** Embedding Provider Id */
+            embedding_provider_id?: string | null;
+            /**
+             * Fallback Reason Codes
+             * @default []
+             */
+            fallback_reason_codes: string[];
+            /** Generation Model */
+            generation_model?: string | null;
+            /** Generation Provider Id */
+            generation_provider_id?: string | null;
+            /** Index Fingerprint */
+            index_fingerprint?: string | null;
+            /** Interpret Model */
+            interpret_model?: string | null;
+            /** Interpret Provider Id */
+            interpret_provider_id?: string | null;
+            /** Model Authorization State */
+            model_authorization_state: string;
+            /** Model Configuration State */
+            model_configuration_state: string;
+            /** Rerank Mode */
+            rerank_mode: string;
+            /** Reranker Model */
+            reranker_model?: string | null;
+            /** Reranker Provider Id */
+            reranker_provider_id?: string | null;
+            /**
+             * Retrieval Data Plane
+             * @enum {string}
+             */
+            retrieval_data_plane: "active_remote_profile" | "default_local_fallback";
+            /** Rewrite Model */
+            rewrite_model?: string | null;
+            /** Rewrite Provider Id */
+            rewrite_provider_id?: string | null;
+            /** Selected Vector Space */
+            selected_vector_space?: string | null;
+            /** Serving Fingerprint */
+            serving_fingerprint?: string | null;
+        };
+        /**
          * QueryKind
          * @description 确定性 Query Planner 的稳定分类。
          * @enum {string}
@@ -2194,6 +2397,7 @@ export interface components {
             /** Cache Key */
             cache_key: string;
             confidence: components["schemas"]["ConfidenceDecision"];
+            data_plane?: components["schemas"]["QueryDataPlane"] | null;
             /**
              * Degraded Reason Codes
              * @default []
@@ -2224,6 +2428,13 @@ export interface components {
             index_fingerprint: string;
             /** Index Revision Id */
             index_revision_id: string;
+            /**
+             * Interpret Called This Request
+             * @default false
+             */
+            interpret_called_this_request: boolean;
+            /** Interpret Reason Code */
+            interpret_reason_code?: string | null;
             /** Knowledge Base Id */
             knowledge_base_id: string;
             /** Project Id */
@@ -2236,6 +2447,12 @@ export interface components {
             /** Query Id */
             query_id: string;
             query_kind: components["schemas"]["QueryKind"];
+            /**
+             * Query Semantic Source
+             * @default ORIGINAL_FALLBACK
+             * @enum {string}
+             */
+            query_semantic_source: "RULE" | "LLM_INTERPRET" | "LLM_REWRITE" | "ORIGINAL_FALLBACK";
             /** Reason Code */
             reason_code: string;
             /**
@@ -2243,6 +2460,8 @@ export interface components {
              * @default []
              */
             related_contents: components["schemas"]["RelatedContent"][];
+            /** @default UNKNOWN */
+            requested_answer_type: components["schemas"]["RequestedAnswerType"];
             /** Rerank Execution Mode */
             rerank_execution_mode: string;
             /** Rerank Mode */
@@ -2361,6 +2580,12 @@ export interface components {
             display_name: string;
         };
         /**
+         * RequestedAnswerType
+         * @description 查询实际要求返回的答案形状。
+         * @enum {string}
+         */
+        RequestedAnswerType: "UNKNOWN" | "FACT" | "DEFINITION" | "PURPOSE" | "ENUMERATION" | "COUNT" | "ORDINAL_ITEM" | "DUTIES" | "RESPONSIBLE_PARTY" | "PROCEDURE" | "SECTION_SUMMARY";
+        /**
          * RetrievalDiagnostics
          * @description 不含正文、向量、Prompt 或 Secret 的完整检索诊断。
          */
@@ -2408,6 +2633,11 @@ export interface components {
              * @default []
              */
             fusion: components["schemas"]["DiagnosticFusionItem"][];
+            /**
+             * Model Evidence Candidates
+             * @default []
+             */
+            model_evidence_candidates: components["schemas"]["DiagnosticEvidenceItem"][];
             /**
              * Provider Call Details
              * @default []
@@ -3120,7 +3350,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.rewrite" | "image.ocr";
+            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.interpret" | "query.rewrite" | "image.ocr";
             /** Request Policy */
             request_policy?: {
                 [key: string]: unknown;
@@ -5790,6 +6020,234 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _authorization_status_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                knowledge_base_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorpusAuthorizationStatus"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _approve_authorization_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                knowledge_base_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CorpusAuthorizationApproval"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CorpusAuthorizationStatus"];
                 };
             };
             /** @description 统一安全错误结构 */

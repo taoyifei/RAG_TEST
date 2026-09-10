@@ -932,7 +932,8 @@ def _knowledge_scope_failure(  # noqa: PLR0911
     if not request.policy_valid:
         return BudgetBlockedError("BUSINESS_REQUEST_POLICY_MISMATCH")
     if (
-        not request.source_hashes and request.operation != "query.rewrite"
+        not request.source_hashes
+        and request.operation not in {"query.interpret", "query.rewrite"}
     ) or not _hash_subset(
         request.source_hashes, campaign.approved_source_hashes
     ):

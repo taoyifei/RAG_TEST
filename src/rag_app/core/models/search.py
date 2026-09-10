@@ -28,7 +28,11 @@ from rag_app.core.models.provider import (
     EmbeddingTopology,
     ProviderCall,
 )
-from rag_app.core.models.query import QueryAnalysis, QueryKind
+from rag_app.core.models.query import (
+    QueryAnalysis,
+    QueryKind,
+    RequestedAnswerType,
+)
 from rag_app.core.models.retrieval import EvidenceItem
 from rag_app.core.models.revisions import RevisionVectorSpec
 
@@ -64,7 +68,12 @@ class RetrievalPolicy(FrozenModel):
     )
     dense_calibrated_vector_spaces: tuple[str, ...] = ()
     bypass_policy_denied: bool = True
-    enabled_channels: tuple[str, ...] = ("exact", "lexical", "dense")
+    enabled_channels: tuple[str, ...] = (
+        "exact",
+        "structural",
+        "lexical",
+        "dense",
+    )
     rerank_enabled: bool = True
     neighbor_expansion_enabled: bool = True
     provisional: bool = True
@@ -72,7 +81,7 @@ class RetrievalPolicy(FrozenModel):
     @field_validator("enabled_channels")
     @classmethod
     def _validate_channels(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        allowed = {"exact", "lexical", "dense"}
+        allowed = {"exact", "structural", "lexical", "dense"}
         if (
             not value
             or len(value) != len(set(value))
@@ -176,6 +185,23 @@ class ExactSearchRequest(FrozenModel):
     revision: IndexRevisionRef
     identifiers: tuple[str, ...] = ()
     quoted_phrases: tuple[str, ...] = ()
+    limit: StrictInt = Field(default=20, gt=0, le=100)
+
+
+class StructuralSearchRequest(FrozenModel):
+    """基于既有 canonical 结构字段的有界检索请求。"""
+
+    revision: IndexRevisionRef
+    query: str = Field(min_length=1, max_length=8000, repr=False)
+    target: str | None = Field(default=None, max_length=512, repr=False)
+    relation: str | None = Field(default=None, max_length=160)
+    answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
+    source_qualifier: str | None = Field(
+        default=None, max_length=512, repr=False
+    )
+    context_qualifier: str | None = Field(
+        default=None, max_length=512, repr=False
+    )
     limit: StrictInt = Field(default=20, gt=0, le=100)
 
 
@@ -299,6 +325,9 @@ class DiagnosticEvidenceItem(FrozenModel):
     evidence_id: str = Field(min_length=1)
     chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
     source_ranges: tuple[SourceSpan, ...] = ()
+    support_status: str | None = None
+    selected_for_answer: bool = False
+    selection_reason: str | None = None
 
 
 class StageTiming(FrozenModel):
@@ -324,6 +353,7 @@ class RetrievalDiagnostics(FrozenModel):
     fusion: tuple[DiagnosticFusionItem, ...] = ()
     reranked: tuple[DiagnosticRerankItem, ...] = ()
     expanded: tuple[DiagnosticExpansionItem, ...] = ()
+    model_evidence_candidates: tuple[DiagnosticEvidenceItem, ...] = ()
     evidence: tuple[DiagnosticEvidenceItem, ...] = ()
     cited_chunk_ids: tuple[str, ...] = ()
     provider_calls: tuple[ProviderCallCount, ...] = ()
@@ -343,6 +373,44 @@ class RetrievalDiagnosticsSummary(FrozenModel):
     provider_call_count: StrictInt = Field(ge=0)
     provider_retry_count: StrictInt = Field(ge=0)
     cache_hit: bool
+
+
+class QueryDataPlane(FrozenModel):
+    """一次查询实际冻结的数据面、模型与授权状态。"""
+
+    retrieval_data_plane: Literal[
+        "active_remote_profile", "default_local_fallback"
+    ]
+    active_retrieval_profile_revision_id: str | None = Field(
+        default=None, pattern=r"^pfr_[0-9a-f]{32}$"
+    )
+    active_index_revision_id: str | None = Field(
+        default=None, pattern=r"^irev_[0-9a-f]{32}$"
+    )
+    index_fingerprint: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    serving_fingerprint: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    embedding_provider_id: str | None = None
+    embedding_model: str | None = None
+    selected_vector_space: str | None = None
+    reranker_provider_id: str | None = None
+    reranker_model: str | None = None
+    rerank_mode: str
+    generation_provider_id: str | None = None
+    generation_model: str | None = None
+    interpret_provider_id: str | None = None
+    interpret_model: str | None = None
+    rewrite_provider_id: str | None = None
+    rewrite_model: str | None = None
+    dense_calibration_state: str
+    model_configuration_state: str
+    model_authorization_state: str
+    corpus_authorization_state: str
+    budget_state: str
+    fallback_reason_codes: tuple[str, ...] = ()
 
 
 class BaseResultCacheKey(FrozenModel):
@@ -422,6 +490,10 @@ class SearchAnswerResult(FrozenModel):
     display_message: str | None = None
     confidence: ConfidenceDecision
     query_kind: QueryKind
+    requested_answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
+    query_semantic_source: Literal[
+        "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
+    ] = "ORIGINAL_FALLBACK"
     active_index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     index_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     serving_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
@@ -433,12 +505,14 @@ class SearchAnswerResult(FrozenModel):
         pattern=r"^(extractive|extractive_fallback|llm|none)$"
     )
     generation_reason_code: str | None = None
+    interpret_reason_code: str | None = None
     rewrite_reason_code: str | None = None
     degraded_reason_codes: tuple[str, ...] = ()
     cache_key: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     cache_hit: bool = False
     result_origin: Literal["fresh", "cache", "singleflight"] = "fresh"
     generation_called_this_request: bool = False
+    interpret_called_this_request: bool = False
     rewrite_called_this_request: bool = False
     singleflight_role: Literal["none", "leader", "follower"] = "none"
     singleflight_key_hash: str | None = Field(
@@ -446,6 +520,7 @@ class SearchAnswerResult(FrozenModel):
     )
     singleflight_wait_ms: StrictInt = Field(default=0, ge=0)
     diagnostics_summary: RetrievalDiagnosticsSummary | None = None
+    data_plane: QueryDataPlane | None = None
     diagnostics: RetrievalDiagnostics | None = Field(
         default=None, exclude=True, repr=False
     )
@@ -464,6 +539,7 @@ __all__ = [
     "FusedCandidate",
     "HydratedChunk",
     "ProviderCallCount",
+    "QueryDataPlane",
     "RankedChunk",
     "RelatedContent",
     "RetrievalDiagnostics",
@@ -473,4 +549,5 @@ __all__ = [
     "SearchAnswerResult",
     "SearchRequest",
     "StageTiming",
+    "StructuralSearchRequest",
 ]

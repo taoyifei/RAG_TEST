@@ -43,9 +43,15 @@ export interface HistoryEntry {
   body_message: string;
   cache_hit?: boolean;
   generation_mode?: string;
+  generation_reason_code?: string | null;
+  degraded_reason_codes?: string[];
+  fallback_answer_available?: boolean;
+  requested_answer_type?: string;
+  query_semantic_source?: string;
   reason_code?: string;
   error_stage?: string;
   active_index_revision_id?: string;
+  data_plane?: components["schemas"]["QueryDataPlane"];
   models?: string[];
   provider_usage?: {
     operation: string;
@@ -59,6 +65,9 @@ export interface HistoryEntry {
     evidence?: Evidence[];
     related_contents?: RelatedContent[];
     generation_mode?: string;
+    requested_answer_type?: string;
+    query_semantic_source?: string;
+    data_plane?: components["schemas"]["QueryDataPlane"] | null;
   } | null;
 }
 
@@ -233,6 +242,33 @@ export interface KnowledgeBaseModelSettings {
   budget_campaign_id: string | null;
   generation_configured?: boolean;
   ocr_configured?: boolean;
+  corpus_authorization?: CorpusAuthorizationStatus;
+  retrieval_data_plane?: RetrievalDataPlaneStatus;
+}
+
+export type CorpusAuthorizationStatus =
+  components["schemas"]["CorpusAuthorizationStatus"];
+export type CorpusAuthorizationApproval =
+  components["schemas"]["CorpusAuthorizationApproval"];
+
+export interface RetrievalDataPlaneStatus {
+  retrieval_data_plane: "active_remote_profile" | "default_local_fallback";
+  profile_state: string;
+  active_retrieval_profile_revision_id?: string | null;
+  pending_profile_revision_id?: string | null;
+  activation_job_id?: string | null;
+  active_index_revision_id?: string | null;
+  index_fingerprint?: string | null;
+  serving_fingerprint?: string | null;
+  embedding_provider_id?: string | null;
+  embedding_model?: string | null;
+  selected_vector_space?: string | null;
+  reranker_provider_id?: string | null;
+  reranker_model?: string | null;
+  dense_calibration_state: string;
+  vector_coverage_complete: boolean;
+  fallback_reason_codes: string[];
+  remediation_path: string;
 }
 
 export interface DocumentOcrScan {
@@ -618,10 +654,7 @@ export async function readSseResponse(
       lastSequence = sequence;
     }
     if (eventName === "meta") {
-      if (
-        versioned &&
-        payload.delivery !== "incremental_or_final_only"
-      ) {
+      if (versioned && payload.delivery !== "incremental_or_final_only") {
         throw new Error("SSE meta 结构无效");
       }
       const value = payload.trace_id;
@@ -803,6 +836,20 @@ export const api = {
     request<KnowledgeBaseModelSettings>(
       `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/model-settings`,
       "",
+    ),
+  corpusAuthorization: (kbId: string) =>
+    request<CorpusAuthorizationStatus>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/corpus-authorization`,
+      "",
+    ),
+  approveCorpusAuthorization: (
+    kbId: string,
+    approval: CorpusAuthorizationApproval,
+  ) =>
+    request<CorpusAuthorizationStatus>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/corpus-authorization:approve`,
+      "",
+      jsonInit("POST", approval),
     ),
   scanDocumentImages: (kbId: string, documentId: string) =>
     request<DocumentOcrScan>(
@@ -1004,10 +1051,7 @@ export const api = {
     ),
   clearHistory: () =>
     request<void>("/api/v1/history", "", { method: "DELETE" }),
-  exportHistoryTrace: async (
-    traceId: string,
-    includeHistoryBody: boolean,
-  ) => {
+  exportHistoryTrace: async (traceId: string, includeHistoryBody: boolean) => {
     const params = new URLSearchParams({
       include_history_body: String(includeHistoryBody),
     });
@@ -1079,11 +1123,9 @@ export const api = {
     return downloadResponse(response, "operational-traces.zip");
   },
   pruneOperationalTraces: () =>
-    request<{ pruned: number }>(
-      "/api/v1/admin/operational-traces:prune",
-      "",
-      { method: "POST" },
-    ),
+    request<{ pruned: number }>("/api/v1/admin/operational-traces:prune", "", {
+      method: "POST",
+    }),
   readEvidenceSource: async (
     token: string,
     projectId: string,

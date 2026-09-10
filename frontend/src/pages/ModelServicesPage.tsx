@@ -178,6 +178,7 @@ export function ModelServicesPage() {
                   const key = `${connection.connection_id}:${operation}`;
                   const configurable = [
                     "generation",
+                    "query.interpret",
                     "query.rewrite",
                     "image.ocr",
                   ].includes(operation);

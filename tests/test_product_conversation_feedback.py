@@ -185,6 +185,30 @@ def test_conversation_is_encrypted_scoped_idempotent_and_revocable(
         assert question.encode() not in (
             harness.runtime.connections.database_path.read_bytes()
         )
+        fallback_question = "请继续说明这个周期。"
+        fallback = result.model_copy(
+            update={
+                "trace_id": new_id("trace"),
+                "generation_mode": "extractive_fallback",
+                "generation_reason_code": "PROVIDER_TIMEOUT",
+                "degraded_reason_codes": ("PROVIDER_TIMEOUT",),
+            }
+        )
+        assert store.commit(
+            scope,
+            "conversation-fallback",
+            fallback_question,
+            fallback,
+            owner_id="owner-a",
+        )
+        fallback_context = store.context(
+            scope,
+            "conversation-fallback",
+            owner_id="owner-a",
+        )
+        assert len(fallback_context) == 1
+        assert fallback_question in fallback_context[0]
+        assert "14 天" in fallback_context[0]
 
         harness.runtime.sdk.delete_document(
             project_id,

@@ -44,6 +44,29 @@ def test_wsl_browser_acceptance_uses_requested_candidate_server(
     assert "P10_BASE_URL/w" in calls[0]["WSLENV"]
 
 
+def test_wsl_browser_acceptance_can_select_one_viewport_project(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def browser_run(
+        command: Sequence[str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setenv("P10_EXTERNAL_SERVER", "1")
+    monkeypatch.setenv("P10_BROWSER_PROJECT", "chromium-mobile")
+    monkeypatch.setattr(dev, "_run_web_script", lambda _script: 0)
+    monkeypatch.setattr(dev.shutil, "which", lambda _name: "node.exe")
+    monkeypatch.setattr(Path, "is_file", lambda _path: True)
+    monkeypatch.setattr(dev, "_windows_path", str)
+    monkeypatch.setattr(dev.subprocess, "run", browser_run)
+
+    assert dev._web_e2e(None) == 0
+    assert commands[0][-1] == "--project=chromium-mobile"
+
+
 def test_wsl_browser_acceptance_isolates_viewport_rate_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

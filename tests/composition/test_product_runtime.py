@@ -77,7 +77,7 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 25
+        assert migration_count == 26
     finally:
         harness.close()
 
@@ -113,6 +113,14 @@ def test_product_runtime_without_provider_keeps_fts_exact_flow(
         assert job.state.value == "succeeded"
         assert result.evidence
         assert result.diagnostics is not None
+        assert result.data_plane is not None
+        assert (
+            result.data_plane.retrieval_data_plane == "default_local_fallback"
+        )
+        assert result.data_plane.embedding_provider_id == "deterministic"
+        assert "DETERMINISTIC_EMBEDDING" in (
+            result.data_plane.fallback_reason_codes
+        )
         channels = dict(result.diagnostics.channel_chunk_ids)
         assert channels["lexical"]
     finally:
@@ -308,7 +316,45 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
         assert result.selected_embedding_slot == "primary"
         assert result.selected_vector_name == "dense_primary"
         assert result.rerank_execution_mode == "provider"
+        assert result.data_plane is not None
+        assert result.data_plane.retrieval_data_plane == "active_remote_profile"
+        assert result.data_plane.embedding_provider_id == "jina-embedding"
+        assert (
+            result.data_plane.embedding_model == "jina-embeddings-v5-text-small"
+        )
+        assert result.data_plane.reranker_provider_id == "jina-reranker"
+        assert result.data_plane.reranker_model == "jina-reranker-v3.5"
         assert result.evidence
+        model_status = harness.client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings"
+        )
+        assert model_status.status_code == 200, model_status.text
+        configured = model_status.json()["retrieval_data_plane"]
+        assert configured["retrieval_data_plane"] == "active_remote_profile"
+        assert configured["profile_state"] == "ACTIVE"
+        assert configured["embedding_provider_id"] == "jina-embedding"
+        assert configured["embedding_model"] == "jina-embeddings-v5-text-small"
+        assert configured["reranker_provider_id"] == "jina"
+        assert configured["reranker_model"] == "jina-reranker-v3.5"
+
+        def _invalid_serving_contract(*_: object) -> object:
+            raise ValueError("公开合成的损坏配置")
+
+        monkeypatch.setattr(
+            harness.runtime.profiles,
+            "serving_contract",
+            _invalid_serving_contract,
+        )
+        invalid_status = harness.client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings"
+        )
+        assert invalid_status.status_code == 200, invalid_status.text
+        invalid_plane = invalid_status.json()["retrieval_data_plane"]
+        assert invalid_plane["profile_state"] == "CONFIGURATION_INVALID"
+        assert (
+            "PROFILE_RUNTIME_CONFIGURATION_INVALID"
+            in invalid_plane["fallback_reason_codes"]
+        )
     finally:
         harness.close()
 

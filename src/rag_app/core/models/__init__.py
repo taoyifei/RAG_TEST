@@ -171,6 +171,7 @@ from rag_app.core.models.search import (
     FusedCandidate,
     HydratedChunk,
     ProviderCallCount,
+    QueryDataPlane,
     RankedChunk,
     RelatedContent,
     RetrievalDiagnostics,
@@ -180,6 +181,7 @@ from rag_app.core.models.search import (
     SearchAnswerResult,
     SearchRequest,
     StageTiming,
+    StructuralSearchRequest,
 )
 from rag_app.core.policies import ParsePolicy, ParsingPolicy
 
@@ -291,6 +293,7 @@ __all__ = [
     "ProviderHealthStatus",
     "QueryAnalysis",
     "QueryConstraint",
+    "QueryDataPlane",
     "QueryEmbeddingRequest",
     "QueryKind",
     "QuerySemantics",
@@ -328,6 +331,7 @@ __all__ = [
     "SourceSpanKind",
     "StageTiming",
     "StoryKind",
+    "StructuralSearchRequest",
     "SystemStatus",
     "TextPayload",
     "TokenCountResult",

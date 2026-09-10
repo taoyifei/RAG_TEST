@@ -27,6 +27,24 @@ egress 网络访问已配置的模型服务。Compose 只启动候选镜像，�
 应用不信任未列出的代理，也不会接受客户端伪造的 forwarded scheme。Qdrant 不应
 暴露公网端口。
 
+## 查询数据面与出网边界
+
+首次启动、没有活动 Retrieval Profile 或尚未批准远程操作时，查询使用
+`default_local_fallback`。这是本地 deterministic embedding、Exact/FTS、结构检索和
+词面 Reranker 的明确数据面，不会因为存在向量槽就显示成真实远程 Dense。来源明确的
+定义、目的、职责、责任人、表格和列表仍可由本地 renderer 回答。
+
+远程检索需要已验证并激活的 Retrieval Profile、完整向量覆盖及匹配的 Index Revision；
+generation/interpret/rewrite 还需要管理员批准当前活动语料清单、具体 operation、模型、
+有效期和累计预算。新文档、新版本、删除、恢复、Revision 或模型变化使旧批准失效，服务
+不会自动扩大授权或把配置状态误报成“资料中没有答案”。真实 Provider 的 endpoint、
+调用次数、usage 与失败类别进入非敏感数据面和 Trace；Secret、Provider body 与私有正文
+不进入日志或默认 Trace。
+
+默认开发与验收 lane 无 Key、无外部调用。需要真实 Provider 时，先在同源管理员控制台
+完成连接验证、Profile 激活和语料批准，再在已持久化的预算 campaign 内运行；公开合成
+授权不能复用于私有知识库。
+
 ## 镜像与验收
 
 ```bash
@@ -69,5 +87,7 @@ python scripts/os_risk_draft.py \
 source version、PURL、arch、Target、layer 和原始条目索引，并强制将 owner、
 approver、expiry 与 risk acceptance 清空；输出始终为 `UNDER_INVESTIGATION`。
 
-基础镜像和扫描工具在 CI/报告中记录解析后的 Digest。发布前仍需检查
-`docs/progress/phase-11.md` 中未修复漏洞、CI、Live 与 Branch Protection 状态。
+基础镜像和扫描工具在 CI/报告中记录解析后的 Digest。查询功能、公开 holdout 与容器
+问答验收的当前状态见 `BLOCKED.md` 和
+`docs/public/evaluation-and-quality-claims.md`；OS 风险、CI、真实 Provider 与 Branch
+Protection 仍需按各自证据独立判断，不能由离线查询结果代替。

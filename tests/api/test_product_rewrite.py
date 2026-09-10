@@ -17,7 +17,12 @@ from rag_app.adapters.providers.budget_ledger import (
 from rag_app.adapters.providers.budget_transport import (
     provider_request_identity,
 )
-from rag_app.core.models import KnowledgeBaseScope, SearchRequest
+from rag_app.application.retrieval import QueryAnalyzer
+from rag_app.core.models import (
+    KnowledgeBaseScope,
+    RequestedAnswerType,
+    SearchRequest,
+)
 from rag_app.product.grounded_runtime import ProductGroundedModel
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 from tests.product_support import (
@@ -92,8 +97,11 @@ def rewrite_model(
                 # 本测试只发送问题，合成来源边界不被读取或发送。
                 approved_source_hashes=("a" * 64,),
                 allowed_models=("qwen3.7-flash",),
-                allowed_operations=("query.rewrite",),
-                operation_request_limits={"query.rewrite": 8},
+                allowed_operations=("query.interpret", "query.rewrite"),
+                operation_request_limits={
+                    "query.interpret": 8,
+                    "query.rewrite": 8,
+                },
                 expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
                 approved_request_identities=(
                     provider_request_identity(
@@ -235,3 +243,157 @@ def test_pronoun_rewrite_uses_bounded_conversation_context(
     payload = json.loads(sent[0].content)
     message = json.loads(payload["messages"][1]["content"])
     assert message["context"] == [value[:300] for value in context[-2:]]
+
+
+def _interpret_payload(
+    **changes: object,
+) -> str:
+    """构造公开合成的严格解释响应，不包含答案。"""
+    payload: dict[str, object] = {
+        "standalone_query": "甲部门这块是怎么回事？",
+        "target": "甲部门",
+        "relation": "职责",
+        "answer_type": "DUTIES",
+        "expected_count": None,
+        "ordinal": None,
+        "source_qualifier": None,
+    }
+    payload.update(changes)
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def test_interpret_upgrades_unknown_semantics_with_one_dispatched_call(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """低置信规则只调用一次，并把严格结果写回共享语义。"""
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": "甲部门这块是怎么回事？"})
+    output["content"] = _interpret_payload()
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.attempted is True
+    assert result.reason_code == "INTERPRET_APPLIED"
+    assert result.standalone_query == request.text
+    assert result.semantics is not None
+    assert result.semantics.target == "甲部门"
+    assert result.semantics.relation == "职责"
+    assert result.semantics.answer_type is RequestedAnswerType.DUTIES
+    assert result.semantics.source == "LLM_INTERPRET"
+    assert len(sent) == 1
+    assert sum(call.call_count for call in result.calls) == 1
+    payload = json.loads(sent[0].content)
+    assert payload["max_tokens"] == 384
+    assert (
+        json.loads(payload["messages"][1]["content"])["question"]
+        == request.text
+    )
+
+
+def test_interpret_accepts_canonical_question_without_changing_scope(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """受控关系词可规范化，业务对象和其余主题必须保持不变。"""
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": "甲部门这块是怎么回事？"})
+    output["content"] = _interpret_payload(
+        standalone_query="甲部门的职责是什么？"
+    )
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.reason_code == "INTERPRET_APPLIED"
+    assert result.standalone_query == "甲部门的职责是什么？"
+    assert result.semantics is not None
+    assert result.semantics.answer_type is RequestedAnswerType.DUTIES
+    assert len(sent) == 1
+
+
+def test_invalid_interpret_json_records_the_one_dispatched_call(
+    rewrite_model: RewriteFixture,
+) -> None:
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": "甲部门这块是怎么回事？"})
+    output["content"] = "not-json"
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.semantics is None
+    assert result.reason_code == "INTERPRET_INVALID"
+    assert result.attempted is True
+    assert len(sent) == 1
+    assert sum(call.call_count for call in result.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("question", "payload", "reason"),
+    (
+        (
+            "甲部门这块是怎么回事？",
+            _interpret_payload(
+                standalone_query="乙部门这块是怎么回事？", target="乙部门"
+            ),
+            "INTERPRET_SCOPE_CHANGED",
+        ),
+        (
+            "甲部门2026年这块是怎么回事？",
+            _interpret_payload(standalone_query="甲部门2027年这块是怎么回事？"),
+            "INTERPRET_CONSTRAINT_CHANGED",
+        ),
+        (
+            "甲部门不得自行处理，这块是怎么回事？",
+            _interpret_payload(
+                standalone_query="甲部门可以自行处理，这块是怎么回事？"
+            ),
+            "INTERPRET_CONSTRAINT_CHANGED",
+        ),
+        (
+            "甲部门这块是怎么回事？",
+            _interpret_payload(source_qualifier="乙规范"),
+            "INTERPRET_SCOPE_CHANGED",
+        ),
+    ),
+)
+def test_interpret_rejects_new_entity_or_changed_hard_constraint(
+    rewrite_model: RewriteFixture,
+    question: str,
+    payload: str,
+    reason: str,
+) -> None:
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": question})
+    output["content"] = payload
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.semantics is None
+    assert result.reason_code == reason
+    assert result.attempted is True
+    assert len(sent) == 1
+    assert sum(call.call_count for call in result.calls) == 1
+
+
+def test_interpret_without_valid_budget_does_not_dispatch(
+    rewrite_model: RewriteFixture,
+) -> None:
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": "甲部门这块是怎么回事？"})
+    output["content"] = _interpret_payload()
+    unauthorized = ProductGroundedModel(
+        model.settings.model_copy(update={"budget_campaign_id": None}),
+        model.knowledge_base_id,
+        model.connections,
+        model.providers,
+    )
+    try:
+        result = unauthorized.interpret(
+            request, QueryAnalyzer().analyze(request)
+        )
+    finally:
+        unauthorized.close()
+
+    assert result.semantics is None
+    assert result.attempted is True
+    assert result.reason_code == "DATA_EGRESS_NOT_AUTHORIZED"
+    assert not sent
+    assert sum(call.call_count for call in result.calls) == 0

@@ -37,6 +37,8 @@ export const zhCN = {
     ANSWERABLE: "有参考原文",
     UNANSWERABLE: "暂无足够依据",
     INSUFFICIENT_EVIDENCE: "暂无足够依据",
+    CONFIGURATION_REQUIRED: "需要配置模型能力",
+    BUDGET_BLOCKED: "模型预算已阻断",
     PROVIDER_UNAVAILABLE: "依赖暂不可用",
     POLICY_DENIED: "无权访问",
     INDEX_NOT_READY: "请先完成索引",
@@ -81,6 +83,7 @@ export function operationLabel(operation: string): string {
         "embedding.query": "查询向量",
         reranking: "结果重排",
         generation: "回答生成",
+        "query.interpret": "问题意图解释",
         "query.rewrite": "问题改写",
         "image.ocr": "图片文字识别",
       } as Record<string, string>

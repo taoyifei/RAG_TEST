@@ -73,9 +73,10 @@ class _FakeRetrieval:
         generator: object,
         *,
         serving_identity: str,
+        interpreter: object = None,
         rewriter: object = None,
     ) -> _FakeRetrieval:
-        del serving_identity, rewriter
+        del serving_identity, interpreter, rewriter
         self.generation = generator
         return self
 

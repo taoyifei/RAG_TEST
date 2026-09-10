@@ -60,8 +60,7 @@ def _build_active_revision(data_dir: Path) -> tuple[str, str, str]:
                 IngestionDocument(
                     document=document,
                     content=build_docx(
-                        "<w:p><w:r><w:t>订单 ABC-123</w:t></w:r></w:p>"
-                        + TABLE
+                        "<w:p><w:r><w:t>订单 ABC-123</w:t></w:r></w:p>" + TABLE
                     ),
                     media_type=_MEDIA_TYPE,
                 ),
@@ -177,9 +176,7 @@ def test_active_snapshot_remains_readable_after_concurrent_activation(
     assert replacement.revision_id != revision_id
     assert snapshot.revision.index_revision_id == revision_id
     assert hydrated
-    assert all(
-        item.chunk.index_revision_id == revision_id for item in hydrated
-    )
+    assert all(item.chunk.index_revision_id == revision_id for item in hydrated)
     assert before_activation.active_index_revision_id == revision_id
     assert after_activation.active_index_revision_id == replacement.revision_id
     assert before_activation.cache_key != after_activation.cache_key
@@ -262,7 +259,7 @@ def test_lexical_and_dense_failures_degrade_without_false_answer(
     assert dense_failed.selected_embedding_slot is None
 
 
-def test_reranker_and_generator_failures_have_distinct_outcomes(
+def test_reranker_failure_and_legacy_generator_bypass_are_distinct(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_id, knowledge_base_id, _ = _build_active_revision(tmp_path)
@@ -291,11 +288,11 @@ def test_reranker_and_generator_failures_have_distinct_outcomes(
         generation_failed = runtime.retrieval.search_and_answer(
             SearchRequest(scope=scope, text="A B")
         )
-    assert generation_failed.status is ConfidenceStatus.PROVIDER_UNAVAILABLE
-    assert generation_failed.answer is None
-    assert "GENERATOR_FAILURE:ProviderUnavailable" in (
-        generation_failed.degraded_reason_codes
-    )
+    assert generation_failed.status is ConfidenceStatus.ANSWERABLE
+    assert generation_failed.answer is not None
+    assert generation_failed.generation_mode == "extractive"
+    assert generation_failed.generation_reason_code == "STRUCTURED_RENDERED"
+    assert generation_failed.degraded_reason_codes == ()
 
 
 def test_active_pointer_state_drift_is_index_corrupt(tmp_path: Path) -> None:
@@ -308,9 +305,7 @@ def test_active_pointer_state_drift_is_index_corrupt(tmp_path: Path) -> None:
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
         connections = runtime.persistence.control._connections
         with connections.transaction(write=True) as connection:
-            connection.execute(
-                "DROP TRIGGER index_revisions_scope_update"
-            )
+            connection.execute("DROP TRIGGER index_revisions_scope_update")
             connection.execute(
                 "UPDATE index_revisions SET state='retired' "
                 "WHERE index_revision_id=?",

@@ -327,7 +327,7 @@ def _frontend_npm() -> str | None:
     return None
 
 
-def _run_web_script(script: str) -> int:
+def _run_web_script(script: str, arguments: Sequence[str] = ()) -> int:
     """执行一个锁定在 frontend package 的 npm script。"""
     npm = _frontend_npm()
     if npm is None:
@@ -338,7 +338,14 @@ def _run_web_script(script: str) -> int:
         f"{Path(sys.executable).parent}{os.pathsep}"
         f"{Path(npm).parent}{os.pathsep}{environment.get('PATH', '')}"
     )
-    command = (npm, "--prefix", "frontend", "run", script)
+    command = (
+        npm,
+        "--prefix",
+        "frontend",
+        "run",
+        script,
+        *(("--", *arguments) if arguments else ()),
+    )
     print(f"RUN {shlex.join(command)}", flush=True)
     completed = subprocess.run(  # noqa: S603
         command,
@@ -405,15 +412,44 @@ def _wait_for_p10(port: int) -> bool:
     return False
 
 
+def _browser_project_arguments() -> tuple[str, ...] | None:
+    """把可选视口项目转换为 Playwright 参数。"""
+    browser_project = os.environ.get("P10_BROWSER_PROJECT")
+    if browser_project is None:
+        return ()
+    if browser_project in {"chromium-desktop", "chromium-mobile"}:
+        return (f"--project={browser_project}",)
+    print(
+        "BLOCKED web-e2e: P10_BROWSER_PROJECT 不是受支持的项目。",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _stop_p10_servers(servers: Sequence[subprocess.Popen[bytes]]) -> None:
+    """停止本次启动的全部 P10 测试服务。"""
+    for server in reversed(servers):
+        server.terminate()
+    for server in reversed(servers):
+        try:
+            server.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait(timeout=5)
+
+
 def _web_e2e(profile: Path | None) -> int:
     """运行真实离线 Playwright；WSL 可复用已安装的 Windows Chrome。"""
     build_result = _run_web_script("build")
     if build_result != 0:
         return build_result
+    project_arguments = _browser_project_arguments()
+    if project_arguments is None:
+        return 2
     node = shutil.which("node.exe")
     chrome = Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
     if node is None or not chrome.is_file():
-        return _run_web_script("e2e")
+        return _run_web_script("e2e", project_arguments)
     external = os.environ.get("P10_EXTERNAL_SERVER") == "1"
     ports = () if external else (8091, 8092)
     servers: list[subprocess.Popen[bytes]] = []
@@ -480,21 +516,14 @@ def _web_e2e(profile: Path | None) -> int:
             _REPOSITORY_ROOT / "frontend/playwright.config.ts"
         )
         completed = subprocess.run(  # noqa: S603
-            [node, cli, "test", f"--config={config}"],
+            [node, cli, "test", f"--config={config}", *project_arguments],
             cwd=_REPOSITORY_ROOT,
             env=environment,
             check=False,
         )
         return completed.returncode
     finally:
-        for server in reversed(servers):
-            server.terminate()
-        for server in reversed(servers):
-            try:
-                server.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                server.kill()
-                server.wait(timeout=5)
+        _stop_p10_servers(servers)
 
 
 def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:

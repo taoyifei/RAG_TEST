@@ -1594,6 +1594,10 @@ def _completion(
                 "reason_code": result.reason_code,
                 "cache_hit": result.cache_hit,
                 "generation_mode": result.generation_mode,
+                "generation_reason_code": result.generation_reason_code,
+                "degraded_reason_codes": list(result.degraded_reason_codes),
+                "requested_answer_type": (result.requested_answer_type.value),
+                "query_semantic_source": result.query_semantic_source,
                 "active_index_revision_id": result.active_index_revision_id,
                 "index_fingerprint": result.index_fingerprint,
                 "serving_fingerprint": result.serving_fingerprint,
@@ -1607,13 +1611,13 @@ def _completion(
                 ),
             }
         )
+        if result.data_plane is not None:
+            metadata["data_plane"] = result.data_plane.model_dump(mode="json")
         if result.diagnostics is not None:
             metadata["diagnostics"] = result.diagnostics.model_dump(mode="json")
             calls = result.diagnostics.provider_call_details
         if result.generation_mode == "extractive_fallback":
-            status = "FAILED"
             metadata["fallback_answer_available"] = bool(result.answer)
-            metadata["reason_code"] = result.generation_reason_code
     elif cancelled:
         status = "CANCELLED"
         metadata["reason_code"] = "REQUEST_CANCELLED"
@@ -1643,6 +1647,7 @@ def _usage_summary(
         "embedding.query",
         "reranking",
         "generation",
+        "query.interpret",
         "query.rewrite",
     }
     items = []
@@ -1667,6 +1672,10 @@ def _usage_summary(
                 reason = (
                     result.rewrite_reason_code if result is not None else None
                 ) or "REWRITE_NOT_CONFIGURED"
+            elif operation == "query.interpret":
+                reason = (
+                    result.interpret_reason_code if result is not None else None
+                ) or "INTERPRET_NOT_CONFIGURED"
             else:
                 reason = "LOCAL_OR_NOT_REQUIRED_BY_PLAN"
         observed = [call.observed_tokens for call in actual]

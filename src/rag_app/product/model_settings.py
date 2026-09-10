@@ -156,6 +156,7 @@ class ProductModelSettings:
         identity: dict[str, object] = {
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v2",
+            "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v3",
             "answer_selection": "shared-query-semantics-v1",

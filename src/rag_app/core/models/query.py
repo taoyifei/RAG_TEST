@@ -32,11 +32,15 @@ class RequestedAnswerType(StrEnum):
 
     UNKNOWN = "UNKNOWN"
     FACT = "FACT"
+    DEFINITION = "DEFINITION"
+    PURPOSE = "PURPOSE"
     ENUMERATION = "ENUMERATION"
     COUNT = "COUNT"
     ORDINAL_ITEM = "ORDINAL_ITEM"
     DUTIES = "DUTIES"
+    RESPONSIBLE_PARTY = "RESPONSIBLE_PARTY"
     PROCEDURE = "PROCEDURE"
+    SECTION_SUMMARY = "SECTION_SUMMARY"
 
 
 class ConstraintKind(StrEnum):
@@ -66,14 +70,15 @@ class QuerySemantics(FrozenModel):
 
     target: str | None = Field(default=None, repr=False)
     source_qualifier: str | None = Field(default=None, repr=False)
+    context_qualifier: str | None = Field(default=None, repr=False)
     relation: str | None = None
     answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
     expected_count: StrictInt | None = Field(default=None, gt=0)
     ordinal: StrictInt | None = Field(default=None, gt=0)
     constraints: tuple[QueryConstraint, ...] = ()
-    source: Literal["RULE", "LLM_REWRITE", "ORIGINAL_FALLBACK"] = (
-        "ORIGINAL_FALLBACK"
-    )
+    source: Literal[
+        "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
+    ] = "ORIGINAL_FALLBACK"
     reason_codes: tuple[str, ...] = ()
 
 

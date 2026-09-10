@@ -9,7 +9,13 @@ from rag_app.application.answering.grounded import (
     validate_grounded_draft,
 )
 from rag_app.application.retrieval.evidence import EvidenceAssembler
-from rag_app.core.errors import ValidationFailed
+from rag_app.core.errors import (
+    PolicyDenied,
+    ProviderInvalidResponse,
+    ProviderRateLimited,
+    ProviderUnavailable,
+    ValidationFailed,
+)
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
@@ -18,7 +24,12 @@ from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    EvidenceSelectionContext,
     ProviderCall,
+    QueryAnalysis,
+    QueryKind,
+    QuerySemantics,
+    RequestedAnswerType,
     RetrievalPolicy,
 )
 from rag_app.product.model_settings import (
@@ -435,3 +446,146 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
     )
     assert len(outcome.calls) == 2
     fallback.assert_called_once()
+
+
+def _fact_analysis() -> QueryAnalysis:
+    """返回不携带私有内容的稳定 FACT 查询分析。"""
+    return QueryAnalysis(
+        original_query="合成设备的保管期限是多少？",
+        normalized_query="合成设备的保管期限是多少?",
+        semantics=QuerySemantics(
+            target="合成设备",
+            relation="保管期限",
+            answer_type=RequestedAnswerType.FACT,
+            source="RULE",
+        ),
+        conversation_fingerprint=canonical_sha256({"conversation": []}),
+    )
+
+
+def _verified_fact_evidence() -> tuple[EvidenceItem, ...]:
+    """让公开事实夹具经过与生产一致的直接支持判定。"""
+    analysis = _fact_analysis()
+    return EvidenceAssembler().assemble(
+        _candidates(_paragraph("合成设备的保管期限为 14 天。")),
+        RetrievalPolicy(),
+        context=EvidenceSelectionContext(
+            analysis=analysis,
+            query_kind=QueryKind.SIMPLE_FACT,
+            rerank_mode="lexical_overlap",
+        ),
+    )
+
+
+def _abstained_draft() -> AnswerDraft:
+    """构造已实际调用但没有形成 claim 的模型拒答。"""
+    return AnswerDraft(
+        text="现有资料不足以支持该问题的回答。",
+        cited_evidence_ids=(),
+        generation_mode="llm",
+        reason_code="GENERATION_ABSTAINED",
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_reason", "expected_calls"),
+    (
+        (_abstained_draft(), "GENERATION_ABSTAINED", 1),
+        (
+            ProviderUnavailable(
+                "上游超时。",
+                stage="generation",
+                code="PROVIDER_TIMEOUT",
+            ),
+            "PROVIDER_TIMEOUT",
+            1,
+        ),
+        (
+            ProviderRateLimited("上游限流。", stage="generation"),
+            "PROVIDER_RATE_LIMITED",
+            1,
+        ),
+        (
+            PolicyDenied(
+                "资料未获授权。",
+                stage="generation.authorization",
+                code="DATA_EGRESS_NOT_AUTHORIZED",
+            ),
+            "DATA_EGRESS_NOT_AUTHORIZED",
+            1,
+        ),
+        (
+            ProviderInvalidResponse(
+                "模型 JSON 无效。",
+                stage="generation",
+                code="GENERATION_JSON_INVALID",
+            ),
+            "GENERATION_JSON_INVALID",
+            2,
+        ),
+    ),
+)
+def test_model_failures_use_structured_fallback_when_support_is_complete(
+    outcome: AnswerDraft | Exception,
+    expected_reason: str,
+    expected_calls: int,
+) -> None:
+    """模型阻断或失败不能覆盖已经闭合的本地事实支持。"""
+    evidence = _verified_fact_evidence()
+    assert evidence
+    generator = Mock()
+    if isinstance(outcome, Exception):
+        generator.generate.side_effect = outcome
+    else:
+        generator.generate.return_value = outcome
+    service = GroundedAnsweringService(generator, Mock())
+
+    result = service.answer(
+        "合成设备的保管期限是多少？",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.mode == "extractive_fallback"
+    assert result.reason_code == expected_reason
+    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
+    assert result.published_support_ids == ("S1",)
+    assert generator.generate.call_count == expected_calls
+    request = generator.generate.call_args_list[0].args[0]
+    assert request.typed_semantics == _fact_analysis().semantics
+    assert request.answer_support_set == evidence
+    assert request.model_evidence_candidates == evidence
+
+
+def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
+    """相关候选不能在 Provider 失败后被本地 renderer 冒充为支持。"""
+    candidates, _ = _supported_draft(
+        "合成设备的维护手册已归档。",
+        "合成设备的维护手册已归档。",
+    )
+    generator = Mock()
+    generator.generate.side_effect = ProviderUnavailable(
+        "上游超时。",
+        stage="generation",
+        code="PROVIDER_TIMEOUT",
+    )
+    service = GroundedAnsweringService(generator, Mock())
+
+    result = service.answer(
+        "合成设备的保管期限是多少？",
+        candidates,
+        ConfidenceDecision(
+            status=ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+            score=0.0,
+        ),
+        answer_support_set=(),
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer is None
+    assert result.mode == "none"
+    assert result.reason_code == "PROVIDER_TIMEOUT"
+    assert result.published_support_ids == ()
+    assert generator.generate.call_count == 1

@@ -85,9 +85,7 @@ export function HistoryTrace({
   async function exportSupport(includeBody: boolean) {
     if (
       includeBody &&
-      !window.confirm(
-        "该文件可能含敏感问答和引用。确认保存到受控位置吗？",
-      )
+      !window.confirm("该文件可能含敏感问答和引用。确认保存到受控位置吗？")
     ) {
       return;
     }
@@ -175,6 +173,40 @@ export function HistoryTrace({
             </dd>
             <dt>回答方式</dt>
             <dd>{entry.generation_mode ?? "—"}</dd>
+            <dt>回答降级原因</dt>
+            <dd>
+              {entry.degraded_reason_codes?.join("、") ||
+                entry.generation_reason_code ||
+                "无"}
+            </dd>
+            <dt>所问类型 / 语义来源</dt>
+            <dd>
+              {entry.requested_answer_type ?? "旧记录未保存"} /{" "}
+              {entry.query_semantic_source ?? "旧记录未保存"}
+            </dd>
+            {entry.data_plane && (
+              <>
+                <dt>实际检索数据面</dt>
+                <dd>
+                  {entry.data_plane.retrieval_data_plane ===
+                  "default_local_fallback"
+                    ? "本地确定性检索"
+                    : "活动真实 Dense 检索"}
+                </dd>
+                <dt>Embedding / Reranker</dt>
+                <dd>
+                  {entry.data_plane.embedding_provider_id ?? "—"} /{" "}
+                  {entry.data_plane.embedding_model ?? "—"} ·{" "}
+                  {entry.data_plane.reranker_provider_id ?? "—"} /{" "}
+                  {entry.data_plane.reranker_model ?? "—"}
+                </dd>
+                <dt>资料授权 / 预算</dt>
+                <dd>
+                  {entry.data_plane.corpus_authorization_state} /{" "}
+                  {entry.data_plane.budget_state}
+                </dd>
+              </>
+            )}
             {entry.error_stage && (
               <>
                 <dt>失败阶段</dt>
