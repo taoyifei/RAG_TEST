@@ -404,6 +404,12 @@ def test_source_qualifier_filters_direct_relation_evidence() -> None:
         _POLICY,
         context=_context("不存在制度中，星环登记表谁负责"),
     )
+    assert not EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("不存在制度中，星环登记表谁负责"),
+        allow_uncertain=True,
+    )
 
 
 def test_responsible_party_does_not_relax_a_named_artifact_target() -> None:
@@ -441,6 +447,38 @@ def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
         context=_context("阀门检查员的手机号是多少"),
         allow_uncertain=True,
     )
+
+
+def test_weak_topic_overlap_is_not_a_model_evidence_candidate() -> None:
+    """通用问句词只形成弱命中时仍是证据不足，不投影模型能力阻断。"""
+    candidates = _candidates(
+        _paragraph("公开守则说明常规审批要求与工作日归档安排。")
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("这些公开守则有没有要求周末必须值班？"),
+        allow_uncertain=True,
+    )
+
+    assert not evidence
+
+
+def test_role_title_without_assignment_is_not_model_evidence() -> None:
+    """角色职责不能被模型候选误当成该角色对应的具体人员。"""
+    candidates = _candidates(
+        _paragraph("巡检负责人需要核对设备清单并归档检查记录。")
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("巡检负责人是谁？"),
+        allow_uncertain=True,
+    )
+
+    assert not evidence
 
 
 @pytest.mark.parametrize(
@@ -741,4 +779,27 @@ def test_document_purpose_prefers_shallow_scope_over_local_purpose() -> None:
 
     assert [item.citation_text for item in evidence] == [
         "统一公开设备的交接记录。"
+    ]
+
+
+def test_document_purpose_heading_beats_same_depth_incidental_word() -> None:
+    candidates = _candidates(
+        _heading("概述")
+        + _heading("目的", level=2)
+        + _paragraph("面向一次性公开交付任务，统一验收和归档边界。")
+        + _heading("实施要求")
+        + _heading("启动检查", level=2)
+        + _paragraph("启动检查的作用是确认本次资源是否齐备。"),
+        display_name="青鸟交付工作规范.docx",
+    )
+    candidates = tuple(reversed(candidates))
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("青鸟交付工作规范主要是为了什么"),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "面向一次性公开交付任务，统一验收和归档边界。"
     ]

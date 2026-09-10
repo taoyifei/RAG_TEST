@@ -175,6 +175,17 @@ export function HistoryTrace({
             </dd>
             <dt>回答方式</dt>
             <dd>{entry.generation_mode ?? "—"}</dd>
+            <dt>回答降级原因</dt>
+            <dd>
+              {entry.degraded_reason_codes?.join("、") ||
+                entry.generation_reason_code ||
+                "无"}
+            </dd>
+            <dt>所问类型 / 语义来源</dt>
+            <dd>
+              {entry.requested_answer_type ?? "旧记录未保存"} /{" "}
+              {entry.query_semantic_source ?? "旧记录未保存"}
+            </dd>
             {entry.data_plane && (
               <>
                 <dt>实际检索数据面</dt>

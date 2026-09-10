@@ -62,20 +62,32 @@ function answerDeliveryMessage(result: QueryResponse): string {
       : "本次答案由回答模型基于所列证据生成，并已通过来源校验。";
   }
   if (result.generation_mode === "extractive") {
-    return "本次答案采用原文摘录；未使用回答模型生成。";
+    return "本次答案由本地结构化回答器从已验证证据生成；未调用回答模型。";
   }
   const reason = result.generation_reason_code ?? "";
   if (result.generation_mode === "extractive_fallback") {
     if (reason.includes("BUDGET")) {
-      return "回答模型因预算不可用，本次已安全回退为原文摘录。";
+      return "回答模型因预算不可用，本次已安全回退为本地结构化回答。";
     }
     if (reason.includes("AUTHORIZED") || reason.includes("POLICY_DENIED")) {
-      return "回答模型未获本次资料出网授权，本次已安全回退为原文摘录。";
+      return "回答模型未获本次资料出网授权，本次已安全回退为本地结构化回答。";
     }
-    return "回答模型本次调用失败或输出未通过校验，已安全回退为原文摘录。";
+    return "回答模型本次调用失败或输出未通过校验，已安全回退为本地结构化回答。";
   }
   if (result.status === "AMBIGUOUS_NEEDS_CLARIFICATION") {
     return "当前问题含义不足以可靠确定，请补充对象、范围或所问关系。";
+  }
+  if (result.status === "CONFIGURATION_REQUIRED") {
+    return "已找到可供模型核验的相关来源，但本知识库的回答模型尚未完成配置，当前本地证据不足以发布答案。";
+  }
+  if (result.status === "BUDGET_BLOCKED") {
+    return "已找到可供模型核验的相关来源，但模型累计预算不可用，当前本地证据不足以发布答案。";
+  }
+  if (result.status === "POLICY_DENIED") {
+    return "已找到可供模型核验的相关来源，但本次资料或模型操作未获授权，当前本地证据不足以发布答案。";
+  }
+  if (result.status === "PROVIDER_UNAVAILABLE") {
+    return "已找到可供模型核验的相关来源，但模型服务暂不可用，当前本地证据不足以发布答案。";
   }
   if (reason.includes("BUDGET")) {
     return "回答模型预算不可用，且当前证据不足以提供原文摘录答案。";
@@ -87,6 +99,37 @@ function answerDeliveryMessage(result: QueryResponse): string {
     return "本知识库未配置回答模型；当前资料也没有足以直接回答的证据。";
   }
   return "当前资料没有足以直接回答这个问题的证据。";
+}
+
+const STRUCTURED_ANSWER_TYPES = new Set([
+  "DUTIES",
+  "ENUMERATION",
+  "COUNT",
+  "ORDINAL_ITEM",
+  "PROCEDURE",
+]);
+
+function AnswerContent({ result }: { result: QueryResponse }) {
+  const answer = result.answer;
+  if (!answer) return null;
+  const lines = answer.split("\n").filter((line) => line.trim().length > 0);
+  if (
+    lines.length > 1 &&
+    STRUCTURED_ANSWER_TYPES.has(result.requested_answer_type)
+  ) {
+    return (
+      <ul
+        className="structured-answer"
+        data-answer-type={result.requested_answer_type}
+        aria-label="结构化答案"
+      >
+        {lines.map((line, index) => (
+          <li key={`${index}:${line}`}>{line}</li>
+        ))}
+      </ul>
+    );
+  }
+  return <p>{answer}</p>;
 }
 
 function retrievalDeliveryMessage(result: QueryResponse): string {
@@ -388,7 +431,7 @@ function ScopedQueryPage({
               data-raw-answer={result.answer}
             >
               <span className="eyebrow">正式答案</span>
-              <p>{result.answer}</p>
+              <AnswerContent result={result} />
             </section>
           )}
           <div className="row-actions">
@@ -411,6 +454,21 @@ function ScopedQueryPage({
             </small>
           </div>
           <p role="status">{answerDeliveryMessage(result)}</p>
+          {!result.answer &&
+            go &&
+            [
+              "CONFIGURATION_REQUIRED",
+              "POLICY_DENIED",
+              "BUDGET_BLOCKED",
+            ].includes(result.status) && (
+              <button className="secondary" onClick={() => go("/documents")}>
+                {result.status === "CONFIGURATION_REQUIRED"
+                  ? "配置回答模型"
+                  : result.status === "BUDGET_BLOCKED"
+                    ? "检查授权与预算"
+                    : "检查资料授权"}
+              </button>
+            )}
           <QueryFeedback
             key={result.trace_id}
             projectId={scope.projectId}
@@ -464,8 +522,14 @@ function ScopedQueryPage({
             <p>
               结果来源：{result.result_origin ?? "fresh"} · 本次回答模型调用：
               {result.generation_called_this_request ? "是" : "否"} ·
+              本次意图解释模型调用：
+              {result.interpret_called_this_request ? "是" : "否"} ·
               本次问题改写模型调用：
               {result.rewrite_called_this_request ? "是" : "否"}
+            </p>
+            <p>
+              所问类型：{result.requested_answer_type} · 语义来源：
+              {result.query_semantic_source}
             </p>
             {result.data_plane && (
               <p>

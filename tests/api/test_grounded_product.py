@@ -91,9 +91,7 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         headers=harness.write_headers,
         json={
             "operations": ["generation"],
-            "expires_at": (
-                datetime.now(UTC) + timedelta(hours=1)
-            ).isoformat(),
+            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
             "request_limit": 8,
             "estimated_token_limit": 80_000,
             "operation_request_limits": {"generation": 8},
@@ -150,12 +148,22 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
     assert failure["generation_called_this_request"] is True
     assert len(requests) == 2
     page = harness.runtime.history.list_history()
-    assert {item["status"] for item in page["items"]} >= {
+    assert {item["status"] for item in page["items"]} == {
         "ANSWERED",
         "REFUSED",
-        "FAILED",
     }
     failed_detail = harness.runtime.history.detail(failure["trace_id"])
+    assert failed_detail["status"] == "ANSWERED"
+    assert failed_detail["fallback_answer_available"] is True
+    assert failed_detail["generation_reason_code"] == "PROVIDER_UNAVAILABLE"
+    assert (
+        failed_detail["requested_answer_type"]
+        == failure["requested_answer_type"]
+    )
+    assert (
+        failed_detail["query_semantic_source"]
+        == failure["query_semantic_source"]
+    )
     assert any(
         item["call_count"] == 1 and item["operation"] == "generation"
         for item in failed_detail["provider_usage"]

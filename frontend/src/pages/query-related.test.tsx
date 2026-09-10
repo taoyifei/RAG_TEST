@@ -46,6 +46,8 @@ function response(overrides: Partial<QueryResponse> = {}): QueryResponse {
       feature_values: [],
     },
     query_kind: "simple_fact",
+    requested_answer_type: "FACT",
+    query_semantic_source: "RULE",
     index_fingerprint: "sha256:synthetic",
     serving_fingerprint: "sha256:synthetic",
     route_reason_code: "LEXICAL_ONLY",
@@ -404,6 +406,40 @@ it("准确区分本次模型生成、缓存、预算回退、无授权与澄清"
   expect(await screen.findByText(/未获本次资料出网授权/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "执行" }));
   expect(await screen.findByText(/请补充对象、范围或所问关系/)).toBeVisible();
+});
+
+it("结构化展示职责并为能力阻断提供独立修复入口", async () => {
+  const go = vi.fn();
+  vi.spyOn(api, "answerStream")
+    .mockResolvedValueOnce(
+      response({
+        status: "ANSWERABLE",
+        answer: "质量主管｜1. 核对标准 [S1]\n质量主管｜2. 组织验收 [S2]",
+        requested_answer_type: "DUTIES",
+        related_contents: [],
+        display_message: null,
+        generation_mode: "extractive",
+      }),
+    )
+    .mockResolvedValueOnce(
+      response({
+        status: "CONFIGURATION_REQUIRED",
+        answer: null,
+        related_contents: [],
+        display_message: null,
+        generation_reason_code: "CONFIGURATION_REQUIRED",
+      }),
+    );
+  render(<QueryPage mode="answer" go={go} />);
+  const user = await submit();
+  const list = await screen.findByRole("list", { name: "结构化答案" });
+  expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+  expect(screen.getByText(/本地结构化回答器/)).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "执行" }));
+  expect(await screen.findByText(/回答模型尚未完成配置/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "配置回答模型" }));
+  expect(go).toHaveBeenCalledWith("/documents");
 });
 
 it("会话 ID 随请求传递，支持新建、清空和有限反馈", async () => {

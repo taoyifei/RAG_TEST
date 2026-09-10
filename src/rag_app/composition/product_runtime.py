@@ -912,6 +912,7 @@ class ProductProfileResolver:
             corpus_authorization_state=corpus_state,
             budget_state=budget_state,
             fallback_reason_codes=tuple(dict.fromkeys(fallback_reasons)),
+            report_model_capability_blockers=True,
         )
 
     def revision_lifecycle(

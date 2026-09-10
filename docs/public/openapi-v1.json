@@ -410,6 +410,8 @@
         "enum": [
           "ANSWERABLE",
           "INSUFFICIENT_EVIDENCE",
+          "CONFIGURATION_REQUIRED",
+          "BUDGET_BLOCKED",
           "PROVIDER_UNAVAILABLE",
           "POLICY_DENIED",
           "INDEX_NOT_READY",
@@ -1043,6 +1045,7 @@
           "NO_HISTORY",
           "NO_CONTEXT_SIGNAL",
           "HISTORY_BUDGET_EMPTY",
+          "INTERPRET_OK",
           "REWRITE_TRIGGER_PRONOUN",
           "REWRITE_TRIGGER_TEMPORAL",
           "REWRITE_TRIGGER_ORDINAL",
@@ -1153,6 +1156,22 @@
             "title": "Evidence Id",
             "type": "string"
           },
+          "selected_for_answer": {
+            "default": false,
+            "title": "Selected For Answer",
+            "type": "boolean"
+          },
+          "selection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selection Reason"
+          },
           "source_ranges": {
             "default": [],
             "items": {
@@ -1160,6 +1179,17 @@
             },
             "title": "Source Ranges",
             "type": "array"
+          },
+          "support_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Support Status"
           }
         },
         "required": [
@@ -3297,6 +3327,17 @@
           "query_kind": {
             "$ref": "#/components/schemas/QueryKind"
           },
+          "query_semantic_source": {
+            "default": "ORIGINAL_FALLBACK",
+            "enum": [
+              "RULE",
+              "LLM_INTERPRET",
+              "LLM_REWRITE",
+              "ORIGINAL_FALLBACK"
+            ],
+            "title": "Query Semantic Source",
+            "type": "string"
+          },
           "reason_code": {
             "minLength": 1,
             "title": "Reason Code",
@@ -3310,6 +3351,10 @@
             "maxItems": 3,
             "title": "Related Contents",
             "type": "array"
+          },
+          "requested_answer_type": {
+            "$ref": "#/components/schemas/RequestedAnswerType",
+            "default": "UNKNOWN"
           },
           "rerank_execution_mode": {
             "title": "Rerank Execution Mode",
@@ -3599,6 +3644,24 @@
         "title": "RenameDocumentRequest",
         "type": "object"
       },
+      "RequestedAnswerType": {
+        "description": "查询实际要求返回的答案形状。",
+        "enum": [
+          "UNKNOWN",
+          "FACT",
+          "DEFINITION",
+          "PURPOSE",
+          "ENUMERATION",
+          "COUNT",
+          "ORDINAL_ITEM",
+          "DUTIES",
+          "RESPONSIBLE_PARTY",
+          "PROCEDURE",
+          "SECTION_SUMMARY"
+        ],
+        "title": "RequestedAnswerType",
+        "type": "string"
+      },
       "RetrievalDiagnostics": {
         "additionalProperties": false,
         "description": "不含正文、向量、Prompt 或 Secret 的完整检索诊断。",
@@ -3675,6 +3738,14 @@
               "$ref": "#/components/schemas/DiagnosticFusionItem"
             },
             "title": "Fusion",
+            "type": "array"
+          },
+          "model_evidence_candidates": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DiagnosticEvidenceItem"
+            },
+            "title": "Model Evidence Candidates",
             "type": "array"
           },
           "provider_call_details": {

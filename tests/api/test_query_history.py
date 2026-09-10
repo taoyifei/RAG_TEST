@@ -11,8 +11,15 @@ from time import monotonic, sleep
 
 import pytest
 
+from rag_app.application.answering.structured import (
+    DeterministicAnswerRenderer,
+)
 from rag_app.composition.product_runtime import build_product_runtime
-from rag_app.core.errors import IndexNotReady, ProviderUnavailable
+from rag_app.core.errors import (
+    IndexNotReady,
+    ProviderUnavailable,
+    ValidationFailed,
+)
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
 from tests.adapters.parsers.docx.fixtures import build_package
@@ -96,6 +103,55 @@ def test_history_records_pre_snapshot_failure_and_survives_restart(
         "还没有上传资料".encode()
         not in (settings.data_dir / "universal-rag.sqlite3").read_bytes()
     )
+
+
+def test_structured_publish_failure_is_422_and_terminally_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本地发布合同损坏必须显式失败，不能伪装成 Provider 降级。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        project, kb = create_project_and_knowledge_base(harness)
+        _upload(harness, project, kb)
+
+        def _reject_publish(
+            _renderer: DeterministicAnswerRenderer,
+            *_args: object,
+            **_kwargs: object,
+        ) -> None:
+            raise ValidationFailed(
+                "结构化回答与最小支持集的确定性投影不一致。",
+                stage="answer.validate",
+                code="STRUCTURED_RENDER_VALIDATION_FAILED",
+            )
+
+        monkeypatch.setattr(
+            DeterministicAnswerRenderer,
+            "render",
+            _reject_publish,
+        )
+        response = harness.client.post(
+            f"/api/v1/projects/{project}/knowledge-bases/{kb}:answer",
+            json={"query": "设备 MX-41 的维护周期是多少？"},
+            headers=harness.write_headers,
+        )
+
+        assert response.status_code == 422, response.text
+        error = response.json()["error"]
+        assert error["code"] == "STRUCTURED_RENDER_VALIDATION_FAILED"
+        assert error["stage"] == "answer.validate"
+        trace_id = error["trace_id"]
+        history = harness.runtime.history.detail(trace_id)
+        trace = harness.client.get(
+            f"/api/v1/admin/operational-traces/{trace_id}"
+        )
+        assert history["status"] == "FAILED"
+        assert history["reason_code"] == ("STRUCTURED_RENDER_VALIDATION_FAILED")
+        assert trace.status_code == 200
+        assert trace.json()["trace"]["status"] == "FAILED"
+    finally:
+        harness.close()
 
 
 def test_history_retains_cache_diagnostics_and_revokes_deleted_source(

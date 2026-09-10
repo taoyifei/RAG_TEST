@@ -53,6 +53,17 @@ _TABLE_HEADER_SEMANTICS = {
         r"负责部门|责任部门|责任单位"
     ),
 }
+_MODEL_REVIEWABLE_ANSWER_TYPES = frozenset(
+    {
+        "DEFINITION",
+        "PURPOSE",
+        "DUTIES",
+        "PROCEDURE",
+        "SECTION_SUMMARY",
+    }
+)
+_MIN_MODEL_REVIEW_OVERLAP = 0.4
+_MIN_MODEL_REVIEW_MULTI_CHAR_TERMS = 3
 _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
@@ -331,8 +342,15 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 quote,
                 table_relation=table_spans is not None,
             )
+            model_reviewable = _model_reviewable_span(
+                support,
+                quote,
+                relevance,
+                context,
+                minimum_overlap,
+            )
             if support.status is not SupportStatus.SUPPORTED and not (
-                allow_uncertain and support.status is SupportStatus.UNCERTAIN
+                allow_uncertain and model_reviewable
             ):
                 continue
             # 精确对象、温度属性与合法量值已逐项证明，中英词面差异不否定该证据。
@@ -366,6 +384,61 @@ def _ranked_citable_spans(  # noqa: PLR0913
         key=lambda item: (-item[0], item[1], item[2].chunk_start_char)
     )
     return tuple((span, quote, key) for _, _, span, quote, key in selected)
+
+
+def _model_reviewable_span(
+    support: AnswerSupport,
+    quote: str,
+    relevance: float,
+    context: EvidenceSelectionContext,
+    minimum_overlap: float,
+) -> bool:
+    """判断未直接支持的片段是否真能交给模型核验。
+
+    弱词面命中只属于召回候选，不能仅因存在模型能力就改写最终拒答状态。
+    结构化责任、计数、序号和列举必须先完成现有结构闭合；模型不能从同主题
+    片段推断缺失的责任关系或集合成员。
+
+    Args:
+        support: 当前片段的确定性支持判定。
+        quote: 未修改的真实 SourceSpan 文本。
+        relevance: 当前片段对原问题的词面相关度。
+        context: 当前请求共享的 QueryAnalysis 与路由上下文。
+        minimum_overlap: 普通 Evidence 的最低词面覆盖阈值。
+
+    Returns:
+        片段具有足够对象或表面覆盖、值得由已授权模型核验时为 True。
+
+    """
+    analysis = context.analysis
+    normalized_quote = quote.casefold()
+    reviewable = support.status is SupportStatus.SUPPORTED
+    if (
+        support.status is SupportStatus.UNSUPPORTED
+        and support.answer_type in _MODEL_REVIEWABLE_ANSWER_TYPES
+    ):
+        target = support.query_target.casefold().strip()
+        reviewable = bool(target and target in normalized_quote)
+    elif support.status is SupportStatus.UNCERTAIN:
+        identifiers = tuple(item.casefold() for item in analysis.identifiers)
+        phrases = tuple(item.casefold() for item in analysis.quoted_phrases)
+        if identifiers:
+            reviewable = all(item in normalized_quote for item in identifiers)
+        elif phrases:
+            reviewable = all(item in normalized_quote for item in phrases)
+        else:
+            query_terms = _lexical_terms(analysis.normalized_query)
+            overlap = query_terms & _lexical_terms(quote)
+            multi_char_overlap = sum(len(item) > 1 for item in overlap)
+            required_overlap = max(
+                _MIN_MODEL_REVIEW_OVERLAP,
+                minimum_overlap * 2,
+            )
+            reviewable = bool(query_terms) and (
+                relevance >= required_overlap
+                and multi_char_overlap >= _MIN_MODEL_REVIEW_MULTI_CHAR_TERMS
+            )
+    return reviewable
 
 
 def semantic_candidate_allowed(
@@ -1400,6 +1473,17 @@ def _section_heading_supports(  # noqa: PLR0912
             for candidate in candidates
         ),
     )
+    document_purpose_has_heading = any(
+        semantics.answer_type is RequestedAnswerType.PURPOSE
+        and document_owner is not None
+        and candidate.hydrated.chunk.version.document_id == document_owner
+        and candidate.hydrated.chunk.role.value
+        not in {"table", "image_metadata", "header_footer"}
+        and relation_pattern.search(
+            " / ".join(candidate.hydrated.chunk.heading_path)
+        )
+        for candidate in candidates
+    )
     document_purpose_depth = min(
         (
             len(candidate.hydrated.chunk.heading_path)
@@ -1410,12 +1494,7 @@ def _section_heading_supports(  # noqa: PLR0912
             and candidate.hydrated.chunk.role.value
             not in {"table", "image_metadata", "header_footer"}
             and relation_pattern.search(
-                " ".join(
-                    (
-                        " / ".join(candidate.hydrated.chunk.heading_path),
-                        candidate.hydrated.chunk.citation_text,
-                    )
-                )
+                " / ".join(candidate.hydrated.chunk.heading_path)
             )
         ),
         default=None,
@@ -1443,6 +1522,13 @@ def _section_heading_supports(  # noqa: PLR0912
             source_matches or target_matches or document_target_matches
         ) or not relation_pattern.search(
             " ".join((heading, chunk.citation_text))
+        ):
+            continue
+        if (
+            semantics.answer_type is RequestedAnswerType.PURPOSE
+            and document_target_matches
+            and document_purpose_has_heading
+            and not relation_pattern.search(heading)
         ):
             continue
         if (

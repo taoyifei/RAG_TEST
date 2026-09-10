@@ -325,6 +325,9 @@ class DiagnosticEvidenceItem(FrozenModel):
     evidence_id: str = Field(min_length=1)
     chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
     source_ranges: tuple[SourceSpan, ...] = ()
+    support_status: str | None = None
+    selected_for_answer: bool = False
+    selection_reason: str | None = None
 
 
 class StageTiming(FrozenModel):
@@ -350,6 +353,7 @@ class RetrievalDiagnostics(FrozenModel):
     fusion: tuple[DiagnosticFusionItem, ...] = ()
     reranked: tuple[DiagnosticRerankItem, ...] = ()
     expanded: tuple[DiagnosticExpansionItem, ...] = ()
+    model_evidence_candidates: tuple[DiagnosticEvidenceItem, ...] = ()
     evidence: tuple[DiagnosticEvidenceItem, ...] = ()
     cited_chunk_ids: tuple[str, ...] = ()
     provider_calls: tuple[ProviderCallCount, ...] = ()
@@ -486,6 +490,10 @@ class SearchAnswerResult(FrozenModel):
     display_message: str | None = None
     confidence: ConfidenceDecision
     query_kind: QueryKind
+    requested_answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
+    query_semantic_source: Literal[
+        "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
+    ] = "ORIGINAL_FALLBACK"
     active_index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     index_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     serving_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")

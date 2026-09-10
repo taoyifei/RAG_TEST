@@ -82,7 +82,7 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
     )
 
 
-def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
+def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # noqa: PLR0915
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """批准前零出网，批准后可调用，新 Revision 后再次零出网。"""
@@ -115,12 +115,14 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
             },
         )
         assert saved.status_code == 200, saved.text
-        assert saved.json()["corpus_authorization"][
-            "corpus_authorization_state"
-        ] == "MISSING"
-        assert saved.json()["retrieval_data_plane"][
-            "retrieval_data_plane"
-        ] == "default_local_fallback"
+        assert (
+            saved.json()["corpus_authorization"]["corpus_authorization_state"]
+            == "MISSING"
+        )
+        assert (
+            saved.json()["retrieval_data_plane"]["retrieval_data_plane"]
+            == "default_local_fallback"
+        )
 
         answer_path = (
             f"/api/v1/projects/{project_id}/knowledge-bases/"
@@ -135,12 +137,14 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
         before_payload = before.json()
         assert before_payload["answer"]
         assert before_payload["generation_called_this_request"] is False
-        assert before_payload["data_plane"][
-            "retrieval_data_plane"
-        ] == "default_local_fallback"
-        assert before_payload["data_plane"][
-            "model_authorization_state"
-        ] == "MISSING"
+        assert (
+            before_payload["data_plane"]["retrieval_data_plane"]
+            == "default_local_fallback"
+        )
+        assert (
+            before_payload["data_plane"]["model_authorization_state"]
+            == "MISSING"
+        )
         assert not requests
 
         authorization_path = (
@@ -149,9 +153,7 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
         )
         approval = {
             "operations": ["generation"],
-            "expires_at": (
-                datetime.now(UTC) + timedelta(hours=1)
-            ).isoformat(),
+            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
             "request_limit": 4,
             "estimated_token_limit": 20_000,
             "operation_request_limits": {"generation": 4},
@@ -209,9 +211,10 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
         generated_payload = generated.json()
         assert generated_payload["generation_mode"] == "llm"
         assert generated_payload["generation_called_this_request"] is True
-        assert generated_payload["data_plane"][
-            "corpus_authorization_state"
-        ] == "APPROVED"
+        assert (
+            generated_payload["data_plane"]["corpus_authorization_state"]
+            == "APPROVED"
+        )
         assert len(requests) == 1
 
         next_version = harness.runtime.sdk.create_document_version(
@@ -226,9 +229,7 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
             idempotency_key="corpus-authorization-stale",
         )
         _wait(harness, next_version)
-        stale = harness.client.get(
-            authorization_path.removesuffix(":approve")
-        )
+        stale = harness.client.get(authorization_path.removesuffix(":approve"))
         assert stale.status_code == 200, stale.text
         assert stale.json()["corpus_authorization_state"] == "STALE_REVISION"
 
@@ -241,12 +242,14 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(
         after_payload = after.json()
         assert after_payload["answer"]
         assert after_payload["generation_called_this_request"] is False
-        assert after_payload["data_plane"][
-            "corpus_authorization_state"
-        ] == "STALE_REVISION"
-        assert "CORPUS_AUTHORIZATION_STALE_REVISION" in after_payload[
-            "data_plane"
-        ]["fallback_reason_codes"]
+        assert (
+            after_payload["data_plane"]["corpus_authorization_state"]
+            == "STALE_REVISION"
+        )
+        assert (
+            "CORPUS_AUTHORIZATION_STALE_REVISION"
+            in after_payload["data_plane"]["fallback_reason_codes"]
+        )
         assert len(requests) == 1
     finally:
         harness.close()
@@ -273,15 +276,41 @@ def test_local_data_plane_is_persisted_in_history_and_safe_trace(
         data_plane = payload["data_plane"]
         assert data_plane["retrieval_data_plane"] == "default_local_fallback"
         assert data_plane["embedding_provider_id"] == "deterministic"
-        assert "DETERMINISTIC_EMBEDDING" in data_plane[
-            "fallback_reason_codes"
-        ]
+        assert "DETERMINISTIC_EMBEDDING" in data_plane["fallback_reason_codes"]
 
         history = harness.runtime.history.detail(payload["trace_id"])
         assert history["data_plane"] == data_plane
         trace = harness.runtime.traces.detail(payload["trace_id"])
-        spans = [item for item in trace.spans if item.name == "query.data_plane"]
+        spans = [
+            item for item in trace.spans if item.name == "query.data_plane"
+        ]
         assert len(spans) == 1
         assert dict(spans[0].attributes)["data_plane"] == data_plane
+        assert trace.candidate_decisions
+        assert all(
+            decision.rank is None
+            and decision.score_type is None
+            and decision.score is None
+            and decision.contribution is None
+            and decision.details == {}
+            for decision in trace.candidate_decisions
+        )
+        span_names = {item.name for item in trace.spans}
+        assert {"query.semantics", "query.final_status"} <= span_names
+        semantics = next(
+            item for item in trace.spans if item.name == "query.semantics"
+        )
+        assert (
+            dict(semantics.attributes)["requested_answer_type"]
+            == payload["requested_answer_type"]
+        )
+        assert (
+            dict(semantics.attributes)["query_semantic_source"]
+            == payload["query_semantic_source"]
+        )
+        final = next(
+            item for item in trace.spans if item.name == "query.final_status"
+        )
+        assert dict(final.attributes)["answer_published"] is True
     finally:
         harness.close()

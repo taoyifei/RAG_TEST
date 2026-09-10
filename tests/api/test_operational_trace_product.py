@@ -277,6 +277,18 @@ def test_diagnostic_and_full_trace_keep_content_boundaries(
             and item["contribution"] > 0
             for item in payload["candidate_decisions"]
         )
+        support_decisions = [
+            item
+            for item in payload["candidate_decisions"]
+            if item["stage"] == "answer_support_selection"
+        ]
+        assert support_decisions
+        assert all(
+            item["details"]["support_status"]
+            in {"SUPPORTED", "UNCERTAIN", "UNSUPPORTED"}
+            and item["details"]["selection_reason"]
+            for item in support_decisions
+        )
         assert any(
             item["name"].startswith("timing.") for item in payload["spans"]
         )

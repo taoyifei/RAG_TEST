@@ -52,6 +52,7 @@ from rag_app.core.errors import (
     QueryCancelled,
     RagError,
     StreamDeliveryError,
+    ValidationFailed,
 )
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
@@ -150,6 +151,7 @@ class QueryDataPlaneContext:
     corpus_authorization_state: str = "NOT_REQUIRED"
     budget_state: str = "NOT_REQUIRED"
     fallback_reason_codes: tuple[str, ...] = ("NO_ACTIVE_RETRIEVAL_PROFILE",)
+    report_model_capability_blockers: bool = False
 
 
 class RetrievalService:
@@ -193,7 +195,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-structural-query-v3",
+                "retrieval_implementation": "v3-07-structured-answer-v4",
             }
         )
         self._egress = egress_policy
@@ -895,7 +897,9 @@ class RetrievalService:
         _raise_if_cancelled(cancellation, provider_calls)
         stage_started = perf_counter()
         generation_mode = "none"
-        generation_reason: str | None = "GENERATOR_NOT_CONFIGURED"
+        generation_reason: str | None = _generation_unavailable_reason(
+            self._data_plane_context
+        )
         generation_evidence = (
             model_evidence_candidates
             if self._grounded is not None
@@ -932,10 +936,11 @@ class RetrievalService:
                         )
 
                 generated = self._grounded.answer(
-                    analysis.original_query,
+                    effective_analysis.original_query,
                     generation_evidence,
                     confidence,
                     answer_support_set=evidence,
+                    analysis=effective_analysis,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -972,13 +977,32 @@ class RetrievalService:
                     provider_calls,
                 )
                 answer = self._answering.answer(
-                    analysis.original_query, evidence, confidence
+                    effective_analysis.original_query,
+                    evidence,
+                    confidence,
+                    analysis=effective_analysis,
                 )
                 generation_mode = "extractive" if answer is not None else "none"
+                if answer is not None:
+                    blocker = _configured_generation_blocker(
+                        self._data_plane_context
+                    )
+                    if blocker is None:
+                        generation_reason = "STRUCTURED_RENDERED"
+                    else:
+                        generation_mode = "extractive_fallback"
+                        generation_reason = blocker
+                        degraded.append(blocker)
         except QueryCancelled as error:
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except StreamDeliveryError:
+            raise
+        except ValidationFailed as error:
+            # 模型输出校验已在 GroundedAnsweringService 内完成修复或回退；
+            # 这里逸出的 ValidationFailed 代表本地 renderer/最终发布合同损坏，
+            # 不能伪装成远程 Provider 不可用。
+            error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except (RagError, ValueError) as error:
             degraded.append(f"GENERATOR_FAILURE:{type(error).__name__}")
@@ -993,6 +1017,34 @@ class RetrievalService:
                 }
             )
             answer = None
+        if (
+            answer is None
+            and not evidence
+            and any(
+                _diagnostic_support_status(item) in {"UNCERTAIN", "UNSUPPORTED"}
+                for item in model_evidence_candidates
+            )
+            and confidence.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+        ):
+            blocked_status = _model_capability_status(
+                self._data_plane_context,
+                generation_reason,
+            )
+            if blocked_status is not None:
+                status, blocked_reason = blocked_status
+                confidence = confidence.model_copy(
+                    update={
+                        "status": status,
+                        "score": 0.0,
+                        "reason_codes": tuple(
+                            dict.fromkeys(
+                                (*confidence.reason_codes, blocked_reason)
+                            )
+                        ),
+                    }
+                )
+                degraded.append(blocked_reason)
+                generation_reason = blocked_reason
         if on_claim is not None:
             # 没有增量 claim 的拒答、摘录或 final-only 路径也必须在 final
             # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
@@ -1044,6 +1096,8 @@ class RetrievalService:
             reranked=reranked.candidates,
             expanded=expansion.candidates,
             evidence=evidence,
+            model_evidence_candidates=model_evidence_candidates,
+            evidence_decisions=evidence_decisions,
             answer_published=answer is not None,
             provider_calls=tuple(provider_calls),
             stage_timings=tuple(stage_timings),
@@ -1057,6 +1111,8 @@ class RetrievalService:
             and confidence.status
             in (
                 ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                ConfidenceStatus.CONFIGURATION_REQUIRED,
+                ConfidenceStatus.BUDGET_BLOCKED,
                 ConfidenceStatus.PROVIDER_UNAVAILABLE,
             )
             and not any("POLICY_DENIED" in reason for reason in degraded)
@@ -1086,6 +1142,8 @@ class RetrievalService:
             display_message=display_message,
             confidence=confidence,
             query_kind=plan.query_kind,
+            requested_answer_type=effective_analysis.semantics.answer_type,
+            query_semantic_source=effective_analysis.semantics.source,
             active_index_revision_id=snapshot.revision.index_revision_id,
             index_fingerprint=snapshot.revision.index_fingerprint,
             serving_fingerprint=snapshot.serving_fingerprint,
@@ -1555,7 +1613,7 @@ class RetrievalService:
         evidence_selection = self._evidence.assemble_sets(
             expansion.candidates,
             self._policy,
-            include_model_candidates=self._grounded is not None,
+            include_model_candidates=True,
             context=EvidenceSelectionContext(
                 analysis=analysis,
                 query_kind=plan.query_kind,
@@ -1931,6 +1989,146 @@ def _published_evidence(
     return tuple(by_id[support_id] for support_id in support_ids)
 
 
+def _configured_generation_blocker(
+    context: QueryDataPlaneContext,
+) -> str | None:
+    """返回已配置远程生成未能挂载时的稳定阻断原因。
+
+    Args:
+        context: 组合根在请求开始时冻结的模型、授权和预算状态。
+
+    Returns:
+        已配置但被阻断时的具体原因；未配置或可用时为空。
+
+    """
+    if context.model_configuration_state == "NOT_CONFIGURED":
+        return None
+    if context.model_configuration_state == "INVALID":
+        return "CONFIGURATION_REQUIRED"
+    if context.corpus_authorization_state not in {
+        "APPROVED",
+        "NOT_REQUIRED",
+    } or context.model_authorization_state not in {
+        "APPROVED",
+        "NOT_REQUIRED",
+    }:
+        return next(
+            (
+                reason
+                for reason in context.fallback_reason_codes
+                if reason
+                not in {
+                    "NO_ACTIVE_RETRIEVAL_PROFILE",
+                    "DETERMINISTIC_EMBEDDING",
+                }
+            ),
+            "DATA_EGRESS_NOT_AUTHORIZED",
+        )
+    if context.budget_state in {"EXHAUSTED", "BLOCKED"}:
+        return "BLOCKED_BUDGET"
+    return None
+
+
+def _generation_unavailable_reason(
+    context: QueryDataPlaneContext,
+) -> str:
+    """为未挂载远程生成器的本地路径给出真实原因。
+
+    Args:
+        context: 当前请求的数据面上下文。
+
+    Returns:
+        明确阻断原因；没有配置模型时返回稳定的未配置原因。
+
+    """
+    return _configured_generation_blocker(context) or "GENERATOR_NOT_CONFIGURED"
+
+
+def _model_capability_status(
+    context: QueryDataPlaneContext,
+    reason: str | None,
+) -> tuple[ConfidenceStatus, str] | None:
+    """在有模型候选但无本地支持时投影能力阻断终态。
+
+    Args:
+        context: 请求开始时冻结的配置、授权和预算状态。
+        reason: 实际生成尝试或未挂载生成器的稳定原因。
+
+    Returns:
+        能力确实被阻断时的公开状态与原因；模型正常拒答或输出校验失败
+        时为空，由 Evidence 语义继续保持证据不足。
+
+    """
+    normalized = (reason or "").upper()
+    projected: tuple[ConfidenceStatus, str] | None = None
+    if "BUDGET" in normalized:
+        projected = (
+            ConfidenceStatus.BUDGET_BLOCKED,
+            reason or "BLOCKED_BUDGET",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "CONFIGURATION",
+            "CREDENTIAL",
+            "AUTHENTICATION",
+            "GENERATOR_NOT_CONFIGURED",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.CONFIGURATION_REQUIRED,
+            reason or "CONFIGURATION_REQUIRED",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "POLICY_DENIED",
+            "NOT_AUTHORIZED",
+            "AUTHORIZATION_DENIED",
+            "AUTHORIZATION_REQUIRED",
+            "SOURCE_UNAVAILABLE",
+            "CORPUS_AUTHORIZATION",
+            "BUSINESS_AUTHORIZATION",
+            "BUSINESS_SOURCE",
+            "BUSINESS_MODEL_OPERATION",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.POLICY_DENIED,
+            reason or "POLICY_DENIED",
+        )
+    elif any(
+        marker in normalized
+        for marker in (
+            "PROVIDER_UNAVAILABLE",
+            "PROVIDER_RATE_LIMITED",
+            "PROVIDER_TIMEOUT",
+            "HTTP_429",
+            "CONNECT_TIMEOUT",
+            "READ_TIMEOUT",
+            "UPSTREAM",
+        )
+    ):
+        projected = (
+            ConfidenceStatus.PROVIDER_UNAVAILABLE,
+            reason or "PROVIDER_UNAVAILABLE",
+        )
+    if projected is not None:
+        return projected
+    blocker = _configured_generation_blocker(context)
+    if blocker is not None:
+        return _model_capability_status(context, blocker)
+    if (
+        context.model_configuration_state == "NOT_CONFIGURED"
+        and context.report_model_capability_blockers
+    ):
+        return (
+            ConfidenceStatus.CONFIGURATION_REQUIRED,
+            "CONFIGURATION_REQUIRED",
+        )
+    return None
+
+
 def _diagnostics(  # noqa: PLR0913
     *,
     channel_hits: dict[str, tuple[ChannelHit, ...]],
@@ -1938,6 +2136,8 @@ def _diagnostics(  # noqa: PLR0913
     reranked: tuple[RankedChunk, ...],
     expanded: tuple[RankedChunk, ...],
     evidence: tuple[EvidenceItem, ...],
+    model_evidence_candidates: tuple[EvidenceItem, ...],
+    evidence_decisions: tuple[tuple[str, str], ...],
     answer_published: bool,
     provider_calls: tuple[ProviderCall, ...],
     stage_timings: tuple[StageTiming, ...],
@@ -1948,6 +2148,8 @@ def _diagnostics(  # noqa: PLR0913
         totals = call_totals.setdefault(call.operation, [0, 0])
         totals[0] += call.call_count
         totals[1] += call.retry_count
+    selected_evidence_ids = {item.evidence_id for item in evidence}
+    rejected_by_chunk = dict(evidence_decisions)
     return RetrievalDiagnostics(
         channel_chunk_ids=tuple(
             (name, tuple(item.chunk_id for item in hits))
@@ -1978,11 +2180,32 @@ def _diagnostics(  # noqa: PLR0913
             )
             for item in expanded
         ),
+        model_evidence_candidates=tuple(
+            DiagnosticEvidenceItem(
+                evidence_id=item.evidence_id,
+                chunk_id=item.chunk_id,
+                source_ranges=item.source_spans,
+                support_status=_diagnostic_support_status(item),
+                selected_for_answer=(item.evidence_id in selected_evidence_ids),
+                selection_reason=(
+                    "ANSWER_SUPPORT_SELECTED"
+                    if item.evidence_id in selected_evidence_ids
+                    else rejected_by_chunk.get(
+                        item.chunk_id,
+                        "NOT_PUBLISHED",
+                    )
+                ),
+            )
+            for item in model_evidence_candidates
+        ),
         evidence=tuple(
             DiagnosticEvidenceItem(
                 evidence_id=item.evidence_id,
                 chunk_id=item.chunk_id,
                 source_ranges=item.source_spans,
+                support_status=_diagnostic_support_status(item),
+                selected_for_answer=True,
+                selection_reason="PUBLISHED_CITATION",
             )
             for item in evidence
         ),
@@ -2003,6 +2226,23 @@ def _diagnostics(  # noqa: PLR0913
         stage_timings=stage_timings,
         degraded_reason_codes=degraded,
     )
+
+
+def _diagnostic_support_status(item: EvidenceItem) -> str | None:
+    """提取 Evidence 已持久化的支持状态，不读取或复制正文。
+
+    Args:
+        item: 已经过 Evidence 选择的候选或发布证据。
+
+    Returns:
+        稳定支持状态；旧 Evidence 没有该元数据时为空。
+
+    """
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    status = support.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _diagnostics_summary(

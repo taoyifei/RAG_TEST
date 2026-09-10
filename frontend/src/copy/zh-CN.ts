@@ -37,6 +37,8 @@ export const zhCN = {
     ANSWERABLE: "有参考原文",
     UNANSWERABLE: "暂无足够依据",
     INSUFFICIENT_EVIDENCE: "暂无足够依据",
+    CONFIGURATION_REQUIRED: "需要配置模型能力",
+    BUDGET_BLOCKED: "模型预算已阻断",
     PROVIDER_UNAVAILABLE: "依赖暂不可用",
     POLICY_DENIED: "无权访问",
     INDEX_NOT_READY: "请先完成索引",

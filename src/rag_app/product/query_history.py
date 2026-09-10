@@ -1594,6 +1594,10 @@ def _completion(
                 "reason_code": result.reason_code,
                 "cache_hit": result.cache_hit,
                 "generation_mode": result.generation_mode,
+                "generation_reason_code": result.generation_reason_code,
+                "degraded_reason_codes": list(result.degraded_reason_codes),
+                "requested_answer_type": (result.requested_answer_type.value),
+                "query_semantic_source": result.query_semantic_source,
                 "active_index_revision_id": result.active_index_revision_id,
                 "index_fingerprint": result.index_fingerprint,
                 "serving_fingerprint": result.serving_fingerprint,
@@ -1613,9 +1617,7 @@ def _completion(
             metadata["diagnostics"] = result.diagnostics.model_dump(mode="json")
             calls = result.diagnostics.provider_call_details
         if result.generation_mode == "extractive_fallback":
-            status = "FAILED"
             metadata["fallback_answer_available"] = bool(result.answer)
-            metadata["reason_code"] = result.generation_reason_code
     elif cancelled:
         status = "CANCELLED"
         metadata["reason_code"] = "REQUEST_CANCELLED"

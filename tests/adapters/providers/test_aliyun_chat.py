@@ -25,7 +25,12 @@ from rag_app.core.errors import (
     ProviderInvalidResponse,
     ProviderUnavailable,
 )
-from rag_app.core.models import EvidenceItem, ProviderCall
+from rag_app.core.models import (
+    EvidenceItem,
+    ProviderCall,
+    QuerySemantics,
+    RequestedAnswerType,
+)
 from rag_app.core.models.chunk import SourceSpan
 from rag_app.core.models.document import SourceAnchor, StoryKind
 from rag_app.core.ports.generator import GenerationRequest
@@ -381,6 +386,14 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
             _generation_request().model_copy(
                 update={
                     "evidence": tuple(evidence),
+                    "typed_semantics": QuerySemantics(
+                        target="值班主管",
+                        relation="职责",
+                        answer_type=RequestedAnswerType.DUTIES,
+                        source="RULE",
+                    ),
+                    "answer_support_set": tuple(evidence[:2]),
+                    "model_evidence_candidates": tuple(evidence),
                     "repair_reason": "CLAIM_OBJECT_CHANGED",
                 }
             )
@@ -390,12 +403,24 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "每条写明角色或对象的事实" in prompt
         assert "这两个ID的逐字quote" in prompt
         content = json.loads(messages[1]["content"])
+        assert content["typed_semantics"]["answer_type"] == "DUTIES"
+        assert content["answer_support_set"] == content["evidence"]
+        assert [item["support_id"] for item in content["evidence"]] == [
+            "S1",
+            "S2",
+        ]
+        assert [
+            item["support_id"] for item in content["model_evidence_candidates"]
+        ] == ["S3"]
         locations = [item["source_structure"] for item in content["evidence"]]
         assert locations[0]["document_version_id"] == "dver_" + "1" * 32
         assert locations[0]["table_locator"] == "public-table"
         assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
         assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"
-        assert locations[2]["anchors"][0]["structural_path"][2] == "tr:1"
+        candidate_location = content["model_evidence_candidates"][0][
+            "source_structure"
+        ]
+        assert candidate_location["anchors"][0]["structural_path"][2] == "tr:1"
         assert "CLAIM_OBJECT_CHANGED" in messages[2]["content"]
         assert len(requests) == 1
     finally:

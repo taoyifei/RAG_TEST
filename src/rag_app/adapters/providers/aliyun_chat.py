@@ -34,7 +34,7 @@ from rag_app.core.models import (
     ProviderHealthStatus,
 )
 from rag_app.core.models.common import FrozenModel, freeze_json_object
-from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft
+from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft, EvidenceItem
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
 from rag_app.core.tokenization import estimate_tokens
@@ -58,6 +58,10 @@ _GROUNDED_SYSTEM = (
     "每条写明角色或对象的事实，其supports必须同时包含对象原文和相应职责原文；"
     "对象和职责分属不同ID时，列出这两个ID的逐字quote。"
     "不能从问题、其他未引用证据或其他表格行借用对象；分条概括也须逐条满足。"
+    "typed_semantics是服务端校验后的所问对象、关系与答案形状。"
+    "answer_support_set是直接支持答案的最小集合；优先据此形成完整回答。"
+    "model_evidence_candidates只是可选核验候选，不能因其中有无关项否定最小支持集，"
+    "也不能把候选的相关性当作事实支持。"
     '仅输出JSON对象，格式为{"claims":[{"text":"事实概括",'
     '"supports":[{"support_id":"提供的ID","quote":"逐字原文"}]}]}。'
     "每条事实至少一个引用，每个quote必须逐字来自相应ID的证据。"
@@ -463,31 +467,34 @@ class _ChatStreamAccumulator:
 
 def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
     """让同步与流式生成共享完全相同的有限证据 Prompt。"""
+    support_set = (
+        request.answer_support_set
+        if request.typed_semantics is not None
+        or request.model_evidence_candidates
+        else request.evidence
+    )
+    support_ids = {item.support_id for item in support_set}
+    model_candidates = request.model_evidence_candidates or request.evidence
+    support_payload = [_grounded_evidence_payload(item) for item in support_set]
     content: dict[str, object] = {
         "question": request.query,
-        "evidence": [
-            {
-                "support_id": item.support_id,
-                "text": item.citation_text,
-                "source_structure": {
-                    "document_version_id": item.document_version_id,
-                    "section_id": item.section_id,
-                    "table_locator": item.table_locator,
-                    "anchors": [
-                        {
-                            "part_uri": span.source_anchor.part_uri,
-                            "story_kind": span.source_anchor.story_kind,
-                            "structural_path": span.structural_path,
-                            "table_index": span.source_anchor.table_index,
-                            "row_index": span.source_anchor.row_index,
-                        }
-                        for span in item.source_spans
-                        if span.source_anchor is not None
-                    ],
-                },
-            }
-            for item in request.evidence
+        "typed_semantics": (
+            None
+            if request.typed_semantics is None
+            else request.typed_semantics.model_dump(
+                mode="json",
+                exclude={"constraints"},
+            )
+        ),
+        "answer_support_set": support_payload,
+        "model_evidence_candidates": [
+            _grounded_evidence_payload(item)
+            for item in model_candidates
+            if item.support_id not in support_ids
         ],
+        # 保留旧适配器消费方的字段形状，但其内容只等于最小支持集，
+        # 不再把待核验候选伪装成同等直接证据。
+        "evidence": support_payload,
     }
     messages: tuple[ChatMessage, ...] = (
         ChatMessage(role="system", content=_GROUNDED_SYSTEM),
@@ -507,6 +514,31 @@ def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
             ),
         )
     return messages
+
+
+def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
+    """投影一个有界证据，不复制检索分数或内部元数据。"""
+    return {
+        "support_id": item.support_id,
+        "text": item.citation_text,
+        "source_structure": {
+            "document_version_id": item.document_version_id,
+            "section_id": item.section_id,
+            "table_locator": item.table_locator,
+            "heading_path": item.heading_path,
+            "anchors": [
+                {
+                    "part_uri": span.source_anchor.part_uri,
+                    "story_kind": span.source_anchor.story_kind,
+                    "structural_path": span.structural_path,
+                    "table_index": span.source_anchor.table_index,
+                    "row_index": span.source_anchor.row_index,
+                }
+                for span in item.source_spans
+                if span.source_anchor is not None
+            ],
+        },
+    }
 
 
 class AliyunChatAdapter:

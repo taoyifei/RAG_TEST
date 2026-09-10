@@ -43,6 +43,11 @@ export interface HistoryEntry {
   body_message: string;
   cache_hit?: boolean;
   generation_mode?: string;
+  generation_reason_code?: string | null;
+  degraded_reason_codes?: string[];
+  fallback_answer_available?: boolean;
+  requested_answer_type?: string;
+  query_semantic_source?: string;
   reason_code?: string;
   error_stage?: string;
   active_index_revision_id?: string;
@@ -60,6 +65,8 @@ export interface HistoryEntry {
     evidence?: Evidence[];
     related_contents?: RelatedContent[];
     generation_mode?: string;
+    requested_answer_type?: string;
+    query_semantic_source?: string;
     data_plane?: components["schemas"]["QueryDataPlane"] | null;
   } | null;
 }
