@@ -1,7 +1,11 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
-import { api, type KnowledgeBaseModelSettings } from "../api/client";
+import {
+  api,
+  type CorpusAuthorizationStatus,
+  type KnowledgeBaseModelSettings,
+} from "../api/client";
 import { KnowledgeBaseModels } from "./KnowledgeBaseModels";
 
 const settings: KnowledgeBaseModelSettings = {
@@ -108,4 +112,86 @@ it("设置保存失败保留输入并显示错误", async () => {
   await user.click(screen.getByRole("button", { name: "保存设置" }));
   expect(await screen.findByText("连接已停用")).toBeVisible();
   expect(screen.getByRole("dialog")).toBeVisible();
+});
+
+it("明确区分本地确定性检索，并由管理员一次批准当前活动资料", async () => {
+  const user = userEvent.setup();
+  const missing: CorpusAuthorizationStatus = {
+    corpus_authorization_state: "MISSING",
+    model_configuration_state: "CONFIGURED",
+    model_authorization_state: "MISSING",
+    budget_state: "MISSING",
+    required_operations: ["generation", "query.rewrite"],
+    fallback_reason_codes: ["CORPUS_AUTHORIZATION_MISSING"],
+  };
+  vi.spyOn(api, "modelSettings").mockResolvedValue({
+    ...settings,
+    generation_connection_id: "conn_test",
+    generation_model: "qwen3.7-flash",
+    rewrite_enabled: true,
+    corpus_authorization: missing,
+    retrieval_data_plane: {
+      retrieval_data_plane: "default_local_fallback",
+      profile_state: "NOT_CONFIGURED",
+      active_index_revision_id: "irev_test",
+      embedding_provider_id: "deterministic",
+      embedding_model: "deterministic-sha256-v1",
+      reranker_provider_id: "lexical_overlap",
+      reranker_model: "1",
+      dense_calibration_state: "UNCALIBRATED",
+      vector_coverage_complete: true,
+      fallback_reason_codes: ["NO_ACTIVE_RETRIEVAL_PROFILE"],
+      remediation_path: "/retrieval-profiles",
+    },
+  });
+  const approved: CorpusAuthorizationStatus = {
+    ...missing,
+    corpus_authorization_state: "APPROVED",
+    model_authorization_state: "APPROVED",
+    budget_state: "AVAILABLE",
+    fallback_reason_codes: [],
+    manifest: {
+      manifest_id: `cauth_${"a".repeat(32)}`,
+      project_id: `prj_${"b".repeat(32)}`,
+      knowledge_base_id: `kb_${"c".repeat(32)}`,
+      active_index_revision_id: `irev_${"d".repeat(32)}`,
+      active_document_digest: `sha256:${"e".repeat(64)}`,
+      active_document_count: 2,
+      provider_connection_id: "conn_test",
+      provider_model: "qwen3.7-flash",
+      operation_binding_identity: `sha256:${"f".repeat(64)}`,
+      operations: ["generation", "query.rewrite"],
+      authorization_id: "synthetic-authorization",
+      budget_campaign_id: "synthetic-budget",
+      created_at: "2030-01-01T00:00:00+00:00",
+      expires_at: "2030-02-01T00:00:00+00:00",
+      policy_revision: "corpus-authorization-v1",
+      approved_by_session_id: "sess_test",
+    },
+  };
+  const approve = vi
+    .spyOn(api, "approveCorpusAuthorization")
+    .mockResolvedValue(approved);
+
+  render(<KnowledgeBaseModels kbId="kb_test" />);
+  expect(await screen.findByText(/当前检索：本地确定性检索/)).toBeVisible();
+  expect(screen.getByText(/尚未批准当前活动语料/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "批准当前活动资料" }));
+  expect(
+    screen.getByText(/本次用途：回答生成、问题改写/),
+  ).toBeVisible();
+  await user.click(
+    screen.getByRole("button", { name: "确认批准当前版本" }),
+  );
+  await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+  expect(approve.mock.calls[0][0]).toBe("kb_test");
+  expect(approve.mock.calls[0][1]).toEqual(
+    expect.objectContaining({
+      operations: ["generation", "query.rewrite"],
+      request_limit: 100,
+      estimated_token_limit: 500_000,
+      operation_request_limits: { generation: 50, "query.rewrite": 50 },
+    }),
+  );
+  expect(await screen.findByText(/已批准当前版本/)).toBeVisible();
 });

@@ -48,7 +48,10 @@ from rag_app.adapters.providers.aliyun_ocr import (
 )
 from rag_app.adapters.providers.batching import estimate_tokens
 from rag_app.adapters.providers.budget_ledger import BudgetBlockedError
-from rag_app.adapters.providers.budget_transport import BudgetedTransport
+from rag_app.adapters.providers.budget_transport import (
+    BudgetedTransport,
+    provider_request_identity,
+)
 from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.adapters.providers.offline_mock_transport import (
     BuiltinOfflineMockTransport,
@@ -574,6 +577,48 @@ class ProviderRuntimeRegistry:
             resolved,
             http_client=self._adapter_http_client(connection, max_attempts=1),
             api_key_resolver=self._secret_resolver(connection),
+        )
+
+    def request_authorization_identity(
+        self,
+        connection_id: str,
+        *,
+        operation: str,
+        model: str,
+    ) -> str:
+        """生成与实际 BudgetedTransport 完全一致的请求身份。
+
+        Args:
+            connection_id: 已保存且启用的 Provider Connection。
+            operation: generation、query.rewrite 或 image.ocr。
+            model: 当前批准的目录模型。
+
+        Returns:
+            绑定端点、模型、连接配置与凭据版本的 SHA-256 身份。
+
+        Raises:
+            ValueError: 操作或模型不是当前连接支持的远程模型用途。
+
+        """
+        if operation not in {"generation", "query.rewrite", "image.ocr"}:
+            raise ValueError("资料授权只支持生成、改写和图片识别用途。")
+        connection = self._control.get_connection(connection_id)
+        if not connection.enabled:
+            raise ValueError("资料授权引用的 Provider Connection 已停用。")
+        validate_model(connection.provider_type, model, operation)
+        endpoint = _base_url(connection).rstrip("/") + _path(
+            connection.provider_type, operation
+        )
+        return provider_request_identity(
+            endpoint,
+            model,
+            {
+                "connection_id": connection.connection_id,
+                "configuration_version": connection.configuration_version,
+                "credential_key_version": self._credentials.get(
+                    connection.credential_id
+                ).key_version,
+            },
         )
 
     def ocr_adapter(

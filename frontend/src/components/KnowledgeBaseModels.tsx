@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   api,
+  type CorpusAuthorizationStatus,
   type KnowledgeBaseModelSettings,
   type ProviderCatalog,
   type ProviderConnection,
@@ -10,6 +11,7 @@ import { ErrorPanel, Modal } from "./ui";
 export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
   const [settings, setSettings] = useState<KnowledgeBaseModelSettings>();
   const [editing, setEditing] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [error, setError] = useState<unknown>();
   useEffect(() => {
     let active = true;
@@ -46,10 +48,46 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
                 "正在读取模型设置…"
               )}
             </p>
+            {settings?.retrieval_data_plane && (
+              <p role="status">
+                当前检索：
+                {retrievalLabel(settings.retrieval_data_plane)} · Embedding：
+                {settings.retrieval_data_plane.embedding_provider_id ?? "未就绪"}
+                {settings.retrieval_data_plane.embedding_model
+                  ? ` / ${settings.retrieval_data_plane.embedding_model}`
+                  : ""}
+                {" · "}Reranker：
+                {settings.retrieval_data_plane.reranker_provider_id ?? "未配置"}
+                {settings.retrieval_data_plane.reranker_model
+                  ? ` / ${settings.retrieval_data_plane.reranker_model}`
+                  : ""}
+              </p>
+            )}
+            {settings?.corpus_authorization && (
+              <p role="status">
+                资料授权：
+                {authorizationLabel(settings.corpus_authorization)}
+              </p>
+            )}
           </div>
-          <button disabled={!settings} onClick={() => setEditing(true)}>
-            设置回答与图片识别
-          </button>
+          <div className="row-actions">
+            {settings?.retrieval_data_plane?.retrieval_data_plane ===
+              "default_local_fallback" && (
+              <a href={settings.retrieval_data_plane.remediation_path}>
+                配置真实检索方案
+              </a>
+            )}
+            {settings?.corpus_authorization &&
+              settings.corpus_authorization.required_operations.length > 0 &&
+              !authorizationReady(settings.corpus_authorization) && (
+                <button onClick={() => setApproving(true)}>
+                  批准当前活动资料
+                </button>
+              )}
+            <button disabled={!settings} onClick={() => setEditing(true)}>
+              设置回答与图片识别
+            </button>
+          </div>
         </div>
         {error !== undefined && <ErrorPanel error={error} />}
       </div>
@@ -64,7 +102,183 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
           }}
         />
       )}
+      {approving && settings?.corpus_authorization && (
+        <AuthorizationEditor
+          kbId={kbId}
+          status={settings.corpus_authorization}
+          onClose={() => setApproving(false)}
+          onApproved={(authorization) => {
+            setSettings({
+              ...settings,
+              budget_campaign_id:
+                authorization.manifest?.budget_campaign_id ??
+                settings.budget_campaign_id,
+              corpus_authorization: authorization,
+            });
+            setApproving(false);
+          }}
+        />
+      )}
     </>
+  );
+}
+
+function retrievalLabel(
+  status: NonNullable<KnowledgeBaseModelSettings["retrieval_data_plane"]>,
+): string {
+  if (status.retrieval_data_plane === "default_local_fallback") {
+    return "本地确定性检索";
+  }
+  if (status.profile_state === "PROFILE_INDEX_MISMATCH") {
+    return "真实检索方案与活动索引不一致（查询会拒绝静默回退）";
+  }
+  if (!status.vector_coverage_complete) return "真实检索索引覆盖未完成";
+  return "活动真实检索方案";
+}
+
+function authorizationReady(status: CorpusAuthorizationStatus): boolean {
+  return (
+    status.corpus_authorization_state === "APPROVED" &&
+    status.model_authorization_state === "APPROVED" &&
+    status.budget_state === "AVAILABLE"
+  );
+}
+
+function authorizationLabel(status: CorpusAuthorizationStatus): string {
+  if (status.required_operations.length === 0) return "当前配置不需要出网批准";
+  if (authorizationReady(status)) {
+    return `已批准当前版本，有效至 ${new Date(
+      status.manifest?.expires_at ?? "",
+    ).toLocaleString()}`;
+  }
+  const labels: Record<string, string> = {
+    MISSING: "尚未批准当前活动语料",
+    STALE_REVISION: "活动索引已变化，需要重新批准",
+    STALE_CORPUS: "活动文档已变化，需要重新批准",
+    STALE_MODEL: "模型或连接已变化，需要重新批准",
+    PARTIAL: "当前模型用途未全部批准",
+    EXPIRED: "批准已过期",
+    EXHAUSTED: "累计预算已用尽",
+    BLOCKED: "模型配置或预算当前不可用",
+  };
+  return (
+    labels[status.corpus_authorization_state] ??
+    labels[status.model_authorization_state] ??
+    labels[status.budget_state] ??
+    "当前不可用"
+  );
+}
+
+function AuthorizationEditor({
+  kbId,
+  status,
+  onClose,
+  onApproved,
+}: {
+  kbId: string;
+  status: CorpusAuthorizationStatus;
+  onClose: () => void;
+  onApproved: (status: CorpusAuthorizationStatus) => void;
+}) {
+  const [validDays, setValidDays] = useState(30);
+  const [requestLimit, setRequestLimit] = useState(100);
+  const [tokenLimit, setTokenLimit] = useState(500_000);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<unknown>();
+  async function approve(event: FormEvent) {
+    event.preventDefault();
+    if (pending) return;
+    setPending(true);
+    setError(undefined);
+    const operations = status.required_operations;
+    const eachLimit = Math.max(1, Math.floor(requestLimit / operations.length));
+    try {
+      onApproved(
+        await api.approveCorpusAuthorization(kbId, {
+          operations,
+          expires_at: new Date(
+            Date.now() + validDays * 24 * 60 * 60 * 1000,
+          ).toISOString(),
+          request_limit: requestLimit,
+          estimated_token_limit: tokenLimit,
+          operation_request_limits: Object.fromEntries(
+            operations.map((operation) => [operation, eachLimit]),
+          ),
+        }),
+      );
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <Modal title="批准当前活动知识库资料" onClose={onClose}>
+      <form className="stack model-settings-form" onSubmit={approve}>
+        <p>
+          服务端会在确认瞬间冻结当前活动 Revision、文档版本整体摘要、所选模型与用途；文档、模型或活动
+          Revision 变化后不会自动跟随。
+        </p>
+        <p role="status">
+          本次用途：{status.required_operations.map(operationLabel).join("、")}
+        </p>
+        <label>
+          有效天数
+          <input
+            type="number"
+            min={1}
+            max={365}
+            value={validDays}
+            disabled={pending}
+            onChange={(event) => setValidDays(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          累计请求上限
+          <input
+            type="number"
+            min={status.required_operations.length}
+            max={10_000}
+            value={requestLimit}
+            disabled={pending}
+            onChange={(event) => setRequestLimit(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          累计估算 Token 上限
+          <input
+            type="number"
+            min={1}
+            max={100_000_000}
+            value={tokenLimit}
+            disabled={pending}
+            onChange={(event) => setTokenLimit(Number(event.target.value))}
+          />
+        </label>
+        <small>
+          确认只创建这一份有界批准，不会立即调用 Provider，也不会由系统自动增加预算。
+        </small>
+        {error !== undefined && <ErrorPanel error={error} />}
+        <div className="row-actions">
+          <button className="primary" disabled={pending}>
+            {pending ? "批准中…" : "确认批准当前版本"}
+          </button>
+          <button type="button" disabled={pending} onClick={onClose}>
+            取消
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function operationLabel(operation: string): string {
+  return (
+    {
+      generation: "回答生成",
+      "query.rewrite": "问题改写",
+      "image.ocr": "图片识别",
+    }[operation] ?? operation
   );
 }
 
@@ -234,24 +448,9 @@ function ModelEditor({
           />
           启用文档图片识别
         </label>
-        <details>
-          <summary>调用授权</summary>
-          <label>
-            已有预算批次标识
-            <input
-              value={value.budget_campaign_id ?? ""}
-              disabled={pending}
-              pattern="[A-Za-z0-9_.:\-]{1,128}"
-              onChange={(event) =>
-                setValue({
-                  ...value,
-                  budget_campaign_id: event.target.value || null,
-                })
-              }
-            />
-          </label>
-          <small>填写服务端已授权的批次；保存不会创建或重置预算。</small>
-        </details>
+        <p>
+          模型设置保存后，请回到知识库卡片明确批准当前活动资料；浏览器不需要管理 source hash。
+        </p>
         {error !== undefined && <ErrorPanel error={error} />}
         <div className="row-actions">
           <button

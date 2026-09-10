@@ -46,6 +46,7 @@ export interface HistoryEntry {
   reason_code?: string;
   error_stage?: string;
   active_index_revision_id?: string;
+  data_plane?: components["schemas"]["QueryDataPlane"];
   models?: string[];
   provider_usage?: {
     operation: string;
@@ -59,6 +60,7 @@ export interface HistoryEntry {
     evidence?: Evidence[];
     related_contents?: RelatedContent[];
     generation_mode?: string;
+    data_plane?: components["schemas"]["QueryDataPlane"] | null;
   } | null;
 }
 
@@ -233,6 +235,33 @@ export interface KnowledgeBaseModelSettings {
   budget_campaign_id: string | null;
   generation_configured?: boolean;
   ocr_configured?: boolean;
+  corpus_authorization?: CorpusAuthorizationStatus;
+  retrieval_data_plane?: RetrievalDataPlaneStatus;
+}
+
+export type CorpusAuthorizationStatus =
+  components["schemas"]["CorpusAuthorizationStatus"];
+export type CorpusAuthorizationApproval =
+  components["schemas"]["CorpusAuthorizationApproval"];
+
+export interface RetrievalDataPlaneStatus {
+  retrieval_data_plane: "active_remote_profile" | "default_local_fallback";
+  profile_state: string;
+  active_retrieval_profile_revision_id?: string | null;
+  pending_profile_revision_id?: string | null;
+  activation_job_id?: string | null;
+  active_index_revision_id?: string | null;
+  index_fingerprint?: string | null;
+  serving_fingerprint?: string | null;
+  embedding_provider_id?: string | null;
+  embedding_model?: string | null;
+  selected_vector_space?: string | null;
+  reranker_provider_id?: string | null;
+  reranker_model?: string | null;
+  dense_calibration_state: string;
+  vector_coverage_complete: boolean;
+  fallback_reason_codes: string[];
+  remediation_path: string;
 }
 
 export interface DocumentOcrScan {
@@ -803,6 +832,20 @@ export const api = {
     request<KnowledgeBaseModelSettings>(
       `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/model-settings`,
       "",
+    ),
+  corpusAuthorization: (kbId: string) =>
+    request<CorpusAuthorizationStatus>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/corpus-authorization`,
+      "",
+    ),
+  approveCorpusAuthorization: (
+    kbId: string,
+    approval: CorpusAuthorizationApproval,
+  ) =>
+    request<CorpusAuthorizationStatus>(
+      `/api/v1/knowledge-bases/${encodeURIComponent(kbId)}/corpus-authorization:approve`,
+      "",
+      jsonInit("POST", approval),
     ),
   scanDocumentImages: (kbId: string, documentId: string) =>
     request<DocumentOcrScan>(

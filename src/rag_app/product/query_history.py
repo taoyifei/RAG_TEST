@@ -1607,6 +1607,8 @@ def _completion(
                 ),
             }
         )
+        if result.data_plane is not None:
+            metadata["data_plane"] = result.data_plane.model_dump(mode="json")
         if result.diagnostics is not None:
             metadata["diagnostics"] = result.diagnostics.model_dump(mode="json")
             calls = result.diagnostics.provider_call_details

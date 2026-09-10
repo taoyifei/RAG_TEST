@@ -1254,6 +1254,18 @@ class ProductTraceCoordinator:
         elif cancelled_calls:
             for call in cancelled_calls:
                 _provider_span(session, call)
+        if result is not None and result.data_plane is not None:
+            session.completed_span(
+                TraceSpanSpec(
+                    name="query.data_plane",
+                    kind=SpanKind.GUARDRAIL,
+                    parent_span_id=session.root.span_id,
+                    reason_code=DecisionCode.AUTHORIZED_SCOPE,
+                    attributes={
+                        "data_plane": result.data_plane.model_dump(mode="json")
+                    },
+                )
+            )
         session.completed_span(
             TraceSpanSpec(
                 name="history.settlement",

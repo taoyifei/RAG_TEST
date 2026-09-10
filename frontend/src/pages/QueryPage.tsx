@@ -89,6 +89,15 @@ function answerDeliveryMessage(result: QueryResponse): string {
   return "当前资料没有足以直接回答这个问题的证据。";
 }
 
+function retrievalDeliveryMessage(result: QueryResponse): string {
+  const dataPlane = result.data_plane;
+  if (!dataPlane) return "原文检索（旧记录未保存数据面）";
+  if (dataPlane.retrieval_data_plane === "default_local_fallback") {
+    return "本地确定性检索";
+  }
+  return "活动真实 Dense 检索";
+}
+
 function ScopedQueryPage({
   mode,
   go,
@@ -421,16 +430,21 @@ function ScopedQueryPage({
               </article>
               <article>
                 <span>检索方式</span>
-                <strong>
-                  {result.selected_embedding_slot
-                    ? "向量与原文检索"
-                    : "原文检索"}
-                </strong>
+                <strong>{retrievalDeliveryMessage(result)}</strong>
                 <details>
                   <summary>技术详情</summary>
                   <code>
-                    {result.route_reason_code} ·{" "}
-                    {result.selected_embedding_slot}
+                    {result.route_reason_code} · slot={
+                      result.selected_embedding_slot ?? "none"
+                    }
+                    {result.data_plane && (
+                      <>
+                        {" · "}
+                        {result.data_plane.embedding_provider_id ?? "none"} /{" "}
+                        {result.data_plane.embedding_model ?? "none"} /{" "}
+                        {result.data_plane.selected_vector_space ?? "none"}
+                      </>
+                    )}
                   </code>
                 </details>
               </article>
@@ -453,6 +467,21 @@ function ScopedQueryPage({
               本次问题改写模型调用：
               {result.rewrite_called_this_request ? "是" : "否"}
             </p>
+            {result.data_plane && (
+              <p>
+                Profile：
+                {result.data_plane.active_retrieval_profile_revision_id ??
+                  "未激活"}
+                {" · "}Reranker：
+                {result.data_plane.reranker_provider_id ?? "未配置"} /{" "}
+                {result.data_plane.reranker_model ?? "未配置"}（
+                {result.data_plane.rerank_mode}） · 生成配置：
+                {result.data_plane.model_configuration_state} · 模型授权：
+                {result.data_plane.model_authorization_state} · 资料授权：
+                {result.data_plane.corpus_authorization_state} · 预算：
+                {result.data_plane.budget_state}
+              </p>
+            )}
             <code>{result.trace_id}</code>
           </details>
           {!!result.evidence.length && (mode === "search" || result.answer) && (

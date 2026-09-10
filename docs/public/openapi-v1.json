@@ -681,6 +681,261 @@
         "title": "ConversationClearResponse",
         "type": "object"
       },
+      "CorpusAuthorizationApproval": {
+        "additionalProperties": false,
+        "description": "管理员明确批准当前活动语料所需的有界输入。",
+        "properties": {
+          "estimated_token_limit": {
+            "maximum": 100000000.0,
+            "minimum": 1.0,
+            "title": "Estimated Token Limit",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "operation_request_limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "generation",
+                "query.rewrite",
+                "image.ocr"
+              ]
+            },
+            "title": "Operation Request Limits",
+            "type": "object"
+          },
+          "operations": {
+            "items": {
+              "enum": [
+                "generation",
+                "query.rewrite",
+                "image.ocr"
+              ],
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          },
+          "request_limit": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Request Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "operations",
+          "expires_at",
+          "request_limit",
+          "estimated_token_limit",
+          "operation_request_limits"
+        ],
+        "title": "CorpusAuthorizationApproval",
+        "type": "object"
+      },
+      "CorpusAuthorizationManifest": {
+        "additionalProperties": false,
+        "description": "不暴露正文与逐文档哈希的不可变活动语料批准记录。",
+        "properties": {
+          "active_document_count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Active Document Count",
+            "type": "integer"
+          },
+          "active_document_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Active Document Digest",
+            "type": "string"
+          },
+          "active_index_revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Active Index Revision Id",
+            "type": "string"
+          },
+          "approved_by_session_id": {
+            "title": "Approved By Session Id",
+            "type": "string"
+          },
+          "authorization_id": {
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "budget_campaign_id": {
+            "title": "Budget Campaign Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "manifest_id": {
+            "pattern": "^cauth_[0-9a-f]{32}$",
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "operation_binding_identity": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Operation Binding Identity",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "enum": [
+                "generation",
+                "query.rewrite",
+                "image.ocr"
+              ],
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Operations",
+            "type": "array"
+          },
+          "policy_revision": {
+            "default": "corpus-authorization-v1",
+            "title": "Policy Revision",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^prj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "provider_connection_id": {
+            "title": "Provider Connection Id",
+            "type": "string"
+          },
+          "provider_model": {
+            "title": "Provider Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest_id",
+          "project_id",
+          "knowledge_base_id",
+          "active_index_revision_id",
+          "active_document_digest",
+          "active_document_count",
+          "provider_connection_id",
+          "provider_model",
+          "operation_binding_identity",
+          "operations",
+          "authorization_id",
+          "budget_campaign_id",
+          "created_at",
+          "expires_at",
+          "approved_by_session_id"
+        ],
+        "title": "CorpusAuthorizationManifest",
+        "type": "object"
+      },
+      "CorpusAuthorizationStatus": {
+        "additionalProperties": false,
+        "description": "查询与管理员页面共享的动态资料、模型和预算状态。",
+        "properties": {
+          "budget_state": {
+            "enum": [
+              "NOT_REQUIRED",
+              "MISSING",
+              "AVAILABLE",
+              "EXHAUSTED",
+              "BLOCKED"
+            ],
+            "title": "Budget State",
+            "type": "string"
+          },
+          "corpus_authorization_state": {
+            "enum": [
+              "NOT_REQUIRED",
+              "MISSING",
+              "APPROVED",
+              "STALE_REVISION",
+              "STALE_CORPUS",
+              "EXPIRED"
+            ],
+            "title": "Corpus Authorization State",
+            "type": "string"
+          },
+          "fallback_reason_codes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallback Reason Codes",
+            "type": "array"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CorpusAuthorizationManifest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "model_authorization_state": {
+            "enum": [
+              "NOT_REQUIRED",
+              "MISSING",
+              "APPROVED",
+              "PARTIAL",
+              "STALE_MODEL",
+              "EXPIRED",
+              "BLOCKED"
+            ],
+            "title": "Model Authorization State",
+            "type": "string"
+          },
+          "model_configuration_state": {
+            "enum": [
+              "NOT_CONFIGURED",
+              "CONFIGURED",
+              "INVALID"
+            ],
+            "title": "Model Configuration State",
+            "type": "string"
+          },
+          "required_operations": {
+            "default": [],
+            "items": {
+              "enum": [
+                "generation",
+                "query.rewrite",
+                "image.ocr"
+              ],
+              "type": "string"
+            },
+            "title": "Required Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "corpus_authorization_state",
+          "model_configuration_state",
+          "model_authorization_state",
+          "budget_state"
+        ],
+        "title": "CorpusAuthorizationStatus",
+        "type": "object"
+      },
       "CreateKnowledgeBaseRequest": {
         "additionalProperties": false,
         "description": "创建知识库请求。",
@@ -2553,6 +2808,210 @@
         "title": "ProviderCallCount",
         "type": "object"
       },
+      "QueryDataPlane": {
+        "additionalProperties": false,
+        "description": "一次查询实际冻结的数据面、模型与授权状态。",
+        "properties": {
+          "active_index_revision_id": {
+            "anyOf": [
+              {
+                "pattern": "^irev_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Index Revision Id"
+          },
+          "active_retrieval_profile_revision_id": {
+            "anyOf": [
+              {
+                "pattern": "^pfr_[0-9a-f]{32}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Retrieval Profile Revision Id"
+          },
+          "budget_state": {
+            "title": "Budget State",
+            "type": "string"
+          },
+          "corpus_authorization_state": {
+            "title": "Corpus Authorization State",
+            "type": "string"
+          },
+          "dense_calibration_state": {
+            "title": "Dense Calibration State",
+            "type": "string"
+          },
+          "embedding_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Model"
+          },
+          "embedding_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Embedding Provider Id"
+          },
+          "fallback_reason_codes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Fallback Reason Codes",
+            "type": "array"
+          },
+          "generation_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Model"
+          },
+          "generation_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Provider Id"
+          },
+          "index_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Fingerprint"
+          },
+          "model_authorization_state": {
+            "title": "Model Authorization State",
+            "type": "string"
+          },
+          "model_configuration_state": {
+            "title": "Model Configuration State",
+            "type": "string"
+          },
+          "rerank_mode": {
+            "title": "Rerank Mode",
+            "type": "string"
+          },
+          "reranker_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Model"
+          },
+          "reranker_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker Provider Id"
+          },
+          "retrieval_data_plane": {
+            "enum": [
+              "active_remote_profile",
+              "default_local_fallback"
+            ],
+            "title": "Retrieval Data Plane",
+            "type": "string"
+          },
+          "rewrite_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewrite Model"
+          },
+          "rewrite_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewrite Provider Id"
+          },
+          "selected_vector_space": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Vector Space"
+          },
+          "serving_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Serving Fingerprint"
+          }
+        },
+        "required": [
+          "retrieval_data_plane",
+          "rerank_mode",
+          "dense_calibration_state",
+          "model_configuration_state",
+          "model_authorization_state",
+          "corpus_authorization_state",
+          "budget_state"
+        ],
+        "title": "QueryDataPlane",
+        "type": "object"
+      },
       "QueryKind": {
         "description": "确定性 Query Planner 的稳定分类。",
         "enum": [
@@ -2682,6 +3141,16 @@
           },
           "confidence": {
             "$ref": "#/components/schemas/ConfidenceDecision"
+          },
+          "data_plane": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QueryDataPlane"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "degraded_reason_codes": {
             "default": [],
@@ -8904,6 +9373,282 @@
         "summary": " Retry Job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization": {
+      "get": {
+        "description": "读取当前活动语料、模型用途和累计预算的动态对账状态。",
+        "operationId": "_authorization_status_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorpusAuthorizationStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Authorization Status",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization:approve": {
+      "post": {
+        "description": "仅接受管理员会话对服务端冻结的活动语料作明确批准。",
+        "operationId": "_approve_authorization_api_v1_knowledge_bases__knowledge_base_id__corpus_authorization_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CorpusAuthorizationApproval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorpusAuthorizationStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Approve Authorization",
+        "tags": [
+          "models"
         ]
       }
     },

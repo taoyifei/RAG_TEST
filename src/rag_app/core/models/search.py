@@ -345,6 +345,42 @@ class RetrievalDiagnosticsSummary(FrozenModel):
     cache_hit: bool
 
 
+class QueryDataPlane(FrozenModel):
+    """一次查询实际冻结的数据面、模型与授权状态。"""
+
+    retrieval_data_plane: Literal[
+        "active_remote_profile", "default_local_fallback"
+    ]
+    active_retrieval_profile_revision_id: str | None = Field(
+        default=None, pattern=r"^pfr_[0-9a-f]{32}$"
+    )
+    active_index_revision_id: str | None = Field(
+        default=None, pattern=r"^irev_[0-9a-f]{32}$"
+    )
+    index_fingerprint: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    serving_fingerprint: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    embedding_provider_id: str | None = None
+    embedding_model: str | None = None
+    selected_vector_space: str | None = None
+    reranker_provider_id: str | None = None
+    reranker_model: str | None = None
+    rerank_mode: str
+    generation_provider_id: str | None = None
+    generation_model: str | None = None
+    rewrite_provider_id: str | None = None
+    rewrite_model: str | None = None
+    dense_calibration_state: str
+    model_configuration_state: str
+    model_authorization_state: str
+    corpus_authorization_state: str
+    budget_state: str
+    fallback_reason_codes: tuple[str, ...] = ()
+
+
 class BaseResultCacheKey(FrozenModel):
     """可在 Provider 调用前计算的最终结果缓存身份。"""
 
@@ -446,6 +482,7 @@ class SearchAnswerResult(FrozenModel):
     )
     singleflight_wait_ms: StrictInt = Field(default=0, ge=0)
     diagnostics_summary: RetrievalDiagnosticsSummary | None = None
+    data_plane: QueryDataPlane | None = None
     diagnostics: RetrievalDiagnostics | None = Field(
         default=None, exclude=True, repr=False
     )
@@ -464,6 +501,7 @@ __all__ = [
     "FusedCandidate",
     "HydratedChunk",
     "ProviderCallCount",
+    "QueryDataPlane",
     "RankedChunk",
     "RelatedContent",
     "RetrievalDiagnostics",

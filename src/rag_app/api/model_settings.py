@@ -7,7 +7,13 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import Field
 
 from rag_app.composition.product_runtime import ProductRuntime
+from rag_app.core.errors import RagError
+from rag_app.core.models import EmbeddingTopology, RetrievalPolicy
 from rag_app.core.models.common import FrozenModel
+from rag_app.product.corpus_authorization import (
+    CorpusAuthorizationApproval,
+    CorpusAuthorizationStatus,
+)
 from rag_app.product.diagram_relations import (
     DiagramRelationCandidate,
     RelationReviewState,
@@ -52,6 +58,9 @@ def register_model_settings_routes(  # noqa: PLR0915
 
     """
     path = "/api/v1/knowledge-bases/{knowledge_base_id}/model-settings"
+    authorization_path = (
+        "/api/v1/knowledge-bases/{knowledge_base_id}/corpus-authorization"
+    )
 
     @app.get(path, tags=["models"])
     def _get(knowledge_base_id: str) -> dict[str, object]:
@@ -69,6 +78,12 @@ def register_model_settings_routes(  # noqa: PLR0915
                 not local_ocr_selected or runtime.providers.local_ocr_available
             ),
             "local_ocr_available": runtime.providers.local_ocr_available,
+            "corpus_authorization": runtime.corpus_authorizations.status(
+                knowledge_base_id
+            ).model_dump(mode="json"),
+            "retrieval_data_plane": _retrieval_data_plane_status(
+                runtime, knowledge_base_id
+            ),
         }
 
     @app.put(path, tags=["models"])
@@ -86,6 +101,44 @@ def register_model_settings_routes(  # noqa: PLR0915
         runtime.models.save(knowledge_base_id, settings)
         runtime.profiles.invalidate(knowledge_base_id)
         return _get(knowledge_base_id)
+
+    @app.get(
+        authorization_path,
+        tags=["models"],
+        response_model=CorpusAuthorizationStatus,
+    )
+    def _authorization_status(
+        knowledge_base_id: str,
+    ) -> CorpusAuthorizationStatus:
+        """读取当前活动语料、模型用途和累计预算的动态对账状态。"""
+        return runtime.corpus_authorizations.status(knowledge_base_id)
+
+    @app.post(
+        authorization_path + ":approve",
+        tags=["models"],
+        response_model=CorpusAuthorizationStatus,
+    )
+    def _approve_authorization(
+        knowledge_base_id: str,
+        approval: CorpusAuthorizationApproval,
+        request: Request,
+    ) -> CorpusAuthorizationStatus:
+        """仅接受管理员会话对服务端冻结的活动语料作明确批准。"""
+        if getattr(request.state, "product_principal", None) != "admin_session":
+            raise HTTPException(403, "资料授权只能由控制台管理员会话批准。")
+        session_id = getattr(request.state, "product_session_id", None)
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(403, "管理员会话身份不可用。")
+        try:
+            status = runtime.corpus_authorizations.approve(
+                knowledge_base_id,
+                approval,
+                approved_by_session_id=session_id,
+            )
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
+        runtime.profiles.invalidate(knowledge_base_id)
+        return status
 
     ocr_path = (
         "/api/v1/knowledge-bases/{knowledge_base_id}"
@@ -285,6 +338,156 @@ def register_model_settings_routes(  # noqa: PLR0915
             rebuild_job_id=job_id,
             content_identity=current_identity,
         )
+
+
+def _retrieval_data_plane_status(
+    runtime: ProductRuntime, knowledge_base_id: str
+) -> dict[str, object]:
+    """在不出网的前提下对账当前 Profile、Revision 和向量覆盖。
+
+    Args:
+        runtime: 当前唯一产品运行时。
+        knowledge_base_id: 用户正在查看的知识库。
+
+    Returns:
+        可在首次问答前展示的非敏感实际检索数据面状态。
+
+    """
+    profiles = runtime.control.list_profiles(knowledge_base_id)
+    active = next((item for item in profiles if item.status == "active"), None)
+    with runtime.connections.transaction() as connection:
+        revision = connection.execute(
+            "SELECT kb.active_revision_id,r.index_fingerprint,"
+            "r.embedding_topology_json,r.expected_chunk_count "
+            "FROM knowledge_bases kb LEFT JOIN index_revisions r "
+            "ON r.index_revision_id=kb.active_revision_id "
+            "WHERE kb.knowledge_base_id=? AND kb.deleted_at IS NULL",
+            (knowledge_base_id,),
+        ).fetchone()
+        if revision is None:
+            raise HTTPException(404, "知识库不存在。")
+        coverage_rows = (
+            ()
+            if revision["active_revision_id"] is None
+            else connection.execute(
+                "SELECT slot_id,expected_chunk_count,valid_vector_count,state "
+                "FROM revision_embedding_coverage WHERE revision_id=? "
+                "ORDER BY slot_id",
+                (revision["active_revision_id"],),
+            ).fetchall()
+        )
+        latest_draft = next(
+            (item for item in profiles if item.status == "draft"), None
+        )
+        activation_state = None
+        if latest_draft is not None and latest_draft.activation_job_id:
+            job = connection.execute(
+                "SELECT state FROM ingestion_jobs WHERE job_id=?",
+                (latest_draft.activation_job_id,),
+            ).fetchone()
+            activation_state = None if job is None else str(job[0])
+    topology = (
+        None
+        if revision["embedding_topology_json"] is None
+        else EmbeddingTopology.model_validate_json(
+            str(revision["embedding_topology_json"])
+        )
+    )
+    primary = None if topology is None else topology.slot(topology.primary_slot_id)
+    reasons: list[str] = []
+    if active is None:
+        reasons.append("NO_ACTIVE_RETRIEVAL_PROFILE")
+        if primary is not None and primary.provider_id.casefold().startswith(
+            "deterministic"
+        ):
+            reasons.append("DETERMINISTIC_EMBEDDING")
+    expected_chunks = int(revision["expected_chunk_count"] or 0)
+    coverage_complete = bool(coverage_rows) and all(
+        int(row["expected_chunk_count"]) == expected_chunks
+        and int(row["valid_vector_count"]) == expected_chunks
+        and str(row["state"]) == "complete"
+        for row in coverage_rows
+    )
+    if revision["active_revision_id"] is not None and not coverage_complete:
+        reasons.append("VECTOR_COVERAGE_INCOMPLETE")
+    calibration_state = "UNCALIBRATED"
+    reranker_provider_id = "lexical_overlap"
+    reranker_model = "1"
+    serving_fingerprint = runtime.sdk.health().serving_fingerprint
+    profile_state = "NOT_CONFIGURED"
+    if active is not None:
+        try:
+            policy = RetrievalPolicy.model_validate(
+                dict(active.retrieval_policy)
+            )
+            calibration_state = policy.dense_semantic_calibration_state
+            serving_fingerprint = runtime.profiles.serving_contract(active)[2]
+            if active.reranker_connection_id:
+                provider_connection = runtime.control.get_connection(
+                    active.reranker_connection_id
+                )
+                reranker_provider_id = provider_connection.provider_type
+                reranker_model = active.reranker_model
+        except (RagError, ValueError, KeyError):
+            profile_state = "CONFIGURATION_INVALID"
+            reasons.append("PROFILE_RUNTIME_CONFIGURATION_INVALID")
+        else:
+            profile_state = "ACTIVE"
+            if (
+                revision["index_fingerprint"]
+                != active.index_semantic_fingerprint
+            ):
+                profile_state = "PROFILE_INDEX_MISMATCH"
+                reasons.append("PROFILE_INDEX_MISMATCH")
+            if runtime.control.profile_validation_issues(
+                active.profile_revision_id
+            ):
+                reasons.append("PROFILE_VALIDATION_STALE")
+            if calibration_state == "UNCALIBRATED":
+                reasons.append("DENSE_CALIBRATION_MISSING")
+    elif latest_draft is not None:
+        if activation_state in {"queued", "running"}:
+            profile_state = "REBUILD_PENDING"
+            reasons.append("PROFILE_REBUILD_PENDING")
+        elif activation_state and activation_state.startswith("failed"):
+            profile_state = "REBUILD_FAILED"
+            reasons.append("PROFILE_REBUILD_FAILED")
+        else:
+            profile_state = "DRAFT_NOT_ACTIVE"
+            reasons.append("PROFILE_DRAFT_NOT_ACTIVE")
+    return {
+        "retrieval_data_plane": (
+            "active_remote_profile"
+            if active is not None
+            else "default_local_fallback"
+        ),
+        "profile_state": profile_state,
+        "active_retrieval_profile_revision_id": (
+            None if active is None else active.profile_revision_id
+        ),
+        "pending_profile_revision_id": (
+            None if latest_draft is None else latest_draft.profile_revision_id
+        ),
+        "activation_job_id": (
+            None if latest_draft is None else latest_draft.activation_job_id
+        ),
+        "active_index_revision_id": revision["active_revision_id"],
+        "index_fingerprint": revision["index_fingerprint"],
+        "serving_fingerprint": serving_fingerprint,
+        "embedding_provider_id": (
+            None if primary is None else primary.provider_id
+        ),
+        "embedding_model": None if primary is None else primary.model,
+        "selected_vector_space": (
+            None if primary is None else primary.vector_space_identity
+        ),
+        "reranker_provider_id": reranker_provider_id,
+        "reranker_model": reranker_model,
+        "dense_calibration_state": calibration_state,
+        "vector_coverage_complete": coverage_complete,
+        "fallback_reason_codes": tuple(dict.fromkeys(reasons)),
+        "remediation_path": "/retrieval-profiles",
+    }
 
 
 def _inflight_ocr_job(

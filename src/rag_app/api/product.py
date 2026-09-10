@@ -455,10 +455,11 @@ def _authenticate_session(
         if csrf is None:
             return _auth_error(403, "CSRF_REQUIRED")
     try:
-        runtime.auth.validate_session(cookie, csrf_token=csrf)
+        session_id = runtime.auth.validate_session(cookie, csrf_token=csrf)
     except PolicyDenied:
         return _auth_error(401, "CONSOLE_SESSION_REQUIRED")
     request.state.product_principal = "admin_session"
+    request.state.product_session_id = session_id
     request.state.stream_authorization_guard = lambda: (
         runtime.auth.validate_session(cookie)
     )

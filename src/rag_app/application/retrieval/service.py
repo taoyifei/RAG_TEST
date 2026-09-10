@@ -8,9 +8,10 @@ import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from copy import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from time import perf_counter
+from typing import Literal
 
 from rag_app.application.answering import ExtractiveAnsweringService
 from rag_app.application.answering.grounded import GroundedAnsweringService
@@ -72,6 +73,7 @@ from rag_app.core.models import (
     ProviderCall,
     ProviderCallCount,
     ProviderFailureCategory,
+    QueryDataPlane,
     QueryAnalysis,
     RankedChunk,
     RelatedContent,
@@ -121,6 +123,29 @@ class RetrievalExecutionIdentity:
     serving_fingerprint: str
 
 
+@dataclass(frozen=True, slots=True)
+class QueryDataPlaneContext:
+    """组合根为单次查询提供的非敏感配置与授权真相。"""
+
+    retrieval_data_plane: Literal[
+        "active_remote_profile", "default_local_fallback"
+    ] = "default_local_fallback"
+    active_retrieval_profile_revision_id: str | None = None
+    reranker_provider_id: str | None = None
+    reranker_model: str | None = None
+    generation_provider_id: str | None = None
+    generation_model: str | None = None
+    rewrite_provider_id: str | None = None
+    rewrite_model: str | None = None
+    model_configuration_state: str = "NOT_CONFIGURED"
+    model_authorization_state: str = "NOT_REQUIRED"
+    corpus_authorization_state: str = "NOT_REQUIRED"
+    budget_state: str = "NOT_REQUIRED"
+    fallback_reason_codes: tuple[str, ...] = (
+        "NO_ACTIVE_RETRIEVAL_PROFILE",
+    )
+
+
 class RetrievalService:
     """不依赖 API、SQLite 或 Qdrant 类型的 P07 application service。"""
 
@@ -149,6 +174,7 @@ class RetrievalService:
         self._lexical = LexicalChannel(lexical_store)
         self._dense = DenseChannel(query_embedding, vector_store)
         self._reranker = CircuitAwareReranker(reranker)
+        reranker_descriptor = reranker.descriptor
         self._answering = ExtractiveAnsweringService(generator)
         self._generator = generator
         self._grounded: GroundedAnsweringService | None = None
@@ -171,6 +197,36 @@ class RetrievalService:
         self._neighbors = NeighborExpander(source)
         self._evidence = EvidenceAssembler()
         self._confidence = ConfidenceEvaluator()
+        self._data_plane_context = QueryDataPlaneContext(
+            reranker_provider_id=reranker_descriptor.name,
+            reranker_model=reranker_descriptor.version,
+        )
+
+    def with_data_plane(
+        self, context: QueryDataPlaneContext
+    ) -> RetrievalService:
+        """为单次请求附加真实配置、授权与降级状态。
+
+        Args:
+            context: Product 组合根从当前持久状态解析的非敏感上下文。
+
+        Returns:
+            共用检索资源、但不会污染其它请求状态的轻量副本。
+
+        """
+        configured = copy(self)
+        configured._data_plane_context = context
+        return configured
+
+    @property
+    def data_plane_context(self) -> QueryDataPlaneContext:
+        """返回当前服务的非敏感数据面配置快照。
+
+        Returns:
+            可由组合根按单次请求派生的冻结上下文。
+
+        """
+        return self._data_plane_context
 
     def with_generation(
         self,
@@ -195,6 +251,17 @@ class RetrievalService:
             generator, self._generator
         )
         configured._rewriter = rewriter
+        descriptor = generator.descriptor
+        configured._data_plane_context = replace(
+            self._data_plane_context,
+            generation_provider_id=descriptor.name,
+            generation_model=descriptor.version,
+            rewrite_provider_id=(
+                descriptor.name if rewriter is not None else None
+            ),
+            rewrite_model=descriptor.version if rewriter is not None else None,
+            model_configuration_state="CONFIGURED",
+        )
         configured._serving_fingerprint = canonical_sha256(
             {
                 "retrieval": self._serving_fingerprint,
@@ -364,6 +431,12 @@ class RetrievalService:
                     "rewrite_called_this_request": False,
                     "diagnostics": diagnostics,
                     "diagnostics_summary": _diagnostics_summary(diagnostics),
+                    "data_plane": self._query_data_plane(
+                        snapshot,
+                        selected_slot=cached.selected_embedding_slot,
+                        rerank_mode=cached.rerank_execution_mode,
+                        degraded=cached.degraded_reason_codes,
+                    ),
                 }
             )
             if on_final is not None:
@@ -887,6 +960,12 @@ class RetrievalService:
                 for call in provider_calls
             ),
             diagnostics_summary=_diagnostics_summary(diagnostics),
+            data_plane=self._query_data_plane(
+                snapshot,
+                selected_slot=selected_slot,
+                rerank_mode=reranked.mode,
+                degraded=tuple(dict.fromkeys(degraded)),
+            ),
             diagnostics=diagnostics,
         )
         if on_final is not None:
@@ -911,6 +990,66 @@ class RetrievalService:
                     self.commit_result_cache(result)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def _query_data_plane(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        selected_slot: str | None,
+        rerank_mode: str,
+        degraded: tuple[str, ...],
+    ) -> QueryDataPlane:
+        """由本次冻结快照和实际路由生成统一数据面真相。
+
+        Args:
+            snapshot: 请求开始时冻结的活动 Revision。
+            selected_slot: Dense 实际选择的 slot；未执行时为空。
+            rerank_mode: 本次实际重排或旁路模式。
+            degraded: 本次执行收集的稳定降级原因。
+
+        Returns:
+            不含正文和 Secret 的公开数据面合同。
+
+        """
+        context = self._data_plane_context
+        slot_id = selected_slot or snapshot.topology.primary_slot_id
+        slot = snapshot.topology.slot(slot_id)
+        fallbacks = list(context.fallback_reason_codes)
+        if selected_slot is None:
+            fallbacks.append("DENSE_NOT_SELECTED_BY_PLAN")
+        if slot.provider_id.casefold().startswith("deterministic"):
+            fallbacks.append("DETERMINISTIC_EMBEDDING")
+        fallbacks.extend(degraded)
+        return QueryDataPlane(
+            retrieval_data_plane=context.retrieval_data_plane,
+            active_retrieval_profile_revision_id=(
+                snapshot.profile_revision_id
+                or context.active_retrieval_profile_revision_id
+            ),
+            active_index_revision_id=snapshot.revision.index_revision_id,
+            index_fingerprint=snapshot.revision.index_fingerprint,
+            serving_fingerprint=snapshot.serving_fingerprint,
+            embedding_provider_id=slot.provider_id,
+            embedding_model=slot.model,
+            selected_vector_space=(
+                slot.vector_space_identity if selected_slot is not None else None
+            ),
+            reranker_provider_id=context.reranker_provider_id,
+            reranker_model=context.reranker_model,
+            rerank_mode=rerank_mode,
+            generation_provider_id=context.generation_provider_id,
+            generation_model=context.generation_model,
+            rewrite_provider_id=context.rewrite_provider_id,
+            rewrite_model=context.rewrite_model,
+            dense_calibration_state=(
+                snapshot.retrieval_policy.dense_semantic_calibration_state
+            ),
+            model_configuration_state=context.model_configuration_state,
+            model_authorization_state=context.model_authorization_state,
+            corpus_authorization_state=context.corpus_authorization_state,
+            budget_state=context.budget_state,
+            fallback_reason_codes=tuple(dict.fromkeys(fallbacks)),
+        )
 
     def validate_shared_result(
         self,

@@ -9,13 +9,6 @@ from pathlib import Path
 import httpx
 import pytest
 
-from rag_app.adapters.providers.budget_ledger import (
-    BudgetCampaign,
-    ProviderBudgetLedger,
-)
-from rag_app.adapters.providers.budget_transport import (
-    provider_request_identity,
-)
 from rag_app.composition.product_runtime import build_product_runtime
 from tests.api.test_query_history import _upload
 from tests.product_support import (
@@ -81,51 +74,8 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         tmp_path, transport_factory=lambda _: httpx.MockTransport(respond)
     )
     project, kb = create_project_and_knowledge_base(harness)
-    document_id = _upload(harness, project, kb)
+    _upload(harness, project, kb)
     _, _, _, connection_id = create_provider_connections(harness)
-    connection = harness.runtime.control.get_connection(connection_id)
-    document = harness.runtime.sdk.get_document(project, kb, document_id)
-    assert document.current_version_id
-    version = harness.runtime.sdk.get_document_version(
-        project, kb, document_id, document.current_version_id
-    )
-    ledger = ProviderBudgetLedger(
-        harness.runtime.data_dir / "provider-budget.sqlite3"
-    )
-    ledger.create_campaign(
-        BudgetCampaign(
-            campaign_id="product-grounded-test",
-            authorization_id="synthetic-scope-test",
-            scope="test-kb",
-            request_limit=8,
-            estimated_token_limit=80_000,
-            scope_mode="knowledge_base",
-            project_id=project,
-            knowledge_base_id=kb,
-            approved_source_hashes=(version.content_sha256,),
-            allowed_models=("qwen3.7-flash",),
-            allowed_operations=("generation",),
-            operation_request_limits={"generation": 8},
-            expires_at=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-            approved_request_identities=(
-                provider_request_identity(
-                    "https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/chat/completions",
-                    "qwen3.7-flash",
-                    {
-                        "connection_id": connection_id,
-                        "configuration_version": (
-                            connection.configuration_version
-                        ),
-                        "credential_key_version": (
-                            harness.runtime.control.credential_version(
-                                connection.credential_id
-                            )
-                        ),
-                    },
-                ),
-            ),
-        )
-    )
     settings_path = f"/api/v1/knowledge-bases/{kb}/model-settings"
     response = harness.client.put(
         settings_path,
@@ -133,10 +83,23 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         json={
             "generation_connection_id": connection_id,
             "generation_model": "qwen3.7-flash",
-            "budget_campaign_id": "product-grounded-test",
         },
     )
     assert response.status_code == 200, response.text
+    approval = harness.client.post(
+        f"/api/v1/knowledge-bases/{kb}/corpus-authorization:approve",
+        headers=harness.write_headers,
+        json={
+            "operations": ["generation"],
+            "expires_at": (
+                datetime.now(UTC) + timedelta(hours=1)
+            ).isoformat(),
+            "request_limit": 8,
+            "estimated_token_limit": 80_000,
+            "operation_request_limits": {"generation": 8},
+        },
+    )
+    assert approval.status_code == 200, approval.text
     assert not requests
     endpoint = f"/api/v1/projects/{project}/knowledge-bases/{kb}:answer"
 

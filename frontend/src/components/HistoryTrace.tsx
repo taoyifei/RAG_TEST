@@ -175,6 +175,29 @@ export function HistoryTrace({
             </dd>
             <dt>回答方式</dt>
             <dd>{entry.generation_mode ?? "—"}</dd>
+            {entry.data_plane && (
+              <>
+                <dt>实际检索数据面</dt>
+                <dd>
+                  {entry.data_plane.retrieval_data_plane ===
+                  "default_local_fallback"
+                    ? "本地确定性检索"
+                    : "活动真实 Dense 检索"}
+                </dd>
+                <dt>Embedding / Reranker</dt>
+                <dd>
+                  {entry.data_plane.embedding_provider_id ?? "—"} /{" "}
+                  {entry.data_plane.embedding_model ?? "—"} ·{" "}
+                  {entry.data_plane.reranker_provider_id ?? "—"} /{" "}
+                  {entry.data_plane.reranker_model ?? "—"}
+                </dd>
+                <dt>资料授权 / 预算</dt>
+                <dd>
+                  {entry.data_plane.corpus_authorization_state} /{" "}
+                  {entry.data_plane.budget_state}
+                </dd>
+              </>
+            )}
             {entry.error_stage && (
               <>
                 <dt>失败阶段</dt>

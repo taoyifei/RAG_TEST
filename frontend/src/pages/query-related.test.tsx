@@ -142,6 +142,41 @@ it("空结果不渲染空卡片标题；正常答案独立提供原始答案文�
   ).toHaveAttribute("data-raw-answer", "已确认内容");
 });
 
+it("deterministic slot 即使被选择也只显示本地确定性检索", async () => {
+  vi.spyOn(api, "answerStream").mockResolvedValue(
+    response({
+      selected_embedding_slot: "primary",
+      selected_vector_name: "dense_primary",
+      data_plane: {
+        retrieval_data_plane: "default_local_fallback",
+        active_index_revision_id: `irev_${"a".repeat(32)}`,
+        index_fingerprint: `sha256:${"b".repeat(64)}`,
+        serving_fingerprint: `sha256:${"c".repeat(64)}`,
+        embedding_provider_id: "deterministic",
+        embedding_model: "deterministic-sha256-v1",
+        selected_vector_space: "primary:deterministic",
+        reranker_provider_id: "lexical_overlap",
+        reranker_model: "1",
+        rerank_mode: "provider",
+        dense_calibration_state: "UNCALIBRATED",
+        model_configuration_state: "NOT_CONFIGURED",
+        model_authorization_state: "NOT_REQUIRED",
+        corpus_authorization_state: "NOT_REQUIRED",
+        budget_state: "NOT_REQUIRED",
+        fallback_reason_codes: ["DETERMINISTIC_EMBEDDING"],
+      },
+    }),
+  );
+  render(<QueryPage mode="answer" />);
+  const user = await submit();
+  await user.click(
+    await screen.findByText("技术统计与检索状态"),
+  );
+  expect(await screen.findByText("本地确定性检索")).toBeVisible();
+  expect(screen.queryByText("向量与原文检索")).toBeNull();
+  expect(screen.queryByText("活动真实 Dense 检索")).toBeNull();
+});
+
 it("知识库切换和晚到响应不能重新显示旧原文", async () => {
   let resolve!: (value: QueryResponse) => void;
   let oldHandlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
