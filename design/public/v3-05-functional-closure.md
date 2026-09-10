@@ -113,13 +113,15 @@ invalidate 后不再分配旧服务，最后一个在途请求释放后才关闭
 
 性能门使用默认 Product HTTP 路径与确定性单 DOCX 离线语料，冻结 4 种 Trace 模式、
 cold/warm、并发 1/8/16、unique/identical 共 48 cells。每 cell 至少 32 samples；
-普通观测至少 5 waves，NONE/SAFE P95 比较至少 20 个独立 waves，且相邻并交替先后
-顺序，避免一个共享调度慢波被误当成同批并发请求的多个独立尾样本。内存采样和
-writer flush 均在计时区外，矩阵在独立 pytest 子进程执行以隔离前序用例状态。
+普通观测至少 5 waves，NONE/SAFE P95 比较至少 40 个独立 waves、每 cell 至少
+320 个样本。低并发 cell 在同一 Session 的每个独立 wave 内顺序执行多个并发
+batch；各 batch 使用独立查询身份，且 A/B 相邻并交替先后，避免一个共享调度慢波
+被误当成同批并发请求的多个独立尾样本。内存采样和 writer flush 均在计时区外，
+矩阵在独立 pytest 子进程执行以隔离前序用例状态。
 
-冻结阈值包括：HTTP error 为 0、SAFE dropped 为 0、identical cold 每 wave 只有一个
+冻结阈值包括：HTTP error 为 0、SAFE dropped 为 0、identical cold 每 batch 只有一个
 fresh execution、缓存不超过 512，以及 SAFE P95 相对 NONE 不劣于
-`max(10%, 10ms)`。最终报告记录 88 项判定、5312 个计时 HTTP 请求、stream 首协议/
+`max(10%, 10ms)`。最终报告记录 88 项判定、11456 个计时 HTTP 请求、stream 首协议/
 首内容/总时延、cache/singleflight、线程/FD/RSS 和取消探针。具体值及精确 HEAD
 写入本地性能 JSON，不把一次本机数值外推为生产容量。
 

@@ -84,6 +84,18 @@ class _ModeContext:
     revision_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class _WaveOutcome:
+    """一个独立测量 wave 及其中顺序执行的并发 batch。"""
+
+    samples: tuple[_Sample, ...]
+    batch_origins: tuple[dict[str, int], ...]
+    cache_before: RetrievalCacheMetrics
+    cache_after: RetrievalCacheMetrics
+    singleflight_before: SingleflightMetrics
+    singleflight_after: SingleflightMetrics
+
+
 @dataclass(slots=True)
 class _CellAccumulator:
     """跨相邻 A/B 波次聚合一个矩阵 cell 的安全数值样本。"""
@@ -91,6 +103,7 @@ class _CellAccumulator:
     samples: list[_Sample] = field(default_factory=list)
     wave_latencies: list[dict[str, float]] = field(default_factory=list)
     wave_origins: list[dict[str, int]] = field(default_factory=list)
+    batch_origins: list[dict[str, int]] = field(default_factory=list)
     cache_before: RetrievalCacheMetrics | None = None
     cache_after: RetrievalCacheMetrics | None = None
     singleflight_before: SingleflightMetrics | None = None
@@ -98,30 +111,20 @@ class _CellAccumulator:
 
     def add(
         self,
-        outcome: tuple[
-            tuple[_Sample, ...],
-            RetrievalCacheMetrics,
-            RetrievalCacheMetrics,
-            SingleflightMetrics,
-            SingleflightMetrics,
-        ],
+        outcome: _WaveOutcome,
     ) -> None:
         """追加一个已排空后台 writer 的 HTTP 波次。"""
-        (
-            samples,
-            cache_before,
-            cache_after,
-            singleflight_before,
-            singleflight_after,
-        ) = outcome
         if self.cache_before is None:
-            self.cache_before = cache_before
-            self.singleflight_before = singleflight_before
-        self.cache_after = cache_after
-        self.singleflight_after = singleflight_after
-        self.samples.extend(samples)
+            self.cache_before = outcome.cache_before
+            self.singleflight_before = outcome.singleflight_before
+        self.cache_after = outcome.cache_after
+        self.singleflight_after = outcome.singleflight_after
+        self.samples.extend(outcome.samples)
+        self.batch_origins.extend(outcome.batch_origins)
         successful_latencies = [
-            sample.elapsed_ms for sample in samples if sample.http_status == 200
+            sample.elapsed_ms
+            for sample in outcome.samples
+            if sample.http_status == 200
         ]
         if successful_latencies:
             self.wave_latencies.append(
@@ -141,7 +144,7 @@ class _CellAccumulator:
                 sorted(
                     Counter(
                         sample.result_origin or "unknown"
-                        for sample in samples
+                        for sample in outcome.samples
                         if sample.http_status == 200
                     ).items()
                 )
@@ -222,7 +225,7 @@ def _load_thresholds() -> dict[str, object]:
     payload = json.loads(_THRESHOLDS.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise AssertionError("V3-05 性能门槛必须是 JSON object。")
-    if payload.get("schema_version") != ("v3-05-product-http-thresholds-v3"):
+    if payload.get("schema_version") != ("v3-05-product-http-thresholds-v4"):
         raise AssertionError("V3-05 性能门槛版本错误。")
     if payload.get("capture_modes") != [
         "NONE",
@@ -237,8 +240,10 @@ def _load_thresholds() -> dict[str, object]:
         raise AssertionError("V3-05 每格最小样本数被修改。")
     if payload.get("minimum_waves_per_cell") != 5:
         raise AssertionError("V3-05 每格最小波次数被修改。")
-    if payload.get("minimum_comparison_waves_per_cell") != 20:
+    if payload.get("minimum_comparison_waves_per_cell") != 40:
         raise AssertionError("V3-05 NONE/SAFE 比较波次数被修改。")
+    if payload.get("minimum_comparison_samples_per_cell") != 320:
+        raise AssertionError("V3-05 NONE/SAFE 比较样本数被修改。")
     return cast(dict[str, object], payload)
 
 
@@ -288,15 +293,17 @@ def _enable_no_trace_baseline(harness: ProductHarness) -> None:
 def _query_text(
     temperature: str,
     shape: str,
+    *,
     concurrency: int,
     index: int,
-    wave: int,
+    measurement_id: str,
 ) -> str:
     """生成跨捕获模式一致、跨 cell 隔离的合成问题。"""
     suffix = 0 if shape == "identical" else index
     return (
         f"{_CORPUS_MARKER} {temperature} {shape} "
-        f"concurrency-{concurrency} wave-{wave} item-{suffix} 的归档要求"
+        f"concurrency-{concurrency} sample-{measurement_id} "
+        f"item-{suffix} 的归档要求"
     )
 
 
@@ -476,18 +483,24 @@ async def _request_async(  # noqa: PLR0913, PLR0917
 async def _run_http_wave(
     harness: ProductHarness,
     endpoint: str,
-    queries: Sequence[str],
+    query_batches: Sequence[Sequence[str]],
     *,
     mode: str,
     temperature: str,
-) -> tuple[
-    tuple[_Sample, ...],
-    RetrievalCacheMetrics,
-    RetrievalCacheMetrics,
-    SingleflightMetrics,
-    SingleflightMetrics,
-]:
-    """在一个真实 ASGI 应用实例上预热并执行一次并发波次。"""
+) -> _WaveOutcome:
+    """在一个真实 ASGI 应用实例上预热并执行一次独立波次。
+
+    Args:
+        harness: 当前捕获模式的 Product 测试运行时。
+        endpoint: Product 查询 HTTP 路径。
+        query_batches: 在同一 Session 内顺序执行的并发请求批次。
+        mode: 当前 Trace 捕获模式。
+        temperature: cold 或 warm 缓存状态。
+
+    Returns:
+        波次样本、逐批结果来源及前后资源指标。
+
+    """
     transport = httpx.ASGITransport(
         app=create_product_app(harness.runtime),
         client=("127.0.0.1", 50_000),
@@ -508,7 +521,10 @@ async def _run_http_wave(
         headers = {"X-CSRF-Token": csrf}
         try:
             if temperature == "warm":
-                for query in dict.fromkeys(queries):
+                warm_queries = dict.fromkeys(
+                    query for batch in query_batches for query in batch
+                )
+                for query in warm_queries:
                     response = await client.post(
                         endpoint,
                         headers=headers,
@@ -525,23 +541,38 @@ async def _run_http_wave(
             singleflight_before = (
                 harness.runtime.profiles.singleflight_metrics()
             )
-            start = asyncio.Event()
-            tasks = tuple(
-                asyncio.create_task(
-                    _request_async(
-                        client,
-                        endpoint,
-                        headers,
-                        query,
-                        mode,
-                        start,
+            samples: list[_Sample] = []
+            batch_origins: list[dict[str, int]] = []
+            for queries in query_batches:
+                start = asyncio.Event()
+                tasks = tuple(
+                    asyncio.create_task(
+                        _request_async(
+                            client,
+                            endpoint,
+                            headers,
+                            query,
+                            mode,
+                            start,
+                        )
+                    )
+                    for query in queries
+                )
+                await asyncio.sleep(0)
+                start.set()
+                batch_samples = tuple(await asyncio.gather(*tasks))
+                samples.extend(batch_samples)
+                batch_origins.append(
+                    dict(
+                        sorted(
+                            Counter(
+                                sample.result_origin or "unknown"
+                                for sample in batch_samples
+                                if sample.http_status == 200
+                            ).items()
+                        )
                     )
                 )
-                for query in queries
-            )
-            await asyncio.sleep(0)
-            start.set()
-            samples = tuple(await asyncio.gather(*tasks))
             harness.runtime.traces.recorder.flush()
             cache_after = harness.runtime.retrieval_runtime.cache.metrics()
             singleflight_after = harness.runtime.profiles.singleflight_metrics()
@@ -552,12 +583,13 @@ async def _run_http_wave(
             )
             if revoked.status_code != 204:
                 raise AssertionError("性能测量 Session 撤销失败。")
-    return (
-        samples,
-        cache_before,
-        cache_after,
-        singleflight_before,
-        singleflight_after,
+    return _WaveOutcome(
+        samples=tuple(samples),
+        batch_origins=tuple(batch_origins),
+        cache_before=cache_before,
+        cache_after=cache_after,
+        singleflight_before=singleflight_before,
+        singleflight_after=singleflight_after,
     )
 
 
@@ -689,34 +721,32 @@ def _run_cell_wave(  # noqa: PLR0913
     shape: str,
     concurrency: int,
     wave: int,
-) -> tuple[
-    tuple[_Sample, ...],
-    RetrievalCacheMetrics,
-    RetrievalCacheMetrics,
-    SingleflightMetrics,
-    SingleflightMetrics,
-]:
+    repetitions: int = 1,
+) -> _WaveOutcome:
     """执行一个并发 HTTP 波次并在返回前排空后台 Trace writer。"""
     endpoint = (
         f"/api/v1/projects/{project_id}/knowledge-bases/"
         f"{knowledge_base_id}:search"
     )
     request_mode = "SAFE" if mode == "NONE" else mode
-    queries = [
-        _query_text(
-            temperature,
-            shape,
-            concurrency,
-            index,
-            wave,
+    query_batches = tuple(
+        tuple(
+            _query_text(
+                temperature,
+                shape,
+                concurrency=concurrency,
+                index=index,
+                measurement_id=f"{wave}-{repetition}",
+            )
+            for index in range(concurrency)
         )
-        for index in range(concurrency)
-    ]
+        for repetition in range(repetitions)
+    )
     return asyncio.run(
         _run_http_wave(
             harness,
             endpoint,
-            queries,
+            query_batches,
             mode=request_mode,
             temperature=temperature,
         )
@@ -757,6 +787,7 @@ def _summarize_cell(  # noqa: PLR0913
     )
     return {
         "cache_delta": _metric_delta(cache_before, cache_after),
+        "batches": len(accumulator.batch_origins),
         "concurrency": concurrency,
         "errors": Counter(
             sample.error_code or "none"
@@ -807,6 +838,7 @@ def _summarize_cell(  # noqa: PLR0913
         "wave_latencies": accumulator.wave_latencies,
         "wave_origins": accumulator.wave_origins,
         "waves": len(accumulator.wave_origins),
+        "batch_origins": accumulator.batch_origins,
     }
 
 
@@ -846,6 +878,31 @@ def _run_cell(  # noqa: PLR0913
         concurrency=concurrency,
         accumulator=accumulator,
     )
+
+
+def _comparison_sampling_plan(
+    concurrency: int,
+    minimum_samples: int,
+    minimum_waves: int,
+) -> tuple[int, int]:
+    """计算尾延迟比较的独立 wave 数与每 wave 重复批次。
+
+    Args:
+        concurrency: 每个并发批次的请求数。
+        minimum_samples: 每个 NONE/SAFE cell 的最小计时样本数。
+        minimum_waves: 每个 cell 的最小独立调度波次数。
+
+    Returns:
+        独立 wave 数与每个 wave 内顺序执行的批次数。
+
+    """
+    if concurrency <= 0 or minimum_samples <= 0 or minimum_waves <= 0:
+        raise AssertionError("性能采样参数必须是正整数。")
+    repetitions = max(
+        1,
+        math.ceil(minimum_samples / (minimum_waves * concurrency)),
+    )
+    return minimum_waves, repetitions
 
 
 def _stream_probe(
@@ -1106,9 +1163,12 @@ def _evaluate(
                 trace,
             )
             if cell["temperature"] == "cold" and cell["shape"] == "identical":
-                wave_origins = cast(list[dict[str, int]], cell["wave_origins"])
-                fresh_per_wave = [
-                    origins.get("fresh", 0) for origins in wave_origins
+                batch_origins = cast(
+                    list[dict[str, int]],
+                    cell["batch_origins"],
+                )
+                fresh_per_batch = [
+                    origins.get("fresh", 0) for origins in batch_origins
                 ]
                 add(
                     "singleflight_one_fresh:" + str(cell["concurrency"]),
@@ -1118,9 +1178,9 @@ def _evaluate(
                             limits["identical_cold_max_fresh_executions"],
                             "identical_cold_max_fresh_executions",
                         )
-                        for fresh in fresh_per_wave
+                        for fresh in fresh_per_batch
                     ),
-                    {"fresh_per_wave": fresh_per_wave},
+                    {"fresh_per_batch": fresh_per_batch},
                 )
     return all(bool(check["passed"]) for check in checks), checks
 
@@ -1188,6 +1248,7 @@ def _run_paired_baselines(
     concurrencies: Sequence[int],
     minimum_samples: int,
     minimum_waves: int,
+    minimum_comparison_samples: int,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -1208,9 +1269,10 @@ def _run_paired_baselines(
                 for shape in ("unique", "identical")
             )
             for index, (concurrency, shape) in enumerate(cell_specs):
-                waves = max(
+                waves, repetitions = _comparison_sampling_plan(
+                    concurrency,
+                    max(minimum_samples, minimum_comparison_samples),
                     minimum_waves,
-                    math.ceil(minimum_samples / concurrency),
                 )
                 accumulators = {
                     "NONE": _CellAccumulator(),
@@ -1234,6 +1296,7 @@ def _run_paired_baselines(
                                 shape=shape,
                                 concurrency=concurrency,
                                 wave=wave,
+                                repetitions=repetitions,
                             )
                         )
                 for mode in ("NONE", "SAFE"):
@@ -1338,6 +1401,10 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
         thresholds["minimum_comparison_waves_per_cell"],
         "minimum_comparison_waves_per_cell",
     )
+    minimum_comparison_samples = _integer(
+        thresholds["minimum_comparison_samples_per_cell"],
+        "minimum_comparison_samples_per_cell",
+    )
     cells: list[dict[str, object]] = []
     stream_probes: list[dict[str, object]] = []
     cancellation: dict[str, object] | None = None
@@ -1348,6 +1415,7 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
             concurrencies,
             minimum_samples,
             minimum_comparison_waves,
+            minimum_comparison_samples,
         )
     )
     cells.extend(paired_cells)
@@ -1389,7 +1457,7 @@ def _run_matrix(tmp_path: Path) -> dict[str, object]:
         },
         "passed": passed
         and all(bool(item["final_seen"]) for item in stream_probes),
-        "report_schema": "v3-05-product-http-performance-v3",
+        "report_schema": "v3-05-product-http-performance-v4",
         "source_revision": revision,
         "stream_probes": stream_probes,
         "thresholds": thresholds,
@@ -1434,7 +1502,7 @@ def _run_isolated_performance_gate(tmp_path: Path) -> None:
         check=False,
         capture_output=True,
         text=True,
-        timeout=1800,
+        timeout=3600,
     )
     failure_output = "\n".join(
         part[-8000:] for part in (completed.stdout, completed.stderr) if part
@@ -1469,3 +1537,16 @@ def test_v3_05_product_http_performance_gate(tmp_path: Path) -> None:
         ensure_ascii=False,
         sort_keys=True,
     )
+
+
+def test_comparison_sampling_plan_balances_tail_samples() -> None:
+    """验证低并发通过顺序 batch 补样且保留独立 wave 数。"""
+    expected = {1: (40, 8), 8: (40, 1), 16: (40, 1)}
+    for concurrency, plan in expected.items():
+        waves, repetitions = _comparison_sampling_plan(
+            concurrency,
+            minimum_samples=320,
+            minimum_waves=40,
+        )
+        assert (waves, repetitions) == plan
+        assert waves * repetitions * concurrency >= 320
