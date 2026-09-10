@@ -121,6 +121,36 @@ class CapabilityUnavailable(RagError):
     default_code = "CAPABILITY_UNAVAILABLE"
 
 
+class QueryCancelled(Exception):
+    """协作取消终止查询，不属于可缓存或可重试的业务错误。"""
+
+    def __init__(
+        self,
+        reason_code: str,
+        *,
+        provider_calls: tuple[ProviderCall, ...] = (),
+    ) -> None:
+        """保留取消前已经发生的脱敏 Provider 调用。
+
+        Args:
+            reason_code: 内部稳定取消原因，不包含请求正文。
+            provider_calls: 取消前已经结算的脱敏调用。
+
+        Returns:
+            无返回值；初始化取消异常。
+
+        """
+        self.reason_code = reason_code
+        self.provider_calls = provider_calls
+        super().__init__(reason_code)
+
+
+class StreamDeliveryError(RagError):
+    """已有公开 claim 后流式生成无法形成权威 final。"""
+
+    default_code = "STREAM_PARTIAL_FAILED"
+
+
 class PolicyDenied(RagError):
     """数据出网或项目策略拒绝操作。"""
 

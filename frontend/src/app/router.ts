@@ -10,6 +10,7 @@ export const routes = {
   retrieval: "/retrieval",
   chat: "/chat",
   history: "/history",
+  traces: "/operational-traces",
   modelServices: "/model-services",
   retrievalProfiles: "/retrieval-profiles",
   system: "/system",

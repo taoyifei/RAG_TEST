@@ -12,7 +12,9 @@ from typing import cast
 from rag_app.product.os_risk_review import (
     ReviewContext,
     apply_review,
+    load_freshness_policy,
     load_review_inputs,
+    validate_scan_freshness,
 )
 
 _STATUSES = frozenset({"PASS", "FAIL", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"})
@@ -248,6 +250,25 @@ def evidence_identity(name: str, identity: Mapping[str, str]) -> dict[str, str]:
     return {key: identity[key] for key in required if key in identity}
 
 
+def _current_os_risk(
+    record: Mapping[str, object], root: Path
+) -> dict[str, object]:
+    """按当前时钟重新计算已有不可变扫描、处置与时效政策。"""
+    payload, overlay, scan_path = load_review_inputs(record, root)
+    current = vulnerability_report(
+        payload, overlay=overlay, root=root, scan_path=scan_path
+    )
+    if current["status"] != "PASS":
+        return current
+    policy = load_freshness_policy(record, root)
+    current["freshness"] = validate_scan_freshness(
+        cast(dict[str, object], current["scan_identity"]),
+        policy,
+        datetime.now(UTC),
+    )
+    return current
+
+
 def _checked_record(
     name: str,
     record: Mapping[str, object],
@@ -289,10 +310,7 @@ def _checked_record(
         result.update(status="FAIL", reason="EVIDENCE_COMMAND_FAILED")
     if name == "os_risk" and result.get("status") == "PASS":
         try:
-            payload, overlay, scan_path = load_review_inputs(record, root)
-            current = vulnerability_report(
-                payload, overlay=overlay, root=root, scan_path=scan_path
-            )
+            current = _current_os_risk(record, root)
         except (ValueError, OSError, TypeError) as error:
             result.update(
                 status="BLOCKED",
@@ -511,20 +529,29 @@ def vulnerability_report(
             "findings": [],
         }
     findings: list[dict[str, object]] = []
-    for result in cast(list[dict[str, object]], payload.get("Results", [])):
-        packages = {
-            item.get("ID"): item
-            for item in cast(
-                list[dict[str, object]], result.get("Packages") or []
-            )
+    for result_index, result in enumerate(
+        cast(list[dict[str, object]], payload.get("Results", []))
+    ):
+        package_rows = cast(
+            list[dict[str, object]], result.get("Packages") or []
+        )
+        packages = {item.get("ID"): item for item in package_rows}
+        package_indexes = {
+            item.get("ID"): index for index, item in enumerate(package_rows)
         }
-        for item in cast(
-            list[dict[str, object]], result.get("Vulnerabilities") or []
+        for vulnerability_index, item in enumerate(
+            cast(list[dict[str, object]], result.get("Vulnerabilities") or [])
         ):
             if item.get("Severity") not in {"HIGH", "CRITICAL"}:
                 continue
             package_id = f"{item.get('PkgName')}@{item.get('InstalledVersion')}"
             package = packages.get(package_id, {})
+            identifier = cast(
+                dict[str, object],
+                item.get("PkgIdentifier") or package.get("Identifier") or {},
+            )
+            layer_value = item.get("Layer") or package.get("Layer") or {}
+            layer = cast(dict[str, object], layer_value)
             source_version = str(package.get("SrcVersion") or "")
             if package.get("SrcRelease"):
                 source_version += f"-{package['SrcRelease']}"
@@ -536,10 +563,25 @@ def vulnerability_report(
                     "package": item.get("PkgName"),
                     "installed_version": item.get("InstalledVersion"),
                     "fixed_version": item.get("FixedVersion") or None,
+                    "vulnerability_status": item.get("Status") or None,
                     "severity": item.get("Severity"),
+                    "severity_source": item.get("SeveritySource") or None,
                     "target": result.get("Target"),
+                    "target_class": result.get("Class"),
+                    "target_type": result.get("Type"),
+                    "package_id": item.get("PkgID") or package_id,
+                    "purl": identifier.get("PURL"),
+                    "arch": package.get("Arch"),
+                    "layer_digest": layer.get("Digest"),
+                    "layer_diff_id": layer.get("DiffID"),
                     "source_package": package.get("SrcName"),
                     "source_version": source_version or None,
+                    "raw_mapping": {
+                        "result_index": result_index,
+                        "vulnerability_index": vulnerability_index,
+                        "package_index": package_indexes.get(package_id),
+                        "fingerprint": item.get("Fingerprint"),
+                    },
                     "reachability": "NOT_ASSESSED",
                     "mitigation": "NOT_ASSESSED",
                     "risk_accepted": False,
@@ -551,6 +593,17 @@ def vulnerability_report(
     report: dict[str, object] = {
         "status": "FAIL" if fixable else "BLOCKED" if findings else "PASS",
         "image_id": metadata["ImageID"],
+        "artifact_id": payload.get("ArtifactID"),
+        "artifact_name": payload.get("ArtifactName"),
+        "local_repo_digests": metadata.get("RepoDigests") or [],
+        "platform": {
+            "os": cast(
+                dict[str, object], metadata.get("ImageConfig") or {}
+            ).get("os"),
+            "architecture": cast(
+                dict[str, object], metadata.get("ImageConfig") or {}
+            ).get("architecture"),
+        },
         "os": metadata["OS"],
         "scanned_at": payload.get("CreatedAt"),
         "scanner": payload.get("Trivy"),

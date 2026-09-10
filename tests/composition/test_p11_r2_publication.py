@@ -1,12 +1,16 @@
 """候选方案发布失败、竞争和跨切换查询的行为回归。"""
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from rag_app.adapters.stores.sqlite_profile_publication import (
+    _assert_validations,
+)
 from rag_app.composition.product_runtime import _product_status
-from rag_app.core.errors import IndexCorrupt, ProviderUnavailable
+from rag_app.core.errors import Conflict, IndexCorrupt, ProviderUnavailable
 from rag_app.core.models import KnowledgeBaseScope, SearchRequest
 from rag_app.product.models import (
     ImpactKind,
@@ -159,6 +163,32 @@ def test_competing_drafts_cannot_overwrite_winning_publication(
         )
         == pointer
     )
+
+
+def test_publication_allows_only_bounded_validation_clock_correction(
+    indexed: tuple[ProductHarness, str, str, str, str],
+) -> None:
+    """事务校验允许小幅时钟回拨，但不接受任意未来时间。"""
+    harness = indexed[0]
+    now = datetime.now(UTC)
+    with harness.runtime.connections.transaction(write=True) as connection:
+        validation_ids = tuple(
+            str(row[0])
+            for row in connection.execute(
+                "SELECT validation_id FROM provider_validation_runs"
+            )
+        )
+        connection.execute(
+            "UPDATE provider_validation_runs SET finished_at=?",
+            ((now + timedelta(seconds=1)).isoformat(),),
+        )
+        _assert_validations(connection, validation_ids, now.isoformat())
+        connection.execute(
+            "UPDATE provider_validation_runs SET finished_at=?",
+            ((now + timedelta(seconds=10)).isoformat(),),
+        )
+        with pytest.raises(Conflict, match="Provider 验证已失效"):
+            _assert_validations(connection, validation_ids, now.isoformat())
 
 
 def test_cancelled_candidate_and_expired_writer_cannot_activate(

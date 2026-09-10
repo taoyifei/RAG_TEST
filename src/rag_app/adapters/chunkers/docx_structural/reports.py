@@ -6,6 +6,7 @@ import math
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 
+from rag_app.adapters.chunkers.docx_structural.atoms import has_visible_text
 from rag_app.core.models import (
     Chunk,
     ChunkingPolicy,
@@ -52,6 +53,14 @@ def build_chunking_report(
     ]
     list_nodes = [
         node for node in document_ir.nodes if node.kind is NodeKind.LIST_ITEM
+    ]
+    whitespace_only_citable_nodes = [
+        node
+        for node in document_ir.nodes
+        if node.text_payload is not None
+        and bool(node.text_payload.exact_text)
+        and not has_visible_text(node.text_payload.exact_text)
+        and _is_citable_node(node, policy)
     ]
     represented_rows = _represented_ancestors(
         represented_nodes,
@@ -151,6 +160,12 @@ def build_chunking_report(
             for node in list_nodes
         ),
         represented_list_label_count=represented_labels,
+        whitespace_only_citable_node_count=len(whitespace_only_citable_nodes),
+        whitespace_only_citable_char_count=sum(
+            len(node.text_payload.exact_text)
+            for node in whitespace_only_citable_nodes
+            if node.text_payload is not None
+        ),
         orphan_note_count=sum(
             dict(chunk.metadata).get("orphan") is True
             for chunk in chunks
@@ -183,7 +198,7 @@ def _source_coverage(
         node.node_id: len(node.text_payload.exact_text)
         for node in document_ir.nodes
         if node.text_payload is not None
-        and node.text_payload.exact_text
+        and has_visible_text(node.text_payload.exact_text)
         and _is_citable_node(node, policy)
     }
     intervals: defaultdict[str, list[tuple[int, int]]] = defaultdict(list)

@@ -3,7 +3,7 @@ import { api, type ChunkPage, type RevisionInspection } from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
 import { useConsole } from "../state/console-context";
 
-export function RevisionPage() {
+export function RevisionPage({ go }: { go?: (path: string) => void }) {
   const { tokens, scope } = useConsole();
   const [revision, setRevision] = useState<RevisionInspection>();
   const [chunks, setChunks] = useState<ChunkPage>();
@@ -55,6 +55,22 @@ export function RevisionPage() {
         </div>
         <StatusBadge value={revision.active ? "active" : "inactive"} />
       </div>
+      {go && (
+        <button
+          className="secondary"
+          onClick={() => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("revision_id", revision.revision_id);
+            url.searchParams.delete("trace_id");
+            url.searchParams.delete("job_id");
+            url.searchParams.delete("document_id");
+            window.history.replaceState({}, "", url.pathname + url.search);
+            go("/operational-traces");
+          }}
+        >
+          打开技术 Trace
+        </button>
+      )}
       <div className="metric-grid">
         <article>
           <span>文档</span>

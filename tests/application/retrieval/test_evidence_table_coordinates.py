@@ -276,6 +276,78 @@ def test_duplicate_row_labels_do_not_guess_between_different_values() -> None:
     assert not {"63 ℃", "95 ℃"} & {item.citation_text for item in evidence}
 
 
+def test_verified_merged_row_uses_original_logical_coordinate() -> None:
+    candidate = _table(
+        rows=(
+            ("型号", "单位", "日期"),
+            ("ZX-17", "27 mm", "2026-01-01"),
+            ("ZX-17", "28 mm", "2026-02-01"),
+        )
+    )
+    chunk = candidate.hydrated.chunk
+    spans = list(chunk.source_spans)
+    label_indexes = [
+        index
+        for index, span in enumerate(spans)
+        if chunk.citation_text[span.chunk_start_char : span.chunk_end_char]
+        == "ZX-17"
+    ]
+    original = spans[label_indexes[0]]
+    spans[label_indexes[1]] = spans[label_indexes[1]].model_copy(
+        update={
+            "node_id": original.node_id,
+            "source_anchor": original.source_anchor,
+            "structural_path": original.structural_path,
+            "span_type": SourceSpanKind.REPEATED_CONTEXT,
+            "is_repeated": True,
+            "source_start_char": original.source_start_char,
+            "source_end_char": original.source_end_char,
+        }
+    )
+
+    def _node(row: int, column: int) -> str:
+        if row == 2 and column == 0:
+            row = 1
+        return f"node_{1000 + row * 10 + column:032x}"
+
+    atoms = []
+    for row in range(3):
+        coordinates = [
+            f"r{row}:c{column}:rs{2 if row == 1 and column == 0 else 1}:cs1"
+            for column in range(3)
+        ]
+        atoms.append(
+            {
+                "metadata": {
+                    "row_index": row,
+                    "cell_coordinates": coordinates,
+                    "cell_source_node_ids": {
+                        str(column): [_node(row, column)] for column in range(3)
+                    },
+                }
+            }
+        )
+    chunk = chunk.model_copy(
+        update={
+            "source_spans": tuple(spans),
+            "metadata": freeze_json_object({"atoms": atoms}),
+        }
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(update={"chunk": chunk})
+        }
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(),
+        context=_context("ZX-17 的单位数值是多少"),
+    )
+
+    assert [item.citation_text for item in evidence] == ["27 mm"]
+
+
 def test_table_answer_respects_token_budget_and_existing_caps() -> None:
     first = _table()
     second = _table(2, document_number=3)
@@ -310,3 +382,22 @@ def test_explicit_numeric_query_uses_coordinates_over_unit_preferences() -> (
     )
 
     assert [item.citation_text for item in evidence] == ["41 L/min"]
+
+
+def test_identifier_table_measurement_without_question_mark_uses_column() -> (
+    None
+):
+    candidate = _table(
+        rows=(
+            ("型号", "单位", "日期"),
+            ("ZX-17", "27 mm", "2026-01-01"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(),
+        context=_context("ZX-17 表格单位数值"),
+    )
+
+    assert [item.citation_text for item in evidence] == ["27 mm"]

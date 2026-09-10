@@ -3,6 +3,14 @@
 `docx-ooxml-v4` 直接读取 OOXML package，输出 Document IR V1。下表中的状态只描述
 Parser 表示能力，不代表 Word 排版还原、OCR 或检索质量。
 
+旧版二进制 DOC 不直接交给 OOXML Parser。默认先由资源受限、无网络的 LibreOffice
+转换器生成 DOCX，移除派生 OOXML 的外部关系并完成安全清洗，再由同一个
+`docx-ooxml-v4` 处理表格、媒体、Artifact 和 Chunk。Document/Version 身份仍来自
+原 DOC 字节；派生节点标记为 `converted_instance`。转换实例中的媒体可以是
+`partial`，未发现媒体时仍只能记为 `unknown`，不能据此声称原 DOC 没有图片。
+只有转换器不可用时才使用有界 antiword fallback；该路径仅生成段落纯文本，
+`media_inventory=unknown`，并明确记录 `LEGACY_DOC_FLATTENED_TEXT`。
+
 | 能力 | 状态 | 合同边界 |
 |---|---|---|
 | 主正文段落与原始 block 顺序 | full | 支持段落、表格、普通内容控件、customXml 与 final-view 修订 wrapper。 |

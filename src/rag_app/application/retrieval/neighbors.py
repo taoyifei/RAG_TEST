@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
@@ -35,6 +36,8 @@ class NeighborExpander:
         candidates: tuple[RankedChunk, ...],
         mode: str,
         policy: RetrievalPolicy,
+        *,
+        source_qualifier: str | None = None,
     ) -> ExpansionOutcome:
         """验证双向链接并拒绝跨 document/section/group。
 
@@ -43,6 +46,7 @@ class NeighborExpander:
             candidates: 已重排或明确 bypass 的 canonical 候选。
             mode: none、same_group、table 或 section。
             policy: 邻居数量和 section 上限。
+            source_qualifier: 原问中的可选来源限定，仅用于安排结构扩展优先级。
 
         Returns:
             扩展候选及可审计的安全降级原因。
@@ -67,7 +71,10 @@ class NeighborExpander:
                 and _has_table_coordinates(candidates)
             ):
                 expanded = self._expand_table_context(
-                    snapshot, candidates, policy
+                    snapshot,
+                    candidates,
+                    policy,
+                    source_qualifier=source_qualifier,
                 )
             else:
                 expanded = self._expand_links(
@@ -82,13 +89,18 @@ class NeighborExpander:
         snapshot: ActiveRevisionQuerySnapshot,
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
+        *,
+        source_qualifier: str | None,
     ) -> tuple[RankedChunk, ...]:
         """取实际章节开头表头，并在候选上限内闭合被切开的逻辑行。"""
         originals = _original_candidates(candidates)
         context: dict[str, RankedChunk] = {}
         limit = max(len(candidates), policy.fusion_candidate_limit)
         # 每个种子先闭合同组来源链，防止无关章节铺满窗口后留下半个职责行。
-        for seed in candidates:
+        seeds = _prioritize_uniquely_qualified_source(
+            candidates, source_qualifier
+        )
+        for seed in seeds:
             expanded: tuple[RankedChunk, ...] = (seed,)
             for _ in range(min(policy.max_evidence_items, 8)):
                 additional = self._expand_links(
@@ -230,6 +242,42 @@ def _has_table_coordinates(candidates: tuple[RankedChunk, ...]) -> bool:
         for candidate in candidates
         if candidate.hydrated.chunk.role.value == "table"
         for span in candidate.hydrated.chunk.source_spans
+    )
+
+
+def _prioritize_uniquely_qualified_source(
+    candidates: tuple[RankedChunk, ...], source_qualifier: str | None
+) -> tuple[RankedChunk, ...]:
+    """让唯一来源限定的种子先使用表格闭合预算。
+
+    限定未命中或同时命中多个文档版本时保持原次序，避免有限扩展窗口
+    隐藏真实来源歧义。这里只调整上下文扩展顺序，不改变直接候选排名。
+    """
+    if source_qualifier is None:
+        return candidates
+    matching = tuple(
+        candidate
+        for candidate in candidates
+        if source_qualifier_matches(
+            candidate.hydrated.display_name,
+            candidate.hydrated.chunk.heading_path,
+            source_qualifier,
+        )
+    )
+    document_versions = {
+        candidate.hydrated.chunk.version.document_version_id
+        for candidate in matching
+    }
+    if len(document_versions) != 1:
+        return candidates
+    matching_ids = {candidate.hydrated.chunk.chunk_id for candidate in matching}
+    return (
+        *matching,
+        *(
+            candidate
+            for candidate in candidates
+            if candidate.hydrated.chunk.chunk_id not in matching_ids
+        ),
     )
 
 

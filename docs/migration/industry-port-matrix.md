@@ -65,3 +65,73 @@
   `REIMPLEMENT_LATER`；当前安全 Trace 不被删除或放宽。
 - 部署路径：`deployment/industry`、工业 bundle/corpus、服务器更新和恢复资产全部
   `REJECT_INDUSTRY_SPECIFIC`；通用分支不包含这些目录。
+
+## V3.2 / V3-04 复核增量（2026-09-09）
+
+本节不改写阶段 0 的逐提交审计，而是在 V3-00.6 至 V3-04 实际完成后复核当时的
+`REIMPLEMENT_LATER` 和新增用户感知能力。冻结远端仍为 main `af30f81`、Industry
+`5cc5d7b`，merge-base 为 `af30f81`；远端 Universal 为 `0505fac`，本地开发分支
+已前进但未 push、merge 或修改两个只读分支。
+
+### 默认入口与可比性
+
+| 分支 | 固定 SHA | 默认可达路径 | 本轮执行状态 |
+| --- | --- | --- | --- |
+| main | `af30f81` | `rag-app serve` → legacy app → `/api/chat` / 旧静态页 | 只读源码审计；未恢复旧运行环境 |
+| Industry | `5cc5d7b` | `rag-app serve` → legacy app → `/api/chat`，另有 Industry 部署资产 | 只读源码审计；未运行工业服务器、bundle 或 updater |
+| Universal 当前分支 | V3-04 行为 `7c41883`，收尾测试至 `03c36ae` | `rag-app serve` → Product Runtime → `/api/v1/...:answer` / React console | 默认 Product 的源码、loopback HTTP/TCP 和浏览器实际验证 |
+
+三者没有在同语料、模型、配置、硬件、预算和缓存状态下执行，因此 main/Industry
+作为 A 的质量与时延均为 `NOT_COMPARABLE`，不填 0，也不以旧源码测试替代 Product
+证据。
+
+### 用户感知能力矩阵
+
+| 能力 | main / Industry 实际路径与既有价值 | Universal 默认路径与处理 | 决策 | 主要测试/证据 | 未完成事项 |
+| --- | --- | --- | --- | --- | --- |
+| 默认 Product 生命周期 | legacy `src/rag_app/api/app.py`、`/api/chat`；缺当前 project/KB/document/revision 默认闭环 | `api/p09.py`、`composition/product_runtime.py`、SDK/Application/SQLite/Revision | `KEEP_CURRENT` | `tests/api/test_p09_e2e.py`、`tests/composition/test_product_runtime.py` | 不整体迁回旧 Runtime |
+| 原问保留与合法改写 | main/Industry 旧 rewrite 保留原问、失败回原问、最多一条改写 | `QueryAnalyzer` + typed semantics + rewrite guard；原问/硬约束权威，接受改写贯穿下游 | `ADAPT` | `tests/application/retrieval/test_query.py`、`test_rewrite_constraints.py`、`tests/e2e/test_v3_semantic_queries.py` | 真实 LLM rewrite 质量 `BLOCKED` |
+| 自然问法语义一致 | 旧路径对首轮普通口语和当前 Evidence 规则不可直接复用 | Analyzer/Planner/Lexical/Dense/Rerank/Evidence/Confidence 共用 `QuerySemantics` | `REPAIR` | `test_synonymous_questions_share_evidence_and_answer`、`test_synonymous_questions_are_equivalent_for_sync_and_streaming` | 开放域覆盖不由有限用例外推 |
+| Hybrid 候选 | legacy BM25/Dense/RRF 有可借鉴组合行为 | 当前 Exact/FTS/Dense、主备向量空间、RRF、Rerank；原问/改写按逻辑 family 防刷票 | `KEEP/ADAPT` | `tests/application/retrieval/test_fusion.py`、`test_query.py`、P08 Evaluation | 未授权 Lane B/C 不运行 |
+| 来源限定与跨文档同名角色 | Industry 的显式主体锚点方向有价值，但依赖旧 generation/evidence | 动态 source qualifier 在改写中保留；只有唯一 document version 匹配才优先闭合表格 | `REPAIR/ADAPT` | `tests/application/retrieval/test_descriptive_answers.py`、`test_neighbors.py` | 不唯一时仍需用户澄清 |
+| Evidence 与引用 | Industry `2c4cf22` 的来源编号门禁已在阶段 0 最小移植 | SourceSpan、node/逻辑表格坐标、完整关系链、Support ID/quote、active revision 校验 | `KEEP/REPAIR` | `test_evidence_precision.py`、`test_evidence_table_coordinates.py`、`test_grounded_claim_validation.py` | 真实生成质量未测 |
+| 正确/完整回答与合理回退 | 旧 generation/extractive fallback 可作行为参照，默认入口和缓存不同 | 模型 claim 校验后发布；无配置/授权/预算/失败可显式摘录回退；无 Evidence 拒答 | `ADAPT` | `tests/api/test_grounded_product.py`、`test_descriptive_answers.py`、`tests/e2e/test_v3_semantic_queries.py` | 真实 LLM 分母 0 |
+| 错误拒答与无依据作答 | Industry 主体支持可防部分无依据输出 | 数字/单位/否定/范围/时序/版本/关系硬约束，Dense 近似不能单独变成答案 | `KEEP/REPAIR` | `test_unsupported_relation_is_refused`、`test_grounded_claim_validation.py`、P08 4 个 negative | 未见自然语言仍需新 holdout |
+| 配置与实际调用可见 | 旧 UI/Trace 路径不可直接放入 Product | `result_origin`、本次 generation/rewrite 调用、cache/budget/auth/provider 状态分别展示 | `ADAPT` | `tests/api/test_grounded_product.py`、`frontend/src/pages/query-related.test.tsx` | 不把配置存在写成实际调用 |
+| DOCX 通用结构 | main/Industry 无当前 OOXML v4 + IR + Chunk v3 全合同 | 纯空白、表格、列表边界修复，正常三视图/顺序/SourceSpan golden 保留 | `KEEP/REPAIR` | `test_docx_contract_v3_00_6.py`、`test_docx_whitespace.py`、`test_v3_00_6_product_ingestion.py` | 非穷举 Word 生产器 |
+| legacy DOC 图文 | Industry 有 LibreOffice 转换方向，但无当前 Artifact/Revision 沙箱合同 | 受限 DOC→清洗 DOCX→当前 Parser/IR/Artifact/Chunk；source/derived/media 分离 | `ADAPT` | `test_doc_conversion.py`、`test_word_document.py`、`test_v3_01_doc_media.py` | 原格式媒体盘点可为 partial/unknown |
+| OCR | Industry 有本地 OCR revision/Bearer/限额/bbox/confidence 价值 | 统一 local/remote Port、来源类型、限额、cache identity、新 Revision；默认可关闭 | `ADAPT` | `tests/application/test_ocr_enrichment.py`、`test_product_ocr_adapters.py` | `OCR_LIVE_QUALITY=BLOCKED` |
+| 图关系 | 无可直接搬回的完整 Product 合同 | candidate/direction/ambiguity/review/occurrence；接纳后新 Revision 才可作为证据 | `SAFER_EQUIVALENT` | `tests/application/test_diagram_relations.py`、`tests/evaluation/test_v3_02_baseline.py` | `DIAGRAM_RELATION_LIVE_QUALITY=BLOCKED` |
+| Operational Trace | Industry Trace 的层级、候选、Provider span 方向有价值 | Product 双存储共享公开 trace ID；权限、TTL、导出、备份、fail-soft/full fail-closed | `ADAPT` | Trace store/API/UI/backup tests；V3-02 固定 Trace baseline | 真实生产容量未测 |
+| 真流与首内容 | Industry legacy `/api/chat` 有 NDJSON 流行为，但不满足 Product scope/claim 合同 | `rag-answer-sse-v1`；真实 TCP 在 Provider 未结束时发布已校验完整 claim | `ADAPT` | `test_tcp_streams_headers_and_validated_claim_before_provider_finishes`、`test_aliyun_chat_stream.py` | 真实 Provider TTFC `BLOCKED` |
+| 浏览器增量与停止 | 旧静态页不是当前 React Product | 增量暂存、唯一 final、AbortSignal、导航/KB 切换丢弃迟到事件 | `REPAIR` | `frontend/src/api/client.test.ts`、`frontend/e2e/console.spec.ts` | 生产代理缓冲未测 |
+| 取消、成本与撤权 | 旧路径无当前 QueryExecutor/History/Trace 一致结算合同 | 断连传播、不可中断占槽、实际 usage、无成功缓存、来源/Session/Token 在途重查 | `SAFER_EQUIVALENT` | `test_real_tcp_disconnect_keeps_slot_and_never_commits_success` 及三项撤权竞态 | 真实远程取消浪费分母 0 |
+| Industry updater/rollback/last-good | Industry 专用实现完整且与服务器布局绑定 | 不进入通用默认路径；只保留未来通用发布设计线索 | `DEFER/REJECT_INDUSTRY_SPECIFIC` | 阶段 0 逐提交审计 | 不属于本轮必修能力 |
+
+### V3-04 选择性继承结果
+
+阶段 0 的以下 `REIMPLEMENT_LATER` 已在当前 Product 中完成为通用实现，而不是复制
+Industry 模块：
+
+- UI 会话、CSRF、scoped token 和 Product API 由 P09/P10/P11 路径建立；
+- Operational Trace 在 V3-02 用 Product 双存储、保留期、权限和导出合同重实现；
+- generation/evidence 的显式主体与来源支持原则已经适配到 typed semantics、
+  SourceSpan、claim validation 和 source qualifier；
+- 真流、停止和成本结算在 V3-03 以 Product SSE 和 QueryExecutor 重实现。
+
+以下项目继续保持原判定：Industry `deployment/industry`、工业 corpus/bundle、服务器
+updater、rollback、last-good 和发布 journal 不进入通用默认产品。它们不是本轮
+DOCX、自然问法、图文、Evidence 或流式必修项的替代品。
+
+### 非回归证据与剩余限制
+
+V3-04 在相同公开合成数据、Parser/Chunker、`fts5-only` selected config 和离线
+Provider 边界下，对比修复前 `a760637` 与修复后 `7c41883`。Recall@5 均为 1.0；
+修复后 answerable accuracy、refusal F1、Citation document/chunk/validity 和
+Source range recall/precision/coverage/F1 均为 1.0，16 个 gate 全通过；安全计数
+仍全部为 0。详细 A/B/C、私有匿名聚合、holdout 复用限制及重建范围见
+`design/public/v3-04-unified-acceptance.md`。
+
+这只证明当前冻结回归集的选择性继承与非回归。main/Industry 仍为
+`NOT_COMPARABLE`；真实 LLM/OCR/视觉、生产代理、容量和发布安全批准没有由源码
+矩阵推断为完成。

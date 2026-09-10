@@ -31,11 +31,6 @@ services:
 
   app:
     image: ${RAG_APP_IMAGE:-docx-rag:v1-candidate}
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        VCS_REF: ${RAG_RELEASE_REVISION:-development-unset}
     restart: unless-stopped
     depends_on:
       qdrant:

@@ -12,8 +12,10 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
 from rag_app.product.catalog import validate_model
 from rag_app.product.control_store import ProductControlStore
+from rag_app.product.ocr_adapters import LOCAL_OCR_CONNECTION_ID
 
 _SHA256_LENGTH = 64
+_LOCAL_OCR_MODEL = "pp-ocrv5-server"
 
 
 class KnowledgeBaseModelSettings(FrozenModel):
@@ -115,6 +117,12 @@ class ProductModelSettings:
             (settings.ocr_connection_id, settings.ocr_model, "image.ocr"),
         ):
             if connection_id and model:
+                if connection_id == LOCAL_OCR_CONNECTION_ID:
+                    if operation != "image.ocr" or model != _LOCAL_OCR_MODEL:
+                        raise ValueError(
+                            "本地 OCR 只允许固定 PP-OCRv5 模型身份。"
+                        )
+                    continue
                 provider_connection = self.control.get_connection(connection_id)
                 if not provider_connection.enabled:
                     raise ValueError("模型连接已停用。")
@@ -148,9 +156,9 @@ class ProductModelSettings:
         identity: dict[str, object] = {
             "settings": settings.model_dump(),
             "prompt": "grounded-chat-v2",
-            "rewrite": "bounded-rewrite-v2",
+            "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v3",
-            "answer_selection": "descriptive-support-v2",
+            "answer_selection": "shared-query-semantics-v1",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

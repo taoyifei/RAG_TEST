@@ -16,7 +16,11 @@ from qdrant_client import QdrantClient
 
 from rag_app._build_revision import SOURCE_REVISION
 from rag_app.api.product import create_product_lifespan_app
-from rag_app.assets import AssetPaths, verify_offline_assets
+from rag_app.assets import (
+    AssetPaths,
+    verify_offline_assets,
+    verify_product_asset_manifest,
+)
 from rag_app.composition.product_runtime import ProductRuntimeSettings
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
@@ -315,6 +319,14 @@ def _run_read_only_command(arguments: argparse.Namespace) -> int | None:
             )
         )
         return 0
+    if arguments.command == "product-asset-selfcheck":
+        product_asset_report = verify_product_asset_manifest(
+            root=arguments.root,
+            manifest_path=arguments.manifest,
+            expected_source_revision=arguments.expected_revision,
+        )
+        _print_json(asdict(product_asset_report))
+        return 0
     return None
 
 
@@ -612,6 +624,20 @@ def _parser() -> argparse.ArgumentParser:
         "--frontend",
         type=Path,
         default=Path("/app/frontend"),
+    )
+    product_selfcheck = subparsers.add_parser(
+        "product-asset-selfcheck",
+        help="验证当前 Product 镜像内的权威资产清单。",
+    )
+    product_selfcheck.add_argument("--root", type=Path, default=Path("/app"))
+    product_selfcheck.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("/app/product-assets.json"),
+    )
+    product_selfcheck.add_argument(
+        "--expected-revision",
+        default=SOURCE_REVISION,
     )
     return parser
 

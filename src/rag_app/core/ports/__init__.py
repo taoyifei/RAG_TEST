@@ -7,12 +7,14 @@ from rag_app.core.ports.blob_store import (
     BlobStorePort,
     BlobWriteRequest,
 )
+from rag_app.core.ports.cancellation import CancellationPort
 from rag_app.core.ports.chunk_validation import ChunkValidationPort
 from rag_app.core.ports.chunker import ChunkerPort
 from rag_app.core.ports.console_inspection import (
     ConsoleJobStorePort,
     ConsoleRevisionStorePort,
 )
+from rag_app.core.ports.conversation import ConversationPort
 from rag_app.core.ports.embedding import (
     EmbeddingPort,
     EmbeddingRouteRequest,
@@ -46,10 +48,12 @@ __all__ = [
     "BlobReadResult",
     "BlobStorePort",
     "BlobWriteRequest",
+    "CancellationPort",
     "ChunkValidationPort",
     "ChunkerPort",
     "ConsoleJobStorePort",
     "ConsoleRevisionStorePort",
+    "ConversationPort",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",

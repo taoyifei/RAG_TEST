@@ -8,7 +8,8 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 
-from rag_app.core.models import QueryAnalysis
+from rag_app.application.retrieval.semantics import parse_query_semantics
+from rag_app.core.models import QueryAnalysis, RequestedAnswerType
 
 
 class SupportStatus(StrEnum):
@@ -89,8 +90,14 @@ _REQUEST_WORDS = re.compile(
     r"^请问|^请|想|自己的|自己|应该|应当|应|办理|需要|的|是多少|多少|多大|是什么|什么|是否|怎样|如何|怎么|哪里|哪位|工作人员|找谁|谁|何时|以后|最迟|现在|[？?，,。\s]"
 )
 _QUESTION = re.compile(
-    r"谁|什么|多少|多大|如何|怎么|怎样|哪|何时|是否|能否|几|[?？]"
+    r"谁|什么|啥|多少|多大|如何|怎么|怎样|哪|何时|是否|能否|几|[?？]"
 )
+_LOOKUP_SCAFFOLDING = re.compile(
+    r"查找|搜索|检索|表格|记录|文档|内容|信息|条目"
+)
+_MIN_ENUMERATION_ITEMS = 2
+_MIN_DOMINANT_FRAGMENT_SHARE = 0.45
+_MIN_IDENTIFIER_CONTEXT_OVERLAP = 0.25
 
 
 def _normalized(text: str) -> str:
@@ -105,23 +112,64 @@ def _normalized(text: str) -> str:
     return value
 
 
+def _analysis_query(analysis: QueryAnalysis) -> str:
+    """返回证据门应共同消费的已解析查询。"""
+    return analysis.resolved_query or analysis.normalized_query
+
+
 def _request(analysis: QueryAnalysis) -> tuple[str, str, str]:
-    query = _normalized(analysis.normalized_query)
-    if re.search(r"谁(?!的)|哪位|找.{0,4}人员", query):
+    semantics = analysis.semantics
+    if (
+        semantics.target
+        and semantics.relation
+        and semantics.answer_type
+        in {
+            RequestedAnswerType.ENUMERATION,
+            RequestedAnswerType.COUNT,
+            RequestedAnswerType.ORDINAL_ITEM,
+            RequestedAnswerType.DUTIES,
+            RequestedAnswerType.PROCEDURE,
+        }
+    ):
+        return (
+            _normalized(semantics.target),
+            _normalized(semantics.relation),
+            semantics.answer_type.value,
+        )
+    query = _normalized(analysis.resolved_query or analysis.normalized_query)
+    requested: tuple[str, str, str] | None
+    identifier_only = (
+        analysis.identifiers
+        and not _QUESTION.search(query)
+        and not _literal_terms(
+            _identifier_residual(query, analysis.identifiers)
+        )
+    )
+    if identifier_only:
+        requested = (query, "字面查找", "FACT")
+    elif re.search(r"谁(?!的)|哪位|找.{0,4}人员", query):
         return _REQUEST_WORDS.sub("", query), "责任角色", "PERSON_OR_ROLE"
-    if re.search(r"数值.*单位|单位.*数值", query):
+    elif re.search(r"数值.*单位|单位.*数值", query):
         return _REQUEST_WORDS.sub("", query), "数值与单位", "MEASUREMENT"
+    else:
+        requested = _attribute_or_descriptive_request(query)
+    if requested is not None:
+        return requested
+    relation = "事实关系" if _QUESTION.search(query) else "字面查找"
+    return _REQUEST_WORDS.sub("", query), relation, "FACT"
+
+
+def _attribute_or_descriptive_request(
+    query: str,
+) -> tuple[str, str, str] | None:
+    """识别属性或描述类请求，供通用回退路径复用。"""
     for answer_type, pattern in _ATTRIBUTES:
         match = re.search(pattern, query)
         if match:
             target = _REQUEST_WORDS.sub("", query[: match.start()])
             target = re.sub(r"(?:保持|允许|储存)$", "", target)
             return target, match[0], answer_type
-    descriptive = descriptive_request(query)
-    if descriptive is not None:
-        return descriptive
-    relation = "事实关系" if _QUESTION.search(query) else "字面查找"
-    return _REQUEST_WORDS.sub("", query), relation, "FACT"
+    return descriptive_request(query)
 
 
 def descriptive_request(query: str) -> tuple[str, str, str] | None:
@@ -134,62 +182,133 @@ def descriptive_request(query: str) -> tuple[str, str, str] | None:
         对象、关系和描述类型三元组；不属于描述类问法时返回 None。
 
     """
-    query = _normalized(query)
-    if not re.search(r"哪些|什么|干啥|几种|列举|列出|职责|负责", query):
-        return None
-    # 仅将紧邻职责关系的修饰语归入关系，保留角色名称中的相同字词。
-    # 口语动作问法限定在句尾，避免截断名称中包含相同字词的角色。
-    duty = re.search(
-        r"(?:(?:具体|主要)(?:地)?)?"
-        r"(?:职责|负责(?:什么|哪些)(?:工作|事项|内容)?|"
-        r"(?P<colloquial>干(?:什么|啥|些什么)|做(?:什么|些什么))"
-        r"(?:工作|事项|内容)?[?？\s]*$)",
-        query,
-    )
-    if duty is not None and duty["colloquial"] is not None:
-        # 条件和操作顺序属于所问关系，不能被当成角色名或无条件职责。
-        prefix = query[: duty.start()]
-        if re.search(
-            r"如果|一旦|若|当.+时|之前|之后|以前|以后|期间|过程中|"
-            r"(?:先|再|然后|随后|接着|前|后|时)(?:应|要|需|应该|需要)?$",
-            prefix,
-        ):
-            return None
-    collection = re.search(r"工作模式|模式|类型|种类|类别|分类|方式", query)
-    match = duty or collection
-    if match is None:
-        return None
-    target = query[: match.start()]
-    target = re.sub(
-        r"请问|请列举|请列出|告诉我|我想知道|请|列举|列出|"
-        r"采用|有哪些|哪些|哪几种|需要承担|承担|主要|核心|的|"
-        r"[零一二三四五六七八九十百两\d]+(?:种|类)|[？?\s]",
-        "",
-        target,
-    )
-    if duty is not None:
-        # 文档限定与角色标签分开，来源选择仍按原问题与实际表格定位。
-        target = re.split(r"(?:规范|文档|制度|手册)(?:里|中)", target)[-1]
-    if not target:
+    semantics = parse_query_semantics(query)
+    if (
+        not semantics.target
+        or not semantics.relation
+        or semantics.answer_type
+        not in {
+            RequestedAnswerType.ENUMERATION,
+            RequestedAnswerType.COUNT,
+            RequestedAnswerType.ORDINAL_ITEM,
+            RequestedAnswerType.DUTIES,
+            RequestedAnswerType.PROCEDURE,
+        }
+    ):
         return None
     return (
-        target,
-        "职责" if duty else match[0],
-        "DUTIES" if duty else "ENUMERATION",
+        _normalized(semantics.target),
+        _normalized(semantics.relation),
+        semantics.answer_type.value,
     )
 
 
-def _literal_lookup_supports(query: str, text: str) -> bool:
+def _literal_lookup_supports(
+    query: str,
+    text: str,
+    *,
+    allow_partial: bool,
+) -> bool:
     """关键词查找只返回实际出现的词，不推导未提出的属性值。"""
     query = _normalized(query)
+    text = _normalized(text)
     if _QUESTION.search(query):
         return False
-    terms = re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", query)
-    actual = re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", text)
+    terms = _literal_terms(query)
+    actual = _literal_terms(text)
     if terms and Counter(terms) <= Counter(actual):
         return True
-    # 分隔的关键词可对应各自的真实表格单元格，不能补出未出现的值。
-    return len(query.split()) > 1 and text.strip() in query.split()
+    if not allow_partial:
+        return False
+    total = len(terms)
+    if total == 0:
+        return False
+    fragments = re.findall(
+        r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]+", query
+    )
+    return any(
+        fragment in text
+        and len(_literal_terms(fragment)) / total
+        >= _MIN_DOMINANT_FRAGMENT_SHARE
+        for fragment in fragments
+    )
+
+
+def _literal_terms(text: str) -> list[str]:
+    """返回用于有界字面覆盖判断的英文词、标识符和单个汉字。"""
+    return re.findall(r"[a-z0-9]+(?:[-_.][a-z0-9]+)*|[\u3400-\u9fff]", text)
+
+
+def _identifier_literal_supports(
+    analysis: QueryAnalysis,
+    clause: str,
+) -> bool:
+    """要求标识符完整命中，并用剩余词面排除同 ID 的无关来源。"""
+    query = _normalized(_analysis_query(analysis))
+    text = _normalized(clause)
+    identifiers = tuple(_normalized(item) for item in analysis.identifiers)
+    if not identifiers or any(item not in text for item in identifiers):
+        return False
+    if analysis.negation_signals and any(
+        _normalized(signal) not in text for signal in analysis.negation_signals
+    ):
+        return False
+    residual = _identifier_residual(query, identifiers)
+    residual_terms = _literal_terms(residual)
+    if not residual_terms:
+        return True
+    actual = Counter(_literal_terms(text))
+    required = Counter(residual_terms)
+    overlap = sum((required & actual).values()) / len(residual_terms)
+    return overlap >= _MIN_IDENTIFIER_CONTEXT_OVERLAP
+
+
+def _identifier_residual(
+    query: str,
+    identifiers: tuple[str, ...],
+) -> str:
+    """移除已验证标识符和无语义的查找载体词。"""
+    residual = query
+    for identifier in identifiers:
+        residual = residual.replace(_normalized(identifier), " ")
+    return _LOOKUP_SCAFFOLDING.sub(" ", residual)
+
+
+def _literal_clause_supports(
+    analysis: QueryAnalysis,
+    clause: str,
+) -> bool:
+    """在硬约束存在时禁止用局部字面片段补成完整证据。"""
+    allow_partial = not (
+        analysis.negation_signals
+        or analysis.numbers
+        or analysis.units
+        or analysis.date_version_signals
+        or analysis.quoted_phrases
+    )
+    return _literal_lookup_supports(
+        _analysis_query(analysis), clause, allow_partial=allow_partial
+    )
+
+
+def _identifier_relation_supports(
+    target: str,
+    answer_type: str,
+    clause: str,
+    analysis: QueryAnalysis,
+) -> bool:
+    """核验含标识符事实，避免同一标识符的无关关系借值。"""
+    if not all(item.casefold() in clause for item in analysis.identifiers):
+        return False
+    query = _normalized(_analysis_query(analysis))
+    if answer_type != "FACT":
+        return bool(_RELATION.search(clause)) or query in clause
+    if _identifier_literal_supports(analysis, clause):
+        return True
+    identifier_targets = {_normalized(item) for item in analysis.identifiers}
+    if target in identifier_targets and not analysis.negation_signals:
+        return True
+    return query in clause
 
 
 def _target_matches(target: str, text: str, *, strict: bool) -> bool:
@@ -259,6 +378,9 @@ def evaluate_span_support(
             for clause in re.split(r"[。；;\n]", text)
             if clause.strip()
         )
+    count_correction = supported and _source_corrects_count_premise(
+        analysis, text
+    )
     return AnswerSupport(
         status=SupportStatus.SUPPORTED
         if supported
@@ -271,9 +393,13 @@ def evaluate_span_support(
         requested_relation_or_attribute=relation,
         answer_type=answer_type,
         support_reason=(
-            "LITERAL_LOOKUP_SOURCE"
-            if relation == "字面查找"
-            else "SOURCE_RELATION_AND_VALUE"
+            "SOURCE_CORRECTS_COUNT_PREMISE"
+            if count_correction
+            else (
+                "LITERAL_LOOKUP_SOURCE"
+                if relation == "字面查找"
+                else "SOURCE_RELATION_AND_VALUE"
+            )
         )
         if supported
         else "REQUESTED_RELATION_NOT_SUPPORTED",
@@ -288,9 +414,15 @@ def _clause_supports(  # noqa: PLR0911
     clause: str,
     analysis: QueryAnalysis,
 ) -> bool:
-    if _UNKNOWN.search(clause) or answer_type in {"ENUMERATION", "DUTIES"}:
+    if _UNKNOWN.search(clause) or answer_type in {
+        "ENUMERATION",
+        "COUNT",
+        "ORDINAL_ITEM",
+        "DUTIES",
+        "PROCEDURE",
+    }:
         return not _UNKNOWN.search(clause) and _descriptive_clause_supports(
-            target, relation, answer_type, clause
+            target, relation, answer_type, clause, analysis
         )
     if answer_type in {"MONEY", "AREA", "CONTACT", "TEMPERATURE"}:
         # 不从逗号后另一个对象的金额或号码借值。
@@ -313,10 +445,12 @@ def _clause_supports(  # noqa: PLR0911
             and _typed_value_matches(answer_type, relation, part)
             for part in re.split(r"[，,]", clause)
         )
-    if relation == "字面查找" and _literal_lookup_supports(
-        analysis.normalized_query, clause
-    ):
-        return True
+    if relation == "字面查找":
+        return (
+            _identifier_literal_supports(analysis, clause)
+            if analysis.identifiers
+            else _literal_clause_supports(analysis, clause)
+        )
     if not _target_matches(target, clause, strict=False):
         return False
     if answer_type == "PERSON_OR_ROLE":
@@ -332,7 +466,7 @@ def _clause_supports(  # noqa: PLR0911
                 "拍照",
                 "提出",
             )
-            if word in _normalized(analysis.normalized_query)
+            if word in _normalized(_analysis_query(analysis))
         )
         return bool(_ROLE.search(clause)) and all(
             word in clause for word in actions
@@ -347,11 +481,11 @@ def _clause_supports(  # noqa: PLR0911
             )
         )
     if analysis.identifiers:
-        return all(
-            item.casefold() in clause for item in analysis.identifiers
-        ) and (
-            bool(_RELATION.search(clause))
-            or _normalized(analysis.normalized_query) in clause
+        return _identifier_relation_supports(
+            target,
+            answer_type,
+            clause,
+            analysis,
         )
     if analysis.quoted_phrases:
         return all(
@@ -360,13 +494,13 @@ def _clause_supports(  # noqa: PLR0911
     actions = tuple(
         word
         for word in ("先", "复核", "核对", "签字", "充电", "上架", "登记")
-        if word in _normalized(analysis.normalized_query)
+        if word in _normalized(_analysis_query(analysis))
     )
     if actions and not all(word in clause for word in actions):
         return False
     if actions:
         return bool(_RELATION.search(clause))
-    query = _normalized(analysis.normalized_query)
+    query = _normalized(_analysis_query(analysis))
     if re.search(r"哪里|何处|什么区域|在何|在哪", query):
         return bool(re.search(r"存放|位于|在|区域|于", clause))
     method = re.search(r"(?:如何|怎么|怎样)(.+)", query)
@@ -388,15 +522,25 @@ def _clause_supports(  # noqa: PLR0911
 
 
 def _descriptive_clause_supports(
-    target: str, relation: str, answer_type: str, clause: str
+    target: str,
+    relation: str,
+    answer_type: str,
+    clause: str,
+    analysis: QueryAnalysis,
 ) -> bool:
-    if answer_type == "ENUMERATION":
-        return (
+    if answer_type in {"ENUMERATION", "COUNT", "ORDINAL_ITEM"}:
+        supports_collection = (
             _target_matches(target, clause, strict=True)
             and relation in clause
             and bool(re.search(r"分为|分成|包括|包含|分别为|有|采用", clause))
             and bool(re.search(r"、|[“”\"]|(?:一|二|三|四|\d)[)）]", clause))
         )
+        if not supports_collection:
+            return False
+        if answer_type == "ORDINAL_ITEM" and analysis.semantics.ordinal:
+            count = _enumeration_item_count(clause)
+            return count is None or count >= analysis.semantics.ordinal
+        return True
     if answer_type == "DUTIES":
         return _target_matches(target, clause, strict=True) and bool(
             re.search(
@@ -404,7 +548,46 @@ def _descriptive_clause_supports(
                 clause.replace(target, "", 1),
             )
         )
+    if answer_type == "PROCEDURE":
+        bare_lead_in = re.search(
+            r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
+            r"[^。；;\n]{0,16}[:：。]?$",
+            clause,
+        )
+        return (
+            _target_matches(target, clause, strict=True)
+            and relation in clause
+            and bare_lead_in is None
+            and bool(
+                re.search(
+                    r"先.+(?:再|然后|随后|接着)|"
+                    r"(?:步骤|流程)(?:是|为|[:：])",
+                    clause,
+                )
+            )
+        )
     return False
+
+
+def _source_corrects_count_premise(analysis: QueryAnalysis, text: str) -> bool:
+    expected = analysis.semantics.expected_count
+    if expected is None:
+        return False
+    actual = _enumeration_item_count(text)
+    return actual is not None and actual != expected
+
+
+def _enumeration_item_count(text: str) -> int | None:
+    quoted = re.findall(r"[“\"]([^”\"]+)[”\"]", text)
+    if len(quoted) >= _MIN_ENUMERATION_ITEMS:
+        return len(quoted)
+    marker = re.search(r"分为|分成|包括|包含|分别为|采用", text)
+    if marker is None:
+        return None
+    value = re.split(r"[。；;\n]", text[marker.end() :], maxsplit=1)[0]
+    parts = [part.strip(" ，,：:") for part in value.split("、")]
+    parts = [part for part in parts if part]
+    return len(parts) if len(parts) >= _MIN_ENUMERATION_ITEMS else None
 
 
 def _attribute_matches(relation: str, answer_type: str, text: str) -> bool:

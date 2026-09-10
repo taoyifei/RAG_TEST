@@ -10,12 +10,17 @@ import httpx
 import pytest
 
 from rag_app.adapters.parsers import word_document
+from rag_app.adapters.parsers.doc_conversion import (
+    DocConversionUnavailableError,
+    SandboxedLibreOfficeConverter,
+)
 from rag_app.application.provider_health import ProviderCircuitBreaker
 from rag_app.core.models import Job
 from rag_app.core.policies import CircuitBreakerPolicy
 from rag_app.product.models import ProviderConnection
 from rag_app.product.provider_runtime import build_offline_mock_transport
 from tests.adapters.parsers.docx.fixtures import build_package
+from tests.ole_doc_fixture import build_ole_word_container
 from tests.product_support import (
     ProductHarness,
     activate_hot_standby_profile,
@@ -42,6 +47,15 @@ def _wait_for_job(harness: ProductHarness, job: Job) -> Job:
     raise AssertionError(f"Job 未在期限内结束：{job.job_id}")
 
 
+def _unavailable_conversion(
+    _converter: SandboxedLibreOfficeConverter,
+    _content: bytes,
+    _policy: object,
+    _cancel_check: object = None,
+) -> object:
+    raise DocConversionUnavailableError("synthetic unavailable")
+
+
 def test_product_runtime_migrates_and_keeps_offline_base_mode(
     tmp_path: Path,
 ) -> None:
@@ -63,7 +77,7 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 20
+        assert migration_count == 25
     finally:
         harness.close()
 
@@ -151,6 +165,11 @@ def test_product_runtime_accepts_mixed_doc_and_docx_snapshot(
         "_extract_doc_text",
         _extract_doc,
     )
+    monkeypatch.setattr(
+        SandboxedLibreOfficeConverter,
+        "convert",
+        _unavailable_conversion,
+    )
     harness = build_product_harness(tmp_path, master_key=False)
     try:
         project_id, knowledge_base_id = create_project_and_knowledge_base(
@@ -163,7 +182,7 @@ def test_product_runtime_accepts_mixed_doc_and_docx_snapshot(
         legacy_response = harness.client.post(
             endpoint,
             params={"display_name": "旧版制度.doc"},
-            content=_DOC_MAGIC + b"synthetic-legacy-doc",
+            content=build_ole_word_container(),
             headers={
                 **harness.write_headers,
                 "Content-Type": _DOC_MEDIA_TYPE,

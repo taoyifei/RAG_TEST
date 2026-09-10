@@ -31,7 +31,10 @@ RUN python -c \
 FROM ${PYTHON_IMAGE} AS runtime
 
 ARG VCS_REF=development-unset
-LABEL org.opencontainers.image.revision="${VCS_REF}"
+ARG PYTHON_IMAGE
+LABEL org.opencontainers.image.revision="${VCS_REF}" \
+    org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
+    org.opencontainers.image.base.digest="sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534"
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -41,8 +44,20 @@ ENV LANG=C.UTF-8 \
 WORKDIR /app
 COPY requirements.runtime.lock ./
 COPY --from=python-build /wheels /wheels
-RUN apt-get update \
-    && apt-get install --yes --no-install-recommends antiword=0.37-17 \
+RUN apt-get update -o Acquire::Retries=5 \
+    && for build_attempt in 1 2 3; do \
+    DEBIAN_FRONTEND=noninteractive apt-get install \
+    --yes --no-install-recommends \
+    -o Acquire::Retries=5 \
+    antiword=0.37-17 \
+    fonts-noto-cjk=1:20240730+repack1-1 \
+    libseccomp2=2.6.0-2 \
+    libreoffice-core=4:25.2.3-2+deb13u6 \
+    libreoffice-writer=4:25.2.3-2+deb13u6 \
+    && break; \
+    if [ "${build_attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep "$((build_attempt * 2))"; \
+    done \
     && apt-get purge --yes mount \
     && rm -rf /var/lib/apt/lists/* \
     && python -m pip install \
@@ -66,6 +81,7 @@ RUN apt-get update \
     && chown -R rag:rag /data /run/rag-secrets
 
 COPY --from=frontend-build --chown=rag:rag /build/frontend/dist/ ./frontend/
+COPY --chown=rag:rag docs/public/openapi-v1.json ./openapi/openapi-v1.json
 COPY --chown=rag:rag migrations/ ./migrations/
 COPY --chown=rag:rag compatibility-manifest.json ./compatibility-manifest.json
 COPY --chown=rag:rag evaluation/__init__.py evaluation/p11_pilot.py evaluation/p11_pilot_data.py evaluation/p11_pilot_runtime.py ./evaluation/
@@ -73,7 +89,12 @@ COPY --chown=rag:rag evaluation/v2/*.py ./evaluation/v2/
 COPY --chown=rag:rag evaluation/gates/p08-gates.json ./evaluation/gates/p08-gates.json
 COPY --chown=rag:rag evaluation/datasets/p11-pilot/ ./evaluation/datasets/p11-pilot/
 RUN python -c \
-    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")'
+    'from rag_app.product.compatibility import write_manifest; write_manifest("/app/compatibility-manifest.json")' \
+    && python -c \
+    'import pathlib, sys; from rag_app.product.asset_manifest import write_product_asset_manifest; write_product_asset_manifest(root=pathlib.Path("/app"), manifest_path=pathlib.Path("/app/product-assets.json"), source_revision=sys.argv[1])' \
+    "${VCS_REF}" \
+    && chown rag:rag /app/product-assets.json \
+    && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"
 
 USER rag:rag
 EXPOSE 8088

@@ -17,6 +17,7 @@ async function navigate(page: Page, name: string) {
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
+import { createServer, type ServerResponse } from "node:http";
 import type { ChunkPage, QueryResponse } from "../src/api/client";
 
 test("相关内容 unit_synthetic 提示与真实授权原文入口", async ({
@@ -115,14 +116,25 @@ test("相关内容 unit_synthetic 提示与真实授权原文入口", async ({
   await page.route(`**${base}:answer`, async (route) => {
     expect(route.request().postDataJSON()).toMatchObject({
       include_related_content: true,
+      stream: true,
+      stream_protocol: "rag-answer-sse-v1",
     });
     const outcome = outcomes[answerRequests++];
     expect(outcome).toBeDefined();
+    const payload = {
+      ...baseline,
+      ...outcome,
+      type: "final",
+      protocol: "rag-answer-sse-v1",
+      sequence: 0,
+      evidence_count: outcome.evidence?.length ?? baseline.evidence_count,
+    };
     await route.fulfill({
-      json: {
-        ...baseline,
-        ...outcome,
-        evidence_count: outcome.evidence?.length ?? baseline.evidence_count,
+      body: `event: final\ndata: ${JSON.stringify(payload)}\n\n`,
+      headers: {
+        "Cache-Control": "no-store, no-transform",
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "X-Trace-Id": baseline.trace_id,
       },
     });
   });
@@ -320,6 +332,191 @@ async function sourceArtifact(page: Page): Promise<string> {
       .textContent()) ?? ""
   );
 }
+
+test("真实浏览器流式显示、停止与知识库切换保持隔离", async ({
+  page,
+}, testInfo) => {
+  await authenticate(page);
+  await createScope(page, `stream-${testInfo.project.name}-${Date.now()}`);
+  await uploadAndWait(
+    page,
+    "浏览器流式合同.docx",
+    "公开合成设备 ZX-9 的复核周期为 9 天。",
+  );
+  const scopeUrl = new URL(page.url());
+  const projectId = scopeUrl.searchParams.get("project")!;
+  const knowledgeBaseId = scopeUrl.searchParams.get("knowledgeBase")!;
+  const base = `/api/v1/projects/${projectId}/knowledge-bases/${knowledgeBaseId}`;
+  await navigate(page, "知识库");
+  const nextKnowledgeBase = `隔离知识库 ${testInfo.project.name}`;
+  await page.getByLabel("知识库名称").fill(nextKnowledgeBase);
+  await page.getByRole("button", { name: "创建", exact: true }).click();
+  const nextKnowledgeBaseCard = page.getByRole("article").filter({
+    hasText: nextKnowledgeBase,
+  });
+  await nextKnowledgeBaseCard.getByRole("heading").waitFor();
+  await navigate(page, "问答");
+  const session = (await (
+    await page.request.get("/api/v1/console/session")
+  ).json()) as { csrf_token: string };
+  const baselineResponse = await page.request.post(`${base}:answer`, {
+    headers: {
+      "X-CSRF-Token": session.csrf_token,
+      Origin: scopeUrl.origin,
+    },
+    data: { query: "ZX-9 的复核周期是多少？" },
+  });
+  expect(baselineResponse.ok(), await baselineResponse.text()).toBeTruthy();
+  const baseline = (await baselineResponse.json()) as QueryResponse;
+
+  const responses = new Map<number, ServerResponse>();
+  const openedResolvers = new Map<
+    number,
+    (response: ServerResponse) => void
+  >();
+  const closedResolvers = new Map<number, () => void>();
+  const opened = new Map<number, Promise<ServerResponse>>();
+  const closed = new Map<number, Promise<void>>();
+  for (const slot of [1, 2, 3]) {
+    opened.set(
+      slot,
+      new Promise((resolve) => openedResolvers.set(slot, resolve)),
+    );
+    closed.set(
+      slot,
+      new Promise((resolve) => closedResolvers.set(slot, resolve)),
+    );
+  }
+  const claimTexts = new Map([
+    [1, "首条已核验浏览器事实"],
+    [2, "停止前已核验浏览器事实"],
+    [3, "旧知识库暂存事实"],
+  ]);
+  const frame = (name: string, payload: object) =>
+    `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
+  const server = createServer((request, response) => {
+    request.resume();
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const slot = Number(url.searchParams.get("slot"));
+    const traceId = `trace_${slot.toString(16).repeat(32)}`;
+    const common = {
+      protocol: "rag-answer-sse-v1",
+      trace_id: traceId,
+      project_id: projectId,
+      knowledge_base_id: knowledgeBaseId,
+    };
+    response.writeHead(200, {
+      "Access-Control-Allow-Credentials": "true",
+      "Access-Control-Allow-Origin": scopeUrl.origin,
+      "Cache-Control": "no-store, no-transform",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "X-Accel-Buffering": "no",
+      "X-Trace-Id": traceId,
+    });
+    response.flushHeaders();
+    response.socket?.setNoDelay(true);
+    response.write(
+      frame("meta", {
+        ...common,
+        type: "meta",
+        sequence: 0,
+        delivery: "incremental_or_final_only",
+      }),
+    );
+    response.write(
+      frame("stage", {
+        ...common,
+        type: "stage",
+        sequence: 1,
+        stage: "generation",
+        attributes: [],
+      }),
+    );
+    response.write(
+      frame("claim", {
+        ...common,
+        type: "claim",
+        sequence: 2,
+        claim_index: 0,
+        provisional: true,
+        active_index_revision_id: baseline.active_index_revision_id,
+        claim: {
+          text: claimTexts.get(slot),
+          supports: [{ support_id: "S1", quote: "公开合成引用" }],
+        },
+      }),
+    );
+    responses.set(slot, response);
+    response.on("close", () => closedResolvers.get(slot)?.());
+    openedResolvers.get(slot)?.(response);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("浏览器 SSE 测试服务未取得 loopback 端口");
+  }
+  let requestSlot = 0;
+  await page.route(`**${base}:answer`, async (route) => {
+    requestSlot += 1;
+    await route.continue({
+      url: `http://127.0.0.1:${address.port}/answer?slot=${requestSlot}`,
+    });
+  });
+  try {
+    const input = page.getByLabel("查询文本");
+    const execute = page.getByRole("button", { name: "执行", exact: true });
+    await input.fill("ZX-9 的复核周期是多少？");
+    await execute.click();
+    const firstResponse = await opened.get(1);
+    await expect(
+      page.getByRole("region", { name: "已核验暂存内容" }),
+    ).toContainText("首条已核验浏览器事实");
+    firstResponse?.end(
+      frame("final", {
+        ...baseline,
+        type: "final",
+        protocol: "rag-answer-sse-v1",
+        sequence: 3,
+        trace_id: "trace_" + "1".repeat(32),
+        query_id: "trace_" + "1".repeat(32),
+        project_id: projectId,
+        knowledge_base_id: knowledgeBaseId,
+      }),
+    );
+    await expect(page.getByRole("region", { name: "正式答案" })).toBeVisible();
+    await expect(
+      page.getByRole("region", { name: "已核验暂存内容" }),
+    ).toHaveCount(0);
+
+    await execute.click();
+    await opened.get(2);
+    await expect(page.getByRole("button", { name: "停止" })).toBeVisible();
+    await page.getByRole("button", { name: "停止" }).click();
+    await closed.get(2);
+    await expect(execute).toBeEnabled();
+    await expect(page.getByText(/暂存内容不是最终答案/)).toBeVisible();
+    responses.get(2)?.write("停止后的晚到正文");
+    await expect(page.getByText("停止后的晚到正文")).toHaveCount(0);
+
+    await execute.click();
+    await opened.get(3);
+    await expect(
+      page.getByRole("region", { name: "已核验暂存内容" }),
+    ).toContainText("旧知识库暂存事实");
+    await navigate(page, "知识库");
+    await closed.get(3);
+    await nextKnowledgeBaseCard.getByRole("button", { name: "进入" }).click();
+    await expect(page.locator(".scope-card")).toContainText(nextKnowledgeBase);
+    await expect(page.getByText("旧知识库暂存事实")).toHaveCount(0);
+  } finally {
+    await page.unroute(`**${base}:answer`);
+    for (const response of responses.values()) response.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   page,

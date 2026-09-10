@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, StrictInt, field_validator
 
@@ -26,6 +27,56 @@ class QueryKind(StrEnum):
     COMPLEX = "complex"
 
 
+class RequestedAnswerType(StrEnum):
+    """查询实际要求返回的答案形状。"""
+
+    UNKNOWN = "UNKNOWN"
+    FACT = "FACT"
+    ENUMERATION = "ENUMERATION"
+    COUNT = "COUNT"
+    ORDINAL_ITEM = "ORDINAL_ITEM"
+    DUTIES = "DUTIES"
+    PROCEDURE = "PROCEDURE"
+
+
+class ConstraintKind(StrEnum):
+    """改写前后必须保持的字面硬约束类别。"""
+
+    IDENTIFIER = "IDENTIFIER"
+    NUMBER = "NUMBER"
+    UNIT = "UNIT"
+    NEGATION = "NEGATION"
+    QUALIFIER = "QUALIFIER"
+    DATE_VERSION = "DATE_VERSION"
+    QUOTED_TEXT = "QUOTED_TEXT"
+
+
+class QueryConstraint(FrozenModel):
+    """保留规范化问题中一个硬约束的位置与原词。"""
+
+    kind: ConstraintKind
+    raw_text: str = Field(min_length=1, repr=False)
+    normalized_value: str = Field(min_length=1, repr=False)
+    start_char: StrictInt = Field(ge=0)
+    end_char: StrictInt = Field(gt=0)
+
+
+class QuerySemantics(FrozenModel):
+    """检索、证据和回答共同消费的类型化问题语义。"""
+
+    target: str | None = Field(default=None, repr=False)
+    source_qualifier: str | None = Field(default=None, repr=False)
+    relation: str | None = None
+    answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
+    expected_count: StrictInt | None = Field(default=None, gt=0)
+    ordinal: StrictInt | None = Field(default=None, gt=0)
+    constraints: tuple[QueryConstraint, ...] = ()
+    source: Literal["RULE", "LLM_REWRITE", "ORIGINAL_FALLBACK"] = (
+        "ORIGINAL_FALLBACK"
+    )
+    reason_codes: tuple[str, ...] = ()
+
+
 class QueryVariant(FrozenModel):
     """受预算约束且只用于召回的 query 变体。"""
 
@@ -39,6 +90,8 @@ class QueryAnalysis(FrozenModel):
 
     original_query: str = Field(min_length=1, repr=False)
     normalized_query: str = Field(min_length=1, repr=False)
+    resolved_query: str | None = Field(default=None, repr=False)
+    semantics: QuerySemantics = QuerySemantics()
     quoted_phrases: tuple[str, ...] = ()
     identifiers: tuple[str, ...] = ()
     numbers: tuple[str, ...] = ()
@@ -110,10 +163,14 @@ class RoutedEmbeddingResult:
 
 __all__ = [
     "ActiveRevisionEmbeddingState",
+    "ConstraintKind",
     "QueryAnalysis",
+    "QueryConstraint",
     "QueryEmbeddingRequest",
     "QueryKind",
+    "QuerySemantics",
     "QueryVariant",
+    "RequestedAnswerType",
     "RetrievalPlan",
     "RoutedEmbeddingResult",
 ]

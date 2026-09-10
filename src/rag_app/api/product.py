@@ -18,7 +18,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.datastructures import MutableHeaders
 from starlette.responses import Response as StarletteResponse
 
+from rag_app.api.conversation_feedback import (
+    register_conversation_feedback_routes,
+)
 from rag_app.api.model_settings import register_model_settings_routes
+from rag_app.api.operational_trace import register_operational_trace_routes
 from rag_app.api.p09 import create_p09_app
 from rag_app.api.product_token_policy import resolve_token_route
 from rag_app.api.provider_budget import register_provider_budget_routes
@@ -184,6 +188,10 @@ class AccessTokenRequest(_RequestModel):
             "knowledge:read",
             "knowledge:write",
             "system:read",
+            "trace:summary",
+            "trace:detail",
+            "trace:full",
+            "trace:export",
         ],
         ...,
     ] = Field(min_length=1)
@@ -405,6 +413,9 @@ def _authenticate_request(
         return _auth_error(401, "AUTHENTICATION_REQUIRED")
     legacy = config.legacy_query if query_route else config.legacy_admin
     if legacy is not None and hmac.compare_digest(token, legacy):
+        request.state.product_principal = (
+            "legacy_query" if query_route else "legacy_admin"
+        )
         _replace_authorization(request, expected)
         return None
     try:
@@ -419,6 +430,14 @@ def _authenticate_request(
         return _auth_error(403, "TOKEN_DENIED")
     request.state.product_principal = "external_token"
     request.state.access_token_id = principal.token_id
+    request.state.stream_authorization_guard = lambda: (
+        runtime.auth.validate_access_token_id(
+            principal.token_id,
+            required_scope=route.scope,
+            project_id=route.project_id,
+            knowledge_base_id=route.knowledge_base_id,
+        )
+    )
     _replace_authorization(request, expected)
     return None
 
@@ -440,6 +459,9 @@ def _authenticate_session(
     except PolicyDenied:
         return _auth_error(401, "CONSOLE_SESSION_REQUIRED")
     request.state.product_principal = "admin_session"
+    request.state.stream_authorization_guard = lambda: (
+        runtime.auth.validate_session(cookie)
+    )
     _replace_authorization(request, expected)
     return None
 
@@ -451,6 +473,8 @@ def _register_product_routes(app: FastAPI, runtime: ProductRuntime) -> None:
     _register_access_token_routes(app, runtime)
     register_provider_budget_routes(app, runtime)
     register_query_history_routes(app, runtime)
+    register_operational_trace_routes(app, runtime)
+    register_conversation_feedback_routes(app, runtime)
     register_model_settings_routes(app, runtime)
 
 
@@ -751,6 +775,7 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             profile_revision_id,
             confirmed_impact=body.confirmed_impact,
         )
+        runtime.profiles.invalidate(profile.knowledge_base_id)
         if profile.activation_job_id is not None and profile.status == "draft":
             runtime.jobs.submit(profile.activation_job_id)
         return {

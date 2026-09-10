@@ -239,7 +239,23 @@ class RevisionValidator:
             raise ValidationFailed(
                 "仍有 RUNNING writer 修改 revision。", stage="revision.validate"
             )
-        probe_passed = self._deterministic_probe(spec, chunks)
+        image_only_value = report_checks.get("image_only_document_count", 0)
+        image_only_documents = (
+            image_only_value
+            if isinstance(image_only_value, int)
+            and not isinstance(image_only_value, bool)
+            else 0
+        )
+        allow_empty_probe = (
+            document_count > 0
+            and chunk_count == 0
+            and image_only_documents == document_count
+        )
+        probe_passed = self._deterministic_probe(
+            spec,
+            chunks,
+            allow_empty=allow_empty_probe,
+        )
         if not probe_passed:
             raise ValidationFailed(
                 "Vector deterministic probe 失败。", stage="revision.validate"
@@ -263,6 +279,7 @@ class RevisionValidator:
         rows: Sequence[tuple[DocumentIR, ParseReport, ChunkingReport]],
     ) -> dict[str, object]:
         checks: dict[str, object] = {}
+        image_only_document_count = 0
         for document_ir, parse_report, stored_report in rows:
             validate_document_ir(document_ir)
             if parse_report != document_ir.parse_report:
@@ -275,6 +292,18 @@ class RevisionValidator:
                 for chunk in chunks
                 if chunk.version == document_ir.version
             )
+            if not document_chunks:
+                has_text = any(node.text.strip() for node in document_ir.nodes)
+                has_image = any(
+                    node.image_attributes is not None
+                    for node in document_ir.nodes
+                )
+                if has_text or not has_image:
+                    raise ValidationFailed(
+                        "无 Chunk 文档必须是保留媒体且无原生文字的纯图文档。",
+                        stage="revision.validate",
+                    )
+                image_only_document_count += 1
             rebuilt = self._chunk_validator.validate_persisted(
                 document_chunks, document_ir
             )
@@ -298,15 +327,18 @@ class RevisionValidator:
                     )
                 checks[field_name] = 0
         checks["source_span_coverage"] = 1.0
+        checks["image_only_document_count"] = image_only_document_count
         return checks
 
     def _deterministic_probe(
         self,
         spec: RevisionVectorSpec,
         chunks: Sequence[Chunk],
+        *,
+        allow_empty: bool = False,
     ) -> bool:
         if not chunks:
-            return False
+            return allow_empty
         point_id = vector_point_id(
             spec.revision.index_revision_id, chunks[0].chunk_id
         )

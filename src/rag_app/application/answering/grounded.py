@@ -3,23 +3,31 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
 from rag_app.application.answering.service import ExtractiveAnsweringService
 from rag_app.core.errors import (
     ProviderInvalidResponse,
+    QueryCancelled,
     RagError,
+    StreamDeliveryError,
     ValidationFailed,
 )
 from rag_app.core.models import (
+    AnswerClaim,
     AnswerDraft,
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
     ProviderCall,
 )
-from rag_app.core.ports import GenerationRequest, GeneratorPort
+from rag_app.core.ports import (
+    CancellationPort,
+    GenerationRequest,
+    GeneratorPort,
+)
 
 _NUMBER = re.compile(
     r"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*(?:%|％|万元|亿元|元|"
@@ -383,11 +391,14 @@ class GroundedAnsweringService:
         self.generator = generator
         self.fallback = ExtractiveAnsweringService(fallback)
 
-    def answer(
+    def answer(  # noqa: PLR0912, PLR0915
         self,
         query: str,
         evidence: tuple[EvidenceItem, ...],
         confidence: ConfidenceDecision,
+        *,
+        on_claim: Callable[[AnswerClaim], None] | None = None,
+        cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
         """最多两次生成；正文缺失、权限和索引错误不允许模型覆盖。
 
@@ -395,6 +406,8 @@ class GroundedAnsweringService:
             query: 用户的原始问题。
             evidence: 已通过资源和引用检查的有限资料。
             confidence: 检索置信状态，不允许越过硬性拒绝。
+            on_claim: 可选的已校验完整 claim 发布回调。
+            cancellation: 可选协作取消端口。
 
         Returns:
             已核验回答或回退结果，包含真实调用和终态原因。
@@ -414,21 +427,79 @@ class GroundedAnsweringService:
         calls: list[ProviderCall] = []
         reason: str | None = None
         for attempt in range(2):
+            _raise_if_cancelled(cancellation)
+            published: list[AnswerClaim] = []
             try:
-                draft = self.generator.generate(
-                    GenerationRequest(
-                        query=query,
-                        evidence=evidence,
-                        citation_protocol="support-id-v1-claims",
-                        repair_reason=reason if attempt else None,
-                    )
+                generation_request = GenerationRequest(
+                    query=query,
+                    evidence=evidence,
+                    citation_protocol="support-id-v1-claims",
+                    repair_reason=reason if attempt else None,
                 )
+                stream_generate = getattr(
+                    self.generator, "generate_stream", None
+                )
+                if on_claim is not None and callable(stream_generate):
+
+                    def publish(
+                        claim: AnswerClaim,
+                        published_claims: list[AnswerClaim] = published,
+                    ) -> None:
+                        """逐条执行完整业务证据门，再允许 HTTP 层发布。
+
+                        Args:
+                            claim: Adapter 刚形成的完整来源匹配事实。
+                            published_claims: 本次尝试已成功交付的事实列表。
+
+                        Returns:
+                            无返回值；发布回调返回后才记录为已交付。
+
+                        """
+                        _raise_if_cancelled(cancellation)
+                        validate_grounded_draft(
+                            AnswerDraft(
+                                text=claim.text,
+                                cited_evidence_ids=tuple(
+                                    support.support_id
+                                    for support in claim.supports
+                                ),
+                                claims=(claim,),
+                                generation_mode="llm",
+                            ),
+                            evidence,
+                        )
+                        if claim in published_claims:
+                            raise ValidationFailed(
+                                "模型重复输出同一事实。",
+                                stage="answer.validate",
+                                code="DUPLICATE_CLAIM",
+                            )
+                        on_claim(claim)
+                        # HTTP 交付回调返回才算已发布；来源或授权门禁拒绝时
+                        # 不能把尚未发送的 claim 误报为 partial 前缀。
+                        published_claims.append(claim)
+
+                    if cancellation is None:
+                        raise RuntimeError("流式生成缺少 cancellation。")
+                    draft = stream_generate(
+                        generation_request,
+                        on_claim=publish,
+                        cancellation=cancellation,
+                    )
+                else:
+                    draft = self.generator.generate(generation_request)
                 calls.extend(draft.provider_calls)
                 if draft.reason_code == "GENERATION_ABSTAINED":
                     return GroundedOutcome(
                         None, "none", tuple(calls), draft.reason_code
                     )
                 validate_grounded_draft(draft, evidence)
+                if published and draft.claims != tuple(published):
+                    raise ValidationFailed(
+                        "增量事实与最终草稿不一致。",
+                        stage="answer.validate",
+                        code="STREAMED_CLAIMS_MISMATCH",
+                    )
                 # 只发布已逐条核验的 claim，忽略任何多余模型正文。
                 answer = "\n".join(
                     claim.text
@@ -441,8 +512,21 @@ class GroundedAnsweringService:
                 return GroundedOutcome(
                     answer, "llm", tuple(calls), "CLAIMS_VALIDATED"
                 )
+            except QueryCancelled as error:
+                error.provider_calls = (*calls, *error.provider_calls)
+                raise
             except ValidationFailed as error:
+                calls.extend(
+                    error.provider_calls
+                    or (
+                        ()
+                        if error.provider_call is None
+                        else (error.provider_call,)
+                    )
+                )
                 reason = error.code
+                if published:
+                    raise _partial_stream_error(calls) from error
                 if reason == "GENERATION_ABSTAINED":
                     return GroundedOutcome(None, "none", tuple(calls), reason)
             except RagError as error:
@@ -455,10 +539,14 @@ class GroundedAnsweringService:
                     )
                 )
                 reason = error.code
+                if published:
+                    raise _partial_stream_error(calls) from error
                 if isinstance(error, ProviderInvalidResponse):
                     continue
                 break
-            except ValueError:
+            except ValueError as error:
+                if published:
+                    raise _partial_stream_error(calls) from error
                 reason = "GENERATION_OUTPUT_INVALID"
         fallback_answer = self.fallback.answer(query, evidence, confidence)
         return GroundedOutcome(
@@ -467,3 +555,20 @@ class GroundedAnsweringService:
             tuple(calls),
             reason,
         )
+
+
+def _raise_if_cancelled(cancellation: CancellationPort | None) -> None:
+    """在开始下一阶段前停止已取消查询。"""
+    if cancellation is not None and cancellation.is_cancelled():
+        raise QueryCancelled("QUERY_CANCELLED")
+
+
+def _partial_stream_error(calls: list[ProviderCall]) -> StreamDeliveryError:
+    """保留已经发生的 Provider 调用，同时禁止发布第二份答案。"""
+    error = StreamDeliveryError(
+        "流式回答在已发布事实后未能安全收束。",
+        stage="answer.stream",
+        code="STREAM_PARTIAL_FAILED",
+    )
+    error.provider_calls = tuple(calls)
+    return error

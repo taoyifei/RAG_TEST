@@ -94,16 +94,24 @@ def split_atom(
             hard_end,
             _fragment_boundaries(atom.fragments),
         )
+        end = _protect_derived_boundary(
+            atom.fragments,
+            fresh_start,
+            end,
+            hard_end,
+        )
         # 尾部空白仍保留在最后一个有正文的来源片段中，避免单独发布空块。
         if hard_end == len(rendered.text) and not rendered.text[end:].strip():
             end = hard_end
         end = _protect_grapheme_boundary(rendered.text, fresh_start, end)
         if end <= fresh_start:
-            end = _protect_grapheme_boundary(
-                rendered.text,
+            end = _protect_derived_boundary(
+                atom.fragments,
                 fresh_start,
                 hard_end,
+                hard_end,
             )
+            end = _protect_grapheme_boundary(rendered.text, fresh_start, end)
         if end <= fresh_start:
             raise ValueError("语义 splitter 无法在 hard max 内严格前进。")
         fragments = _slice_fragments(
@@ -112,6 +120,14 @@ def split_atom(
             end,
             repeated_before=fresh_start,
         )
+        if not any(
+            fragment.span_type is not SourceSpanKind.SEPARATOR
+            for fragment in fragments
+        ):
+            # 跨块处的生成分隔符没有来源语义，禁止独立发布为正文。
+            fresh_start = end
+            segment_start = end
+            continue
         segments.append(
             replace(
                 atom,
@@ -317,6 +333,29 @@ def _protect_grapheme_boundary(text: str, start: int, end: int) -> int:
         ):
             break
         end -= 1
+    return end
+
+
+def _protect_derived_boundary(
+    fragments: tuple[SourceFragment, ...],
+    start: int,
+    end: int,
+    hard_end: int,
+) -> int:
+    """禁止在无原文坐标的派生编号内部切块。"""
+    cursor = 0
+    for fragment in fragments:
+        fragment_end = cursor + len(fragment.text)
+        if (
+            fragment.span_type is SourceSpanKind.DERIVED_NUMBERING
+            and cursor < end < fragment_end
+        ):
+            if cursor > start:
+                return cursor
+            if fragment_end <= hard_end:
+                return fragment_end
+            return start
+        cursor = fragment_end
     return end
 
 

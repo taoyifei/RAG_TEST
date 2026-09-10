@@ -60,6 +60,7 @@ it("保存配对模型引用，不触发验证或实际问答；清空回答会�
   render(<KnowledgeBaseModels kbId="kb_test" />);
   expect(await screen.findByText(/未配置，使用证据摘录回答/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "设置回答与图片识别" }));
+  expect(await screen.findByText(/已选择模型不等于连接已验证/)).toBeVisible();
   const generation = await screen.findByRole("combobox", { name: "回答模型" });
   await waitFor(() => expect(generation).toBeEnabled());
   await user.selectOptions(

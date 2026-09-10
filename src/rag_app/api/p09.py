@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hmac
-import json
 import os
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
@@ -16,6 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+from starlette.types import Receive, Scope, Send
 
 from rag_app.api.console import register_console_routes
 from rag_app.api.p09_schemas import (
@@ -28,8 +28,9 @@ from rag_app.api.p09_schemas import (
     UpdateKnowledgeBaseRequest,
     UpdateProjectRequest,
 )
+from rag_app.api.p09_stream import P09AnswerStream, P09AnswerStreamRequest
 from rag_app.composition.p09_runtime import P09Runtime
-from rag_app.core.errors import PolicyDenied, RagError
+from rag_app.core.errors import PolicyDenied, ProviderUnavailable, RagError
 from rag_app.core.identifiers import deterministic_id, new_id
 from rag_app.core.models import (
     Document,
@@ -41,6 +42,8 @@ from rag_app.core.models import (
     SystemStatus,
 )
 from rag_app.core.models.search import SearchAnswerResult
+from rag_app.query_executor import QueryAdmissionError
+from rag_app.tracing import TraceMode, TraceUnavailableError
 
 _MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 _HTTP_UNAUTHORIZED = 401
@@ -62,11 +65,40 @@ _ERROR_STATUS = {
     "UPLOAD_TOO_LARGE": 413,
     "VALIDATION_FAILED": 422,
     "TRACE_PERSISTENCE_UNAVAILABLE": 503,
+    "TRACE_FULL_UNAVAILABLE": 503,
+    "TRACE_ARTIFACT_CORRUPT": 503,
 }
 _ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     status: {"model": ErrorEnvelope, "description": "统一安全错误结构"}
     for status in (400, 401, 403, 404, 409, 413, 422, 429, 500, 503)
 }
+
+
+class _DisconnectAwareStreamingResponse(StreamingResponse):
+    """无论正常结束、发送失败或 TCP 断连都传播协作取消。"""
+
+    def __init__(
+        self,
+        content: Iterator[bytes],
+        *,
+        cancel: Callable[[], None],
+        media_type: str,
+        headers: dict[str, str],
+    ) -> None:
+        super().__init__(content, media_type=media_type, headers=headers)
+        self._cancel_stream = cancel
+
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
+        """绑定 Starlette 响应任务与底层同步查询生命周期。"""
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._cancel_stream()
 
 
 def create_p09_app(  # noqa: PLR0915
@@ -594,6 +626,7 @@ def _register_query_routes(
         require_query(authorization)
         trace_id = new_id("trace")
         response.headers["X-Trace-Id"] = trace_id
+        _prepare_query_trace(runtime, request, trace_id, body.trace_mode)
         result = runtime.sdk.search(
             project_id,
             kb_id,
@@ -603,6 +636,8 @@ def _register_query_routes(
             history_mode=_history_mode(request, body),
             owner_id=_history_owner(request),
             trace_id=trace_id,
+            conversation_id=body.conversation_id,
+            singleflight_enabled=body.trace_mode == "SAFE",
         )
         return _query_payload(
             runtime,
@@ -630,6 +665,62 @@ def _register_query_routes(
         require_query(authorization)
         trace_id = new_id("trace")
         response.headers["X-Trace-Id"] = trace_id
+        _prepare_query_trace(runtime, request, trace_id, body.trace_mode)
+        if body.stream:
+            # 在发送响应头前完成知识库范围与固定查询容量准入。
+            runtime.sdk.get_knowledge_base(project_id, kb_id)
+            stream = P09AnswerStream(
+                executor=runtime.query_executor,
+                sdk=runtime.sdk,
+                request=P09AnswerStreamRequest(
+                    project_id=project_id,
+                    knowledge_base_id=kb_id,
+                    question=body.query,
+                    trace_id=trace_id,
+                    limit=body.limit,
+                    include_related_content=body.include_related_content,
+                    history_mode=_history_mode(request, body),
+                    owner_id=_history_owner(request),
+                    conversation_id=body.conversation_id,
+                ),
+                render_final=lambda result: _query_payload(
+                    runtime,
+                    result,
+                    project_id,
+                    kb_id,
+                    include_related_content=body.include_related_content,
+                ),
+                versioned_protocol=(
+                    body.stream_protocol == "rag-answer-sse-v1"
+                ),
+                authorization_guard=_stream_authorization_guard(request),
+            )
+            try:
+                iterator = stream.start()
+            except QueryAdmissionError as error:
+                raise RagError(
+                    "查询容量已满，请稍后重试。",
+                    stage="query.admission",
+                    code="QUEUE_LIMIT_EXCEEDED",
+                    retryable=True,
+                    trace_id=trace_id,
+                    details={
+                        "retry_after_seconds": (
+                            runtime.query_executor.retry_after_seconds
+                        ),
+                        "admission_reason": type(error).__name__,
+                    },
+                ) from error
+            return _DisconnectAwareStreamingResponse(
+                iterator,
+                cancel=stream.cancel,
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-store, no-transform",
+                    "X-Accel-Buffering": "no",
+                    "X-Trace-Id": trace_id,
+                },
+            )
         result = runtime.sdk.answer(
             project_id,
             kb_id,
@@ -639,23 +730,15 @@ def _register_query_routes(
             history_mode=_history_mode(request, body),
             owner_id=_history_owner(request),
             trace_id=trace_id,
+            conversation_id=body.conversation_id,
+            singleflight_enabled=body.trace_mode == "SAFE",
         )
-        payload = _query_payload(
+        return _query_payload(
             runtime,
             result,
             project_id,
             kb_id,
             include_related_content=body.include_related_content,
-        )
-        if not body.stream:
-            return payload
-        return StreamingResponse(
-            _sse_events(payload),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-store, no-transform",
-                "X-Trace-Id": trace_id,
-            },
         )
 
     @app.get(
@@ -673,6 +756,39 @@ def _register_query_routes(
                 "检索诊断端点未启用。", stage="retrieval.diagnostics"
             )
         return _model(runtime.sdk.retrieval_diagnostics(trace_id))
+
+
+def _prepare_query_trace(
+    runtime: P09Runtime,
+    request: Request,
+    trace_id: str,
+    mode: Literal["SAFE", "DIAGNOSTIC", "FULL"],
+) -> None:
+    """只允许管理员显式提高默认 SAFE 捕获级别。"""
+    resolved = TraceMode(mode)
+    if resolved is not TraceMode.SAFE and getattr(
+        request.state, "product_principal", None
+    ) not in {"admin_session", "legacy_admin"}:
+        raise PolicyDenied(
+            "DIAGNOSTIC/FULL Trace 只允许管理员显式启用。",
+            stage="trace.mode",
+        )
+    if runtime.prepare_trace is None:
+        if resolved is not TraceMode.SAFE:
+            raise PolicyDenied(
+                "当前 Runtime 未启用 Operational Trace。",
+                stage="trace.mode",
+            )
+        return
+    try:
+        runtime.prepare_trace(trace_id, resolved)
+    except TraceUnavailableError as error:
+        raise ProviderUnavailable(
+            "FULL Trace 容量不足，查询尚未执行。",
+            code="TRACE_FULL_UNAVAILABLE",
+            stage="trace.preflight",
+            trace_id=trace_id,
+        ) from error
 
 
 def _register_status_routes(
@@ -960,28 +1076,10 @@ def _history_owner(request: Request) -> str:
     return str(getattr(request.state, "access_token_id", "local-admin"))
 
 
-def _sse_events(payload: dict[str, object]) -> Iterator[bytes]:
-    trace_id = payload["trace_id"]
-    yield _sse("meta", {"trace_id": trace_id})
-    yield _sse(
-        "retrieval",
-        {
-            "trace_id": trace_id,
-            "evidence_count": payload["evidence_count"],
-            "diagnostics_summary": payload.get("diagnostics_summary"),
-        },
-    )
-    yield _sse("final", payload)
-
-
-def _sse(event: str, payload: object) -> bytes:
-    body = json.dumps(
-        payload,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    return f"event: {event}\ndata: {body}\n\n".encode()
+def _stream_authorization_guard(request: Request) -> Callable[[], None] | None:
+    """读取 Product 中间件注入的在途授权复核，不信任请求正文。"""
+    guard = getattr(request.state, "stream_authorization_guard", None)
+    return guard if callable(guard) else None
 
 
 def _error_response(  # noqa: PLR0913

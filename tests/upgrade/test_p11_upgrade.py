@@ -68,13 +68,18 @@ def test_supported_phase_data_upgrades_monotonically(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert [item.version for item in applied] == list(range(1, 21))
+    assert [item.version for item in applied] == list(range(1, 26))
     assert project is not None and project[0] == "升级保留项目"
     assert "provider_operation_events" in tables
     assert "provider_daily_budgets" in tables
     assert "query_history" in tables
     assert "knowledge_base_model_settings" in tables
     assert "ocr_enrichment_cache" in tables
+    assert "diagram_relation_candidates" in tables
+    assert "history_export_journal" in tables
+    assert "history_export_leases" in tables
+    assert "product_conversations" in tables
+    assert "product_feedback" in tables
 
 
 def test_legacy_fts_v1_is_preserved_and_requires_explicit_reindex(
@@ -104,12 +109,59 @@ def test_legacy_fts_v1_is_preserved_and_requires_explicit_reindex(
             connection.execute("SELECT count(*) FROM chunks_fts").fetchone()[0]
         )
         v2_count = int(
-            connection.execute(
-                "SELECT count(*) FROM chunks_fts_v2"
-            ).fetchone()[0]
+            connection.execute("SELECT count(*) FROM chunks_fts_v2").fetchone()[
+                0
+            ]
         )
     assert legacy_count == 1
     assert v2_count == 0
+
+
+def test_derived_document_role_upgrade_preserves_existing_references(
+    tmp_path: Path,
+) -> None:
+    connections = SqliteConnectionFactory(
+        tmp_path / "derived-role.sqlite3", journal_mode="DELETE"
+    )
+    MigrationRunner(
+        connections,
+        _migration_subset(tmp_path / "old", 20),
+    ).migrate()
+    digest = "a" * 64
+    artifact_id = f"sha256:{digest}"
+    with connections.transaction(write=True) as connection:
+        connection.execute(
+            "INSERT INTO blob_objects(artifact_id, content_sha256, "
+            "size_bytes, media_type, physical_state, physical_locator, "
+            "created_at) VALUES (?, ?, 1, 'application/msword', "
+            "'available', ?, '2026-09-08T00:00:00+00:00')",
+            (artifact_id, digest, f"blobs/sha256/aa/{digest}"),
+        )
+        connection.execute(
+            "INSERT INTO blob_references(reference_id, artifact_id, "
+            "owner_type, owner_id, role, revision_id, created_at) "
+            "VALUES ('bref_existing', ?, 'document_version', 'dver_old', "
+            "'source_document', NULL, '2026-09-08T00:00:00+00:00')",
+            (artifact_id,),
+        )
+
+    MigrationRunner(connections, _MIGRATIONS).migrate()
+
+    with connections.transaction(write=True) as connection:
+        connection.execute(
+            "INSERT INTO blob_references(reference_id, artifact_id, "
+            "owner_type, owner_id, role, revision_id, created_at) "
+            "VALUES ('bref_derived', ?, 'document_version', 'dver_old', "
+            "'derived_document', NULL, '2026-09-08T00:00:01+00:00')",
+            (artifact_id,),
+        )
+        roles = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT role FROM blob_references ORDER BY role"
+            ).fetchall()
+        }
+    assert roles == {"source_document", "derived_document"}
 
 
 def test_p10_5_encrypted_provider_secret_survives_upgrade(
@@ -147,7 +199,7 @@ def test_failed_migration_rolls_back_without_advancing_schema(
     shutil.copytree(_MIGRATIONS, migrations)
     MigrationRunner(connections, migrations).migrate()
     _seed_control_rows(connections)
-    (migrations / "0021_synthetic_failure.sql").write_text(
+    (migrations / "0026_synthetic_failure.sql").write_text(
         "CREATE TABLE must_rollback(value TEXT);\nINVALID SQL;\n",
         encoding="utf-8",
     )
@@ -169,6 +221,6 @@ def test_failed_migration_rolls_back_without_advancing_schema(
         rollback_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name='must_rollback'"
         ).fetchone()
-    assert migration_count == 20
+    assert migration_count == 25
     assert project_count == 1
     assert rollback_table is None

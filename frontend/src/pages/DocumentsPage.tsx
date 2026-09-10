@@ -349,6 +349,19 @@ function DocumentActions({
         />
       </label>
       <button onClick={inspect}>详情</button>
+      <button
+        onClick={() => {
+          const url = new URL(window.location.href);
+          url.searchParams.set("document_id", document.document_id);
+          url.searchParams.delete("trace_id");
+          url.searchParams.delete("job_id");
+          url.searchParams.delete("revision_id");
+          window.history.replaceState({}, "", url.pathname + url.search);
+          go("/operational-traces");
+        }}
+      >
+        技术 Trace
+      </button>
       <button onClick={() => setImages(true)}>图片识别</button>
       {images && (
         <DocumentImages

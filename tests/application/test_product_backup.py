@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import stat
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,11 @@ from rag_app.core.models import ParseSource
 from rag_app.product import backup
 from rag_app.product.backup import create_backup, restore_backup, verify_backup
 from tests.adapters.parsers.docx.fixtures import context, policy
-from tests.product_support import build_product_harness
+from tests.api.test_query_history import _upload
+from tests.product_support import (
+    build_product_harness,
+    create_project_and_knowledge_base,
+)
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -128,7 +134,40 @@ def test_backup_verifies_and_restores_without_secret_files(
 ) -> None:
     harness = build_product_harness(tmp_path / "source")
     try:
-        harness.runtime.sdk.create_project("备份项目")
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        failed = harness.client.post(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer",
+            json={"query": "备份前的公开 Trace 样例"},
+            headers=harness.write_headers,
+        )
+        assert failed.status_code == 409
+        trace_id = failed.json()["error"]["trace_id"]
+        assert (
+            harness.runtime.traces.detail(trace_id).trace.trace_id == trace_id
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        answer = harness.client.post(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer",
+            json={
+                "query": "MX-41",
+                "conversation_id": "backup-conversation",
+            },
+            headers=harness.write_headers,
+        )
+        assert answer.status_code == 200, answer.text
+        answer_trace_id = str(answer.json()["trace_id"])
+        feedback = harness.client.put(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}/queries/{answer_trace_id}/feedback",
+            json={"useful": False, "reason_code": "INCOMPLETE"},
+            headers=harness.write_headers,
+        )
+        assert feedback.status_code == 200, feedback.text
+        assert feedback.json()["projection_state"] == "APPLIED"
         content = b"synthetic-public-blob"
         digest = hashlib.sha256(content).hexdigest()
         blob = harness.runtime.data_dir / "blobs" / "sha256" / digest[:2]
@@ -169,6 +208,58 @@ def test_backup_verifies_and_restores_without_secret_files(
         for name in names
     )
     assert (tmp_path / "restored" / "universal-rag.sqlite3").is_file()
+    trace_database = tmp_path / "restored" / "product-traces.sqlite3"
+    assert trace_database.is_file()
+    assert stat.S_IMODE(trace_database.stat().st_mode) == 0o600
+    assert (
+        stat.S_IMODE(
+            (tmp_path / "restored" / "universal-rag.sqlite3").stat().st_mode
+        )
+        == 0o600
+    )
+    with sqlite3.connect(trace_database) as connection:
+        assert connection.execute(
+            "SELECT status FROM traces WHERE trace_id=?", (trace_id,)
+        ).fetchone() == ("FAILED",)
+        assert connection.execute(
+            "SELECT status, feedback_useful FROM traces WHERE trace_id=?",
+            (answer_trace_id,),
+        ).fetchone() == ("ANSWERED", 0)
+    with sqlite3.connect(
+        tmp_path / "restored" / "universal-rag.sqlite3"
+    ) as connection:
+        conversation_row = connection.execute(
+            "SELECT project_id, knowledge_base_id, owner_id, expires_at "
+            "FROM product_conversations WHERE conversation_id=?",
+            ("backup-conversation",),
+        ).fetchone()
+        assert conversation_row is not None
+        assert conversation_row[:3] == (
+            project_id,
+            knowledge_base_id,
+            "local-admin",
+        )
+        assert datetime.fromisoformat(str(conversation_row[3])) > datetime.now(
+            UTC
+        )
+        assert connection.execute(
+            "SELECT turn_id FROM product_conversation_turns "
+            "WHERE conversation_id=?",
+            ("backup-conversation",),
+        ).fetchone() == (answer_trace_id,)
+        assert connection.execute(
+            "SELECT project_id, knowledge_base_id, owner_id, useful, "
+            "reason_code, projection_state FROM product_feedback "
+            "WHERE trace_id=?",
+            (answer_trace_id,),
+        ).fetchone() == (
+            project_id,
+            knowledge_base_id,
+            "local-admin",
+            0,
+            "INCOMPLETE",
+            "APPLIED",
+        )
     assert (
         tmp_path / "restored" / "blobs" / "sha256" / digest[:2] / digest
     ).read_bytes() == content

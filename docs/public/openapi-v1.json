@@ -50,7 +50,11 @@
                 "query:read",
                 "knowledge:read",
                 "knowledge:write",
-                "system:read"
+                "system:read",
+                "trace:summary",
+                "trace:detail",
+                "trace:full",
+                "trace:export"
               ],
               "type": "string"
             },
@@ -646,6 +650,37 @@
         "title": "ConnectionRequest",
         "type": "object"
       },
+      "ConversationClearResponse": {
+        "additionalProperties": false,
+        "description": "严格 scope 会话清理回执。",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "deleted_turns": {
+            "minimum": 0.0,
+            "title": "Deleted Turns",
+            "type": "integer"
+          },
+          "owner_id": {
+            "title": "Owner Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "owner_id",
+          "deleted",
+          "deleted_turns"
+        ],
+        "title": "ConversationClearResponse",
+        "type": "object"
+      },
       "CreateKnowledgeBaseRequest": {
         "additionalProperties": false,
         "description": "创建知识库请求。",
@@ -738,6 +773,112 @@
         ],
         "title": "CredentialRequest",
         "type": "object"
+      },
+      "DecisionCode": {
+        "description": "只描述可观察机械决策，不承载自由文本判断。",
+        "enum": [
+          "STARTED",
+          "ADMISSION_ALLOWED",
+          "AUTHORIZED_SCOPE",
+          "CONTEXT_LOADED",
+          "NO_HISTORY",
+          "NO_CONTEXT_SIGNAL",
+          "HISTORY_BUDGET_EMPTY",
+          "REWRITE_TRIGGER_PRONOUN",
+          "REWRITE_TRIGGER_TEMPORAL",
+          "REWRITE_TRIGGER_ORDINAL",
+          "REWRITE_TRIGGER_CONTINUATION",
+          "REWRITE_OK",
+          "REWRITE_MODEL_UNAVAILABLE",
+          "REWRITE_INVALID_SCHEMA",
+          "REWRITE_SAME_AS_ORIGINAL",
+          "REWRITE_ANCHOR_DRIFT",
+          "REWRITE_TOKEN_LIMIT",
+          "NO_RULES",
+          "UNIQUE_MATCH",
+          "BELOW_THRESHOLD",
+          "TIE",
+          "FALLBACK_FULL_CORPUS",
+          "RETRIEVAL_OK",
+          "RETRIEVAL_EMPTY",
+          "CACHE_HIT",
+          "CACHE_MISS",
+          "SINGLEFLIGHT_LEADER",
+          "SINGLEFLIGHT_FOLLOWER",
+          "EXACT_MATCH",
+          "LEXICAL_MATCH",
+          "DENSE_MATCH",
+          "FUSION_SELECTED",
+          "HYDRATED",
+          "RERANK_SELECTED",
+          "NEIGHBOR_EXPANDED",
+          "EVIDENCE_SELECTED",
+          "CONFIDENCE_ACCEPTED",
+          "GENERATION_CALLED",
+          "PROVIDER_CALLED",
+          "PUBLISHED",
+          "SELECTED",
+          "DROPPED_FINAL_LIMIT",
+          "ACCEPTED",
+          "MISSING_PAYLOAD",
+          "DUPLICATE",
+          "SOURCE_MISMATCH",
+          "VERSION_MISMATCH",
+          "SCOPE_MISMATCH",
+          "SOURCE_DELETED",
+          "SOURCE_UNAUTHORIZED",
+          "NEIGHBOR_GROUP_MISMATCH",
+          "CAPACITY_LIMIT",
+          "PROMPT_INJECTION",
+          "TOKEN_BUDGET",
+          "MAX_ITEMS",
+          "INVALID_PAYLOAD",
+          "MODEL_UNAVAILABLE",
+          "MODEL_ABSTAINED",
+          "ABSTENTION_REVIEW_TRIGGERED",
+          "ABSTENTION_REVIEW_ANSWERED",
+          "ABSTENTION_REVIEW_EMPTY",
+          "ABSTENTION_REVIEW_INVALID",
+          "VALIDATION_OK",
+          "INVALID_JSON",
+          "INVALID_TOP_LEVEL_SCHEMA",
+          "INVALID_REFUSAL_SCHEMA",
+          "INVALID_ANSWER_SCHEMA",
+          "INVALID_CLAIM_SCHEMA",
+          "EMPTY_CLAIM_OR_SUPPORT",
+          "INVALID_SUPPORT_SCHEMA",
+          "INVALID_EVIDENCE_ID",
+          "EMPTY_QUOTE",
+          "QUOTE_NOT_FOUND",
+          "AMBIGUOUS_QUOTE_LOCATION",
+          "CROSS_SPAN_QUOTE",
+          "DUPLICATE_SUPPORT",
+          "LOW_CONFIDENCE_OCR_ONLY",
+          "UNSUPPORTED_NUMBER",
+          "DUPLICATE_CLAIM",
+          "REPAIR_OK",
+          "REPAIR_FAILED",
+          "VALIDATION_FAILED",
+          "ANSWERED",
+          "REFUSED",
+          "CANCELLED",
+          "INTERRUPTED",
+          "PROVIDER_FAILED",
+          "INGESTION_STAGE_SUCCEEDED",
+          "INGESTION_STAGE_FAILED",
+          "INGESTION_STAGE_CANCELLED",
+          "ERROR",
+          "SKIPPED",
+          "TRACE_QUEUE_FULL",
+          "TRACE_CAPTURE_FAILED",
+          "TRACE_ARTIFACT_LIMIT",
+          "TRACE_EXPORT_FAILED",
+          "RERANK_DROP",
+          "EVIDENCE_BUDGET_DROP",
+          "PROMPT_INJECTION_ONLY"
+        ],
+        "title": "DecisionCode",
+        "type": "string"
       },
       "DiagnosticEvidenceItem": {
         "additionalProperties": false,
@@ -864,6 +1005,245 @@
           "rank"
         ],
         "title": "DiagnosticRerankItem",
+        "type": "object"
+      },
+      "DiagramRelationCandidate": {
+        "additionalProperties": false,
+        "description": "绑定图像 occurrence、模型和政策版本的结构化关系候选。",
+        "properties": {
+          "ambiguous": {
+            "default": false,
+            "title": "Ambiguous",
+            "type": "boolean"
+          },
+          "candidate_id": {
+            "pattern": "^drel_[0-9a-f]{32}$",
+            "title": "Candidate Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/RelationDirection"
+          },
+          "document_id": {
+            "pattern": "^doc_[0-9a-f]{32}$",
+            "title": "Document Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "evidence_source": {
+            "$ref": "#/components/schemas/RelationEvidenceSource"
+          },
+          "figure_occurrence_id": {
+            "pattern": "^node_[0-9a-f]{32}$",
+            "title": "Figure Occurrence Id",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "media_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Media Sha256",
+            "type": "string"
+          },
+          "model_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model Id",
+            "type": "string"
+          },
+          "policy_version": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "relation_type": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,79}$",
+            "title": "Relation Type",
+            "type": "string"
+          },
+          "review_revision": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Review Revision",
+            "type": "integer"
+          },
+          "review_state": {
+            "$ref": "#/components/schemas/RelationReviewState",
+            "default": "pending"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewer_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Sha256"
+          },
+          "schema_version": {
+            "default": "1",
+            "pattern": "^1$",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "source_node": {
+            "$ref": "#/components/schemas/DiagramRelationNode"
+          },
+          "target_node": {
+            "$ref": "#/components/schemas/DiagramRelationNode"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "knowledge_base_id",
+          "document_id",
+          "document_version_id",
+          "figure_occurrence_id",
+          "media_sha256",
+          "source_node",
+          "target_node",
+          "relation_type",
+          "direction",
+          "evidence_source",
+          "model_id",
+          "policy_version",
+          "created_at"
+        ],
+        "title": "DiagramRelationCandidate",
+        "type": "object"
+      },
+      "DiagramRelationNode": {
+        "additionalProperties": false,
+        "description": "一张图内由 Provider 或原生连接器定位的逻辑节点。",
+        "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
+          "label": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^[A-Za-z0-9_.:-]{1,128}$",
+            "title": "Node Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "label"
+        ],
+        "title": "DiagramRelationNode",
+        "type": "object"
+      },
+      "DiagramRelationReview": {
+        "additionalProperties": false,
+        "description": "管理员对结构化图关系候选作出的显式发布决定。",
+        "properties": {
+          "state": {
+            "enum": [
+              "accepted",
+              "rejected",
+              "ambiguous"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "DiagramRelationReview",
+        "type": "object"
+      },
+      "DiagramRelationReviewResponse": {
+        "additionalProperties": false,
+        "description": "审阅后的候选与可能触发的新 Revision Job。",
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/DiagramRelationCandidate"
+          },
+          "content_identity": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Identity"
+          },
+          "rebuild_job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rebuild Job Id"
+          }
+        },
+        "required": [
+          "candidate"
+        ],
+        "title": "DiagramRelationReviewResponse",
         "type": "object"
       },
       "Document": {
@@ -1282,6 +1662,147 @@
         "title": "EvidenceItem",
         "type": "object"
       },
+      "FeedbackReadResponse": {
+        "additionalProperties": false,
+        "description": "尚未提交时仍返回稳定空状态。",
+        "properties": {
+          "feedback": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FeedbackResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "feedback"
+        ],
+        "title": "FeedbackReadResponse",
+        "type": "object"
+      },
+      "FeedbackRequest": {
+        "additionalProperties": false,
+        "description": "只允许布尔信号与有限原因码。",
+        "properties": {
+          "reason_code": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INCORRECT",
+                  "INCOMPLETE",
+                  "WRONG_SOURCE",
+                  "OUTDATED",
+                  "TOO_SLOW",
+                  "OTHER"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "useful": {
+            "title": "Useful",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "useful"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
+      "FeedbackResponse": {
+        "additionalProperties": false,
+        "description": "canonical 反馈与 Trace 投影对账状态。",
+        "properties": {
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^prj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "projection_state": {
+            "enum": [
+              "PENDING",
+              "APPLIED",
+              "NOT_APPLICABLE"
+            ],
+            "title": "Projection State",
+            "type": "string"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "trace_id": {
+            "pattern": "^trace_[0-9a-f]{32}$",
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "useful": {
+            "title": "Useful",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "trace_id",
+          "project_id",
+          "knowledge_base_id",
+          "useful",
+          "reason_code",
+          "projection_state",
+          "updated_at"
+        ],
+        "title": "FeedbackResponse",
+        "type": "object"
+      },
+      "HistoryTraceExportRequest": {
+        "additionalProperties": false,
+        "description": "管理员批量支持包请求。",
+        "properties": {
+          "include_history_body": {
+            "default": false,
+            "title": "Include History Body",
+            "type": "boolean"
+          },
+          "trace_ids": {
+            "items": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Trace Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "trace_ids"
+        ],
+        "title": "HistoryTraceExportRequest",
+        "type": "object"
+      },
       "ImpactKind": {
         "description": "Retrieval Profile 变更的最小部署影响。",
         "enum": [
@@ -1657,6 +2178,119 @@
         "title": "KnowledgeBaseStatus",
         "type": "string"
       },
+      "LegacyTraceEventResponse": {
+        "additionalProperties": false,
+        "description": "兼容两种 Trace ID 的旧 flat event DTO。",
+        "properties": {
+          "attributes": {
+            "title": "Attributes"
+          },
+          "event_name": {
+            "title": "Event Name",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "trace_id": {
+            "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "trace_id",
+          "event_name",
+          "occurred_at",
+          "attributes"
+        ],
+        "title": "LegacyTraceEventResponse",
+        "type": "object"
+      },
+      "LegacyTraceRootResponse": {
+        "additionalProperties": false,
+        "description": "迁移前只有平面事件时的显式不完整根 DTO。",
+        "properties": {
+          "capture_complete": {
+            "const": false,
+            "title": "Capture Complete",
+            "type": "boolean"
+          },
+          "capture_incomplete_reason": {
+            "const": "legacy_flat_events",
+            "title": "Capture Incomplete Reason",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "legacy-flat-1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "schema_version",
+          "capture_complete",
+          "capture_incomplete_reason"
+        ],
+        "title": "LegacyTraceRootResponse",
+        "type": "object"
+      },
+      "MissingPreV3TraceRootResponse": {
+        "additionalProperties": false,
+        "description": "只有 History 时返回的不伪造技术细节占位根。",
+        "properties": {
+          "capture_complete": {
+            "const": false,
+            "title": "Capture Complete",
+            "type": "boolean"
+          },
+          "knowledge_base_id": {
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": "missing-pre-v3",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "status": {
+            "const": "NOT_CAPTURED_BEFORE_V3",
+            "title": "Status",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "schema_version",
+          "capture_complete",
+          "status",
+          "project_id",
+          "knowledge_base_id"
+        ],
+        "title": "MissingPreV3TraceRootResponse",
+        "type": "object"
+      },
       "OcrConfirmation": {
         "additionalProperties": false,
         "description": "用户从当前盘点结果中选出的媒体，不扩大既有出网授权。",
@@ -1935,6 +2569,20 @@
         "additionalProperties": false,
         "description": "有界 Search/Answer 请求。",
         "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
           "history_mode": {
             "anyOf": [
               {
@@ -1972,6 +2620,28 @@
             "default": false,
             "title": "Stream",
             "type": "boolean"
+          },
+          "stream_protocol": {
+            "anyOf": [
+              {
+                "const": "rag-answer-sse-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stream Protocol"
+          },
+          "trace_mode": {
+            "default": "SAFE",
+            "enum": [
+              "SAFE",
+              "DIAGNOSTIC",
+              "FULL"
+            ],
+            "title": "Trace Mode",
+            "type": "string"
           }
         },
         "required": [
@@ -2059,6 +2729,11 @@
             "title": "Evidence Count",
             "type": "integer"
           },
+          "generation_called_this_request": {
+            "default": false,
+            "title": "Generation Called This Request",
+            "type": "boolean"
+          },
           "generation_mode": {
             "pattern": "^(extractive|extractive_fallback|llm|none)$",
             "title": "Generation Mode",
@@ -2133,6 +2808,21 @@
             "title": "Rerank Mode",
             "type": "string"
           },
+          "result_origin": {
+            "default": "fresh",
+            "enum": [
+              "fresh",
+              "cache",
+              "singleflight"
+            ],
+            "title": "Result Origin",
+            "type": "string"
+          },
+          "rewrite_called_this_request": {
+            "default": false,
+            "title": "Rewrite Called This Request",
+            "type": "boolean"
+          },
           "rewrite_reason_code": {
             "anyOf": [
               {
@@ -2174,6 +2864,34 @@
             "pattern": "^sha256:[0-9a-f]{64}$",
             "title": "Serving Fingerprint",
             "type": "string"
+          },
+          "singleflight_key_hash": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Singleflight Key Hash"
+          },
+          "singleflight_role": {
+            "default": "none",
+            "enum": [
+              "none",
+              "leader",
+              "follower"
+            ],
+            "title": "Singleflight Role",
+            "type": "string"
+          },
+          "singleflight_wait_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Singleflight Wait Ms",
+            "type": "integer"
           },
           "status": {
             "$ref": "#/components/schemas/ConfidenceStatus"
@@ -2319,6 +3037,38 @@
         ],
         "title": "RelatedContent",
         "type": "object"
+      },
+      "RelationDirection": {
+        "description": "候选边相对于 source/target 的方向。",
+        "enum": [
+          "source_to_target",
+          "target_to_source",
+          "bidirectional",
+          "unknown"
+        ],
+        "title": "RelationDirection",
+        "type": "string"
+      },
+      "RelationEvidenceSource": {
+        "description": "关系结论的真实来源，不把视觉推断伪装成原生结构。",
+        "enum": [
+          "native_drawing",
+          "visual_candidate",
+          "synthetic_contract"
+        ],
+        "title": "RelationEvidenceSource",
+        "type": "string"
+      },
+      "RelationReviewState": {
+        "description": "候选是否具备进入正式回答证据的资格。",
+        "enum": [
+          "pending",
+          "accepted",
+          "rejected",
+          "ambiguous"
+        ],
+        "title": "RelationReviewState",
+        "type": "string"
       },
       "RenameDocumentRequest": {
         "additionalProperties": false,
@@ -3359,11 +4109,41 @@
         "description": "citation 字符的来源语义。",
         "enum": [
           "original_text",
+          "ocr_text",
+          "diagram_relation",
+          "derived_caption_or_association",
           "derived_numbering",
           "repeated_context",
           "separator"
         ],
         "title": "SourceSpanKind",
+        "type": "string"
+      },
+      "SpanKind": {
+        "description": "可映射到 OpenTelemetry 的 span 类别。",
+        "enum": [
+          "CHAIN",
+          "RETRIEVER",
+          "EMBEDDING",
+          "RERANKER",
+          "LLM",
+          "GUARDRAIL",
+          "STORAGE",
+          "HTTP"
+        ],
+        "title": "SpanKind",
+        "type": "string"
+      },
+      "SpanStatus": {
+        "description": "单个 span 生命周期状态。",
+        "enum": [
+          "RUNNING",
+          "OK",
+          "ERROR",
+          "SKIPPED",
+          "INTERRUPTED"
+        ],
+        "title": "SpanStatus",
         "type": "string"
       },
       "StageTiming": {
@@ -3574,6 +4354,722 @@
         ],
         "title": "SystemStatus",
         "type": "object"
+      },
+      "TraceArtifactResponse": {
+        "additionalProperties": false,
+        "description": "FULL Artifact 的元数据 DTO，不内联内容。",
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "compressed_bytes": {
+            "title": "Compressed Bytes",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_type": {
+            "title": "Media Type",
+            "type": "string"
+          },
+          "original_bytes": {
+            "title": "Original Bytes",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "trace_id",
+          "kind",
+          "media_type",
+          "sha256",
+          "original_bytes",
+          "compressed_bytes",
+          "created_at"
+        ],
+        "title": "TraceArtifactResponse",
+        "type": "object"
+      },
+      "TraceCandidateDecisionResponse": {
+        "additionalProperties": false,
+        "description": "候选漏斗中的一次选择或淘汰 DTO。",
+        "properties": {
+          "candidate_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "chunk_id": {
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "contribution": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contribution"
+          },
+          "details": {
+            "additionalProperties": true,
+            "title": "Details",
+            "type": "object"
+          },
+          "evidence_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Id"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/DecisionCode"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "score_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Type"
+          },
+          "selected": {
+            "title": "Selected",
+            "type": "boolean"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "sequence",
+          "stage",
+          "chunk_id",
+          "selected",
+          "reason_code",
+          "details",
+          "candidate_id",
+          "evidence_id",
+          "channel",
+          "rank",
+          "score_type",
+          "score",
+          "contribution"
+        ],
+        "title": "TraceCandidateDecisionResponse",
+        "type": "object"
+      },
+      "TraceDetailResponse": {
+        "additionalProperties": false,
+        "description": "Trace waterfall、候选漏斗与 Artifact 元数据。",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "$ref": "#/components/schemas/TraceArtifactResponse"
+            },
+            "title": "Artifacts",
+            "type": "array"
+          },
+          "candidate_decisions": {
+            "items": {
+              "$ref": "#/components/schemas/TraceCandidateDecisionResponse"
+            },
+            "title": "Candidate Decisions",
+            "type": "array"
+          },
+          "legacy_flat_events": {
+            "items": {
+              "$ref": "#/components/schemas/LegacyTraceEventResponse"
+            },
+            "title": "Legacy Flat Events",
+            "type": "array"
+          },
+          "spans": {
+            "items": {
+              "$ref": "#/components/schemas/TraceSpanResponse"
+            },
+            "title": "Spans",
+            "type": "array"
+          },
+          "trace": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TraceRootResponse"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyTraceRootResponse"
+              },
+              {
+                "$ref": "#/components/schemas/MissingPreV3TraceRootResponse"
+              }
+            ],
+            "title": "Trace"
+          }
+        },
+        "required": [
+          "trace",
+          "spans",
+          "candidate_decisions",
+          "artifacts"
+        ],
+        "title": "TraceDetailResponse",
+        "type": "object"
+      },
+      "TraceExportRequest": {
+        "additionalProperties": false,
+        "description": "有界批量导出请求。",
+        "properties": {
+          "trace_ids": {
+            "items": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "type": "string"
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Trace Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "trace_ids"
+        ],
+        "title": "TraceExportRequest",
+        "type": "object"
+      },
+      "TraceMode": {
+        "description": "Trace 内容边界。",
+        "enum": [
+          "SAFE",
+          "DIAGNOSTIC",
+          "FULL"
+        ],
+        "title": "TraceMode",
+        "type": "string"
+      },
+      "TracePageResponse": {
+        "description": "稳定倒序的 Operational Trace 列表页。",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TraceRootResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "page": {
+            "title": "Page",
+            "type": "integer"
+          },
+          "page_size": {
+            "title": "Page Size",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "page_size",
+          "total"
+        ],
+        "title": "TracePageResponse",
+        "type": "object"
+      },
+      "TraceRootResponse": {
+        "additionalProperties": false,
+        "description": "列表和详情共用的根 Trace DTO。",
+        "properties": {
+          "active_collection": {
+            "title": "Active Collection",
+            "type": "string"
+          },
+          "capture_complete": {
+            "title": "Capture Complete",
+            "type": "boolean"
+          },
+          "capture_incomplete_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capture Incomplete Reason"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "document_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Id"
+          },
+          "dropped_decision_count": {
+            "title": "Dropped Decision Count",
+            "type": "integer"
+          },
+          "dropped_span_count": {
+            "title": "Dropped Span Count",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "feedback_useful": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Useful"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "index_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Fingerprint"
+          },
+          "index_manifest_sha256": {
+            "title": "Index Manifest Sha256",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Base Id"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/TraceMode"
+          },
+          "owner_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Sha256"
+          },
+          "payload_schema_version": {
+            "title": "Payload Schema Version",
+            "type": "integer"
+          },
+          "pipeline_fingerprint": {
+            "title": "Pipeline Fingerprint",
+            "type": "string"
+          },
+          "profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile Id"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "refusal_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refusal Code"
+          },
+          "release_revision": {
+            "title": "Release Revision",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision Id"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "serving_fingerprint": {
+            "title": "Serving Fingerprint",
+            "type": "string"
+          },
+          "source_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Revision"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TraceStatus"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "writer_queue_high_water": {
+            "title": "Writer Queue High Water",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "trace_id",
+          "schema_version",
+          "mode",
+          "kind",
+          "status",
+          "created_at",
+          "finished_at",
+          "duration_ms",
+          "pipeline_fingerprint",
+          "serving_fingerprint",
+          "release_revision",
+          "active_collection",
+          "index_manifest_sha256",
+          "payload_schema_version",
+          "refusal_code",
+          "error_code",
+          "feedback_useful",
+          "expires_at",
+          "project_id",
+          "knowledge_base_id",
+          "owner_sha256",
+          "request_id",
+          "job_id",
+          "document_id",
+          "revision_id",
+          "profile_id",
+          "index_fingerprint",
+          "source_revision",
+          "capture_complete",
+          "capture_incomplete_reason",
+          "dropped_span_count",
+          "dropped_decision_count",
+          "writer_queue_high_water"
+        ],
+        "title": "TraceRootResponse",
+        "type": "object"
+      },
+      "TraceSpanResponse": {
+        "additionalProperties": false,
+        "description": "Waterfall 中的一个稳定 Span DTO。",
+        "properties": {
+          "attributes": {
+            "additionalProperties": true,
+            "title": "Attributes",
+            "type": "object"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "input_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Artifact Id"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SpanKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "output_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Artifact Id"
+          },
+          "parent_span_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Span Id"
+          },
+          "reason_code": {
+            "$ref": "#/components/schemas/DecisionCode"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "span_id": {
+            "title": "Span Id",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trace_id",
+          "span_id",
+          "parent_span_id",
+          "sequence",
+          "name",
+          "kind",
+          "started_at",
+          "finished_at",
+          "duration_ms",
+          "status",
+          "reason_code",
+          "attributes",
+          "input_artifact_id",
+          "output_artifact_id"
+        ],
+        "title": "TraceSpanResponse",
+        "type": "object"
+      },
+      "TraceStatus": {
+        "description": "根 Trace 生命周期状态。",
+        "enum": [
+          "RUNNING",
+          "SUCCEEDED",
+          "ANSWERED",
+          "REFUSED",
+          "FAILED",
+          "CANCELLED",
+          "INTERRUPTED"
+        ],
+        "title": "TraceStatus",
+        "type": "string"
       },
       "UpdateKnowledgeBaseRequest": {
         "additionalProperties": false,
@@ -4089,6 +5585,1338 @@
         "summary": " Revoke Token",
         "tags": [
           "access-tokens"
+        ]
+      }
+    },
+    "/api/v1/admin/history-traces/{trace_id}/export": {
+      "get": {
+        "operationId": "_export_history_trace_api_v1_admin_history_traces__trace_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_history_body",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include History Body",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Export History Trace",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/api/v1/admin/history-traces:export": {
+      "post": {
+        "operationId": "_export_history_traces_api_v1_admin_history_traces_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HistoryTraceExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Export History Traces",
+        "tags": [
+          "history"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces": {
+      "get": {
+        "operationId": "_list_api_v1_admin_operational_traces_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "trace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Trace Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "created_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "created_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TraceStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "knowledge_base_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Knowledge Base Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "request_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Request Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "job_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Job Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "document_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Document Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revision Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "refusal_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refusal Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_code",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error Code"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capture_mode",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/TraceMode"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Capture Mode"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capture_complete",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Capture Complete"
+            }
+          },
+          {
+            "in": "query",
+            "name": "feedback_useful",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Feedback Useful"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TracePageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " List",
+        "tags": [
+          "operational-trace"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces/{trace_id}": {
+      "get": {
+        "operationId": "_detail_api_v1_admin_operational_traces__trace_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraceDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Detail",
+        "tags": [
+          "operational-trace"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces/{trace_id}/artifacts/{artifact_id}": {
+      "get": {
+        "operationId": "_artifact_api_v1_admin_operational_traces__trace_id__artifacts__artifact_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Artifact",
+        "tags": [
+          "operational-trace"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces/{trace_id}/export": {
+      "get": {
+        "operationId": "_export_api_v1_admin_operational_traces__trace_id__export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "pattern": "^(?:trace_)?[0-9a-f]{32}$",
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Export",
+        "tags": [
+          "operational-trace"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces:export": {
+      "post": {
+        "operationId": "_batch_export_api_v1_admin_operational_traces_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Batch Export",
+        "tags": [
+          "operational-trace"
+        ]
+      }
+    },
+    "/api/v1/admin/operational-traces:prune": {
+      "post": {
+        "operationId": "_prune_api_v1_admin_operational_traces_prune_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response  Prune Api V1 Admin Operational Traces Prune Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Prune",
+        "tags": [
+          "operational-trace"
         ]
       }
     },
@@ -6076,6 +8904,311 @@
         "summary": " Retry Job",
         "tags": [
           "jobs"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations": {
+      "get": {
+        "operationId": "_relations_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DiagramRelationCandidate"
+                  },
+                  "title": "Response  Relations Api V1 Knowledge Bases  Knowledge Base Id  Documents  Document Id  Diagram Relations Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Relations",
+        "tags": [
+          "diagram-relations"
+        ]
+      }
+    },
+    "/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}/diagram-relations/{candidate_id}:review": {
+      "post": {
+        "operationId": "_review_relation_api_v1_knowledge_bases__knowledge_base_id__documents__document_id__diagram_relations__candidate_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "knowledge_base_id",
+            "required": true,
+            "schema": {
+              "title": "Knowledge Base Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "document_id",
+            "required": true,
+            "schema": {
+              "title": "Document Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "candidate_id",
+            "required": true,
+            "schema": {
+              "title": "Candidate Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiagramRelationReview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiagramRelationReviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Review Relation",
+        "tags": [
+          "diagram-relations"
         ]
       }
     },
@@ -8703,6 +11836,173 @@
         ]
       }
     },
+    "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/conversations/{conversation_id}": {
+      "delete": {
+        "operationId": "_clear_conversation_api_v1_projects__project_id__knowledge_bases__kb_id__conversations__conversation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationClearResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Clear Conversation",
+        "tags": [
+          "conversation"
+        ]
+      }
+    },
     "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/documents": {
       "get": {
         "description": "稳定分页读取知识库文档。",
@@ -10738,6 +14038,314 @@
         "summary": " Scoped Detail",
         "tags": [
           "history"
+        ]
+      }
+    },
+    "/api/v1/projects/{project_id}/knowledge-bases/{kb_id}/queries/{trace_id}/feedback": {
+      "get": {
+        "operationId": "_get_feedback_api_v1_projects__project_id__knowledge_bases__kb_id__queries__trace_id__feedback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackReadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Get Feedback",
+        "tags": [
+          "feedback"
+        ]
+      },
+      "put": {
+        "operationId": "_put_feedback_api_v1_projects__project_id__knowledge_bases__kb_id__queries__trace_id__feedback_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "kb_id",
+            "required": true,
+            "schema": {
+              "title": "Kb Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "trace_id",
+            "required": true,
+            "schema": {
+              "title": "Trace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Put Feedback",
+        "tags": [
+          "feedback"
         ]
       }
     },

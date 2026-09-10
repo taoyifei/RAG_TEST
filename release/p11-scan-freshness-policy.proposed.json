@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "kind": "os-scan-freshness-policy",
+  "status": "PROPOSED",
+  "approval_source": null,
+  "scope": "P11_RELEASE",
+  "maximum_scan_age_hours": 24,
+  "maximum_db_age_at_scan_hours": 24,
+  "approver": null,
+  "approval_reference": null,
+  "approved_at": null,
+  "expires_at": null,
+  "rationale": "建议最终候选使用不超过24小时的完整扫描，且扫描时漏洞库更新时间不早于24小时；该数值待发布管理员决定，当前文件不能放行。"
+}

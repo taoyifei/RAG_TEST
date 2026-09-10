@@ -776,7 +776,7 @@ button,
 input,
 select,
 textarea {
-  min-height: 40px;
+  min-height: 44px;
   font: inherit;
 }
 
@@ -1066,6 +1066,25 @@ label:has(input[type="checkbox"]) {
 .history-list article {
   align-items: start;
 }
+.history-select {
+  display: grid;
+  min-width: 44px;
+  min-height: 44px;
+  place-items: center;
+}
+.history-select input,
+.sensitive-export-choice input {
+  width: 20px;
+  min-height: 20px;
+}
+.sensitive-export-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.modal > label.sensitive-export-choice {
+  display: flex;
+}
 .history-summary {
   white-space: pre-line;
   overflow-wrap: anywhere;
@@ -1085,6 +1104,102 @@ label:has(input[type="checkbox"]) {
   max-width: 100%;
   overflow: auto;
 }
+.trace-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+.trace-filters label,
+.trace-stage-filter {
+  display: grid;
+  gap: 6px;
+}
+.trace-filters input,
+.trace-filters select,
+.trace-stage-filter select {
+  width: 100%;
+  min-width: 0;
+}
+.trace-table {
+  min-width: 980px;
+}
+.trace-table strong,
+.trace-table small,
+.trace-artifact strong,
+.trace-artifact code,
+.trace-artifact small {
+  display: block;
+}
+.trace-detail {
+  display: grid;
+  gap: 20px;
+}
+.trace-detail h2 {
+  overflow-wrap: anywhere;
+}
+.trace-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+}
+.trace-tabs button {
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  color: #36506b;
+  background: transparent;
+  white-space: nowrap;
+}
+.trace-tabs button.active {
+  border-bottom-color: var(--blue);
+  color: var(--blue);
+  font-weight: 750;
+}
+.waterfall {
+  display: grid;
+  gap: 2px;
+}
+.waterfall-row {
+  padding: 0;
+}
+.waterfall-row summary {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) 72px minmax(220px, 1fr);
+  gap: 12px;
+  align-items: center;
+  min-height: 42px;
+}
+.waterfall-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #e8eef5;
+}
+.waterfall-track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: inherit;
+  background: var(--blue);
+}
+.trace-artifact {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.trace-artifact div {
+  min-width: 0;
+}
+.trace-artifact code {
+  overflow-wrap: anywhere;
+}
 .query-options {
   display: flex;
   gap: 12px;
@@ -1094,10 +1209,39 @@ label:has(input[type="checkbox"]) {
 .query-options input {
   width: auto;
 }
+.conversation-controls,
+.query-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.conversation-controls > div:first-child,
+.query-feedback > div:first-child {
+  display: grid;
+  min-width: min(100%, 320px);
+  gap: 6px;
+}
+.query-feedback {
+  padding: 16px 0;
+  border-block: 1px solid var(--line);
+}
+.query-feedback label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
 .scope-card {
   color: #344054;
 }
 @media (max-width: 900px) {
+  .waterfall-row summary {
+    grid-template-columns: minmax(150px, 1fr) 64px;
+  }
+  .waterfall-track {
+    grid-column: 1 / -1;
+  }
   .sidebar:not(.open) {
     visibility: hidden;
   }

@@ -7,8 +7,10 @@ import {
   type SourceChunk,
 } from "../api/client";
 import { useConsole } from "../state/console-context";
+import { downloadFile } from "../utils/download";
 import { ErrorPanel, Modal, StatusBadge } from "./ui";
 import { OcrEvidenceSource } from "./DocumentImages";
+import { QueryFeedback } from "./QueryFeedback";
 
 export function historyTime(value: string): string {
   const parsed = new Date(value);
@@ -30,6 +32,8 @@ export function HistoryTrace({
   const [source, setSource] = useState<SourceChunk>();
   const [sourceError, setSourceError] = useState<unknown>();
   const [sourceBusy, setSourceBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportError, setExportError] = useState<unknown>();
   const activeRequest = useRef<AbortController | undefined>(undefined);
   useEffect(() => {
     const controller = new AbortController();
@@ -78,6 +82,36 @@ export function HistoryTrace({
       if (!controller.signal.aborted) setSourceBusy(false);
     }
   }
+  async function exportSupport(includeBody: boolean) {
+    if (
+      includeBody &&
+      !window.confirm(
+        "该文件可能含敏感问答和引用。确认保存到受控位置吗？",
+      )
+    ) {
+      return;
+    }
+    setExportBusy(true);
+    setExportError(undefined);
+    try {
+      downloadFile(await api.exportHistoryTrace(traceId, includeBody));
+    } catch (reason) {
+      setExportError(reason);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+  async function exportTechnicalTrace() {
+    setExportBusy(true);
+    setExportError(undefined);
+    try {
+      downloadFile(await api.exportOperationalTrace(traceId));
+    } catch (reason) {
+      setExportError(reason);
+    } finally {
+      setExportBusy(false);
+    }
+  }
   return (
     <Modal title="问答与检索过程" onClose={onClose} drawer>
       <code>{traceId}</code>
@@ -92,6 +126,30 @@ export function HistoryTrace({
               {historyTime(entry.created_at)}
             </time>
           </div>
+          <div className="row-actions" aria-label="历史导出">
+            <button
+              type="button"
+              disabled={exportBusy}
+              onClick={() => void exportSupport(false)}
+            >
+              下载问答+Trace 支持包（仅元数据）
+            </button>
+            <button
+              type="button"
+              disabled={exportBusy}
+              onClick={() => void exportSupport(true)}
+            >
+              包含敏感正文下载
+            </button>
+            <button
+              type="button"
+              disabled={exportBusy}
+              onClick={() => void exportTechnicalTrace()}
+            >
+              仅下载技术 Trace JSON
+            </button>
+          </div>
+          {exportError !== undefined && <ErrorPanel error={exportError} />}
           {entry.body_available ? (
             <>
               <h3>问题</h3>
@@ -177,6 +235,14 @@ export function HistoryTrace({
             </section>
           )}
           {entry.diagnostics && <DiagnosticsView value={entry.diagnostics} />}
+          {new Set(["ANSWERED", "REFUSED"]).has(entry.status) && (
+            <QueryFeedback
+              key={entry.trace_id}
+              projectId={entry.project_id}
+              kbId={entry.knowledge_base_id}
+              traceId={entry.trace_id}
+            />
+          )}
           <section aria-label="请求阶段">
             <h3>请求阶段与决定</h3>
             {!entry.events?.length && <p>本次未记录细分阶段。</p>}

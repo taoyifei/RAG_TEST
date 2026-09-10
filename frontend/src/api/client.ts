@@ -64,9 +64,16 @@ export interface HistoryEntry {
 
 export interface HistoryPageResult extends Page<HistoryEntry> {
   total: number;
+  total_is_exact?: boolean;
   body_enabled: boolean;
   retention_days: number;
   storage: string;
+  search_complete?: boolean;
+  scanned_count?: number;
+  next_cursor?: string | null;
+  truncation_reason?: "CANDIDATE_LIMIT" | "TIME_LIMIT";
+  candidate_scan_limit?: number;
+  time_scan_limit_ms?: number;
 }
 
 export interface HistoryFilters {
@@ -78,6 +85,137 @@ export interface HistoryFilters {
   keyword?: string;
   page_size?: number;
   offset?: number;
+}
+
+export type TraceMode = "SAFE" | "DIAGNOSTIC" | "FULL";
+
+export interface OperationalTraceRoot {
+  trace_id: string;
+  schema_version: string;
+  mode: TraceMode;
+  kind: string;
+  status: string;
+  created_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  project_id?: string | null;
+  knowledge_base_id?: string | null;
+  request_id?: string | null;
+  job_id?: string | null;
+  document_id?: string | null;
+  revision_id?: string | null;
+  profile_id?: string | null;
+  index_fingerprint?: string | null;
+  serving_fingerprint: string;
+  source_revision?: string | null;
+  capture_complete: boolean;
+  capture_incomplete_reason?: string | null;
+  dropped_span_count: number;
+  dropped_decision_count: number;
+  writer_queue_high_water: number;
+  feedback_useful?: boolean | null;
+}
+
+export interface OperationalTraceSpan {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  sequence: number;
+  name: string;
+  kind: string;
+  started_at: string;
+  finished_at?: string | null;
+  duration_ms?: number | null;
+  status: string;
+  reason_code: string;
+  attributes: Record<string, unknown>;
+  input_artifact_id?: string | null;
+  output_artifact_id?: string | null;
+}
+
+export interface OperationalTraceDecision {
+  trace_id: string;
+  sequence: number;
+  stage: string;
+  chunk_id: string;
+  selected: boolean;
+  reason_code: string;
+  details: Record<string, unknown>;
+  candidate_id?: string | null;
+  evidence_id?: string | null;
+  channel?: string | null;
+  rank?: number | null;
+  score_type?: string | null;
+  score?: number | null;
+  contribution?: number | null;
+}
+
+export interface OperationalTraceArtifact {
+  artifact_id: string;
+  trace_id: string;
+  kind: string;
+  media_type: string;
+  sha256: string;
+  original_bytes: number;
+  compressed_bytes: number;
+  created_at: string;
+}
+
+export interface OperationalTraceDetail {
+  trace: OperationalTraceRoot;
+  spans: OperationalTraceSpan[];
+  candidate_decisions: OperationalTraceDecision[];
+  artifacts: OperationalTraceArtifact[];
+  legacy_flat_events: HistoryEntry["events"];
+}
+
+export interface OperationalTracePage {
+  items: OperationalTraceRoot[];
+  page: number;
+  page_size: number;
+  total: number;
+}
+
+export interface OperationalTraceFilters {
+  page?: number;
+  page_size?: number;
+  trace_id?: string;
+  created_from?: string;
+  created_to?: string;
+  kind?: string;
+  status?: string;
+  project_id?: string;
+  knowledge_base_id?: string;
+  request_id?: string;
+  job_id?: string;
+  document_id?: string;
+  revision_id?: string;
+  refusal_code?: string;
+  error_code?: string;
+  capture_mode?: TraceMode | "";
+  capture_complete?: boolean;
+  feedback_useful?: boolean;
+}
+
+export interface OperationalTraceArtifactContent {
+  mediaType: string;
+  sha256: string;
+  body: string;
+}
+
+export interface DownloadFile {
+  blob: Blob;
+  filename: string;
+}
+
+export interface ProductFeedback {
+  trace_id: string;
+  project_id: string;
+  knowledge_base_id: string;
+  useful: boolean;
+  reason_code?: string | null;
+  projection_state: "PENDING" | "APPLIED" | "NOT_APPLICABLE";
+  updated_at: string;
 }
 
 export interface Tokens {
@@ -293,6 +431,24 @@ export class ApiError extends Error {
   }
 }
 
+export interface StreamedAnswerClaim {
+  claim_index: number;
+  text: string;
+  supports: { support_id: string; quote: string }[];
+  active_index_revision_id: string;
+}
+
+export interface AnswerStreamHandlers {
+  onMeta?: (traceId: string) => void;
+  onStage?: (stage: string) => void;
+  onClaim?: (claim: StreamedAnswerClaim) => void;
+}
+
+export interface AnswerStreamScope {
+  projectId: string;
+  knowledgeBaseId: string;
+}
+
 async function request<T>(
   path: string,
   token: string,
@@ -319,24 +475,283 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+async function rawRequest(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const method = (init.method ?? "GET").toUpperCase();
+  if (!new Set(["GET", "HEAD", "OPTIONS"]).has(method) && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+  const response = await fetch(path, {
+    ...init,
+    headers,
+    credentials: "same-origin",
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
+    throw new ApiError(response.status, payload);
+  }
+  return response;
+}
+
+async function downloadResponse(
+  response: Response,
+  fallbackFilename: string,
+): Promise<DownloadFile> {
+  return {
+    blob: await response.blob(),
+    filename: contentDispositionFilename(
+      response.headers.get("Content-Disposition"),
+      fallbackFilename,
+    ),
+  };
+}
+
+export function contentDispositionFilename(
+  header: string | null,
+  fallbackFilename: string,
+): string {
+  const fallback = safeFilename(fallbackFilename) ?? "download.bin";
+  if (!header) return fallback;
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)?.[1];
+  const quoted = /filename="([^"]+)"/i.exec(header)?.[1];
+  const plain = /filename=([^;\s]+)/i.exec(header)?.[1];
+  let candidate = encoded ?? quoted ?? plain;
+  if (!candidate) return fallback;
+  if (encoded) {
+    try {
+      candidate = decodeURIComponent(candidate);
+    } catch {
+      return fallback;
+    }
+  }
+  return safeFilename(candidate) ?? fallback;
+}
+
+function safeFilename(value: string): string | undefined {
+  if (
+    value !== value.trim() ||
+    value === "." ||
+    value === ".." ||
+    value.length > 180 ||
+    /[\\/]/.test(value) ||
+    [...value].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    }) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
 export async function readSseResponse(
   response: Response,
+  handlers: AnswerStreamHandlers = {},
+  expectedScope?: AnswerStreamScope,
 ): Promise<QueryResponse> {
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as ErrorPayload;
     throw new ApiError(response.status, payload);
   }
-  const body = await response.text();
-  for (const frame of body.split("\n\n")) {
-    const lines = frame.split("\n");
-    const event = lines.find((line) => line.startsWith("event: "))?.slice(7);
-    const data = lines.find((line) => line.startsWith("data: "))?.slice(6);
-    if (!event || !data) continue;
-    const payload = JSON.parse(data) as QueryResponse | ErrorPayload;
-    if (event === "error") throw new ApiError(500, payload as ErrorPayload);
-    if (event === "final") return payload as QueryResponse;
+  if (!response.body) throw new Error("SSE 响应缺少正文");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const maxFrameChars = 256 * 1024;
+  const maxResponseChars = 4 * 1024 * 1024;
+  let buffer = "";
+  let responseChars = 0;
+  let eventName = "message";
+  let dataLines: string[] = [];
+  let frameChars = 0;
+  let lastSequence = -1;
+  let lastClaimIndex = -1;
+  let traceId = response.headers.get("X-Trace-Id") ?? "";
+  let finalResult: QueryResponse | undefined;
+  let streamCompleted = false;
+
+  const dispatch = () => {
+    if (!dataLines.length) {
+      eventName = "message";
+      frameChars = 0;
+      return;
+    }
+    const data = dataLines.join("\n");
+    dataLines = [];
+    const payload = JSON.parse(data) as Record<string, unknown>;
+    const versioned = payload.protocol === "rag-answer-sse-v1";
+    if (finalResult) {
+      throw new Error("SSE Final 后包含额外协议事件");
+    }
+    if (expectedScope && !versioned) {
+      throw new Error("SSE 事件缺少协商的协议版本");
+    }
+    if (versioned) {
+      if (payload.type !== eventName) {
+        throw new Error("SSE 事件名称与类型不匹配");
+      }
+      const sequence = payload.sequence;
+      if (
+        typeof sequence !== "number" ||
+        !Number.isInteger(sequence) ||
+        sequence !== lastSequence + 1
+      ) {
+        throw new Error("SSE 事件序号不连续");
+      }
+      if (
+        expectedScope &&
+        (payload.project_id !== expectedScope.projectId ||
+          payload.knowledge_base_id !== expectedScope.knowledgeBaseId)
+      ) {
+        throw new Error("SSE 事件知识库范围不匹配");
+      }
+      if (typeof payload.trace_id !== "string") {
+        throw new Error("SSE 事件缺少 trace_id");
+      }
+      if (traceId && payload.trace_id !== traceId) {
+        throw new Error("SSE 事件 trace_id 不匹配");
+      }
+      traceId = payload.trace_id;
+      lastSequence = sequence;
+    }
+    if (eventName === "meta") {
+      if (
+        versioned &&
+        payload.delivery !== "incremental_or_final_only"
+      ) {
+        throw new Error("SSE meta 结构无效");
+      }
+      const value = payload.trace_id;
+      if (typeof value === "string") handlers.onMeta?.(value);
+    } else if (eventName === "stage") {
+      if (typeof payload.stage === "string") handlers.onStage?.(payload.stage);
+    } else if (eventName === "claim") {
+      const claim = payload.claim as Record<string, unknown> | undefined;
+      const supports = claim?.supports;
+      if (
+        !versioned ||
+        typeof payload.claim_index !== "number" ||
+        !Number.isInteger(payload.claim_index) ||
+        payload.claim_index < 0 ||
+        payload.claim_index !== lastClaimIndex + 1 ||
+        typeof payload.active_index_revision_id !== "string" ||
+        !/^irev_[0-9a-f]{32}$/.test(payload.active_index_revision_id) ||
+        payload.provisional !== true ||
+        typeof claim?.text !== "string" ||
+        claim.text.length === 0 ||
+        !Array.isArray(supports) ||
+        supports.length === 0 ||
+        !supports.every(
+          (item) =>
+            typeof item === "object" &&
+            item !== null &&
+            typeof (item as Record<string, unknown>).support_id === "string" &&
+            typeof (item as Record<string, unknown>).quote === "string",
+        )
+      ) {
+        throw new Error("SSE claim 结构无效");
+      }
+      lastClaimIndex = payload.claim_index;
+      handlers.onClaim?.({
+        claim_index: payload.claim_index,
+        text: claim.text,
+        supports: supports as { support_id: string; quote: string }[],
+        active_index_revision_id: payload.active_index_revision_id,
+      });
+    } else if (eventName === "error") {
+      if (
+        versioned &&
+        (typeof payload.code !== "string" ||
+          typeof payload.message !== "string" ||
+          typeof payload.stage !== "string" ||
+          typeof payload.retryable !== "boolean" ||
+          typeof payload.partial !== "boolean")
+      ) {
+        throw new Error("SSE error 结构无效");
+      }
+      const nested = payload.error as ErrorPayload["error"] | undefined;
+      const detail = nested ?? {
+        code: typeof payload.code === "string" ? payload.code : undefined,
+        message:
+          typeof payload.message === "string" ? payload.message : undefined,
+        stage: typeof payload.stage === "string" ? payload.stage : undefined,
+        retryable:
+          typeof payload.retryable === "boolean"
+            ? payload.retryable
+            : undefined,
+        trace_id:
+          typeof payload.trace_id === "string" ? payload.trace_id : undefined,
+      };
+      throw new ApiError(500, { error: detail });
+    } else if (eventName === "cancelled") {
+      throw new Error("流式查询已取消");
+    } else if (eventName === "final") {
+      if (finalResult) throw new Error("SSE 响应包含重复 final 事件");
+      if (
+        versioned &&
+        (typeof payload.status !== "string" ||
+          typeof payload.reason_code !== "string" ||
+          !(typeof payload.answer === "string" || payload.answer === null) ||
+          !Array.isArray(payload.evidence) ||
+          typeof payload.active_index_revision_id !== "string")
+      ) {
+        throw new Error("SSE final 结构无效");
+      }
+      finalResult = payload as unknown as QueryResponse;
+    }
+    eventName = "message";
+    frameChars = 0;
+  };
+
+  const consumeLine = (rawLine: string) => {
+    frameChars += rawLine.length + 1;
+    if (frameChars > maxFrameChars) {
+      throw new Error("SSE 单事件超过客户端上限");
+    }
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (!line) {
+      dispatch();
+      return;
+    }
+    if (line.startsWith(":")) return;
+    const separator = line.indexOf(":");
+    const field = separator < 0 ? line : line.slice(0, separator);
+    let value = separator < 0 ? "" : line.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") eventName = value;
+    if (field === "data") dataLines.push(value);
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      const decoded = decoder.decode(value, { stream: !done });
+      responseChars += decoded.length;
+      if (responseChars > maxResponseChars) {
+        throw new Error("SSE 响应超过客户端上限");
+      }
+      buffer += decoded;
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        consumeLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf("\n");
+      }
+      if (!done) continue;
+      if (buffer) consumeLine(buffer);
+      dispatch();
+      break;
+    }
+    if (!finalResult) throw new Error("SSE 响应缺少合法终态");
+    streamCompleted = true;
+    return finalResult;
+  } finally {
+    if (!streamCompleted) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
   }
-  throw new Error("SSE 响应缺少 final 事件");
 }
 
 function jsonInit(
@@ -589,6 +1004,86 @@ export const api = {
     ),
   clearHistory: () =>
     request<void>("/api/v1/history", "", { method: "DELETE" }),
+  exportHistoryTrace: async (
+    traceId: string,
+    includeHistoryBody: boolean,
+  ) => {
+    const params = new URLSearchParams({
+      include_history_body: String(includeHistoryBody),
+    });
+    const response = await rawRequest(
+      `/api/v1/admin/history-traces/${encodeURIComponent(traceId)}/export?${params}`,
+    );
+    return downloadResponse(response, `${traceId}-support.zip`);
+  },
+  exportHistoryTraces: async (
+    traceIds: string[],
+    includeHistoryBody: boolean,
+  ) => {
+    const response = await rawRequest(
+      "/api/v1/admin/history-traces:export",
+      jsonInit("POST", {
+        trace_ids: traceIds,
+        include_history_body: includeHistoryBody,
+      }),
+    );
+    return downloadResponse(response, "history-traces-support.zip");
+  },
+  listOperationalTraces: (
+    filters: OperationalTraceFilters = {},
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== "") params.set(key, String(value));
+    }
+    return request<OperationalTracePage>(
+      `/api/v1/admin/operational-traces?${params}`,
+      "",
+      { signal },
+    );
+  },
+  operationalTraceDetail: (traceId: string, signal?: AbortSignal) =>
+    request<OperationalTraceDetail>(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}`,
+      "",
+      { signal },
+    ),
+  operationalTraceArtifact: async (
+    traceId: string,
+    artifactId: string,
+    signal?: AbortSignal,
+  ): Promise<OperationalTraceArtifactContent> => {
+    const response = await rawRequest(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}/artifacts/${encodeURIComponent(artifactId)}`,
+      { signal },
+    );
+    return {
+      mediaType:
+        response.headers.get("Content-Type") ?? "application/octet-stream",
+      sha256: response.headers.get("X-Artifact-SHA256") ?? "",
+      body: await response.text(),
+    };
+  },
+  exportOperationalTrace: async (traceId: string) => {
+    const response = await rawRequest(
+      `/api/v1/admin/operational-traces/${encodeURIComponent(traceId)}/export`,
+    );
+    return downloadResponse(response, `${traceId}.json`);
+  },
+  exportOperationalTraces: async (traceIds: string[]) => {
+    const response = await rawRequest(
+      "/api/v1/admin/operational-traces:export",
+      jsonInit("POST", { trace_ids: traceIds }),
+    );
+    return downloadResponse(response, "operational-traces.zip");
+  },
+  pruneOperationalTraces: () =>
+    request<{ pruned: number }>(
+      "/api/v1/admin/operational-traces:prune",
+      "",
+      { method: "POST" },
+    ),
   readEvidenceSource: async (
     token: string,
     projectId: string,
@@ -693,6 +1188,7 @@ export const api = {
     signal?: AbortSignal,
     includeRelatedContent = false,
     historyMode?: "full" | "metadata_only",
+    conversationId?: string,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:search`,
@@ -704,6 +1200,7 @@ export const api = {
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
           ...(historyMode ? { history_mode: historyMode } : {}),
+          ...(conversationId ? { conversation_id: conversationId } : {}),
         }),
         signal,
       },
@@ -716,6 +1213,7 @@ export const api = {
     signal?: AbortSignal,
     includeRelatedContent = false,
     historyMode?: "full" | "metadata_only",
+    conversationId?: string,
   ) =>
     request<QueryResponse>(
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
@@ -727,6 +1225,7 @@ export const api = {
           stream: false,
           ...(includeRelatedContent ? { include_related_content: true } : {}),
           ...(historyMode ? { history_mode: historyMode } : {}),
+          ...(conversationId ? { conversation_id: conversationId } : {}),
         }),
         signal,
       },
@@ -738,13 +1237,19 @@ export const api = {
     query: string,
     signal?: AbortSignal,
     includeRelatedContent = false,
+    historyMode?: "full" | "metadata_only",
+    handlers: AnswerStreamHandlers = {},
+    conversationId?: string,
   ) => {
     void token;
     const init = jsonInit("POST", {
       query,
       limit: 10,
       stream: true,
+      stream_protocol: "rag-answer-sse-v1",
       ...(includeRelatedContent ? { include_related_content: true } : {}),
+      ...(historyMode ? { history_mode: historyMode } : {}),
+      ...(conversationId ? { conversation_id: conversationId } : {}),
     });
     const headers = new Headers(init.headers);
     if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
@@ -752,12 +1257,56 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}:answer`,
       { ...init, headers, signal, credentials: "same-origin" },
     );
-    return readSseResponse(response);
+    return readSseResponse(response, handlers, {
+      projectId,
+      knowledgeBaseId: kbId,
+    });
   },
   diagnostics: (token: string, traceId: string) =>
     request<RetrievalDiagnostics>(
       `/api/v1/admin/retrieval-diagnostics/${traceId}`,
       token,
+    ),
+  getFeedback: (
+    projectId: string,
+    kbId: string,
+    traceId: string,
+    signal?: AbortSignal,
+  ) =>
+    request<{ feedback: ProductFeedback | null }>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/queries/${encodeURIComponent(traceId)}/feedback`,
+      "",
+      { signal },
+    ),
+  putFeedback: (
+    projectId: string,
+    kbId: string,
+    traceId: string,
+    useful: boolean,
+    reasonCode?: string,
+  ) =>
+    request<ProductFeedback>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/queries/${encodeURIComponent(traceId)}/feedback`,
+      "",
+      jsonInit("PUT", {
+        useful,
+        ...(reasonCode ? { reason_code: reasonCode } : {}),
+      }),
+    ),
+  clearConversation: (
+    projectId: string,
+    kbId: string,
+    conversationId: string,
+  ) =>
+    request<{
+      conversation_id: string;
+      owner_id: string;
+      deleted: boolean;
+      deleted_turns: number;
+    }>(
+      `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/conversations/${encodeURIComponent(conversationId)}`,
+      "",
+      { method: "DELETE" },
     ),
   system: (token: string) =>
     request<SystemStatus>("/api/v1/system/components", token),

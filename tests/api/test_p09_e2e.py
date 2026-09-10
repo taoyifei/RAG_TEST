@@ -213,6 +213,25 @@ def test_debug_diagnostics_and_sse_final_are_controlled(tmp_path: Path) -> None:
             json={"query": "财务制度", "limit": 5, "stream": True},
             headers=_QUERY,
         )
+        versioned = client.post(
+            path,
+            json={
+                "query": "财务制度",
+                "limit": 5,
+                "stream": True,
+                "stream_protocol": "rag-answer-sse-v1",
+            },
+            headers=_QUERY,
+        )
+        invalid_negotiation = client.post(
+            path,
+            json={
+                "query": "财务制度",
+                "stream": False,
+                "stream_protocol": "rag-answer-sse-v1",
+            },
+            headers=_QUERY,
+        )
         trace_id = regular.json()["trace_id"]
         diagnostic = client.get(
             f"/api/v1/admin/retrieval-diagnostics/{trace_id}",
@@ -245,11 +264,30 @@ def test_debug_diagnostics_and_sse_final_are_controlled(tmp_path: Path) -> None:
             if event == "event: final" and line.startswith("data: ")
         )
         final = json.loads(final_line.removeprefix("data: "))
+        versioned_events = [
+            (
+                lines[index].removeprefix("event: "),
+                json.loads(lines[index + 1][6:]),
+            )
+            for lines in [versioned.text.splitlines()]
+            for index in range(len(lines) - 1)
+            if lines[index].startswith("event: ")
+            and lines[index + 1].startswith("data: ")
+        ]
         assert diagnostic.status_code == 200
         assert safe_trace.status_code == 200
         assert safe_trace.json()["trace_id"] == trace_id
         assert safe_trace.json()["events"]
         assert disabled.status_code == 403
+        assert invalid_negotiation.status_code == 422
+        assert streamed.headers["Cache-Control"] == "no-store, no-transform"
+        assert streamed.headers["X-Accel-Buffering"] == "no"
+        assert [
+            line.removeprefix("event: ")
+            for line in streamed.text.splitlines()
+            if line.startswith("event: ")
+        ] == ["meta", "retrieval", "final"]
+        assert "rag-answer-sse-v1" not in streamed.text
         assert final["answer"] == regular.json()["answer"]
         assert final["evidence"] == regular.json()["evidence"]
         assert (
@@ -257,6 +295,24 @@ def test_debug_diagnostics_and_sse_final_are_controlled(tmp_path: Path) -> None:
             == regular.json()["active_index_revision_id"]
         )
         assert final["evidence_count"] <= 8
+        assert [payload["sequence"] for _, payload in versioned_events] == list(
+            range(len(versioned_events))
+        )
+        assert all(
+            payload["protocol"] == "rag-answer-sse-v1"
+            and payload["type"] == event
+            and payload["project_id"] == project_id
+            and payload["knowledge_base_id"] == knowledge_base_id
+            for event, payload in versioned_events
+        )
+        assert [event for event, _ in versioned_events] == [
+            "meta",
+            "stage",
+            "stage",
+            "stage",
+            "final",
+        ]
+        assert versioned_events[-1][1]["answer"] == regular.json()["answer"]
 
 
 def test_index_corruption_and_fts_v1_have_distinct_errors(

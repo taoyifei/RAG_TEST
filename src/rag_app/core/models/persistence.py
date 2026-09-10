@@ -64,7 +64,9 @@ class BlobReference(FrozenModel):
     artifact_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     owner_type: str = Field(pattern=r"^(document_version|parsed_media|other)$")
     owner_id: str = Field(min_length=1)
-    role: str = Field(pattern=r"^(source_document|embedded_media|other)$")
+    role: str = Field(
+        pattern=r"^(source_document|derived_document|embedded_media|other)$"
+    )
     revision_id: str | None = Field(
         default=None,
         pattern=r"^irev_[0-9a-f]{32}$",

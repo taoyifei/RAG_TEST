@@ -43,7 +43,6 @@ from rag_app.adapters.providers.aliyun_endpoint import (
 )
 from rag_app.adapters.providers.aliyun_ocr import (
     AliyunOcrAdapter,
-    AliyunOcrConfig,
     ocr_input_token_estimate,
     synthetic_ocr_payload,
 )
@@ -65,6 +64,18 @@ from rag_app.product.catalog import CATALOG_VERSION, validate_model
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.models import ProviderConnection, ProviderValidationRun
+from rag_app.product.ocr_adapters import (
+    LOCAL_OCR_CONNECTION_ID,
+    LocalProductOcrAdapter,
+    aliyun_ocr_config,
+    aliyun_ocr_identity,
+    aliyun_product_ocr_adapter,
+)
+from rag_app.product.ocr_contract import (
+    OcrAdapterIdentity,
+    ProductOcrAdapter,
+    ProductOcrPolicy,
+)
 from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_embedding,
@@ -118,6 +129,7 @@ class ProviderRuntimeRegistry:
         *,
         transport_factory: TransportFactory | None = None,
         budget_ledger_path: Path | None = None,
+        local_ocr_adapter: LocalProductOcrAdapter | None = None,
     ) -> None:
         """保存安全解析器、控制面和可注入 Transport。
 
@@ -126,6 +138,7 @@ class ProviderRuntimeRegistry:
             control: Provider Connection 与验证记录 Store。
             transport_factory: 测试用 MockTransport 工厂。
             budget_ledger_path: 产品共享的持久预算账本路径。
+            local_ocr_adapter: 可选的内部 OCR 客户端适配器；默认不可用。
 
         Returns:
             无返回值。
@@ -135,6 +148,7 @@ class ProviderRuntimeRegistry:
         self._control = control
         self._transport_factory = transport_factory
         self._budget_ledger_path = budget_ledger_path
+        self._local_ocr_adapter = local_ocr_adapter
         self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
         self._lock = RLock()
 
@@ -163,6 +177,19 @@ class ProviderRuntimeRegistry:
 
         """
         return self._transport_factory is not None
+
+    @property
+    def local_ocr_available(self) -> bool:
+        """说明 Product 组合根是否注入了可用的本地 OCR Adapter。
+
+        Args:
+            无参数；读取当前 Provider Registry 配置。
+
+        Returns:
+            本地 OCR Adapter 已注入时为 ``True``。
+
+        """
+        return self._local_ocr_adapter is not None
 
     def validate(
         self,
@@ -554,28 +581,106 @@ class ProviderRuntimeRegistry:
         connection_id: str,
         *,
         model: str,
-        config: AliyunOcrConfig | None = None,
-    ) -> AliyunOcrAdapter:
-        """复用同一百炼凭据创建有界图片识别 adapter。
+        config: ProductOcrPolicy | None = None,
+    ) -> ProductOcrAdapter:
+        """按连接选择本地或百炼 OCR，并返回统一 Product 端口。
 
         Args:
-            connection_id: 当前受控百炼连接。
+            connection_id: 当前受控百炼连接或注入的本地连接标识。
             model: 已批准的 OCR 模型 ID。
-            config: 可选图像/输出预算及识别策略身份。
+            config: 可选图像/输出预算及统一识别策略身份。
 
         Returns:
-            每图至多两次 HTTP 尝试的 OCR adapter。
+            带完整 adapter/provider/revision 身份的 OCR adapter。
+
+        Raises:
+            ConfigurationError: 选择本地 OCR 但组合根没有注入配置，或
+                本地模型、策略身份不匹配。
 
         """
-        connection = self._control.get_connection(connection_id)
-        validate_model(connection.provider_type, model, "image.ocr")
-        resolved = config or AliyunOcrConfig(model=model, egress_allowed=True)
+        resolved = config or ProductOcrPolicy(model=model, egress_allowed=True)
         if resolved.model != model:
             raise ValueError("OCR 策略与模型引用不一致。")
-        return AliyunOcrAdapter(
-            resolved,
-            http_client=self._adapter_http_client(connection, max_attempts=2),
-            api_key_resolver=self._secret_resolver(connection),
+        identity = self.ocr_identity(
+            connection_id,
+            model=model,
+            policy_version=resolved.policy_version,
+        )
+        if identity.adapter == "local-paddleocr":
+            if self._local_ocr_adapter is None:
+                raise ConfigurationError(
+                    "本地 OCR 尚未配置。",
+                    stage="product.ocr.config",
+                    code="LOCAL_OCR_UNAVAILABLE",
+                )
+            return self._local_ocr_adapter
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "image.ocr")
+        return aliyun_product_ocr_adapter(
+            AliyunOcrAdapter(
+                aliyun_ocr_config(resolved),
+                http_client=self._adapter_http_client(
+                    connection, max_attempts=2
+                ),
+                api_key_resolver=self._secret_resolver(connection),
+            ),
+            provider=identity.provider,
+            policy=resolved,
+        )
+
+    def ocr_identity(
+        self,
+        connection_id: str,
+        *,
+        model: str,
+        policy_version: str,
+    ) -> OcrAdapterIdentity:
+        """不创建网络客户端即解析 OCR 的完整缓存身份。
+
+        Args:
+            connection_id: 远程连接或注入的本地连接标识。
+            model: 当前知识库选择的 OCR 模型。
+            policy_version: 内容增补策略版本。
+
+        Returns:
+            可同时绑定内容 Revision、cache row 和派生节点的身份。
+
+        Raises:
+            ConfigurationError: 本地 OCR 未注入或身份不匹配。
+
+        """
+        local = self._local_ocr_adapter
+        if connection_id == LOCAL_OCR_CONNECTION_ID or (
+            local is not None and connection_id == local.connection_id
+        ):
+            if local is None:
+                raise ConfigurationError(
+                    "本地 OCR 尚未配置。",
+                    stage="product.ocr.config",
+                    code="LOCAL_OCR_UNAVAILABLE",
+                )
+            identity = local.identity
+            if (
+                identity.model != model
+                or identity.policy_version != policy_version
+            ):
+                raise ConfigurationError(
+                    "本地 OCR 模型或策略身份与选择不一致。",
+                    stage="product.ocr.config",
+                    code="LOCAL_OCR_IDENTITY_MISMATCH",
+                )
+            return identity
+        connection = self._control.get_connection(connection_id)
+        validate_model(connection.provider_type, model, "image.ocr")
+        return aliyun_ocr_identity(
+            provider=(
+                f"{connection.provider_type}:{connection.connection_id}:"
+                f"v{connection.configuration_version}"
+            ),
+            policy=ProductOcrPolicy(
+                model=model,
+                policy_version=policy_version,
+            ),
         )
 
     def _client(

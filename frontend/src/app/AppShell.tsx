@@ -11,6 +11,7 @@ import {
   Menu,
   MessageSquareText,
   Network,
+  Route,
   RefreshCw,
   Settings,
 } from "lucide-react";
@@ -33,6 +34,7 @@ import { RevisionPage } from "../pages/RevisionPage";
 import { QueryPage } from "../pages/QueryPage";
 import { SystemPage } from "../pages/SystemPage";
 import { HistoryPage } from "../pages/HistoryPage";
+import { OperationalTracesPage } from "../pages/OperationalTracesPage";
 const primaryNav = [
   [routes.workspace, zhCN.navigation.workspace, LayoutDashboard],
   [routes.knowledgeBases, zhCN.navigation.knowledge, FolderKanban],
@@ -44,6 +46,7 @@ const primaryNav = [
 const operationsNav = [
   [routes.documents, zhCN.navigation.documents, Database],
   [routes.jobs, zhCN.navigation.jobs, Activity],
+  [routes.traces, "Operational Trace", Route],
   [routes.revision, zhCN.navigation.revisions, Boxes],
   [routes.retrieval, zhCN.navigation.retrieval, FileSearch],
   [routes.retrievalProfiles, "检索方案", Settings],
@@ -250,22 +253,28 @@ export default function AppShell() {
               )}
               {path === "/revision" && (
                 <ScopeGuard>
-                  <RevisionPage key={scope.kbId} />
+                  <RevisionPage key={scope.kbId} go={go} />
                 </ScopeGuard>
               )}
               {path === "/retrieval" && (
                 <ScopeGuard>
-                  <QueryPage key={scope.kbId} mode="search" />
+                  <QueryPage key={scope.kbId} mode="search" go={go} />
                 </ScopeGuard>
               )}
               {path === "/chat" && (
                 <ScopeGuard>
-                  <QueryPage key={scope.kbId} mode="answer" />
+                  <QueryPage key={scope.kbId} mode="answer" go={go} />
                 </ScopeGuard>
               )}
               {path === "/system" && <SystemPage />}
               {path === routes.history && (
-                <HistoryPage key={`${scope.projectId}:${scope.kbId}`} />
+                <HistoryPage key={`${scope.projectId}:${scope.kbId}`} go={go} />
+              )}
+              {path === routes.traces && (
+                <OperationalTracesPage
+                  key={`${scope.projectId}:${scope.kbId}`}
+                  go={go}
+                />
               )}
               {path === routes.modelServices && <ModelServicesPage />}
               {path === routes.retrievalProfiles && (

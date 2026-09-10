@@ -1,4 +1,4 @@
-"""断网启动前的本地资源完整性检查。"""
+"""Legacy 与 Product 断网启动前的本地资源完整性检查。"""
 
 from __future__ import annotations
 
@@ -8,15 +8,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rag_app.chunking import HuggingFaceTokenCounter
+from rag_app.product.asset_manifest import (
+    ProductAssetCheckReport,
+    verify_product_asset_manifest,
+)
 from rag_app.runtime import load_pipeline
 from rag_app.settings import RetrievalSettings
 
-__all__ = ["AssetCheckReport", "AssetPaths", "verify_offline_assets"]
+__all__ = [
+    "AssetCheckReport",
+    "AssetPaths",
+    "ProductAssetCheckReport",
+    "verify_offline_assets",
+    "verify_product_asset_manifest",
+]
 
-_MANIFEST_LINE = re.compile(
-    r"^(?P<digest>[0-9a-f]{64})  (?P<path>[^\r\n]+)$"
-)
-_REMOTE_RESOURCE_MARKERS = ("http://", "https://", "src=\"//", "href=\"//")
+_MANIFEST_LINE = re.compile(r"^(?P<digest>[0-9a-f]{64})  (?P<path>[^\r\n]+)$")
+_REMOTE_RESOURCE_MARKERS = ("http://", "https://", 'src="//', 'href="//')
 
 
 @dataclass(frozen=True, slots=True)

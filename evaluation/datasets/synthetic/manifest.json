@@ -1,8 +1,8 @@
 {
   "schema_version": "3",
   "dataset_id": "p08-synthetic-v2",
-  "dataset_version": "3.0.0",
-  "description": "Non-sensitive deterministic OOXML corpus for P08.5 Evaluation V3, including CJK, precision, isolation, and refusal slices.",
+  "dataset_version": "3.0.1",
+  "description": "Non-sensitive deterministic OOXML corpus for P08.5 Evaluation V3, refreshed for the docx-structural-v3 3.0.2 chunk identity while preserving the public source-range labels.",
   "split_algorithm": "Document and template families are assigned as indivisible groups before authoring queries; rename and near-duplicate families remain in one split.",
   "content_classification": "synthetic_public",
   "cases_file": "cases.jsonl",

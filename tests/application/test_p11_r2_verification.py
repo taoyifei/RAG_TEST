@@ -1,5 +1,6 @@
 """验证结果不能跨连接、参数、模式和生命周期复用。"""
 
+from datetime import datetime, timedelta, tzinfo
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,54 @@ def test_unrelated_connection_and_changed_policy_do_not_admit_profile(
                 profile.profile_revision_id
             )
         ) == {f"{jina}:embedding.document", f"{jina}:embedding.query"}
+    finally:
+        harness.close()
+
+
+def test_provider_validation_allows_only_bounded_clock_correction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """允许虚拟化时钟小幅回拨，但拒绝超出边界的未来证据。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "synthetic-aliyun-value")
+    harness = build_product_harness(tmp_path)
+    try:
+        _, kb = create_project_and_knowledge_base(harness)
+        _, _, jina, aliyun = create_provider_connections(harness)
+        validate_five_operations(harness, jina, aliyun)
+        profile = harness.runtime.control.create_profile(
+            _draft(kb, jina, aliyun)
+        )
+        finished = min(
+            datetime.fromisoformat(run.finished_at)
+            for connection_id in (jina, aliyun)
+            for run in harness.runtime.control.list_validations(connection_id)
+        )
+
+        class Clock:
+            current = finished - timedelta(seconds=1)
+            fromisoformat = staticmethod(datetime.fromisoformat)
+
+            @classmethod
+            def now(cls, timezone: tzinfo | None = None) -> datetime:
+                """返回测试控制的 UTC 墙钟。"""
+                return cls.current.astimezone(timezone)
+
+        monkeypatch.setattr("rag_app.product.verification.datetime", Clock)
+        assert (
+            harness.runtime.control.profile_validation_issues(
+                profile.profile_revision_id
+            )
+            == ()
+        )
+        Clock.current = finished - timedelta(seconds=10)
+        assert (
+            len(
+                harness.runtime.control.profile_validation_issues(
+                    profile.profile_revision_id
+                )
+            )
+            == 4
+        )
     finally:
         harness.close()
 

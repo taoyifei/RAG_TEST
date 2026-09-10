@@ -36,7 +36,7 @@ def test_p08_5_diagnostics_are_stage_specific_and_public_safe(
         item.call_count for item in diagnostics.provider_calls
     )
     serialized = result.model_dump_json()
-    assert "diagnostics\"" not in serialized
+    assert 'diagnostics"' not in serialized
     assert "ABC-123" not in diagnostics.model_dump_json()
 
 
@@ -57,4 +57,4 @@ def test_p08_5_dataset_and_schema_migrations_are_complete(
 
     assert len(dataset.cases) >= 50
     assert migrations[5:9] == (6, 7, 8, 9)
-    assert migrations[-1] == 20
+    assert migrations[-1] == 25

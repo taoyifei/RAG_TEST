@@ -247,7 +247,12 @@ def _qualified_support(
         support = dict(item.metadata).get("answer_support")
         if not isinstance(support, dict) or support.get(
             "support_reason"
-        ) not in {"LINKED_SUBJECT_ATTRIBUTE", "TABLE_ROW_ATTRIBUTE"}:
+        ) not in {
+            "LINKED_SUBJECT_ATTRIBUTE",
+            "TABLE_ROW_ATTRIBUTE",
+            "STRUCTURED_LIST_RELATION",
+            "SOURCE_CORRECTS_COUNT_PREMISE",
+        }:
             return False
         nodes = support.get("supporting_span_ids", [])
         if not isinstance(nodes, list) or not any(

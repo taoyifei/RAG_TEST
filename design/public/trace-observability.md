@@ -1,77 +1,114 @@
-# Query Trace v1 可观测契约
+# Product Operational Trace v2 可观测契约
 
-Query Trace v1 用于管理员按 `trace_id` 复盘查询流水，不参与检索、排序、生成、
-readiness 或生产评测。它记录可观察输入输出、分数、阈值、稳定 reason code 和
-确定性校验结果，不记录或推断模型隐藏思维过程。
+Operational Trace v2 服务于当前默认 `rag-app serve`、Product API、SDK 和
+React 控制台。它按同一个公开 `trace_id` 与 `ProductQueryHistory` 关联，但不
+参与检索、排序、生成、readiness 或评测判定，也不记录或推断模型隐藏思维过程。
 
-## 内容边界
+History 与 Operational Trace 的职责不同：History 保存用户可见请求、终态、
+加密问题/答案、引用和 Provider usage；Operational Trace 保存技术身份、层级
+span、候选漏斗、Provider 子调用和有限调试制品。Trace 不重复结算请求，不替代
+History 的正文保留与重新鉴权策略。
 
-普通 `/api/chat` 由运维配置为 `SAFE` 或 `DIAGNOSTIC`，query token 不能选择
-`FULL`：
+## 内容与失败边界
 
-- `SAFE` 保存版本身份、父子 span、独立耗时、阶段计数、终态和非敏感失败码；
-- `DIAGNOSTIC` 另保存问题/历史/resolved query 的 SHA256 与 token 数，以及候选
-  的通道 rank、同通道 raw score、RRF contribution、rerank score、reason；
-- `FULL` 只由 `/api/admin/debug/chat` 开启，保存准确 context、改写请求响应、
-  候选、evidence、Prompt、原始模型输出、validation、repair 和最终回答。
+- `SAFE` 是默认模式，只保存版本身份、问题摘要、父子 span、独立耗时、阶段
+  计数、终态、稳定 reason code 和 Provider operation/model；不保存问题、回答、
+  证据、Prompt、原始 delta、Secret、Cookie、向量或模型思考。
+- `DIAGNOSTIC` 增加候选 ID、通道 rank、分数类型、RRF contribution、rerank
+  score 和淘汰原因；仍不保存正文或 Prompt。
+- `FULL` 只接受显式管理员调试请求。执行前先检查 Store、writer queue、磁盘和
+  1 MiB Artifact 预留容量；准入失败时 fail closed，不执行查询。正文优先通过
+  加密 History 读取，Trace Artifact 不独立捕获问题、回答、整份文档或 Prompt。
 
-`FULL` 默认保留 72 小时，其他模式保留 30 天。单 Trace 的原始 artifact 总量
-上限为 5 MiB；超限停止写入新大对象并标记不完整，不截断内容冒充完整记录。
-artifact 使用 zlib 压缩，同时保存 SHA256、原始字节数和压缩字节数。
+所有模式都禁止 Authorization、API key、Cookie、未经净化的异常、原始
+embedding、图片二进制、OCR base64 和模型思考。Artifact 使用 zlib 压缩并保存
+SHA-256、media type、原始/压缩字节数；读取时复核完整性，不截断后声称完整。
 
-所有模式禁止保存 Authorization、API key、Cookie、未经净化的异常、原始
-embedding 向量、图片二进制、OCR base64 或 SQLite 密钥。候选矩阵和完整输入
-输出保存在独立表；span attributes 只保存小型安全字段和 artifact 引用。
+普通 `SAFE`/`DIAGNOSTIC` 捕获失败不能改变正常查询结果：记录
+`capture_complete=false`、稳定失败码和 dropped/high-water 计数。`FULL` 的开始
+或最终持久化失败按严格模式返回安全错误。根终态支持 `ANSWERED`、`REFUSED`、
+`FAILED`、`CANCELLED`、`INTERRUPTED` 和 ingestion 的 `SUCCEEDED`；重复 finish
+保持幂等。启动时将遗留 `RUNNING` root/span 恢复为 `INTERRUPTED`。
 
-## 持久化与失败语义
+## 持久化、保留与恢复
 
-`RAG_TRACE_DATABASE` 指向独立 SQLite 文件，不与任务、manifest 或评测证据库
-共用。数据库使用 0600、WAL、`synchronous=FULL`、外键和有界分页。单 writer
-队列串行写入，固定周期清理到期根 Trace 及级联数据。
+Trace 使用 Product data root 下独立的 `product-traces.sqlite3`，不与 Query
+History 正文、任务数据库或评测证据混写。数据库采用受控目录、拒绝 symlink、
+0600、WAL、`synchronous=FULL`、外键、唯一 sequence 和有界分页。单 writer
+队列默认容量 256；span、candidate、stage decision、Artifact 和批量导出均有
+硬上限，超限记录摘要而非无限增长或阻塞查询。
 
-普通查询中 Store、队列或身份读取失败只写非敏感 `TRACE_CAPTURE_FAILED`/
-`TRACE_QUEUE_FULL` 审计，查询结果不变。管理员 FULL Debug 在查询提交前检查
-Store 与容量，不可用时返回 503。查询中途异常会关闭活动 span，保留此前 span、
-候选漏斗、外部调用和稳定 `failure_stage`。
+`SAFE`/`DIAGNOSTIC` 根 Trace 默认保留 30 天，`FULL` 默认保留 72 小时；History
+正文与 Trace Artifact 按各自策略独立保留。prune 是幂等事务，活动导出持有读取
+租约，不会与清理交错。Product 备份包含独立 Trace 数据库；恢复先校验 manifest、
+成员 hash 与目标安全性，再在冷启动迁移和恢复未完成状态。
 
-所有 `/api/admin/traces*` 接口只接受 admin token，并返回
-`Cache-Control: no-store`。artifact 必须同时匹配 trace ID；过期内容返回 410。
-canonical export 只包含所请求 Trace，禁止成为生产 evaluator 的活动证据输入。
+旧平面 Job/History event 继续可读。没有层级信息的旧记录显示为
+`legacy_flat_events` 且 `capture_complete=false`，不会伪造历史 span。Trace schema
+通过 Product migration 独立升级；部分迁移失败会阻止 Store 被当作健康实例使用。
 
-## Span 与 OpenTelemetry 映射
+## 身份、Span 与候选漏斗
 
-本轮只提供无第三方依赖的 `TraceExporter` Protocol 和默认
-`NullTraceExporter`，不安装 OpenTelemetry SDK，也不部署 Phoenix。
+Product 公共 ID 继续使用 `trace_<32 hex>`，Store 同时兼容旧 `<32 hex>` 读取。
+根身份绑定 query/ingestion kind、project/KB、owner 摘要、request/job/document/
+revision、profile、index/serving/pipeline fingerprint 和 source revision。
 
-| 本地逻辑 | SpanKind | 后续 OTel/Phoenix 映射 |
+当前共享执行链记录 admission、snapshot/context、analysis/normalization、rewrite、
+cache/singleflight、exact/lexical/dense、fusion/hydration、plan、rerank、neighbor、
+evidence、confidence/abstention、generation、claim/citation validation、repair、publish
+和 History 结算。Ingestion 记录 upload/spool、format、DOC 转换或原生 DOCX、parse、
+IR、媒体增强、chunk、embedding、lexical/vector persist、revision validation、
+activation、cancel/retry 和资源释放。
+
+每次真实 Provider 调用是所属阶段的 child span，独立记录 operation、provider、
+model、attempt、实际 elapsed、status、usage 的 actual/unknown 和稳定 fallback/
+circuit reason。候选决策区分 exact/lexical/dense rank、score type、RRF contribution、
+rerank、evidence 和 drop reason；同一数值字段不混用不同分数语义。
+
+本地 Span 可映射到 OpenTelemetry，但默认不安装 OTel SDK 或部署 Phoenix：
+
+| 本地 SpanKind | 含义 | 可选 OTel 映射 |
 | --- | --- | --- |
-| `rag.query`、context、rewrite、route、evidence | `CHAIN` | root/internal span |
-| `embedding.query` | `EMBEDDING` | embedding client span |
-| retrieve、Qdrant、RRF、neighbor | `RETRIEVER` | retriever/client span |
-| rerank | `RERANKER` | reranker client span |
-| answer、rewrite LLM、repair | `LLM` | LLM client span |
-| validation、publish | `GUARDRAIL` | deterministic guardrail span |
-| conversation/Trace SQLite | `STORAGE` | storage client span |
+| `CHAIN` / `HTTP` | 根链、准入和编排 | server/internal span |
+| `RETRIEVER` / `EMBEDDING` | 检索与向量调用 | retriever/client span |
+| `RERANKER` / `LLM` | 重排和生成调用 | model client span |
+| `GUARDRAIL` | 证据、校验、拒答和发布 | internal span |
+| `STORAGE` | Trace、History 和缓存写入 | storage client span |
 
-32 位小写十六进制 trace ID、16 位小写十六进制 span ID、parent、kind、status、
-attributes 和 artifact SHA 均可映射到 OTel。后续可通过 OTLP 把小型 span 导出
-到可选的内网 Phoenix；Phoenix 不参与 RAG readiness，不替代本项目的 decision
-reason、候选表或 artifact Store，exporter 失败也不得影响本地 Store 或查询。
+可选 exporter 失败不影响本地 Store 或查询语义；外部观测系统也不替代本项目的
+reason code、候选表或安全 Artifact 合同。
 
-## 管理页面
+## API、权限与 React
 
-`/debug/` 只加载本地 HTML/CSS/JS。页面展示稳定倒序列表、父子 waterfall、
-候选漏斗、完整 artifact 标签、chunk 定位和机械诊断摘要。所有业务内容通过
-`textContent` 或新建 DOM 文本节点展示，不使用 `innerHTML`。
+当前 Product 路由为：
 
-expected chunk ID 只保存在当前浏览器会话：
+- `GET /api/v1/admin/operational-traces`：有界分页和身份/状态/模式过滤；
+- `GET /api/v1/admin/operational-traces/{trace_id}`：根、waterfall、候选、Provider
+  和 Artifact metadata；
+- `GET .../{trace_id}/artifacts/{artifact_id}`：惰性读取并重新鉴权；
+- `GET .../{trace_id}/export`：单条 canonical JSON；
+- `POST /api/v1/admin/operational-traces:export`：稳定排序、manifest 和 SHA-256 的
+  有界 ZIP；
+- `POST /api/v1/admin/operational-traces:prune`：仅管理员会话。
 
-- 未进入 recall 候选：`retrieval loss`；
-- 进入 recall、未进 rerank final：`rerank loss`；
-- 进入 rerank、未进 evidence：`assembly loss`；
-- 进入 evidence、未引用：`generation/validation loss`。
+管理员 Session 服从同源与 CSRF；API Token 分别要求 `trace:summary`、
+`trace:detail`、`trace:full`、`trace:export`，并按绑定的 project/KB 重新校验范围。
+普通 query token 没有 Trace 管理能力。响应统一 `Cache-Control: no-store` 和
+`X-Content-Type-Options: nosniff`；来源删除、撤权或 scope 不匹配后不再返回受
+保护 Artifact 或导出。
 
-该临时标注不会写入 SQLite、冻结集或评测可信根。诊断摘要只描述观察到的
-`RETRIEVAL_EMPTY`、`RERANK_DROP`、`EVIDENCE_BUDGET_DROP`、
-`PROMPT_INJECTION_ONLY`、`MODEL_UNAVAILABLE`、`VALIDATION_FAILED` 或
-`ANSWERED`，没有人工标签时不声称语义根因。
+React 的 `/operational-traces` 是默认管理页面，不恢复 legacy `/debug/`：支持
+列表、过滤、分页、capture completeness、waterfall、candidate funnel、Provider/
+usage、惰性 Artifact、单条/批量导出，以及 Query、History、Job、Document 和
+Revision 的双向跳转。大 Trace 采用有界展开，业务值按文本渲染，不使用 HTML
+注入。旧 `/api/admin/traces*` 与静态 debug 页面仅是 legacy 规格来源，不是当前
+Product 默认入口。
+
+## 多模态 Trace 边界
+
+媒体事件明确区分 `native_text`、`ocr_text`、`diagram_relation` 和
+`derived_caption_or_association`。本地/远程 OCR 共用结果合同；Provider 未返回
+bbox/confidence 时保持 `None`。视觉关系首先是带 occurrence、media SHA、模型/
+策略和 review state 的 candidate，只有版本化策略接纳后才能成为回答证据。
+OCR 文本正确不证明连线、方向或层级正确，Trace 和 UI 不能把待审 candidate
+冒充 Word 原文或正式关系。

@@ -8,6 +8,7 @@ import {
   type RetrievalDiagnostics,
   type RelatedContent,
   type SourceChunk,
+  type StreamedAnswerClaim,
 } from "../api/client";
 import {
   EmptyState,
@@ -18,8 +19,22 @@ import {
 import { DiagnosticsView, HistoryTrace } from "../components/HistoryTrace";
 import { useConsole } from "../state/console-context";
 import { isOcrEvidence, OcrEvidenceSource } from "../components/DocumentImages";
+import { QueryFeedback } from "../components/QueryFeedback";
 
-export function QueryPage({ mode }: { mode: "search" | "answer" }) {
+function newConversationId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return `conversation-${crypto.randomUUID()}`;
+  }
+  return `conversation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export function QueryPage({
+  mode,
+  go,
+}: {
+  mode: "search" | "answer";
+  go?: (path: string) => void;
+}) {
   const { tokens, scope } = useConsole();
   const [identity, setIdentity] = useState({ ...tokens, generation: 0 });
   if (identity.query !== tokens.query || identity.admin !== tokens.admin) {
@@ -29,11 +44,58 @@ export function QueryPage({ mode }: { mode: "search" | "answer" }) {
     <ScopedQueryPage
       key={`${mode}:${scope.projectId}:${scope.kbId}:${scope.revisionId}:${identity.generation}`}
       mode={mode}
+      go={go}
     />
   );
 }
 
-function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
+function answerDeliveryMessage(result: QueryResponse): string {
+  if (result.result_origin === "singleflight") {
+    return "本次复用了同一主体、权限、索引版本和会话下的等价在途计算；历史与 Trace 仍独立记录。";
+  }
+  if (result.result_origin === "cache" || result.cache_hit) {
+    return "本次结果来自查询缓存；本次请求没有调用回答模型或问题改写模型。";
+  }
+  if (result.generation_mode === "llm") {
+    return result.generation_called_this_request === false
+      ? "答案由已核验的模型结果提供，但本次没有记录到新的模型调用。"
+      : "本次答案由回答模型基于所列证据生成，并已通过来源校验。";
+  }
+  if (result.generation_mode === "extractive") {
+    return "本次答案采用原文摘录；未使用回答模型生成。";
+  }
+  const reason = result.generation_reason_code ?? "";
+  if (result.generation_mode === "extractive_fallback") {
+    if (reason.includes("BUDGET")) {
+      return "回答模型因预算不可用，本次已安全回退为原文摘录。";
+    }
+    if (reason.includes("AUTHORIZED") || reason.includes("POLICY_DENIED")) {
+      return "回答模型未获本次资料出网授权，本次已安全回退为原文摘录。";
+    }
+    return "回答模型本次调用失败或输出未通过校验，已安全回退为原文摘录。";
+  }
+  if (result.status === "AMBIGUOUS_NEEDS_CLARIFICATION") {
+    return "当前问题含义不足以可靠确定，请补充对象、范围或所问关系。";
+  }
+  if (reason.includes("BUDGET")) {
+    return "回答模型预算不可用，且当前证据不足以提供原文摘录答案。";
+  }
+  if (reason.includes("AUTHORIZED") || reason.includes("POLICY_DENIED")) {
+    return "回答模型未获本次资料出网授权，且当前证据不足以提供答案。";
+  }
+  if (reason === "GENERATOR_NOT_CONFIGURED") {
+    return "本知识库未配置回答模型；当前资料也没有足以直接回答的证据。";
+  }
+  return "当前资料没有足以直接回答这个问题的证据。";
+}
+
+function ScopedQueryPage({
+  mode,
+  go,
+}: {
+  mode: "search" | "answer";
+  go?: (path: string) => void;
+}) {
   const { tokens, scope } = useConsole();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<QueryResponse>();
@@ -47,7 +109,14 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
   const [saveBody, setSaveBody] = useState(true);
   const [savedBody, setSavedBody] = useState(true);
   const [historyTrace, setHistoryTrace] = useState<string>();
+  const [streamClaims, setStreamClaims] = useState<StreamedAnswerClaim[]>([]);
+  const [streamStage, setStreamStage] = useState<string>();
+  const [conversationId, setConversationId] = useState(newConversationId);
+  const [conversationBusy, setConversationBusy] = useState(false);
+  const [conversationStatus, setConversationStatus] = useState<string>();
+  const [conversationError, setConversationError] = useState<unknown>();
   const activeRequest = useRef<AbortController | undefined>(undefined);
+  const requestGeneration = useRef(0);
   const sourceRequest = useRef<AbortController | undefined>(undefined);
   useEffect(
     () => () => {
@@ -60,6 +129,8 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
     event.preventDefault();
     activeRequest.current?.abort();
     const controller = new AbortController();
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
     activeRequest.current = controller;
     setBusy(true);
     sourceRequest.current?.abort();
@@ -71,6 +142,8 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
     setDiagnostics(undefined);
     setDiagnosticsError(undefined);
     setHistoryTrace(undefined);
+    setStreamClaims([]);
+    setStreamStage(mode === "answer" ? "accepted" : undefined);
     try {
       const response =
         mode === "search"
@@ -83,7 +156,7 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               true,
               saveBody ? "full" : "metadata_only",
             )
-          : await api.answer(
+          : await api.answerStream(
               tokens.query,
               scope.projectId,
               scope.kbId,
@@ -91,9 +164,33 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
               controller.signal,
               true,
               saveBody ? "full" : "metadata_only",
+              {
+                onStage: (stage) => {
+                  if (
+                    activeRequest.current === controller &&
+                    requestGeneration.current === generation &&
+                    !controller.signal.aborted
+                  ) {
+                    setStreamStage(stage);
+                  }
+                },
+                onClaim: (claim) => {
+                  if (
+                    activeRequest.current !== controller ||
+                    requestGeneration.current !== generation ||
+                    controller.signal.aborted
+                  ) {
+                    return;
+                  }
+                  setStreamClaims((current) => [...current, claim]);
+                },
+              },
+              conversationId,
             );
       if (controller.signal.aborted) return;
       setResult(response);
+      setStreamClaims([]);
+      setStreamStage("final");
       setSavedBody(saveBody);
       if (mode === "search") {
         void api
@@ -114,6 +211,48 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
       );
     } finally {
       if (activeRequest.current === controller) setBusy(false);
+    }
+  }
+  function stopAnswer() {
+    const controller = activeRequest.current;
+    if (!controller || controller.signal.aborted) return;
+    controller.abort();
+    setStreamStage("cancelled");
+    setError(new Error("流式查询已停止；暂存内容不是最终答案。"));
+  }
+  function startNewConversation() {
+    activeRequest.current?.abort();
+    setConversationId(newConversationId());
+    setConversationStatus("已开始新会话；先前会话仍按保留策略保存。");
+    setConversationError(undefined);
+    setResult(undefined);
+    setStreamClaims([]);
+    setStreamStage(undefined);
+    setHistoryTrace(undefined);
+  }
+  async function clearConversation() {
+    activeRequest.current?.abort();
+    setConversationBusy(true);
+    setConversationError(undefined);
+    try {
+      const cleared = await api.clearConversation(
+        scope.projectId,
+        scope.kbId,
+        conversationId,
+      );
+      setConversationStatus(
+        cleared.deleted
+          ? `已清空当前会话的 ${cleared.deleted_turns} 轮。`
+          : "当前会话没有已保存轮次。",
+      );
+      setResult(undefined);
+      setStreamClaims([]);
+      setStreamStage(undefined);
+      setHistoryTrace(undefined);
+    } catch (reason) {
+      setConversationError(reason);
+    } finally {
+      setConversationBusy(false);
     }
   }
   async function openRelated(item: RelatedContent) {
@@ -149,6 +288,37 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
           </p>
         </div>
       </div>
+      {mode === "answer" && (
+        <section className="panel conversation-controls" aria-label="当前会话">
+          <div>
+            <span className="eyebrow">当前会话</span>
+            <code>{conversationId}</code>
+            <small>
+              仅保存有界问题和已验证事实摘要；切换知识库或退出后不会串用。
+            </small>
+          </div>
+          <div className="row-actions">
+            <button
+              type="button"
+              disabled={busy || conversationBusy}
+              onClick={startNewConversation}
+            >
+              新会话
+            </button>
+            <button
+              type="button"
+              disabled={busy || conversationBusy}
+              onClick={() => void clearConversation()}
+            >
+              {conversationBusy ? "清空中…" : "清空当前会话"}
+            </button>
+          </div>
+          {conversationStatus && <p role="status">{conversationStatus}</p>}
+          {conversationError !== undefined && (
+            <ErrorPanel error={conversationError} />
+          )}
+        </section>
+      )}
       <form className="query-box" onSubmit={submit}>
         <label htmlFor={`${mode}-query`}>查询文本</label>
         <div>
@@ -157,12 +327,18 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="输入需要从资料中查证的问题"
+            maxLength={mode === "answer" ? 2000 : 8000}
             required
           />
-          <button className="primary" disabled={busy}>
+          <button className="primary" type="submit" disabled={busy}>
             <Search aria-hidden="true" size={18} />
             {busy ? "执行中…" : "执行"}
           </button>
+          {mode === "answer" && busy && (
+            <button className="secondary" type="button" onClick={stopAnswer}>
+              停止
+            </button>
+          )}
         </div>
         <label className="query-options">
           <input
@@ -180,6 +356,20 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
         </button>
       )}
       {sourceError !== undefined && <ErrorPanel error={sourceError} />}
+      {mode === "answer" && busy && streamStage && (
+        <p role="status">流式阶段：{streamStage}</p>
+      )}
+      {mode === "answer" && !result && streamClaims.length > 0 && (
+        <section className="answer" aria-label="已核验暂存内容">
+          <span className="eyebrow">已核验暂存内容</span>
+          <p>以下事实已通过来源校验，仍以最终答案为唯一权威结果。</p>
+          <ol>
+            {streamClaims.map((claim) => (
+              <li key={claim.claim_index}>{claim.text}</li>
+            ))}
+          </ol>
+        </section>
+      )}
       {result && (
         <>
           {mode === "answer" && result.answer && (
@@ -197,15 +387,27 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             <button onClick={() => setHistoryTrace(result.trace_id)}>
               查看检索过程
             </button>
+            {go && (
+              <button
+                className="secondary"
+                onClick={() => openOperationalTrace(result.trace_id, go)}
+              >
+                打开技术 Trace
+              </button>
+            )}
             <small>
               {savedBody
                 ? "已请求本机保存；可在问答历史中查看"
                 : "本次未保存正文"}
             </small>
           </div>
-          {result.generation_mode === "extractive" && (
-            <p role="status">本次答案采用原文抽取；未使用回答模型生成。</p>
-          )}
+          <p role="status">{answerDeliveryMessage(result)}</p>
+          <QueryFeedback
+            key={result.trace_id}
+            projectId={scope.projectId}
+            kbId={scope.kbId}
+            traceId={result.trace_id}
+          />
           <details className="panel">
             <summary>技术统计与检索状态</summary>
             <div className="metric-grid">
@@ -244,6 +446,12 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
             <p>
               回答方式：{result.generation_mode} ·{" "}
               {result.degraded_reason_codes?.join("、") || "未报告降级"}
+            </p>
+            <p>
+              结果来源：{result.result_origin ?? "fresh"} · 本次回答模型调用：
+              {result.generation_called_this_request ? "是" : "否"} ·
+              本次问题改写模型调用：
+              {result.rewrite_called_this_request ? "是" : "否"}
             </p>
             <code>{result.trace_id}</code>
           </details>
@@ -373,4 +581,11 @@ function ScopedQueryPage({ mode }: { mode: "search" | "answer" }) {
       )}
     </section>
   );
+}
+
+function openOperationalTrace(traceId: string, go: (path: string) => void) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("trace_id", traceId);
+  window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+  go("/operational-traces");
 }

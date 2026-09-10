@@ -81,6 +81,7 @@ beforeEach(() => {
   });
   vi.spyOn(api, "listHistory").mockResolvedValue(page());
   vi.spyOn(api, "historyDetail").mockResolvedValue(item);
+  vi.spyOn(api, "getFeedback").mockResolvedValue({ feedback: null });
 });
 
 it("历史可筛选并分页，不要求预先输入 trace_id", async () => {
@@ -183,4 +184,34 @@ it("清理历史必须二次确认并明确影响全部知识库", async () => {
   expect(screen.getByText(/本机所有项目和知识库/)).toBeVisible();
   await user.click(screen.getByRole("button", { name: "确认清理全部历史" }));
   expect(clear).toHaveBeenCalledTimes(1);
+});
+
+it("选择本页后批量下载确定性排序的支持包并可清空选择", async () => {
+  const user = userEvent.setup();
+  const second = { ...item, trace_id: "trace_alpha", question: "第二条" };
+  vi.mocked(api.listHistory).mockResolvedValue(page([item, second]));
+  const exportBatch = vi.spyOn(api, "exportHistoryTraces").mockResolvedValue({
+    blob: new Blob(["synthetic"], { type: "application/zip" }),
+    filename: "server-safe.zip",
+  });
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic");
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+    () => undefined,
+  );
+
+  render(<HistoryPage />);
+  await screen.findByText("合成岗位职责是什么");
+  await user.click(screen.getByRole("button", { name: "选择本页" }));
+  expect(screen.getByText("已选择 2 条")).toBeVisible();
+  await user.click(
+    screen.getByRole("button", { name: "下载已选支持包" }),
+  );
+  await user.click(screen.getByRole("button", { name: "确认下载支持包" }));
+  expect(exportBatch).toHaveBeenCalledWith(
+    ["trace_alpha", "trace_test"],
+    false,
+  );
+  await user.click(screen.getByRole("button", { name: "清空选择" }));
+  expect(screen.getByText("已选择 0 条")).toBeVisible();
 });

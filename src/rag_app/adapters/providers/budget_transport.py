@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import threading
 import time
 import warnings
 from collections.abc import Callable, Iterator, Mapping
@@ -16,7 +17,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 from PIL import Image
@@ -86,6 +87,9 @@ _MAX_OUTPUT_TOKENS = 4096
 _MAX_IMAGE_PIXELS = 1_048_576
 _OCR_CONTENT_PARTS = 2
 _MAX_IMAGE_DIMENSION = 4096
+_HTTP_SUCCESS_MIN = 200
+_HTTP_SUCCESS_MAX = 300
+_HTTP_CLIENT_ERROR_MIN = 400
 _HASH = re.compile(r"(?:sha256:)?[0-9a-f]{64}\Z")
 
 
@@ -439,7 +443,6 @@ class BudgetedTransport(httpx.BaseTransport):
         started = time.monotonic()
         try:
             response = self._transport.handle_request(request)
-            response.read()
         except httpx.HTTPError as error:
             _finish_safely(
                 binding.ledger,
@@ -452,25 +455,37 @@ class BudgetedTransport(httpx.BaseTransport):
                 ),
             )
             raise
-        observed, request_id = _response_observation(
-            response, chat=descriptor.operation in _CHAT_OPERATIONS
-        )
-        _finish_safely(
-            binding.ledger,
-            attempt_id,
-            outcome={
-                "status": "HTTP_SUCCESS"
-                if response.is_success
-                else "HTTP_ERROR",
-                "observed_tokens": observed,
-                "request_id": request_id,
-                "http_status": response.status_code,
-            },
-            diagnostics=transport_diagnostics(
-                None,
-                elapsed_ms=round((time.monotonic() - started) * 1000),
-                extensions=request.extensions,
-            ),
+        if response.is_stream_consumed:
+            observed, request_id = _response_observation(
+                response, chat=descriptor.operation in _CHAT_OPERATIONS
+            )
+            _finish_safely(
+                binding.ledger,
+                attempt_id,
+                outcome={
+                    "status": (
+                        "HTTP_SUCCESS" if response.is_success else "HTTP_ERROR"
+                    ),
+                    "observed_tokens": observed,
+                    "request_id": request_id,
+                    "http_status": response.status_code,
+                },
+                diagnostics=transport_diagnostics(
+                    None,
+                    elapsed_ms=round((time.monotonic() - started) * 1000),
+                    extensions=request.extensions,
+                ),
+            )
+            return response
+        response.stream = _BudgetObservedStream(
+            cast(httpx.SyncByteStream, response.stream),
+            ledger=binding.ledger,
+            attempt_id=attempt_id,
+            request=request,
+            status_code=response.status_code,
+            headers=response.headers,
+            chat=descriptor.operation in _CHAT_OPERATIONS,
+            started=started,
         )
         return response
 
@@ -485,6 +500,122 @@ class BudgetedTransport(httpx.BaseTransport):
 
         """
         self._transport.close()
+
+
+class _BudgetObservedStream(httpx.SyncByteStream):
+    """逐块透传响应，并在 EOF、错误或提前关闭时只结算一次账本。"""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        stream: httpx.SyncByteStream,
+        *,
+        ledger: ProviderBudgetLedger,
+        attempt_id: str,
+        request: httpx.Request,
+        status_code: int,
+        headers: httpx.Headers,
+        chat: bool,
+        started: float,
+    ) -> None:
+        self._stream = stream
+        self._ledger = ledger
+        self._attempt_id = attempt_id
+        self._request = request
+        self._status_code = status_code
+        self._headers = headers
+        self._chat = chat
+        self._started = started
+        self._observed = bytearray()
+        self._observation_overflow = False
+        self._lock = threading.Lock()
+        self._finished = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        """透传底层字节且只保留有限审计副本。
+
+        Yields:
+            底层响应实际产生的字节块。
+
+        """
+        try:
+            for chunk in self._stream:
+                self._observe_bytes(chunk)
+                yield chunk
+        except httpx.HTTPError as error:
+            self._finish("TRANSPORT_ERROR", error=error)
+            raise
+        except BaseException:
+            self._finish("CANCELLED")
+            raise
+        else:
+            self._finish(
+                "HTTP_SUCCESS"
+                if _HTTP_SUCCESS_MIN <= self._status_code < _HTTP_SUCCESS_MAX
+                else "HTTP_ERROR"
+            )
+
+    def close(self) -> None:
+        """关闭底层响应；成功响应未读完时按取消结算。
+
+        Args:
+            无参数；关闭当前响应流。
+
+        Returns:
+            无返回值；账本终态只结算一次。
+
+        """
+        try:
+            self._stream.close()
+        finally:
+            self._finish(
+                "HTTP_ERROR"
+                if self._status_code >= _HTTP_CLIENT_ERROR_MIN
+                else "CANCELLED"
+            )
+
+    def _observe_bytes(self, chunk: bytes) -> None:
+        if self._observation_overflow:
+            return
+        remaining = _MAX_OBSERVATION_BYTES - len(self._observed)
+        if len(chunk) > remaining:
+            self._observation_overflow = True
+            self._observed.clear()
+            return
+        self._observed.extend(chunk)
+
+    def _finish(
+        self,
+        status: str,
+        *,
+        error: httpx.HTTPError | None = None,
+    ) -> None:
+        with self._lock:
+            if self._finished:
+                return
+            self._finished = True
+        observed: int | None = None
+        request_id: str | None = None
+        if not self._observation_overflow:
+            observed, request_id = _response_observation_bytes(
+                bytes(self._observed),
+                headers=self._headers,
+                chat=self._chat,
+            )
+        _finish_safely(
+            self._ledger,
+            self._attempt_id,
+            outcome={
+                "status": status,
+                "observed_tokens": observed,
+                "request_id": request_id,
+                "http_status": self._status_code,
+            },
+            diagnostics=transport_diagnostics(
+                error,
+                elapsed_ms=round((time.monotonic() - self._started) * 1000),
+                extensions=self._request.extensions,
+            ),
+        )
 
 
 def _finish_safely(
@@ -748,7 +879,7 @@ def _ocr_messages_valid(messages: list[Any]) -> bool:
     )
 
 
-def _chat_request_valid(  # noqa: PLR0911
+def _chat_request_valid(  # noqa: PLR0911, PLR0912
     payload: object,
     operation: str,
     input_tokens: int,
@@ -766,13 +897,23 @@ def _chat_request_valid(  # noqa: PLR0911
             "model",
             "messages",
             "stream",
+            "stream_options",
             "max_tokens",
             "enable_thinking",
             "response_format",
         }
-        or payload.get("stream") is not False
         or payload.get("enable_thinking") not in (None, False)
     ):
+        return False
+    streaming = payload.get("stream") is True
+    if payload.get("stream") not in (False, True):
+        return False
+    if streaming:
+        if operation != "generation" or payload.get("stream_options") != {
+            "include_usage": True
+        }:
+            return False
+    elif "stream_options" in payload:
         return False
     expected_model = (
         "qwen3.5-ocr" if operation == "image.ocr" else "qwen3.7-flash"
@@ -814,10 +955,28 @@ def _response_observation(
 ) -> tuple[int | None, str | None]:
     if len(response.content) > _MAX_OBSERVATION_BYTES:
         return None, None
-    try:
-        payload = response.json()
-    except ValueError:
-        payload = None
+    return _response_observation_bytes(
+        response.content,
+        headers=response.headers,
+        chat=chat,
+    )
+
+
+def _response_observation_bytes(
+    content: bytes,
+    *,
+    headers: Mapping[str, str],
+    chat: bool = False,
+) -> tuple[int | None, str | None]:
+    """从有限响应副本提取 usage；SSE 缺失值保持未知。"""
+    content_type = headers.get("content-type", "").casefold()
+    if "text/event-stream" in content_type:
+        payload = _last_sse_usage_payload(content)
+    else:
+        try:
+            payload = json.loads(content)
+        except (UnicodeDecodeError, ValueError):
+            payload = None
     if not isinstance(payload, dict):
         return None, None
     usage = payload.get("usage")
@@ -834,6 +993,34 @@ def _response_observation(
                 observed = value
                 break
     request_id = safe_identifier(
-        payload.get("request_id") or response.headers.get("x-request-id")
+        payload.get("request_id") or headers.get("x-request-id")
     )
     return observed, request_id
+
+
+def _last_sse_usage_payload(content: bytes) -> dict[str, object] | None:
+    """只为预算审计寻找最后一个含 usage 的合法 SSE JSON 对象。"""
+    try:
+        text = content.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    selected: dict[str, object] | None = None
+    data_lines: list[str] = []
+    for line in (*text.splitlines(), ""):
+        if line:
+            if line.startswith("data:"):
+                data_lines.append(line[5:].removeprefix(" "))
+            continue
+        if not data_lines:
+            continue
+        data = "\n".join(data_lines)
+        data_lines.clear()
+        if data == "[DONE]":
+            continue
+        try:
+            payload = json.loads(data)
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("usage"), dict):
+            selected = payload
+    return selected

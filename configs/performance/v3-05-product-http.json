@@ -1,0 +1,43 @@
+{
+  "capture_modes": [
+    "NONE",
+    "SAFE",
+    "DIAGNOSTIC",
+    "FULL"
+  ],
+  "concurrencies": [
+    1,
+    8,
+    16
+  ],
+  "frozen_contract": {
+    "answer_path": "product-search-http",
+    "chunking_changes_allowed": false,
+    "corpus": "deterministic-single-docx-v1",
+    "latency_probe": "httpx-async-asgi-transport-pre-sample-gc",
+    "memory_probe": "proc-status-outside-timed-samples",
+    "provider": "offline-keyless",
+    "query_shapes": [
+      "unique",
+      "identical"
+    ],
+    "temperatures": [
+      "cold",
+      "warm"
+    ],
+    "trace_baseline": "test-only-history-preserving-null-adapter"
+  },
+  "minimum_comparison_samples_per_cell": 320,
+  "minimum_comparison_waves_per_cell": 40,
+  "minimum_waves_per_cell": 5,
+  "minimum_samples_per_cell": 32,
+  "schema_version": "v3-05-product-http-thresholds-v5",
+  "thresholds": {
+    "cache_max_entries": 512,
+    "identical_cold_max_fresh_executions": 1,
+    "max_http_errors": 0,
+    "safe_max_dropped_trace_items": 0,
+    "safe_p95_over_no_trace_absolute_ms": 10.0,
+    "safe_p95_over_no_trace_relative": 0.1
+  }
+}

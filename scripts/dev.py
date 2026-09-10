@@ -9,6 +9,7 @@ import importlib
 import importlib.metadata
 import json
 import os
+import re
 import shlex
 import shutil
 import sqlite3
@@ -16,11 +17,12 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
 from pathlib import Path
 from typing import cast
 
+from rag_app._build_revision import SOURCE_REVISION
 from rag_app.adapters.providers import (
     AliyunQwen37EmbeddingAdapter,
     AliyunQwen37EmbeddingConfig,
@@ -152,6 +154,14 @@ _PRODUCT_TESTS = (
     "tests/application/test_profile_impact.py",
     "tests/application/test_provider_runtime_registry.py",
 )
+_IDENTITY_GATE = "DEV_RUNTIME_IDENTITY_GATE"
+_IDENTITY_JSON_MAX_BYTES = 1024 * 1024
+_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_ID_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+_SAFE_IDENTITY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/@-]{0,159}$")
+_API_SCHEMA_PATH = Path("docs/public/openapi-v1.json")
+_FRONTEND_PACKAGE_PATH = Path("frontend/package.json")
+_COMPATIBILITY_MANIFEST_PATH = Path("compatibility-manifest.json")
 
 
 def _doctor_python() -> str:
@@ -404,45 +414,59 @@ def _web_e2e(profile: Path | None) -> int:
     chrome = Path("/mnt/c/Program Files/Google/Chrome/Application/chrome.exe")
     if node is None or not chrome.is_file():
         return _run_web_script("e2e")
-    server_command = [
-        sys.executable,
-        "scripts/serve_p10.py",
-        "--port",
-        "8091",
-        "--frontend-dir",
-        "frontend/dist",
-    ]
-    if profile is not None:
-        server_command.extend(("--profile", str(profile)))
     external = os.environ.get("P10_EXTERNAL_SERVER") == "1"
-    server = (
-        None
-        if external
-        else subprocess.Popen(  # noqa: S603
-            server_command,
-            cwd=_REPOSITORY_ROOT,
-            env=_offline_environment(),
-        )
-    )
+    ports = () if external else (8091, 8092)
+    servers: list[subprocess.Popen[bytes]] = []
     try:
-        if not external and not _wait_for_p10(8091):
-            print("BLOCKED web-e2e: P10 loopback 服务未就绪。", file=sys.stderr)
+        for port in ports:
+            server_command = [
+                sys.executable,
+                "scripts/serve_p10.py",
+                "--port",
+                str(port),
+                "--frontend-dir",
+                "frontend/dist",
+            ]
+            if profile is not None:
+                server_command.extend(("--profile", str(profile)))
+            servers.append(
+                subprocess.Popen(  # noqa: S603
+                    server_command,
+                    cwd=_REPOSITORY_ROOT,
+                    env=_offline_environment(),
+                )
+            )
+        if not external and not all(_wait_for_p10(port) for port in ports):
+            print(
+                "BLOCKED web-e2e: P10 loopback 服务未就绪。",
+                file=sys.stderr,
+            )
             return 2
         environment = _offline_environment()
-        environment.update(
-            {
-                "P10_EXTERNAL_SERVER": "1",
-                "P10_BROWSER_CHANNEL": "chrome",
-                "P10_BASE_URL": os.environ.get(
-                    "P10_BASE_URL", "http://127.0.0.1:8091"
-                )
-                if external
-                else "http://127.0.0.1:8091",
-            }
-        )
+        for name in (
+            "P10_BASE_URL",
+            "P10_DESKTOP_BASE_URL",
+            "P10_MOBILE_BASE_URL",
+        ):
+            environment.pop(name, None)
+        environment["P10_EXTERNAL_SERVER"] = "1"
+        environment["P10_BROWSER_CHANNEL"] = "chrome"
+        if external:
+            environment["P10_BASE_URL"] = os.environ.get(
+                "P10_BASE_URL", "http://127.0.0.1:8091"
+            )
+            browser_urls = "P10_BASE_URL/w"
+        else:
+            environment.update(
+                {
+                    "P10_DESKTOP_BASE_URL": "http://127.0.0.1:8091",
+                    "P10_MOBILE_BASE_URL": "http://127.0.0.1:8092",
+                }
+            )
+            browser_urls = "P10_DESKTOP_BASE_URL/w:P10_MOBILE_BASE_URL/w"
         wsl_environment = environment.get("WSLENV", "")
         p10_environment = (
-            "P10_EXTERNAL_SERVER/w:P10_BROWSER_CHANNEL/w:P10_BASE_URL/w"
+            "P10_EXTERNAL_SERVER/w:P10_BROWSER_CHANNEL/w:" + browser_urls
         )
         environment["WSLENV"] = (
             f"{p10_environment}:{wsl_environment}"
@@ -463,8 +487,9 @@ def _web_e2e(profile: Path | None) -> int:
         )
         return completed.returncode
     finally:
-        if server is not None:
+        for server in reversed(servers):
             server.terminate()
+        for server in reversed(servers):
             try:
                 server.wait(timeout=10)
             except subprocess.TimeoutExpired:
@@ -486,6 +511,7 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
             "failover-smoke",
             "product-check",
             "product-smoke",
+            "runtime-identity",
             "inspect-document",
             "chunk-document",
             "chunk-ablation",
@@ -494,6 +520,9 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
     )
     parser.add_argument("document_path", nargs="?", type=Path)
     parser.add_argument("--profile", type=Path)
+    parser.add_argument("--build-context-manifest", type=Path)
+    parser.add_argument("--image-inspect-json", type=Path)
+    parser.add_argument("--runtime-status-json", type=Path)
     parser.add_argument("--output-json", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--include-content", action="store_true")
@@ -516,6 +545,566 @@ def _arguments(arguments: Sequence[str] | None) -> argparse.Namespace:
         if parsed.output is None:
             parser.error("chunk-ablation 必须提供 --output。")
     return parsed
+
+
+def _identity_git(*arguments: str) -> bytes:
+    """执行不经过 shell 的只读 Git 身份查询。"""
+    executable = shutil.which("git")
+    if executable is None:
+        raise RuntimeError("GIT_UNAVAILABLE")
+    completed = subprocess.run(  # noqa: S603
+        (executable, *arguments),
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("GIT_IDENTITY_QUERY_FAILED")
+    return completed.stdout
+
+
+def _source_tree_identity() -> dict[str, object]:
+    """读取当前源码树对应的完整 Git 提交身份。"""
+    revision = _identity_git("rev-parse", "--verify", "HEAD^{commit}")
+    source_tree_revision = revision.decode("ascii").strip()
+    if _REVISION_PATTERN.fullmatch(source_tree_revision) is None:
+        raise RuntimeError("GIT_HEAD_INVALID")
+    tracked_changes = subprocess.run(  # noqa: S603
+        (
+            shutil.which("git") or "git",
+            "diff-index",
+            "--quiet",
+            "HEAD",
+            "--",
+        ),
+        cwd=_REPOSITORY_ROOT,
+        check=False,
+        capture_output=True,
+    )
+    if tracked_changes.returncode not in {0, 1}:
+        raise RuntimeError("GIT_WORKTREE_QUERY_FAILED")
+    untracked = _identity_git("ls-files", "--others", "--exclude-standard")
+    dirty = tracked_changes.returncode == 1 or bool(untracked)
+    return {
+        "status": "BLOCKED" if dirty else "PASS",
+        "git_head": source_tree_revision,
+        "source_tree_revision": source_tree_revision,
+        "worktree_dirty": dirty,
+        "reason": ("SOURCE_TREE_DIRTY" if dirty else "SOURCE_TREE_CLEAN"),
+    }
+
+
+def _build_revision_identity(source_tree_revision: str) -> dict[str, object]:
+    """核对 wheel 内嵌 revision，源码树占位值不伪装成提交。"""
+    if SOURCE_REVISION == "development-unset":
+        return {
+            "status": "NOT_APPLICABLE",
+            "build_revision": SOURCE_REVISION,
+            "matches_source_tree": None,
+            "reason": "SOURCE_TREE_BUILD_REVISION_UNSET",
+        }
+    valid = _REVISION_PATTERN.fullmatch(SOURCE_REVISION) is not None
+    matches = valid and source_tree_revision == SOURCE_REVISION
+    return {
+        "status": "PASS" if matches else "BLOCKED",
+        "build_revision": SOURCE_REVISION if valid else None,
+        "matches_source_tree": matches,
+        "reason": (
+            "BUILD_REVISION_MATCH"
+            if matches
+            else "BUILD_REVISION_INVALID_OR_MISMATCH"
+        ),
+    }
+
+
+def _without_duplicate_keys(
+    pairs: Sequence[tuple[str, object]],
+) -> dict[str, object]:
+    """拒绝会让身份字段含义不唯一的重复 JSON key。"""
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("IDENTITY_JSON_DUPLICATE_KEY")
+        result[key] = value
+    return result
+
+
+def _load_identity_json(path: Path) -> Mapping[str, object] | Sequence[object]:
+    """读取有大小上限且无重复 key 的本地身份 JSON。"""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("IDENTITY_JSON_NOT_REGULAR_FILE")
+    content = path.read_bytes()
+    if len(content) > _IDENTITY_JSON_MAX_BYTES:
+        raise ValueError("IDENTITY_JSON_TOO_LARGE")
+    payload = json.loads(
+        content.decode("utf-8"), object_pairs_hook=_without_duplicate_keys
+    )
+    if not isinstance(payload, (Mapping, Sequence)) or isinstance(
+        payload, (str, bytes, bytearray)
+    ):
+        raise ValueError("IDENTITY_JSON_INVALID_ROOT")
+    return payload
+
+
+def _mapping(value: object, reason: str) -> Mapping[str, object]:
+    """要求身份片段为 JSON object。"""
+    if not isinstance(value, Mapping):
+        raise ValueError(reason)
+    return value
+
+
+def _tracked_file_bytes(relative_path: Path) -> bytes:
+    """读取当前工作树中已被 Git 跟踪的普通文件。"""
+    _identity_git(
+        "ls-files",
+        "--error-unmatch",
+        "--",
+        relative_path.as_posix(),
+    )
+    path = _REPOSITORY_ROOT / relative_path
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("TRACKED_IDENTITY_FILE_INVALID")
+    content = path.read_bytes()
+    if len(content) > _IDENTITY_JSON_MAX_BYTES:
+        raise ValueError("TRACKED_IDENTITY_FILE_TOO_LARGE")
+    return content
+
+
+def _tracked_json(relative_path: Path) -> tuple[Mapping[str, object], bytes]:
+    """读取已跟踪的无重复 key JSON object。"""
+    content = _tracked_file_bytes(relative_path)
+    payload = json.loads(
+        content.decode("utf-8"), object_pairs_hook=_without_duplicate_keys
+    )
+    return _mapping(payload, "TRACKED_IDENTITY_JSON_INVALID"), content
+
+
+def _api_schema_identity() -> dict[str, object]:
+    """计算当前已跟踪 OpenAPI schema 的实际 SHA-256。"""
+    payload, content = _tracked_json(_API_SCHEMA_PATH)
+    if not isinstance(payload.get("openapi"), str):
+        raise ValueError("API_SCHEMA_VERSION_MISSING")
+    return {
+        "status": "PASS",
+        "path": _API_SCHEMA_PATH.as_posix(),
+        "sha256": hashlib.sha256(content).hexdigest(),
+    }
+
+
+def _safe_identity(value: object, reason: str) -> str:
+    """只允许输出短且不含空白的非敏感身份值。"""
+    if (
+        not isinstance(value, str)
+        or _SAFE_IDENTITY_PATTERN.fullmatch(value) is None
+    ):
+        raise ValueError(reason)
+    return value
+
+
+def _frontend_identity() -> dict[str, object]:
+    """从已跟踪 package 与兼容清单计算前端构建身份。"""
+    package, package_content = _tracked_json(_FRONTEND_PACKAGE_PATH)
+    compatibility, compatibility_content = _tracked_json(
+        _COMPATIBILITY_MANIFEST_PATH
+    )
+    package_name = _safe_identity(package.get("name"), "PACKAGE_NAME_INVALID")
+    package_version = _safe_identity(
+        package.get("version"), "PACKAGE_VERSION_INVALID"
+    )
+    build_identity = f"{package_name}@{package_version}"
+    manifest_identity = _safe_identity(
+        compatibility.get("frontend_build_id"),
+        "FRONTEND_MANIFEST_IDENTITY_INVALID",
+    )
+    matches = build_identity == manifest_identity
+    return {
+        "status": "PASS" if matches else "BLOCKED",
+        "build_identity": build_identity,
+        "compatibility_manifest_identity": manifest_identity,
+        "matches_compatibility_manifest": matches,
+        "package_manifest_sha256": hashlib.sha256(package_content).hexdigest(),
+        "compatibility_manifest_sha256": hashlib.sha256(
+            compatibility_content
+        ).hexdigest(),
+        "build_artifact_status": "NOT_RUN",
+    }
+
+
+def _build_context_identity(
+    path: Path | None, source_tree_revision: str
+) -> dict[str, object]:
+    """核对显式提供的受控 build context manifest。"""
+    if path is None:
+        return {
+            "status": "NOT_RUN",
+            "source_revision": None,
+            "matches_source_tree": None,
+            "reason": "BUILD_CONTEXT_MANIFEST_NOT_PROVIDED",
+        }
+    payload = _mapping(
+        _load_identity_json(path), "BUILD_CONTEXT_MANIFEST_INVALID"
+    )
+    revision = payload.get("source_revision")
+    if (
+        not isinstance(revision, str)
+        or _REVISION_PATTERN.fullmatch(revision) is None
+    ):
+        raise ValueError("BUILD_CONTEXT_REVISION_INVALID")
+    matches = revision == source_tree_revision
+    return {
+        "status": "PASS" if matches else "BLOCKED",
+        "source_revision": revision,
+        "matches_source_tree": matches,
+        "reason": (
+            "BUILD_CONTEXT_REVISION_MATCH"
+            if matches
+            else "BUILD_CONTEXT_REVISION_MISMATCH"
+        ),
+    }
+
+
+def _profile_identity(path: Path | None) -> dict[str, object]:
+    """离线装配显式 Profile，仅计算组合身份。"""
+    if path is None:
+        return {
+            "status": "NOT_RUN",
+            "profile_id": None,
+            "index_fingerprint": None,
+            "serving_fingerprint": None,
+            "reason": "PROFILE_NOT_PROVIDED",
+        }
+    profile = load_profile(path)
+    registry = ComponentRegistry()
+    register_builtin_components(registry)
+    with build_components(profile, registry) as components:
+        return {
+            "status": "PASS",
+            "profile_id": profile.profile_id,
+            "index_fingerprint": components.index_fingerprint,
+            "serving_fingerprint": components.serving_fingerprint,
+            "network_calls": 0,
+        }
+
+
+def _runtime_field(payload: Mapping[str, object], key: str) -> object:
+    """从状态根或其 `identity` 对象读取一个已知字段。"""
+    if key in payload:
+        return payload[key]
+    identity = payload.get("identity")
+    if isinstance(identity, Mapping):
+        return identity.get(key)
+    return None
+
+
+def _runtime_identity(
+    path: Path | None, source_tree_revision: str
+) -> tuple[dict[str, object], dict[str, object]]:
+    """核对显式导出的 Runtime 状态，不连接正在运行的服务。"""
+    if path is None:
+        return (
+            {
+                "status": "NOT_RUN",
+                "build_revision": None,
+                "image_id": None,
+                "profile_id": None,
+                "index_fingerprint": None,
+                "serving_fingerprint": None,
+                "runtime_identity": None,
+                "reason": "RUNTIME_STATUS_NOT_PROVIDED",
+            },
+            {
+                "status": "NOT_RUN",
+                "active_revision_id": None,
+                "reason": "RUNTIME_STATUS_NOT_PROVIDED",
+            },
+        )
+    payload = _mapping(_load_identity_json(path), "RUNTIME_STATUS_INVALID")
+    build_revision_value = _runtime_field(payload, "build_revision")
+    if build_revision_value is None:
+        build_revision_value = _runtime_field(payload, "source_revision")
+    build_revision: str | None = None
+    build_matches: bool | None = None
+    build_status = "NOT_APPLICABLE"
+    if build_revision_value is not None:
+        if not isinstance(build_revision_value, str):
+            raise ValueError("RUNTIME_BUILD_REVISION_INVALID")
+        if build_revision_value == "development-unset":
+            build_revision = build_revision_value
+        elif _REVISION_PATTERN.fullmatch(build_revision_value) is not None:
+            build_revision = build_revision_value
+            build_matches = build_revision == source_tree_revision
+            build_status = "PASS" if build_matches else "BLOCKED"
+        else:
+            raise ValueError("RUNTIME_BUILD_REVISION_INVALID")
+    profile_value = _runtime_field(payload, "profile_id")
+    index_value = _runtime_field(payload, "index_fingerprint")
+    serving_value = _runtime_field(payload, "serving_fingerprint")
+    profile_fields = (profile_value, index_value, serving_value)
+    if any(value is not None for value in profile_fields) and not all(
+        value is not None for value in profile_fields
+    ):
+        raise ValueError("RUNTIME_PROFILE_IDENTITY_INCOMPLETE")
+    profile_id = (
+        None
+        if profile_value is None
+        else _safe_identity(profile_value, "RUNTIME_PROFILE_ID_INVALID")
+    )
+    index_fingerprint = None if index_value is None else str(index_value)
+    serving_fingerprint = None if serving_value is None else str(serving_value)
+    if index_fingerprint is not None and (
+        _SHA256_ID_PATTERN.fullmatch(index_fingerprint) is None
+        or _SHA256_ID_PATTERN.fullmatch(serving_fingerprint or "") is None
+    ):
+        raise ValueError("RUNTIME_FINGERPRINT_INVALID")
+    runtime_value = _runtime_field(payload, "runtime_identity")
+    runtime_name = (
+        None
+        if runtime_value is None
+        else _safe_identity(runtime_value, "RUNTIME_IDENTITY_INVALID")
+    )
+    image_value = _runtime_field(payload, "image_id")
+    image_id = None if image_value is None else str(image_value)
+    if image_id is not None and _SHA256_ID_PATTERN.fullmatch(image_id) is None:
+        raise ValueError("RUNTIME_IMAGE_ID_INVALID")
+    active_value = _runtime_field(payload, "active_revision_id")
+    if active_value is None:
+        active_value = _runtime_field(payload, "index_revision_id")
+    active_revision_id = (
+        None
+        if active_value is None
+        else _safe_identity(active_value, "ACTIVE_REVISION_ID_INVALID")
+    )
+    recognized = any(
+        value is not None
+        for value in (
+            build_revision_value,
+            profile_value,
+            runtime_value,
+            image_value,
+            active_value,
+        )
+    )
+    if not recognized:
+        raise ValueError("RUNTIME_IDENTITY_FIELDS_MISSING")
+    runtime_status = "BLOCKED" if build_status == "BLOCKED" else "PASS"
+    runtime: dict[str, object] = {
+        "status": runtime_status,
+        "build_revision": build_revision,
+        "build_revision_status": build_status,
+        "build_revision_matches_source_tree": build_matches,
+        "image_id": image_id,
+        "profile_id": profile_id,
+        "index_fingerprint": index_fingerprint,
+        "serving_fingerprint": serving_fingerprint,
+        "runtime_identity": runtime_name,
+        "reason": (
+            "RUNTIME_IDENTITY_VERIFIED"
+            if runtime_status == "PASS"
+            else "RUNTIME_BUILD_REVISION_MISMATCH"
+        ),
+    }
+    active_revision: dict[str, object] = {
+        "status": "PASS" if active_revision_id is not None else "NOT_RUN",
+        "active_revision_id": active_revision_id,
+        "reason": (
+            "ACTIVE_REVISION_REPORTED"
+            if active_revision_id is not None
+            else "ACTIVE_REVISION_UNAVAILABLE"
+        ),
+    }
+    return runtime, active_revision
+
+
+def _image_identity(
+    path: Path | None,
+    source_tree_revision: str,
+    runtime_image_id: object,
+) -> dict[str, object]:
+    """核对显式 Docker inspect 中的 image ID 与 OCI revision。"""
+    if path is None:
+        return {
+            "status": "NOT_RUN",
+            "image_id": None,
+            "oci_revision": None,
+            "reason": "IMAGE_INSPECT_NOT_PROVIDED",
+        }
+    raw = _load_identity_json(path)
+    if isinstance(raw, Mapping):
+        inspect = raw
+    elif len(raw) == 1:
+        inspect = _mapping(raw[0], "IMAGE_INSPECT_INVALID")
+    else:
+        raise ValueError("IMAGE_INSPECT_INVALID")
+    image_id = inspect.get("Id")
+    if (
+        not isinstance(image_id, str)
+        or _SHA256_ID_PATTERN.fullmatch(image_id) is None
+    ):
+        raise ValueError("IMAGE_ID_INVALID")
+    config = _mapping(inspect.get("Config"), "IMAGE_CONFIG_INVALID")
+    labels = _mapping(config.get("Labels"), "IMAGE_LABELS_INVALID")
+    revision = labels.get("org.opencontainers.image.revision")
+    if (
+        not isinstance(revision, str)
+        or _REVISION_PATTERN.fullmatch(revision) is None
+    ):
+        raise ValueError("IMAGE_OCI_REVISION_INVALID")
+    revision_matches = revision == source_tree_revision
+    expected_image_id = (
+        runtime_image_id if isinstance(runtime_image_id, str) else None
+    )
+    image_matches = (
+        None if expected_image_id is None else image_id == expected_image_id
+    )
+    passed = revision_matches and image_matches is not False
+    return {
+        "status": "PASS" if passed else "BLOCKED",
+        "image_id": image_id,
+        "oci_revision": revision,
+        "revision_matches_source_tree": revision_matches,
+        "runtime_image_id_status": (
+            "NOT_APPLICABLE"
+            if image_matches is None
+            else "PASS"
+            if image_matches
+            else "BLOCKED"
+        ),
+        "matches_runtime_image_id": image_matches,
+        "reason": (
+            "IMAGE_IDENTITY_MATCH" if passed else "IMAGE_IDENTITY_MISMATCH"
+        ),
+    }
+
+
+def _blocked_identity(reason: str) -> dict[str, object]:
+    """构造不包含异常文本或路径的稳定阻塞结果。"""
+    return {"status": "BLOCKED", "reason": reason}
+
+
+def _emit_identity_report(
+    report: Mapping[str, object], output_json: Path | None
+) -> None:
+    """向 stdout 和可选私有文件写出同一份稳定身份报告。
+
+    Args:
+        report: 已完成全部检查的身份报告。
+        output_json: 可选 JSON 收据路径。
+
+    Returns:
+        无返回值。
+
+    """
+    rendered = json.dumps(
+        report,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    if output_json is not None:
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(f"{rendered}\n", encoding="utf-8")
+        if os.name != "nt":
+            output_json.chmod(0o600)
+    print(rendered)
+
+
+def _run_runtime_identity(arguments: argparse.Namespace) -> int:
+    """输出源码树、构建、前端与可选 Runtime 的统一身份 JSON。"""
+    checks: dict[str, dict[str, object]] = {}
+    source_tree_revision: str | None = None
+    try:
+        checks["source_tree"] = _source_tree_identity()
+        source_tree_revision = str(
+            checks["source_tree"]["source_tree_revision"]
+        )
+    except (OSError, UnicodeError, RuntimeError, ValueError):
+        checks["source_tree"] = _blocked_identity("SOURCE_TREE_IDENTITY_FAILED")
+    if source_tree_revision is None:
+        checks["build_revision"] = _blocked_identity("SOURCE_TREE_UNAVAILABLE")
+        checks["build_context"] = _blocked_identity("SOURCE_TREE_UNAVAILABLE")
+    else:
+        checks["build_revision"] = _build_revision_identity(
+            source_tree_revision
+        )
+        try:
+            checks["build_context"] = _build_context_identity(
+                arguments.build_context_manifest,
+                source_tree_revision,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            checks["build_context"] = _blocked_identity(
+                "BUILD_CONTEXT_IDENTITY_FAILED"
+            )
+    try:
+        checks["api_schema"] = _api_schema_identity()
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        RuntimeError,
+        ValueError,
+    ):
+        checks["api_schema"] = _blocked_identity("API_SCHEMA_IDENTITY_FAILED")
+    try:
+        checks["frontend"] = _frontend_identity()
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        RuntimeError,
+        ValueError,
+    ):
+        checks["frontend"] = _blocked_identity("FRONTEND_IDENTITY_FAILED")
+    try:
+        checks["profile"] = _profile_identity(arguments.profile)
+    except Exception:  # CLI 边界只输出稳定错误码，避免泄漏配置内容。
+        checks["profile"] = _blocked_identity("PROFILE_IDENTITY_FAILED")
+    if source_tree_revision is None:
+        checks["runtime"] = _blocked_identity("SOURCE_TREE_UNAVAILABLE")
+        checks["active_revision"] = _blocked_identity("SOURCE_TREE_UNAVAILABLE")
+        checks["image"] = _blocked_identity("SOURCE_TREE_UNAVAILABLE")
+    else:
+        try:
+            runtime, active_revision = _runtime_identity(
+                arguments.runtime_status_json,
+                source_tree_revision,
+            )
+            checks["runtime"] = runtime
+            checks["active_revision"] = active_revision
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            checks["runtime"] = _blocked_identity("RUNTIME_IDENTITY_FAILED")
+            checks["active_revision"] = _blocked_identity(
+                "RUNTIME_IDENTITY_FAILED"
+            )
+        try:
+            checks["image"] = _image_identity(
+                arguments.image_inspect_json,
+                source_tree_revision,
+                checks["runtime"].get("image_id"),
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            checks["image"] = _blocked_identity("IMAGE_IDENTITY_FAILED")
+    blocked = any(check.get("status") == "BLOCKED" for check in checks.values())
+    report = {
+        "gate": _IDENTITY_GATE,
+        "schema_version": 1,
+        "mode": "source-tree",
+        "overall_status": "BLOCKED" if blocked else "PASS",
+        "overall_reason": (
+            "REQUIRED_IDENTITY_CHECK_BLOCKED"
+            if blocked
+            else "AVAILABLE_IDENTITY_CHECKS_PASSED"
+        ),
+        "status_semantics": {
+            "PASS": "check completed and matched",
+            "BLOCKED": "check failed or identity mismatched",
+            "NOT_RUN": "optional evidence was not provided",
+            "NOT_APPLICABLE": "identity does not exist in source-tree mode",
+        },
+        "checks": checks,
+    }
+    _emit_identity_report(report, arguments.output_json)
+    return 1 if blocked else 0
 
 
 def _product_check_commands() -> tuple[tuple[str, ...], ...]:
@@ -882,6 +1471,8 @@ def main(  # noqa: PLR0911, PLR0912
         return _run_commands(_product_check_commands())
     if command == "product-smoke":
         return _run_commands(_product_smoke_commands())
+    if command == "runtime-identity":
+        return _run_runtime_identity(parsed)
     if command == "web-install-check":
         return _web_install_check()
     if command.startswith("web-"):

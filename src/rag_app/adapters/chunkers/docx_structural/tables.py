@@ -220,6 +220,11 @@ def _row_fragments(
         marker = value if value else f"<{state.upper()}>"
         context_parts.append(f"[列{column + 1}] {marker}")
         fragments.extend(cell_fragments)
+    if not any(
+        fragment.span_type is not SourceSpanKind.SEPARATOR
+        for fragment in fragments
+    ):
+        fragments.clear()
     return (
         tuple(fragments),
         tuple(dict.fromkeys(child_groups)),

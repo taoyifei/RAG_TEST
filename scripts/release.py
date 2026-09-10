@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from functools import partial
@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from rag_app.product.live_acceptance import run_acceptance
+from rag_app.product.os_risk_review import validate_scan_freshness
 from rag_app.product.release_evidence import (
     build_report,
     component_identity,
@@ -35,6 +36,9 @@ from rag_app.product.release_evidence import (
 _ROOT = Path(__file__).resolve().parents[1]
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+_release_context = import_module("scripts.release_context")
+export_release_context = _release_context.export_release_context
+require_clean_committed_head = _release_context.require_clean_committed_head
 _build_budget_plan = cast(
     Callable[..., dict[str, object]],
     import_module("rag_app.product.budget_plan").build_p11_budget_plan,
@@ -162,30 +166,53 @@ def _revision() -> str:
     return _capture((_required_executable("git"), "rev-parse", "HEAD"))
 
 
-def _build() -> None:
+def _build(context_manifest: Path | None = None) -> None:
     """构建带当前 Git 身份的候选镜像。
 
     Args:
-        无参数；使用固定候选镜像名。
+        context_manifest: 可选构建上下文 manifest 输出路径。
 
     Returns:
         构建和 Compose 配置都成功时无返回值。
 
     """
     docker = _required_executable("docker")
-    revision = _revision()
-    _run(
-        (
-            docker,
-            "build",
-            "--build-arg",
-            f"VCS_REF={revision}",
-            "--tag",
-            _IMAGE,
-            ".",
-        )
+    revision = require_clean_committed_head(_ROOT)
+    manifest_path = context_manifest or (
+        _ROOT
+        / "artifacts"
+        / "release-context"
+        / datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        / "context-manifest.json"
     )
+    with tempfile.TemporaryDirectory(
+        prefix="rag-release-context-"
+    ) as temporary:
+        context = Path(temporary) / "context"
+        manifest = export_release_context(
+            _ROOT, revision, context, manifest_path
+        )
+        _run(
+            (
+                docker,
+                "build",
+                "--build-arg",
+                f"VCS_REF={revision}",
+                "--file",
+                str(context / "Dockerfile"),
+                "--tag",
+                _IMAGE,
+                str(context),
+            ),
+            cwd=context,
+        )
     _run((docker, "compose", "config", "--quiet"))
+    print(
+        "OK release-build "
+        f"source_revision={revision} "
+        f"context_manifest={manifest_path} "
+        f"context_manifest_sha256={manifest['manifest_sha256']}"
+    )
 
 
 def _artifact_directory(evidence_path: Path) -> Path:
@@ -266,6 +293,130 @@ def _verify_image_contract(docker: str) -> None:
             "test ! -e /usr/local/bin/wheel",
         )
     )
+
+
+def _candidate_image_identity(docker: str) -> dict[str, object]:
+    """读取当前本地候选的镜像、平台和声明基础镜像身份。"""
+    _verify_image_contract(docker)
+    payload = cast(
+        list[dict[str, object]],
+        json.loads(_capture((docker, "image", "inspect", _IMAGE))),
+    )[0]
+    config = cast(dict[str, object], payload.get("Config") or {})
+    labels = cast(dict[str, str], config.get("Labels") or {})
+    base_digest = labels.get("org.opencontainers.image.base.digest")
+    if not isinstance(base_digest, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", base_digest
+    ):
+        raise RuntimeError("CANDIDATE_BASE_IMAGE_IDENTITY_MISSING")
+    return {
+        "image_id": payload.get("Id"),
+        "local_repo_digests": payload.get("RepoDigests") or [],
+        "registry_manifest_digest": None,
+        "manifest_scope": "local_image_store_only",
+        "platform": {
+            "os": payload.get("Os"),
+            "architecture": payload.get("Architecture"),
+        },
+        "vcs_ref": labels.get("org.opencontainers.image.revision"),
+        "base_image": {
+            "name": labels.get("org.opencontainers.image.base.name"),
+            "digest": base_digest,
+        },
+    }
+
+
+def _validate_scan_candidate(
+    scan: dict[str, object], docker: str
+) -> dict[str, object]:
+    """证明不可变扫描仍指向当前本地候选及同一平台。"""
+    candidate = _candidate_image_identity(docker)
+    metadata = cast(dict[str, object], scan.get("Metadata") or {})
+    image_config = cast(dict[str, object], metadata.get("ImageConfig") or {})
+    scanned_platform = {
+        "os": image_config.get("os"),
+        "architecture": image_config.get("architecture"),
+    }
+    if metadata.get("ImageID") != candidate["image_id"]:
+        raise RuntimeError("OS_SCAN_IMAGE_IDENTITY_MISMATCH")
+    if scanned_platform != candidate["platform"]:
+        raise RuntimeError("OS_SCAN_PLATFORM_MISMATCH")
+    scanned_repo_digests = set(
+        cast(list[str], metadata.get("RepoDigests") or [])
+    )
+    candidate_repo_digests = set(
+        cast(list[str], candidate.get("local_repo_digests") or [])
+    )
+    if scanned_repo_digests != candidate_repo_digests:
+        raise RuntimeError("OS_SCAN_LOCAL_REPO_DIGEST_MISMATCH")
+    return candidate
+
+
+def _review_existing_os_scan(
+    *,
+    scan_path: Path,
+    review_overlay: Path,
+    freshness_policy: Path,
+    output_path: Path,
+    evidence_path: Path,
+) -> None:
+    """审核同一完整扫描，不产生新扫描或迁移任何批准。
+
+    Args:
+        scan_path: 已存在的完整 Trivy JSON。
+        review_overlay: 与该扫描精确绑定的本地处置文件。
+        freshness_policy: 本地管理员批准或待批的时效政策。
+        output_path: 本次重新聚合的风险报告。
+        evidence_path: 最终发布聚合使用的执行记录。
+
+    Returns:
+        全部风险、候选身份和时效政策均通过时无返回值。
+
+    Raises:
+        RuntimeError: 仍有风险、身份或时效阻断项。
+
+    """
+    scan = _load_evidence(scan_path)
+    overlay = _load_evidence(review_overlay)
+    risks = vulnerability_report(
+        scan,
+        overlay=overlay,
+        root=_ROOT,
+        scan_path=scan_path,
+    )
+    candidate: dict[str, object] | None = None
+    try:
+        candidate = _validate_scan_candidate(
+            scan, _required_executable("docker")
+        )
+    except RuntimeError as error:
+        risks.update(status="BLOCKED", reason=str(error))
+    freshness = _freshness_result(risks, freshness_policy)
+    risks["freshness"] = freshness
+    if risks["status"] == "PASS" and freshness["status"] != "PASS":
+        risks.update(status="BLOCKED", reason="OS_SCAN_FRESHNESS_INVALID")
+    risks["candidate_identity"] = candidate
+    _save_evidence(output_path, risks)
+    _record_os_risk(
+        evidence_path=evidence_path,
+        review_path=output_path,
+        risks=risks,
+        inputs={
+            "scan": scan_path,
+            "review_overlay": review_overlay,
+            "freshness_policy": freshness_policy,
+        },
+        candidate_identity=candidate,
+    )
+    print(
+        "OS_RISK_REVIEW "
+        f"status={risks['status']} reason={risks['reason']} "
+        f"scan={scan_path} output={output_path}"
+    )
+    if risks["status"] != "PASS":
+        raise RuntimeError(
+            f"SECURITY_READY={risks['status']}: {risks['reason']}"
+        )
 
 
 def _write_license_inventory(sbom: Path, output: Path) -> None:
@@ -587,12 +738,117 @@ def _audit_frontend_dependencies(lock_file: Path, npm: str) -> None:
     _run_osv_dependency_audit(_locked_npm_dependencies(lock_file), "npm")
 
 
-def _verify(evidence_path: Path, review_overlay: Path) -> None:
+def _trivy_db_metadata(
+    docker: str, trivy_cache_mount: str, output: Path
+) -> Path:
+    """从本次 Trivy cache 读取数据库 metadata 并保存为用户可读证据。
+
+    Args:
+        docker: Docker CLI 绝对路径。
+        trivy_cache_mount: 本次 cache 的容器挂载参数。
+        output: 本次安全证据目录。
+
+    Returns:
+        已保存的 metadata 文件路径。
+
+    """
+    content = _capture(
+        (
+            docker,
+            "run",
+            "--rm",
+            "-v",
+            trivy_cache_mount,
+            "--entrypoint",
+            "cat",
+            _TRIVY_IMAGE,
+            "/root/.cache/trivy/db/metadata.json",
+        )
+    )
+    metadata = json.loads(content)
+    if not isinstance(metadata, dict):
+        raise RuntimeError("TRIVY_DB_METADATA_INVALID")
+    path = output / "trivy-db-metadata.json"
+    _save_evidence(path, cast(dict[str, object], metadata))
+    return path
+
+
+def _proof(path: Path) -> dict[str, str]:
+    """生成不含文件正文的仓库内证据引用。"""
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(_ROOT.resolve()):
+        raise ValueError("RELEASE_EVIDENCE_OUTSIDE_ROOT")
+    return {
+        "path": resolved.relative_to(_ROOT.resolve()).as_posix(),
+        "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+    }
+
+
+def _freshness_result(
+    risks: dict[str, object], freshness_policy: Path
+) -> dict[str, object]:
+    """验证管理员批准的扫描新鲜度政策，草案不能放行。"""
+    try:
+        policy = _load_evidence(freshness_policy)
+        identity = risks.get("scan_identity")
+        if not isinstance(identity, dict):
+            raise ValueError("REVIEW_SCAN_IDENTITY_UNAVAILABLE")
+        return validate_scan_freshness(
+            cast(dict[str, object], identity), policy, datetime.now(UTC)
+        )
+    except (OSError, ValueError, TypeError) as error:
+        return {
+            "status": "BLOCKED",
+            "reason": str(error),
+            "policy": str(freshness_policy),
+        }
+
+
+def _record_os_risk(
+    *,
+    evidence_path: Path,
+    review_path: Path,
+    risks: dict[str, object],
+    inputs: Mapping[str, Path],
+    candidate_identity: dict[str, object] | None = None,
+) -> None:
+    """保存可由最终聚合重新计算的 OS 风险检查记录。"""
+    evidence = _load_evidence(evidence_path)
+    checks = cast(dict[str, object], evidence.setdefault("checks", {}))
+    details: dict[str, object] = {
+        "raw_scan": _proof(inputs["scan"]),
+        "review_overlay": _proof(inputs["review_overlay"]),
+        "freshness_policy": _proof(inputs["freshness_policy"]),
+        "risk_summary": {
+            name: value for name, value in risks.items() if name != "findings"
+        },
+    }
+    if candidate_identity is not None:
+        details["candidate_identity"] = candidate_identity
+    checks["os_risk"] = {
+        "status": risks["status"],
+        "reason": risks["reason"],
+        "identity": evidence_identity("os_risk", _current_identity()),
+        "origin": "本次执行",
+        "evidence": _proof(review_path)["path"],
+        "exit_code": 0,
+        "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
+        "details": details,
+    }
+    _save_evidence(evidence_path, evidence)
+
+
+def _verify(
+    evidence_path: Path,
+    review_overlay: Path,
+    freshness_policy: Path,
+) -> None:
     """执行依赖、镜像、Secret、SBOM 与许可证门禁。
 
     Args:
         evidence_path: 本轮独立执行证据汇总文件。
         review_overlay: 绑定完整扫描及实际处置证据的本地审查文件。
+        freshness_policy: 扫描及漏洞库时效的管理员政策或待批草案。
 
     Returns:
         全部门禁通过时无返回值。
@@ -659,6 +915,7 @@ def _verify(evidence_path: Path, review_overlay: Path) -> None:
             _IMAGE,
         )
     )
+    _trivy_db_metadata(docker, trivy_cache_mount, output)
     risks = vulnerability_report(
         json.loads(
             (output / "trivy-all.json").read_text(encoding="utf-8"),
@@ -671,41 +928,26 @@ def _verify(evidence_path: Path, review_overlay: Path) -> None:
     )
     if risks.get("image_id") != _current_identity()["image_id"]:
         risks.update(status="BLOCKED", reason="OS_SCAN_IMAGE_IDENTITY_MISMATCH")
+    freshness = _freshness_result(risks, freshness_policy)
+    risks["freshness"] = freshness
+    if risks["status"] == "PASS" and freshness["status"] != "PASS":
+        risks.update(status="BLOCKED", reason="OS_SCAN_FRESHNESS_INVALID")
     _save_evidence(output / "os-risk-review.json", risks)
-    evidence = _load_evidence(evidence_path)
-    checks = cast(dict[str, object], evidence.setdefault("checks", {}))
     review_path = output / "os-risk-review.json"
-    checks["os_risk"] = {
-        "status": risks["status"],
-        "reason": risks["reason"],
-        "identity": evidence_identity("os_risk", _current_identity()),
-        "origin": "本次执行",
-        "evidence": str(review_path),
-        "exit_code": 0,
-        "sha256": hashlib.sha256(review_path.read_bytes()).hexdigest(),
-        "details": {
-            "raw_scan": {
-                "path": str(output / "trivy-all.json"),
-                "sha256": hashlib.sha256(
-                    (output / "trivy-all.json").read_bytes()
-                ).hexdigest(),
-            },
-            "review_overlay": {
-                "path": str(review_overlay),
-                "sha256": hashlib.sha256(
-                    review_overlay.read_bytes()
-                ).hexdigest()
-                if review_overlay.is_file()
-                else None,
-            },
-            "risk_summary": {
-                name: value
-                for name, value in risks.items()
-                if name != "findings"
-            },
+    if not review_overlay.is_file():
+        raise RuntimeError("OS_RISK_REVIEW_MISSING")
+    if not freshness_policy.is_file():
+        raise RuntimeError("OS_SCAN_FRESHNESS_POLICY_MISSING")
+    _record_os_risk(
+        evidence_path=evidence_path,
+        review_path=review_path,
+        risks=risks,
+        inputs={
+            "scan": output / "trivy-all.json",
+            "review_overlay": review_overlay,
+            "freshness_policy": freshness_policy,
         },
-    }
-    _save_evidence(evidence_path, evidence)
+    )
     _run(
         (
             docker,
@@ -1711,7 +1953,14 @@ def _parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "command", choices=("build", "verify", "acceptance", "budget-plan")
+        "command",
+        choices=(
+            "build",
+            "verify",
+            "review-os-scan",
+            "acceptance",
+            "budget-plan",
+        ),
     )
     parser.add_argument(
         "--resume", action="store_true", help="复用有效记录，仅续跑选中验收阶段"
@@ -1758,6 +2007,23 @@ def _parser() -> argparse.ArgumentParser:
         help="完整扫描的本地处置overlay；计划和未批准风险保持阻断",
     )
     parser.add_argument(
+        "--scan",
+        type=Path,
+        help="review-os-scan 使用的既有完整 Trivy JSON；不会重新扫描",
+    )
+    parser.add_argument(
+        "--freshness-policy",
+        type=Path,
+        default=_ROOT / "release/p11-scan-freshness-policy.proposed.json",
+        help="管理员控制的扫描/DB时效政策；PROPOSED保持阻断",
+    )
+    parser.add_argument(
+        "--review-output",
+        type=Path,
+        default=_ROOT / "artifacts/p11-r5/os-risk-review-recheck.json",
+        help="review-os-scan 的重新聚合输出；不修改原始扫描",
+    )
+    parser.add_argument(
         "--budget-history",
         type=Path,
         default=_ROOT / "release/p11-blocker-diagnosis.json",
@@ -1773,6 +2039,11 @@ def _parser() -> argparse.ArgumentParser:
         "--report-output",
         type=Path,
         default=_ROOT / "release/p11-repair-acceptance.json",
+    )
+    parser.add_argument(
+        "--context-manifest",
+        type=Path,
+        help="build 的确定性上下文 manifest 输出路径",
     )
     return parser
 
@@ -1791,9 +2062,23 @@ def main(arguments: Sequence[str] | None = None) -> int:
     command = args.command
     try:
         if command == "build":
-            _build()
+            _build(args.context_manifest)
         elif command == "verify":
-            _verify(args.evidence_file, args.risk_review)
+            _verify(
+                args.evidence_file,
+                args.risk_review,
+                args.freshness_policy,
+            )
+        elif command == "review-os-scan":
+            if args.scan is None:
+                raise ValueError("OS_SCAN_PATH_REQUIRED")
+            _review_existing_os_scan(
+                scan_path=args.scan,
+                review_overlay=args.risk_review,
+                freshness_policy=args.freshness_policy,
+                output_path=args.review_output,
+                evidence_path=args.evidence_file,
+            )
         elif command == "budget-plan":
             _write_budget_plan(args)
         else:

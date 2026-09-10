@@ -101,3 +101,119 @@ def test_colloquial_grammar_and_topic_reordering_are_allowed(
     request = _request(before)
     assert rewrite_constraint_reason(request, after) is None
     assert request.text == before
+
+
+def test_pronoun_can_resolve_only_to_scoped_conversation_object() -> None:
+    """指代可使用会话对象，但不能借上下文加入新事实或其它对象。"""
+    request = _request("它的维护周期是多少？").model_copy(
+        update={
+            "conversation_context": (
+                "上一问：设备 MX-41 是什么？\n"
+                "已验证事实：MX-41 是公开合成设备。",
+            )
+        }
+    )
+
+    assert (
+        rewrite_constraint_reason(request, "MX-41 的维护周期是多少？") is None
+    )
+    assert (
+        rewrite_constraint_reason(request, "MX-42 的维护周期是多少？")
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(request, "MX-41 的维护周期是 14 天吗？")
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(
+            _request("它的维护周期是多少？"),
+            "MX-41 的维护周期是多少？",
+        )
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        ("开发中心的工作模式是啥", "开发中心的工作模式是什么"),
+        ("美的中心的工作模式是啥", "美的中心的工作模式是什么"),
+        (
+            "研发和质量组的工作模式是啥",
+            "研发和质量组的工作模式是什么",
+        ),
+        (
+            "“啥都有”研究组的工作模式是啥",
+            "“啥都有”研究组的工作模式是什么",
+        ),
+    ),
+)
+def test_descriptive_rewrite_preserves_entity_names(
+    before: str, after: str
+) -> None:
+    assert rewrite_constraint_reason(_request(before), after) is None
+
+
+def test_duty_rewrite_preserves_dynamic_source_qualifier() -> None:
+    before = "蓝熊规范中项目经理具体负责哪些工作"
+
+    assert (
+        rewrite_constraint_reason(
+            _request(before), "蓝熊规范中项目经理的职责是什么"
+        )
+        is None
+    )
+    assert (
+        rewrite_constraint_reason(
+            _request(before), "白鹭规范中项目经理的职责是什么"
+        )
+        == "REWRITE_SCOPE_CHANGED"
+    )
+    assert (
+        rewrite_constraint_reason(_request(before), "项目经理的职责是什么")
+        == "REWRITE_SCOPE_CHANGED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        ("开发中心在哪里？", "开发心在哪里？"),
+        ("研发和质量组在哪里？", "研发质量组在哪里？"),
+        ("美的中心在哪里？", "美中心在哪里？"),
+        ("啥都有研究组在哪里？", "都有研究组在哪里？"),
+        ("里程碑小组在哪里？", "程碑小组在哪里？"),
+    ),
+)
+def test_fallback_rewrite_cannot_delete_entity_function_characters(
+    before: str, after: str
+) -> None:
+    """未知关系也按原词比较，不能靠全局删虚词掩盖实体漂移。"""
+    assert (
+        rewrite_constraint_reason(_request(before), after)
+        == "REWRITE_SCOPE_CHANGED"
+    )
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    (
+        (
+            "蓝鹊小组的三种工作模式是啥",
+            "蓝鹊小组的四种工作模式是什么",
+        ),
+        (
+            "蓝鹊小组的第三种工作模式是什么",
+            "蓝鹊小组的第二种工作模式是什么",
+        ),
+        (
+            "蓝鹊小组有多少种工作模式",
+            "蓝鹊小组有哪些工作模式",
+        ),
+    ),
+)
+def test_rewrite_cannot_change_count_or_answer_shape(
+    before: str, after: str
+) -> None:
+    assert rewrite_constraint_reason(_request(before), after) is not None

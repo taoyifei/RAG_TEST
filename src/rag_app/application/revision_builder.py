@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
+from types import TracebackType
 from typing import Protocol
 
 from pydantic import Field, ValidationError
@@ -15,7 +17,7 @@ from pydantic import Field, ValidationError
 from rag_app.application.artifact_lifecycle import ArtifactLifecycleService
 from rag_app.application.embedding_indexing import DocumentEmbeddingService
 from rag_app.application.revision_validator import RevisionValidator
-from rag_app.core.errors import RagError, RevisionStateError
+from rag_app.core.errors import JobCancelled, RagError, RevisionStateError
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import (
     canonical_sha256,
@@ -56,6 +58,29 @@ from rag_app.core.ports import (
     TracePort,
     VectorStorePort,
 )
+
+_MAX_VALIDATION_ERRORS = 8
+_MAX_VALIDATION_PATH_SEGMENTS = 8
+_MAX_CAUSE_TYPES = 4
+_SAFE_CODE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,79}$")
+_SAFE_PATH_TOKEN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_SAFE_PUBLIC_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
+_SAFE_FAILURE_IDS = {
+    "node_id": re.compile(r"^node_[0-9a-f]{32}$"),
+    "chunk_id": re.compile(r"^chunk_[0-9a-f]{32}$"),
+}
+_PYDANTIC_SAFE_REASONS = {
+    "missing": "必填字段缺失。",
+    "int_parsing": "字段必须是有效整数。",
+    "int_type": "字段必须是整数。",
+    "string_pattern_mismatch": "字段格式不符合模型合同。",
+    "string_too_short": "字段长度低于模型下限。",
+    "string_too_long": "字段长度超过模型上限。",
+    "greater_than": "字段值未超过模型下限。",
+    "greater_than_equal": "字段值低于模型下限。",
+    "less_than": "字段值未低于模型上限。",
+    "less_than_equal": "字段值超过模型上限。",
+}
 
 
 class IngestionDocument(FrozenModel):
@@ -581,11 +606,33 @@ class RevisionBuilder:
                 evidence=evidence,
             )
         self._control.acquire_revision_lease(revision_id, job_id)
+        self._record_event(
+            job_id,
+            revision_id,
+            "started",
+            {
+                "attempt": attempt,
+                "project_id": project_id,
+                "knowledge_base_id": knowledge_base_id,
+            },
+        )
         try:
             self._control.assert_job_active(job_id)
             if self._control.is_ready_revision(revision_id):
                 current_state = IndexRevisionState.READY
-                return self._resume_ready(spec, job_id, attempt)
+                resumed = self._resume_ready(spec, job_id, attempt)
+                self._record_event(
+                    job_id,
+                    revision_id,
+                    "completed",
+                    {
+                        "attempt": attempt,
+                        "document_count": resumed.document_count,
+                        "chunk_count": resumed.chunk_count,
+                        "resumed": True,
+                    },
+                )
+                return resumed
             self._control.create_revision(
                 revision,
                 physical_namespace=spec.physical_namespace,
@@ -710,7 +757,7 @@ class RevisionBuilder:
                 stage="activate",
                 attempt=attempt,
             )
-            trace_id = deterministic_id("trace", job_id, revision_id)
+            trace_id = _ingestion_trace_id(job_id, revision_id, attempt)
             if (
                 content_identity_current is not None
                 and content_identity_current() != content_identity
@@ -730,6 +777,17 @@ class RevisionBuilder:
                 state="completed",
                 stage="activated",
                 attempt=attempt,
+            )
+            self._record_event(
+                job_id,
+                revision_id,
+                "completed",
+                {
+                    "attempt": attempt,
+                    "document_count": len(documents),
+                    "chunk_count": len(chunks),
+                    "resumed": False,
+                },
             )
             return RevisionBuildResult(
                 job_id=job_id,
@@ -764,7 +822,11 @@ class RevisionBuilder:
             spec.revision.knowledge_base_id,
             evidence,
             reason="P11_RESUME_VALIDATED",
-            trace_id=deterministic_id("trace", job_id, evidence.revision_id),
+            trace_id=_ingestion_trace_id(
+                job_id,
+                evidence.revision_id,
+                attempt,
+            ),
         )
         self._control.update_job(
             job_id, state="completed", stage="activated", attempt=attempt
@@ -805,7 +867,12 @@ class RevisionBuilder:
                         extension=item.extension,
                     ),
                     self._parsing_policy,
-                    ParseContext(document=item.document),
+                    ParseContext(
+                        document=item.document,
+                        cancel_check=lambda: self._control.assert_job_active(
+                            job_id
+                        ),
+                    ),
                 )
             with self._document_stage(context, "ir_validation"):
                 validate_document_ir(result.document_ir)
@@ -813,6 +880,18 @@ class RevisionBuilder:
                 with self._document_stage(context, "image_enrichment"):
                     result = self._document_enricher(result)
                     validate_document_ir(result.document_ir)
+                media_summary = _media_evidence_summary(result.document_ir)
+                if media_summary:
+                    self._record_event(
+                        job_id,
+                        revision_id,
+                        "media_evidence.evaluated",
+                        {
+                            "document_id": item.document.document_id,
+                            "attempt": attempt,
+                            **media_summary,
+                        },
+                    )
             version = result.document_ir.version
             created, existing = self._artifact_lifecycle.persist(
                 result.artifacts,
@@ -876,47 +955,68 @@ class RevisionBuilder:
             "input_sha256": context.input_sha256,
             "attempt": context.attempt,
             "parsing_policy": self._parsing_policy.model_dump(mode="json"),
+            "chunking_policy": self._chunking_policy.model_dump(mode="json"),
             "parser": self._parser.descriptor.model_dump(mode="json"),
             "chunker": self._chunker.descriptor.model_dump(mode="json"),
+            "tokenizer": _safe_tokenizer_contract(self._chunker),
+            "embedding_slot_limits": _safe_embedding_slot_limits(
+                self._slots,
+                self._chunking_policy,
+            ),
         }
         self._record_event(
             context.job_id, context.revision_id, f"{stage}.started", attributes
         )
+        status = "success"
+        error_code: str | None = None
+        primary_error: Exception | None = None
         try:
             yield
         except Exception as error:
+            status = (
+                "cancelled" if isinstance(error, JobCancelled) else "failed"
+            )
             if isinstance(error, RagError):
+                error_code = error.code
+                primary_error = error
                 raise
-            details = _safe_exception_location(error)
+            details = _safe_exception_details(error)
             details["document_id"] = context.document_id
-            if isinstance(error, ValidationError):
-                details["invalid_fields"] = [
-                    ".".join(str(value) for value in item["loc"])
-                    for item in error.errors(
-                        include_input=False, include_context=False
-                    )[:8]
-                ]
             stage_label = {
                 "chunk_persistence": "分块与检索索引保存",
                 "document_persistence": "文档解析结果保存",
             }.get(stage, stage)
-            raise RagError(
-                f"{stage_label}阶段处理失败（{type(error).__name__}），"
+            error_code = f"{stage.upper()}_FAILED"
+            primary_error = RagError(
+                f"{stage_label}阶段处理失败（{_safe_type_name(error)}），"
                 "请查看任务检索过程中的安全定位信息。",
-                code=f"{stage.upper()}_FAILED",
+                code=error_code,
                 stage=stage,
                 details=details,
-            ) from error
-        finally:
-            self._record_event(
-                context.job_id,
-                context.revision_id,
-                f"{stage}.finished",
-                {
-                    "elapsed_ms": (perf_counter() - started) * 1000,
-                    "document_id": context.document_id,
-                },
             )
+            raise primary_error from error
+        finally:
+            terminal_attributes: dict[str, object] = {
+                "elapsed_ms": (perf_counter() - started) * 1000,
+                "document_id": context.document_id,
+                "status": status,
+                "attempt": context.attempt,
+            }
+            if error_code is not None:
+                terminal_attributes["error_code"] = error_code
+            try:
+                self._record_event(
+                    context.job_id,
+                    context.revision_id,
+                    f"{stage}.finished",
+                    terminal_attributes,
+                )
+            except Exception as terminal_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    f"记录阶段终态失败：{_safe_type_name(terminal_error)}。"
+                )
 
     def _record_event(
         self,
@@ -926,12 +1026,21 @@ class RevisionBuilder:
         attributes: dict[str, object],
     ) -> None:
         if self._trace is not None:
+            safe_attributes = {
+                **attributes,
+                "job_id": job_id,
+                "revision_id": revision_id,
+            }
             self._trace.record(
                 TraceEvent(
-                    trace_id=deterministic_id("trace", job_id, revision_id),
+                    trace_id=_ingestion_trace_id(
+                        job_id,
+                        revision_id,
+                        _positive_attempt(safe_attributes.get("attempt")),
+                    ),
                     event_name="ingestion." + name,
                     occurred_at=datetime.now(UTC),
-                    attributes=freeze_json_object(attributes),
+                    attributes=freeze_json_object(safe_attributes),
                 )
             )
 
@@ -1008,7 +1117,7 @@ class RevisionBuilder:
         self._record_event(
             job_id,
             revision_id,
-            "failed",
+            "cancelled" if isinstance(error, JobCancelled) else "failed",
             {
                 "error_code": code,
                 "safe_message": safe_message,
@@ -1023,19 +1132,312 @@ class RevisionBuilder:
         )
 
 
+def _positive_attempt(value: object) -> int:
+    """把事件中的 retry attempt 收窄为正整数。"""
+    if type(value) is not int or value <= 0:
+        raise ValueError("Ingestion Trace 事件必须包含正整数 attempt。")
+    return value
+
+
+def _ingestion_trace_id(
+    job_id: str,
+    revision_id: str,
+    attempt: int,
+) -> str:
+    """为 retry 生成新根，同时保留首次尝试的既有公开 ID。"""
+    if attempt == 1:
+        return deterministic_id("trace", job_id, revision_id)
+    return deterministic_id("trace", job_id, revision_id, attempt)
+
+
+def _safe_exception_details(error: Exception) -> dict[str, object]:
+    """提取不含输入、消息和宿主绝对路径的有界异常诊断。"""
+    validation_error = _validation_error_in_chain(error)
+    diagnostic_error = validation_error or error
+    details = _safe_exception_location(diagnostic_error)
+    if validation_error is not None and "application_frame" not in details:
+        outer_location = _safe_exception_location(error)
+        application_frame = outer_location.get("application_frame")
+        if application_frame is not None:
+            details["application_frame"] = application_frame
+    details["error_type"] = (
+        "pydantic_validation"
+        if validation_error is not None
+        else "unexpected_exception"
+    )
+    details["invariant_code"] = (
+        "PYDANTIC_VALIDATION_FAILED"
+        if validation_error is not None
+        else "UNEXPECTED_EXCEPTION"
+    )
+    details["cause_types"] = _safe_cause_types(error)
+    details.update(_safe_failure_identifiers(error))
+    if validation_error is not None:
+        details.update(_safe_validation_details(validation_error))
+    return details
+
+
+def _validation_error_in_chain(error: Exception) -> ValidationError | None:
+    current: BaseException | None = error
+    for _ in range(_MAX_CAUSE_TYPES):
+        if current is None:
+            return None
+        if isinstance(current, ValidationError):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _safe_exception_location(error: Exception) -> dict[str, object]:
-    traceback = error.__traceback__
-    while traceback is not None and traceback.tb_next is not None:
-        traceback = traceback.tb_next
-    if traceback is None:
-        return {"exception_type": type(error).__name__}
-    return {
-        "exception_type": type(error).__name__,
-        "source_file": traceback.tb_frame.f_code.co_filename.replace(
-            "\\", "/"
-        ).rsplit("/", 1)[-1],
-        "source_line": traceback.tb_lineno,
+    frames = _traceback_frames(error.__traceback__)
+    exception_type = _safe_type_name(error)
+    if not frames:
+        return {"exception_type": exception_type}
+    origin = frames[-1]
+    origin_frame = _safe_frame(origin, application=False)
+    application = next(
+        (
+            frame
+            for frame in reversed(frames)
+            if _application_file(frame.tb_frame.f_code.co_filename) is not None
+        ),
+        None,
+    )
+    details: dict[str, object] = {
+        "exception_type": exception_type,
+        "source_file": origin_frame["file"],
+        "source_line": origin_frame["line"],
+        "origin_frame": origin_frame,
     }
+    if application is not None:
+        details["application_frame"] = _safe_frame(
+            application, application=True
+        )
+    return details
+
+
+def _traceback_frames(
+    traceback: TracebackType | None,
+) -> tuple[TracebackType, ...]:
+    frames: list[TracebackType] = []
+    while traceback is not None:
+        frames.append(traceback)
+        traceback = traceback.tb_next
+    return tuple(frames)
+
+
+def _safe_frame(
+    traceback: TracebackType,
+    *,
+    application: bool,
+) -> dict[str, object]:
+    filename = traceback.tb_frame.f_code.co_filename
+    resolved_file = (
+        _application_file(filename)
+        if application
+        else _safe_file_basename(filename)
+    )
+    return {
+        "file": resolved_file or "unknown.py",
+        "line": traceback.tb_lineno,
+        "function": _safe_code_value(
+            traceback.tb_frame.f_code.co_name,
+            fallback="unknown",
+        ),
+    }
+
+
+def _application_file(filename: str) -> str | None:
+    normalized = filename.replace("\\", "/")
+    parts = tuple(part for part in normalized.split("/") if part)
+    for index in range(len(parts) - 1):
+        if parts[index : index + 2] == ("src", "rag_app"):
+            return "/".join(parts[index:])
+    if "rag_app" in parts:
+        index = parts.index("rag_app")
+        return "/".join(parts[index:])
+    return None
+
+
+def _safe_file_basename(filename: str) -> str:
+    basename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    return _safe_code_value(basename, fallback="unknown.py")
+
+
+def _safe_type_name(error: Exception) -> str:
+    return _safe_code_value(type(error).__name__, fallback="Exception")
+
+
+def _safe_code_value(value: object, *, fallback: str) -> str:
+    if isinstance(value, str) and _SAFE_CODE_NAME.fullmatch(value):
+        return value
+    return fallback
+
+
+def _safe_public_identity(value: object) -> str:
+    if isinstance(value, str) and _SAFE_PUBLIC_IDENTITY.fullmatch(value):
+        return value
+    return "redacted"
+
+
+def _safe_cause_types(error: Exception) -> list[str]:
+    values: list[str] = []
+    current: BaseException | None = error
+    while current is not None and len(values) < _MAX_CAUSE_TYPES:
+        values.append(
+            _safe_code_value(type(current).__name__, fallback="Exception")
+        )
+        current = current.__cause__ or current.__context__
+    return values
+
+
+def _safe_failure_identifiers(error: Exception) -> dict[str, str]:
+    identifiers: dict[str, str] = {}
+    for name, pattern in _SAFE_FAILURE_IDS.items():
+        value = getattr(error, name, None)
+        if isinstance(value, str) and pattern.fullmatch(value):
+            identifiers[name] = value
+    return identifiers
+
+
+def _safe_validation_details(error: ValidationError) -> dict[str, object]:
+    errors = error.errors(
+        include_input=False,
+        include_context=False,
+        include_url=False,
+    )
+    bounded = errors[:_MAX_VALIDATION_ERRORS]
+    entries = [_safe_validation_entry(item) for item in bounded]
+    paths = [str(entry["path"]) for entry in entries]
+    return {
+        "model_name": _safe_code_value(
+            error.title,
+            fallback="pydantic_model",
+        ),
+        "invalid_fields": paths,
+        "validation_errors": entries,
+        "validation_error_count": len(errors),
+        "validation_errors_truncated": len(errors) > len(bounded),
+    }
+
+
+def _safe_validation_entry(item: Mapping[str, object]) -> dict[str, object]:
+    error_type = item.get("type")
+    safe_error_type = (
+        error_type
+        if isinstance(error_type, str)
+        and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_type)
+        else "validation_error"
+    )
+    location = item.get("loc")
+    path = _safe_validation_path(
+        location if isinstance(location, (tuple, list)) else ()
+    )
+    invariant_code = (
+        "PYDANTIC_MODEL_INVARIANT_FAILED"
+        if path == "$"
+        else "PYDANTIC_" + safe_error_type.upper()
+    )
+    safe_reason = _PYDANTIC_SAFE_REASONS.get(
+        safe_error_type,
+        ("模型级不变量未通过。" if path == "$" else "字段值不符合模型合同。"),
+    )
+    return {
+        "path": path,
+        "error_type": safe_error_type,
+        "invariant_code": invariant_code,
+        "safe_reason": safe_reason,
+    }
+
+
+def _safe_validation_path(location: Sequence[object]) -> str:
+    if not location:
+        return "$"
+    path = "$"
+    for item in location[:_MAX_VALIDATION_PATH_SEGMENTS]:
+        if isinstance(item, int) and not isinstance(item, bool) and item >= 0:
+            path += f"[{item}]"
+        elif isinstance(item, str) and _SAFE_PATH_TOKEN.fullmatch(item):
+            path += f".{item}"
+        else:
+            path += "[?]"
+    if len(location) > _MAX_VALIDATION_PATH_SEGMENTS:
+        path += "[...]"
+    return path
+
+
+def _safe_tokenizer_contract(chunker: ChunkerPort) -> dict[str, object]:
+    token_counter = getattr(chunker, "token_counter", None)
+    count = getattr(token_counter, "count", None)
+    if not callable(count):
+        return {"available": False}
+    try:
+        probe = count("")
+    except Exception:
+        return {"available": False}
+    tokenizer_id = getattr(probe, "tokenizer_id", None)
+    exact = getattr(probe, "exact", None)
+    compatibility = getattr(probe, "model_compatibility", ())
+    if not isinstance(exact, bool) or not isinstance(compatibility, tuple):
+        return {"available": False}
+    return {
+        "available": True,
+        "tokenizer_id": _safe_public_identity(tokenizer_id),
+        "exact": exact,
+        "model_compatibility": [
+            _safe_public_identity(item) for item in compatibility[:8]
+        ],
+    }
+
+
+def _safe_embedding_slot_limits(
+    slots: Sequence[EmbeddingSlotIdentity],
+    policy: ChunkingPolicy,
+) -> list[dict[str, object]]:
+    policy_limits = dict(policy.max_embedding_tokens_by_slot)
+    return [
+        {
+            "slot_id": _safe_public_identity(slot.slot_id),
+            "provider_id": _safe_public_identity(slot.provider_id),
+            "model": _safe_public_identity(slot.model),
+            "max_input_tokens": slot.max_input_tokens,
+            "policy_max_tokens": policy_limits.get(slot.slot_id),
+        }
+        for slot in slots
+    ]
+
+
+def _media_evidence_summary(document: DocumentIR) -> dict[str, object]:
+    """仅把计数、模式和政策身份写入安全 Ingestion Trace。"""
+    metadata = dict(document.metadata)
+    summary: dict[str, object] = {}
+    allowed = {
+        "status",
+        "media_count",
+        "recognized_count",
+        "pending_count",
+        "policy_version",
+        "adapter_identity",
+        "provider_id",
+        "cache_hit_count",
+        "candidate_count",
+        "accepted_count",
+        "published_count",
+        "review_states",
+        "source_mismatch_count",
+        "evidence_sources",
+    }
+    for source_key, output_key in (
+        ("ocr_enrichment", "ocr"),
+        ("diagram_relation_enrichment", "diagram_relations"),
+    ):
+        value = metadata.get(source_key)
+        if not isinstance(value, dict):
+            continue
+        summary[output_key] = {
+            str(key): item for key, item in value.items() if key in allowed
+        }
+    return summary
 
 
 def _validate_snapshot_scope(
