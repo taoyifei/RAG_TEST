@@ -10,9 +10,7 @@ describe("中文产品文案", () => {
     expect(localizeStatus("succeeded")).toBe("已完成");
     expect(localizeStatus("INSUFFICIENT_EVIDENCE")).toBe("暂无足够依据");
     expect(localizeStatus("PROVIDER_UNAVAILABLE")).toBe("依赖暂不可用");
-    expect(localizeStatus("CONFIGURATION_REQUIRED")).toBe(
-      "需要配置模型能力",
-    );
+    expect(localizeStatus("CONFIGURATION_REQUIRED")).toBe("需要配置模型能力");
     expect(localizeStatus("BUDGET_BLOCKED")).toBe("模型预算已阻断");
     expect(zhCN.impact.NEW_INDEX_REVISION_REQUIRED).toBe("需要构建新索引版本");
   });

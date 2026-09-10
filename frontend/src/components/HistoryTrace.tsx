@@ -85,9 +85,7 @@ export function HistoryTrace({
   async function exportSupport(includeBody: boolean) {
     if (
       includeBody &&
-      !window.confirm(
-        "该文件可能含敏感问答和引用。确认保存到受控位置吗？",
-      )
+      !window.confirm("该文件可能含敏感问答和引用。确认保存到受控位置吗？")
     ) {
       return;
     }

@@ -121,11 +121,7 @@ it("明确区分本地确定性检索，并由管理员一次批准当前活动�
     model_configuration_state: "CONFIGURED",
     model_authorization_state: "MISSING",
     budget_state: "MISSING",
-    required_operations: [
-      "generation",
-      "query.interpret",
-      "query.rewrite",
-    ],
+    required_operations: ["generation", "query.interpret", "query.rewrite"],
     fallback_reason_codes: ["CORPUS_AUTHORIZATION_MISSING"],
   };
   vi.spyOn(api, "modelSettings").mockResolvedValue({
@@ -184,9 +180,7 @@ it("明确区分本地确定性检索，并由管理员一次批准当前活动�
   expect(
     screen.getByText(/本次用途：回答生成、问题意图解释、问题改写/),
   ).toBeVisible();
-  await user.click(
-    screen.getByRole("button", { name: "确认批准当前版本" }),
-  );
+  await user.click(screen.getByRole("button", { name: "确认批准当前版本" }));
   await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
   expect(approve.mock.calls[0][0]).toBe("kb_test");
   expect(approve.mock.calls[0][1]).toEqual(

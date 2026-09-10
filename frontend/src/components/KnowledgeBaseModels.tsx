@@ -52,7 +52,8 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
               <p role="status">
                 当前检索：
                 {retrievalLabel(settings.retrieval_data_plane)} · Embedding：
-                {settings.retrieval_data_plane.embedding_provider_id ?? "未就绪"}
+                {settings.retrieval_data_plane.embedding_provider_id ??
+                  "未就绪"}
                 {settings.retrieval_data_plane.embedding_model
                   ? ` / ${settings.retrieval_data_plane.embedding_model}`
                   : ""}
@@ -216,8 +217,9 @@ function AuthorizationEditor({
     <Modal title="批准当前活动知识库资料" onClose={onClose}>
       <form className="stack model-settings-form" onSubmit={approve}>
         <p>
-          服务端会在确认瞬间冻结当前活动 Revision、文档版本整体摘要、所选模型与用途；文档、模型或活动
-          Revision 变化后不会自动跟随。
+          服务端会在确认瞬间冻结当前活动
+          Revision、文档版本整体摘要、所选模型与用途；文档、模型或活动 Revision
+          变化后不会自动跟随。
         </p>
         <p role="status">
           本次用途：{status.required_operations.map(operationLabel).join("、")}
@@ -256,7 +258,8 @@ function AuthorizationEditor({
           />
         </label>
         <small>
-          确认只创建这一份有界批准，不会立即调用 Provider，也不会由系统自动增加预算。
+          确认只创建这一份有界批准，不会立即调用
+          Provider，也不会由系统自动增加预算。
         </small>
         {error !== undefined && <ErrorPanel error={error} />}
         <div className="row-actions">
@@ -450,7 +453,8 @@ function ModelEditor({
           启用文档图片识别
         </label>
         <p>
-          模型设置保存后，请回到知识库卡片明确批准当前活动资料；浏览器不需要管理 source hash。
+          模型设置保存后，请回到知识库卡片明确批准当前活动资料；浏览器不需要管理
+          source hash。
         </p>
         {error !== undefined && <ErrorPanel error={error} />}
         <div className="row-actions">

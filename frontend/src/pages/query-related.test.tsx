@@ -172,9 +172,7 @@ it("deterministic slot 即使被选择也只显示本地确定性检索", async 
   );
   render(<QueryPage mode="answer" />);
   const user = await submit();
-  await user.click(
-    await screen.findByText("技术统计与检索状态"),
-  );
+  await user.click(await screen.findByText("技术统计与检索状态"));
   expect(await screen.findByText("本地确定性检索")).toBeVisible();
   expect(screen.queryByText("向量与原文检索")).toBeNull();
   expect(screen.queryByText("活动真实 Dense 检索")).toBeNull();
@@ -183,16 +181,12 @@ it("deterministic slot 即使被选择也只显示本地确定性检索", async 
 it("知识库切换和晚到响应不能重新显示旧原文", async () => {
   let resolve!: (value: QueryResponse) => void;
   let oldHandlers!: NonNullable<Parameters<typeof api.answerStream>[7]>;
-  vi.spyOn(api, "answerStream").mockImplementation(
-    (...args) => {
-      oldHandlers = args[7] ?? {};
-      return (
-      new Promise((done) => {
-        resolve = done;
-      })
-      );
-    },
-  );
+  vi.spyOn(api, "answerStream").mockImplementation((...args) => {
+    oldHandlers = args[7] ?? {};
+    return new Promise((done) => {
+      resolve = done;
+    });
+  });
   const view = render(<QueryPage mode="answer" />);
   await submit();
   consoleState.scope.kbId = "kb_b";
@@ -227,9 +221,7 @@ it("合法 claim 立即显示为暂存内容，final 到达后由正式答案替
     handlers.onClaim?.({
       claim_index: 0,
       text: "资料员每周核对设备清单。",
-      supports: [
-        { support_id: "support-1", quote: "每周核对设备清单" },
-      ],
+      supports: [{ support_id: "support-1", quote: "每周核对设备清单" }],
       active_index_revision_id: "irev_stream",
     });
   });
@@ -251,9 +243,7 @@ it("合法 claim 立即显示为暂存内容，final 到达后由正式答案替
   expect(
     await screen.findByRole("region", { name: "正式答案" }),
   ).toHaveTextContent("资料员每周核对设备清单。 [support-1]");
-  expect(
-    screen.queryByRole("region", { name: "已核验暂存内容" }),
-  ).toBeNull();
+  expect(screen.queryByRole("region", { name: "已核验暂存内容" })).toBeNull();
 });
 
 it("停止按钮中断当前 fetch，且停止后的晚到 claim 不再显示", async () => {

@@ -492,13 +492,13 @@ function ScopedQueryPage({
                 <details>
                   <summary>技术详情</summary>
                   <code>
-                    {result.route_reason_code} · slot={
-                      result.selected_embedding_slot ?? "none"
-                    }
+                    {result.route_reason_code} · slot=
+                    {result.selected_embedding_slot ?? "none"}
                     {result.data_plane && (
                       <>
                         {" · "}
-                        {result.data_plane.embedding_provider_id ?? "none"} /{" "}
+                        {result.data_plane.embedding_provider_id ??
+                          "none"} /{" "}
                         {result.data_plane.embedding_model ?? "none"} /{" "}
                         {result.data_plane.selected_vector_space ?? "none"}
                       </>
