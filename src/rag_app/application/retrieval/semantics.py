@@ -28,7 +28,8 @@ _CONDITION_OR_ORDER = re.compile(
 )
 _ORDINAL = re.compile(rf"第(?P<number>{_NUMERAL})(?:种|类|项|步|条|阶段|环节)")
 _COUNT_QUESTION = re.compile(
-    r"(?:有)?多少(?:种|个)?(?:步骤|步|项)?|(?<!哪)几种|几(?:个)?步骤"
+    r"(?:有)?多少(?:种|个)?(?:步骤|步|项|阶段|环节)?|(?<!哪)几种|"
+    r"几(?:个)?(?:步骤|阶段|环节)"
 )
 _EXPECTED_COUNT = re.compile(
     rf"(?<!第)(?P<number>{_NUMERAL})(?:种|类|项|步)(?![类型])"
@@ -52,7 +53,8 @@ _PROCEDURE_QUESTION = re.compile(
     r"如何|怎么|怎样"
 )
 _LEADING_REQUEST = re.compile(
-    r"^(?:请问|请告诉我|告诉我|我想知道|请帮我|请介绍|请说明|"
+    r"^(?:请查一下|帮我查一下|查一下|请问|请告诉我|告诉我|我想知道|"
+    r"请帮我|请介绍|请说明|"
     r"请解释|请列举|请列出|请)"
 )
 _TRAILING_TARGET_SYNTAX = re.compile(
@@ -95,14 +97,20 @@ _DEFINITION_SUFFIX = re.compile(
     r"^(?P<target>.+?)(?:(?:说白了|简单来说|通俗地说)?"
     r"(?:是|指(?:的)?是|定义为)(?:什么|啥)|(?:是)?什么意思)$"
 )
+_FACT_QUESTION_END = re.compile(
+    r"(?:(?:是|为)?(?:什么|啥|多少|多大)|是多少|是什么|是啥)$"
+)
 # 这些是通用事实属性，不是术语定义。若把“邮箱是什么”一概解析为定义，
 # 会让类型化语义抢走已有的属性证据路径。
 _FACT_ATTRIBUTE_SUFFIX = re.compile(
     r"(?:联系方式|联系电话|电话号码|手机号码|手机号|电话|分机号|分机|"
     r"邮箱|电子邮件|采购价格|采购价|采购成本|购买价格|售价|销售价格|"
     r"价格|价钱|费用|工资|薪资|保证金|补助|预付款|建筑面积|占地面积|"
-    r"面积|储存温度|温度|额定压力|压力|载荷上限|载荷|重量|质量|"
+    r"面积|温度上限|储存温度|温度|额定压力|压力|额定载荷|载荷上限|"
+    r"载荷|重量|质量|"
     r"允许偏差|偏差|比例|百分比|保管期限|保存期限|借阅期限|期限|"
+    r"维护周期|校准周期|检验周期|检查周期|保养周期|复核周期|更新周期|"
+    r"轮换周期|当前有效版本|现行版本|当前版本|有效版本|版本|"
     r"日期|时间|数据库品牌|品牌|型号|单位|数值)$"
 )
 _GENERIC_ENUMERATION = re.compile(
@@ -113,6 +121,10 @@ _STAGE_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:从[^，,]{1,40}(?:到|至)[^，,]{1,40})?[，,]?"
     r"(?:一共)?(?:都)?(?:分为|分成|分|包括|包含|经历|要走|需走|会走)"
     r"(?:了)?(?:哪些|哪几个|几大|什么)(?:主要)?(?:阶段|环节|步骤)$"
+)
+_STAGE_COUNT = re.compile(
+    r"^(?P<target>.+?(?:全流程|流程))(?:一共)?(?:有)?"
+    r"(?:多少|几)(?:个)?(?:阶段|环节)$"
 )
 _DELIVERABLE_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:(?:做|办理|执行)?(?:完成|做完|结束)"
@@ -155,6 +167,21 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     """
     normalized = unicodedata.normalize("NFKC", query).strip()
     core = _question_core(normalized)
+
+    fact_core = _FACT_QUESTION_END.sub("", core).strip()
+    fact_attribute = _FACT_ATTRIBUTE_SUFFIX.search(fact_core)
+    if fact_core != core and fact_attribute is not None:
+        raw_target = fact_core[: fact_attribute.start()].removesuffix("的")
+        target, source = _target_and_source(raw_target)
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source,
+                relation=fact_attribute.group(0),
+                answer_type=RequestedAnswerType.FACT,
+                source="RULE",
+                reason_codes=("FACT_ATTRIBUTE_QUESTION_SYNTAX",),
+            )
 
     purpose = _PURPOSE_QUESTION.fullmatch(core)
     if purpose is None:
@@ -254,6 +281,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
                 reason_codes=("STAGE_ENUMERATION_QUESTION_SYNTAX",),
+            )
+
+    stage_count = _STAGE_COUNT.fullmatch(core)
+    if stage_count is not None:
+        target, source = _target_and_source(stage_count["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source,
+                relation="主要阶段",
+                answer_type=RequestedAnswerType.COUNT,
+                source="RULE",
+                reason_codes=("STAGE_COUNT_QUESTION_SYNTAX",),
             )
 
     deliverables = _DELIVERABLE_ENUMERATION.fullmatch(core)

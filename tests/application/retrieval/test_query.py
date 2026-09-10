@@ -197,6 +197,14 @@ def test_search_request_bounds_conversation_context() -> None:
             None,
             None,
         ),
+        (
+            "露舟巡检全流程有几个阶段？",
+            "露舟巡检全流程",
+            "主要阶段",
+            RequestedAnswerType.COUNT,
+            None,
+            None,
+        ),
     ),
 )
 def test_analyzer_builds_shared_descriptive_semantics(  # noqa: PLR0913, PLR0917
@@ -225,6 +233,78 @@ def test_plain_process_keywords_remain_literal_lookup() -> None:
     assert (
         evaluate_span_support(
             analysis, "青岛啤酒采购流程使用公开合成文本。"
+        ).status
+        is SupportStatus.SUPPORTED
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "quote", "header"),
+    (
+        ("请查一下 XQ-71 维护周期是什么？", "18 天", "维护周期"),
+        ("HC-52 的校准周期是多少？", "21 天", "校准周期"),
+    ),
+)
+def test_cycle_attributes_are_facts_and_support_table_values(
+    question: str,
+    quote: str,
+    header: str,
+) -> None:
+    analysis = _analyze(question)
+
+    assert analysis.semantics.answer_type is RequestedAnswerType.FACT
+    assert analysis.semantics.target in {"XQ-71", "HC-52"}
+    assert analysis.semantics.relation in {"维护周期", "校准周期"}
+    assert (
+        evaluate_span_support(
+            analysis,
+            quote,
+            table_relation=True,
+            table_header=header,
+        ).status
+        is SupportStatus.SUPPORTED
+    )
+
+
+def test_current_version_is_a_supported_fact_instead_of_a_definition() -> None:
+    analysis = _analyze("霜叶校验规程当前有效版本是什么？")
+
+    assert analysis.semantics.answer_type is RequestedAnswerType.FACT
+    assert analysis.semantics.target == "霜叶校验规程"
+    assert analysis.semantics.relation == "当前有效版本"
+    assert (
+        question_search_terms(
+            analysis.normalized_query,
+            analysis.semantics,
+        )
+        == "霜叶校验规程 版本"
+    )
+    assert (
+        evaluate_span_support(
+            analysis,
+            "霜叶校验规程现行版本为 V2，V1 已废止。",
+        ).status
+        is SupportStatus.SUPPORTED
+    )
+
+
+def test_definition_prefix_is_not_reclassified_as_an_attribute_question() -> (
+    None
+):
+    analysis = _analyze("什么是温度？")
+
+    assert analysis.semantics.target == "温度"
+    assert analysis.semantics.answer_type is RequestedAnswerType.DEFINITION
+
+
+def test_exact_negative_constraint_remains_directly_supported() -> None:
+    analysis = _analyze("霜叶设备严禁在断电状态下继续加热？")
+
+    assert "严禁" in analysis.negation_signals
+    assert (
+        evaluate_span_support(
+            analysis,
+            "霜叶设备严禁在断电状态下继续加热。",
         ).status
         is SupportStatus.SUPPORTED
     )

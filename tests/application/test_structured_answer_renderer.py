@@ -12,6 +12,7 @@ from rag_app.application.answering.structured import (
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.errors import ValidationFailed
 from rag_app.core.models import EvidenceItem, QueryAnalysis
+from rag_app.core.models.chunk import SourceSpanKind
 from tests.application.retrieval.test_descriptive_answers import (
     _POLICY,
     _candidates,
@@ -21,16 +22,30 @@ from tests.application.retrieval.test_descriptive_answers import (
 )
 from tests.application.retrieval.test_evidence_table_coordinates import _context
 
+_NUMBERING = """<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="7">
+    <w:multiLevelType w:val="singleLevel"/>
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/><w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="7"><w:abstractNumId w:val="7"/></w:num>
+</w:numbering>
+"""
+
 
 def _render(
     question: str,
     blocks: str,
     *,
     name: str = "合成规范.docx",
+    numbering: str | None = None,
 ) -> tuple[RenderedAnswer, QueryAnalysis, tuple[EvidenceItem, ...]]:
     context = _context(question)
     evidence = EvidenceAssembler().assemble(
-        _candidates(blocks, display_name=name),
+        _candidates(blocks, display_name=name, numbering=numbering),
         _POLICY,
         context=context,
     )
@@ -138,6 +153,46 @@ def test_renderer_counts_real_structure_instead_of_question_premise() -> None:
 
     assert "共 2 项。" in rendered.text
     assert all(mode in rendered.text for mode in modes)
+
+
+def test_renderer_ignores_derived_numbering_as_a_list_item() -> None:
+    intro = "样品入库流程包括以下步骤："
+    steps = ("登记样品编号。", "完成双人复核。", "保存位置记录。")
+    blocks = _paragraph(intro) + "".join(
+        _list_paragraph(step) for step in steps
+    )
+
+    rendered, _analysis, evidence = _render(
+        "样品入库流程该怎么做？",
+        blocks,
+        numbering=_NUMBERING,
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, *steps]
+    assert all(
+        span.span_type is not SourceSpanKind.DERIVED_NUMBERING
+        for item in evidence
+        for span in item.source_spans
+    )
+    assert "步骤 1：登记样品编号。" in rendered.text
+    assert "步骤 3：保存位置记录。" in rendered.text
+
+
+def test_ordinal_list_ignores_derived_numbering_when_selecting_item() -> None:
+    intro = "样品入库流程包括以下步骤："
+    steps = ("登记样品编号。", "完成双人复核。", "保存位置记录。")
+    blocks = _paragraph(intro) + "".join(
+        _list_paragraph(step) for step in steps
+    )
+
+    rendered, _analysis, evidence = _render(
+        "样品入库流程的第三步是什么？",
+        blocks,
+        numbering=_NUMBERING,
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, steps[2]]
+    assert "第 3 项：保存位置记录。" in rendered.text
 
 
 def test_renderer_recalculation_rejects_tampered_output() -> None:

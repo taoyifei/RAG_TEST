@@ -22,6 +22,7 @@ _QUESTION_SYNTAX = re.compile(
 )
 _TYPED_SEARCH_TYPES = frozenset(
     {
+        RequestedAnswerType.FACT,
         RequestedAnswerType.DEFINITION,
         RequestedAnswerType.PURPOSE,
         RequestedAnswerType.ENUMERATION,
@@ -59,19 +60,27 @@ def question_search_terms(
             if semantics.source_qualifier is None
             else semantics.source_qualifier + " "
         )
-        relation = (
-            ""
-            if semantics.answer_type
-            in {
-                RequestedAnswerType.DEFINITION,
-                RequestedAnswerType.DUTIES,
-                RequestedAnswerType.RESPONSIBLE_PARTY,
-                RequestedAnswerType.SECTION_SUMMARY,
-            }
-            else " " + semantics.relation
-        )
+        relation = _search_relation(semantics)
         return source + semantics.target + relation
     return " ".join(_QUESTION_SYNTAX.sub(" ", query).split())
+
+
+def _search_relation(semantics: QuerySemantics) -> str:
+    """把问句修饰后的事实属性还原为可检索的通用关系词。"""
+    if semantics.answer_type in {
+        RequestedAnswerType.DEFINITION,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.RESPONSIBLE_PARTY,
+        RequestedAnswerType.SECTION_SUMMARY,
+    }:
+        return ""
+    relation = semantics.relation or ""
+    if semantics.answer_type is RequestedAnswerType.FACT:
+        if relation.endswith("版本"):
+            relation = "版本"
+        elif relation.endswith("周期"):
+            relation = "周期"
+    return " " + relation if relation else ""
 
 
 class LexicalChannel:

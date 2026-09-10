@@ -1026,7 +1026,11 @@ def _descriptive_list_evidence(  # noqa: PLR0911
         for candidate in list_chunks
         for span in candidate.hydrated.chunk.source_spans
         if span.is_citable
-        and span.span_type is not SourceSpanKind.SEPARATOR
+        and span.span_type
+        not in {
+            SourceSpanKind.DERIVED_NUMBERING,
+            SourceSpanKind.SEPARATOR,
+        }
         and candidate.hydrated.chunk.citation_text[
             span.chunk_start_char : span.chunk_end_char
         ].strip()
@@ -1043,7 +1047,12 @@ def _descriptive_list_evidence(  # noqa: PLR0911
         1
         for candidate in list_chunks
         for span in candidate.hydrated.chunk.source_spans
-        if span.is_citable and span.span_type is not SourceSpanKind.SEPARATOR
+        if span.is_citable
+        and span.span_type
+        not in {
+            SourceSpanKind.DERIVED_NUMBERING,
+            SourceSpanKind.SEPARATOR,
+        }
     )
     support_reason = (
         "SOURCE_CORRECTS_COUNT_PREMISE"

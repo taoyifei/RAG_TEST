@@ -50,6 +50,7 @@ _TABLE_TERMS = (
     "row",
 )
 _NEGATIONS = (
+    "严禁",
     "不",
     "未",
     "禁止",

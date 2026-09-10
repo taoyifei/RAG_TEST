@@ -47,8 +47,14 @@ _ATTRIBUTES = (
     ("PRESSURE", r"额定压力|压力"),
     ("MASS", r"载荷上限|载荷|重量|质量"),
     ("RATIO", r"允许偏差|偏差|比例|百分比"),
-    ("DURATION", r"保管期限|保存期限|借阅期限|期限|多久|多少天|几天|多少小时"),
+    (
+        "DURATION",
+        r"维护周期|校准周期|检验周期|检查周期|保养周期|复核周期|"
+        r"更新周期|轮换周期|保管期限|保存期限|借阅期限|期限|周期|"
+        r"多久|多少天|几天|多少小时",
+    ),
     ("TIME", r"日期|何时|什么时候|什么时间"),
+    ("VERSION", r"当前有效版本|现行版本|当前版本|有效版本|版本"),
     ("BRAND", r"数据库品牌|品牌|型号"),
 )
 _NUMBER = r"(?:\d+(?:\.\d+)?|[零一二三四五六七八九十百千万两]+)"
@@ -72,6 +78,7 @@ _VALUES = {
     "RATIO": rf"{_NUMBER}\s*[%％]|百分之{_NUMBER}",
     "DURATION": rf"{_NUMBER}\s*(?:个)?(?:工作日|天|小时|分钟|周|月|年)",
     "TIME": r"(?:每日|每周|每月|凌晨|上午|下午|晚上|\d{4}年|\d{1,2}[:：]\d{2})",
+    "VERSION": r"(?<![a-z0-9])(?:v|r)?\d+(?:[._-]\d+)*(?![a-z0-9])",
     "BRAND": r"(?:品牌|型号|数据库)(?:为|是|采用|使用|[:：])\s*\S+",
     "MEASUREMENT": (
         rf"{_NUMBER}\s*(?:kg|g|mg|mm|cm|km|m|mpa|kpa|pa|℃|°c|千克|米)"
@@ -87,7 +94,8 @@ _RELATION = re.compile(
     r"为|是|由|需|应|先|后|存放|位于|保持|允许|禁止|不得|备份|预热|采用|使用|负责|进行|核对|不直接"
 )
 _LEADING_REQUEST_WORDS = re.compile(
-    r"^(?:请问|请|我想知道|我想了解|想知道|想了解|告诉我|帮我查(?:一下)?)"
+    r"^(?:请查(?:一下)?|帮我查(?:一下)?|查一下|请问|请|我想知道|"
+    r"我想了解|想知道|想了解|告诉我)"
 )
 _TRAILING_REQUEST_WORDS = re.compile(
     r"(?:(?:的)?(?:是多少|是什么|是啥|有多少|多大|是否|怎样|如何|怎么|"
@@ -523,7 +531,10 @@ def _clause_supports(  # noqa: PLR0911
     if answer_type in _VALUES:
         return (
             bool(re.search(_VALUES[answer_type], clause, re.IGNORECASE))
-            and (relation in clause or answer_type in {"DURATION", "TIME"})
+            and (
+                relation in clause
+                or answer_type in {"DURATION", "TIME", "VERSION"}
+            )
             and (
                 not (answer_type == "DURATION" and "期限" in relation)
                 or _target_matches(target, clause, strict=True)

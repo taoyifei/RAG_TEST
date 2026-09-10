@@ -49,9 +49,10 @@ def _candidates(
     *,
     display_name: str = "合成制度.docx",
     document_id: str | None = None,
+    numbering: str | None = None,
 ) -> tuple[RankedChunk, ...]:
     ir = parse_package(
-        build_package(blocks),
+        build_package(blocks, numbering=numbering),
         name=display_name,
         parse_context=parse_context(
             document_id=document_id, display_name=display_name
