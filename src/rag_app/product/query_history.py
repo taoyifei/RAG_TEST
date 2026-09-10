@@ -6,13 +6,14 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import re
 import sqlite3
 import threading
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import cast
@@ -44,12 +45,17 @@ _MAX_RETENTION_DAYS = 365
 _MAX_KEYWORD_SCAN_RECORDS = 1_000
 _MAX_KEYWORD_SCAN_SECONDS = 0.25
 _EXPORT_LEASE_SECONDS = 15 * 60
+_WRITE_QUEUE_SIZE = 1_024
+_WRITE_BATCH_SIZE = 64
+_WRITE_BATCH_WINDOW_SECONDS = 0.002
+_WRITE_WAIT_SECONDS = 10.0
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _TRACE_ID_PATTERN = re.compile(r"^(?:trace_)?[0-9a-f]{32}$")
 _SECRET_TEXT = re.compile(
     r"(?i)(?:\b(?:authorization|cookie|api[_-]?key)\s*[:=]\s*"
     r"[^\r\n]+|\bBearer\s+\S+|\bsk-[a-zA-Z0-9_-]{12,})"
 )
+_STOP_WRITER = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +77,16 @@ class HistorySnapshotLimitError(ValueError):
     def __init__(self, reason_code: str) -> None:
         self.reason_code = reason_code
         super().__init__(reason_code)
+
+
+@dataclass(slots=True)
+class _HistoryWriteCommand:
+    """等待同一 durable group commit 的单条 History 写命令。"""
+
+    trace_id: str
+    action: Callable[[sqlite3.Connection], object]
+    completion: threading.Event = field(default_factory=threading.Event)
+    error: Exception | None = None
 
 
 class ProductQueryHistory:
@@ -100,6 +116,175 @@ class ProductQueryHistory:
         self._instance_id = uuid.uuid4().hex
         self._process_id = os.getpid()
         self._write_lock = threading.RLock()
+        self._writer_state_lock = threading.Lock()
+        self._write_queue: queue.Queue[_HistoryWriteCommand | object] = (
+            queue.Queue(maxsize=_WRITE_QUEUE_SIZE)
+        )
+        self._writer: threading.Thread | None = None
+        self._accepting_writes = True
+
+    def _submit_write(
+        self,
+        trace_id: str,
+        action: Callable[[sqlite3.Connection], object],
+    ) -> None:
+        """提交同步 History 写入并等待所属 group commit。
+
+        Args:
+            trace_id: 用于稳定错误关联的当前 Trace ID。
+            action: 在 writer 外层事务及独立 savepoint 中执行的写操作。
+
+        Returns:
+            所属批次完成 durable commit 后无返回值。
+
+        Raises:
+            ProviderUnavailable: writer 已关闭、队列已满或等待超时。
+            Exception: 当前命令自身的原始业务或 SQLite 异常。
+
+        """
+        command = _HistoryWriteCommand(trace_id=trace_id, action=action)
+        with self._writer_state_lock:
+            if not self._accepting_writes:
+                raise self._unavailable(trace_id)
+            if self._writer is None:
+                self._writer = threading.Thread(
+                    target=self._run_writer,
+                    name="rag-history-writer",
+                    daemon=False,
+                )
+                self._writer.start()
+            try:
+                self._write_queue.put_nowait(command)
+            except queue.Full as error:
+                raise self._unavailable(trace_id) from error
+        if not command.completion.wait(timeout=_WRITE_WAIT_SECONDS):
+            raise self._unavailable(trace_id)
+        if command.error is not None:
+            raise command.error
+
+    def _run_writer(self) -> None:
+        """在唯一后台线程中收集并提交有界 History 写批次。
+
+        Args:
+            无参数；持续消费本实例的有界队列。
+
+        Returns:
+            收到关闭标记并提交此前命令后返回。
+
+        """
+        while True:
+            item = self._write_queue.get()
+            if item is _STOP_WRITER:
+                self._write_queue.task_done()
+                return
+            if not isinstance(item, _HistoryWriteCommand):
+                self._write_queue.task_done()
+                continue
+            commands = [item]
+            stop_after_batch = self._collect_write_batch(commands)
+            self._execute_write_batch(commands)
+            for _command in commands:
+                self._write_queue.task_done()
+            if stop_after_batch:
+                self._write_queue.task_done()
+                return
+
+    def _collect_write_batch(
+        self,
+        commands: list[_HistoryWriteCommand],
+    ) -> bool:
+        """在固定微窗口内收集同一 durable commit 的并发命令。
+
+        Args:
+            commands: 已含首条命令且由 writer 独占的可变批次。
+
+        Returns:
+            收集期间是否同时收到关闭标记。
+
+        """
+        deadline = monotonic() + _WRITE_BATCH_WINDOW_SECONDS
+        while len(commands) < _WRITE_BATCH_SIZE:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                candidate = self._write_queue.get(timeout=remaining)
+            except queue.Empty:
+                return False
+            if candidate is _STOP_WRITER:
+                return True
+            if isinstance(candidate, _HistoryWriteCommand):
+                commands.append(candidate)
+            else:
+                self._write_queue.task_done()
+        return False
+
+    def _execute_write_batch(
+        self,
+        commands: Sequence[_HistoryWriteCommand],
+    ) -> None:
+        """以逐命令 savepoint 和单次外层 commit 执行批次。
+
+        Args:
+            commands: 按队列顺序排列的非空写命令。
+
+        Returns:
+            全部命令均记录成功或错误并唤醒等待方后返回。
+
+        """
+        batch_error: Exception | None = None
+        try:
+            with (
+                self._write_lock,
+                self._connections.transaction(write=True) as connection,
+            ):
+                for index, command in enumerate(commands):
+                    savepoint = f"history_write_{index}"
+                    connection.execute(f"SAVEPOINT {savepoint}")
+                    try:
+                        command.action(connection)
+                    except Exception as error:  # 每条命令独立失败，不污染同批。
+                        connection.execute(f"ROLLBACK TO {savepoint}")
+                        connection.execute(f"RELEASE {savepoint}")
+                        command.error = error
+                    else:
+                        connection.execute(f"RELEASE {savepoint}")
+        except Exception as error:
+            batch_error = error
+        finally:
+            for command in commands:
+                if command.error is None and batch_error is not None:
+                    command.error = batch_error
+                command.completion.set()
+
+    def _stop_writer(self) -> None:
+        """停止准入并等待此前 History 写命令全部提交。
+
+        Args:
+            无参数；幂等关闭本实例的 writer。
+
+        Returns:
+            writer 不存在或已退出后返回。
+
+        Raises:
+            ProviderUnavailable: 关闭标记无法入队或 writer 超时未退出。
+
+        """
+        with self._writer_state_lock:
+            if not self._accepting_writes:
+                return
+            self._accepting_writes = False
+            writer = self._writer
+            if writer is None:
+                return
+            try:
+                self._write_queue.put(_STOP_WRITER, timeout=_WRITE_WAIT_SECONDS)
+            except queue.Full as error:
+                raise self._unavailable("history-close") from error
+        self._write_queue.join()
+        writer.join(timeout=_WRITE_WAIT_SECONDS)
+        if writer.is_alive():
+            raise self._unavailable("history-close")
 
     def recover(self) -> None:
         """启动时将未终态请求标记中断，清理已到期记录。
@@ -192,45 +377,43 @@ class ProductQueryHistory:
         ciphertext, nonce = self._encode(
             trace_id, {"question": question}, enabled=body_saved
         )
+        parameters = (
+            trace_id,
+            scope.project_id,
+            scope.knowledge_base_id,
+            owner_id,
+            now.isoformat(),
+            (now + timedelta(days=self.retention_days)).isoformat(),
+            hashlib.sha256(question.encode()).hexdigest(),
+            int(body_saved),
+            ciphertext,
+            nonce,
+            self._instance_id,
+            self._process_id,
+            json.dumps(
+                {
+                    "conversation_context_digest": conversation_context_digest,
+                    "conversation_context_present": (
+                        conversation_context_digest is not None
+                    ),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
         try:
-            with (
-                self._write_lock,
-                self._connections.transaction(write=True) as connection,
-            ):
-                connection.execute(
+            self._submit_write(
+                trace_id,
+                lambda connection: connection.execute(
                     "INSERT INTO query_history (trace_id, project_id, "
                     "knowledge_base_id, owner_id, created_at, expires_at, "
                     "status, question_sha256, body_saved, ciphertext, nonce, "
                     "instance_id, process_id, metadata_json) "
                     "VALUES (?, ?, ?, ?, ?, ?, 'STARTED', ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        trace_id,
-                        scope.project_id,
-                        scope.knowledge_base_id,
-                        owner_id,
-                        now.isoformat(),
-                        (now + timedelta(days=self.retention_days)).isoformat(),
-                        hashlib.sha256(question.encode()).hexdigest(),
-                        int(body_saved),
-                        ciphertext,
-                        nonce,
-                        self._instance_id,
-                        self._process_id,
-                        json.dumps(
-                            {
-                                "conversation_context_digest": (
-                                    conversation_context_digest
-                                ),
-                                "conversation_context_present": (
-                                    conversation_context_digest is not None
-                                ),
-                            },
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            sort_keys=True,
-                        ),
-                    ),
-                )
+                    parameters,
+                ),
+            )
         except (sqlite3.Error, ProviderUnavailable) as error:
             raise self._unavailable(trace_id) from error
 
@@ -257,51 +440,83 @@ class ProductQueryHistory:
 
         """
         try:
-            with (
-                self._write_lock,
-                self._connections.transaction(write=True) as connection,
-            ):
-                row = connection.execute(
-                    "SELECT * FROM query_history WHERE trace_id=?",
-                    (trace_id,),
-                ).fetchone()
-                if row is None:
-                    raise self._unavailable(trace_id)
-                now = datetime.now(UTC)
-                status, metadata = _completion(
-                    result,
-                    error,
-                    cancelled,
-                    cancelled_calls,
-                )
-                start_metadata = cast(
-                    dict[str, object], json.loads(row["metadata_json"])
-                )
-                metadata = {**start_metadata, **metadata}
-                payload = self._decode(row)
-                if result is not None:
-                    payload["answer"] = result.answer
-                    payload["result"] = result.model_dump(mode="json")
-                ciphertext, nonce = self._encode(
-                    trace_id, payload, enabled=bool(row["body_saved"])
-                )
-                elapsed = now - datetime.fromisoformat(row["created_at"])
-                connection.execute(
-                    "UPDATE query_history SET finished_at=?, status=?, "
-                    "duration_ms=?, metadata_json=?, ciphertext=?, nonce=? "
-                    "WHERE trace_id=? AND status='STARTED'",
-                    (
-                        now.isoformat(),
-                        status,
-                        max(0, int(elapsed.total_seconds() * 1000)),
-                        json.dumps(metadata, ensure_ascii=False),
-                        ciphertext,
-                        nonce,
-                        trace_id,
-                    ),
-                )
+            self._submit_write(
+                trace_id,
+                lambda connection: self._finish_in_transaction(
+                    connection,
+                    trace_id,
+                    result=result,
+                    error=error,
+                    cancelled=cancelled,
+                    cancelled_calls=cancelled_calls,
+                ),
+            )
         except (sqlite3.Error, ProviderUnavailable) as failure:
             raise self._unavailable(trace_id) from failure
+
+    def _finish_in_transaction(  # noqa: PLR0913
+        self,
+        connection: sqlite3.Connection,
+        trace_id: str,
+        *,
+        result: SearchAnswerResult | None,
+        error: RagError | None,
+        cancelled: bool,
+        cancelled_calls: tuple[ProviderCall, ...],
+    ) -> None:
+        """在 writer 批次内把一条 STARTED History 结算为唯一终态。
+
+        Args:
+            connection: 已进入外层写事务和当前命令 savepoint 的连接。
+            trace_id: 待结算的请求标识。
+            result: 可选成功或拒答结果。
+            error: 可选安全业务错误。
+            cancelled: 是否按取消终态结算。
+            cancelled_calls: 取消前已结算的安全 Provider 调用。
+
+        Returns:
+            当前命令的 SQL 更新完成后无返回值；durable commit 由批次负责。
+
+        """
+        row = connection.execute(
+            "SELECT * FROM query_history WHERE trace_id=?",
+            (trace_id,),
+        ).fetchone()
+        if row is None:
+            raise self._unavailable(trace_id)
+        now = datetime.now(UTC)
+        status, metadata = _completion(
+            result,
+            error,
+            cancelled,
+            cancelled_calls,
+        )
+        start_metadata = cast(
+            dict[str, object], json.loads(row["metadata_json"])
+        )
+        metadata = {**start_metadata, **metadata}
+        payload = self._decode(row)
+        if result is not None:
+            payload["answer"] = result.answer
+            payload["result"] = result.model_dump(mode="json")
+        ciphertext, nonce = self._encode(
+            trace_id, payload, enabled=bool(row["body_saved"])
+        )
+        elapsed = now - datetime.fromisoformat(row["created_at"])
+        connection.execute(
+            "UPDATE query_history SET finished_at=?, status=?, "
+            "duration_ms=?, metadata_json=?, ciphertext=?, nonce=? "
+            "WHERE trace_id=? AND status='STARTED'",
+            (
+                now.isoformat(),
+                status,
+                max(0, int(elapsed.total_seconds() * 1000)),
+                json.dumps(metadata, ensure_ascii=False),
+                ciphertext,
+                nonce,
+                trace_id,
+            ),
+        )
 
     def record(self, event: TraceEvent) -> None:
         """实现当前 TracePort，只写不含正文的结构化事件。
@@ -1058,6 +1273,7 @@ class ProductQueryHistory:
             收尾后无返回值。
 
         """
+        self._stop_writer()
         try:
             with (
                 self._write_lock,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,7 +12,7 @@ from time import monotonic, sleep
 import pytest
 
 from rag_app.composition.product_runtime import build_product_runtime
-from rag_app.core.errors import IndexNotReady
+from rag_app.core.errors import IndexNotReady, ProviderUnavailable
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
 from tests.adapters.parsers.docx.fixtures import build_package
@@ -254,6 +256,99 @@ def test_history_keyword_scan_is_bounded_and_reports_truncation(
         assert len(page["items"]) == 20
     finally:
         harness.close()
+
+
+def test_history_group_commit_batches_and_isolates_concurrent_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并发 STARTED/终态共享 commit，重复 ID 不回滚同批其他请求。"""
+    harness = build_product_harness(tmp_path)
+    history = harness.runtime.history
+    project, kb = create_project_and_knowledge_base(harness)
+    scope = KnowledgeBaseScope(project_id=project, knowledge_base_id=kb)
+    batch_sizes: list[int] = []
+    original_execute = history._execute_write_batch
+
+    def observe_batch(commands: object) -> None:
+        batch_sizes.append(len(commands))  # type: ignore[arg-type]
+        original_execute(commands)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(history, "_execute_write_batch", observe_batch)
+    trace_ids = tuple(new_id("trace") for _ in range(16))
+
+    def start_one(trace_id: str, barrier: threading.Barrier) -> None:
+        barrier.wait()
+        history.start(
+            trace_id,
+            scope,
+            "并发批量历史问题",
+            owner_id="local-admin",
+            save_body=False,
+        )
+
+    def finish_one(trace_id: str, barrier: threading.Barrier) -> None:
+        barrier.wait()
+        history.finish(
+            trace_id,
+            result=None,
+            error=None,
+            cancelled=True,
+        )
+
+    try:
+        start_barrier = threading.Barrier(len(trace_ids) + 1)
+        with ThreadPoolExecutor(max_workers=len(trace_ids)) as executor:
+            starts = tuple(
+                executor.submit(start_one, trace_id, start_barrier)
+                for trace_id in trace_ids
+            )
+            start_barrier.wait()
+            for future in starts:
+                future.result()
+
+        finish_barrier = threading.Barrier(len(trace_ids) + 1)
+        with ThreadPoolExecutor(max_workers=len(trace_ids)) as executor:
+            finishes = tuple(
+                executor.submit(finish_one, trace_id, finish_barrier)
+                for trace_id in trace_ids
+            )
+            finish_barrier.wait()
+            for future in finishes:
+                future.result()
+
+        assert max(batch_sizes) > 1
+        assert all(
+            history.detail(trace_id)["status"] == "CANCELLED"
+            for trace_id in trace_ids
+        )
+
+        peer_trace_id = new_id("trace")
+        isolation_barrier = threading.Barrier(3)
+        before_isolation = len(batch_sizes)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            duplicate = executor.submit(
+                start_one,
+                trace_ids[0],
+                isolation_barrier,
+            )
+            peer = executor.submit(
+                start_one,
+                peer_trace_id,
+                isolation_barrier,
+            )
+            isolation_barrier.wait()
+            with pytest.raises(ProviderUnavailable):
+                duplicate.result()
+            peer.result()
+        assert any(size > 1 for size in batch_sizes[before_isolation:])
+        assert history.detail(peer_trace_id)["status"] == "STARTED"
+        assert history.detail(trace_ids[0])["status"] == "CANCELLED"
+    finally:
+        harness.close()
+
+    assert history._writer is not None
+    assert history._writer.is_alive() is False
 
 
 def _insert_history_metadata(
