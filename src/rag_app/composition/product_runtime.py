@@ -70,6 +70,7 @@ from rag_app.core.models import (
     Job,
     KnowledgeBaseScope,
     ParseResult,
+    QueuedIngestion,
     RetrievalPolicy,
     SearchAnswerResult,
     SearchRequest,
@@ -1132,23 +1133,9 @@ class ProductProfileResolver:
                 self._acquire_generation_locked(generation)
                 service = generation.resource.lifecycle
         try:
-            source_hashes: tuple[str, ...] | None = None
-            if (
-                profile is not None
-                and self._retrieval_authorizations is not None
-                and not self._providers.test_only_transport
-            ):
-                request = runtime.store.ingestion_request(job_id)
-                source_hashes = tuple(
-                    sorted({item.content_sha256 for item in request.documents})
-                )
-            with self._retrieval_scope(
-                profile,
-                step_id="retrieval.build",
-                required_operations=("embedding.document",),
-                source_hashes=source_hashes,
-            ):
-                yield service
+            # 资源 generation lease 只保护生命周期对象；资料授权必须等
+            # Worker claim 并刷新完整 KB 快照后，紧邻 Builder 再核对。
+            yield service
         finally:
             if generation is not None:
                 self._release_service_generation(generation)
@@ -1189,6 +1176,36 @@ class ProductProfileResolver:
             required_operations=required_operations,
             source_hashes=source_hashes,
             expected_index_revision_id=expected_index_revision_id,
+        ):
+            yield
+
+    @contextmanager
+    def _ingestion_retrieval_scope(
+        self,
+        profile: RetrievalProfileRevision,
+        request: QueuedIngestion,
+    ) -> Iterator[None]:
+        """按 Worker 最终快照选择 Profile 重建或普通上传授权。"""
+        if (
+            self._retrieval_authorizations is None
+            or self._providers.test_only_transport
+        ):
+            yield
+            return
+        source_hashes = tuple(
+            sorted({item.content_sha256 for item in request.documents})
+        )
+        if request.activate_profile:
+            with self._retrieval_scope(
+                profile,
+                step_id="retrieval.build",
+                required_operations=("embedding.document",),
+                source_hashes=source_hashes,
+            ):
+                yield
+            return
+        with self._retrieval_authorizations.ingestion_scope(
+            profile.profile_revision_id, request
         ):
             yield
 
@@ -1784,6 +1801,9 @@ class ProductProfileResolver:
             content_identity=None
             if self._ocr is None
             else self._ocr.content_identity,
+            ingestion_scope=lambda request: self._ingestion_retrieval_scope(
+                profile, request
+            ),
         )
         cache = InMemoryRetrievalCache()
         retrieval = RetrievalService(
@@ -2117,7 +2137,9 @@ def build_product_runtime(  # noqa: PLR0915
             product_profile,
             data_dir=data_dir,
             hooks=P09RuntimeHooks(
-                recover_jobs=recover_jobs,
+                # Product resolver 必须先绑定完整 P09 runtime，之后才能恢复
+                # 持久 Job，避免启动线程抢在组合根就绪前解析 Profile。
+                recover_jobs=False,
                 trace_sink=traces,
                 query_history=traces,
                 conversation=conversations,
@@ -2141,7 +2163,7 @@ def build_product_runtime(  # noqa: PLR0915
         raise
     profiles.bind_runtime(p09)
     ocr.bind_blob_store(p09.retrieval_runtime.persistence.components.blob_store)
-    return ProductRuntime(
+    runtime = ProductRuntime(
         p09=p09,
         connections=connections,
         credentials=credentials,
@@ -2164,6 +2186,9 @@ def build_product_runtime(  # noqa: PLR0915
         content_identity=_content_identity,
         local_ocr_http_client=local_ocr_http_client,
     )
+    if recover_jobs:
+        runtime.p09.jobs.recover()
+    return runtime
 
 
 def _build_local_ocr_adapter(

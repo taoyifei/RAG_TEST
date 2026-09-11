@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import Field, StrictInt
 
@@ -158,6 +159,8 @@ class Job(FrozenModel):
     trace_id: str | None = Field(default=None, pattern=r"^trace_[0-9a-f]{32}$")
     lease_owner: bool
     fencing_safe_status: str = Field(min_length=1, max_length=80)
+    revision_available: bool
+    required_action: Literal["approve_retrieval"] | None
     slot_progress: tuple[SlotProgress, ...] = ()
 
 
@@ -224,6 +227,7 @@ class QueuedIngestion(FrozenModel):
     documents: tuple[QueuedIngestionDocument, ...] = Field(min_length=1)
     activate_profile: bool = False
     expected_profile_revision_id: str | None = None
+    initial_index_revision_id: str | None = None
     expected_index_revision_id: str | None = None
     activation_validation_ids: tuple[str, ...] = ()
     content_identity: str | None = None

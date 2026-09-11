@@ -46,6 +46,7 @@ from rag_app.product.provider_runtime import TransportFactory
 from rag_app.product.retrieval_authorization import (
     RetrievalAuthorizationApproval,
     RetrievalAuthorizationStatus,
+    RetrievalIngestionAuthorizationStatus,
 )
 from rag_app.product.verification import validation_is_current
 
@@ -804,6 +805,45 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         try:
             return runtime.retrieval_authorizations.approve(
                 profile_revision_id,
+                approval,
+                approved_by_session_id=session_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @app.get(
+        "/api/v1/jobs/{job_id}/retrieval-authorization",
+        tags=["jobs", "retrieval-profiles"],
+        response_model=RetrievalIngestionAuthorizationStatus,
+    )
+    def _retrieval_ingestion_authorization(
+        job_id: str,
+    ) -> RetrievalIngestionAuthorizationStatus:
+        """读取一个待入库 Job 的精确真实检索批准状态。"""
+        try:
+            return runtime.retrieval_authorizations.ingestion_status(job_id)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @app.post(
+        "/api/v1/jobs/{job_id}/retrieval-authorization:approve",
+        tags=["jobs", "retrieval-profiles"],
+        response_model=RetrievalIngestionAuthorizationStatus,
+    )
+    def _approve_retrieval_ingestion_authorization(
+        job_id: str,
+        approval: RetrievalAuthorizationApproval,
+        request: Request,
+    ) -> RetrievalIngestionAuthorizationStatus:
+        """仅由管理员批准同一 Job 最终快照的真实检索出网。"""
+        if getattr(request.state, "product_principal", None) != "admin_session":
+            raise HTTPException(403, "首次入库检索授权只能由控制台管理员批准。")
+        session_id = getattr(request.state, "product_session_id", None)
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(403, "管理员会话身份不可用。")
+        try:
+            return runtime.retrieval_authorizations.approve_ingestion(
+                job_id,
                 approval,
                 approved_by_session_id=session_id,
             )

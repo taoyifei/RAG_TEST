@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from rag_app.composition.profiles import (
     RagProfile,
     load_profile,
 )
+from rag_app.core.errors import RagError
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import ParseResult, RetrievalPolicy, SystemStatus
 from rag_app.core.models.common import freeze_json_object
@@ -26,6 +28,8 @@ from rag_app.core.ports.query_history import QueryHistoryPort
 from rag_app.query_executor import QueryExecutor
 from rag_app.sdk import RagSdk
 from rag_app.tracing.models import TraceMode
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -183,10 +187,29 @@ def build_p09_runtime(
         return hooks.system_status_overlay(status)
 
     def _run_ingestion(job_id: str) -> None:
-        resolved = lifecycle
-        if hooks is not None and hooks.job_lifecycle_resolver is not None:
-            resolved = hooks.job_lifecycle_resolver(job_id, lifecycle)
-        resolved.run_ingestion(job_id)
+        try:
+            resolved = lifecycle
+            if hooks is not None and hooks.job_lifecycle_resolver is not None:
+                resolved = hooks.job_lifecycle_resolver(job_id, lifecycle)
+            resolved.run_ingestion(job_id)
+        except Exception as error:
+            # Resolver/lease 建立发生在 LifecycleService 的内部终态边界之外；
+            # 仍必须把持久请求移出 queued，避免 poller 热循环吞掉异常。
+            store.fail_unclaimed_ingestion(
+                job_id,
+                error_code=(
+                    error.code
+                    if isinstance(error, RagError)
+                    else type(error).__name__
+                ),
+                safe_message=(
+                    error.safe_message
+                    if isinstance(error, RagError)
+                    else "文档构建启动失败。"
+                ),
+                retryable=isinstance(error, RagError) and error.retryable,
+            )
+            _LOGGER.exception("持久入库 Job 在生命周期边界外失败：%s", job_id)
 
     jobs = DurableJobRunner(
         _run_ingestion,

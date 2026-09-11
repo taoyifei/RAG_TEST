@@ -17,5 +17,6 @@ class BudgetBlockedError(PolicyDenied):
             reason,
             stage="provider.budget",
             code=reason,
+            retryable=True,
             details={"minimum_additional": self.minimum_additional},
         )

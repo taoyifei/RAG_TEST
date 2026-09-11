@@ -400,7 +400,7 @@ class LifecycleStorePort(Protocol):
         safe_message: str | None = None,
         retryable: bool = False,
     ) -> None:
-        """持久化构建请求终态和兜底安全错误。
+        """持久化已领取构建请求的终态和安全错误。
 
         Args:
             job_id: 目标 Job ID。
@@ -411,6 +411,28 @@ class LifecycleStorePort(Protocol):
 
         Returns:
             无返回值。
+
+        """
+        ...
+
+    def fail_unclaimed_ingestion(
+        self,
+        job_id: str,
+        *,
+        error_code: str,
+        safe_message: str,
+        retryable: bool,
+    ) -> None:
+        """只把尚未被 Worker 领取的请求持久化为安全失败。
+
+        Args:
+            job_id: 目标 Job ID。
+            error_code: 稳定错误码。
+            safe_message: 安全消息。
+            retryable: 是否可安全重试。
+
+        Returns:
+            无返回值；请求已被领取或终结时保持原状。
 
         """
         ...
