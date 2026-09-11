@@ -529,8 +529,8 @@ def test_responsible_party_does_not_relax_a_named_artifact_target() -> None:
     assert not evidence
 
 
-def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
-    """规则无法覆盖的概括请求可交生成器核验，缺失号码仍不能借值。"""
+def test_uncertain_sources_reach_model_without_rule_gate() -> None:
+    """有界原文先交模型判断，确定性规则只标记直接支持集。"""
     candidates = _candidates(
         _paragraph("阀门检查要求包括确认开度、核对记录并保存照片。")
     )
@@ -542,44 +542,48 @@ def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
     )
     assert evidence
     assert dict(evidence[0].metadata)["answer_support"]["status"] == "UNCERTAIN"
-    assert not assembler.assemble(
+    phone_selection = assembler.assemble_sets(
         candidates,
         _POLICY,
         context=_context("阀门检查员的手机号是多少"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
+    assert phone_selection.answer_support_set == ()
+    assert phone_selection.model_evidence_candidates
 
 
-def test_weak_topic_overlap_is_not_a_model_evidence_candidate() -> None:
-    """通用问句词只形成弱命中时仍是证据不足，不投影模型能力阻断。"""
+def test_weak_topic_overlap_stays_out_of_direct_support_set() -> None:
+    """弱命中可供模型判读，但不能冒充确定性直接支持。"""
     candidates = _candidates(
         _paragraph("公开守则说明常规审批要求与工作日归档安排。")
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
         _POLICY,
         context=_context("这些公开守则有没有要求周末必须值班？"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
 
-    assert not evidence
+    assert selection.answer_support_set == ()
+    assert selection.model_evidence_candidates
 
 
-def test_role_title_without_assignment_is_not_model_evidence() -> None:
-    """角色职责不能被模型候选误当成该角色对应的具体人员。"""
+def test_role_title_without_assignment_is_not_direct_answer_support() -> None:
+    """角色职责原文可供模型判断，但不能直接证明具体人员。"""
     candidates = _candidates(
         _paragraph("巡检负责人需要核对设备清单并归档检查记录。")
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
         _POLICY,
         context=_context("巡检负责人是谁？"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
 
-    assert not evidence
+    assert selection.answer_support_set == ()
+    assert selection.model_evidence_candidates
 
 
 @pytest.mark.parametrize(
