@@ -141,6 +141,27 @@ _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
 _ResourceT = TypeVar("_ResourceT")
 
 
+def _can_reuse_generation_cache(
+    status: CorpusAuthorizationStatus | None,
+) -> bool:
+    """判断预算耗尽是否只允许复用同授权身份的已验证回答。
+
+    Args:
+        status: 当前语料、模型和预算的动态对账结果。
+
+    Returns:
+        仅当语料与模型授权仍批准、且唯一阻断是预算耗尽时返回 True。
+
+    """
+    return bool(
+        status is not None
+        and status.corpus_authorization_state == "APPROVED"
+        and status.model_configuration_state == "CONFIGURED"
+        and status.model_authorization_state == "APPROVED"
+        and status.budget_state == "EXHAUSTED"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProductRuntimeSettings:
     """普通产品启动所需的最小配置。"""
@@ -750,6 +771,61 @@ class ProductProfileResolver:
             _RetrievalLeaseProxy(self, knowledge_base_id, fallback),
         )
 
+    def _query_generation_locked(
+        self,
+        knowledge_base_id: str,
+        settings: KnowledgeBaseModelSettings,
+        authorization_status: CorpusAuthorizationStatus | None,
+    ) -> tuple[
+        str | None,
+        _ResourceGeneration[ProductGroundedModel] | None,
+        bool,
+        bool,
+    ]:
+        """在 resolver 锁内解析可调用模型或仅缓存身份。
+
+        Args:
+            knowledge_base_id: 当前 Query 的知识库。
+            settings: 当前冻结的模型设置。
+            authorization_status: 当前语料、模型与预算状态。
+
+        Returns:
+            serving identity、模型 generation、是否仅允许缓存，以及配置
+            构造是否失败。
+
+        """
+        if self._models is None:
+            raise RuntimeError("Product Model Settings 尚未绑定。")
+        model_authorized = authorization_status is None or (
+            authorization_status.corpus_authorization_state == "APPROVED"
+            and authorization_status.model_authorization_state == "APPROVED"
+            and authorization_status.budget_state == "AVAILABLE"
+        )
+        cache_identity_only = _can_reuse_generation_cache(authorization_status)
+        if not settings.generation_connection_id or not (
+            model_authorized or cache_identity_only
+        ):
+            return None, None, False, False
+        try:
+            generation_identity = self._models.serving_identity(settings)
+            model_generation = (
+                self._model_generation_locked(
+                    knowledge_base_id,
+                    generation_identity,
+                    settings,
+                )
+                if model_authorized
+                else None
+            )
+        except (RagError, ValueError, KeyError):
+            return None, None, False, True
+        return (
+            generation_identity,
+            model_generation,
+            cache_identity_only,
+            False,
+        )
+
     @contextmanager
     def retrieval_service_lease(
         self,
@@ -779,6 +855,7 @@ class ProductProfileResolver:
             None
         )
         generation_identity: str | None = None
+        cache_identity_only = False
         settings = KnowledgeBaseModelSettings()
         model_configuration_failed = False
         authorization_status: CorpusAuthorizationStatus | None = None
@@ -795,26 +872,16 @@ class ProductProfileResolver:
                     authorization_status = self._corpus_authorizations.status(
                         knowledge_base_id
                     )
-                model_authorized = authorization_status is None or (
-                    authorization_status.corpus_authorization_state
-                    == "APPROVED"
-                    and authorization_status.model_authorization_state
-                    == "APPROVED"
-                    and authorization_status.budget_state == "AVAILABLE"
+                (
+                    generation_identity,
+                    model_generation,
+                    cache_identity_only,
+                    model_configuration_failed,
+                ) = self._query_generation_locked(
+                    knowledge_base_id,
+                    settings,
+                    authorization_status,
                 )
-                if settings.generation_connection_id and model_authorized:
-                    try:
-                        generation_identity = self._models.serving_identity(
-                            settings
-                        )
-                        model_generation = self._model_generation_locked(
-                            knowledge_base_id,
-                            generation_identity,
-                            settings,
-                        )
-                    except (RagError, ValueError, KeyError):
-                        model_generation = None
-                        model_configuration_failed = True
             base_data_plane_context = getattr(
                 service, "data_plane_context", None
             )
@@ -848,6 +915,10 @@ class ProductProfileResolver:
                     serving_identity=generation_identity,
                     interpreter=model if rewrite_enabled else None,
                     rewriter=model if rewrite_enabled else None,
+                )
+            elif cache_identity_only and generation_identity is not None:
+                service = service.with_generation_cache_identity(
+                    serving_identity=generation_identity
                 )
             with_data_plane = getattr(service, "with_data_plane", None)
             if data_plane_context is not None and callable(with_data_plane):

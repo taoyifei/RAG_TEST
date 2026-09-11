@@ -187,6 +187,7 @@ class RetrievalService:
         self._grounded: GroundedAnsweringService | None = None
         self._interpreter: QueryInterpretPort | None = None
         self._rewriter: QueryRewritePort | None = None
+        self._generation_behavior = "model_required"
         self._trace = trace
         self._cache = cache
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
@@ -259,7 +260,9 @@ class RetrievalService:
             与原文档向量配置共存的查询服务。
 
         """
-        configured = copy(self)
+        configured = self.with_generation_cache_identity(
+            serving_identity=serving_identity
+        )
         configured._grounded = GroundedAnsweringService(generator)
         configured._interpreter = interpreter
         configured._rewriter = rewriter
@@ -282,6 +285,31 @@ class RetrievalService:
             rewrite_model=descriptor.version if rewriter is not None else None,
             model_configuration_state="CONFIGURED",
         )
+        return configured
+
+    def with_generation_cache_identity(
+        self,
+        *,
+        serving_identity: str,
+    ) -> RetrievalService:
+        """仅附加已批准生成配置的缓存身份，不挂载可出网模型。
+
+        预算耗尽不会改变已经发布答案的模型、Prompt 或授权身份。此副本
+        因而可以在任何 Provider 调用前读取同身份缓存；缓存未命中时仍由
+        数据面阻断原因拒答，且不存在可调用的生成器。
+
+        Args:
+            serving_identity: 模型、Prompt、连接、凭据与活动授权的稳定身份。
+
+        Returns:
+            使用 grounded 缓存键、但不能发起生成请求的轻量副本。
+
+        """
+        configured = copy(self)
+        configured._grounded = None
+        configured._interpreter = None
+        configured._rewriter = None
+        configured._generation_behavior = "grounded"
         configured._serving_fingerprint = canonical_sha256(
             {
                 "retrieval": self._serving_fingerprint,
@@ -1437,9 +1465,7 @@ class RetrievalService:
             cache_schema=self._policy.cache_schema_version,
             limit=request.limit,
             dense_required=request.dense_required,
-            generation_behavior=(
-                "grounded" if self._grounded is not None else "model_required"
-            ),
+            generation_behavior=self._generation_behavior,
             include_related_content=request.include_related_content,
             related_policy_version=DISPLAY_POLICY.version,
         )

@@ -359,11 +359,11 @@ def test_queries_without_available_model_report_configuration_and_policy(
         harness.close()
 
 
-def test_exhausted_budget_refuses_regardless_of_local_support(
+def test_exhausted_budget_reuses_valid_cache_and_refuses_new_queries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """预算耗尽时完整与不完整支持都不得绕过真实生成。"""
+    """预算耗尽后只复用同身份回答，新问题仍不得绕过真实生成。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -389,6 +389,13 @@ def test_exhausted_budget_refuses_regardless_of_local_support(
         assert generated["generation_called_this_request"] is True
         assert len(requests) == 1
 
+        cached = _answer(harness, project_id, knowledge_base_id, "MX-41")
+        assert cached["answer"] == generated["answer"]
+        assert cached["cache_hit"] is True
+        assert cached["generation_called_this_request"] is False
+        assert cached["data_plane"]["budget_state"] == "EXHAUSTED"
+        assert len(requests) == 1
+
         direct_blocked = _answer(
             harness,
             project_id,
@@ -411,6 +418,25 @@ def test_exhausted_budget_refuses_regardless_of_local_support(
         _assert_refused_state(harness, blocked, "BUDGET_BLOCKED")
         assert blocked["generation_reason_code"] == "BLOCKED_BUDGET"
         assert blocked["generation_called_this_request"] is False
+        assert len(requests) == 1
+
+        with harness.runtime.connections.transaction(write=True) as connection:
+            connection.execute(
+                "UPDATE corpus_authorization_manifests SET expires_at = ? "
+                "WHERE knowledge_base_id = ?",
+                (
+                    (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
+                    knowledge_base_id,
+                ),
+            )
+        expired = _answer(harness, project_id, knowledge_base_id, "MX-41")
+        assert expired["answer"] is None
+        assert expired["cache_hit"] is False
+        assert expired["generation_called_this_request"] is False
+        assert expired["generation_reason_code"] == (
+            "BUSINESS_AUTHORIZATION_EXPIRED"
+        )
+        _assert_refused_state(harness, expired, "POLICY_DENIED")
         assert len(requests) == 1
     finally:
         harness.close()
