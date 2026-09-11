@@ -259,8 +259,8 @@ class RetrievalAuthorizationStore:
             expires_at=approval.expires_at,
             approved_by_session_id=approved_by_session_id,
         )
-        with self._connections.transaction(write=True) as connection:
-            connection.execute(
+        with self._connections.transaction(write=True) as db_connection:
+            db_connection.execute(
                 "INSERT INTO retrieval_authorization_manifests("
                 "manifest_id,project_id,knowledge_base_id,profile_revision_id,"
                 "source_index_revision_id,active_document_digest,"
@@ -291,7 +291,15 @@ class RetrievalAuthorizationStore:
     def status(  # noqa: PLR0911
         self, profile_revision_id: str
     ) -> RetrievalAuthorizationStatus:
-        """重新核对方案、当前活动文档、连接预算和累计账本。"""
+        """重新核对方案、当前活动文档、连接预算和累计账本。
+
+        Args:
+            profile_revision_id: 待核对的检索方案修订标识。
+
+        Returns:
+            当前授权、连接预算与累计账本的联合状态。
+
+        """
         profile = self._control.get_profile(profile_revision_id)
         try:
             snapshot = self._snapshot(profile.knowledge_base_id)
@@ -410,6 +418,9 @@ class RetrievalAuthorizationStore:
 
         Yields:
             与当前资料、Profile 和 Revision 一致的预算与数据范围。
+
+        Returns:
+            上下文退出后无返回值。
 
         Raises:
             BudgetBlockedError: 任一授权身份、预算或数据范围不再匹配。
