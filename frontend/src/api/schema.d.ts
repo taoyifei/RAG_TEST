@@ -326,6 +326,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/retrieval-authorization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieval Ingestion Authorization
+         * @description 读取一个待入库 Job 的精确真实检索批准状态。
+         */
+        get: operations["_retrieval_ingestion_authorization_api_v1_jobs__job_id__retrieval_authorization_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/retrieval-authorization:approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Retrieval Ingestion Authorization
+         * @description 仅由管理员批准同一 Job 最终快照的真实检索出网。
+         */
+        post: operations["_approve_retrieval_ingestion_authorization_api_v1_jobs__job_id__retrieval_authorization_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}:cancel": {
         parameters: {
             query?: never;
@@ -2053,8 +2093,12 @@ export interface components {
             lease_owner: boolean;
             /** Project Id */
             project_id: string;
+            /** Required Action */
+            required_action: "approve_retrieval" | null;
             /** Retryable */
             retryable: boolean;
+            /** Revision Available */
+            revision_available: boolean;
             /** Revision Id */
             revision_id: string;
             /** Safe Error */
@@ -2810,6 +2854,117 @@ export interface components {
             provider_retry_count: number;
             /** Reranked Count */
             reranked_count: number;
+        };
+        /**
+         * RetrievalIngestionAuthorizationManifest
+         * @description 绑定一个待入库 Job 最终刷新快照的不可变批准记录。
+         */
+        RetrievalIngestionAuthorizationManifest: {
+            /** Active Document Digest */
+            active_document_digest: string;
+            /** Approved By Session Id */
+            approved_by_session_id: string;
+            /** Authorization Id */
+            authorization_id: string;
+            /** Budget Campaign Id */
+            budget_campaign_id: string;
+            /** Created At */
+            created_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Job Id */
+            job_id: string;
+            /** Knowledge Base Id */
+            knowledge_base_id: string;
+            /** Manifest Id */
+            manifest_id: string;
+            /** Operations */
+            operations: ("embedding.document" | "embedding.query" | "reranking")[];
+            /**
+             * Policy Revision
+             * @default retrieval-ingestion-authorization-v1
+             */
+            policy_revision: string;
+            /** Predecessor Index Revision Id */
+            predecessor_index_revision_id?: string | null;
+            /** Profile Binding Identity */
+            profile_binding_identity: string;
+            /** Profile Revision Id */
+            profile_revision_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Source Binding Digest */
+            source_binding_digest: string;
+            /** Source Document Count */
+            source_document_count: number;
+            /** Source Size Bytes */
+            source_size_bytes: number;
+            /** Target Index Revision Id */
+            target_index_revision_id: string;
+        };
+        /**
+         * RetrievalIngestionAuthorizationStatus
+         * @description 待入库 Job 的真实资料、Profile 与硬预算批准状态。
+         */
+        RetrievalIngestionAuthorizationStatus: {
+            /** Approval Allowed */
+            approval_allowed: boolean;
+            /**
+             * Authorization State
+             * @enum {string}
+             */
+            authorization_state: "MISSING" | "APPROVED" | "STALE_JOB" | "STALE_PROFILE" | "EXPIRED" | "BLOCKED";
+            /**
+             * Budget State
+             * @enum {string}
+             */
+            budget_state: "MISSING" | "AVAILABLE" | "EXHAUSTED" | "BLOCKED";
+            /**
+             * Connection Budget State
+             * @enum {string}
+             */
+            connection_budget_state: "READY" | "INSUFFICIENT" | "BLOCKED";
+            /** Embedding Slot Count */
+            embedding_slot_count: number;
+            /**
+             * Estimation State
+             * @default UNAVAILABLE_PREBUILD
+             * @constant
+             */
+            estimation_state: "UNAVAILABLE_PREBUILD";
+            /** Job Id */
+            job_id: string;
+            manifest?: components["schemas"]["RetrievalIngestionAuthorizationManifest"] | null;
+            /**
+             * Next Action
+             * @enum {string}
+             */
+            next_action: "approve" | "continue" | "repair_profile" | "reauthorize" | "review_document";
+            /** Predecessor Index Revision Id */
+            predecessor_index_revision_id?: string | null;
+            /** Profile Revision Id */
+            profile_revision_id: string;
+            /**
+             * Reason Codes
+             * @default []
+             */
+            reason_codes: string[];
+            /** Recommended Estimated Token Limit */
+            recommended_estimated_token_limit: number;
+            /** Recommended Operation Request Limits */
+            recommended_operation_request_limits: {
+                [key: string]: number;
+            };
+            /** Recommended Request Limit */
+            recommended_request_limit: number;
+            /** Required Operations */
+            required_operations: ("embedding.document" | "embedding.query" | "reranking")[];
+            /** Source Document Count */
+            source_document_count: number;
+            /** Source Size Bytes */
+            source_size_bytes: number;
+            /** Target Index Revision Id */
+            target_index_revision_id: string;
         };
         /**
          * RetrievalProfileRequest
@@ -5924,6 +6079,234 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Job"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _retrieval_ingestion_authorization_api_v1_jobs__job_id__retrieval_authorization_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalIngestionAuthorizationStatus"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _approve_retrieval_ingestion_authorization_api_v1_jobs__job_id__retrieval_authorization_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetrievalAuthorizationApproval"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalIngestionAuthorizationStatus"];
                 };
             };
             /** @description 统一安全错误结构 */

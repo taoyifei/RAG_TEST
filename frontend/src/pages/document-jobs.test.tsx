@@ -1,9 +1,16 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
-import { api, type Document, type Job } from "../api/client";
+import {
+  ApiError,
+  api,
+  type Document,
+  type Job,
+  type RetrievalIngestionAuthorizationStatus,
+} from "../api/client";
 import { DocumentsPage } from "./DocumentsPage";
 import { JobsPage } from "./JobsPage";
+import { RevisionPage } from "./RevisionPage";
 
 const consoleState = vi.hoisted(() => ({
   tokens: { admin: "session", query: "session" },
@@ -37,11 +44,46 @@ const job: Job = {
   error_code: "INVALID_CHUNK",
   lease_owner: false,
   fencing_safe_status: "released",
+  revision_available: false,
+  required_action: null,
   slot_progress: [],
 };
 const scope = { offset: 0, page_size: 50, next_offset: null };
+
+function ingestionAuthorizationStatus(
+  overrides: Partial<RetrievalIngestionAuthorizationStatus> = {},
+): RetrievalIngestionAuthorizationStatus {
+  return {
+    approval_allowed: true,
+    authorization_state: "MISSING",
+    budget_state: "MISSING",
+    connection_budget_state: "READY",
+    embedding_slot_count: 1,
+    estimation_state: "UNAVAILABLE_PREBUILD",
+    job_id: job.job_id,
+    next_action: "approve",
+    predecessor_index_revision_id: null,
+    profile_revision_id: "pfr_test",
+    reason_codes: ["RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED"],
+    recommended_estimated_token_limit: 4096,
+    recommended_operation_request_limits: {
+      "embedding.document": 5,
+      "embedding.query": 5,
+      reranking: 5,
+    },
+    recommended_request_limit: 15,
+    required_operations: ["embedding.document", "embedding.query", "reranking"],
+    source_document_count: 1,
+    source_size_bytes: 1024,
+    target_index_revision_id: job.revision_id,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
+  consoleState.scope.revisionId = "";
+  consoleState.setRevision.mockReset();
   vi.spyOn(api, "modelSettings").mockResolvedValue({
     generation_connection_id: null,
     generation_model: null,
@@ -60,6 +102,28 @@ beforeEach(() => {
     total: 1,
     items: [job],
   });
+});
+
+it("上传回执只进入任务页，不把计划 Revision 当成可读版本", async () => {
+  const user = userEvent.setup();
+  const go = vi.fn();
+  vi.spyOn(api, "uploadDocument").mockResolvedValue({
+    ...job,
+    state: "queued",
+    stage: "queued",
+    safe_error: null,
+    error_code: null,
+  });
+  render(<DocumentsPage go={go} />);
+  await screen.findByText("无当前版本，尚不可检索");
+
+  await user.upload(
+    screen.getByTestId("new-document-file"),
+    new File(["synthetic"], "首次入库.docx"),
+  );
+
+  await waitFor(() => expect(go).toHaveBeenCalledWith("/jobs"));
+  expect(consoleState.setRevision).not.toHaveBeenCalled();
 });
 
 it("无当前版本明确不可检索，204删除二次确认并刷新列表", async () => {
@@ -141,5 +205,237 @@ it("任务展示真实失败阶段和事件，released不作为失败原因，�
   await user.click(screen.getByRole("button", { name: "重试此任务" }));
   await waitFor(() =>
     expect(retry).toHaveBeenCalledWith("session", "job_test"),
+  );
+});
+
+it("授权阻塞任务不开放幻影版本，管理员确认后批准并重试同一job", async () => {
+  const user = userEvent.setup();
+  const authorizationJob: Job = {
+    ...job,
+    error_code: "RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED",
+    safe_error: "此文档版本尚未获准发送给远程检索服务。",
+    required_action: "approve_retrieval",
+  };
+  vi.mocked(api.listJobs).mockResolvedValue({
+    ...scope,
+    total: 1,
+    items: [authorizationJob],
+  });
+  vi.spyOn(api, "retrievalIngestionAuthorization").mockResolvedValue({
+    approval_allowed: true,
+    authorization_state: "MISSING",
+    budget_state: "MISSING",
+    connection_budget_state: "READY",
+    estimation_state: "UNAVAILABLE_PREBUILD",
+    job_id: job.job_id,
+    profile_revision_id: "pfr_test",
+    predecessor_index_revision_id: null,
+    target_index_revision_id: job.revision_id,
+    source_document_count: 1,
+    source_size_bytes: 1024,
+    embedding_slot_count: 1,
+    required_operations: ["embedding.document", "embedding.query", "reranking"],
+    recommended_request_limit: 15,
+    recommended_estimated_token_limit: 4096,
+    recommended_operation_request_limits: {
+      "embedding.document": 5,
+      "embedding.query": 5,
+      reranking: 5,
+    },
+    next_action: "approve",
+    reason_codes: ["RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED"],
+  });
+  const approve = vi
+    .spyOn(api, "approveRetrievalIngestionAuthorization")
+    .mockResolvedValue({
+      approval_allowed: false,
+      authorization_state: "APPROVED",
+      budget_state: "AVAILABLE",
+      connection_budget_state: "READY",
+      estimation_state: "UNAVAILABLE_PREBUILD",
+      job_id: job.job_id,
+      profile_revision_id: "pfr_test",
+      predecessor_index_revision_id: null,
+      target_index_revision_id: job.revision_id,
+      source_document_count: 1,
+      source_size_bytes: 1024,
+      embedding_slot_count: 1,
+      required_operations: [
+        "embedding.document",
+        "embedding.query",
+        "reranking",
+      ],
+      recommended_request_limit: 15,
+      recommended_estimated_token_limit: 4096,
+      recommended_operation_request_limits: {
+        "embedding.document": 5,
+        "embedding.query": 5,
+        reranking: 5,
+      },
+      next_action: "continue",
+      reason_codes: [],
+    });
+  const retry = vi.spyOn(api, "retryJob").mockResolvedValue({
+    ...authorizationJob,
+    state: "queued",
+    required_action: null,
+  });
+  render(<JobsPage go={vi.fn()} />);
+
+  expect(await screen.findByText("此任务尚无可读索引版本。")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "检查版本" })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "处理检索授权" }));
+  expect(await screen.findByText(/尚未获得继续发送/)).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "批准并继续同一任务" }));
+
+  await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+  expect(retry).toHaveBeenCalledWith("session", "job_test");
+  expect(consoleState.setRevision).not.toHaveBeenCalled();
+});
+
+it("服务端未确认授权可用时不自动重试，并在弹窗保留错误", async () => {
+  const user = userEvent.setup();
+  const authorizationJob: Job = {
+    ...job,
+    error_code: "RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED",
+    safe_error: "此文档版本正在等待真实检索授权。",
+    required_action: "approve_retrieval",
+  };
+  vi.mocked(api.listJobs).mockResolvedValue({
+    ...scope,
+    total: 1,
+    items: [authorizationJob],
+  });
+  vi.spyOn(api, "retrievalIngestionAuthorization").mockResolvedValue(
+    ingestionAuthorizationStatus(),
+  );
+  vi.spyOn(api, "approveRetrievalIngestionAuthorization").mockResolvedValue(
+    ingestionAuthorizationStatus({
+      authorization_state: "STALE_JOB",
+      budget_state: "BLOCKED",
+      next_action: "reauthorize",
+      reason_codes: ["RETRIEVAL_INGESTION_JOB_CHANGED"],
+    }),
+  );
+  const retry = vi.spyOn(api, "retryJob");
+  render(<JobsPage go={vi.fn()} />);
+
+  await user.click(await screen.findByRole("button", { name: "处理检索授权" }));
+  await user.click(screen.getByRole("button", { name: "批准并继续同一任务" }));
+
+  expect(await screen.findByText(/服务端尚未确认授权与预算可用/)).toBeVisible();
+  expect(screen.getByText(/此前是否发生过发送/)).toBeVisible();
+  expect(retry).not.toHaveBeenCalled();
+});
+
+it("冻结方案已被替代时引导回文档管理，不展示不可达的批准动作", async () => {
+  const user = userEvent.setup();
+  const go = vi.fn();
+  const authorizationJob: Job = {
+    ...job,
+    error_code: "RETRIEVAL_INGESTION_PROFILE_CHANGED",
+    safe_error: "任务冻结的检索方案已变化。",
+    required_action: "approve_retrieval",
+  };
+  vi.mocked(api.listJobs).mockResolvedValue({
+    ...scope,
+    total: 1,
+    items: [authorizationJob],
+  });
+  vi.spyOn(api, "retrievalIngestionAuthorization").mockResolvedValue(
+    ingestionAuthorizationStatus({
+      approval_allowed: false,
+      authorization_state: "STALE_PROFILE",
+      budget_state: "BLOCKED",
+      connection_budget_state: "BLOCKED",
+      next_action: "review_document",
+      reason_codes: ["RETRIEVAL_INGESTION_PROFILE_CHANGED"],
+    }),
+  );
+  const approve = vi.spyOn(api, "approveRetrievalIngestionAuthorization");
+  render(<JobsPage go={go} />);
+
+  await user.click(await screen.findByRole("button", { name: "处理检索授权" }));
+  expect(
+    await screen.findByText(/任务冻结的检索方案已被另一方案替代/),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: /批准并继续/ })).toBeNull();
+  await user.click(screen.getByRole("button", { name: "返回文档管理" }));
+
+  expect(go).toHaveBeenCalledWith("/documents");
+  expect(approve).not.toHaveBeenCalled();
+});
+
+it("旧会话中的计划 Revision 先检查存在性，404 时不再并发读取子资源", async () => {
+  const user = userEvent.setup();
+  const go = vi.fn();
+  consoleState.scope.revisionId = "irev_missing";
+  vi.spyOn(api, "inspectRevision").mockRejectedValue(new ApiError(404, {}));
+  const listChunks = vi.spyOn(api, "listChunks");
+  const reports = vi.spyOn(api, "revisionReports");
+
+  render(<RevisionPage go={go} />);
+
+  expect(
+    await screen.findByRole("heading", { name: "索引版本尚不可用" }),
+  ).toBeVisible();
+  expect(consoleState.setRevision).toHaveBeenCalledWith("");
+  expect(listChunks).not.toHaveBeenCalled();
+  expect(reports).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "返回任务列表" }));
+  expect(go).toHaveBeenCalledWith("/jobs");
+});
+
+it("成功或已退役的可读 Revision 通过检查后再读取内容与报告", async () => {
+  consoleState.scope.revisionId = "irev_readable";
+  vi.spyOn(api, "inspectRevision").mockResolvedValue({
+    activation_history: [],
+    active: false,
+    actual_chunk_count: 0,
+    actual_document_count: 1,
+    chunk_payload_schema: "chunk-v1",
+    created_at: "2026-01-01T00:00:00Z",
+    expected_chunk_count: 0,
+    expected_document_count: 1,
+    fts_count: 0,
+    index_fingerprint: "sha256:test",
+    knowledge_base_id: "kb_test",
+    lexical_schema: [],
+    project_id: "prj_test",
+    revision_id: "irev_readable",
+    serving_compatibility_version: "v1",
+    serving_fingerprint: "sha256:test",
+    slot_coverages: [],
+    state: "retired",
+    vector_schema: [],
+    writer_status: "committed",
+  });
+  const listChunks = vi.spyOn(api, "listChunks").mockResolvedValue({
+    items: [],
+    total: 0,
+    offset: 0,
+    page_size: 50,
+    next_offset: null,
+  });
+  const reports = vi
+    .spyOn(api, "revisionReports")
+    .mockResolvedValue({ items: [] });
+
+  render(<RevisionPage go={vi.fn()} />);
+
+  expect(
+    await screen.findByRole("heading", { name: "索引版本" }),
+  ).toBeVisible();
+  expect(listChunks).toHaveBeenCalledWith(
+    "session",
+    "prj_test",
+    "kb_test",
+    "irev_readable",
+  );
+  expect(reports).toHaveBeenCalledWith(
+    "session",
+    "prj_test",
+    "kb_test",
+    "irev_readable",
   );
 });
