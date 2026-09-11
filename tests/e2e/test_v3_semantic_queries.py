@@ -111,6 +111,7 @@ def _scope_with_blocks(
         "蓝鹊小组是哪三种工作模式",
         "蓝鹊小组的工作模式分别指什么",
         "请把蓝鹊小组的工作模式列出来",
+        "蓝鹊小组通常会用哪几种方式参与项目，每一种分别怎么配合？",
     ),
 )
 def test_synonymous_questions_share_evidence_but_require_model(
@@ -285,6 +286,7 @@ class _EvidenceEchoGenerator:
         "蓝鹊小组是哪三种工作模式",
         "蓝鹊小组的工作模式分别指什么",
         "请把蓝鹊小组的工作模式列出来",
+        "蓝鹊小组通常会用哪几种方式参与项目，每一种分别怎么配合？",
     ),
 )
 def test_synonymous_questions_are_equivalent_for_sync_and_streaming(

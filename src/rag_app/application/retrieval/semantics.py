@@ -286,7 +286,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
             return QuerySemantics(
                 target=target,
                 source_qualifier=source,
-                relation="工作方式",
+                relation="工作模式",
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
                 reason_codes=("MODE_ENUMERATION_QUESTION_SYNTAX",),
