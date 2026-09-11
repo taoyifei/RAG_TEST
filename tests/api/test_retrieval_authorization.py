@@ -109,6 +109,90 @@ def _approve(
     return response.json()
 
 
+def test_new_empty_knowledge_base_does_not_require_retrieval_authorization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """首次空知识库没有 Index Revision 时仍可应用已验证方案。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    harness = build_product_harness(tmp_path)
+    try:
+        _, knowledge_base_id = create_project_and_knowledge_base(harness)
+        _, _, jina_connection_id, _ = create_provider_connections(harness)
+        profile_id = _create_jina_profile(
+            harness, knowledge_base_id, jina_connection_id
+        )
+
+        response = harness.client.get(
+            f"/api/v1/retrieval-profiles/{profile_id}/authorization"
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "authorization_state": "NOT_REQUIRED",
+            "budget_state": "AVAILABLE",
+            "connection_budget_state": "READY",
+            "required_operations": [
+                "embedding.document",
+                "embedding.query",
+                "reranking",
+            ],
+            "estimated_document_chunks": 0,
+            "estimated_document_requests_per_slot": 0,
+            "estimated_document_tokens_per_slot": 0,
+            "embedding_slot_count": 1,
+            "manifest": None,
+            "reason_codes": [],
+        }
+        activated = harness.client.post(
+            f"/api/v1/retrieval-profiles/{profile_id}:activate",
+            headers=harness.write_headers,
+            json={"confirmed_impact": "NEW_INDEX_REVISION_REQUIRED"},
+        )
+        assert activated.status_code == 200, activated.text
+        assert activated.json()["status"] == "active"
+    finally:
+        harness.close()
+
+
+def test_active_documents_without_index_revision_remain_blocked(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """活动文档丢失 Index Revision 时不得借空库例外绕过授权门。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, jina_connection_id, _ = create_provider_connections(harness)
+        profile_id = _create_jina_profile(
+            harness, knowledge_base_id, jina_connection_id
+        )
+        with harness.runtime.retrieval_authorizations._connections.transaction(
+            write=True
+        ) as connection:
+            connection.execute(
+                "UPDATE knowledge_bases SET active_revision_id=NULL "
+                "WHERE knowledge_base_id=?",
+                (knowledge_base_id,),
+            )
+
+        response = harness.client.get(
+            f"/api/v1/retrieval-profiles/{profile_id}/authorization"
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["authorization_state"] == "BLOCKED"
+        assert response.json()["reason_codes"] == [
+            "RETRIEVAL_CONFIGURATION_INVALID"
+        ]
+    finally:
+        harness.close()
+
+
 def test_retrieval_authorization_binds_current_corpus_profile_and_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
