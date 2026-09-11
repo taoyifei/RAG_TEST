@@ -32,7 +32,9 @@ from tests.product_support import ProductHarness
 from tests.support.p11_closure_replay import run_replay
 
 
-def _unit_synthetic_report(*, cached: bool = False) -> PilotReport:
+def _unit_synthetic_report(
+    *, cached: bool = False, campaign_bound: bool = True
+) -> PilotReport:
     """只为分类/来源门状态机重建受控输入，结果不得发布为 Live 证据。"""
     dataset = load_pilot_dataset()
     replay = run_replay()
@@ -78,6 +80,14 @@ def _unit_synthetic_report(*, cached: bool = False) -> PilotReport:
                 for lane in observations
                 for case in dataset.cases
             },
+            retrieval_budget_campaign_ids=(
+                {
+                    case.knowledge_base_id: "unit_synthetic"
+                    for case in dataset.cases
+                }
+                if campaign_bound
+                else {}
+            ),
             provider_models=("unit_synthetic",),
         ),
         evaluation_kind="exposed_regression",
@@ -95,6 +105,13 @@ def test_exposed_classification_preserves_live_provenance(cached: bool) -> None:
         if cached
         else "EXPOSED_REGRESSION_ACCEPTED"
     )
+
+
+def test_live_provenance_requires_retrieval_campaign_binding() -> None:
+    """实际请求必须能追溯到每个独立 Pilot 知识库的授权账本。"""
+    report = _unit_synthetic_report(campaign_bound=False)
+    assert report.status == "BLOCKED"
+    assert report.reason == "MISSING_CASE_BOUND_LIVE_ATTEMPTS_OR_ROUTE"
 
 
 def test_replay_classification_cannot_make_offline_quality_live() -> None:

@@ -32,6 +32,7 @@ class PilotLiveEvidence(BaseModel):
     campaign_id: str
     dataset_sha256: str
     case_attempts: dict[str, tuple[str, ...]]
+    retrieval_budget_campaign_ids: dict[str, str] = Field(default_factory=dict)
     provider_models: tuple[str, ...] = Field(min_length=1)
 
 
@@ -198,6 +199,12 @@ def _live_provenance(
     attempts = identity.case_attempts
     if set(attempts) != expected_keys or any(
         not ids for ids in attempts.values()
+    ):
+        return False
+    expected_knowledge_bases = {case.knowledge_base_id for case in cases}
+    campaign_ids = identity.retrieval_budget_campaign_ids
+    if set(campaign_ids) != expected_knowledge_bases or any(
+        not campaign_id for campaign_id in campaign_ids.values()
     ):
         return False
     all_ids = [identifier for ids in attempts.values() for identifier in ids]
