@@ -214,3 +214,66 @@ def test_evidence_total_and_per_chunk_caps_are_explicit() -> None:
 
     assert len(evidence) == 2
     assert len({item.chunk_id for item in evidence}) == 2
+
+
+def test_model_candidates_do_not_let_one_chunk_consume_the_total_cap() -> None:
+    first = make_ranked_chunk(1, "甲乙丙丁戊己庚辛", document_number=1)
+    original_span = first.hydrated.chunk.source_spans[0]
+    source_anchor = original_span.source_anchor
+    assert source_anchor is not None
+    spans = tuple(
+        original_span.model_copy(
+            update={
+                "node_id": f"node_diversity_{index}",
+                "source_anchor": source_anchor.model_copy(
+                    update={
+                        "structural_path": ("body", f"p:{index}"),
+                        "ordinal": index,
+                        "paragraph_index": index,
+                        "source_start_char": index,
+                        "source_end_char": index + 1,
+                    }
+                ),
+                "structural_path": ("body", f"p:{index}"),
+                "chunk_start_char": index,
+                "chunk_end_char": index + 1,
+                "source_start_char": index,
+                "source_end_char": index + 1,
+            }
+        )
+        for index in range(8)
+    )
+    first = first.model_copy(
+        update={
+            "hydrated": first.hydrated.model_copy(
+                update={
+                    "chunk": first.hydrated.chunk.model_copy(
+                        update={"source_spans": spans}
+                    )
+                }
+            )
+        }
+    )
+    later = make_ranked_chunk(2, "真正答案", document_number=2)
+
+    evidence = EvidenceAssembler().assemble(
+        (first, later),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=EvidenceSelectionContext(
+            analysis=QueryAnalyzer().analyze(
+                SearchRequest(scope=_SCOPE, text="没被规则覆盖的口语问题？")
+            ),
+            query_kind=QueryKind.SIMPLE_FACT,
+            rerank_mode="provider",
+            selected_slot=None,
+        ),
+        allow_uncertain=True,
+    )
+
+    assert len(evidence) == 8
+    assert later.hydrated.chunk.chunk_id in {item.chunk_id for item in evidence}
