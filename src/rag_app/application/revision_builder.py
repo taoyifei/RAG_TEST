@@ -528,6 +528,7 @@ class RevisionBuilder:
         egress_allowed_slots: frozenset[str] = frozenset(),
         attempt: int = 1,
         persistent_job_id: str | None = None,
+        persistent_revision_id: str | None = None,
         content_identity: str | None = None,
         content_identity_current: Callable[[], str | None] | None = None,
     ) -> RevisionBuildResult:
@@ -542,6 +543,7 @@ class RevisionBuilder:
             egress_allowed_slots: 显式远程出网授权。
             attempt: 当前用户发起的尝试序号。
             persistent_job_id: 队列重新冻结快照时保留的公开 Job 身份。
+            persistent_revision_id: 队列为候选 Profile 冻结的 Revision 身份。
             content_identity: 与向量契约独立的 OCR 内容修订身份。
             content_identity_current: 激活前复核内容配置未漂移的读取函数。
 
@@ -562,7 +564,7 @@ class RevisionBuilder:
             )
             for item in documents
         )
-        revision_id = deterministic_id(
+        revision_id = persistent_revision_id or deterministic_id(
             "irev",
             knowledge_base_id,
             tuple(sorted(version_ids)),
