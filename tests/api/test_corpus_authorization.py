@@ -255,6 +255,58 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         harness.close()
 
 
+def test_all_corpus_operations_keep_a_stable_binding_identity(
+    tmp_path: Path,
+) -> None:
+    """批准顺序与配置推导顺序不同时仍应立即可用。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, _, aliyun_connection_id = create_provider_connections(harness)
+        saved = harness.client.put(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+            headers=harness.write_headers,
+            json={
+                "generation_connection_id": aliyun_connection_id,
+                "generation_model": "qwen3.7-flash",
+                "rewrite_enabled": True,
+                "ocr_connection_id": aliyun_connection_id,
+                "ocr_model": "qwen3.5-ocr",
+                "ocr_enabled": True,
+                "ocr_media_hashes": ["a" * 64],
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        required = saved.json()["corpus_authorization"]["required_operations"]
+
+        approved = harness.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+            "corpus-authorization:approve",
+            headers=harness.write_headers,
+            json={
+                "operations": required,
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 4,
+                "estimated_token_limit": 20_000,
+                "operation_request_limits": dict.fromkeys(required, 1),
+            },
+        )
+
+        assert approved.status_code == 200, approved.text
+        status = approved.json()
+        assert status["corpus_authorization_state"] == "APPROVED"
+        assert status["model_authorization_state"] == "APPROVED"
+        assert status["budget_state"] == "AVAILABLE"
+        assert status["fallback_reason_codes"] == []
+    finally:
+        harness.close()
+
+
 def test_local_data_plane_is_persisted_in_history_and_safe_trace(
     tmp_path: Path,
 ) -> None:
