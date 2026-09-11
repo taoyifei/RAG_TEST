@@ -345,9 +345,9 @@ def test_pilot_query_entry_receives_scoped_policy_and_restores_on_failure(
                 "estimated_input_tokens": 0,
             },
         )
-    assert not runtime.profiles.serving_contract(scenario.profile)[
-        0
-    ].dense_semantic_enabled
+    ordinary = runtime.profiles.serving_contract(scenario.profile)[0]
+    assert ordinary.dense_semantic_enabled
+    assert ordinary.dense_semantic_calibration_state == "ACTIVE_PROFILE"
     assert (
         runtime.control.quality.states(scenario.profile.profile_revision_id)
         == {}

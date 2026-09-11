@@ -1543,24 +1543,43 @@ class ProductProfileResolver:
 
         """
         policy = RetrievalPolicy.model_validate(dict(profile.retrieval_policy))
-        spaces = self._control.quality.calibrated_spaces(
+        calibrated_spaces = self._control.quality.calibrated_spaces(
             profile.profile_revision_id
         )
-        calibrated = bool(spaces) and not self._providers.test_only_transport
+        calibrated = bool(calibrated_spaces) and not (
+            self._providers.test_only_transport
+        )
         controlled = self._controlled_vector_spaces(profile)
+        active_profile_spaces = (
+            tuple(
+                slot.vector_space_identity
+                for slot in _product_topology(
+                    profile_specs(profile, self._control.get_connection)
+                ).slots
+            )
+            if profile.status == "active"
+            and not self._providers.test_only_transport
+            else ()
+        )
+        if controlled is not None:
+            spaces = controlled
+            readiness = "CONTROLLED_TEST_ONLY"
+        elif calibrated:
+            spaces = calibrated_spaces
+            readiness = "LIVE_CALIBRATED"
+        elif active_profile_spaces:
+            # 真实验证并成功建索引的 Active Profile 已具备可执行合同；
+            # P11 合成质量记录保留为附加证据，不再阻断产品检索。
+            spaces = active_profile_spaces
+            readiness = "ACTIVE_PROFILE"
+        else:
+            spaces = ()
+            readiness = "UNCALIBRATED"
         policy = policy.model_copy(
             update={
-                "dense_semantic_enabled": calibrated or controlled is not None,
-                "dense_semantic_calibration_state": "CONTROLLED_TEST_ONLY"
-                if controlled is not None
-                else "LIVE_CALIBRATED"
-                if calibrated
-                else "UNCALIBRATED",
-                "dense_calibrated_vector_spaces": controlled
-                if controlled is not None
-                else spaces
-                if calibrated
-                else (),
+                "dense_semantic_enabled": bool(spaces),
+                "dense_semantic_calibration_state": readiness,
+                "dense_calibrated_vector_spaces": spaces,
             }
         )
         egress = _product_egress(profile, self._control)
