@@ -1,33 +1,30 @@
 # 当前 V3 Universal RAG 状态
 
-当前查询恢复状态以
-[V3-07 查询质量恢复报告](design/public/v3-07-query-quality-recovery.md)为权威入口；
-旧 V3/P11 报告保留历史证据，但其中的候选 SHA、镜像和查询结论不代表当前版本。
+当前问答恢复的权威说明见
+[V3-07 真正问答恢复状态](design/public/v3-07-query-quality-recovery.md)。旧 V3/P11 报告、
+extractive 回归和早期 Review ZIP 只保留历史诊断价值，不代表当前 model-only 版本。
 
 | 状态项 | 当前状态 | 已验证边界或恢复条件 |
 | --- | --- | --- |
-| `QUERY_DATA_PLANE_READY` | `PASS` | 响应、History、Trace 与 UI 使用同一冻结运行时状态；本地 fallback 不再冒充真实 Dense |
-| `DIRECT_EVIDENCE_QA_READY` | `PASS` | 公开 holdout 40/40 可答、4/4 正确拒答；私有已知可答 15/15，另有 5/5 负例 |
-| `SEMANTIC_QUERY_READY` | `PASS` | 类型化语义、硬约束、受控 interpret/rewrite、结构通道和最小充分支持集进入正式 Product API |
-| `PRIVATE_KNOWN_REGRESSION` | `PASS` | 仅本地隔离 Product API；公开材料只含匿名计数，不含原件、问题、答案、Trace 或 hash |
-| `PUBLIC_HOLDOUT` | `PASS` | 冻结 88-case 数据集；holdout 只运行一次，accuracy/citation/paraphrase/status 均 1.0，硬约束违规 0 |
-| `STATUS_AND_TRACE_CONSISTENCY` | `PASS` | 已发布 fallback 为 ANSWERED，正常无答案为 REFUSED，错误为 FAILED；公开和私有回归 parity 1.0 |
-| `CONTAINER_QUERY_QA` | `PASS` | 候选镜像中真实上传合成 DOCX、自然问句回答、FULL Trace、桌面/移动浏览器、重启持久性均通过；外部调用 0 |
-| `SCOPED_FUNCTIONAL_GATES` | `PASS` | 用户本轮要求的查询、Product API/E2E、公开/私有回归、前端与 Docker 功能门禁已执行 |
-| `FULL_LOCAL_GATES` | `NOT_RUN_BY_SCOPE` | 用户明确暂缓 CI、mypy、无关全仓测试与完整发布/离线包验收；不能写成 PASS |
-| `LIVE_RETRIEVAL_READY` | `BLOCKED` | 没有已授权的真实 Provider/Profile/预算运行证据；需管理员明确授权 Lane R 后执行 |
-| `LIVE_GENERATION_READY` | `BLOCKED` | 私有语料未获数据出网与累计预算授权；AI 不代管理员批准 |
-| `SOURCE_MERGE_READINESS` | `PASS` | 已对最新远端目标执行隔离 `--no-ff` 合并，并在 merged tree 重跑约定功能门禁；普通 push 尚待执行 |
-| `PRODUCTION_RELEASE_READINESS` | `BLOCKED` | 未执行生产部署；OS 风险、CI/Branch Protection 与真实 Provider 质量仍须独立批准和验证 |
-
-`PASS` 只覆盖对应行的实际证据。离线 Mock、公开合成、私有本地 renderer、源码合并和
-候选容器分别是不同边界，任何一项都不能替代真实 Provider 或生产发布证据。
+| `QUERY_DATA_PLANE_READY` | `PASS` | 响应、History、Trace 与 UI 使用同一冻结 Profile/Revision/provider/auth/budget 状态 |
+| `MODEL_GROUNDED_QA_READY` | `PASS_SCOPED` | 此前 3 个代表性问题及本轮候选链 4 个口语化问题均真实调用 Jina+Qwen，并得到 `llm`、`CLAIMS_VALIDATED`、可回读引用和零 fallback；另有 1 次原问缓存复验为零 Provider 调用 |
+| `SEMANTIC_RETRIEVAL_READY` | `PASS_SCOPED` | typed semantics、Exact/FTS/结构/Dense/RRF/Jina rerank、模型候选和最终引用进入正式 Product API |
+| `CACHE_CITATION_RECHECK` | `PASS_SCOPED` | 长 canonical 段落的连续子引用可复核；预算耗尽后同身份命中缓存不再误变为 `BUDGET_BLOCKED`；越界、错身份、改字和过期授权继续失败关闭 |
+| `ACTIVE_KB_LOCAL_RUNTIME` | `PASS` | App 与 Qdrant healthy，`/live`、`/ready` 200，产品资产自检通过，原持久卷保留 |
+| `CURRENT_PRIVATE_15_REGRESSION` | `NOT_RUN` | 旧 15/15 是已删除的 extractive 行为；需在当前 model-only 合同、明确额度和资料授权下重跑才可恢复 |
+| `CURRENT_PUBLIC_HOLDOUT` | `NOT_RUN` | 旧 44/44 为 Provider call 0 的 extractive 结果；当前 80+ model-only holdout 未执行 |
+| `CURRENT_BC_QUALITY_COMPARISON` | `NOT_RUN` | 当前候选尚无同配置 correctness/citation/false-refusal 对照；纯性能部分按用户范围排除 |
+| `LIVE_FAILURE_MATRIX` | `CONTRACT_ONLY` | 授权、预算、429、timeout、无效 JSON 和 claim fail 有定向合同；未刻意制造真实 Provider 故障 |
+| `REMOTE_QUALITY_CALIBRATION` | `NOT_VERIFIED` | `/ready` 的 primary/standby/reranker live evaluation 仍为 `not_verified`；这些代表性样本不能外推为广泛质量 |
+| `FINAL_SOURCE_AND_IMAGE_IDENTITY` | `REQUIRED_AT_DELIVERY` | 最终提交合入后从 clean HEAD 构建，只切 App，再核 OCI revision、资产、健康和远端 SHA |
+| `PRODUCTION_RELEASE_READINESS` | `BLOCKED` | 未执行生产部署；OS 风险、生产容量、正式质量校准与 Branch Protection 仍是外部边界 |
 
 当前工作流仍遵守：
 
-- `main` 与 `Industry` 只读，不自动合并或更新；
-- 只向 `feature/universal-rag` 做普通 push，禁止 force-push；
-- 合并前重新 fetch 并确认目标没有未知前进；
-- 私有原件、问题、答案、文件名、Trace、数据库、凭据和 hash 不进入 Git、Review ZIP
-  或 Docker build context；
-- 真实 Provider 与生产发布必须由管理员另行授权。
+- 正式答案必须由模型读取有界原文候选后生成，再通过逐 claim 引用校验；没有模型时不得用
+  本地表格规则或 extractive renderer 代答。
+- 真实 Provider 只在当前知识库授权和累计预算内调用；AI 不代管理员批准资料出网或扩大预算。
+- 不用 Mock、旧 extractive 成绩、静态检查或容器健康冒充真实问答质量。
+- 不运行与当前问答、引用、Provider、镜像和本机可用性无关的性能、P11、迁移或全仓测试。
+- `main` 与 `Industry` 只读；只向 `feature/universal-rag` 普通 push，禁止 reset、stash、rebase、
+  force-push 或自动合并主分支。

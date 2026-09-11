@@ -117,6 +117,11 @@ _GENERIC_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:都)?(?:有|包含)?"
     r"(?:哪些(?:阶段|环节)?|有啥|哪几项|哪几个阶段|分别是什么)$"
 )
+_MODE_ENUMERATION = re.compile(
+    r"^(?P<target>.+?)(?:通常|一般|平时|主要)?(?:会|可以|可)?"
+    r"(?:有|用|采用|通过)?(?:哪几种|哪些)(?:方式|方法)"
+    r"(?:[^，,。；;！？?]{0,24})?(?:[，,].*)?$"
+)
 _STAGE_ENUMERATION = re.compile(
     r"^(?P<target>.+?)(?:从[^，,]{1,40}(?:到|至)[^，,]{1,40})?[，,]?"
     r"(?:一共)?(?:都)?(?:分为|分成|分|包括|包含|经历|要走|需走|会走)"
@@ -272,6 +277,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.DEFINITION,
                 source="RULE",
                 reason_codes=("DEFINITION_QUESTION_SYNTAX",),
+            )
+
+    modes = _MODE_ENUMERATION.fullmatch(core)
+    if modes is not None:
+        target, source = _target_and_source(modes["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source,
+                relation="工作模式",
+                answer_type=RequestedAnswerType.ENUMERATION,
+                source="RULE",
+                reason_codes=("MODE_ENUMERATION_QUESTION_SYNTAX",),
             )
 
     stages = _STAGE_ENUMERATION.fullmatch(core)

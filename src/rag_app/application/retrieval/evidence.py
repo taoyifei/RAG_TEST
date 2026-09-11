@@ -53,6 +53,9 @@ _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
 _EvidencePiece = tuple[RankedChunk, SourceSpan, str]
+_RankedSpan = tuple[SourceSpan, str, _SpanKey]
+_RankedChunkSpans = tuple[tuple[RankedChunk, tuple[_RankedSpan, ...]], ...]
+_PackablePiece = tuple[RankedChunk, SourceSpan, str, _SpanKey]
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,79 +212,113 @@ class EvidenceAssembler:
         support_overrides = _context_supports(
             unique_chunks, context, table_spans
         )
-        ordered = unique_chunks
         documents: Counter[str] = Counter()
         sections: Counter[tuple[str, str]] = Counter()
+        chunks: Counter[str] = Counter()
         used_spans: set[tuple[object, ...]] = set()
         remaining = policy.evidence_token_budget
         evidence: list[EvidenceItem] = []
         # 字面得分仅在候选内部排列，不让别的表格单位淘汰当前段落。
         relevance_floor = policy.minimum_span_overlap
-        for candidate in ordered:
+        ranked_by_chunk = tuple(
+            (
+                candidate,
+                _ranked_citable_spans(
+                    candidate.hydrated.chunk,
+                    set(),
+                    context=context,
+                    minimum_overlap=relevance_floor,
+                    allow_semantic=semantic_candidate_allowed(
+                        candidate, policy, context
+                    ),
+                    table_spans=table_spans.get(
+                        candidate.hydrated.chunk.chunk_id
+                    ),
+                    support_overrides=support_overrides,
+                    **({"allow_uncertain": True} if allow_uncertain else {}),
+                ),
+            )
+            for candidate in unique_chunks
+        )
+        packing_order = _evidence_packing_order(
+            ranked_by_chunk,
+            diversify_chunks=allow_uncertain,
+        )
+        for candidate, span, quote, span_key in packing_order:
             if len(evidence) >= policy.max_evidence_items:
                 break
             chunk = candidate.hydrated.chunk
+            if span_key in used_spans:
+                continue
             document_id = chunk.version.document_id
             section_key = (document_id, chunk.section_id)
-            selected_for_chunk = 0
-            for span, quote, span_key in _ranked_citable_spans(
-                chunk,
-                used_spans,
-                context=context,
-                minimum_overlap=relevance_floor,
-                allow_semantic=semantic_candidate_allowed(
-                    candidate, policy, context
-                ),
-                table_spans=table_spans.get(chunk.chunk_id),
-                support_overrides=support_overrides,
-                **({"allow_uncertain": True} if allow_uncertain else {}),
-            ):
-                if len(evidence) >= policy.max_evidence_items:
-                    break
-                if selected_for_chunk >= policy.max_evidence_items_per_chunk:
-                    break
-                if documents[document_id] >= policy.per_document_cap:
-                    break
-                if sections[section_key] >= policy.per_section_cap:
-                    break
-                estimated_tokens = max(1, (len(quote) + 3) // 4)
-                if estimated_tokens > remaining:
-                    continue
-                remaining -= estimated_tokens
-                used_spans.add(span_key)
-                documents[document_id] += 1
-                sections[section_key] += 1
-                selected_for_chunk += 1
-                support_id = f"S{len(evidence) + 1}"
-                item = _evidence_item(candidate, span, quote, support_id)
-                if context is not None:
-                    support = support_overrides.get(
-                        span_key
-                    ) or evaluate_span_support(
-                        context.analysis,
-                        quote,
-                        span_id=span.node_id or "",
-                        table_relation=table_spans.get(chunk.chunk_id)
-                        is not None,
-                    )
-                    support_metadata = asdict(support)
-                    support_metadata["status"] = support.status.value
-                    support_metadata["supporting_span_ids"] = list(
-                        support.supporting_span_ids
-                    )
-                    item = item.model_copy(
-                        update={
-                            "metadata": freeze_json_object(
-                                {
-                                    **dict(item.metadata),
-                                    "answer_support": support_metadata,
-                                }
-                            )
-                        }
-                    )
-                evidence.append(item)
+            if chunks[chunk.chunk_id] >= policy.max_evidence_items_per_chunk:
+                continue
+            if documents[document_id] >= policy.per_document_cap:
+                continue
+            if sections[section_key] >= policy.per_section_cap:
+                continue
+            estimated_tokens = max(1, (len(quote) + 3) // 4)
+            if estimated_tokens > remaining:
+                continue
+            remaining -= estimated_tokens
+            used_spans.add(span_key)
+            documents[document_id] += 1
+            sections[section_key] += 1
+            chunks[chunk.chunk_id] += 1
+            support_id = f"S{len(evidence) + 1}"
+            item = _evidence_item(candidate, span, quote, support_id)
+            if context is not None:
+                support = support_overrides.get(
+                    span_key
+                ) or evaluate_span_support(
+                    context.analysis,
+                    quote,
+                    span_id=span.node_id or "",
+                    table_relation=table_spans.get(chunk.chunk_id) is not None,
+                )
+                support_metadata = asdict(support)
+                support_metadata["status"] = support.status.value
+                support_metadata["supporting_span_ids"] = list(
+                    support.supporting_span_ids
+                )
+                item = item.model_copy(
+                    update={
+                        "metadata": freeze_json_object(
+                            {
+                                **dict(item.metadata),
+                                "answer_support": support_metadata,
+                            }
+                        )
+                    }
+                )
+            evidence.append(item)
         # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
         return _complete_supports(tuple(evidence))
+
+
+def _evidence_packing_order(
+    ranked_by_chunk: _RankedChunkSpans,
+    *,
+    diversify_chunks: bool,
+) -> tuple[_PackablePiece, ...]:
+    """按 Chunk 多样性或原候选顺序展开待打包 span。"""
+    if not diversify_chunks:
+        return tuple(
+            (candidate, *piece)
+            for candidate, spans in ranked_by_chunk
+            for piece in spans
+        )
+    # 模型候选先横向覆盖不同 Chunk，再补同 Chunk 的第二个 span。
+    # 否则一个表格 Chunk 可独占总上限，掩盖已召回的后续原文。
+    return tuple(
+        (candidate, *spans[span_index])
+        for span_index in range(
+            max((len(spans) for _, spans in ranked_by_chunk), default=0)
+        )
+        for candidate, spans in ranked_by_chunk
+        if span_index < len(spans)
+    )
 
 
 def _ranked_citable_spans(  # noqa: PLR0913

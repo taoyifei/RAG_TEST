@@ -187,13 +187,14 @@ class RetrievalService:
         self._grounded: GroundedAnsweringService | None = None
         self._interpreter: QueryInterpretPort | None = None
         self._rewriter: QueryRewritePort | None = None
+        self._generation_behavior = "model_required"
         self._trace = trace
         self._cache = cache
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-grounded-answer-v10",
+                "retrieval_implementation": "v3-07-grounded-answer-v16",
             }
         )
         self._egress = egress_policy
@@ -259,7 +260,9 @@ class RetrievalService:
             与原文档向量配置共存的查询服务。
 
         """
-        configured = copy(self)
+        configured = self.with_generation_cache_identity(
+            serving_identity=serving_identity
+        )
         configured._grounded = GroundedAnsweringService(generator)
         configured._interpreter = interpreter
         configured._rewriter = rewriter
@@ -282,6 +285,31 @@ class RetrievalService:
             rewrite_model=descriptor.version if rewriter is not None else None,
             model_configuration_state="CONFIGURED",
         )
+        return configured
+
+    def with_generation_cache_identity(
+        self,
+        *,
+        serving_identity: str,
+    ) -> RetrievalService:
+        """仅附加已批准生成配置的缓存身份，不挂载可出网模型。
+
+        预算耗尽不会改变已经发布答案的模型、Prompt 或授权身份。此副本
+        因而可以在任何 Provider 调用前读取同身份缓存；缓存未命中时仍由
+        数据面阻断原因拒答，且不存在可调用的生成器。
+
+        Args:
+            serving_identity: 模型、Prompt、连接、凭据与活动授权的稳定身份。
+
+        Returns:
+            使用 grounded 缓存键、但不能发起生成请求的轻量副本。
+
+        """
+        configured = copy(self)
+        configured._grounded = None
+        configured._interpreter = None
+        configured._rewriter = None
+        configured._generation_behavior = "grounded"
         configured._serving_fingerprint = canonical_sha256(
             {
                 "retrieval": self._serving_fingerprint,
@@ -1437,9 +1465,7 @@ class RetrievalService:
             cache_schema=self._policy.cache_schema_version,
             limit=request.limit,
             dense_required=request.dense_required,
-            generation_behavior=(
-                "grounded" if self._grounded is not None else "model_required"
-            ),
+            generation_behavior=self._generation_behavior,
             include_related_content=request.include_related_content,
             related_policy_version=DISPLAY_POLICY.version,
         )
@@ -1846,27 +1872,62 @@ def _formal_span_is_current(
     span: SourceSpan,
     item: EvidenceItem,
 ) -> bool:
-    """正式引用采用引用片段内偏移，来源身份和原文字节仍必须完全匹配。"""
-    raw_quote = chunk.citation_text[
-        original.chunk_start_char : original.chunk_end_char
-    ]
-    quote = raw_quote.strip()
-    leading_trim = len(raw_quote) - len(raw_quote.lstrip())
-    updates: dict[str, int] = {
+    """把正式引用的相对坐标投影回 canonical 原文并逐字复核。
+
+    Args:
+        chunk: 当前索引中的 canonical chunk。
+        original: 当前 chunk 持有的原始来源范围。
+        span: Evidence 中相对于引用文本的来源范围。
+        item: 待复核的 Evidence。
+
+    Returns:
+        来源身份、连续范围和引用原文是否仍与当前索引一致。
+
+    """
+    quote = item.citation_text
+    relative_updates = {
         "chunk_start_char": 0,
         "chunk_end_char": len(quote),
     }
-    if original.source_start_char is not None:
-        source_start = original.source_start_char + leading_trim
-        updates.update(
-            {
-                "source_start_char": source_start,
-                "source_end_char": source_start + len(quote),
-            }
+    if original.source_start_char is None:
+        raw_quote = chunk.citation_text[
+            original.chunk_start_char : original.chunk_end_char
+        ]
+        return (
+            original.source_end_char is None
+            and span == original.model_copy(update=relative_updates)
+            and quote == raw_quote.strip()
         )
+    if (
+        original.source_end_char is None
+        or span.source_start_char is None
+        or span.source_end_char is None
+    ):
+        return False
+    source_start = span.source_start_char
+    source_end = source_start + len(quote)
+    canonical_start = (
+        original.chunk_start_char + source_start - original.source_start_char
+    )
+    canonical_end = canonical_start + len(quote)
+    expected = original.model_copy(
+        update={
+            **relative_updates,
+            "source_start_char": source_start,
+            "source_end_char": source_end,
+        }
+    )
     return (
-        span == original.model_copy(update=updates)
-        and item.citation_text == quote
+        span == expected
+        and original.source_start_char
+        <= source_start
+        < source_end
+        <= original.source_end_char
+        and original.chunk_start_char
+        <= canonical_start
+        < canonical_end
+        <= original.chunk_end_char
+        and chunk.citation_text[canonical_start:canonical_end] == quote
     )
 
 
