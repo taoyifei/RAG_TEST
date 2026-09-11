@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     ChannelHit,
@@ -39,7 +41,7 @@ class StructuralChannel:
         if not callable(search):
             return ()
         semantics = analysis.semantics
-        return search(
+        result = search(
             StructuralSearchRequest(
                 revision=snapshot.revision,
                 query=analysis.resolved_query or analysis.normalized_query,
@@ -51,6 +53,7 @@ class StructuralChannel:
                 limit=limit,
             )
         )
+        return cast(tuple[ChannelHit, ...], result)
 
 
 __all__ = ["StructuralChannel"]

@@ -1047,14 +1047,15 @@ def _structural_document_anchor_ids(
     if source_matches:
         return source_matches
     if request.context_qualifier:
-        labels = tuple(
+        context_labels = tuple(
             (chunk.version.document_id, display_name)
             for chunk, display_name, _ in rows
         )
         context_owners = {
             owner
             for variant in context_label_variants(request.context_qualifier)
-            if (owner := select_unique_label_owner(variant, labels)) is not None
+            if (owner := select_unique_label_owner(variant, context_labels))
+            is not None
         }
         if len(context_owners) == 1:
             return context_owners

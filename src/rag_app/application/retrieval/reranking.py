@@ -210,10 +210,10 @@ def _diversified_candidates(
         return candidates
     by_family: dict[str, list[RankedChunk]] = {}
     for candidate in candidates:
-        families = {
+        candidate_families = {
             _channel_family(item.channel) for item in candidate.contributions
         }
-        for family in families:
+        for family in candidate_families:
             by_family.setdefault(family, []).append(candidate)
     if len(by_family) <= 1:
         return candidates[:limit]
@@ -224,13 +224,13 @@ def _diversified_candidates(
     for row in zip_longest(
         *(by_family[family] for family in families), fillvalue=None
     ):
-        for candidate in row:
-            if candidate is None:
+        for row_candidate in row:
+            if row_candidate is None:
                 continue
-            chunk_id = candidate.hydrated.chunk.chunk_id
+            chunk_id = row_candidate.hydrated.chunk.chunk_id
             if chunk_id in selected_ids:
                 continue
-            selected.append(candidate)
+            selected.append(row_candidate)
             selected_ids.add(chunk_id)
             if len(selected) == limit:
                 return tuple(selected)

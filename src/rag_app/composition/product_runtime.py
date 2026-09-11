@@ -1136,6 +1136,9 @@ class ProductProfileResolver:
         Yields:
             本次查询使用的资料与预算范围。
 
+        Returns:
+            上下文退出后无返回值。
+
         """
         profile = self.active_profile(knowledge_base_id)
         required_operations: tuple[RetrievalOperation, ...] = (

@@ -645,7 +645,7 @@ def prepare_workspace(
             }
     finally:
         _close_runtime(opened)
-    manifest = {
+    manifest: dict[str, object] = {
         "schema_version": _REPORT_SCHEMA_VERSION,
         "kind": "v3_07_public_product_seed",
         "dataset_sha256": dataset_sha256(),
@@ -870,12 +870,19 @@ def _span_is_valid(  # noqa: PLR0911
             )
         ):
             continue
+        source_start_int = cast(int, source_start)
+        source_end_int = cast(int, source_end)
+        canonical_start_int = cast(int, canonical_start)
+        canonical_end_int = cast(int, canonical_end)
         if not (
-            canonical_start <= source_start < source_end <= canonical_end
-            and source_end - source_start == len(cited_text)
+            canonical_start_int
+            <= source_start_int
+            < source_end_int
+            <= canonical_end_int
+            and source_end_int - source_start_int == len(cited_text)
         ):
             continue
-        offset = source_start - canonical_start
+        offset = source_start_int - canonical_start_int
         if canonical_text[offset : offset + len(cited_text)] == cited_text:
             return True
     return False
@@ -1235,17 +1242,23 @@ def _metrics(cases: Sequence[Mapping[str, object]]) -> dict[str, object]:
         ),
         "target_document_recall": _rate(answerable, "target_retrieved"),
         "support_set_recall": round(
-            sum(float(item["support_fragment_recall"]) for item in answerable)
+            sum(
+                float(cast(float | int, item["support_fragment_recall"]))
+                for item in answerable
+            )
             / max(1, len(answerable)),
             6,
         ),
         "support_set_precision": round(
-            sum(float(item["support_precision"]) for item in answerable)
+            sum(
+                float(cast(float | int, item["support_precision"]))
+                for item in answerable
+            )
             / max(1, len(answerable)),
             6,
         ),
         "provider_call_count": sum(
-            int(item["provider_call_count"]) for item in cases
+            int(cast(int, item["provider_call_count"])) for item in cases
         ),
         "slice_metrics": slice_metrics,
     }
@@ -1253,21 +1266,35 @@ def _metrics(cases: Sequence[Mapping[str, object]]) -> dict[str, object]:
 
 def _gate_results(metrics: Mapping[str, object]) -> dict[str, object]:
     checks = {
-        "answerable_accuracy": float(metrics["answerable_accuracy"])
+        "answerable_accuracy": float(
+            cast(float | int, metrics["answerable_accuracy"])
+        )
         >= float(GATES["answerable_accuracy_min"]),
-        "false_refusal_rate": float(metrics["false_refusal_rate"])
+        "false_refusal_rate": float(
+            cast(float | int, metrics["false_refusal_rate"])
+        )
         <= float(GATES["false_refusal_rate_max"]),
-        "false_answer_rate": float(metrics["false_answer_rate"])
+        "false_answer_rate": float(
+            cast(float | int, metrics["false_answer_rate"])
+        )
         <= float(GATES["false_answer_rate_max"]),
-        "citation_source_precision": float(metrics["citation_source_precision"])
+        "citation_source_precision": float(
+            cast(float | int, metrics["citation_source_precision"])
+        )
         >= float(GATES["citation_source_precision_min"]),
-        "citation_span_validity": float(metrics["citation_span_validity"])
+        "citation_span_validity": float(
+            cast(float | int, metrics["citation_span_validity"])
+        )
         >= float(GATES["citation_span_validity_min"]),
-        "paraphrase_consistency": float(metrics["paraphrase_consistency"])
+        "paraphrase_consistency": float(
+            cast(float | int, metrics["paraphrase_consistency"])
+        )
         >= float(GATES["paraphrase_consistency_min"]),
-        "hard_constraint_violations": int(metrics["hard_constraint_violations"])
+        "hard_constraint_violations": int(
+            cast(int, metrics["hard_constraint_violations"])
+        )
         <= int(GATES["hard_constraint_violations_max"]),
-        "status_parity": float(metrics["status_parity"])
+        "status_parity": float(cast(float | int, metrics["status_parity"]))
         >= float(GATES["status_parity_min"]),
     }
     return {"passed": all(checks.values()), "checks": checks, "gates": GATES}
@@ -1346,9 +1373,12 @@ async def _singleflight_wave(
         "provider_call_count": sum(
             int(
                 cast(
-                    dict[str, object],
-                    item.get("diagnostics_summary", {}),
-                ).get("provider_call_count", 0)
+                    int,
+                    cast(
+                        dict[str, object],
+                        item.get("diagnostics_summary", {}),
+                    ).get("provider_call_count", 0),
+                )
             )
             for item in payloads
             if isinstance(item.get("diagnostics_summary"), dict)
@@ -1428,7 +1458,7 @@ def _run_metrics(
     timings: Sequence[Mapping[str, object]],
 ) -> tuple[dict[str, object], dict[str, object]]:
     quality = _metrics(case_scores)
-    cold = [float(item["cold_total_ms"]) for item in timings]
+    cold = [float(cast(float | int, item["cold_total_ms"])) for item in timings]
     warm = [
         float(value)
         for item in timings
@@ -1436,11 +1466,11 @@ def _run_metrics(
         if isinstance(value, (int, float))
     ]
     ttfc = [
-        float(item["first_content_ms"])
+        float(cast(float | int, item["first_content_ms"]))
         for item in timings
-        if float(item["first_content_ms"]) >= 0
+        if float(cast(float | int, item["first_content_ms"])) >= 0
     ]
-    performance = {
+    performance: dict[str, object] = {
         "sample_count": len(timings),
         "cold_p50_ms": _percentile(cold, 0.50),
         "cold_p95_ms": _percentile(cold, 0.95),
@@ -1567,7 +1597,7 @@ def run_evaluation(  # noqa: PLR0913, PLR0915, PLR0917
         performance["resource_after"] = _resource_snapshot()
     finally:
         _close_runtime(opened)
-    report = {
+    report: dict[str, object] = {
         "schema_version": _REPORT_SCHEMA_VERSION,
         "kind": "v3_07_public_product_evaluation",
         "dataset_sha256": dataset_sha256(),
