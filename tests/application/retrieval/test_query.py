@@ -10,6 +10,7 @@ from rag_app.application.retrieval.answer_support import (
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
 from rag_app.application.retrieval.lexical import question_search_terms
 from rag_app.core.models import (
+    ConstraintKind,
     KnowledgeBaseScope,
     QueryAnalysis,
     QueryKind,
@@ -163,6 +164,14 @@ def test_search_request_bounds_conversation_context() -> None:
             "工作模式",
             RequestedAnswerType.ENUMERATION,
             3,
+            None,
+        ),
+        (
+            "蓝鹊小组通常会用哪几种方式参与项目，每一种分别怎么配合？",
+            "蓝鹊小组",
+            "工作方式",
+            RequestedAnswerType.ENUMERATION,
+            None,
             None,
         ),
         (
@@ -365,6 +374,19 @@ def test_analyzer_does_not_treat_which_step_as_a_fixed_count() -> None:
     assert analysis.semantics.expected_count is None
     assert not any(
         constraint.raw_text == "一"
+        for constraint in analysis.semantics.constraints
+    )
+
+
+def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
+    analysis = _analyze(
+        "蓝鹊小组通常会用哪几种方式参与项目，每一种分别怎么配合？"
+    )
+
+    assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
+    assert analysis.semantics.expected_count is None
+    assert not any(
+        constraint.kind is ConstraintKind.NUMBER and constraint.raw_text == "一"
         for constraint in analysis.semantics.constraints
     )
 
