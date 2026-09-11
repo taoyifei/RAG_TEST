@@ -403,6 +403,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "每条写明角色或对象的事实" in prompt
         assert "这两个ID的逐字quote" in prompt
         assert "候选证据" in prompt
+        assert "不同来源组回答不同事实，拆成多条claim" in prompt
         content = json.loads(messages[1]["content"])
         assert content["typed_semantics"]["answer_type"] == "DUTIES"
         assert "answer_support_set" not in content
@@ -420,6 +421,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         candidate_location = content["evidence"][2]["source_structure"]
         assert candidate_location["anchors"][0]["structural_path"][2] == "tr:1"
         assert "CLAIM_OBJECT_CHANGED" in messages[2]["content"]
+        assert "把不同来源组支持的事实拆开" in messages[2]["content"]
         assert len(requests) == 1
     finally:
         adapter.close()

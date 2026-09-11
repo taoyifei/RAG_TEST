@@ -58,6 +58,9 @@ _GROUNDED_SYSTEM = (
     "每条写明角色或对象的事实，其supports必须同时包含对象原文和相应职责原文；"
     "对象和职责分属不同ID时，列出这两个ID的逐字quote。"
     "不能从问题、其他未引用证据或其他表格行借用对象；分条概括也须逐条满足。"
+    "一条claim内的每个分句必须由一个完整来源组独立支持；普通正文来源组是"
+    "同一anchor节点，表格来源组是同一行。需要用不同来源组回答不同事实，拆成多条claim；"
+    "不得把一个来源组的对象与另一个来源组的动作拼成事实。"
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
     "evidence是检索、融合与重排后的有界候选证据；请自行选择与问题相关的候选。"
@@ -495,7 +498,9 @@ def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
                 role="user",
                 content=(
                     "上次草稿未通过校验。仅根据同一证据重新输出一次，"
-                    "无法支持的事实请删除。安全原因：" + request.repair_reason
+                    "无法支持的事实请删除。把不同来源组支持的事实拆开，"
+                    "每条claim只保留可由一个来源组完整证明的分句。安全原因："
+                    + request.repair_reason
                 ),
             ),
         )
