@@ -103,6 +103,17 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
+    """“用于记录”中的用途连接词不能被误识别为业务对象。"""
+    evidence, draft = _supported_draft(
+        "上线申请单 | 发布经理 | 包含版本号、变更说明和回滚方案，"
+        "作为发布准入凭证",
+        "上线申请单用于记录版本号、变更说明和回滚方案，并作为发布准入凭证。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
 @pytest.mark.parametrize(
     "text,claim,code",
     [
