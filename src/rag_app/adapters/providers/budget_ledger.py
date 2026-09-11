@@ -924,8 +924,7 @@ def _knowledge_scope_failure(  # noqa: PLR0911
     ):
         return BudgetBlockedError("BUSINESS_DATA_SCOPE_MISMATCH")
     if (
-        request.provider != "aliyun"
-        or request.operation not in campaign.allowed_operations
+        request.operation not in campaign.allowed_operations
         or request.model not in campaign.allowed_models
     ):
         return BudgetBlockedError("BUSINESS_MODEL_OPERATION_NOT_APPROVED")
@@ -933,7 +932,8 @@ def _knowledge_scope_failure(  # noqa: PLR0911
         return BudgetBlockedError("BUSINESS_REQUEST_POLICY_MISMATCH")
     if (
         not request.source_hashes
-        and request.operation not in {"query.interpret", "query.rewrite"}
+        and request.operation
+        not in {"embedding.query", "query.interpret", "query.rewrite"}
     ) or not _hash_subset(
         request.source_hashes, campaign.approved_source_hashes
     ):

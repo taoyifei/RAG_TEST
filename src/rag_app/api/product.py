@@ -43,6 +43,10 @@ from rag_app.product.models import (
     RetrievalProfileDraft,
 )
 from rag_app.product.provider_runtime import TransportFactory
+from rag_app.product.retrieval_authorization import (
+    RetrievalAuthorizationApproval,
+    RetrievalAuthorizationStatus,
+)
 from rag_app.product.verification import validation_is_current
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -113,7 +117,7 @@ class ConnectionRequest(_RequestModel):
     api_host: str | None = Field(default=None, max_length=300)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
     region: Literal["cn-beijing"] | None = None
-    request_budget: int = Field(default=5, ge=1, le=20)
+    request_budget: int = Field(default=5, ge=1, le=500)
     token_budget: int = Field(default=4096, ge=1, le=1_000_000)
 
 
@@ -126,7 +130,7 @@ class ConnectionPatchRequest(_RequestModel):
     endpoint_mode: Literal["workspace_host", "beijing_dashscope"] | None = None
     api_host: str | None = Field(default=None, max_length=300)
     region: Literal["cn-beijing"] | None = None
-    request_budget: int | None = Field(default=None, ge=1, le=20)
+    request_budget: int | None = Field(default=None, ge=1, le=500)
     token_budget: int | None = Field(default=None, ge=1, le=1_000_000)
     enabled: bool | None = None
 
@@ -727,6 +731,11 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
                     "effective_serving_fingerprint": (
                         runtime.profiles.serving_contract(item)[2]
                     ),
+                    "retrieval_authorization": (
+                        runtime.retrieval_authorizations.status(
+                            item.profile_revision_id
+                        ).model_dump(mode="json")
+                    ),
                 }
                 for item in runtime.control.list_profiles(knowledge_base_id)
             ]
@@ -765,6 +774,42 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             mode="json"
         )
 
+    @app.get(
+        "/api/v1/retrieval-profiles/{profile_revision_id}/authorization",
+        tags=["retrieval-profiles"],
+        response_model=RetrievalAuthorizationStatus,
+    )
+    def _retrieval_authorization(
+        profile_revision_id: str,
+    ) -> RetrievalAuthorizationStatus:
+        """读取候选方案与当前活动文档的真实检索批准状态。"""
+        return runtime.retrieval_authorizations.status(profile_revision_id)
+
+    @app.post(
+        "/api/v1/retrieval-profiles/{profile_revision_id}/authorization:approve",
+        tags=["retrieval-profiles"],
+        response_model=RetrievalAuthorizationStatus,
+    )
+    def _approve_retrieval_authorization(
+        profile_revision_id: str,
+        approval: RetrievalAuthorizationApproval,
+        request: Request,
+    ) -> RetrievalAuthorizationStatus:
+        """仅由管理员批准当前真实文档的远程 Embedding 与重排。"""
+        if getattr(request.state, "product_principal", None) != "admin_session":
+            raise HTTPException(403, "真实检索授权只能由控制台管理员批准。")
+        session_id = getattr(request.state, "product_session_id", None)
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(403, "管理员会话身份不可用。")
+        try:
+            return runtime.retrieval_authorizations.approve(
+                profile_revision_id,
+                approval,
+                approved_by_session_id=session_id,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
     @app.post(
         "/api/v1/retrieval-profiles/{profile_revision_id}:activate",
         tags=["retrieval-profiles"],
@@ -773,10 +818,13 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         profile_revision_id: str,
         body: ActivateProfileRequest,
     ) -> dict[str, object]:
-        profile = runtime.control.activate_profile(
-            profile_revision_id,
-            confirmed_impact=body.confirmed_impact,
-        )
+        try:
+            profile = runtime.control.activate_profile(
+                profile_revision_id,
+                confirmed_impact=body.confirmed_impact,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
         runtime.profiles.invalidate(profile.knowledge_base_id)
         if profile.activation_job_id is not None and profile.status == "draft":
             runtime.jobs.submit(profile.activation_job_id)

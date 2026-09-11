@@ -496,7 +496,7 @@
           "request_budget": {
             "anyOf": [
               {
-                "maximum": 20.0,
+                "maximum": 500.0,
                 "minimum": 1.0,
                 "type": "integer"
               },
@@ -619,7 +619,7 @@
           },
           "request_budget": {
             "default": 5,
-            "maximum": 20.0,
+            "maximum": 500.0,
             "minimum": 1.0,
             "title": "Request Budget",
             "type": "integer"
@@ -3661,6 +3661,253 @@
         ],
         "title": "RequestedAnswerType",
         "type": "string"
+      },
+      "RetrievalAuthorizationApproval": {
+        "additionalProperties": false,
+        "description": "管理员对当前真实文档检索用途给出的有界累计预算。",
+        "properties": {
+          "estimated_token_limit": {
+            "maximum": 100000000.0,
+            "minimum": 1.0,
+            "title": "Estimated Token Limit",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "operation_request_limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "propertyNames": {
+              "enum": [
+                "embedding.document",
+                "embedding.query",
+                "reranking"
+              ]
+            },
+            "title": "Operation Request Limits",
+            "type": "object"
+          },
+          "request_limit": {
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Request Limit",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expires_at",
+          "request_limit",
+          "estimated_token_limit",
+          "operation_request_limits"
+        ],
+        "title": "RetrievalAuthorizationApproval",
+        "type": "object"
+      },
+      "RetrievalAuthorizationManifest": {
+        "additionalProperties": false,
+        "description": "不保存正文或逐文档哈希的不可变检索批准记录。",
+        "properties": {
+          "active_document_count": {
+            "exclusiveMinimum": 0.0,
+            "title": "Active Document Count",
+            "type": "integer"
+          },
+          "active_document_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Active Document Digest",
+            "type": "string"
+          },
+          "approved_by_session_id": {
+            "title": "Approved By Session Id",
+            "type": "string"
+          },
+          "authorization_id": {
+            "title": "Authorization Id",
+            "type": "string"
+          },
+          "budget_campaign_id": {
+            "title": "Budget Campaign Id",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "string"
+          },
+          "knowledge_base_id": {
+            "pattern": "^kb_[0-9a-f]{32}$",
+            "title": "Knowledge Base Id",
+            "type": "string"
+          },
+          "manifest_id": {
+            "pattern": "^rauth_[0-9a-f]{32}$",
+            "title": "Manifest Id",
+            "type": "string"
+          },
+          "operations": {
+            "items": {
+              "enum": [
+                "embedding.document",
+                "embedding.query",
+                "reranking"
+              ],
+              "type": "string"
+            },
+            "minItems": 2,
+            "title": "Operations",
+            "type": "array"
+          },
+          "policy_revision": {
+            "default": "retrieval-authorization-v1",
+            "title": "Policy Revision",
+            "type": "string"
+          },
+          "profile_binding_identity": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Profile Binding Identity",
+            "type": "string"
+          },
+          "profile_revision_id": {
+            "pattern": "^pfr_[0-9a-f]{32}$",
+            "title": "Profile Revision Id",
+            "type": "string"
+          },
+          "project_id": {
+            "pattern": "^prj_[0-9a-f]{32}$",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "source_index_revision_id": {
+            "pattern": "^irev_[0-9a-f]{32}$",
+            "title": "Source Index Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "manifest_id",
+          "project_id",
+          "knowledge_base_id",
+          "profile_revision_id",
+          "source_index_revision_id",
+          "active_document_digest",
+          "active_document_count",
+          "profile_binding_identity",
+          "operations",
+          "authorization_id",
+          "budget_campaign_id",
+          "created_at",
+          "expires_at",
+          "approved_by_session_id"
+        ],
+        "title": "RetrievalAuthorizationManifest",
+        "type": "object"
+      },
+      "RetrievalAuthorizationStatus": {
+        "additionalProperties": false,
+        "description": "草稿、激活与查询共享的实时检索授权投影。",
+        "properties": {
+          "authorization_state": {
+            "enum": [
+              "NOT_REQUIRED",
+              "MISSING",
+              "APPROVED",
+              "STALE_CORPUS",
+              "STALE_PROFILE",
+              "EXPIRED",
+              "BLOCKED"
+            ],
+            "title": "Authorization State",
+            "type": "string"
+          },
+          "budget_state": {
+            "enum": [
+              "MISSING",
+              "AVAILABLE",
+              "EXHAUSTED",
+              "BLOCKED"
+            ],
+            "title": "Budget State",
+            "type": "string"
+          },
+          "connection_budget_state": {
+            "enum": [
+              "READY",
+              "INSUFFICIENT",
+              "BLOCKED"
+            ],
+            "title": "Connection Budget State",
+            "type": "string"
+          },
+          "embedding_slot_count": {
+            "maximum": 2.0,
+            "minimum": 1.0,
+            "title": "Embedding Slot Count",
+            "type": "integer"
+          },
+          "estimated_document_chunks": {
+            "minimum": 0.0,
+            "title": "Estimated Document Chunks",
+            "type": "integer"
+          },
+          "estimated_document_requests_per_slot": {
+            "minimum": 0.0,
+            "title": "Estimated Document Requests Per Slot",
+            "type": "integer"
+          },
+          "estimated_document_tokens_per_slot": {
+            "minimum": 0.0,
+            "title": "Estimated Document Tokens Per Slot",
+            "type": "integer"
+          },
+          "manifest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RetrievalAuthorizationManifest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_codes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Reason Codes",
+            "type": "array"
+          },
+          "required_operations": {
+            "items": {
+              "enum": [
+                "embedding.document",
+                "embedding.query",
+                "reranking"
+              ],
+              "type": "string"
+            },
+            "title": "Required Operations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "authorization_state",
+          "budget_state",
+          "connection_budget_state",
+          "required_operations",
+          "estimated_document_chunks",
+          "estimated_document_requests_per_slot",
+          "estimated_document_tokens_per_slot",
+          "embedding_slot_count"
+        ],
+        "title": "RetrievalAuthorizationStatus",
+        "type": "object"
       },
       "RetrievalDiagnostics": {
         "additionalProperties": false,
@@ -17836,6 +18083,282 @@
         "summary": " Daily Provider Usage",
         "tags": [
           "model-services"
+        ]
+      }
+    },
+    "/api/v1/retrieval-profiles/{profile_revision_id}/authorization": {
+      "get": {
+        "description": "读取候选方案与当前活动文档的真实检索批准状态。",
+        "operationId": "_retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_revision_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Revision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalAuthorizationStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Retrieval Authorization",
+        "tags": [
+          "retrieval-profiles"
+        ]
+      }
+    },
+    "/api/v1/retrieval-profiles/{profile_revision_id}/authorization:approve": {
+      "post": {
+        "description": "仅由管理员批准当前真实文档的远程 Embedding 与重排。",
+        "operationId": "_approve_retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_revision_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Revision Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalAuthorizationApproval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalAuthorizationStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "统一安全错误结构"
+          }
+        },
+        "summary": " Approve Retrieval Authorization",
+        "tags": [
+          "retrieval-profiles"
         ]
       }
     },

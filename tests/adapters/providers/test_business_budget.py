@@ -235,6 +235,42 @@ def test_query_language_operation_requires_fresh_authorization(
         )
 
 
+def test_retrieval_business_scope_allows_query_without_document_source(
+    tmp_path: Path,
+) -> None:
+    """检索授权允许用户查询出网，但文档 Embedding 仍必须绑定来源。"""
+    url = "https://api.jina.ai/v1/embeddings"
+    identity = provider_request_identity(
+        url, "jina-embeddings-v5-text-small", _IDENTITY
+    )
+    campaign = replace(
+        _campaign(),
+        approved_request_identities=(identity,),
+        allowed_models=("jina-embeddings-v5-text-small",),
+        allowed_operations=("embedding.document", "embedding.query"),
+        operation_request_limits={
+            "embedding.document": 2,
+            "embedding.query": 2,
+        },
+    )
+    ledger = ProviderBudgetLedger(tmp_path / "budget.sqlite3")
+    ledger.create_campaign(campaign)
+    query = _request(
+        provider="jina",
+        operation="embedding.query",
+        request_identity=identity,
+        model="jina-embeddings-v5-text-small",
+        source_hashes=(),
+    )
+
+    _reserve(ledger, query)
+    with pytest.raises(BudgetBlockedError, match="SOURCE_NOT_APPROVED"):
+        _reserve(
+            ledger,
+            replace(query, operation="embedding.document"),
+        )
+
+
 def test_unknown_usage_combined_reservation_survives_restart_and_concurrency(
     tmp_path: Path,
 ):

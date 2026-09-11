@@ -13,16 +13,24 @@ from rag_app.adapters.stores.memory_retrieval_cache import (
 )
 from rag_app.application.lifecycle import LifecycleService
 from rag_app.application.retrieval import RetrievalService
+from rag_app.application.retrieval.service import RetrievalExecutionIdentity
 from rag_app.composition import product_runtime
 from rag_app.composition.p09_runtime import P09Runtime
 from rag_app.composition.product_runtime import ProductProfileResolver
-from rag_app.core.models import SearchAnswerResult, SearchRequest
+from rag_app.core.models import (
+    KnowledgeBaseScope,
+    SearchAnswerResult,
+    SearchRequest,
+)
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.model_settings import ProductModelSettings
 from rag_app.product.models import RetrievalProfileRevision
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
 
 _KNOWLEDGE_BASE_ID = f"kb_{'1' * 32}"
+_PROJECT_ID = f"prj_{'2' * 32}"
+_REVISION_ID = f"irev_{'3' * 32}"
+_SERVING_FINGERPRINT = f"sha256:{'4' * 64}"
 
 
 class _FakeQuality:
@@ -67,6 +75,16 @@ class _FakeRetrieval:
         self.search_result = cast(SearchAnswerResult, object())
         self.generation: object = None
         self.resource_serving_fingerprint = ""
+
+    def execution_identity(
+        self, request: SearchRequest
+    ) -> RetrievalExecutionIdentity:
+        del request
+        return RetrievalExecutionIdentity(
+            key_hash=f"sha256:{'5' * 64}",
+            active_revision_id=_REVISION_ID,
+            serving_fingerprint=_SERVING_FINGERPRINT,
+        )
 
     def with_generation(
         self,
@@ -137,6 +155,7 @@ def _profile(
         SimpleNamespace(
             knowledge_base_id=knowledge_base_id,
             profile_revision_id=f"profile:{knowledge_base_id}",
+            reranker_connection_id=None,
         ),
     )
 
@@ -282,7 +301,14 @@ def test_retrieval_proxy_holds_lease_for_complete_search(
 
     monkeypatch.setattr(resolver, "_build", _build_with_callback)
     result = proxy.search_and_answer(
-        cast(SearchRequest, SimpleNamespace(singleflight_enabled=False))
+        SearchRequest(
+            scope=KnowledgeBaseScope(
+                project_id=_PROJECT_ID,
+                knowledge_base_id=_KNOWLEDGE_BASE_ID,
+            ),
+            text="验证完整查询租约",
+            singleflight_enabled=False,
+        )
     )
 
     assert result is expected

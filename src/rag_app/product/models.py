@@ -43,7 +43,7 @@ class ProviderConnectionDraft(FrozenModel):
     api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
-    request_budget: StrictInt = Field(default=5, ge=1, le=20)
+    request_budget: StrictInt = Field(default=5, ge=1, le=500)
     token_budget: StrictInt = Field(default=4096, ge=1, le=1_000_000)
 
 
@@ -63,7 +63,7 @@ class ProviderConnection(FrozenModel):
     api_host: str | None = None
     workspace_id: str | None = None
     region: str | None = None
-    request_budget: StrictInt = Field(default=5, ge=1, le=20)
+    request_budget: StrictInt = Field(default=5, ge=1, le=500)
     token_budget: StrictInt = Field(default=4096, ge=1, le=1_000_000)
     created_at: str
     updated_at: str

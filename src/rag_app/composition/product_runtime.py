@@ -123,6 +123,10 @@ from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_retrieval_policy,
 )
+from rag_app.product.retrieval_authorization import (
+    RetrievalAuthorizationStore,
+    RetrievalOperation,
+)
 from rag_app.product.singleflight import (
     ProductQuerySingleflight,
     SingleflightMetrics,
@@ -347,25 +351,9 @@ class _RetrievalLeaseProxy:
             self._knowledge_base_id,
             self._fallback,
         ) as service:
-            if (
-                not request.singleflight_enabled
-                or on_stage is not None
-                or on_claim is not None
-                or on_final is not None
-            ):
-                return service.search_and_answer(
-                    request,
-                    on_stage=on_stage,
-                    on_claim=on_claim,
-                    on_final=on_final,
-                    cancellation=cancellation,
-                    cache_result=cache_result,
-                )
             identity = service.execution_identity(request)
-            trace_id = request.trace_id or f"trace_{uuid.uuid4().hex}"
             frozen_request = request.model_copy(
                 update={
-                    "trace_id": trace_id,
                     "expected_active_revision_id": (
                         identity.active_revision_id
                     ),
@@ -374,24 +362,48 @@ class _RetrievalLeaseProxy:
                     ),
                 }
             )
-            result = self._resolver.singleflight.execute(
-                identity.key_hash,
-                request_trace_id=trace_id,
-                cancellation=cancellation,
-                compute=lambda group_cancellation: service.search_and_answer(
-                    frozen_request,
-                    cancellation=group_cancellation,
-                    cache_result=cache_result,
-                ),
-            )
-            if result.singleflight_role == "follower":
-                service.validate_shared_result(
-                    result,
-                    frozen_request,
-                    identity,
+            with self._resolver.query_retrieval_scope(
+                self._knowledge_base_id,
+                identity.active_revision_id,
+            ):
+                if (
+                    not request.singleflight_enabled
+                    or on_stage is not None
+                    or on_claim is not None
+                    or on_final is not None
+                ):
+                    return service.search_and_answer(
+                        frozen_request,
+                        on_stage=on_stage,
+                        on_claim=on_claim,
+                        on_final=on_final,
+                        cancellation=cancellation,
+                        cache_result=cache_result,
+                    )
+                trace_id = request.trace_id or f"trace_{uuid.uuid4().hex}"
+                frozen_request = frozen_request.model_copy(
+                    update={"trace_id": trace_id}
                 )
-            service.record_singleflight_observation(result, identity)
-            return result
+                result = self._resolver.singleflight.execute(
+                    identity.key_hash,
+                    request_trace_id=trace_id,
+                    cancellation=cancellation,
+                    compute=lambda group_cancellation: (
+                        service.search_and_answer(
+                            frozen_request,
+                            cancellation=group_cancellation,
+                            cache_result=cache_result,
+                        )
+                    ),
+                )
+                if result.singleflight_role == "follower":
+                    service.validate_shared_result(
+                        result,
+                        frozen_request,
+                        identity,
+                    )
+                service.record_singleflight_observation(result, identity)
+                return result
 
 
 class _LifecycleLeaseProxy:
@@ -561,6 +573,7 @@ class ProductProfileResolver:
         *,
         models: ProductModelSettings | None = None,
         corpus_authorizations: CorpusAuthorizationStore | None = None,
+        retrieval_authorizations: RetrievalAuthorizationStore | None = None,
         ocr: ProductOcrEnrichment | None = None,
         circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
         acceptance_egress_resolver: Callable[
@@ -575,6 +588,7 @@ class ProductProfileResolver:
             providers: 页面托管 Credential 的 Provider 工厂。
             models: 可选的知识库回答和 OCR 配置存储。
             corpus_authorizations: 可选的活动语料批准与预算状态存储。
+            retrieval_authorizations: 可选的真实检索资料与预算批准存储。
             ocr: 可选的同库图片增补服务。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
@@ -587,6 +601,7 @@ class ProductProfileResolver:
         self._providers = providers
         self._models = models
         self._corpus_authorizations = corpus_authorizations
+        self._retrieval_authorizations = retrieval_authorizations
         self._ocr = ocr
         self._grounded_models: dict[
             str, _ResourceGeneration[ProductGroundedModel]
@@ -666,6 +681,24 @@ class ProductProfileResolver:
             for run in validations.values()
         ):
             raise ValueError("候选方案的验证已失效，请重新验证。")
+        if (
+            not self._providers.test_only_transport
+            and self._retrieval_authorizations is not None
+        ):
+            status = self._retrieval_authorizations.status(
+                profile.profile_revision_id
+            )
+            if (
+                status.authorization_state not in {"APPROVED", "NOT_REQUIRED"}
+                or status.budget_state != "AVAILABLE"
+                or status.connection_budget_state != "READY"
+            ):
+                reason = (
+                    status.reason_codes[0]
+                    if status.reason_codes
+                    else "RETRIEVAL_AUTHORIZATION_REQUIRED"
+                )
+                raise ValueError(f"真实检索授权未就绪：{reason}")
         with self._profile_services_lease(profile) as services:
             services.lifecycle.queue_profile_rebuild(
                 profile.knowledge_base_id,
@@ -1016,6 +1049,7 @@ class ProductProfileResolver:
 
         """
         generation: _ResourceGeneration[_ResolvedProductServices] | None = None
+        profile: RetrievalProfileRevision | None = None
         with self._lock:
             self._ensure_open_locked()
             runtime = self._require_runtime()
@@ -1027,10 +1061,96 @@ class ProductProfileResolver:
                 self._acquire_generation_locked(generation)
                 service = generation.resource.lifecycle
         try:
-            yield service
+            source_hashes: tuple[str, ...] | None = None
+            if (
+                profile is not None
+                and self._retrieval_authorizations is not None
+                and not self._providers.test_only_transport
+            ):
+                request = runtime.store.ingestion_request(job_id)
+                source_hashes = tuple(
+                    sorted({item.content_sha256 for item in request.documents})
+                )
+            with self._retrieval_scope(
+                profile,
+                step_id="retrieval.build",
+                required_operations=("embedding.document",),
+                source_hashes=source_hashes,
+            ):
+                yield service
         finally:
             if generation is not None:
                 self._release_service_generation(generation)
+
+    @contextmanager
+    def _retrieval_scope(
+        self,
+        profile: RetrievalProfileRevision | None,
+        *,
+        step_id: str,
+        required_operations: tuple[RetrievalOperation, ...],
+        source_hashes: tuple[str, ...] | None = None,
+        expected_index_revision_id: str | None = None,
+    ) -> Iterator[None]:
+        """生产远程 Profile 的完整调用链必须绑定真实资料批准。
+
+        Args:
+            profile: 本次请求或作业冻结的 Profile；本地路径为空。
+            step_id: 累计预算账本中的稳定阶段身份。
+            required_operations: 当前调用链可能执行的远程检索用途。
+            source_hashes: 后台作业实际冻结的文档版本 SHA256。
+            expected_index_revision_id: 查询已冻结的活动 Revision。
+
+        Yields:
+            已绑定预算与资料范围的执行上下文；测试 Transport 保持隔离。
+
+        """
+        if (
+            profile is None
+            or self._retrieval_authorizations is None
+            or self._providers.test_only_transport
+        ):
+            yield
+            return
+        with self._retrieval_authorizations.scope(
+            profile.profile_revision_id,
+            step_id=step_id,
+            required_operations=required_operations,
+            source_hashes=source_hashes,
+            expected_index_revision_id=expected_index_revision_id,
+        ):
+            yield
+
+    @contextmanager
+    def query_retrieval_scope(
+        self,
+        knowledge_base_id: str,
+        expected_index_revision_id: str,
+    ) -> Iterator[None]:
+        """把查询冻结的 Revision 与当前远程检索批准绑定。
+
+        Args:
+            knowledge_base_id: 当前查询的知识库。
+            expected_index_revision_id: Provider 前读取的活动 Revision。
+
+        Yields:
+            本次查询使用的资料与预算范围。
+
+        """
+        profile = self.active_profile(knowledge_base_id)
+        required_operations: tuple[RetrievalOperation, ...] = (
+            ("embedding.query", "reranking")
+            if profile is not None
+            and profile.reranker_connection_id is not None
+            else ("embedding.query",)
+        )
+        with self._retrieval_scope(
+            profile,
+            step_id="retrieval.query",
+            required_operations=required_operations,
+            expected_index_revision_id=expected_index_revision_id,
+        ):
+            yield
 
     def invalidate(self, knowledge_base_id: str | None = None) -> None:
         """退役指定知识库或全部 Profile 与回答模型 generation。
@@ -1652,6 +1772,7 @@ class ProductRuntime:
     feedback: ProductFeedbackStore
     models: ProductModelSettings
     corpus_authorizations: CorpusAuthorizationStore
+    retrieval_authorizations: RetrievalAuthorizationStore
     ocr: ProductOcrEnrichment
     relations: ProductDiagramRelations
     traces: ProductTraceCoordinator
@@ -1856,6 +1977,12 @@ def build_product_runtime(  # noqa: PLR0915
         providers,
         data_dir / "provider-budget.sqlite3",
     )
+    retrieval_authorizations = RetrievalAuthorizationStore(
+        connections,
+        control,
+        providers,
+        data_dir / "provider-budget.sqlite3",
+    )
     ocr = ProductOcrEnrichment(
         connections, models, providers, data_dir / "provider-budget.sqlite3"
     )
@@ -1878,6 +2005,7 @@ def build_product_runtime(  # noqa: PLR0915
         providers,
         models=models,
         corpus_authorizations=corpus_authorizations,
+        retrieval_authorizations=retrieval_authorizations,
         ocr=ocr,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
@@ -1936,6 +2064,7 @@ def build_product_runtime(  # noqa: PLR0915
         feedback=feedback,
         models=models,
         corpus_authorizations=corpus_authorizations,
+        retrieval_authorizations=retrieval_authorizations,
         ocr=ocr,
         relations=relations,
         traces=traces,

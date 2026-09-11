@@ -23,8 +23,16 @@ _BUSINESS_FIELDS = frozenset(
         "operation_request_limits",
     }
 )
-_CHAT_OPERATIONS = frozenset(
-    {"generation", "query.interpret", "query.rewrite", "image.ocr"}
+_BUSINESS_OPERATIONS = frozenset(
+    {
+        "embedding.document",
+        "embedding.query",
+        "reranking",
+        "generation",
+        "query.interpret",
+        "query.rewrite",
+        "image.ocr",
+    }
 )
 
 
@@ -116,7 +124,7 @@ class BudgetCampaign:
             or not self.allowed_models
             or not self.allowed_operations
             or not self.approved_request_identities
-            or not set(self.allowed_operations) <= _CHAT_OPERATIONS
+            or not set(self.allowed_operations) <= _BUSINESS_OPERATIONS
             or set(self.operation_request_limits)
             != set(self.allowed_operations)
             or any(

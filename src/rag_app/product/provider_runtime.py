@@ -596,7 +596,7 @@ class ProviderRuntimeRegistry:
 
         Args:
             connection_id: 已保存且启用的 Provider Connection。
-            operation: generation、query.interpret、query.rewrite 或 image.ocr。
+            operation: 检索、生成、改写或图片识别的明确用途。
             model: 当前批准的目录模型。
 
         Returns:
@@ -607,12 +607,15 @@ class ProviderRuntimeRegistry:
 
         """
         if operation not in {
+            "embedding.document",
+            "embedding.query",
+            "reranking",
             "generation",
             "query.interpret",
             "query.rewrite",
             "image.ocr",
         }:
-            raise ValueError("资料授权只支持生成、改写和图片识别用途。")
+            raise ValueError("资料授权不支持该 Provider 用途。")
         connection = self._control.get_connection(connection_id)
         if not connection.enabled:
             raise ValueError("资料授权引用的 Provider Connection 已停用。")
