@@ -30,10 +30,8 @@ RUN python -c \
 
 FROM ${PYTHON_IMAGE} AS runtime
 
-ARG VCS_REF=development-unset
 ARG PYTHON_IMAGE
-LABEL org.opencontainers.image.revision="${VCS_REF}" \
-    org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
+LABEL org.opencontainers.image.base.name="${PYTHON_IMAGE}" \
     org.opencontainers.image.base.digest="sha256:9534e5a8e315485d4061ed659af0fd78a284c015f9b73661b41d6bab25604534"
 
 ENV LANG=C.UTF-8 \
@@ -42,8 +40,6 @@ ENV LANG=C.UTF-8 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
-COPY requirements.runtime.lock ./
-COPY --from=python-build /wheels /wheels
 RUN apt-get update -o Acquire::Retries=5 \
     && for build_attempt in 1 2 3; do \
     DEBIAN_FRONTEND=noninteractive apt-get install \
@@ -60,11 +56,20 @@ RUN apt-get update -o Acquire::Retries=5 \
     done \
     && apt-get purge --yes mount \
     && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install \
+    && groupadd --gid 10001 rag \
+    && useradd --uid 10001 --gid rag --no-create-home rag \
+    && mkdir -p /data /run/rag-secrets \
+    && chown -R rag:rag /data /run/rag-secrets
+
+COPY requirements.runtime.lock ./
+RUN python -m pip install \
     --disable-pip-version-check \
     --no-cache-dir \
-    --requirement=/app/requirements.runtime.lock \
-    && python -m pip install \
+    --requirement=/app/requirements.runtime.lock
+
+ARG VCS_REF=development-unset
+COPY --from=python-build /wheels /wheels
+RUN python -m pip install \
     --disable-pip-version-check \
     --no-cache-dir \
     --no-deps \
@@ -74,11 +79,7 @@ RUN apt-get update -o Acquire::Retries=5 \
     'import sys; from rag_app._build_revision import SOURCE_REVISION; expected = sys.argv[1]; sys.exit(0 if expected == "development-unset" or SOURCE_REVISION == sys.argv[1] else 1)' \
     "${VCS_REF}" \
     && rm -rf /wheels \
-    && python -m pip uninstall --yes pip setuptools wheel \
-    && groupadd --gid 10001 rag \
-    && useradd --uid 10001 --gid rag --no-create-home rag \
-    && mkdir -p /data /run/rag-secrets \
-    && chown -R rag:rag /data /run/rag-secrets
+    && python -m pip uninstall --yes pip setuptools wheel
 
 COPY --from=frontend-build --chown=rag:rag /build/frontend/dist/ ./frontend/
 COPY --chown=rag:rag docs/public/openapi-v1.json ./openapi/openapi-v1.json
@@ -95,6 +96,8 @@ RUN python -c \
     "${VCS_REF}" \
     && chown rag:rag /app/product-assets.json \
     && rag-app product-asset-selfcheck --expected-revision "${VCS_REF}"
+
+LABEL org.opencontainers.image.revision="${VCS_REF}"
 
 USER rag:rag
 EXPOSE 8088

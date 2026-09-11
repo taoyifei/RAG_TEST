@@ -74,6 +74,23 @@ def test_image_contains_product_runtime_resources_and_default_command() -> None:
     assert "frontend-build" in runtime
 
 
+def test_runtime_dependency_layers_precede_revision_dependent_inputs() -> None:
+    """源码 revision 变化不能让稳定的系统包与依赖层失去缓存。"""
+    dockerfile = (_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    runtime = dockerfile.split("FROM ${PYTHON_IMAGE} AS runtime", maxsplit=1)[1]
+
+    apt_install = runtime.index("apt-get update")
+    lock_copy = runtime.index("COPY requirements.runtime.lock")
+    locked_dependencies = runtime.index(
+        "--requirement=/app/requirements.runtime.lock"
+    )
+    revision_arg = runtime.index("ARG VCS_REF")
+    application_wheel = runtime.index("COPY --from=python-build /wheels")
+
+    assert apt_install < lock_copy < locked_dependencies
+    assert locked_dependencies < revision_arg < application_wheel
+
+
 def test_default_env_contains_no_secret_values() -> None:
     example = (_ROOT / ".env.example").read_text(encoding="utf-8")
 
