@@ -194,7 +194,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-grounded-answer-v13",
+                "retrieval_implementation": "v3-07-grounded-answer-v14",
             }
         )
         self._egress = egress_policy

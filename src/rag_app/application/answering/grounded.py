@@ -73,6 +73,7 @@ _LEADING_ACTION_CONTEXT = re.compile(
     r"^\s*(?:在)?(?:"
     r"[^，,。；;！？?]{1,24}(?:完成|结束|通过|确认|测完)(?:了)?"
     r"(?:之后|以后|后)|"
+    r"(?:(?:版本|系统|应用|产品|功能|代码|制品|项目)\s*)?(?:正式)?"
     r"(?:上线|发布|提交|开始|执行|操作|处理|准备|验收|交付)"
     r"(?:之前|之后|以前|以后|前|后)"
     r")\s*[，,]?\s*"
@@ -86,8 +87,11 @@ _MODAL_ACTION = re.compile(
     r"^(?:准备|整理|提交|上传|填报|填写|确认|补充|完成|检查|核对|"
     r"提供|记录|归档|执行)"
 )
-_GENERAL_SUBJECT = re.compile(
-    r"^\s*([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff ]{0,40}?)"
+_ENTITY_SUBJECT = re.compile(
+    r"^\s*((?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
+    r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
+    r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
+    r"服务|应用|模块|组件|设备|系统|模式|库)))"
     r"\s*(?=(?:(?:应当|必须|可以|应|须|需|可|已)?"
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
     rf"(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB}))"
@@ -163,7 +167,7 @@ def _subject(text: str) -> str | None:
         subject_text,
     ):
         return None
-    match = _GENERAL_SUBJECT.search(subject_text)
+    match = _ENTITY_SUBJECT.search(subject_text)
     value = match[1].strip() if match is not None else None
     if value:
         value = (
@@ -210,8 +214,9 @@ def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
     """同一句逗号后的省略主体沿用前项，跨句重新识别。"""
     clauses: list[tuple[str, str | None]] = []
     for sentence in re.split(r"[。；;！!？?\n]", text):
+        normalized_sentence = _LEADING_ACTION_CONTEXT.sub("", sentence)
         subject: str | None = None
-        for clause in re.split(r"[，,]", sentence):
+        for clause in re.split(r"[，,]", normalized_sentence):
             if clause.strip():
                 subject = _subject(clause) or subject
                 clauses.append((clause, subject))

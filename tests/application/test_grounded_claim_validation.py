@@ -119,6 +119,8 @@ def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
     [
         "需要准备测试报告和版本需求确认记录。",
         "上线前需要准备测试报告和版本需求确认记录。",
+        "版本上线前还需要准备测试报告和版本需求确认记录。",
+        "版本发布前，要准备测试报告和版本需求确认记录。",
     ],
 )
 def test_action_context_is_not_mistaken_for_a_changed_subject(
@@ -138,6 +140,7 @@ def test_action_context_is_not_mistaken_for_a_changed_subject(
     [
         "需要乙部门负责设备维护。",
         "上线前乙部门负责设备维护。",
+        "版本上线前乙部门负责设备维护。",
     ],
 )
 def test_action_context_does_not_hide_a_changed_subject(claim: str) -> None:
