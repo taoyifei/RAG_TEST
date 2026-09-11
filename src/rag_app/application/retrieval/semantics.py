@@ -228,7 +228,11 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 relation="职责",
                 answer_type=RequestedAnswerType.DUTIES,
                 source="RULE",
-                reason_codes=("DUTY_QUESTION_SYNTAX",),
+                reason_codes=(
+                    "AMBIGUOUS_ACTION_QUESTION_SYNTAX"
+                    if "干" in duty.group(0)
+                    else "DUTY_QUESTION_SYNTAX",
+                ),
             )
 
     section = _SECTION_SUMMARY.fullmatch(core)
@@ -360,7 +364,15 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     relation = relation_match.group(0)
     ordinal_match = _ORDINAL.search(prefix + suffix)
     count_question = _COUNT_QUESTION.search(prefix + suffix)
-    expected_match = _EXPECTED_COUNT.search(prefix + suffix)
+    count_surface = prefix + suffix
+    expected_match = _EXPECTED_COUNT.search(count_surface)
+    if (
+        expected_match is not None
+        and expected_match["number"] == "一"
+        and expected_match.start("number") > 0
+        and count_surface[expected_match.start("number") - 1] == "哪"
+    ):
+        expected_match = None
     expected_count = (
         _number_value(expected_match["number"])
         if expected_match is not None

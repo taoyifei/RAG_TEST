@@ -50,6 +50,13 @@ _CONTEXT_REFERENCE = re.compile(
 )
 _MAX_REWRITE_CHARS = 512
 _MAX_INTERPRET_FIELD_CHARS = 512
+_MAX_GROUNDED_INPUT_TOKENS = 16_384
+_LOW_CONFIDENCE_RULE_REASONS = frozenset(
+    {
+        "AMBIGUOUS_ACTION_QUESTION_SYNTAX",
+        "SHARED_QUERY_SEMANTICS_V2",
+    }
+)
 _INTERPRET_CANONICAL_RELATIONS = {
     RequestedAnswerType.DEFINITION: ("定义", ("定义", "释义", "含义")),
     RequestedAnswerType.PURPOSE: ("目的", ("目的", "目标", "作用", "用途")),
@@ -147,7 +154,9 @@ class ProductGroundedModel:
             settings.generation_connection_id,
             model=settings.generation_model,
             config=AliyunChatConfig(
-                model=settings.generation_model, egress_allowed=True
+                model=settings.generation_model,
+                egress_allowed=True,
+                max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
             ),
         )
 
@@ -300,11 +309,16 @@ class ProductGroundedModel:
             通过原问题硬约束校验的共享语义和实际调用审计。
 
         """
-        if (
-            not self.settings.rewrite_enabled
-            or analysis.semantics.source != "ORIGINAL_FALLBACK"
-            or analysis.semantics.answer_type
-            not in {RequestedAnswerType.UNKNOWN, RequestedAnswerType.FACT}
+        fallback_semantics = (
+            analysis.semantics.source == "ORIGINAL_FALLBACK"
+            and analysis.semantics.answer_type
+            in {RequestedAnswerType.UNKNOWN, RequestedAnswerType.FACT}
+        )
+        low_confidence_rule = bool(
+            _LOW_CONFIDENCE_RULE_REASONS & set(analysis.semantics.reason_codes)
+        )
+        if not self.settings.rewrite_enabled or not (
+            fallback_semantics or low_confidence_rule
         ):
             return InterpretOutcome()
         if len(request.text) > _MAX_REWRITE_CHARS:

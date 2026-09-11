@@ -289,3 +289,23 @@ def test_semantic_admission_never_replaces_requested_fact_support(
     assert semantic_candidate_allowed(candidate, _POLICY, context)
     assert not evidence
     assert decision.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+
+
+def test_remote_semantic_candidate_can_reach_model_review_only() -> None:
+    query = "雨林巡护协议是什么？"
+    quote = "用于核对设备标识并记录批准日期。"
+    candidate = _candidate(quote)
+    context = _context(query)
+
+    selection = EvidenceAssembler().assemble_sets(
+        (candidate,),
+        _POLICY,
+        context=context,
+        include_model_candidates=True,
+    )
+
+    assert semantic_candidate_allowed(candidate, _POLICY, context)
+    assert selection.answer_support_set == ()
+    assert [
+        item.citation_text for item in selection.model_evidence_candidates
+    ] == [quote]

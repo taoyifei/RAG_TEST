@@ -350,7 +350,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 minimum_overlap,
             )
             if support.status is not SupportStatus.SUPPORTED and not (
-                allow_uncertain and model_reviewable
+                allow_uncertain and (allow_semantic or model_reviewable)
             ):
                 continue
             # 精确对象、温度属性与合法量值已逐项证明，中英词面差异不否定该证据。
@@ -911,9 +911,9 @@ def _definition_table_evidence(
         groups.append(unique)
     if len(groups) != 1 or not groups[0]:
         return None if not groups else ()
-    pieces = groups[0]
-    if not _complete_table_pieces(pieces) or not _list_pieces_fit(
-        pieces, policy
+    selected_pieces = groups[0]
+    if not _complete_table_pieces(selected_pieces) or not _list_pieces_fit(
+        selected_pieces, policy
     ):
         return ()
     span_ids = list(
@@ -941,7 +941,7 @@ def _definition_table_evidence(
                 )
             }
         )
-        for index, (candidate, span, quote) in enumerate(pieces, 1)
+        for index, (candidate, span, quote) in enumerate(selected_pieces, 1)
     )
 
 

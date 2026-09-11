@@ -195,7 +195,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-structured-answer-v4",
+                "retrieval_implementation": "v3-07-grounded-answer-v5",
             }
         )
         self._egress = egress_policy
@@ -262,9 +262,7 @@ class RetrievalService:
 
         """
         configured = copy(self)
-        configured._grounded = GroundedAnsweringService(
-            generator, self._generator
-        )
+        configured._grounded = GroundedAnsweringService(generator)
         configured._interpreter = interpreter
         configured._rewriter = rewriter
         descriptor = getattr(
@@ -979,30 +977,33 @@ class RetrievalService:
                     {"mode": "final_only"},
                     provider_calls,
                 )
-                answer = self._answering.answer(
-                    effective_analysis.original_query,
-                    evidence,
-                    confidence,
-                    analysis=effective_analysis,
-                )
-                generation_mode = "extractive" if answer is not None else "none"
-                if answer is not None:
-                    blocker = _configured_generation_blocker(
+                if _remote_generation_configured(self._data_plane_context):
+                    # 远程模型已配置却未挂载时必须明确拒答，不能用本地规则
+                    # 生成一份看似成功、实际未经模型读取候选的答案。
+                    answer = None
+                    generation_reason = _generation_unavailable_reason(
                         self._data_plane_context
                     )
-                    if blocker is None:
+                    degraded.append(generation_reason)
+                else:
+                    answer = self._answering.answer(
+                        effective_analysis.original_query,
+                        evidence,
+                        confidence,
+                        analysis=effective_analysis,
+                    )
+                    generation_mode = (
+                        "extractive" if answer is not None else "none"
+                    )
+                    if answer is not None:
                         generation_reason = "STRUCTURED_RENDERED"
-                    else:
-                        generation_mode = "extractive_fallback"
-                        generation_reason = blocker
-                        degraded.append(blocker)
         except QueryCancelled as error:
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except StreamDeliveryError:
             raise
         except ValidationFailed as error:
-            # 模型输出校验已在 GroundedAnsweringService 内完成修复或回退；
+            # 模型输出校验已在 GroundedAnsweringService 内完成修复；
             # 这里逸出的 ValidationFailed 代表本地 renderer/最终发布合同损坏，
             # 不能伪装成远程 Provider 不可用。
             error.provider_calls = (*provider_calls, *error.provider_calls)
@@ -1020,14 +1021,20 @@ class RetrievalService:
                 }
             )
             answer = None
-        if (
-            answer is None
-            and not evidence
+        model_was_required = (
+            self._grounded is not None
+            or _remote_generation_configured(self._data_plane_context)
+        )
+        capability_projection_required = (
+            not evidence
             and any(
                 _diagnostic_support_status(item) in {"UNCERTAIN", "UNSUPPORTED"}
                 for item in model_evidence_candidates
             )
             and confidence.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+        )
+        if answer is None and (
+            model_was_required or capability_projection_required
         ):
             blocked_status = _model_capability_status(
                 self._data_plane_context,
@@ -1048,8 +1055,26 @@ class RetrievalService:
                 )
                 degraded.append(blocked_reason)
                 generation_reason = blocked_reason
+            elif (
+                self._grounded is not None
+                and confidence.status is ConfidenceStatus.ANSWERABLE
+            ):
+                # 直接证据只能作为模型输入；模型弃答或连续两次输出未通过
+                # 逐字引用校验时，不能让规则把检索状态冒充成最终答案状态。
+                failure_reason = generation_reason or "GENERATION_FAILED"
+                confidence = confidence.model_copy(
+                    update={
+                        "status": ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                        "score": 0.0,
+                        "reason_codes": tuple(
+                            dict.fromkeys(
+                                (*confidence.reason_codes, failure_reason)
+                            )
+                        ),
+                    }
+                )
         if on_claim is not None:
-            # 没有增量 claim 的拒答、摘录或 final-only 路径也必须在 final
+            # 没有增量 claim 的拒答或 final-only 路径也必须在 final
             # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
             try:
                 self._validate_stream_sources(evidence, request, snapshot)
@@ -1470,7 +1495,6 @@ class RetrievalService:
         if (
             result.status is ConfidenceStatus.ANSWERABLE
             and not rerank_dependency_failed(result.rerank_execution_mode)
-            and result.generation_mode != "extractive_fallback"
         ):
             _raise_if_cancelled(cancellation)
             self._cache.put(result.cache_key, result, ttl_seconds=300)
@@ -2045,6 +2069,19 @@ def _configured_generation_blocker(
     return None
 
 
+def _remote_generation_configured(context: QueryDataPlaneContext) -> bool:
+    """判断当前数据面是否声明了远程回答模型。
+
+    OCR 等非回答用途可以让统一模型状态变为已配置，但不能因此关闭
+    纯离线回答路径。只要回答 Provider 或模型任一身份存在，就视为
+    用户选择了远程生成，失败时不得改用规则代答。
+    """
+    return (
+        context.generation_provider_id is not None
+        or context.generation_model is not None
+    )
+
+
 def _generation_unavailable_reason(
     context: QueryDataPlaneContext,
 ) -> str:
@@ -2119,8 +2156,11 @@ def _model_capability_status(  # noqa: PLR0911
             marker in normalized
             for marker in (
                 "PROVIDER_UNAVAILABLE",
+                "PROVIDER_INVALID_RESPONSE",
                 "PROVIDER_RATE_LIMITED",
                 "PROVIDER_TIMEOUT",
+                "GENERATION_JSON_INVALID",
+                "GENERATION_OUTPUT_INVALID",
                 "HTTP_429",
                 "CONNECT_TIMEOUT",
                 "READ_TIMEOUT",

@@ -340,37 +340,33 @@ def test_local_answer_and_incomplete_candidate_report_configuration_and_policy(
             "CORPUS_AUTHORIZATION_MISSING"
         )
 
-        local_fallback = _answer(
+        policy_blocked = _answer(
             harness,
             project_id,
             knowledge_base_id,
             "设备 MX-41 的维护周期是多少？",
         )
-        assert local_fallback["status"] == "ANSWERABLE"
-        assert local_fallback["answer"]
-        assert local_fallback["generation_mode"] == "extractive_fallback"
-        assert local_fallback["generation_called_this_request"] is False
-        assert local_fallback["generation_reason_code"] == (
+        assert policy_blocked["answer"] is None
+        assert policy_blocked["generation_mode"] == "none"
+        assert policy_blocked["generation_called_this_request"] is False
+        assert policy_blocked["generation_reason_code"] == (
             "CORPUS_AUTHORIZATION_MISSING"
         )
         assert (
             "CORPUS_AUTHORIZATION_MISSING"
-            in local_fallback["degraded_reason_codes"]
+            in policy_blocked["degraded_reason_codes"]
         )
-        history = harness.runtime.history.detail(local_fallback["trace_id"])
-        trace = harness.runtime.traces.detail(local_fallback["trace_id"])
-        assert history["status"] == "ANSWERED"
-        assert trace.trace.status.value == "ANSWERED"
+        _assert_refused_state(harness, policy_blocked, "POLICY_DENIED")
         assert requests == []
     finally:
         harness.close()
 
 
-def test_exhausted_budget_falls_back_or_reports_budget_blocked(
+def test_exhausted_budget_refuses_regardless_of_local_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """预算耗尽时完整支持走 fallback，不完整支持显示 BUDGET_BLOCKED。"""
+    """预算耗尽时完整与不完整支持都不得绕过真实生成。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -396,16 +392,17 @@ def test_exhausted_budget_falls_back_or_reports_budget_blocked(
         assert generated["generation_called_this_request"] is True
         assert len(requests) == 1
 
-        fallback = _answer(
+        direct_blocked = _answer(
             harness,
             project_id,
             knowledge_base_id,
             "设备 MX-41 的维护周期是多少？",
         )
-        assert fallback["status"] == "ANSWERABLE"
-        assert fallback["generation_mode"] == "extractive_fallback"
-        assert fallback["generation_reason_code"] == "BLOCKED_BUDGET"
-        assert fallback["generation_called_this_request"] is False
+        assert direct_blocked["answer"] is None
+        assert direct_blocked["generation_mode"] == "none"
+        assert direct_blocked["generation_reason_code"] == "BLOCKED_BUDGET"
+        assert direct_blocked["generation_called_this_request"] is False
+        _assert_refused_state(harness, direct_blocked, "BUDGET_BLOCKED")
 
         blocked = _answer(
             harness,
@@ -423,12 +420,12 @@ def test_exhausted_budget_falls_back_or_reports_budget_blocked(
 
 
 @pytest.mark.parametrize("failure", ("rate_limit", "timeout"))
-def test_provider_failure_falls_back_or_reports_unavailable(
+def test_provider_failure_refuses_regardless_of_local_support(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure: str,
 ) -> None:
-    """429 与超时在完整和不完整支持下具有不同发布结果。"""
+    """429 与超时都必须保留调用事实并拒答。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -451,15 +448,20 @@ def test_provider_failure_falls_back_or_reports_unavailable(
         _configure_generation(harness, knowledge_base_id, connection_id)
         _approve_generation(harness, knowledge_base_id, request_limit=8)
 
-        fallback = _answer(
+        direct_failure = _answer(
             harness,
             project_id,
             knowledge_base_id,
             "设备 MX-41 的维护周期是多少？",
         )
-        assert fallback["status"] == "ANSWERABLE"
-        assert fallback["generation_mode"] == "extractive_fallback"
-        assert fallback["generation_called_this_request"] is True
+        assert direct_failure["answer"] is None
+        assert direct_failure["generation_mode"] == "none"
+        assert direct_failure["generation_called_this_request"] is True
+        _assert_refused_state(
+            harness,
+            direct_failure,
+            "PROVIDER_UNAVAILABLE",
+        )
 
         unavailable = _answer(
             harness,
@@ -483,11 +485,11 @@ def test_provider_failure_falls_back_or_reports_unavailable(
         harness.close()
 
 
-def test_invalid_model_json_with_complete_support_is_answered_fallback(
+def test_invalid_model_json_with_complete_support_is_refused(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """无效 JSON 只修复一次，仍失败时发布已验证的本地结构答案。"""
+    """无效 JSON 只修复一次，仍失败时必须拒答。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 
@@ -528,15 +530,15 @@ def test_invalid_model_json_with_complete_support_is_answered_fallback(
             knowledge_base_id,
             "设备 MX-41 的维护周期是多少？",
         )
-        assert result["status"] == "ANSWERABLE"
-        assert result["answer"]
-        assert result["generation_mode"] == "extractive_fallback"
+        assert result["answer"] is None
+        assert result["generation_mode"] == "none"
         assert result["generation_called_this_request"] is True
         assert result["generation_reason_code"] == "PROVIDER_INVALID_RESPONSE"
         assert len(requests) == 2
-        assert (
-            harness.runtime.history.detail(result["trace_id"])["status"]
-            == "ANSWERED"
+        _assert_refused_state(
+            harness,
+            result,
+            "PROVIDER_UNAVAILABLE",
         )
     finally:
         harness.close()

@@ -309,6 +309,62 @@ def test_interpret_accepts_canonical_question_without_changing_scope(
     assert len(sent) == 1
 
 
+def test_interpret_refines_ambiguous_rule_semantics(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """口语动作问法由模型区分职责和资料用途。"""
+    model, request, sent, output = rewrite_model
+    question = "项目报备登记表干嘛的"
+    request = request.model_copy(update={"text": question})
+    output["content"] = _interpret_payload(
+        standalone_query=question,
+        target="项目报备登记表",
+        relation="作用",
+        answer_type="PURPOSE",
+    )
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.reason_code == "INTERPRET_APPLIED"
+    assert result.semantics is not None
+    assert result.semantics.answer_type is RequestedAnswerType.PURPOSE
+    assert len(sent) == 1
+
+
+def test_interpret_refines_generic_procedure_without_inventing_count(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """泛化流程规则允许模型纠正对象，但保留原始问句范围。"""
+    model, request, sent, output = rewrite_model
+    question = (
+        "我第一次接触开发中心的项目流程，想申请他们支持一个新项目，"
+        "应该从哪一步开始，后续通常怎么推进？"
+    )
+    request = request.model_copy(update={"text": question})
+    output["content"] = _interpret_payload(
+        standalone_query=question,
+        target="开发中心的项目流程",
+        relation="流程",
+        answer_type="PROCEDURE",
+    )
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.reason_code == "INTERPRET_APPLIED"
+    assert result.semantics is not None
+    assert result.semantics.target == "开发中心的项目流程"
+    assert result.semantics.expected_count is None
+    assert len(sent) == 1
+
+
+def test_product_grounded_model_accepts_full_bounded_evidence_prompt(
+    rewrite_model: RewriteFixture,
+) -> None:
+    model, _request, _sent, _output = rewrite_model
+
+    assert model.adapter.config.max_input_tokens == 16_384
+
+
 def test_invalid_interpret_json_records_the_one_dispatched_call(
     rewrite_model: RewriteFixture,
 ) -> None:

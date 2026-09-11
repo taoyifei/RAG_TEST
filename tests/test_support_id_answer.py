@@ -127,9 +127,7 @@ def _generator(handler: object) -> AnswerGenerator:
 
 
 def test_support_id_is_resolved_to_exact_quote_and_locator() -> None:
-    bundle = _bundle(
-        _ranked("chunk-1", "验收测试完成后输出《验收测试报告》。")
-    )
+    bundle = _bundle(_ranked("chunk-1", "验收测试完成后输出《验收测试报告》。"))
     support_id = bundle.units[0].unit_id
 
     result = _generator(
@@ -191,9 +189,7 @@ def test_valid_claim_is_published_when_another_support_id_is_invalid() -> None:
     ]
     assert result.model_calls == 1
     assert result.trace["dropped_claim_count"] == 1
-    assert result.trace["dropped_claim_codes"] == {
-        "INVALID_SUPPORT_ID": 1
-    }
+    assert result.trace["dropped_claim_codes"] == {"INVALID_SUPPORT_ID": 1}
 
 
 def test_missing_strong_anchors_return_friendly_not_found_without_llm() -> None:
@@ -263,16 +259,12 @@ def test_precise_source_id_cannot_be_satisfied_by_overlapping_title() -> None:
         rerank_scores=(1.0, 0.99),
     )
 
-    assert result.status is AnswerStatus.ANSWERED
-    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.status is AnswerStatus.REFUSED
+    assert result.answer_mode is AnswerMode.INTERNAL_VALIDATION_ERROR
+    assert result.refusal_code is RefusalCode.VALIDATION_FAILED
+    assert result.answer is None
     assert result.model_calls == 2
-    assert len(result.claims) == 1
-    assert result.claims[0].text == (
-        "成品检验人员应按检验规范实施质量检验。"
-    )
-    assert result.claims[0].supports[0].locator.startswith(
-        "GM-03 质量管理制度.docx"
-    )
+    assert result.claims == ()
 
 
 def test_answer_must_cover_every_explicit_source_id() -> None:
@@ -304,25 +296,17 @@ def test_answer_must_cover_every_explicit_source_id() -> None:
     }
 
     result = _generator(lambda _: _response(incomplete)).answer(
-        (
-            "GM-07《技术文件管理规定》和 GM-09《仓库管理制度》"
-            "有什么不同？"
-        ),
+        ("GM-07《技术文件管理规定》和 GM-09《仓库管理制度》有什么不同？"),
         bundle,
         rerank_scores=(1.0, 0.99),
     )
 
-    assert result.status is AnswerStatus.ANSWERED
-    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.status is AnswerStatus.REFUSED
+    assert result.answer_mode is AnswerMode.INTERNAL_VALIDATION_ERROR
+    assert result.refusal_code is RefusalCode.VALIDATION_FAILED
+    assert result.answer is None
     assert result.model_calls == 2
-    assert {
-        support.locator.split(" > ", maxsplit=1)[0]
-        for claim in result.claims
-        for support in claim.supports
-    } == {
-        "GM-07 技术文件管理规定.docx",
-        "GM-09 仓库管理制度.docx",
-    }
+    assert result.claims == ()
 
 
 def test_deliverables_preserve_source_and_actor_relationships() -> None:
@@ -344,9 +328,7 @@ def test_deliverables_preserve_source_and_actor_relationships() -> None:
     )
     first_id = bundle.units[0].unit_id
     second_id = next(
-        unit.unit_id
-        for unit in bundle.units
-        if unit.evidence_id == "E2"
+        unit.unit_id for unit in bundle.units if unit.evidence_id == "E2"
     )
 
     result = _generator(
@@ -354,9 +336,7 @@ def test_deliverables_preserve_source_and_actor_relationships() -> None:
             {
                 "claims": [
                     {
-                        "text": (
-                            "OPC规范由测试工程师输出《验收测试报告》。"
-                        ),
+                        "text": ("OPC规范由测试工程师输出《验收测试报告》。"),
                         "support_ids": [first_id],
                     },
                     {
@@ -419,17 +399,14 @@ def test_compare_and_decision_keep_each_claim_in_one_source_group(
     )
     first_id = bundle.units[0].unit_id
     second_id = next(
-        unit.unit_id
-        for unit in bundle.units
-        if unit.evidence_id == "E2"
+        unit.unit_id for unit in bundle.units if unit.evidence_id == "E2"
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         payload = json.loads(body["messages"][1]["content"])
         assert (
-            payload["question_profile"]["primary_operation"]
-            == expected_intent
+            payload["question_profile"]["primary_operation"] == expected_intent
         )
         prompt = body["messages"][0]["content"]
         assert "每个模式或来源单独输出一条 claim" in prompt
@@ -492,8 +469,7 @@ def test_final_support_quality_is_recorded_without_changing_selection() -> None:
     assert result.trace["low_rank_support_count"] == 1
 
 
-def test_supported_double_abstention_uses_matching_extractive_fallback(
-) -> None:
+def test_supported_double_abstention_refuses_without_rule_answer() -> None:
     calls = 0
     bundle = _bundle(
         _ranked(
@@ -514,11 +490,13 @@ def test_supported_double_abstention_uses_matching_extractive_fallback(
         rerank_scores=(1.0, 0.99),
     )
 
-    assert result.status is AnswerStatus.ANSWERED
-    assert result.answer_mode is AnswerMode.EXTRACTIVE_FALLBACK
+    assert result.status is AnswerStatus.REFUSED
+    assert result.answer_mode is AnswerMode.INTERNAL_VALIDATION_ERROR
+    assert result.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT
     assert result.model_calls == 2
-    assert result.trace["extractive_fallback"] is True
-    assert "需求变更应提交书面申请" in (result.answer or "")
+    assert result.answer is None
+    assert result.claims == ()
+    assert "extractive_fallback" not in result.trace
     assert calls == 2
 
 

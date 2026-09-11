@@ -135,7 +135,12 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         )
         assert before.status_code == 200, before.text
         before_payload = before.json()
-        assert before_payload["answer"]
+        assert before_payload["answer"] is None
+        assert before_payload["status"] == "POLICY_DENIED"
+        assert before_payload["generation_mode"] == "none"
+        assert before_payload["generation_reason_code"] == (
+            "CORPUS_AUTHORIZATION_MISSING"
+        )
         assert before_payload["generation_called_this_request"] is False
         assert (
             before_payload["data_plane"]["retrieval_data_plane"]
@@ -240,7 +245,12 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         )
         assert after.status_code == 200, after.text
         after_payload = after.json()
-        assert after_payload["answer"]
+        assert after_payload["answer"] is None
+        assert after_payload["status"] == "POLICY_DENIED"
+        assert after_payload["generation_mode"] == "none"
+        assert after_payload["generation_reason_code"] == (
+            "CORPUS_AUTHORIZATION_STALE_REVISION"
+        )
         assert after_payload["generation_called_this_request"] is False
         assert (
             after_payload["data_plane"]["corpus_authorization_state"]

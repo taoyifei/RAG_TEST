@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from rag_app.application.answering.service import ExtractiveAnsweringService
 from rag_app.core.errors import (
     ProviderInvalidResponse,
     QueryCancelled,
@@ -120,7 +119,7 @@ class GroundedOutcome:
     """供检索与历史真实记录的生成结果。"""
 
     answer: str | None
-    mode: Literal["llm", "extractive", "extractive_fallback", "none"]
+    mode: Literal["llm", "none"]
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str | None = None
     published_support_ids: tuple[str, ...] = ()
@@ -375,23 +374,19 @@ def validate_grounded_draft(
 
 
 class GroundedAnsweringService:
-    """生成不确定性只在合法证据内解决；失败回退保留真实原因。"""
+    """生成不确定性只在合法证据内解决；失败时保留原因并拒答。"""
 
-    def __init__(
-        self, generator: GeneratorPort, fallback: GeneratorPort
-    ) -> None:
-        """绑定生成器和经验证据摘录回退。
+    def __init__(self, generator: GeneratorPort) -> None:
+        """绑定最多执行初次生成与一次修复的生成器。
 
         Args:
             generator: 最多接收初次生成与一次修复请求的生成端口。
-            fallback: 生成失败后使用的证据摘录端口。
 
         Returns:
             无返回值。
 
         """
         self.generator = generator
-        self.fallback = ExtractiveAnsweringService(fallback)
 
     def answer(  # noqa: PLR0912, PLR0913, PLR0915
         self,
@@ -410,13 +405,13 @@ class GroundedAnsweringService:
             query: 用户的原始问题。
             evidence: 已通过资源和引用检查的有限资料。
             confidence: 检索置信状态，不允许越过硬性拒绝。
-            answer_support_set: 已直接支持所问关系的最小集合，供本地回退使用。
+            answer_support_set: 已直接支持所问关系的最小集合，供模型核验使用。
             analysis: 检索、Evidence 与回答共同消费的最终查询分析。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
         Returns:
-            已核验回答或回退结果，包含真实调用和终态原因。
+            已核验回答或明确拒答，包含真实调用和终态原因。
 
         """
         if not evidence or confidence.status not in {
@@ -432,7 +427,7 @@ class GroundedAnsweringService:
             )
         calls: list[ProviderCall] = []
         reason: str | None = None
-        fallback_evidence = (
+        direct_support = (
             evidence if answer_support_set is None else answer_support_set
         )
         for attempt in range(2):
@@ -447,7 +442,7 @@ class GroundedAnsweringService:
                     typed_semantics=(
                         None if analysis is None else analysis.semantics
                     ),
-                    answer_support_set=fallback_evidence,
+                    answer_support_set=direct_support,
                     model_evidence_candidates=evidence,
                 )
                 stream_generate = getattr(
@@ -571,20 +566,11 @@ class GroundedAnsweringService:
                 if published:
                     raise _partial_stream_error(calls) from error
                 reason = "GENERATION_OUTPUT_INVALID"
-        fallback_answer = self.fallback.answer(
-            query,
-            fallback_evidence,
-            confidence,
-            analysis=analysis,
-        )
         return GroundedOutcome(
-            fallback_answer,
-            "extractive_fallback" if fallback_answer else "none",
+            None,
+            "none",
             tuple(calls),
             reason,
-            tuple(item.evidence_id for item in fallback_evidence)
-            if fallback_answer
-            else (),
         )
 
 

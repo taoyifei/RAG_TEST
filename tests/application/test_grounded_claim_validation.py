@@ -413,9 +413,7 @@ def _supported_draft(
     )
 
 
-def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:
     evidence, invalid = _supported_draft(
         "甲部门保存 14 天。", "甲部门保存 4 天。"
     )
@@ -429,9 +427,7 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
     invalid = invalid.model_copy(update={"provider_calls": (call,)})
     generator = Mock()
     generator.generate.return_value = invalid
-    service = GroundedAnsweringService(generator, Mock())
-    fallback = Mock(return_value=None)
-    monkeypatch.setattr(service.fallback, "answer", fallback)
+    service = GroundedAnsweringService(generator)
     outcome = service.answer(
         "保存多久",
         evidence,
@@ -445,7 +441,9 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
         == "CLAIM_NUMBER_UNSUPPORTED"
     )
     assert len(outcome.calls) == 2
-    fallback.assert_called_once()
+    assert outcome.answer is None
+    assert outcome.mode == "none"
+    assert outcome.reason_code == "CLAIM_NUMBER_UNSUPPORTED"
 
 
 def _fact_analysis() -> QueryAnalysis:
@@ -525,12 +523,12 @@ def _abstained_draft() -> AnswerDraft:
         ),
     ),
 )
-def test_model_failures_use_structured_fallback_when_support_is_complete(
+def test_model_failures_refuse_even_when_support_is_complete(
     outcome: AnswerDraft | Exception,
     expected_reason: str,
     expected_calls: int,
 ) -> None:
-    """模型阻断或失败不能覆盖已经闭合的本地事实支持。"""
+    """模型阻断或失败时，完整本地支持也不能绕过真实生成。"""
     evidence = _verified_fact_evidence()
     assert evidence
     generator = Mock()
@@ -538,7 +536,7 @@ def test_model_failures_use_structured_fallback_when_support_is_complete(
         generator.generate.side_effect = outcome
     else:
         generator.generate.return_value = outcome
-    service = GroundedAnsweringService(generator, Mock())
+    service = GroundedAnsweringService(generator)
 
     result = service.answer(
         "合成设备的保管期限是多少？",
@@ -548,10 +546,10 @@ def test_model_failures_use_structured_fallback_when_support_is_complete(
         analysis=_fact_analysis(),
     )
 
-    assert result.mode == "extractive_fallback"
+    assert result.mode == "none"
     assert result.reason_code == expected_reason
-    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
-    assert result.published_support_ids == ("S1",)
+    assert result.answer is None
+    assert result.published_support_ids == ()
     assert generator.generate.call_count == expected_calls
     request = generator.generate.call_args_list[0].args[0]
     assert request.typed_semantics == _fact_analysis().semantics
@@ -571,7 +569,7 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
         stage="generation",
         code="PROVIDER_TIMEOUT",
     )
-    service = GroundedAnsweringService(generator, Mock())
+    service = GroundedAnsweringService(generator)
 
     result = service.answer(
         "合成设备的保管期限是多少？",
