@@ -20,6 +20,7 @@ from rag_app.core.models import (
     RerankRequest,
     RerankResult,
     RetrievalPolicy,
+    RrfContribution,
 )
 from rag_app.core.policies import EgressPolicy
 from tests.application.retrieval.helpers import make_ranked_chunk
@@ -38,9 +39,11 @@ class _Reranker:
         self.invalid = invalid
         self.equal = equal
         self.calls = 0
+        self.request: RerankRequest | None = None
 
     def rerank(self, request: RerankRequest) -> RerankResult:
         self.calls += 1
+        self.request = request
         count = max(0, request.limit - int(self.invalid))
         return RerankResult(
             mode=RerankExecutionMode.PROVIDER,
@@ -87,6 +90,53 @@ def test_reranker_returns_requested_limit_and_preserves_equal_order() -> None:
     assert [item.hydrated.chunk.chunk_id for item in outcome.candidates] == [
         item.hydrated.chunk.chunk_id for item in candidates[:3]
     ]
+
+
+def test_reranker_input_preserves_each_retrieval_family() -> None:
+    """重复的字面通道不能占满重排输入并挤掉 Dense 语义候选。"""
+    repeated = tuple(
+        make_ranked_chunk(index, f"lexical text {index}").model_copy(
+            update={
+                "contributions": (
+                    RrfContribution(
+                        channel="lexical:fts5:question_terms",
+                        rank=index,
+                        weight=1.0,
+                        contribution=1.0 / (60 + index),
+                    ),
+                    RrfContribution(
+                        channel="structural:canonical-v1",
+                        rank=index,
+                        weight=1.0,
+                        contribution=1.0 / (60 + index),
+                    ),
+                )
+            }
+        )
+        for index in range(1, 25)
+    )
+    dense = tuple(
+        make_ranked_chunk(
+            100 + index,
+            f"semantic text {index}",
+            channel="dense:primary",
+        )
+        for index in range(1, 9)
+    )
+    provider = _Reranker(equal=True)
+
+    CircuitAwareReranker(provider).rerank(
+        "申请支持新项目后如何推进",
+        (*repeated, *dense),
+        EgressPolicy(),
+        RetrievalPolicy(rerank_candidate_limit=24),
+        enabled=True,
+        result_limit=10,
+    )
+
+    assert provider.request is not None
+    reranked_ids = {item[0] for item in provider.request.candidates}
+    assert {item.hydrated.chunk.chunk_id for item in dense} <= reranked_ids
 
 
 def test_invalid_reranker_response_bypasses_without_zero_scores() -> None:

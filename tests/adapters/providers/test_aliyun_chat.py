@@ -402,24 +402,22 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         prompt = messages[0]["content"]
         assert "每条写明角色或对象的事实" in prompt
         assert "这两个ID的逐字quote" in prompt
+        assert "候选证据" in prompt
         content = json.loads(messages[1]["content"])
         assert content["typed_semantics"]["answer_type"] == "DUTIES"
-        assert content["answer_support_set"] == content["evidence"]
+        assert "answer_support_set" not in content
+        assert "model_evidence_candidates" not in content
         assert [item["support_id"] for item in content["evidence"]] == [
             "S1",
             "S2",
+            "S3",
         ]
-        assert [
-            item["support_id"] for item in content["model_evidence_candidates"]
-        ] == ["S3"]
         locations = [item["source_structure"] for item in content["evidence"]]
         assert locations[0]["document_version_id"] == "dver_" + "1" * 32
         assert locations[0]["table_locator"] == "public-table"
         assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
         assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"
-        candidate_location = content["model_evidence_candidates"][0][
-            "source_structure"
-        ]
+        candidate_location = content["evidence"][2]["source_structure"]
         assert candidate_location["anchors"][0]["structural_path"][2] == "tr:1"
         assert "CLAIM_OBJECT_CHANGED" in messages[2]["content"]
         assert len(requests) == 1

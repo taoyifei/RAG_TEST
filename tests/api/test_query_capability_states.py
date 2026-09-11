@@ -178,13 +178,10 @@ def _assert_refused_state(
 
 
 def _grounded_response(request: httpx.Request) -> httpx.Response:
-    """把最小支持集第一项原样返回为合法 claim。"""
+    """把候选证据第一项原样返回为合法 claim。"""
     request_payload = json.loads(request.content)
     grounded = json.loads(request_payload["messages"][1]["content"])
-    available = (
-        grounded["answer_support_set"] or grounded["model_evidence_candidates"]
-    )
-    evidence = available[0]
+    evidence = grounded["evidence"][0]
     return httpx.Response(
         200,
         json={
@@ -258,12 +255,12 @@ def test_llm_can_validate_candidate_separate_from_empty_support_set(
         assert len(requests) == 1
         provider_payload = json.loads(requests[0].content)
         grounded = json.loads(provider_payload["messages"][1]["content"])
-        assert grounded["answer_support_set"] == []
-        assert grounded["evidence"] == []
-        assert grounded["model_evidence_candidates"]
+        assert grounded["evidence"]
+        assert "answer_support_set" not in grounded
+        assert "model_evidence_candidates" not in grounded
         assert (
             result["evidence"][0]["evidence_id"]
-            == (grounded["model_evidence_candidates"][0]["support_id"])
+            == grounded["evidence"][0]["support_id"]
         )
     finally:
         harness.close()

@@ -374,7 +374,6 @@ class ProductGroundedModel:
             permitted_topic_terms = (
                 payload.target,
                 payload.source_qualifier or "",
-                payload.relation,
                 *(relation_spec[1] if relation_spec is not None else ()),
             )
             reason = interpretation_constraint_reason(
@@ -574,6 +573,7 @@ def _interpretation_semantics_reason(  # noqa: PLR0911
         or (
             payload.answer_type is not RequestedAnswerType.FACT
             and payload.relation not in relation_spec[1]
+            and not _surface_contains(available, payload.relation)
         )
     ):
         return "INTERPRET_RELATION_INVALID"

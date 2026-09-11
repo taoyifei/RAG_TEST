@@ -31,9 +31,7 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
             return httpx.Response(503, json={"error": {"code": "unavailable"}})
         payload = json.loads(request.content)
         data = json.loads(payload["messages"][1]["content"])
-        candidates = (
-            data["answer_support_set"] or data["model_evidence_candidates"]
-        )
+        candidates = data["evidence"]
         claims = []
         if "手机号" not in data["question"]:
             evidence = candidates[0]
@@ -146,8 +144,9 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
     assert refused["generation_called_this_request"] is True
     refused_payload = json.loads(requests[1].content)
     refused_input = json.loads(refused_payload["messages"][1]["content"])
-    assert refused_input["answer_support_set"] == []
-    assert refused_input["model_evidence_candidates"]
+    assert refused_input["evidence"]
+    assert "answer_support_set" not in refused_input
+    assert "model_evidence_candidates" not in refused_input
     failing = True
     failure = query("设备 MX-41 的维护周期是多少？")
     assert failure["status"] == "PROVIDER_UNAVAILABLE", failure
