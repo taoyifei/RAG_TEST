@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from qdrant_client.http import models
 
+import rag_app.adapters.stores.qdrant_vector as qdrant_vector_module
 from rag_app.adapters.stores import (
     MemoryRevisionVectorStore,
     QdrantRevisionVectorStore,
@@ -161,6 +163,69 @@ def test_qdrant_local_path_reopens_complete_named_vectors(
         }
     finally:
         reopened.close()
+
+
+def test_qdrant_upsert_splits_requests_by_serialized_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """完整 Point 总体过大时分批，且每批保持全部 named vectors。"""
+    spec = _spec()
+    points = tuple(
+        _point(spec, suffix, (0.5, 0.5)) for suffix in ("a", "b", "c")
+    )
+    first = points[0]
+    qdrant_point = models.PointStruct(
+        id=first.point_id,
+        vector={
+            name: list(vector) for name, vector in first.vector_map().items()
+        },
+        payload=first.payload.model_dump(mode="json"),
+    )
+    max_bytes = len(
+        models.PointsList(points=[qdrant_point])
+        .model_dump_json(exclude_none=True)
+        .encode("utf-8")
+    )
+    monkeypatch.setattr(
+        qdrant_vector_module,
+        "_MAX_UPSERT_BATCH_BYTES",
+        max_bytes,
+    )
+    batches: list[tuple[models.PointStruct, ...]] = []
+    store = QdrantRevisionVectorStore()
+    store.create_revision(spec)
+
+    def record_upsert(
+        *,
+        collection_name: str,
+        points: list[models.PointStruct],
+        wait: bool,
+    ) -> None:
+        assert collection_name == spec.physical_namespace
+        assert wait is True
+        batches.append(tuple(points))
+
+    monkeypatch.setattr(store._client, "upsert", record_upsert)
+    try:
+        store.upsert_complete_points(spec, points)
+    finally:
+        store.close()
+
+    assert [len(batch) for batch in batches] == [1, 1, 1]
+    assert all(
+        set(point.vector) == {"dense_primary", "dense_standby"}
+        for batch in batches
+        for point in batch
+    )
+    assert all(
+        len(
+            models.PointsList(points=list(batch))
+            .model_dump_json(exclude_none=True)
+            .encode("utf-8")
+        )
+        <= max_bytes
+        for batch in batches
+    )
 
 
 @pytest.mark.parametrize(

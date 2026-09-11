@@ -40,6 +40,9 @@ from rag_app.core.models import (
 )
 
 _MAX_SCROLL_PAGES = 100_000
+_MAX_UPSERT_BATCH_BYTES = 16 * 1024 * 1024
+_MAX_UPSERT_BATCH_POINTS = 256
+_POINTS_LIST_ENVELOPE_BYTES = len(b'{"points":[]}')
 
 
 class _QdrantRecord(Protocol):
@@ -138,7 +141,7 @@ class QdrantRevisionVectorStore:
         spec: RevisionVectorSpec,
         points: tuple[NamedVectorPoint, ...],
     ) -> None:
-        """一次 upsert 每个 Point 的全部 required vectors。
+        """每个 Point 一次写入全部 required vectors，并安全分批请求。
 
         Args:
             spec: 目标不可变 schema。
@@ -175,10 +178,10 @@ class QdrantRevisionVectorStore:
                     payload=point.payload.model_dump(mode="json"),
                 )
             )
-        if qdrant_points:
+        for batch in _partition_upsert_points(qdrant_points):
             self._client.upsert(
                 collection_name=spec.physical_namespace,
-                points=qdrant_points,
+                points=list(batch),
                 wait=True,
             )
 
@@ -657,6 +660,40 @@ def _safe_payload(value: object) -> VectorPointPayload | None:
         return VectorPointPayload.model_validate(value)
     except (TypeError, ValidationError, ValueError):
         return None
+
+
+def _partition_upsert_points(
+    points: list[models.PointStruct],
+) -> tuple[tuple[models.PointStruct, ...], ...]:
+    """按 Point 数与 JSON 字节上限预分批，避免 Qdrant 拒绝整批。"""
+    batches: list[tuple[models.PointStruct, ...]] = []
+    current: list[models.PointStruct] = []
+    current_bytes = _POINTS_LIST_ENVELOPE_BYTES
+    for point in points:
+        point_bytes = len(
+            point.model_dump_json(exclude_none=True).encode("utf-8")
+        )
+        if point_bytes + _POINTS_LIST_ENVELOPE_BYTES > _MAX_UPSERT_BATCH_BYTES:
+            raise IndexCompatibilityError(
+                "Qdrant 单个完整 Point 超过安全请求上限。",
+                stage="qdrant.upsert",
+            )
+        separator_bytes = 1 if current else 0
+        exceeds_batch = (
+            len(current) >= _MAX_UPSERT_BATCH_POINTS
+            or current_bytes + separator_bytes + point_bytes
+            > _MAX_UPSERT_BATCH_BYTES
+        )
+        if current and exceeds_batch:
+            batches.append(tuple(current))
+            current = []
+            current_bytes = _POINTS_LIST_ENVELOPE_BYTES
+            separator_bytes = 0
+        current.append(point)
+        current_bytes += separator_bytes + point_bytes
+    if current:
+        batches.append(tuple(current))
+    return tuple(batches)
 
 
 def _canonical_uuid(value: object) -> str | None:
