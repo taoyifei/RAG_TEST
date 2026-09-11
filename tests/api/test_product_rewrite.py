@@ -434,6 +434,17 @@ def test_invalid_interpret_json_records_the_one_dispatched_call(
             "INTERPRET_SCOPE_CHANGED",
         ),
         (
+            "版本都测完了，上线前还得把哪些东西准备齐？",
+            _interpret_payload(
+                standalone_query="版本都测完了，上线前还得把哪些东西准备齐？",
+                target="版本",
+                relation="项目",
+                answer_type="ENUMERATION",
+                source_qualifier="上线前",
+            ),
+            "INTERPRET_SCOPE_CHANGED",
+        ),
+        (
             "甲部门这块是怎么回事？",
             _interpret_payload(relation="未在问题中出现的动作"),
             "INTERPRET_RELATION_INVALID",

@@ -549,10 +549,7 @@ def _interpretation_semantics_reason(  # noqa: PLR0911
     ) or not _surface_contains(payload.standalone_query, payload.target):
         return "INTERPRET_SCOPE_CHANGED"
     original_source = analysis.semantics.source_qualifier
-    if (
-        original_source is not None
-        and payload.source_qualifier != original_source
-    ):
+    if payload.source_qualifier != original_source:
         return "INTERPRET_SCOPE_CHANGED"
     if payload.source_qualifier is not None and not _surface_contains(
         available, payload.source_qualifier
