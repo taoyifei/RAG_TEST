@@ -12,6 +12,7 @@ from rag_app.adapters.providers.budget_ledger import (
     ProviderBudgetLedger,
 )
 from rag_app.core.models import EmbeddingRequest, EmbeddingRequestRole
+from rag_app.core.tokenization import estimate_provider_input_tokens
 from tests.api.test_query_history import _upload
 from tests.product_support import (
     ProductHarness,
@@ -193,6 +194,46 @@ def test_retrieval_authorization_binds_current_corpus_profile_and_budget(
         assert stale.json()["reason_codes"] == [
             "RETRIEVAL_PROFILE_BINDING_CHANGED"
         ]
+    finally:
+        harness.close()
+
+
+def test_retrieval_estimate_uses_unique_provider_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """授权估算按实际 16 条 Provider 批次去重，不能沿用外层 32 条批次。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, jina_connection_id, _ = create_provider_connections(harness)
+        profile_id = _create_jina_profile(
+            harness, knowledge_base_id, jina_connection_id
+        )
+        store = harness.runtime.retrieval_authorizations
+        snapshot = store._snapshot(knowledge_base_id)
+        unique_texts = tuple(f"公开批次文本 {index}" for index in range(17))
+        embedding_texts = (*unique_texts, unique_texts[0])
+        monkeypatch.setattr(
+            store,
+            "_snapshot",
+            lambda _knowledge_base_id: {
+                **snapshot,
+                "embedding_texts": embedding_texts,
+            },
+        )
+
+        status = store.status(profile_id)
+
+        assert status.estimated_document_chunks == 18
+        assert status.estimated_document_requests_per_slot == 2
+        assert status.estimated_document_tokens_per_slot == sum(
+            estimate_provider_input_tokens(text) for text in unique_texts
+        )
     finally:
         harness.close()
 

@@ -15,7 +15,7 @@ import warnings
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -38,7 +38,10 @@ from rag_app.adapters.providers.transport_diagnostics import (
     transport_diagnostics,
 )
 from rag_app.core.identifiers import canonical_sha256
-from rag_app.core.tokenization import estimate_tokens
+from rag_app.core.tokenization import (
+    estimate_provider_input_tokens,
+    estimate_tokens,
+)
 
 
 @dataclass(frozen=True)
@@ -192,42 +195,9 @@ def provider_budget_fault(
         _LOCAL_BLOCKER.reset(token)
 
 
-def _binding(ledger_path: Path) -> _Binding | None:
-    explicit = _explicit_binding()
-    if explicit is not None:
-        selected = explicit.ledger.campaign(explicit.campaign_id)
-        if selected.scope_mode == "knowledge_base":
-            if explicit.ledger.path.resolve() != ledger_path.resolve():
-                raise BudgetBlockedError("ACTIVE_CAMPAIGN_BINDING_MISMATCH")
-            # 显式业务授权独立累计，不替换或扩大旧合成验收的活动范围。
-            return explicit
-    if not ledger_path.exists():
-        return explicit
-    reader = ProviderBudgetLedger(ledger_path, read_only=True)
-    campaign = reader.active_campaign()
-    if campaign is None:
-        return explicit
-    persistent = _Binding(
-        ProviderBudgetLedger(ledger_path),
-        campaign.campaign_id,
-        campaign.authorization_id,
-        campaign.scope,
-        "background",
-    )
-    if explicit is None:
-        return persistent
-    if (
-        explicit.ledger.path.resolve() != ledger_path.resolve()
-        or explicit.campaign_id != persistent.campaign_id
-        or explicit.authorization_id != persistent.authorization_id
-        or explicit.scope != persistent.scope
-    ):
-        raise BudgetBlockedError("ACTIVE_CAMPAIGN_BINDING_MISMATCH")
-    return replace(
-        persistent,
-        step_id=explicit.step_id,
-        local_blocker=explicit.local_blocker,
-    )
+def _binding(_ledger_path: Path) -> _Binding | None:
+    """只使用当前调用链显式建立的授权，不继承历史全局 Campaign。"""
+    return _explicit_binding()
 
 
 def _explicit_binding() -> _Binding | None:
@@ -423,6 +393,9 @@ class BudgetedTransport(httpx.BaseTransport):
             ) not in {httpx.MockTransport, BuiltinOfflineMockTransport}:
                 raise BudgetBlockedError("CHAT_AUTHORIZATION_REQUIRED")
             return self._transport.handle_request(request)
+        # 预算账本在原始 Transport 边界提取 Provider usage。要求 identity
+        # 编码可避免压缩字节被误判成未知 usage，业务响应仍由 httpx 正常读取。
+        request.headers["Accept-Encoding"] = "identity"
         descriptor = _request_descriptor(
             request,
             self._identity() if callable(self._identity) else self._identity,
@@ -709,6 +682,15 @@ def _request_descriptor(
     data_scope = _DATA_SCOPE.get()
     media_hashes = _submitted_media_hashes(payload) if chat else ()
     input_tokens = estimated_input_tokens(payload)
+    if data_scope is not None and operation in {
+        "embedding.document",
+        "embedding.query",
+        "reranking",
+    }:
+        input_tokens = sum(
+            estimate_provider_input_tokens(text)
+            for text in _request_texts(payload)
+        )
     output_tokens = _output_tokens(payload) if chat else 0
     return BudgetRequest(
         provider=provider,

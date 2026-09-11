@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -13,6 +12,7 @@ from typing import Literal, cast
 
 from pydantic import Field, StrictInt, model_validator
 
+from rag_app.adapters.providers.batching import BatchLimits, batch_texts
 from rag_app.adapters.providers.budget_ledger import (
     BudgetBlockedError,
     ProviderBudgetLedger,
@@ -26,6 +26,7 @@ from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.core.errors import RagError
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.tokenization import estimate_provider_input_tokens
 from rag_app.product.control_store import ProductControlStore
 from rag_app.product.models import RetrievalProfileRevision
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
@@ -47,7 +48,7 @@ ConnectionBudgetState = Literal["READY", "INSUFFICIENT", "BLOCKED"]
 
 _POLICY_REVISION = "retrieval-authorization-v1"
 _MAX_AUTHORIZATION_DAYS = 365
-_DOCUMENT_BATCH_SIZE = 32
+_DOCUMENT_PROVIDER_BATCH_ITEMS = 16
 
 
 class RetrievalAuthorizationApproval(FrozenModel):
@@ -525,9 +526,18 @@ class RetrievalAuthorizationStore:
             dict.fromkeys(binding[0] for binding in bindings)
         )
         chunks = cast(tuple[str, ...], snapshot["embedding_texts"])
-        requests_per_slot = math.ceil(len(chunks) / _DOCUMENT_BATCH_SIZE)
+        unique_chunks = tuple(dict.fromkeys(chunks))
+        requests_per_slot = len(
+            batch_texts(
+                unique_chunks,
+                BatchLimits(
+                    max_items=_DOCUMENT_PROVIDER_BATCH_ITEMS,
+                    max_input_tokens=32_768,
+                ),
+            )
+        )
         tokens_per_slot = sum(
-            max(1, len(text.encode("utf-8")) // 4) for text in chunks
+            estimate_provider_input_tokens(text) for text in unique_chunks
         )
         embedding_connections = tuple(
             item

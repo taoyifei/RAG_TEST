@@ -22,6 +22,7 @@ from rag_app.core.models import (
     content_sha256,
 )
 from rag_app.core.ports import EmbeddingCachePort, EmbeddingPort
+from rag_app.core.tokenization import estimate_provider_input_tokens
 
 
 class EmbeddingProgressPort(Protocol):
@@ -190,9 +191,10 @@ class DocumentEmbeddingService:
                 for chunk in chunks
             )
             cached = list(self._cache.get_many(identities))
-            missing = [
-                index for index, value in enumerate(cached) if value is None
-            ]
+            missing_groups = _missing_identity_groups(cached, identities)
+            # 相同正文可能出现在多个 Chunk。只发送一次相同 cache 身份，
+            # 避免远程模型的微小数值漂移触发同 key 不同向量冲突。
+            missing = [positions[0] for positions in missing_groups.values()]
             for index, record in enumerate(cached):
                 if record is not None:
                     self._progress.set_embedding_state(
@@ -210,7 +212,7 @@ class DocumentEmbeddingService:
                     chunks[index].embedding_text for index in positions
                 )
                 estimated_tokens = sum(
-                    max(1, len(text.encode("utf-8")) // 4) for text in texts
+                    estimate_provider_input_tokens(text) for text in texts
                 )
                 budget = budget.reserve(
                     requests=1,
@@ -234,16 +236,19 @@ class DocumentEmbeddingService:
                         else type(error).__name__
                     )
                     for index in positions:
-                        self._progress.set_embedding_state(
-                            revision_id,
-                            chunks[index].chunk_id,
-                            slot.slot_id,
-                            ChunkEmbeddingState.FAILED,
-                            cache_key=identities[index].persistent_key,
-                            attempt=attempt,
-                            error_code=code,
-                            retryable=retryable,
-                        )
+                        for duplicate_index in missing_groups[
+                            identities[index].persistent_key
+                        ]:
+                            self._progress.set_embedding_state(
+                                revision_id,
+                                chunks[duplicate_index].chunk_id,
+                                slot.slot_id,
+                                ChunkEmbeddingState.FAILED,
+                                cache_key=identities[index].persistent_key,
+                                attempt=attempt,
+                                error_code=code,
+                                retryable=retryable,
+                            )
                     self._record_usage(
                         job_id,
                         slot,
@@ -269,15 +274,18 @@ class DocumentEmbeddingService:
                 )
                 self._cache.put_many(records)
                 for index, record in zip(positions, records, strict=True):
-                    cached[index] = record
-                    self._progress.set_embedding_state(
-                        revision_id,
-                        chunks[index].chunk_id,
-                        slot.slot_id,
-                        ChunkEmbeddingState.EMBEDDED,
-                        cache_key=record.identity.persistent_key,
-                        attempt=attempt,
-                    )
+                    for duplicate_index in missing_groups[
+                        identities[index].persistent_key
+                    ]:
+                        cached[duplicate_index] = record
+                        self._progress.set_embedding_state(
+                            revision_id,
+                            chunks[duplicate_index].chunk_id,
+                            slot.slot_id,
+                            ChunkEmbeddingState.EMBEDDED,
+                            cache_key=record.identity.persistent_key,
+                            attempt=attempt,
+                        )
                 self._record_usage(
                     job_id,
                     slot,
@@ -328,6 +336,29 @@ def _cache_identity(
         role_policy_identity=canonical_sha256(slot.document_request_policy),
         text_sha256=content_sha256(chunk.embedding_text),
     )
+
+
+def _missing_identity_groups(
+    cached: Sequence[EmbeddingCacheRecord | None],
+    identities: Sequence[EmbeddingCacheIdentity],
+) -> dict[str, list[int]]:
+    """按 cache key 汇总尚未命中的位置并保持首次出现顺序。
+
+    Args:
+        cached: 与输入位置一一对应的 cache 结果。
+        identities: 与输入位置一一对应的 cache 身份。
+
+    Returns:
+        每个 missing cache key 对应的全部输入位置。
+
+    """
+    groups: dict[str, list[int]] = {}
+    for index, value in enumerate(cached):
+        if value is None:
+            groups.setdefault(identities[index].persistent_key, []).append(
+                index
+            )
+    return groups
 
 
 def _scope_id(

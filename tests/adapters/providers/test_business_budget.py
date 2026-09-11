@@ -36,6 +36,7 @@ from rag_app.adapters.providers.budget_transport import (
     provider_request_identity,
 )
 from rag_app.core.identifiers import canonical_sha256
+from rag_app.core.tokenization import estimate_provider_input_tokens
 
 _URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 _SOURCE = "1" * 64
@@ -376,6 +377,63 @@ def test_scoped_new_questions_do_not_replace_old_active_campaign(
             "SELECT configuration FROM provider_budget_campaigns"
         ).fetchall()
         assert all("允许的新问题" not in item[0] for item in configurations)
+
+
+def test_retrieval_scope_uses_billable_estimate_and_identity_encoding(
+    tmp_path: Path,
+) -> None:
+    """真实资料调用使用计费估算，并让账本可读取未压缩 usage。"""
+    url = "https://api.jina.ai/v1/embeddings"
+    model = "jina-embeddings-v5-text-small"
+    identity = provider_request_identity(url, model, _IDENTITY)
+    ledger = ProviderBudgetLedger(tmp_path / "budget.sqlite3")
+    ledger.create_campaign(
+        _campaign(
+            request_limit=1,
+            estimated_token_limit=100,
+            provider_request_limits={"jina": 1},
+            provider_token_limits={"jina": 100},
+            approved_request_identities=(identity,),
+            allowed_models=(model,),
+            allowed_operations=("embedding.document",),
+            operation_request_limits={"embedding.document": 1},
+        )
+    )
+    texts = ("中文资料", "English retrieval text")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Accept-Encoding"] == "identity"
+        return httpx.Response(200, json={"usage": {"total_tokens": 17}})
+
+    with (
+        httpx.Client(
+            transport=BudgetedTransport(
+                httpx.MockTransport(handler),
+                ledger_path=ledger.path,
+                identity=_IDENTITY,
+            )
+        ) as client,
+        provider_budget_scope(
+            ledger,
+            campaign_id="kb-test",
+            authorization_id="approved-test",
+            scope="kb-scope",
+            step_id="retrieval.build",
+        ),
+        provider_data_scope(
+            project_id="project-1",
+            knowledge_base_id="kb-1",
+            source_hashes=(_SOURCE,),
+        ),
+    ):
+        response = client.post(url, json={"model": model, "input": texts})
+        response.raise_for_status()
+
+    attempt = ledger.attempts("kb-test")[0]
+    assert attempt["estimated_input_tokens"] == sum(
+        estimate_provider_input_tokens(text) for text in texts
+    )
+    assert attempt["observed_tokens"] == 17
 
 
 def test_real_transport_without_authorization_is_blocked_before_network(
