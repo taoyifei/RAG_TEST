@@ -51,10 +51,10 @@ test("默认 Product Trace 支持诊断、惰性 Artifact、导出与关联导�
     generation_mode: string;
     data_plane: { retrieval_data_plane: string };
   };
-  expect(result.status).toBe("ANSWERABLE");
-  expect(result.answer).toContain("14 天");
+  expect(result.status).toBe("CONFIGURATION_REQUIRED");
+  expect(result.answer).toBeNull();
   expect(result.requested_answer_type).toBe("FACT");
-  expect(result.generation_mode).toBe("extractive");
+  expect(result.generation_mode).toBe("none");
   expect(result.data_plane.retrieval_data_plane).toBe("default_local_fallback");
   const traceUrl = new URL(scopeUrl);
   traceUrl.pathname = "/operational-traces";
@@ -153,9 +153,12 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
   const firstConversationId = await conversation.locator("code").innerText();
   await page.getByLabel("查询文本").fill("设备 TR-21 的维护周期是多少？");
   await page.getByRole("button", { name: "执行", exact: true }).click();
-  await expect(page.getByRole("region", { name: "正式答案" })).toContainText(
-    "14 天",
-  );
+  await expect(
+    page.getByText(/回答模型尚未完成配置/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "正式答案" }),
+  ).toHaveCount(0);
   const traceCode = page
     .locator("code")
     .filter({ hasText: /^trace_[0-9a-f]{32}$/ });
@@ -171,7 +174,7 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
     .getByRole("button", { name: "清空当前会话", exact: true })
     .click();
   await expect(conversation.getByRole("status")).toHaveText(
-    "已清空当前会话的 1 轮。",
+    "当前会话没有已保存轮次。",
   );
   await conversation.getByRole("button", { name: "新会话" }).click();
   await expect(conversation.locator("code")).not.toHaveText(
@@ -180,9 +183,12 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
 
   await page.getByLabel("查询文本").fill("请再次核对 TR-21 的维护周期。");
   await page.getByRole("button", { name: "执行", exact: true }).click();
-  await expect(page.getByRole("region", { name: "正式答案" })).toContainText(
-    "14 天",
-  );
+  await expect(
+    page.getByText(/回答模型尚未完成配置/),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "正式答案" }),
+  ).toHaveCount(0);
   await expect(traceCode).toHaveCount(1);
   const secondaryTraceId = (await traceCode.textContent()) ?? "";
   expect(secondaryTraceId).toMatch(/^trace_[0-9a-f]{32}$/);
@@ -242,6 +248,7 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
   );
   expect(body.body_included).toBe(true);
   expect(body.question).toBe("设备 TR-21 的维护周期是多少？");
+  expect(body.answer).toBeNull();
   expect(JSON.stringify(body)).toContain("14 天");
 
   await primaryRow.getByRole("button", { name: "查看详情与过程" }).click();

@@ -538,15 +538,17 @@ class RetrievalAuthorizationStore:
         )
         chunks = cast(tuple[str, ...], snapshot["embedding_texts"])
         unique_chunks = tuple(dict.fromkeys(chunks))
-        requests_per_slot = len(
-            batch_texts(
-                unique_chunks,
-                BatchLimits(
-                    max_items=_DOCUMENT_PROVIDER_BATCH_ITEMS,
-                    max_input_tokens=32_768,
-                ),
+        requests_per_slot = 0
+        if unique_chunks:
+            requests_per_slot = len(
+                batch_texts(
+                    unique_chunks,
+                    BatchLimits(
+                        max_items=_DOCUMENT_PROVIDER_BATCH_ITEMS,
+                        max_input_tokens=32_768,
+                    ),
+                )
             )
-        )
         tokens_per_slot = sum(
             estimate_provider_input_tokens(text) for text in unique_chunks
         )
@@ -646,11 +648,27 @@ class RetrievalAuthorizationStore:
                 "WHERE knowledge_base_id=? AND deleted_at IS NULL",
                 (knowledge_base_id,),
             ).fetchone()
-            if (
-                knowledge_base is None
-                or knowledge_base["active_revision_id"] is None
-            ):
-                raise ValueError("知识库尚无活动 Index Revision。")
+            if knowledge_base is None:
+                raise ValueError("知识库不存在或已删除。")
+            if knowledge_base["active_revision_id"] is None:
+                active_document = connection.execute(
+                    "SELECT 1 FROM documents WHERE knowledge_base_id=? "
+                    "AND status='active' AND deleted_at IS NULL LIMIT 1",
+                    (knowledge_base_id,),
+                ).fetchone()
+                if active_document is not None:
+                    raise ValueError("知识库尚无活动 Index Revision。")
+                return {
+                    "project_id": str(knowledge_base["project_id"]),
+                    "active_index_revision_id": None,
+                    "active_document_count": 0,
+                    "active_document_digest": canonical_sha256(
+                        {"active_document_content_hashes": ()}
+                    ),
+                    "source_hashes": (),
+                    "index_aligned": True,
+                    "embedding_texts": (),
+                }
             revision_id = str(knowledge_base["active_revision_id"])
             revision = connection.execute(
                 "SELECT state FROM index_revisions WHERE index_revision_id=? "

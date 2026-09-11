@@ -15,7 +15,7 @@ async function navigate(page: Page, name: string) {
   await button.click();
 }
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
 import { createServer, type ServerResponse } from "node:http";
 import type { ChunkPage, QueryResponse } from "../src/api/client";
@@ -261,25 +261,6 @@ async function uploadAndWait(page: Page, name: string, content: string) {
   });
 }
 
-async function validateConnection(
-  page: Page,
-  connection: Locator,
-  buttonName: string,
-) {
-  const validationResponse = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().includes("/api/v1/provider-connections/") &&
-      response.url().endsWith(":validate"),
-  );
-  await connection.getByRole("button", { name: buttonName }).click();
-  await page.getByRole("button", { name: "开始测试", exact: true }).click();
-  const response = await validationResponse;
-  expect(response.ok()).toBeTruthy();
-  const payload = (await response.json()) as { status: string };
-  expect(payload.status).toBe("succeeded");
-}
-
 async function configureModelServices(page: Page) {
   await page.getByRole("button", { name: "模型服务" }).click();
   await page.getByRole("button", { name: "新增连接" }).click();
@@ -287,10 +268,6 @@ async function configureModelServices(page: Page) {
     .getByLabel("服务密钥", { exact: true })
     .fill("synthetic-jina-browser-value");
   await page.getByRole("button", { name: "保存连接" }).click();
-  const jina = page.getByRole("article").filter({ hasText: "Jina 主连接" });
-  await validateConnection(page, jina, "测试文档向量");
-  await validateConnection(page, jina, "测试查询向量");
-  await validateConnection(page, jina, "测试结果重排");
 
   await page.getByRole("button", { name: "新增连接" }).click();
   await page.getByLabel("服务商").selectOption("aliyun-model-studio");
@@ -302,9 +279,6 @@ async function configureModelServices(page: Page) {
     .getByLabel("API Host", { exact: true })
     .fill("https://llm-syntheticworkspace.cn-beijing.maas.aliyuncs.com");
   await page.getByRole("button", { name: "保存连接" }).click();
-  const aliyun = page.getByRole("article").filter({ hasText: "百炼备用连接" });
-  await validateConnection(page, aliyun, "测试文档向量");
-  await validateConnection(page, aliyun, "测试查询向量");
 }
 
 async function createRetrievalProfile(page: Page, instruction = "") {
@@ -368,6 +342,21 @@ test("真实浏览器流式显示、停止与知识库切换保持隔离", async
   });
   expect(baselineResponse.ok(), await baselineResponse.text()).toBeTruthy();
   const baseline = (await baselineResponse.json()) as QueryResponse;
+  expect(baseline.status).toBe("CONFIGURATION_REQUIRED");
+  expect(baseline.answer).toBeNull();
+  const modelFinal: QueryResponse = {
+    ...baseline,
+    status: "ANSWERABLE",
+    reason_code: "ANSWERED",
+    answer: "公开合成模型答案 [S1]",
+    generation_mode: "llm",
+    generation_reason_code: null,
+    generation_called_this_request: true,
+    confidence: {
+      ...baseline.confidence,
+      status: "ANSWERABLE",
+    },
+  };
 
   const responses = new Map<number, ServerResponse>();
   const openedResolvers = new Map<
@@ -476,7 +465,7 @@ test("真实浏览器流式显示、停止与知识库切换保持隔离", async
     ).toContainText("首条已核验浏览器事实");
     firstResponse?.end(
       frame("final", {
-        ...baseline,
+        ...modelFinal,
         type: "final",
         protocol: "rag-answer-sse-v1",
         sequence: 3,
@@ -528,6 +517,11 @@ test("真实离线 DOCX 到中文 FTS V2 Evidence 流程", async ({
   await createScope(page, `${testInfo.project.name}-${Date.now()}`);
   await createRetrievalProfile(page);
   await expect(page.getByText("需要构建新索引版本")).toBeVisible();
+  await page.getByRole("button", { name: "验证方案所用参数" }).click();
+  await page.getByRole("button", { name: "开始测试", exact: true }).click();
+  await expect(
+    page.getByText("方案参数连接验证通过；检索质量仍需独立验证。"),
+  ).toBeVisible();
   const applied = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
