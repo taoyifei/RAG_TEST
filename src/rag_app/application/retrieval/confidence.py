@@ -256,8 +256,6 @@ def _qualified_support(
             "support_reason"
         ) not in {
             "LINKED_SUBJECT_ATTRIBUTE",
-            "TABLE_ROW_ATTRIBUTE",
-            "TABLE_ROW_RECORD",
             "SECTION_STAGE_SET",
             "STRUCTURED_LIST_RELATION",
             "SOURCE_CORRECTS_COUNT_PREMISE",

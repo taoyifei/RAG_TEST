@@ -442,7 +442,7 @@ class BaseResultCacheKey(FrozenModel):
     cache_schema: StrictInt = Field(gt=0)
     limit: StrictInt = Field(default=10, gt=0, le=50)
     dense_required: bool = False
-    generation_behavior: str = Field(default="extractive", min_length=1)
+    generation_behavior: str = Field(default="model_required", min_length=1)
     include_related_content: bool = False
     related_policy_version: str = "1"
 

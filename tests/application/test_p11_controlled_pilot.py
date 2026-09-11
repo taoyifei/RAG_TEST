@@ -25,12 +25,12 @@ from evaluation.v2.models import (
     FixtureVersion,
 )
 from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
-from rag_app.application.answering.service import ExtractiveAnsweringService
 from rag_app.application.retrieval import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
+    ConfidenceStatus,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
     QueryKind,
@@ -151,13 +151,13 @@ def _candidate() -> RankedChunk:
     ).model_copy(update={"rerank_rank": 1, "rerank_score": 0.95})
 
 
-def _answer(
+def _has_answer_support(
     scenario: _Scenario,
     policy: RetrievalPolicy,
     vector: str | None,
     *,
     candidates: tuple[RankedChunk, ...] | None = None,
-) -> str | None:
+) -> bool:
     scope = KnowledgeBaseScope(
         project_id=scenario.project_id,
         knowledge_base_id=scenario.profile.knowledge_base_id,
@@ -186,13 +186,7 @@ def _answer(
         rerank_mode="provider",
         selected_vector_space=vector,
     )
-    persistence = scenario.harness.runtime.p09.retrieval_runtime.persistence
-    generator = persistence.components.generator
-    return ExtractiveAnsweringService(generator).answer(
-        "低温时如何保护设备",
-        evidence,
-        decision,
-    )
+    return bool(evidence) and decision.status is ConfidenceStatus.ANSWERABLE
 
 
 def test_scoped_calibration_allows_citation_without_marking_quality_pass(
@@ -201,20 +195,17 @@ def test_scoped_calibration_allows_citation_without_marking_quality_pass(
     runtime = scenario.harness.runtime
     resolver = runtime.profiles
     ordinary = resolver._resolve(scenario.profile)
-    assert _answer(scenario, ordinary.retrieval._policy, None) is None
+    assert not _has_answer_support(scenario, ordinary.retrieval._policy, None)
     with _scope(scenario):
         controlled = resolver._resolve(scenario.profile)
         policy = controlled.retrieval._policy
         assert policy.dense_semantic_calibration_state == "CONTROLLED_TEST_ONLY"
         assert len(policy.dense_calibrated_vector_spaces) == 2
-        assert _answer(
+        assert _has_answer_support(
             scenario, policy, policy.dense_calibrated_vector_spaces[0]
         )
-        assert (
-            _answer(
-                scenario, policy, "primary:another-provider:model:1024:l2-v1:1"
-            )
-            is None
+        assert not _has_answer_support(
+            scenario, policy, "primary:another-provider:model:1024:l2-v1:1"
         )
         assert (
             runtime.control.quality.states(scenario.profile.profile_revision_id)
@@ -498,14 +489,14 @@ def test_controlled_admission_keeps_evidence_rank_and_span_requirements(
             scenario.profile
         )[0]
         vector = policy.dense_calibrated_vector_spaces[0]
-        assert _answer(scenario, policy, vector, candidates=()) is None
+        assert not _has_answer_support(scenario, policy, vector, candidates=())
         irrelevant = make_ranked_chunk(
             1,
             "前台午间领取快递。",
             channel="dense:primary",
         ).model_copy(update={"rerank_rank": 50, "rerank_score": 0.01})
-        assert (
-            _answer(scenario, policy, vector, candidates=(irrelevant,)) is None
+        assert not _has_answer_support(
+            scenario, policy, vector, candidates=(irrelevant,)
         )
         candidate = _candidate()
         chunk = candidate.hydrated.chunk
@@ -524,8 +515,8 @@ def test_controlled_admission_keeps_evidence_rank_and_span_requirements(
                 )
             }
         )
-        assert (
-            _answer(scenario, policy, vector, candidates=(candidate,)) is None
+        assert not _has_answer_support(
+            scenario, policy, vector, candidates=(candidate,)
         )
 
 

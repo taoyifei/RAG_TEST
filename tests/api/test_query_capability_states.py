@@ -269,11 +269,11 @@ def test_llm_can_validate_candidate_separate_from_empty_support_set(
         harness.close()
 
 
-def test_local_answer_and_incomplete_candidate_report_configuration_and_policy(
+def test_queries_without_available_model_report_configuration_and_policy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """本地可答保持 ANSWERED；不可答时区分未配置和资料未批准。"""
+    """没有真实回答模型时拒答，并区分未配置和资料未批准。"""
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
     requests: list[httpx.Request] = []
 

@@ -320,7 +320,7 @@ def test_all_corpus_operations_keep_a_stable_binding_identity(
 def test_local_data_plane_is_persisted_in_history_and_safe_trace(
     tmp_path: Path,
 ) -> None:
-    """响应、History 和 SAFE Trace 共享同一份非敏感数据面真相。"""
+    """本地检索仍留痕，但没有模型时不得发布规则答案。"""
     harness = build_product_harness(tmp_path)
     try:
         project_id, knowledge_base_id = create_project_and_knowledge_base(
@@ -335,6 +335,9 @@ def test_local_data_plane_is_persisted_in_history_and_safe_trace(
         )
         assert response.status_code == 200, response.text
         payload = response.json()
+        assert payload["status"] == "CONFIGURATION_REQUIRED"
+        assert payload["answer"] is None
+        assert payload["generation_mode"] == "none"
         data_plane = payload["data_plane"]
         assert data_plane["retrieval_data_plane"] == "default_local_fallback"
         assert data_plane["embedding_provider_id"] == "deterministic"
@@ -373,6 +376,6 @@ def test_local_data_plane_is_persisted_in_history_and_safe_trace(
         final = next(
             item for item in trace.spans if item.name == "query.final_status"
         )
-        assert dict(final.attributes)["answer_published"] is True
+        assert dict(final.attributes)["answer_published"] is False
     finally:
         harness.close()

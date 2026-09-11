@@ -161,7 +161,7 @@ def test_temperature_language_still_requires_citable_spans() -> None:
     )
 
 
-def test_product_retrieves_english_recognized_text_for_chinese_temperature(
+def test_product_retrieves_english_text_but_requires_answer_model(
     tmp_path: Path,
 ) -> None:
     """覆盖识别文字进入文档后的真实索引与检索，不模拟 OCR 质量。"""
@@ -188,9 +188,9 @@ def test_product_retrieves_english_recognized_text_for_chinese_temperature(
         )
         assert response.status_code == 200, response.text
         result = response.json()
-        assert result["status"] == "ANSWERABLE", result
-        assert result["generation_mode"] == "extractive"
-        assert original in result["answer"]
+        assert result["status"] == "CONFIGURATION_REQUIRED", result
+        assert result["generation_mode"] == "none"
+        assert result["answer"] is None
         assert result["evidence"][0]["citation_text"] == original
         assert result["diagnostics_summary"]["provider_call_count"] == 0
     finally:

@@ -24,12 +24,27 @@ from rag_app.core.models import (
     RetrievalPolicy,
     SearchRequest,
 )
+from rag_app.core.ports import GenerationRequest
 from tests.adapters.parsers.docx_fixtures import TABLE, build_docx
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def test_legacy_extractive_generator_is_disabled() -> None:
+    """旧 Profile 占位不得直接把 Evidence 文本发布成答案。"""
+    with pytest.raises(ProviderUnavailable) as captured:
+        ExtractiveGenerator().generate(
+            GenerationRequest(
+                query="公开合成问题",
+                evidence=(),
+                citation_protocol="support-id-v1-claims",
+            )
+        )
+
+    assert captured.value.code == "GENERATOR_NOT_CONFIGURED"
 
 
 def _build_active_revision(data_dir: Path) -> tuple[str, str, str]:
@@ -71,7 +86,7 @@ def _build_active_revision(data_dir: Path) -> tuple[str, str, str]:
     return project_id, knowledge_base_id, result.revision_id
 
 
-def test_p07_offline_reopen_search_answer_cache_and_refusal(
+def test_p07_offline_reopen_retrieves_but_requires_answer_model(
     tmp_path: Path,
 ) -> None:
     project_id, knowledge_base_id, revision_id = _build_active_revision(
@@ -97,21 +112,23 @@ def test_p07_offline_reopen_search_answer_cache_and_refusal(
         trace_sink = runtime.persistence.components.trace_sink
         trace_events = trace_sink.events(first.trace_id)
 
-    assert first.status is ConfidenceStatus.ANSWERABLE
+    assert first.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert first.active_index_revision_id == revision_id
     assert first.selected_embedding_slot == "primary"
     assert first.selected_vector_name == "dense_primary"
-    assert first.generation_mode == "extractive"
-    assert first.answer
+    assert first.generation_mode == "none"
+    assert first.generation_reason_code == "GENERATOR_NOT_CONFIGURED"
+    assert first.answer is None
     assert first.evidence
     assert all(item.support_id.startswith("S") for item in first.evidence)
     assert second.cache_key == first.cache_key
     assert second.trace_id != first.trace_id
-    assert exact.status is ConfidenceStatus.ANSWERABLE
+    assert second.cache_hit is False
+    assert exact.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert exact.query_kind.value == "exact_identifier"
     assert any("exact" in item.retrieval_origins for item in exact.evidence)
     assert malicious_fts.reason_code
-    assert refused.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert refused.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert refused.answer is None
     assert refused.generation_mode == "none"
     serialized_trace = "".join(
@@ -237,7 +254,7 @@ def test_lexical_and_dense_failures_degrade_without_false_answer(
         lexical_failed = runtime.retrieval.search_and_answer(
             SearchRequest(scope=scope, text="A B")
         )
-    assert lexical_failed.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert lexical_failed.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert any(
         reason == "CHANNEL_UNAVAILABLE"
         for reason in lexical_failed.degraded_reason_codes
@@ -254,12 +271,12 @@ def test_lexical_and_dense_failures_degrade_without_false_answer(
         dense_failed = runtime.retrieval.search_and_answer(
             SearchRequest(scope=scope, text="A B")
         )
-    assert dense_failed.status is ConfidenceStatus.ANSWERABLE
+    assert dense_failed.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert "DENSE_UNAVAILABLE" in dense_failed.degraded_reason_codes
     assert dense_failed.selected_embedding_slot is None
 
 
-def test_reranker_failure_and_legacy_generator_bypass_are_distinct(
+def test_reranker_failure_and_legacy_generator_cannot_publish_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_id, knowledge_base_id, _ = _build_active_revision(tmp_path)
@@ -277,7 +294,7 @@ def test_reranker_failure_and_legacy_generator_bypass_are_distinct(
         rerank_failed = runtime.retrieval.search_and_answer(
             SearchRequest(scope=scope, text="A B")
         )
-    assert rerank_failed.status is ConfidenceStatus.ANSWERABLE
+    assert rerank_failed.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert rerank_failed.rerank_execution_mode == (
         "rerank_bypassed_provider_unavailable"
     )
@@ -288,11 +305,15 @@ def test_reranker_failure_and_legacy_generator_bypass_are_distinct(
         generation_failed = runtime.retrieval.search_and_answer(
             SearchRequest(scope=scope, text="A B")
         )
-    assert generation_failed.status is ConfidenceStatus.ANSWERABLE
-    assert generation_failed.answer is not None
-    assert generation_failed.generation_mode == "extractive"
-    assert generation_failed.generation_reason_code == "STRUCTURED_RENDERED"
-    assert generation_failed.degraded_reason_codes == ()
+    assert generation_failed.status is ConfidenceStatus.CONFIGURATION_REQUIRED
+    assert generation_failed.answer is None
+    assert generation_failed.generation_mode == "none"
+    assert (
+        generation_failed.generation_reason_code == "GENERATOR_NOT_CONFIGURED"
+    )
+    assert generation_failed.degraded_reason_codes == (
+        "GENERATOR_NOT_CONFIGURED",
+    )
 
 
 def test_active_pointer_state_drift_is_index_corrupt(tmp_path: Path) -> None:

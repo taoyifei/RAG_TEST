@@ -20,8 +20,6 @@ from evaluation.p11_pilot import evaluate_pilot
 from evaluation.p11_pilot_data import load_pilot_dataset
 from evaluation.v2.models import SourceRangeExpectation
 from evaluation.v2.observations import ObservationContext, observe_case_result
-from rag_app.adapters.legacy.providers import ExtractiveGenerator
-from rag_app.application.answering.service import ExtractiveAnsweringService
 from rag_app.application.retrieval import evidence as evidence_module
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.answer_support import AnswerSupport
@@ -32,6 +30,7 @@ from rag_app.application.retrieval.related import select_related_contents
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     Chunk,
+    ConfidenceStatus,
     DiagnosticExpansionItem,
     DiagnosticRerankItem,
     EvidenceSelectionContext,
@@ -436,9 +435,17 @@ def _run_replay(  # noqa: PLR0915
                 rerank_mode=old["rerank_mode"],
                 selected_vector_space=vector_space,
             )
-            answer = ExtractiveAnsweringService(ExtractiveGenerator()).answer(
-                case.query, evidence, confidence
+            confidence = confidence.model_copy(
+                update={
+                    "status": ConfidenceStatus.CONFIGURATION_REQUIRED,
+                    "score": 0.0,
+                    "reason_codes": (
+                        *confidence.reason_codes,
+                        "GENERATOR_NOT_CONFIGURED",
+                    ),
+                }
             )
+            answer = None
             diagnostics = RetrievalDiagnostics(
                 channel_chunk_ids=old["channel_chunk_ids"],
                 fused_chunk_ids=old["fused_chunk_ids"],
@@ -487,7 +494,8 @@ def _run_replay(  # noqa: PLR0915
                 selected_vector_name=old["selected_vector_name"],
                 route_reason_code=old["route_reason_code"],
                 rerank_execution_mode=old["rerank_mode"],
-                generation_mode="extractive" if answer else "none",
+                generation_mode="none",
+                generation_reason_code="GENERATOR_NOT_CONFIGURED",
                 cache_key="sha256:" + "0" * 64,
                 diagnostics=diagnostics,
             )

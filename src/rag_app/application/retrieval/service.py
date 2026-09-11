@@ -1,4 +1,4 @@
-"""P07 Active Snapshot 到 extractive answer 的统一同步路由。"""
+"""P07 Active Snapshot 到模型证据回答的统一同步路由。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Literal
 
-from rag_app.application.answering import ExtractiveAnsweringService
 from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
@@ -184,8 +183,7 @@ class RetrievalService:
         self._dense = DenseChannel(query_embedding, vector_store)
         self._reranker = CircuitAwareReranker(reranker)
         reranker_descriptor = reranker.descriptor
-        self._answering = ExtractiveAnsweringService(generator)
-        self._generator = generator
+        self._default_generator_descriptor = generator.descriptor
         self._grounded: GroundedAnsweringService | None = None
         self._interpreter: QueryInterpretPort | None = None
         self._rewriter: QueryRewritePort | None = None
@@ -195,7 +193,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-grounded-answer-v5",
+                "retrieval_implementation": "v3-07-grounded-answer-v6",
             }
         )
         self._egress = egress_policy
@@ -266,7 +264,7 @@ class RetrievalService:
         configured._interpreter = interpreter
         configured._rewriter = rewriter
         descriptor = getattr(
-            generator, "descriptor", self._generator.descriptor
+            generator, "descriptor", self._default_generator_descriptor
         )
         configured._data_plane_context = replace(
             self._data_plane_context,
@@ -342,7 +340,7 @@ class RetrievalService:
                 已交付后。
 
         Returns:
-            实际 route/rerank、证据、置信和 extractive answer。
+            实际 route/rerank、证据、置信和模型回答或明确拒答。
 
         Raises:
             IndexNotReady: 没有 Active Revision。
@@ -974,29 +972,16 @@ class RetrievalService:
                 _emit_stage(
                     on_stage,
                     "generation",
-                    {"mode": "final_only"},
+                    {"mode": "model_required"},
                     provider_calls,
                 )
-                if _remote_generation_configured(self._data_plane_context):
-                    # 远程模型已配置却未挂载时必须明确拒答，不能用本地规则
-                    # 生成一份看似成功、实际未经模型读取候选的答案。
-                    answer = None
-                    generation_reason = _generation_unavailable_reason(
-                        self._data_plane_context
-                    )
-                    degraded.append(generation_reason)
-                else:
-                    answer = self._answering.answer(
-                        effective_analysis.original_query,
-                        evidence,
-                        confidence,
-                        analysis=effective_analysis,
-                    )
-                    generation_mode = (
-                        "extractive" if answer is not None else "none"
-                    )
-                    if answer is not None:
-                        generation_reason = "STRUCTURED_RENDERED"
+                # 正常查询必须由模型实际读取本次候选。未挂载模型时明确
+                # 拒答，不能调用确定性表格或摘录 renderer 代替生成。
+                answer = None
+                generation_reason = _generation_unavailable_reason(
+                    self._data_plane_context
+                )
+                degraded.append(generation_reason)
         except QueryCancelled as error:
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
@@ -1004,8 +989,8 @@ class RetrievalService:
             raise
         except ValidationFailed as error:
             # 模型输出校验已在 GroundedAnsweringService 内完成修复；
-            # 这里逸出的 ValidationFailed 代表本地 renderer/最终发布合同损坏，
-            # 不能伪装成远程 Provider 不可用。
+            # 这里逸出的 ValidationFailed 代表最终发布合同损坏，不能
+            # 伪装成远程 Provider 不可用。
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except (RagError, ValueError) as error:
@@ -1021,21 +1006,7 @@ class RetrievalService:
                 }
             )
             answer = None
-        model_was_required = (
-            self._grounded is not None
-            or _remote_generation_configured(self._data_plane_context)
-        )
-        capability_projection_required = (
-            not evidence
-            and any(
-                _diagnostic_support_status(item) in {"UNCERTAIN", "UNSUPPORTED"}
-                for item in model_evidence_candidates
-            )
-            and confidence.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
-        )
-        if answer is None and (
-            model_was_required or capability_projection_required
-        ):
+        if answer is None:
             blocked_status = _model_capability_status(
                 self._data_plane_context,
                 generation_reason,
@@ -1431,7 +1402,7 @@ class RetrievalService:
                 "semantic_policy": "shared-query-semantics-v3-07",
                 "rewrite_policy": "bounded-rewrite-v3",
                 "answer_support_policy": "minimum-supported-set-v3-07",
-                "structured_renderer_policy": "source-span-renderer-v1",
+                "answer_generation_policy": "model-grounded-claims-v1",
             }
         )
         return BaseResultCacheKey(
@@ -1467,7 +1438,7 @@ class RetrievalService:
             limit=request.limit,
             dense_required=request.dense_required,
             generation_behavior=(
-                "grounded" if self._grounded is not None else "extractive"
+                "grounded" if self._grounded is not None else "model_required"
             ),
             include_related_content=request.include_related_content,
             related_policy_version=DISPLAY_POLICY.version,
@@ -2041,6 +2012,13 @@ def _configured_generation_blocker(
         已配置但被阻断时的具体原因；未配置或可用时为空。
 
     """
+    # OCR 等非回答用途会共享统一模型状态与语料授权字段；只有回答
+    # Provider 或模型身份实际存在时，才允许这些状态阻断 generation。
+    if (
+        context.generation_provider_id is None
+        and context.generation_model is None
+    ):
+        return None
     if context.model_configuration_state == "NOT_CONFIGURED":
         return None
     if context.model_configuration_state == "INVALID":
@@ -2067,19 +2045,6 @@ def _configured_generation_blocker(
     if context.budget_state in {"EXHAUSTED", "BLOCKED"}:
         return "BLOCKED_BUDGET"
     return None
-
-
-def _remote_generation_configured(context: QueryDataPlaneContext) -> bool:
-    """判断当前数据面是否声明了远程回答模型。
-
-    OCR 等非回答用途可以让统一模型状态变为已配置，但不能因此关闭
-    纯离线回答路径。只要回答 Provider 或模型任一身份存在，就视为
-    用户选择了远程生成，失败时不得改用规则代答。
-    """
-    return (
-        context.generation_provider_id is not None
-        or context.generation_model is not None
-    )
 
 
 def _generation_unavailable_reason(
