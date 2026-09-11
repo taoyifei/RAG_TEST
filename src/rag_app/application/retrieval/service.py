@@ -1846,27 +1846,62 @@ def _formal_span_is_current(
     span: SourceSpan,
     item: EvidenceItem,
 ) -> bool:
-    """正式引用采用引用片段内偏移，来源身份和原文字节仍必须完全匹配。"""
-    raw_quote = chunk.citation_text[
-        original.chunk_start_char : original.chunk_end_char
-    ]
-    quote = raw_quote.strip()
-    leading_trim = len(raw_quote) - len(raw_quote.lstrip())
-    updates: dict[str, int] = {
+    """把正式引用的相对坐标投影回 canonical 原文并逐字复核。
+
+    Args:
+        chunk: 当前索引中的 canonical chunk。
+        original: 当前 chunk 持有的原始来源范围。
+        span: Evidence 中相对于引用文本的来源范围。
+        item: 待复核的 Evidence。
+
+    Returns:
+        来源身份、连续范围和引用原文是否仍与当前索引一致。
+
+    """
+    quote = item.citation_text
+    relative_updates = {
         "chunk_start_char": 0,
         "chunk_end_char": len(quote),
     }
-    if original.source_start_char is not None:
-        source_start = original.source_start_char + leading_trim
-        updates.update(
-            {
-                "source_start_char": source_start,
-                "source_end_char": source_start + len(quote),
-            }
+    if original.source_start_char is None:
+        raw_quote = chunk.citation_text[
+            original.chunk_start_char : original.chunk_end_char
+        ]
+        return (
+            original.source_end_char is None
+            and span == original.model_copy(update=relative_updates)
+            and quote == raw_quote.strip()
         )
+    if (
+        original.source_end_char is None
+        or span.source_start_char is None
+        or span.source_end_char is None
+    ):
+        return False
+    source_start = span.source_start_char
+    source_end = source_start + len(quote)
+    canonical_start = (
+        original.chunk_start_char + source_start - original.source_start_char
+    )
+    canonical_end = canonical_start + len(quote)
+    expected = original.model_copy(
+        update={
+            **relative_updates,
+            "source_start_char": source_start,
+            "source_end_char": source_end,
+        }
+    )
     return (
-        span == original.model_copy(update=updates)
-        and item.citation_text == quote
+        span == expected
+        and original.source_start_char
+        <= source_start
+        < source_end
+        <= original.source_end_char
+        and original.chunk_start_char
+        <= canonical_start
+        < canonical_end
+        <= original.chunk_end_char
+        and chunk.citation_text[canonical_start:canonical_end] == quote
     )
 
 

@@ -50,3 +50,90 @@ def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     )
 
     assert _formal_span_is_current(chunk, original, span, item)
+
+
+def test_formal_span_recheck_accepts_long_source_subrange() -> None:
+    """长段落中的连续逐字引用可按原文坐标通过复核。"""
+    quote = "关键结论：切换前必须完成双人复核。"
+    text = "背景说明。" * 80 + quote + "补充说明。" * 80
+    chunk = make_ranked_chunk(2, text).hydrated.chunk
+    original = chunk.source_spans[0]
+    quote_start = text.index(quote)
+    span = original.model_copy(
+        update={
+            "chunk_start_char": 0,
+            "chunk_end_char": len(quote),
+            "source_start_char": quote_start,
+            "source_end_char": quote_start + len(quote),
+        }
+    )
+    item = EvidenceItem(
+        evidence_id="S1",
+        chunk_id=chunk.chunk_id,
+        citation_text=quote,
+        source_label="长段落回归.docx",
+        source_spans=(span,),
+    )
+
+    assert _formal_span_is_current(chunk, original, span, item)
+
+
+def test_formal_span_recheck_rejects_invalid_long_source_subranges() -> None:
+    """越界或来源身份变化的长段引用必须继续失败关闭。"""
+    quote = "关键结论：切换前必须完成双人复核。"
+    text = "背景说明。" * 80 + quote + "补充说明。" * 80
+    chunk = make_ranked_chunk(3, text).hydrated.chunk
+    original = chunk.source_spans[0]
+    quote_start = text.index(quote)
+    span = original.model_copy(
+        update={
+            "chunk_start_char": 0,
+            "chunk_end_char": len(quote),
+            "source_start_char": quote_start,
+            "source_end_char": quote_start + len(quote),
+        }
+    )
+    item = EvidenceItem(
+        evidence_id="S1",
+        chunk_id=chunk.chunk_id,
+        citation_text=quote,
+        source_label="长段落回归.docx",
+        source_spans=(span,),
+    )
+    wrong_anchor = original.source_anchor.model_copy(
+        update={"part_uri": "/word/header1.xml"}
+    )
+    wrong_structural_anchor = original.source_anchor.model_copy(
+        update={"structural_path": ("body", "p:999")}
+    )
+    invalid_spans = {
+        "out_of_bounds": span.model_copy(
+            update={
+                "source_start_char": len(text) - len(quote) + 1,
+                "source_end_char": len(text) + 1,
+            }
+        ),
+        "wrong_node": span.model_copy(update={"node_id": f"node_{'f' * 32}"}),
+        "wrong_anchor": span.model_copy(update={"source_anchor": wrong_anchor}),
+        "wrong_structure": span.model_copy(
+            update={
+                "source_anchor": wrong_structural_anchor,
+                "structural_path": wrong_structural_anchor.structural_path,
+            }
+        ),
+        "wrong_repeated_identity": span.model_copy(
+            update={"is_repeated": True}
+        ),
+        "not_citable": span.model_copy(update={"is_citable": False}),
+    }
+
+    for reason, invalid_span in invalid_spans.items():
+        invalid_item = item.model_copy(update={"source_spans": (invalid_span,)})
+        assert not _formal_span_is_current(
+            chunk, original, invalid_span, invalid_item
+        ), reason
+
+    forged = item.model_copy(
+        update={"citation_text": quote.replace("必须", "无需")}
+    )
+    assert not _formal_span_is_current(chunk, original, span, forged)
