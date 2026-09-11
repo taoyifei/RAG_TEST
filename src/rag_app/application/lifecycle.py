@@ -754,6 +754,8 @@ class LifecycleService:
             knowledge_base_id,
             versions,
             self._content_fingerprint(identity),
+            # 相同索引语义的新草稿必须能从旧终态失败中恢复；同一草稿仍幂等。
+            self._retrieval_profile_revision_id,
         )
         first = documents[0]
         request = QueuedIngestion(
@@ -822,6 +824,7 @@ class LifecycleService:
                 egress_allowed_slots=self._egress_allowed_slots,
                 attempt=max(1, self._store.get_job(job_id).attempt),
                 persistent_job_id=job_id,
+                persistent_revision_id=request.revision_id,
                 content_identity=request.content_identity,
                 content_identity_current=lambda: self._current_content_identity(
                     knowledge_base_id

@@ -6,24 +6,31 @@ from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from evaluation import p11_pilot_runtime
 from evaluation.p11_pilot_data import PilotContent, PilotDataset, PilotDocument
-from evaluation.p11_pilot_runtime import _PilotRuntime, _prepare_corpus
+from evaluation.p11_pilot_runtime import (
+    _PilotInventory,
+    _PilotRuntime,
+    _prepare_corpus,
+)
 from evaluation.v2.models import (
     DatasetDocument,
     DatasetManifest,
     FixtureVersion,
 )
-from rag_app.application.answering.service import ExtractiveAnsweringService
+from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
 from rag_app.application.retrieval import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.identifiers import canonical_sha256, deterministic_id
 from rag_app.core.models import (
+    ConfidenceStatus,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
     QueryKind,
@@ -144,13 +151,13 @@ def _candidate() -> RankedChunk:
     ).model_copy(update={"rerank_rank": 1, "rerank_score": 0.95})
 
 
-def _answer(
+def _has_answer_support(
     scenario: _Scenario,
     policy: RetrievalPolicy,
     vector: str | None,
     *,
     candidates: tuple[RankedChunk, ...] | None = None,
-) -> str | None:
+) -> bool:
     scope = KnowledgeBaseScope(
         project_id=scenario.project_id,
         knowledge_base_id=scenario.profile.knowledge_base_id,
@@ -179,13 +186,7 @@ def _answer(
         rerank_mode="provider",
         selected_vector_space=vector,
     )
-    persistence = scenario.harness.runtime.p09.retrieval_runtime.persistence
-    generator = persistence.components.generator
-    return ExtractiveAnsweringService(generator).answer(
-        "低温时如何保护设备",
-        evidence,
-        decision,
-    )
+    return bool(evidence) and decision.status is ConfidenceStatus.ANSWERABLE
 
 
 def test_scoped_calibration_allows_citation_without_marking_quality_pass(
@@ -194,20 +195,17 @@ def test_scoped_calibration_allows_citation_without_marking_quality_pass(
     runtime = scenario.harness.runtime
     resolver = runtime.profiles
     ordinary = resolver._resolve(scenario.profile)
-    assert _answer(scenario, ordinary.retrieval._policy, None) is None
+    assert not _has_answer_support(scenario, ordinary.retrieval._policy, None)
     with _scope(scenario):
         controlled = resolver._resolve(scenario.profile)
         policy = controlled.retrieval._policy
         assert policy.dense_semantic_calibration_state == "CONTROLLED_TEST_ONLY"
         assert len(policy.dense_calibrated_vector_spaces) == 2
-        assert _answer(
+        assert _has_answer_support(
             scenario, policy, policy.dense_calibrated_vector_spaces[0]
         )
-        assert (
-            _answer(
-                scenario, policy, "primary:another-provider:model:1024:l2-v1:1"
-            )
-            is None
+        assert not _has_answer_support(
+            scenario, policy, "primary:another-provider:model:1024:l2-v1:1"
         )
         assert (
             runtime.control.quality.states(scenario.profile.profile_revision_id)
@@ -274,6 +272,7 @@ def test_exception_and_connection_drift_remove_controlled_admission(
 
 def test_pilot_query_entry_receives_scoped_policy_and_restores_on_failure(
     scenario: _Scenario,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """只探测入口策略便停止，不运行样本查询或把 Mock 当成 Live 质量。"""
@@ -289,17 +288,46 @@ def test_pilot_query_entry_receives_scoped_policy_and_restores_on_failure(
         property(lambda _: False),
     )
 
-    def inspect_query_policy(*_args: object) -> None:
-        policy = runtime.profiles.serving_contract(scenario.profile)[0]
+    def inspect_query_policy(*args: object) -> None:
+        inventory = cast(_PilotInventory, args[2])
+        target = runtime.control.active_profile(
+            inventory.documents[0].knowledge_base_id
+        )
+        assert target is not None
+        policy = runtime.profiles.serving_contract(target)[0]
         assert policy.dense_semantic_calibration_state == "CONTROLLED_TEST_ONLY"
         raise RuntimeError("SYNTHETIC_QUERY_STOP")
 
     monkeypatch.setattr(p11_pilot_runtime, "_query_cases", inspect_query_policy)
+    with runtime.connections.transaction() as connection:
+        session_id = str(
+            connection.execute(
+                "SELECT session_id FROM console_sessions "
+                "ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()[0]
+        )
     with pytest.raises(RuntimeError, match="SYNTHETIC_QUERY_STOP"):
         p11_pilot_runtime.run_pilot(
             runtime,
-            scenario.context.config,
-            scenario.context.state,
+            {
+                **scenario.context.config,
+                "pilot_retrieval_authorization": {
+                    "expires_at": (
+                        datetime.now(UTC) + timedelta(hours=1)
+                    ).isoformat(),
+                    "request_limit": 500,
+                    "estimated_token_limit": 1_000_000,
+                    "operation_request_limits": {
+                        "embedding.document": 100,
+                        "embedding.query": 200,
+                        "reranking": 200,
+                    },
+                },
+                "pilot_admin_session_id": session_id,
+            },
+            AcceptanceState(
+                tmp_path / "scoped-policy.sqlite3", "scoped-policy"
+            ),
             lambda *_: pytest.fail("本回归不能执行真实样本查询"),
             {
                 "request_limit": 1,
@@ -308,12 +336,148 @@ def test_pilot_query_entry_receives_scoped_policy_and_restores_on_failure(
                 "estimated_input_tokens": 0,
             },
         )
-    assert not runtime.profiles.serving_contract(scenario.profile)[
-        0
-    ].dense_semantic_enabled
+    ordinary = runtime.profiles.serving_contract(scenario.profile)[0]
+    assert ordinary.dense_semantic_enabled
+    assert ordinary.dense_semantic_calibration_state == "ACTIVE_PROFILE"
     assert (
         runtime.control.quality.states(scenario.profile.profile_revision_id)
         == {}
+    )
+
+
+def test_pilot_preflight_includes_locally_blocked_standby_retries(
+    scenario: _Scenario,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Query operation 预算不足时必须在建 Pilot 语料前阻断。"""
+    runtime = scenario.harness.runtime
+    projects_before = runtime.sdk.list_projects()
+    monkeypatch.setattr(
+        ProviderRuntimeRegistry,
+        "test_only_transport",
+        property(lambda _: False),
+    )
+    result = p11_pilot_runtime.run_pilot(
+        runtime,
+        {
+            **scenario.context.config,
+            "max_forwarded_attempts": 3,
+            "pilot_retrieval_authorization": {
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 500,
+                "estimated_token_limit": 1_000_000,
+                "operation_request_limits": {
+                    "embedding.document": 100,
+                    "embedding.query": 149,
+                    "reranking": 60,
+                },
+            },
+        },
+        AcceptanceState(tmp_path / "budget-preflight.sqlite3", "preflight"),
+        lambda *_: pytest.fail("预算预检后不能执行查询"),
+        {
+            "request_limit": 1,
+            "reserved": 0,
+            "estimated_token_limit": 1,
+            "estimated_input_tokens": 0,
+        },
+    )
+
+    assert result.status == "BLOCKED"
+    assert result.reason == "BLOCKED_BUDGET"
+    assert result.evidence["minimum_additional"] == {
+        "requests": 1,
+        "estimated_input_tokens": 0,
+        "reranking_requests": 0,
+    }
+    assert result.evidence["operation_request_lower_bound"] == {
+        "embedding.query": 150,
+        "reranking": 60,
+    }
+    assert runtime.sdk.list_projects() == projects_before
+
+
+def test_pilot_build_uses_explicit_scoped_retrieval_authorization(
+    scenario: _Scenario,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """生产组合分支只能用独立 KB 清单构建，不复用全局验收活动。"""
+    runtime = scenario.harness.runtime
+    with runtime.connections.transaction() as connection:
+        session_id = str(
+            connection.execute(
+                "SELECT session_id FROM console_sessions "
+                "ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()[0]
+        )
+    context = _PilotRuntime(
+        runtime,
+        {
+            "source_profile_revision_id": scenario.context.config[
+                "source_profile_revision_id"
+            ],
+            "pilot_admin_session_id": session_id,
+            "pilot_retrieval_authorization": {
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 30,
+                "estimated_token_limit": 100_000,
+                "operation_request_limits": {
+                    "embedding.document": 10,
+                    "embedding.query": 10,
+                    "reranking": 10,
+                },
+            },
+        },
+        AcceptanceState(tmp_path / "authorized.sqlite3", "authorized-pilot"),
+        _new_dataset(),
+    )
+    monkeypatch.setattr(
+        ProviderRuntimeRegistry,
+        "test_only_transport",
+        property(lambda _: False),
+    )
+
+    documents, profile_ids = _prepare_corpus(context)
+
+    assert len(documents) == len(profile_ids) == 1
+    profile = runtime.control.get_profile(profile_ids[0])
+    assert profile.status == "active"
+    status = runtime.retrieval_authorizations.status(
+        profile.profile_revision_id
+    )
+    assert status.authorization_state == "APPROVED"
+    assert status.manifest is not None
+    with runtime.profiles._controlled_pilot(
+        source_profile_id=str(context.config["source_profile_revision_id"]),
+        project_id=documents[0].project_id,
+        profile_ids=(profile.profile_revision_id,),
+    ):
+        result = runtime.sdk.search(
+            documents[0].project_id,
+            documents[0].knowledge_base_id,
+            "低温时如何保护设备",
+            limit=5,
+        )
+    assert result.selected_embedding_slot == "primary"
+    assert result.selected_vector_name == "dense_primary"
+    ledger = ProviderBudgetLedger(
+        runtime.data_dir / "provider-budget.sqlite3", read_only=True
+    )
+    attempts = ledger.attempts(status.manifest.budget_campaign_id)
+    assert attempts
+    assert {item["operation"] for item in attempts} == {
+        "embedding.document",
+        "embedding.query",
+        "reranking",
+    }
+    assert all(
+        item["forwarded"] and item["http_status"] == 200 for item in attempts
     )
 
 
@@ -325,14 +489,14 @@ def test_controlled_admission_keeps_evidence_rank_and_span_requirements(
             scenario.profile
         )[0]
         vector = policy.dense_calibrated_vector_spaces[0]
-        assert _answer(scenario, policy, vector, candidates=()) is None
+        assert not _has_answer_support(scenario, policy, vector, candidates=())
         irrelevant = make_ranked_chunk(
             1,
             "前台午间领取快递。",
             channel="dense:primary",
         ).model_copy(update={"rerank_rank": 50, "rerank_score": 0.01})
-        assert (
-            _answer(scenario, policy, vector, candidates=(irrelevant,)) is None
+        assert not _has_answer_support(
+            scenario, policy, vector, candidates=(irrelevant,)
         )
         candidate = _candidate()
         chunk = candidate.hydrated.chunk
@@ -351,8 +515,8 @@ def test_controlled_admission_keeps_evidence_rank_and_span_requirements(
                 )
             }
         )
-        assert (
-            _answer(scenario, policy, vector, candidates=(candidate,)) is None
+        assert not _has_answer_support(
+            scenario, policy, vector, candidates=(candidate,)
         )
 
 

@@ -468,7 +468,7 @@ class HotStandbyRouter:
 
 
 class ExtractiveGenerator:
-    """只从显式证据提取文本的离线 Generator。"""
+    """保留旧 Profile 名称的禁用占位，不生成确定性答案。"""
 
     descriptor = ComponentDescriptor(
         kind=ComponentKind.GENERATOR,
@@ -491,23 +491,24 @@ class ExtractiveGenerator:
         return self.descriptor.capabilities
 
     def generate(self, request: GenerationRequest) -> AnswerDraft:
-        """按证据顺序生成带显式引用的草稿。
+        """拒绝旧 extractive 调用，防止绕过模型读取候选。
 
         Args:
-            request: 查询、证据和引用协议。
+            request: 仅用于满足旧 GeneratorPort 配置形状。
 
         Returns:
-            未经过发布门的提取式草稿。
+            此兼容占位永不返回草稿。
+
+        Raises:
+            ProviderUnavailable: 确定性回答能力已被关闭。
 
         """
-        text = "\n".join(item.citation_text for item in request.evidence)
-        if not text:
-            text = "没有可用证据。"
-        return AnswerDraft(
-            text=text,
-            cited_evidence_ids=tuple(
-                item.evidence_id for item in request.evidence
-            ),
+        del request
+        raise ProviderUnavailable(
+            "确定性回答已关闭，必须配置真实回答模型。",
+            stage="generation",
+            code="GENERATOR_NOT_CONFIGURED",
+            retryable=False,
         )
 
     def health(self, *, network: bool = False) -> ProviderHealth:
@@ -523,7 +524,7 @@ class ExtractiveGenerator:
         del network
         return ProviderHealth(
             status=ProviderHealthStatus.HEALTHY,
-            reason_code="EXTRACTIVE_READY",
+            reason_code="DETERMINISTIC_ANSWER_DISABLED",
         )
 
 

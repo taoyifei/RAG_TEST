@@ -403,6 +403,16 @@ class _ProxyResolver:
         del knowledge_base_id, fallback
         yield cast(RetrievalService, self.service)
 
+    @contextmanager
+    def query_retrieval_scope(
+        self,
+        knowledge_base_id: str,
+        expected_index_revision_id: str,
+    ) -> object:
+        del knowledge_base_id
+        assert expected_index_revision_id == _REVISION_ID
+        yield
+
 
 def test_retrieval_proxy_coalesces_non_stream_and_preserves_trace_ids() -> None:
     service = _ProxyService()

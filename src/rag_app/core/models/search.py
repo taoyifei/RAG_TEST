@@ -64,7 +64,10 @@ class RetrievalPolicy(FrozenModel):
     dense_semantic_enabled: bool = False
     dense_semantic_calibration_state: str = Field(
         default="UNCALIBRATED",
-        pattern=r"^(UNCALIBRATED|CONTROLLED_TEST_ONLY|LIVE_CALIBRATED)$",
+        pattern=(
+            r"^(UNCALIBRATED|ACTIVE_PROFILE|CONTROLLED_TEST_ONLY|"
+            r"LIVE_CALIBRATED)$"
+        ),
     )
     dense_calibrated_vector_spaces: tuple[str, ...] = ()
     bypass_policy_denied: bool = True
@@ -101,7 +104,7 @@ class RetrievalPolicy(FrozenModel):
             or not self.dense_calibrated_vector_spaces
         ):
             raise ValueError(
-                "Dense semantic 启用时必须绑定校准状态和向量空间。"
+                "Dense semantic 启用时必须绑定就绪状态和向量空间。"
             )
         return self
 
@@ -439,7 +442,7 @@ class BaseResultCacheKey(FrozenModel):
     cache_schema: StrictInt = Field(gt=0)
     limit: StrictInt = Field(default=10, gt=0, le=50)
     dense_required: bool = False
-    generation_behavior: str = Field(default="extractive", min_length=1)
+    generation_behavior: str = Field(default="model_required", min_length=1)
     include_related_content: bool = False
     related_policy_version: str = "1"
 

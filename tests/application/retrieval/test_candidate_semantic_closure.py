@@ -289,3 +289,51 @@ def test_semantic_admission_never_replaces_requested_fact_support(
     assert semantic_candidate_allowed(candidate, _POLICY, context)
     assert not evidence
     assert decision.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+
+
+def test_remote_semantic_candidate_can_reach_model_review_only() -> None:
+    query = "雨林巡护协议是什么？"
+    quote = "用于核对设备标识并记录批准日期。"
+    candidate = _candidate(quote)
+    context = _context(query)
+
+    selection = EvidenceAssembler().assemble_sets(
+        (candidate,),
+        _POLICY,
+        context=context,
+        include_model_candidates=True,
+    )
+
+    assert semantic_candidate_allowed(candidate, _POLICY, context)
+    assert selection.answer_support_set == ()
+    assert [
+        item.citation_text for item in selection.model_evidence_candidates
+    ] == [quote]
+
+
+def test_reranked_hybrid_candidate_reaches_model_without_rule_gate() -> None:
+    """真实重排后的原文候选不应再由答案规则挡在模型之前。"""
+    query = (
+        "我第一次接触开发中心的项目流程，想申请他们支持一个新项目，"
+        "应该从哪一步开始，后续通常怎么推进？"
+    )
+    quote = "项目启动前收集需求材料，完成登记后按评审流程推进。"
+    candidate = make_ranked_chunk(
+        1,
+        quote,
+        channel="lexical:fts5:question_terms",
+    ).model_copy(update={"rerank_rank": 1, "rerank_score": 0.91})
+    context = _context(query)
+
+    selection = EvidenceAssembler().assemble_sets(
+        (candidate,),
+        _POLICY,
+        context=context,
+        include_model_candidates=True,
+    )
+
+    assert not semantic_candidate_allowed(candidate, _POLICY, context)
+    assert selection.answer_support_set == ()
+    assert [
+        item.citation_text for item in selection.model_evidence_candidates
+    ] == [quote]

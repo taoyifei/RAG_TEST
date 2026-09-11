@@ -1,17 +1,15 @@
-"""P07 extractive answering 与 citation validation。"""
+"""只允许模型读取本次候选后生成，并执行 citation validation。"""
 
-from rag_app.application.answering.service import ExtractiveAnsweringService
-from rag_app.application.answering.structured import (
-    DeterministicAnswerRenderer,
-    RenderedAnswer,
-    validate_rendered_answer,
+from rag_app.application.answering.grounded import (
+    GroundedAnsweringService,
+    GroundedOutcome,
+    validate_grounded_draft,
 )
 from rag_app.application.answering.validation import validate_extractive_draft
 
 __all__ = [
-    "DeterministicAnswerRenderer",
-    "ExtractiveAnsweringService",
-    "RenderedAnswer",
+    "GroundedAnsweringService",
+    "GroundedOutcome",
     "validate_extractive_draft",
-    "validate_rendered_answer",
+    "validate_grounded_draft",
 ]

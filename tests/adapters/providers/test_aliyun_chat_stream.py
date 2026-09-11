@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -226,7 +225,7 @@ def test_invalid_later_claim_is_not_published_or_repaired_after_prefix(
         )
     )
     adapter = _adapter(tmp_path, body)
-    service = GroundedAnsweringService(adapter, Mock())
+    service = GroundedAnsweringService(adapter)
     emitted = []
     try:
         with pytest.raises(StreamDeliveryError) as captured:

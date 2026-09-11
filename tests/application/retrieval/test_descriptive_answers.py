@@ -9,6 +9,7 @@ import pytest
 from rag_app.application.retrieval.answer_support import evaluate_span_support
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.models import (
+    EvidenceSelectionContext,
     HydratedChunk,
     RankedChunk,
     RetrievalPolicy,
@@ -21,6 +22,14 @@ from tests.application.retrieval.test_evidence_table_coordinates import _context
 
 _POLICY = RetrievalPolicy(
     per_document_cap=8, per_section_cap=8, max_evidence_items_per_chunk=8
+)
+_REMOTE_SPACE = "primary:synthetic:table-grounding:3:l2:1"
+_REMOTE_POLICY = _POLICY.model_copy(
+    update={
+        "dense_semantic_enabled": True,
+        "dense_semantic_calibration_state": "ACTIVE_PROFILE",
+        "dense_calibrated_vector_spaces": (_REMOTE_SPACE,),
+    }
 )
 
 
@@ -75,6 +84,40 @@ def _candidates(
     )
 
 
+def _remote_candidates(
+    candidates: tuple[RankedChunk, ...],
+) -> tuple[RankedChunk, ...]:
+    """给公开合成候选附加真实远程 Dense 与重排身份。"""
+    return tuple(
+        candidate.model_copy(
+            update={
+                "contributions": (
+                    RrfContribution(
+                        channel="dense:primary",
+                        rank=index,
+                        weight=1.0,
+                        contribution=1.0 / (60 + index),
+                    ),
+                ),
+                "rerank_rank": index,
+                "rerank_score": 1.0 - index / 100,
+            }
+        )
+        for index, candidate in enumerate(candidates, 1)
+    )
+
+
+def _remote_context(question: str) -> EvidenceSelectionContext:
+    """返回允许模型查看远程重排候选的合成上下文。"""
+    return _context(question).model_copy(
+        update={
+            "rerank_mode": "provider",
+            "selected_slot": "primary",
+            "selected_vector_space": _REMOTE_SPACE,
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "role",
     [
@@ -103,7 +146,7 @@ def _candidates(
         "{role}干什么工作？",
     ],
 )
-def test_role_table_keeps_every_duty_from_the_selected_row(
+def test_role_table_reaches_model_without_preassembled_rule_answer(
     role: str, question: str
 ) -> None:
     duties = (
@@ -129,18 +172,27 @@ def test_role_table_keeps_every_duty_from_the_selected_row(
         + _paragraph("仅登记物料清单。")
         + "</w:tc></w:tr></w:tbl>"
     )
-    candidates = _candidates(blocks)
-    evidence = EvidenceAssembler().assemble(
-        candidates, _POLICY, context=_context(question.format(role=role))
+    candidates = _remote_candidates(_candidates(blocks))
+    selection = EvidenceAssembler().assemble_sets(
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context(question.format(role=role)),
+        include_model_candidates=True,
     )
-    assert [item.citation_text for item in evidence] == [role, *duties]
-    assert all(
-        dict(item.metadata)["answer_support"]["support_reason"]
+    candidate_text = {
+        item.citation_text for item in selection.model_evidence_candidates
+    }
+    assert {role, *duties} <= candidate_text
+    assert selection.answer_support_set == ()
+    assert not any(
+        dict(item.metadata).get("answer_support", {}).get("support_reason")
         == "TABLE_ROW_ATTRIBUTE"
-        for item in evidence
+        for item in selection.model_evidence_candidates
     )
     assert not EvidenceAssembler().assemble(
-        candidates, _POLICY, context=_context(f"{role}的手机号是多少")
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context(f"{role}的手机号是多少"),
     )
     for unsupported in (
         f"{role}的具体手机号是多少",
@@ -153,17 +205,21 @@ def test_role_table_keeps_every_duty_from_the_selected_row(
         "外部协调员具体干啥",
     ):
         assert not EvidenceAssembler().assemble(
-            candidates, _POLICY, context=_context(unsupported)
+            candidates,
+            _REMOTE_POLICY,
+            context=_remote_context(unsupported),
         )
-    # 无法装下整行时不能截掉后一项职责后声称已经完整回答。
+    # 预算只裁剪模型输入，永远不能因此形成规则支持集。
     assert not EvidenceAssembler().assemble(
         candidates,
-        _POLICY.model_copy(update={"max_evidence_items": 2}),
-        context=_context(question.format(role=role)),
+        _REMOTE_POLICY.model_copy(update={"max_evidence_items": 2}),
+        context=_remote_context(question.format(role=role)),
     )
 
 
-def test_role_table_combines_multiple_semantic_duty_columns() -> None:
+def test_role_table_keeps_raw_cells_for_model_instead_of_combining_answer() -> (
+    None
+):
     blocks = (
         "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/>"
         "</w:tblGrid><w:tr><w:tc>"
@@ -182,18 +238,23 @@ def test_role_table_combines_multiple_semantic_duty_columns() -> None:
         + "</w:tc></w:tr></w:tbl>"
     )
 
-    evidence = EvidenceAssembler().assemble(
-        _candidates(blocks),
-        _POLICY,
-        context=_context("合成负责人平时主要管哪些事？"),
+    selection = EvidenceAssembler().assemble_sets(
+        _remote_candidates(_candidates(blocks)),
+        _REMOTE_POLICY,
+        context=_remote_context("合成负责人平时主要管哪些事？"),
+        include_model_candidates=True,
     )
 
-    assert [item.citation_text for item in evidence] == [
+    candidate_text = {
+        item.citation_text for item in selection.model_evidence_candidates
+    }
+    assert {
         "合成负责人",
         "负责公开合成质量保障。",
         "维护公开合成用例。",
         "闭环公开合成缺陷。",
-    ]
+    } <= candidate_text
+    assert selection.answer_support_set == ()
 
 
 @pytest.mark.parametrize(
@@ -244,7 +305,9 @@ def test_enumeration_reports_source_count_when_question_premise_differs() -> (
     assert support["support_reason"] == "SOURCE_CORRECTS_COUNT_PREMISE"
 
 
-def test_source_qualifier_disambiguates_same_role_across_documents() -> None:
+def test_source_qualifier_filters_model_candidates_without_rule_answer() -> (
+    None
+):
     def table(duties: tuple[str, ...]) -> str:
         return (
             "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>"
@@ -260,41 +323,62 @@ def test_source_qualifier_disambiguates_same_role_across_documents() -> None:
         )
 
     selected = ("统筹蓝熊计划。", "跟踪蓝熊风险。")
-    candidates = (
-        *_candidates(
-            table(selected),
-            display_name="蓝熊交付规范.docx",
-            document_id="doc_" + "4" * 32,
-        ),
-        *_candidates(
-            table(("统筹白鹭计划。", "跟踪白鹭风险。")),
-            display_name="白鹭研发制度.docx",
-            document_id="doc_" + "5" * 32,
-        ),
+    candidates = _remote_candidates(
+        (
+            *_candidates(
+                table(selected),
+                display_name="蓝熊交付规范.docx",
+                document_id="doc_" + "4" * 32,
+            ),
+            *_candidates(
+                table(("统筹白鹭计划。", "跟踪白鹭风险。")),
+                display_name="白鹭研发制度.docx",
+                document_id="doc_" + "5" * 32,
+            ),
+        )
     )
     assembler = EvidenceAssembler()
 
-    evidence = assembler.assemble(
+    selection = assembler.assemble_sets(
         candidates,
-        _POLICY,
-        context=_context("蓝熊规范中项目经理负责什么"),
+        _REMOTE_POLICY,
+        context=_remote_context("蓝熊规范中项目经理负责什么"),
+        include_model_candidates=True,
     )
 
-    assert [item.citation_text for item in evidence] == [
-        "项目经理",
-        *selected,
-    ]
-    assert not assembler.assemble(
-        candidates, _POLICY, context=_context("项目经理负责什么")
-    )
-    assert not assembler.assemble(
+    candidate_text = {
+        item.citation_text for item in selection.model_evidence_candidates
+    }
+    assert {"项目经理", *selected} <= candidate_text
+    assert "统筹白鹭计划。" not in candidate_text
+    assert selection.answer_support_set == ()
+
+    ambiguous = assembler.assemble_sets(
         candidates,
-        _POLICY,
-        context=_context("不存在规范中项目经理负责什么"),
+        _REMOTE_POLICY,
+        context=_remote_context("项目经理负责什么"),
+        include_model_candidates=True,
     )
+    ambiguous_text = {
+        item.citation_text for item in ambiguous.model_evidence_candidates
+    }
+    ambiguous_sources = {
+        item.display_name for item in ambiguous.model_evidence_candidates
+    }
+    assert "统筹蓝熊计划。" in ambiguous_text
+    assert {"蓝熊交付规范.docx", "白鹭研发制度.docx"} <= ambiguous_sources
+    assert ambiguous.answer_support_set == ()
+    assert not assembler.assemble_sets(
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context("不存在规范中项目经理负责什么"),
+        include_model_candidates=True,
+    ).model_evidence_candidates
 
 
-def test_project_context_disambiguates_same_role_across_documents() -> None:
+def test_project_context_is_left_for_model_to_resolve_across_documents() -> (
+    None
+):
     def table(duties: tuple[str, ...]) -> str:
         return (
             "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>"
@@ -310,36 +394,46 @@ def test_project_context_disambiguates_same_role_across_documents() -> None:
         )
 
     selected = ("维护蓝熊用例。", "跟踪蓝熊缺陷。")
-    candidates = (
-        *_candidates(
-            table(selected),
-            display_name="蓝熊交付规范.docx",
-            document_id="doc_" + "6" * 32,
-        ),
-        *_candidates(
-            table(("维护白鹭用例。", "跟踪白鹭缺陷。")),
-            display_name="白鹭运维规范.docx",
-            document_id="doc_" + "7" * 32,
-        ),
+    candidates = _remote_candidates(
+        (
+            *_candidates(
+                table(selected),
+                display_name="蓝熊交付规范.docx",
+                document_id="doc_" + "6" * 32,
+            ),
+            *_candidates(
+                table(("维护白鹭用例。", "跟踪白鹭缺陷。")),
+                display_name="白鹭运维规范.docx",
+                document_id="doc_" + "7" * 32,
+            ),
+        )
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
-        _POLICY,
-        context=_context("做蓝熊交付项目时，测试协调员平时主要管哪些事？"),
+        _REMOTE_POLICY,
+        context=_remote_context(
+            "做蓝熊交付项目时，测试协调员平时主要管哪些事？"
+        ),
+        include_model_candidates=True,
     )
 
-    assert [item.citation_text for item in evidence] == [
-        "测试协调员",
-        *selected,
-    ]
+    candidate_text = {
+        item.citation_text for item in selection.model_evidence_candidates
+    }
+    candidate_sources = {
+        item.display_name for item in selection.model_evidence_candidates
+    }
+    assert {"测试协调员", *selected} <= candidate_text
+    assert {"蓝熊交付规范.docx", "白鹭运维规范.docx"} <= candidate_sources
+    assert selection.answer_support_set == ()
 
 
 @pytest.mark.parametrize(
     "duty_header",
     ("主要工作职责说明", "角色定义", "岗位角色描述"),
 )
-def test_project_context_disambiguates_same_role_tables_in_one_document(
+def test_project_context_does_not_preassemble_same_role_table_answer(
     duty_header: str,
 ) -> None:
     def table(duties: tuple[str, ...]) -> str:
@@ -357,24 +451,30 @@ def test_project_context_disambiguates_same_role_tables_in_one_document(
         )
 
     selected = ("维护蓝熊用例。", "跟踪蓝熊缺陷。")
-    candidates = _candidates(
-        _heading("蓝熊交付")
-        + table(selected)
-        + _heading("白鹭运维")
-        + table(("维护白鹭用例。", "跟踪白鹭缺陷。")),
-        display_name="综合项目规范.docx",
+    candidates = _remote_candidates(
+        _candidates(
+            _heading("蓝熊交付")
+            + table(selected)
+            + _heading("白鹭运维")
+            + table(("维护白鹭用例。", "跟踪白鹭缺陷。")),
+            display_name="综合项目规范.docx",
+        )
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
-        _POLICY,
-        context=_context("做蓝熊交付项目时，测试协调员平时主要管哪些事？"),
+        _REMOTE_POLICY,
+        context=_remote_context(
+            "做蓝熊交付项目时，测试协调员平时主要管哪些事？"
+        ),
+        include_model_candidates=True,
     )
 
-    assert [item.citation_text for item in evidence] == [
-        "测试协调员",
-        *selected,
-    ]
+    candidate_text = {
+        item.citation_text for item in selection.model_evidence_candidates
+    }
+    assert {"测试协调员", *selected} <= candidate_text
+    assert selection.answer_support_set == ()
 
 
 def test_source_qualifier_filters_direct_relation_evidence() -> None:
@@ -429,8 +529,8 @@ def test_responsible_party_does_not_relax_a_named_artifact_target() -> None:
     assert not evidence
 
 
-def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
-    """规则无法覆盖的概括请求可交生成器核验，缺失号码仍不能借值。"""
+def test_uncertain_sources_reach_model_without_rule_gate() -> None:
+    """有界原文先交模型判断，确定性规则只标记直接支持集。"""
     candidates = _candidates(
         _paragraph("阀门检查要求包括确认开度、核对记录并保存照片。")
     )
@@ -442,44 +542,48 @@ def test_uncertain_sources_require_explicit_grounded_generation_path() -> None:
     )
     assert evidence
     assert dict(evidence[0].metadata)["answer_support"]["status"] == "UNCERTAIN"
-    assert not assembler.assemble(
+    phone_selection = assembler.assemble_sets(
         candidates,
         _POLICY,
         context=_context("阀门检查员的手机号是多少"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
+    assert phone_selection.answer_support_set == ()
+    assert phone_selection.model_evidence_candidates
 
 
-def test_weak_topic_overlap_is_not_a_model_evidence_candidate() -> None:
-    """通用问句词只形成弱命中时仍是证据不足，不投影模型能力阻断。"""
+def test_weak_topic_overlap_stays_out_of_direct_support_set() -> None:
+    """弱命中可供模型判读，但不能冒充确定性直接支持。"""
     candidates = _candidates(
         _paragraph("公开守则说明常规审批要求与工作日归档安排。")
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
         _POLICY,
         context=_context("这些公开守则有没有要求周末必须值班？"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
 
-    assert not evidence
+    assert selection.answer_support_set == ()
+    assert selection.model_evidence_candidates
 
 
-def test_role_title_without_assignment_is_not_model_evidence() -> None:
-    """角色职责不能被模型候选误当成该角色对应的具体人员。"""
+def test_role_title_without_assignment_is_not_direct_answer_support() -> None:
+    """角色职责原文可供模型判断，但不能直接证明具体人员。"""
     candidates = _candidates(
         _paragraph("巡检负责人需要核对设备清单并归档检查记录。")
     )
 
-    evidence = EvidenceAssembler().assemble(
+    selection = EvidenceAssembler().assemble_sets(
         candidates,
         _POLICY,
         context=_context("巡检负责人是谁？"),
-        allow_uncertain=True,
+        include_model_candidates=True,
     )
 
-    assert not evidence
+    assert selection.answer_support_set == ()
+    assert selection.model_evidence_candidates
 
 
 @pytest.mark.parametrize(

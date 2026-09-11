@@ -106,6 +106,38 @@ class _FlakyDeterministicProvider(DeterministicEmbeddingProvider):
         return super().embed(request)
 
 
+class _PositionSensitiveProvider(DeterministicEmbeddingProvider):
+    """模拟同一文本重复发送时返回略有差异的远程 Provider。"""
+
+    def __init__(self, slot: EmbeddingSlotIdentity) -> None:
+        super().__init__(
+            slot_id=slot.slot_id,
+            dimension=slot.dimension,
+            model=slot.model,
+            request_policy_identity=canonical_sha256({"role": "document"}),
+            document_request_policy_identity=canonical_sha256(
+                slot.document_request_policy
+            ),
+            query_request_policy_identity=canonical_sha256(
+                slot.query_request_policy
+            ),
+        )
+        self.requests: list[tuple[str, ...]] = []
+
+    def embed(self, request: EmbeddingRequest) -> EmbeddingResult:
+        self.requests.append(request.texts)
+        return EmbeddingResult(
+            slot_id=request.slot_id,
+            role=request.role,
+            vectors=tuple(
+                (float(index + 1),) * self._dimension
+                for index, _text in enumerate(request.texts)
+            ),
+            observed_dimension=self._dimension,
+            request_policy_identity=self._document_policy_identity,
+        )
+
+
 def _slot() -> EmbeddingSlotIdentity:
     return EmbeddingSlotIdentity(
         slot_id="primary",
@@ -211,6 +243,39 @@ def test_partial_cache_only_embeds_missing_and_preserves_order() -> None:
     assert any(
         state is ChunkEmbeddingState.CACHED for _, _, state in progress.states
     )
+
+
+def test_duplicate_embedding_text_is_sent_once_and_fanned_out() -> None:
+    """相同 cache 身份只调用 Provider 一次，避免非确定输出互相冲突。"""
+    slot = _slot()
+    first = _chunk("duplicate-a")
+    second = _chunk("duplicate-b").model_copy(
+        update={"embedding_text": first.embedding_text}
+    )
+    provider = _PositionSensitiveProvider(slot)
+    service = DocumentEmbeddingService(
+        _MemoryCache(), _Progress([], []), {slot.slot_id: provider}
+    )
+
+    result = service.embed_missing(
+        job_id=deterministic_id("job", "duplicates"),
+        revision_id=first.index_revision_id,
+        project_id=_PROJECT_ID,
+        knowledge_base_id=_KNOWLEDGE_BASE_ID,
+        chunks=(first, second),
+        slots=(slot,),
+        budgets={
+            slot.slot_id: DocumentEmbeddingBudget(
+                max_requests=1,
+                max_tokens=100,
+                max_chunks=1,
+            )
+        },
+    )
+
+    assert provider.requests == [(first.embedding_text,)]
+    assert result.vectors[slot.slot_id][0] == result.vectors[slot.slot_id][1]
+    assert result.budgets[slot.slot_id].used_chunks == 1
 
 
 def test_budget_is_checked_before_provider_call() -> None:

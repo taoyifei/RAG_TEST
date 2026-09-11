@@ -135,7 +135,12 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         )
         assert before.status_code == 200, before.text
         before_payload = before.json()
-        assert before_payload["answer"]
+        assert before_payload["answer"] is None
+        assert before_payload["status"] == "POLICY_DENIED"
+        assert before_payload["generation_mode"] == "none"
+        assert before_payload["generation_reason_code"] == (
+            "CORPUS_AUTHORIZATION_MISSING"
+        )
         assert before_payload["generation_called_this_request"] is False
         assert (
             before_payload["data_plane"]["retrieval_data_plane"]
@@ -240,7 +245,12 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         )
         assert after.status_code == 200, after.text
         after_payload = after.json()
-        assert after_payload["answer"]
+        assert after_payload["answer"] is None
+        assert after_payload["status"] == "POLICY_DENIED"
+        assert after_payload["generation_mode"] == "none"
+        assert after_payload["generation_reason_code"] == (
+            "CORPUS_AUTHORIZATION_STALE_REVISION"
+        )
         assert after_payload["generation_called_this_request"] is False
         assert (
             after_payload["data_plane"]["corpus_authorization_state"]
@@ -255,10 +265,62 @@ def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # 
         harness.close()
 
 
+def test_all_corpus_operations_keep_a_stable_binding_identity(
+    tmp_path: Path,
+) -> None:
+    """批准顺序与配置推导顺序不同时仍应立即可用。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, _, aliyun_connection_id = create_provider_connections(harness)
+        saved = harness.client.put(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+            headers=harness.write_headers,
+            json={
+                "generation_connection_id": aliyun_connection_id,
+                "generation_model": "qwen3.7-flash",
+                "rewrite_enabled": True,
+                "ocr_connection_id": aliyun_connection_id,
+                "ocr_model": "qwen3.5-ocr",
+                "ocr_enabled": True,
+                "ocr_media_hashes": ["a" * 64],
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        required = saved.json()["corpus_authorization"]["required_operations"]
+
+        approved = harness.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+            "corpus-authorization:approve",
+            headers=harness.write_headers,
+            json={
+                "operations": required,
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 4,
+                "estimated_token_limit": 20_000,
+                "operation_request_limits": dict.fromkeys(required, 1),
+            },
+        )
+
+        assert approved.status_code == 200, approved.text
+        status = approved.json()
+        assert status["corpus_authorization_state"] == "APPROVED"
+        assert status["model_authorization_state"] == "APPROVED"
+        assert status["budget_state"] == "AVAILABLE"
+        assert status["fallback_reason_codes"] == []
+    finally:
+        harness.close()
+
+
 def test_local_data_plane_is_persisted_in_history_and_safe_trace(
     tmp_path: Path,
 ) -> None:
-    """响应、History 和 SAFE Trace 共享同一份非敏感数据面真相。"""
+    """本地检索仍留痕，但没有模型时不得发布规则答案。"""
     harness = build_product_harness(tmp_path)
     try:
         project_id, knowledge_base_id = create_project_and_knowledge_base(
@@ -273,6 +335,9 @@ def test_local_data_plane_is_persisted_in_history_and_safe_trace(
         )
         assert response.status_code == 200, response.text
         payload = response.json()
+        assert payload["status"] == "CONFIGURATION_REQUIRED"
+        assert payload["answer"] is None
+        assert payload["generation_mode"] == "none"
         data_plane = payload["data_plane"]
         assert data_plane["retrieval_data_plane"] == "default_local_fallback"
         assert data_plane["embedding_provider_id"] == "deterministic"
@@ -311,6 +376,6 @@ def test_local_data_plane_is_persisted_in_history_and_safe_trace(
         final = next(
             item for item in trace.spans if item.name == "query.final_status"
         )
-        assert dict(final.attributes)["answer_published"] is True
+        assert dict(final.attributes)["answer_published"] is False
     finally:
         harness.close()

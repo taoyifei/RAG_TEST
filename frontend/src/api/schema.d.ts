@@ -1095,6 +1095,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/retrieval-profiles/{profile_revision_id}/authorization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Retrieval Authorization
+         * @description 读取候选方案与当前活动文档的真实检索批准状态。
+         */
+        get: operations["_retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/retrieval-profiles/{profile_revision_id}/authorization:approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Retrieval Authorization
+         * @description 仅由管理员批准当前真实文档的远程 Embedding 与重排。
+         */
+        post: operations["_approve_retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/retrieval-profiles/{profile_revision_id}:activate": {
         parameters: {
             query?: never;
@@ -2585,6 +2625,98 @@ export interface components {
          * @enum {string}
          */
         RequestedAnswerType: "UNKNOWN" | "FACT" | "DEFINITION" | "PURPOSE" | "ENUMERATION" | "COUNT" | "ORDINAL_ITEM" | "DUTIES" | "RESPONSIBLE_PARTY" | "PROCEDURE" | "SECTION_SUMMARY";
+        /**
+         * RetrievalAuthorizationApproval
+         * @description 管理员对当前真实文档检索用途给出的有界累计预算。
+         */
+        RetrievalAuthorizationApproval: {
+            /** Estimated Token Limit */
+            estimated_token_limit: number;
+            /** Expires At */
+            expires_at: string;
+            /** Operation Request Limits */
+            operation_request_limits: {
+                [key: string]: number;
+            };
+            /** Request Limit */
+            request_limit: number;
+        };
+        /**
+         * RetrievalAuthorizationManifest
+         * @description 不保存正文或逐文档哈希的不可变检索批准记录。
+         */
+        RetrievalAuthorizationManifest: {
+            /** Active Document Count */
+            active_document_count: number;
+            /** Active Document Digest */
+            active_document_digest: string;
+            /** Approved By Session Id */
+            approved_by_session_id: string;
+            /** Authorization Id */
+            authorization_id: string;
+            /** Budget Campaign Id */
+            budget_campaign_id: string;
+            /** Created At */
+            created_at: string;
+            /** Expires At */
+            expires_at: string;
+            /** Knowledge Base Id */
+            knowledge_base_id: string;
+            /** Manifest Id */
+            manifest_id: string;
+            /** Operations */
+            operations: ("embedding.document" | "embedding.query" | "reranking")[];
+            /**
+             * Policy Revision
+             * @default retrieval-authorization-v1
+             */
+            policy_revision: string;
+            /** Profile Binding Identity */
+            profile_binding_identity: string;
+            /** Profile Revision Id */
+            profile_revision_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Source Index Revision Id */
+            source_index_revision_id: string;
+        };
+        /**
+         * RetrievalAuthorizationStatus
+         * @description 草稿、激活与查询共享的实时检索授权投影。
+         */
+        RetrievalAuthorizationStatus: {
+            /**
+             * Authorization State
+             * @enum {string}
+             */
+            authorization_state: "NOT_REQUIRED" | "MISSING" | "APPROVED" | "STALE_CORPUS" | "STALE_PROFILE" | "EXPIRED" | "BLOCKED";
+            /**
+             * Budget State
+             * @enum {string}
+             */
+            budget_state: "MISSING" | "AVAILABLE" | "EXHAUSTED" | "BLOCKED";
+            /**
+             * Connection Budget State
+             * @enum {string}
+             */
+            connection_budget_state: "READY" | "INSUFFICIENT" | "BLOCKED";
+            /** Embedding Slot Count */
+            embedding_slot_count: number;
+            /** Estimated Document Chunks */
+            estimated_document_chunks: number;
+            /** Estimated Document Requests Per Slot */
+            estimated_document_requests_per_slot: number;
+            /** Estimated Document Tokens Per Slot */
+            estimated_document_tokens_per_slot: number;
+            manifest?: components["schemas"]["RetrievalAuthorizationManifest"] | null;
+            /**
+             * Reason Codes
+             * @default []
+             */
+            reason_codes: string[];
+            /** Required Operations */
+            required_operations: ("embedding.document" | "embedding.query" | "reranking")[];
+        };
         /**
          * RetrievalDiagnostics
          * @description 不含正文、向量、Prompt 或 Secret 的完整检索诊断。
@@ -12236,6 +12368,234 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalAuthorizationStatus"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 统一安全错误结构 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    _approve_retrieval_authorization_api_v1_retrieval_profiles__profile_revision_id__authorization_approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_revision_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RetrievalAuthorizationApproval"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetrievalAuthorizationStatus"];
                 };
             };
             /** @description 统一安全错误结构 */

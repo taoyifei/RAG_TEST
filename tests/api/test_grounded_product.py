@@ -31,7 +31,21 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
             return httpx.Response(503, json={"error": {"code": "unavailable"}})
         payload = json.loads(request.content)
         data = json.loads(payload["messages"][1]["content"])
-        evidence = data["evidence"][0]
+        candidates = data["evidence"]
+        claims = []
+        if "手机号" not in data["question"]:
+            evidence = candidates[0]
+            claims = [
+                {
+                    "text": evidence["text"],
+                    "supports": [
+                        {
+                            "support_id": evidence["support_id"],
+                            "quote": evidence["text"],
+                        }
+                    ],
+                }
+            ]
         return httpx.Response(
             200,
             json={
@@ -42,21 +56,7 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
                         "message": {
                             "role": "assistant",
                             "content": json.dumps(
-                                {
-                                    "claims": [
-                                        {
-                                            "text": evidence["text"],
-                                            "supports": [
-                                                {
-                                                    "support_id": evidence[
-                                                        "support_id"
-                                                    ],
-                                                    "quote": evidence["text"],
-                                                }
-                                            ],
-                                        }
-                                    ]
-                                },
+                                {"claims": claims},
                                 ensure_ascii=False,
                             ),
                         },
@@ -141,20 +141,27 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
     refused = query("MX-41 负责人的手机号是什么")
     assert refused["answer"] is None, refused
     assert refused["generation_mode"] == "none"
-    assert refused["generation_called_this_request"] is False
+    assert refused["generation_called_this_request"] is True
+    refused_payload = json.loads(requests[1].content)
+    refused_input = json.loads(refused_payload["messages"][1]["content"])
+    assert refused_input["evidence"]
+    assert "answer_support_set" not in refused_input
+    assert "model_evidence_candidates" not in refused_input
     failing = True
     failure = query("设备 MX-41 的维护周期是多少？")
-    assert failure["generation_mode"] == "extractive_fallback", failure
+    assert failure["status"] == "PROVIDER_UNAVAILABLE", failure
+    assert failure["answer"] is None
+    assert failure["generation_mode"] == "none"
     assert failure["generation_called_this_request"] is True
-    assert len(requests) == 2
+    assert len(requests) == 3
     page = harness.runtime.history.list_history()
     assert {item["status"] for item in page["items"]} == {
         "ANSWERED",
         "REFUSED",
     }
     failed_detail = harness.runtime.history.detail(failure["trace_id"])
-    assert failed_detail["status"] == "ANSWERED"
-    assert failed_detail["fallback_answer_available"] is True
+    assert failed_detail["status"] == "REFUSED"
+    assert "fallback_answer_available" not in failed_detail
     assert failed_detail["generation_reason_code"] == "PROVIDER_UNAVAILABLE"
     assert (
         failed_detail["requested_answer_type"]

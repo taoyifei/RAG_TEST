@@ -32,12 +32,17 @@ from rag_app.core.tokenization import estimate_tokens
 from rag_app.product.live_acceptance import AcceptanceState, StepResult
 from rag_app.product.models import ImpactKind, RetrievalProfileDraft
 from rag_app.product.quality import QualityValidationRecord
+from rag_app.product.retrieval_authorization import (
+    RetrievalAuthorizationApproval,
+)
 from rag_app.product.verification import profile_specs
 
 SearchCallback = Callable[[str, str, str, str], SearchAnswerResult]
 _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+_DUAL_LANE_COUNT = 2
+_MAX_PILOT_FORWARDED_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,33 +64,106 @@ class _PilotInventory:
 class _PilotJobScope:
     project_id: str
     knowledge_base_id: str
-    profile_revision_id: str
+    profile_revision_id: str | None
     document_id: str
     document_version_id: str
 
 
 def query_budget_lower_bound(
-    dataset: PilotDataset, query_instruct: str
+    dataset: PilotDataset, query_instruct: str, *, lane_count: int = 2
 ) -> dict[str, int]:
     """按已固定问题与实际 instruct 计算仅查询 embedding 的预算下限。
 
     Args:
         dataset: 两条路径共用的独立问题。
         query_instruct: 当前百炼 Query 策略的原值。
+        lane_count: 本次实际评估的向量槽数量。
 
     Returns:
         请求与估算 Token 下限；文档、Reranker 和重试还需另计。
 
     """
+    if lane_count not in {1, _DUAL_LANE_COUNT}:
+        raise ValueError("Pilot 向量槽数量必须为一或二。")
     query_tokens = sum(estimate_tokens(case.query) for case in dataset.cases)
     return {
-        "requests": len(dataset.cases) * 2,
-        "estimated_input_tokens": query_tokens * 2
-        + len(dataset.cases) * estimate_tokens(query_instruct),
+        "requests": len(dataset.cases) * lane_count,
+        "estimated_input_tokens": query_tokens * lane_count
+        + (
+            len(dataset.cases) * estimate_tokens(query_instruct)
+            if query_instruct
+            else 0
+        ),
     }
 
 
-def run_pilot(
+def _operation_request_lower_bound(
+    dataset: PilotDataset,
+    *,
+    lane_count: int,
+    max_forwarded_attempts: int,
+    reranking_enabled: bool,
+) -> dict[str, int]:
+    """计算单个 Pilot 知识库可能预留的 operation 请求下限。
+
+    Standby 路径会先把 Primary 路径本地阻断到重试上限，再转向
+    Standby。账本会记录并占用这些本地阻断请求，因此预算预检必须把
+    它们算入 `embedding.query`，不能只统计最终发出的 HTTP 请求。
+
+    Args:
+        dataset: 已冻结的公开 Pilot 数据集。
+        lane_count: 当前 Profile 的向量槽数量。
+        max_forwarded_attempts: 验收 Transport 允许的最大尝试次数。
+        reranking_enabled: 当前 Profile 是否配置真实 Reranker。
+
+    Returns:
+        最繁忙知识库所需的查询 Embedding 和 Reranker 请求数。
+
+    Raises:
+        ValueError: 向量槽或最大尝试次数超出验收合同。
+
+    """
+    if lane_count not in {1, 2}:
+        raise ValueError("Pilot 向量槽数量必须为一或二。")
+    if not 1 <= max_forwarded_attempts <= _MAX_PILOT_FORWARDED_ATTEMPTS:
+        raise ValueError("Pilot Provider 最大尝试次数无效。")
+    knowledge_base_ids = {
+        item.document.knowledge_base_id for item in dataset.documents
+    }
+    busiest_case_count = max(
+        (
+            sum(
+                case.knowledge_base_id == knowledge_base_id
+                for case in dataset.cases
+            )
+            for knowledge_base_id in knowledge_base_ids
+        ),
+        default=0,
+    )
+    standby_retry_reservations = (
+        max_forwarded_attempts if lane_count == _DUAL_LANE_COUNT else 0
+    )
+    return {
+        "embedding.query": busiest_case_count
+        * (lane_count + standby_retry_reservations),
+        "reranking": busiest_case_count * lane_count
+        if reranking_enabled
+        else 0,
+    }
+
+
+def _max_forwarded_attempts(config: dict[str, object]) -> int:
+    """读取与验收 Transport 相同的有界尝试次数。"""
+    value = config.get("max_forwarded_attempts", _MAX_PILOT_FORWARDED_ATTEMPTS)
+    if (
+        type(value) is not int
+        or not 1 <= value <= _MAX_PILOT_FORWARDED_ATTEMPTS
+    ):
+        raise ValueError("MAX_FORWARDED_ATTEMPTS_INVALID")
+    return value
+
+
+def run_pilot(  # noqa: PLR0911
     runtime: ProductRuntime,
     config: dict[str, object],
     state: AcceptanceState,
@@ -113,20 +191,58 @@ def run_pilot(
         source.profile_revision_id
     )
     specs = profile_specs(source, runtime.control.get_connection)
-    query_instruct = str(dict(specs[1].query_policy)["query_instruct"])
-    lower_bound = query_budget_lower_bound(dataset, query_instruct)
-    available = {
-        "requests": int(str(budget_summary["request_limit"]))
-        - int(str(budget_summary["reserved"])),
-        "estimated_input_tokens": int(
-            str(budget_summary["estimated_token_limit"])
+    query_instruct = next(
+        (
+            str(value)
+            for spec in specs
+            if (value := dict(spec.query_policy).get("query_instruct"))
+        ),
+        "",
+    )
+    lower_bound = query_budget_lower_bound(
+        dataset, query_instruct, lane_count=len(specs)
+    )
+    try:
+        pilot_approval = _pilot_authorization(config)
+        max_forwarded_attempts = _max_forwarded_attempts(config)
+    except ValueError:
+        return StepResult("BLOCKED", "PILOT_RETRIEVAL_AUTHORIZATION_INVALID")
+    if pilot_approval is None:
+        available = {
+            "requests": int(str(budget_summary["request_limit"]))
+            - int(str(budget_summary["reserved"])),
+            "estimated_input_tokens": int(
+                str(budget_summary["estimated_token_limit"])
+            )
+            - int(str(budget_summary["estimated_input_tokens"])),
+        }
+        additional = {
+            name: max(0, value - available[name])
+            for name, value in lower_bound.items()
+        }
+    else:
+        operation_lower_bound = _operation_request_lower_bound(
+            dataset,
+            lane_count=len(specs),
+            max_forwarded_attempts=max_forwarded_attempts,
+            reranking_enabled=source.reranker_connection_id is not None,
         )
-        - int(str(budget_summary["estimated_input_tokens"])),
-    }
-    additional = {
-        name: max(0, value - available[name])
-        for name, value in lower_bound.items()
-    }
+        operation_limits = pilot_approval.operation_request_limits
+        additional = {
+            "requests": max(
+                0,
+                operation_lower_bound["embedding.query"]
+                - operation_limits.get("embedding.query", 0),
+            ),
+            "estimated_input_tokens": 0,
+            "reranking_requests": max(
+                0,
+                operation_lower_bound["reranking"]
+                - operation_limits.get("reranking", 0),
+            )
+            if source.reranker_connection_id is not None
+            else 0,
+        }
     if any(additional.values()):
         return StepResult(
             "BLOCKED",
@@ -137,21 +253,43 @@ def run_pilot(
                 "dataset_sha256": dataset.dataset_sha256,
                 "minimum_additional": additional,
                 "query_only_lower_bound": lower_bound,
-                "excluded_costs": [
-                    "document_embedding",
-                    "reranking",
-                    "retries",
-                ],
+                "operation_request_lower_bound": (
+                    operation_lower_bound
+                    if pilot_approval is not None
+                    else None
+                ),
+                "max_forwarded_attempts": max_forwarded_attempts,
+                "excluded_costs": (
+                    ["document_embedding"]
+                    if pilot_approval is not None
+                    else ["document_embedding", "reranking", "retries"]
+                ),
                 "quality_ready": "BLOCKED_BUDGET",
             },
         )
     if runtime.providers.test_only_transport:
         return StepResult("NOT_RUN", "MOCK_TRANSPORT_IS_NOT_LIVE")
+    if pilot_approval is None:
+        return StepResult(
+            "BLOCKED",
+            "PILOT_RETRIEVAL_AUTHORIZATION_REQUIRED",
+            {
+                "pilot": True,
+                "sample_count": len(dataset.cases),
+                "dataset_sha256": dataset.dataset_sha256,
+            },
+        )
     context = _PilotRuntime(runtime, config, state, dataset)
     documents, profile_ids = _prepare_corpus(context)
     chunks, revisions = _active_inventory(runtime, documents)
     cases = _remap_cases(dataset, documents)
     cases = _effective_cases(cases, chunks, require_fixed_labels=False)
+    retrieval_campaign_ids = {
+        knowledge_base_id: _pilot_query_campaign_id(context, knowledge_base_id)
+        for knowledge_base_id in sorted(
+            {item.knowledge_base_id for item in documents}
+        )
+    }
     if (
         runtime.control.quality.binding_identity(source.profile_revision_id)
         != binding_identity
@@ -197,6 +335,7 @@ def run_pilot(
             campaign_id=state.campaign_id,
             dataset_sha256=dataset.dataset_sha256,
             case_attempts=attempts,
+            retrieval_budget_campaign_ids=retrieval_campaign_ids,
             provider_models=tuple(
                 f"{spec.provider_id}:{spec.model}" for spec in specs
             ),
@@ -244,6 +383,7 @@ def _prepare_corpus(
     scopes: dict[str, str] = {}
     scoped_profiles: dict[str, str] = {}
     profiles = []
+    authorized_build = _pilot_authorization(context.config) is not None
     for logical_kb in sorted(
         {item.document.knowledge_base_id for item in dataset.documents}
     ):
@@ -254,7 +394,11 @@ def _prepare_corpus(
             idempotency_key=prefix + logical_kb,
         )
         scopes[logical_kb] = kb.knowledge_base_id
-        profile_id = _ensure_profile(context, kb.knowledge_base_id)
+        profile_id = _ensure_profile(
+            context,
+            kb.knowledge_base_id,
+            activate=not authorized_build,
+        )
         scoped_profiles[logical_kb] = profile_id
         profiles.append(profile_id)
     documents = []
@@ -295,7 +439,9 @@ def _prepare_corpus(
                 _PilotJobScope(
                     project.project_id,
                     kb_id,
-                    scoped_profiles[logical.knowledge_base_id],
+                    None
+                    if authorized_build
+                    else scoped_profiles[logical.knowledge_base_id],
                     expected_document_id,
                     document_version_id(
                         expected_document_id,
@@ -315,10 +461,15 @@ def _prepare_corpus(
                 }
             )
         )
+    if authorized_build:
+        for profile_id in profiles:
+            _activate_authorized_profile(context, profile_id)
     return tuple(documents), tuple(profiles)
 
 
-def _ensure_profile(context: _PilotRuntime, kb_id: str) -> str:
+def _ensure_profile(
+    context: _PilotRuntime, kb_id: str, *, activate: bool = True
+) -> str:
     runtime, state = context.runtime, context.state
     source = runtime.control.get_profile(
         str(context.config["source_profile_revision_id"])
@@ -344,11 +495,71 @@ def _ensure_profile(context: _PilotRuntime, kb_id: str) -> str:
         or profile.serving_fingerprint != source.serving_fingerprint
     ):
         raise ValueError("PILOT_PROFILE_BINDING_MISMATCH")
-    if profile.status == "draft":
+    if activate and profile.status == "draft":
         runtime.control.activate_profile(
             profile_id, confirmed_impact=ImpactKind.NEW_INDEX_REVISION_REQUIRED
         )
     return profile_id
+
+
+def _activate_authorized_profile(
+    context: _PilotRuntime, profile_id: str
+) -> None:
+    """用显式 Pilot 批准构建独立远程索引并等待原子激活。"""
+    runtime = context.runtime
+    profile = runtime.control.get_profile(profile_id)
+    if profile.status == "active":
+        return
+    if profile.status != "draft":
+        raise ValueError("PILOT_PROFILE_NOT_ACTIVATABLE")
+    approval = _pilot_authorization(context.config)
+    session_id = context.config.get("pilot_admin_session_id")
+    if approval is None or not isinstance(session_id, str) or not session_id:
+        raise ValueError("PILOT_RETRIEVAL_AUTHORIZATION_REQUIRED")
+    status = runtime.retrieval_authorizations.status(profile_id)
+    if status.authorization_state != "APPROVED":
+        status = runtime.retrieval_authorizations.approve(
+            profile_id,
+            approval,
+            approved_by_session_id=session_id,
+        )
+    if (
+        status.authorization_state != "APPROVED"
+        or status.budget_state != "AVAILABLE"
+        or status.connection_budget_state != "READY"
+    ):
+        raise ValueError("PILOT_RETRIEVAL_AUTHORIZATION_NOT_READY")
+    if profile.activation_job_id is None:
+        profile = runtime.control.activate_profile(
+            profile_id,
+            confirmed_impact=ImpactKind.NEW_INDEX_REVISION_REQUIRED,
+        )
+    job_id = profile.activation_job_id
+    if job_id is None:
+        if profile.status != "active":
+            raise ValueError("PILOT_PROFILE_ACTIVATION_JOB_MISSING")
+        return
+    job = runtime.sdk.get_job(job_id)
+    if job.state.value == "queued":
+        runtime.jobs.submit(job_id)
+    deadline = monotonic() + 120
+    while job.state.value in {"queued", "running"} and monotonic() < deadline:
+        sleep(0.1)
+        job = runtime.sdk.get_job(job_id)
+    if job.state.value != "succeeded":
+        raise ValueError("PILOT_PROFILE_JOB_NOT_SUCCEEDED:" + job.state.value)
+
+
+def _pilot_authorization(
+    config: dict[str, object],
+) -> RetrievalAuthorizationApproval | None:
+    """读取显式 Pilot 累计预算；缺失时保留旧离线诊断路径。"""
+    raw = config.get("pilot_retrieval_authorization")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("PILOT_RETRIEVAL_AUTHORIZATION_INVALID")
+    return RetrievalAuthorizationApproval.model_validate(raw)
 
 
 def _wait_job(context: _PilotRuntime, key: str, scope: _PilotJobScope) -> Job:
@@ -521,10 +732,10 @@ def _query_cases(
     for lane in ("primary", "standby"):
         items = []
         for case in cases:
-            before = {
-                row["attempt_id"]
-                for row in ledger.attempts(context.state.campaign_id)
-            }
+            campaign_id = _pilot_query_campaign_id(
+                context, case.knowledge_base_id
+            )
+            before = {row["attempt_id"] for row in ledger.attempts(campaign_id)}
             started = monotonic()
             result = callback(
                 case.project_id, case.knowledge_base_id, case.query, lane
@@ -569,12 +780,11 @@ def _query_cases(
                     "cache_hit": result.cache_hit,
                 },
             }
-            current = ledger.attempts(context.state.campaign_id)
+            current = ledger.attempts(campaign_id)
             attempts[f"{lane}:{case.case_id}"] = tuple(
                 str(row["attempt_id"])
                 for row in current
                 if row["attempt_id"] not in before
-                and row["step_id"] == "citation_quality"
                 and row["forwarded"]
                 and row["http_status"] == HTTPStatus.OK
                 and row["operation"] == "embedding.query"
@@ -609,6 +819,21 @@ def _query_cases(
             )
         observations[lane] = tuple(items)
     return observations, attempts, source_ranges
+
+
+def _pilot_query_campaign_id(
+    context: _PilotRuntime, knowledge_base_id: str
+) -> str:
+    """优先返回独立 Pilot KB 的资料授权账本，兼容旧验收活动。"""
+    profile = context.runtime.control.active_profile(knowledge_base_id)
+    if profile is None:
+        raise ValueError("Pilot 缺少实际 Profile。")
+    status = context.runtime.retrieval_authorizations.status(
+        profile.profile_revision_id
+    )
+    if status.manifest is not None:
+        return status.manifest.budget_campaign_id
+    return context.state.campaign_id
 
 
 def _record_quality(

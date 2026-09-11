@@ -7,7 +7,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from rag_app.application.answering.service import ExtractiveAnsweringService
 from rag_app.core.errors import (
     ProviderInvalidResponse,
     QueryCancelled,
@@ -68,7 +67,7 @@ _ACTION_MODIFIER = r"(?:牵头|主要|直接|统一|共同|定期)"
 _ACTION_VERB = (
     r"负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
     r"保存|归档|销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|"
-    r"支持|拥有|具备|配备|完成|启动|停止"
+    r"用于|用来|支持|拥有|具备|配备|完成|启动|停止"
 )
 _GENERAL_SUBJECT = re.compile(
     r"^\s*([A-Za-z\u4e00-\u9fff][A-Za-z0-9_\-\u4e00-\u9fff ]{0,40}?)"
@@ -120,7 +119,7 @@ class GroundedOutcome:
     """供检索与历史真实记录的生成结果。"""
 
     answer: str | None
-    mode: Literal["llm", "extractive", "extractive_fallback", "none"]
+    mode: Literal["llm", "none"]
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str | None = None
     published_support_ids: tuple[str, ...] = ()
@@ -247,15 +246,23 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
 
 
 def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
-    """表格联合引用按真实行锚点分组，未知行只允许同一个来源节点。"""
-    base = (item.document_version_id, item.section_id, item.table_locator)
-    if not item.table_context and item.table_locator is None:
-        return {base}
+    """表格按真实行分组，普通正文按真实来源节点分组。"""
     groups: set[tuple[object, ...]] = set()
     for span in item.source_spans:
         anchor = span.source_anchor
         if anchor is None:
-            groups.add((*base, span.node_id))
+            continue
+        if not item.table_context and item.table_locator is None:
+            groups.add(
+                (
+                    "node",
+                    item.document_version_id,
+                    item.section_id,
+                    anchor.part_uri,
+                    anchor.story_kind,
+                    span.node_id,
+                )
+            )
             continue
         row_ends = [
             index + 1
@@ -268,8 +275,85 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
             row = (anchor.table_index, anchor.row_index)
         else:
             row = span.node_id
-        groups.add((*base, anchor.part_uri, anchor.story_kind, row))
+        groups.add(
+            (
+                "table-row",
+                item.document_version_id,
+                item.section_id,
+                item.table_locator,
+                anchor.part_uri,
+                anchor.story_kind,
+                row,
+            )
+        )
     return groups
+
+
+def _claim_source_texts(
+    claim: AnswerClaim, units: list[EvidenceItem]
+) -> tuple[str, ...]:
+    """按可独立证明事实的表格行或原文节点聚合逐字引用。"""
+    grouped: dict[tuple[object, ...], list[str]] = {}
+    for support, item in zip(claim.supports, units, strict=True):
+        groups = _source_groups(item)
+        if len(groups) != 1:
+            raise ValidationFailed(
+                "一个引用跨越不同来源结构。",
+                stage="answer.validate",
+                code="CLAIM_SOURCE_MISMATCH",
+            )
+        group = next(iter(groups))
+        grouped.setdefault(group, []).append(support.quote)
+    return tuple("\n".join(quotes) for quotes in grouped.values())
+
+
+def _validate_clause_support(
+    clause: str, clause_subject: str | None, support_text: str
+) -> None:
+    """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
+    source_clauses = _clauses_with_subject(support_text)
+    subjects = set(_NAMED_SUBJECT.findall(clause))
+    general_subject = _subject(clause)
+    if general_subject:
+        subjects.add(general_subject)
+    if any(subject not in support_text for subject in subjects):
+        raise ValidationFailed(
+            "事实偷换了所引资料的对象。",
+            stage="answer.validate",
+            code="CLAIM_OBJECT_CHANGED",
+        )
+    relevant_sources = [
+        text
+        for text, subject in source_clauses
+        if clause_subject is None
+        or subject is None
+        or clause_subject in subject
+    ]
+    numeric_sources = [
+        text
+        for text in relevant_sources
+        if _action_terms(clause) & _action_terms(text)
+        and _quantity_relation_matches(clause, text)
+    ]
+    if not _number_tokens(clause) <= _number_tokens("\n".join(numeric_sources)):
+        raise ValidationFailed(
+            "事实中的数字或单位缺少来源。",
+            stage="answer.validate",
+            code="CLAIM_NUMBER_UNSUPPORTED",
+        )
+    # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
+    predicate = _predicate(clause)
+    terms = _terms(predicate)
+    supported_terms = terms & _terms("\n".join(relevant_sources))
+    if not terms or len(supported_terms) / len(terms) < (
+        _MIN_SUPPORTED_BIGRAM_RATIO
+    ):
+        raise ValidationFailed(
+            "事实与所引原文缺少支持关系。",
+            stage="answer.validate",
+            code="CLAIM_TEXT_UNSUPPORTED",
+        )
+    _check_negations(clause, relevant_sources)
 
 
 def validate_grounded_draft(
@@ -313,85 +397,42 @@ def validate_grounded_draft(
                     code="CLAIM_QUOTE_INVALID",
                 )
             units.append(item)
-        # 同一事实可以联合同一行/段落的多个 span，不能混接不同表格角色。
-        source_groups = {
-            group for item in units for group in _source_groups(item)
-        }
-        if len(source_groups) != 1:
-            raise ValidationFailed(
-                "单条事实跨越不同来源结构。",
-                stage="answer.validate",
-                code="CLAIM_SOURCE_MISMATCH",
-            )
+        source_texts = _claim_source_texts(claim, units)
         support_text = "\n".join(support.quote for support in claim.supports)
-        source_clauses = _clauses_with_subject(support_text)
         for clause, clause_subject in _clauses_with_subject(claim.text):
-            subjects = set(_NAMED_SUBJECT.findall(clause))
-            general_subject = _subject(clause)
-            if general_subject:
-                subjects.add(general_subject)
-            if any(subject not in support_text for subject in subjects):
+            for source_text in source_texts:
+                try:
+                    _validate_clause_support(
+                        clause, clause_subject, source_text
+                    )
+                except ValidationFailed:
+                    continue
+                break
+            else:
+                # 联合所有引用仍不成立时保留精确语义错误；只有跨来源
+                # 拼接才能成立时，明确标记来源结构不一致。
+                _validate_clause_support(clause, clause_subject, support_text)
                 raise ValidationFailed(
-                    "事实偷换了所引资料的对象。",
+                    "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",
-                    code="CLAIM_OBJECT_CHANGED",
+                    code="CLAIM_SOURCE_MISMATCH",
                 )
-            relevant_sources = [
-                text
-                for text, subject in source_clauses
-                if clause_subject is None
-                or subject is None
-                or clause_subject in subject
-            ]
-            numeric_sources = [
-                text
-                for text in relevant_sources
-                if _action_terms(clause) & _action_terms(text)
-                and _quantity_relation_matches(clause, text)
-            ]
-            if not _number_tokens(clause) <= _number_tokens(
-                "\n".join(numeric_sources)
-            ):
-                raise ValidationFailed(
-                    "事实中的数字或单位缺少来源。",
-                    stage="answer.validate",
-                    code="CLAIM_NUMBER_UNSUPPORTED",
-                )
-            # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
-            predicate = _predicate(clause)
-            terms = _terms(predicate)
-            supported_terms = terms & _terms("\n".join(relevant_sources))
-            if (
-                not terms
-                or len(supported_terms) / len(terms)
-                < _MIN_SUPPORTED_BIGRAM_RATIO
-            ):
-                raise ValidationFailed(
-                    "事实与所引原文缺少支持关系。",
-                    stage="answer.validate",
-                    code="CLAIM_TEXT_UNSUPPORTED",
-                )
-            _check_negations(clause, relevant_sources)
 
 
 class GroundedAnsweringService:
-    """生成不确定性只在合法证据内解决；失败回退保留真实原因。"""
+    """生成不确定性只在合法证据内解决；失败时保留原因并拒答。"""
 
-    def __init__(
-        self, generator: GeneratorPort, fallback: GeneratorPort
-    ) -> None:
-        """绑定生成器和经验证据摘录回退。
+    def __init__(self, generator: GeneratorPort) -> None:
+        """绑定最多执行初次生成与一次修复的生成器。
 
         Args:
             generator: 最多接收初次生成与一次修复请求的生成端口。
-            fallback: 生成失败后使用的证据摘录端口。
 
         Returns:
             无返回值。
 
         """
         self.generator = generator
-        self.fallback = ExtractiveAnsweringService(fallback)
 
     def answer(  # noqa: PLR0912, PLR0913, PLR0915
         self,
@@ -410,13 +451,13 @@ class GroundedAnsweringService:
             query: 用户的原始问题。
             evidence: 已通过资源和引用检查的有限资料。
             confidence: 检索置信状态，不允许越过硬性拒绝。
-            answer_support_set: 已直接支持所问关系的最小集合，供本地回退使用。
+            answer_support_set: 已直接支持所问关系的最小集合，供模型核验使用。
             analysis: 检索、Evidence 与回答共同消费的最终查询分析。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
         Returns:
-            已核验回答或回退结果，包含真实调用和终态原因。
+            已核验回答或明确拒答，包含真实调用和终态原因。
 
         """
         if not evidence or confidence.status not in {
@@ -432,7 +473,7 @@ class GroundedAnsweringService:
             )
         calls: list[ProviderCall] = []
         reason: str | None = None
-        fallback_evidence = (
+        direct_support = (
             evidence if answer_support_set is None else answer_support_set
         )
         for attempt in range(2):
@@ -447,7 +488,7 @@ class GroundedAnsweringService:
                     typed_semantics=(
                         None if analysis is None else analysis.semantics
                     ),
-                    answer_support_set=fallback_evidence,
+                    answer_support_set=direct_support,
                     model_evidence_candidates=evidence,
                 )
                 stream_generate = getattr(
@@ -571,20 +612,11 @@ class GroundedAnsweringService:
                 if published:
                     raise _partial_stream_error(calls) from error
                 reason = "GENERATION_OUTPUT_INVALID"
-        fallback_answer = self.fallback.answer(
-            query,
-            fallback_evidence,
-            confidence,
-            analysis=analysis,
-        )
         return GroundedOutcome(
-            fallback_answer,
-            "extractive_fallback" if fallback_answer else "none",
+            None,
+            "none",
             tuple(calls),
             reason,
-            tuple(item.evidence_id for item in fallback_evidence)
-            if fallback_answer
-            else (),
         )
 
 

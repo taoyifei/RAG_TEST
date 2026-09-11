@@ -139,6 +139,43 @@ def test_failed_build_keeps_old_pointers_and_can_retry(
     assert control.active_revision_id(kb) == retried.revision_id
 
 
+def test_terminal_build_does_not_poison_equivalent_new_draft(
+    indexed: tuple[ProductHarness, str, str, str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新草稿可从相同索引语义的旧终态构建中安全恢复。"""
+    harness, _, kb, _, _ = indexed
+    first = _candidate(indexed, "相同的检索指令")
+
+    def _fail(*_args: object, **_kwargs: object) -> None:
+        raise IndexCorrupt("TEST_ONLY 终态构建失败", stage="test.publication")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            harness.runtime.profiles._resolve(
+                first
+            ).lifecycle._builder._validator,
+            "validate",
+            _fail,
+        )
+        _run(harness, first)
+    failed = harness.runtime.sdk.get_job(first.activation_job_id)
+    assert failed.state.value == "failed_terminal"
+
+    second = _candidate(indexed, "相同的检索指令")
+    assert second.activation_job_id != first.activation_job_id
+    _run(harness, second)
+    completed = harness.runtime.sdk.get_job(second.activation_job_id)
+
+    assert completed.state.value == "succeeded", completed.model_dump_json(
+        indent=2
+    )
+    assert (
+        harness.runtime.control.active_profile(kb).profile_revision_id
+        == second.profile_revision_id
+    )
+
+
 def test_competing_drafts_cannot_overwrite_winning_publication(
     indexed: tuple[ProductHarness, str, str, str, str],
 ) -> None:

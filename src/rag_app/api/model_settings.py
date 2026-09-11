@@ -13,7 +13,6 @@ from rag_app.core.errors import RagError
 from rag_app.core.models import (
     EmbeddingSlotIdentity,
     EmbeddingTopology,
-    RetrievalPolicy,
 )
 from rag_app.core.models.common import FrozenModel
 from rag_app.product.corpus_authorization import (
@@ -469,11 +468,12 @@ def _active_profile_projection(
 ) -> _ProfileStatusProjection:
     """对账活动 Profile 的策略、校准、索引与 Reranker。"""
     try:
-        policy = RetrievalPolicy.model_validate(dict(active.retrieval_policy))
+        policy, _egress, serving_fingerprint = (
+            runtime.profiles.serving_contract(active)
+        )
         calibration_state = policy.dense_semantic_calibration_state
-        serving_fingerprint = runtime.profiles.serving_contract(active)[2]
         reranker_provider_id = "lexical_overlap"
-        reranker_model = "1"
+        reranker_model: str | None = "1"
         if active.reranker_connection_id:
             provider_connection = runtime.control.get_connection(
                 active.reranker_connection_id

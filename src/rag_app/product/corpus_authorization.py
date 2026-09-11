@@ -128,6 +128,27 @@ class CorpusAuthorizationStatus(FrozenModel):
     fallback_reason_codes: tuple[str, ...] = ()
 
 
+def _operation_binding_identity(
+    bindings: tuple[tuple[CorpusOperation, str, str, str], ...],
+) -> str:
+    """按 operation 规范化模型用途绑定，避免集合等价却哈希漂移。"""
+    return canonical_sha256(
+        {
+            "bindings": [
+                {
+                    "operation": operation,
+                    "connection_id": connection_id,
+                    "model": model,
+                    "request_identity": request_identity,
+                }
+                for operation, connection_id, model, request_identity in sorted(
+                    bindings, key=lambda item: item[0]
+                )
+            ]
+        }
+    )
+
+
 class CorpusAuthorizationStore:
     """从当前活动 Revision 计算清单，并追加不可变管理员批准。"""
 
@@ -189,20 +210,8 @@ class CorpusAuthorizationStore:
         request_identities = tuple(
             sorted({item[3] for item in resolved_bindings})
         )
-        operation_binding_identity = canonical_sha256(
-            {
-                "bindings": [
-                    {
-                        "operation": operation,
-                        "connection_id": connection_id,
-                        "model": model,
-                        "request_identity": request_identity,
-                    }
-                    for operation, connection_id, model, request_identity in (
-                        resolved_bindings
-                    )
-                ]
-            }
+        operation_binding_identity = _operation_binding_identity(
+            resolved_bindings
         )
         allowed_models = tuple(sorted({model for _, _, model in bindings}))
         source_hashes = cast(tuple[str, ...], snapshot["source_hashes"])
@@ -210,6 +219,10 @@ class CorpusAuthorizationStore:
         authorization_id = f"corpus-auth-{uuid.uuid4().hex}"
         campaign_id = f"corpus-budget-{uuid.uuid4().hex}"
         project_id = cast(str, snapshot["project_id"])
+        operation_request_limits = {
+            str(operation): int(limit)
+            for operation, limit in approval.operation_request_limits.items()
+        }
         campaign = BudgetCampaign(
             campaign_id=campaign_id,
             authorization_id=authorization_id,
@@ -219,7 +232,7 @@ class CorpusAuthorizationStore:
             approved_request_identities=request_identities,
             provider_request_limits={"aliyun": approval.request_limit},
             provider_token_limits={"aliyun": approval.estimated_token_limit},
-            step_request_limits=dict(approval.operation_request_limits),
+            step_request_limits=operation_request_limits,
             scope_mode="knowledge_base",
             project_id=project_id,
             knowledge_base_id=knowledge_base_id,
@@ -232,7 +245,7 @@ class CorpusAuthorizationStore:
             allowed_models=allowed_models,
             allowed_operations=approval.operations,
             expires_at=approval.expires_at,
-            operation_request_limits=dict(approval.operation_request_limits),
+            operation_request_limits=operation_request_limits,
         )
         ledger = ProviderBudgetLedger(self._ledger_path)
         ledger.create_campaign(campaign)
@@ -572,24 +585,20 @@ class CorpusAuthorizationStore:
         if not set(required) <= set(manifest.operations):
             return "PARTIAL", "CORPUS_OPERATION_NOT_APPROVED"
         bindings = self._operation_bindings(settings, required)
-        current_binding_identity = canonical_sha256(
-            {
-                "bindings": [
-                    {
-                        "operation": operation,
-                        "connection_id": connection_id,
-                        "model": model,
-                        "request_identity": (
-                            self._providers.request_authorization_identity(
-                                connection_id,
-                                operation=operation,
-                                model=model,
-                            )
-                        ),
-                    }
-                    for operation, connection_id, model in bindings
-                ]
-            }
+        current_binding_identity = _operation_binding_identity(
+            tuple(
+                (
+                    operation,
+                    connection_id,
+                    model,
+                    self._providers.request_authorization_identity(
+                        connection_id,
+                        operation=operation,
+                        model=model,
+                    ),
+                )
+                for operation, connection_id, model in bindings
+            )
         )
         if current_binding_identity != manifest.operation_binding_identity:
             return "STALE_MODEL", "CORPUS_MODEL_BINDING_CHANGED"

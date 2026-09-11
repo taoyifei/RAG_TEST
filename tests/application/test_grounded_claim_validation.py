@@ -103,6 +103,17 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
+    """“用于记录”中的用途连接词不能被误识别为业务对象。"""
+    evidence, draft = _supported_draft(
+        "上线申请单 | 发布经理 | 包含版本号、变更说明和回滚方案，"
+        "作为发布准入凭证",
+        "上线申请单用于记录版本号、变更说明和回滚方案，并作为发布准入凭证。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
 @pytest.mark.parametrize(
     "text,claim,code",
     [
@@ -368,6 +379,105 @@ def test_role_and_duty_cannot_join_different_table_rows(location: str) -> None:
     assert error.value.code == "CLAIM_SOURCE_MISMATCH"
 
 
+def test_each_clause_can_bind_to_its_own_cited_source_group() -> None:
+    """一条回答可串联多个独立事实，但每个分句必须有自己的完整来源。"""
+    table_evidence, _ = _table_role_draft("质量主管负责组织验收。")
+    paragraph_evidence, _ = _supported_draft(
+        "需求发起方提交核心材料，完成项目报备登记。",
+        "需求发起方完成项目报备登记。",
+    )
+    paragraph = paragraph_evidence[0].model_copy(update={"evidence_id": "S3"})
+    supports = (
+        *(
+            ClaimSupport(
+                support_id=item.support_id,
+                quote=item.citation_text,
+            )
+            for item in table_evidence
+        ),
+        ClaimSupport(
+            support_id=paragraph.support_id,
+            quote=paragraph.citation_text,
+        ),
+    )
+    draft = AnswerDraft(
+        text=("质量主管负责组织验收；需求发起方完成项目报备登记。"),
+        cited_evidence_ids=tuple(support.support_id for support in supports),
+        claims=(
+            AnswerClaim(
+                text=("质量主管负责组织验收；需求发起方完成项目报备登记。"),
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(draft, (*table_evidence, paragraph))
+
+
+def test_complete_source_group_is_not_rejected_by_an_extra_citation() -> None:
+    """多引一个来源不能推翻已由单一表格行完整支持的事实。"""
+    table_evidence, _ = _table_role_draft("质量主管负责组织验收。")
+    paragraph_evidence, _ = _supported_draft(
+        "需求发起方完成项目报备登记。",
+        "需求发起方完成项目报备登记。",
+    )
+    paragraph = paragraph_evidence[0].model_copy(update={"evidence_id": "S3"})
+    supports = tuple(
+        ClaimSupport(
+            support_id=item.support_id,
+            quote=item.citation_text,
+        )
+        for item in (*table_evidence, paragraph)
+    )
+    draft = AnswerDraft(
+        text="质量主管负责组织验收。",
+        cited_evidence_ids=tuple(support.support_id for support in supports),
+        claims=(
+            AnswerClaim(
+                text="质量主管负责组织验收。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(draft, (*table_evidence, paragraph))
+
+
+def test_subject_and_action_cannot_be_borrowed_across_paragraphs() -> None:
+    """同一章节的两个段落也不能分别借出对象和动作来拼事实。"""
+    role_evidence, _ = _supported_draft("甲部门负责人。", "甲部门负责人。")
+    action_evidence, _ = _supported_draft("负责归档。", "负责归档。")
+    role = role_evidence[0].model_copy(update={"evidence_id": "S1"})
+    action = action_evidence[0].model_copy(
+        update={
+            "evidence_id": "S2",
+            "document_version_id": role.document_version_id,
+            "section_id": role.section_id,
+        }
+    )
+    supports = (
+        ClaimSupport(support_id="S1", quote=role.citation_text),
+        ClaimSupport(support_id="S2", quote=action.citation_text),
+    )
+    draft = AnswerDraft(
+        text="甲部门负责人负责归档。",
+        cited_evidence_ids=("S1", "S2"),
+        claims=(
+            AnswerClaim(
+                text="甲部门负责人负责归档。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, (role, action))
+    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
+
+
 def test_uncited_role_is_not_borrowed_from_question_or_other_evidence() -> None:
     evidence, draft = _table_role_draft(
         "质量主管负责组织验收。", cite_role=False
@@ -413,9 +523,7 @@ def _supported_draft(
     )
 
 
-def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:
     evidence, invalid = _supported_draft(
         "甲部门保存 14 天。", "甲部门保存 4 天。"
     )
@@ -429,9 +537,7 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
     invalid = invalid.model_copy(update={"provider_calls": (call,)})
     generator = Mock()
     generator.generate.return_value = invalid
-    service = GroundedAnsweringService(generator, Mock())
-    fallback = Mock(return_value=None)
-    monkeypatch.setattr(service.fallback, "answer", fallback)
+    service = GroundedAnsweringService(generator)
     outcome = service.answer(
         "保存多久",
         evidence,
@@ -445,7 +551,9 @@ def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls(
         == "CLAIM_NUMBER_UNSUPPORTED"
     )
     assert len(outcome.calls) == 2
-    fallback.assert_called_once()
+    assert outcome.answer is None
+    assert outcome.mode == "none"
+    assert outcome.reason_code == "CLAIM_NUMBER_UNSUPPORTED"
 
 
 def _fact_analysis() -> QueryAnalysis:
@@ -525,12 +633,12 @@ def _abstained_draft() -> AnswerDraft:
         ),
     ),
 )
-def test_model_failures_use_structured_fallback_when_support_is_complete(
+def test_model_failures_refuse_even_when_support_is_complete(
     outcome: AnswerDraft | Exception,
     expected_reason: str,
     expected_calls: int,
 ) -> None:
-    """模型阻断或失败不能覆盖已经闭合的本地事实支持。"""
+    """模型阻断或失败时，完整本地支持也不能绕过真实生成。"""
     evidence = _verified_fact_evidence()
     assert evidence
     generator = Mock()
@@ -538,7 +646,7 @@ def test_model_failures_use_structured_fallback_when_support_is_complete(
         generator.generate.side_effect = outcome
     else:
         generator.generate.return_value = outcome
-    service = GroundedAnsweringService(generator, Mock())
+    service = GroundedAnsweringService(generator)
 
     result = service.answer(
         "合成设备的保管期限是多少？",
@@ -548,10 +656,10 @@ def test_model_failures_use_structured_fallback_when_support_is_complete(
         analysis=_fact_analysis(),
     )
 
-    assert result.mode == "extractive_fallback"
+    assert result.mode == "none"
     assert result.reason_code == expected_reason
-    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
-    assert result.published_support_ids == ("S1",)
+    assert result.answer is None
+    assert result.published_support_ids == ()
     assert generator.generate.call_count == expected_calls
     request = generator.generate.call_args_list[0].args[0]
     assert request.typed_semantics == _fact_analysis().semantics
@@ -571,7 +679,7 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
         stage="generation",
         code="PROVIDER_TIMEOUT",
     )
-    service = GroundedAnsweringService(generator, Mock())
+    service = GroundedAnsweringService(generator)
 
     result = service.answer(
         "合成设备的保管期限是多少？",

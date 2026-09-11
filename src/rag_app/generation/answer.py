@@ -29,10 +29,6 @@ from rag_app.generation.evidence import (
     decide_answerability,
     required_question_anchors,
 )
-from rag_app.generation.question_intent import (
-    QuestionIntent,
-    classify_question_intent,
-)
 from rag_app.generation.question_profile import (
     QuestionProfile,
     legacy_question_profile,
@@ -60,7 +56,6 @@ __all__ = [
 ]
 
 _NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?%?")
-_LONG_CHINESE_TERM_LENGTH = 4
 _LOW_RANK_MAX = 4
 _LOW_SUPPORT_SCORE_MIN = 0.2
 
@@ -243,9 +238,7 @@ class _StreamingClaimState:
         if tuple(final_claims) != self.parser.claims:
             self.parser_error = "STREAMED_CLAIMS_MISMATCH"
             if self.validated_claims:
-                raise _StreamFinalValidationError(
-                    "STREAMED_CLAIMS_MISMATCH"
-                )
+                raise _StreamFinalValidationError("STREAMED_CLAIMS_MISMATCH")
 
     def trace(self) -> dict[str, JsonValue]:
         """返回不含模型正文的增量校验指标。
@@ -397,7 +390,6 @@ class AnswerGenerator:
                     first_request=first_request,
                     evidence=evidence,
                     question=question,
-                    answerability=answerability,
                     calls=calls,
                     generations=generations,
                     trace_context=trace_context,
@@ -408,11 +400,7 @@ class AnswerGenerator:
                 trace={
                     **trace_context,
                     **validated.trace,
-                    **(
-                        {}
-                        if stream_state is None
-                        else stream_state.trace()
-                    ),
+                    **({} if stream_state is None else stream_state.trace()),
                     "first_validation_code": validation_code,
                     "review_triggered": False,
                     "repair_triggered": False,
@@ -475,11 +463,8 @@ class AnswerGenerator:
                 "generations": generations,
             }
             if validated.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT:
-                return _fallback_or_refusal(
-                    question,
-                    evidence,
-                    answerability,
-                    code=RefusalCode.EVIDENCE_INSUFFICIENT,
+                return _refusal(
+                    RefusalCode.EVIDENCE_INSUFFICIENT,
                     model_calls=2,
                     calls=tuple(calls),
                     trace=repair_trace,
@@ -513,11 +498,8 @@ class AnswerGenerator:
                 else "INVALID_MODEL_RESPONSE"
             )
             _record_generation_validation(generations, repair_code)
-            return _fallback_or_refusal(
-                question,
-                evidence,
-                answerability,
-                code=RefusalCode.VALIDATION_FAILED,
+            return _refusal(
+                RefusalCode.VALIDATION_FAILED,
                 model_calls=2,
                 calls=tuple(calls),
                 trace=_repair_failure_trace(
@@ -613,7 +595,6 @@ class AnswerGenerator:
         first_request: StructuredModelRequest,
         evidence: EvidenceBundle,
         question: str,
-        answerability: AnswerabilityDecision,
         calls: list[ExternalCallAudit],
         generations: list[JsonValue],
         trace_context: dict[str, JsonValue],
@@ -624,7 +605,6 @@ class AnswerGenerator:
             first_request: 已执行的首次回答请求。
             evidence: 首次请求使用的同一证据包。
             question: 当前原始问题。
-            answerability: 首次生成前的回答性结论。
             calls: 已完成的外部调用审计记录。
             generations: 已记录的首次生成诊断。
             trace_context: 不含业务正文的回答诊断上下文。
@@ -692,11 +672,8 @@ class AnswerGenerator:
                     calls=tuple(calls),
                     trace=trace,
                 )
-            return _fallback_or_refusal(
-                question,
-                evidence,
-                answerability,
-                code=RefusalCode.VALIDATION_FAILED,
+            return _refusal(
+                RefusalCode.VALIDATION_FAILED,
                 model_calls=2,
                 calls=tuple(calls),
                 trace=trace,
@@ -710,11 +687,8 @@ class AnswerGenerator:
             )
         except _ValidationError as error:
             _record_generation_validation(generations, error.code)
-            return _fallback_or_refusal(
-                question,
-                evidence,
-                answerability,
-                code=RefusalCode.VALIDATION_FAILED,
+            return _refusal(
+                RefusalCode.VALIDATION_FAILED,
                 model_calls=2,
                 calls=tuple(calls),
                 trace=_abstention_trace(
@@ -747,11 +721,8 @@ class AnswerGenerator:
             config=self._config,
         )
         if validated.refusal_code is RefusalCode.EVIDENCE_INSUFFICIENT:
-            return _fallback_or_refusal(
-                question,
-                evidence,
-                answerability,
-                code=RefusalCode.EVIDENCE_INSUFFICIENT,
+            return _refusal(
+                RefusalCode.EVIDENCE_INSUFFICIENT,
                 model_calls=2,
                 calls=tuple(calls),
                 trace=review_trace,
@@ -908,9 +879,7 @@ def _validate_answer(
                 raise _ValidationError("DUPLICATE_CLAIM")
             claims.append(claim)
             claim_source_groups.append(source_groups)
-            selected_units.extend(
-                _claim_evidence_units(raw_claim, units_by_id)
-            )
+            selected_units.extend(_claim_evidence_units(raw_claim, units_by_id))
         except _ValidationError as error:
             dropped_codes[error.code] = dropped_codes.get(error.code, 0) + 1
     if not claims:
@@ -931,9 +900,7 @@ def _validate_answer(
         AnswerMode.PARTIAL: (
             "知识库只能确认以下部分，未找到其余内容的明确依据。"
         ),
-        AnswerMode.SOURCE_SEPARATED: (
-            "下面按模式或来源分别列出。"
-        ),
+        AnswerMode.SOURCE_SEPARATED: ("下面按模式或来源分别列出。"),
     }.get(mode)
     dropped_trace_codes: dict[str, JsonValue] = dict(dropped_codes)
     return AnswerResult(
@@ -1055,8 +1022,7 @@ def _claim_evidence_units(
     claim = cast(dict[str, object], raw_claim)
     support_ids = cast(list[str], claim["support_ids"])
     return tuple(
-        _resolve_support(support_id, units_by_id)
-        for support_id in support_ids
+        _resolve_support(support_id, units_by_id) for support_id in support_ids
     )
 
 
@@ -1070,8 +1036,7 @@ def _selected_support_quality(
         "selected_support_ranks": ranks,
         "min_selected_support_score": min(scores) if scores else None,
         "low_rank_support_count": sum(
-            unit.rerank_rank > _LOW_RANK_MAX
-            or score < _LOW_SUPPORT_SCORE_MIN
+            unit.rerank_rank > _LOW_RANK_MAX or score < _LOW_SUPPORT_SCORE_MIN
             for unit, score in zip(selected_units, scores, strict=True)
         ),
     }
@@ -1119,181 +1084,6 @@ def _refusal(  # noqa: PLR0913
         user_message=user_message or _refusal_message(code),
         trace={} if trace is None else trace,
     )
-
-
-def _fallback_or_refusal(  # noqa: PLR0913
-    question: str,
-    evidence: EvidenceBundle,
-    answerability: AnswerabilityDecision,
-    *,
-    code: RefusalCode,
-    model_calls: int,
-    calls: tuple[ExternalCallAudit, ...],
-    trace: dict[str, JsonValue],
-) -> AnswerResult:
-    """仅对高置信可回答请求发布确定性原文兜底。"""
-    if answerability.status is not AnswerabilityStatus.SUPPORTED:
-        return _refusal(
-            code,
-            model_calls=model_calls,
-            calls=calls,
-            trace=trace,
-        )
-    intent = classify_question_intent(question)
-    limit = 2 if intent is QuestionIntent.DEFINITION else 4
-    selected = _matching_fallback_units(
-        question,
-        evidence,
-        intent=intent,
-        limit=limit,
-    )
-    if not selected:
-        return _refusal(
-            code,
-            model_calls=model_calls,
-            calls=calls,
-            trace=trace,
-        )
-    question_anchors = required_question_anchors(question)
-    if question_anchors and not _units_cover_question_anchors(
-        selected,
-        question_anchors,
-    ):
-        return _refusal(
-            code,
-            model_calls=model_calls,
-            calls=calls,
-            trace=trace,
-        )
-    claims = tuple(
-        AnswerClaim(
-            text=unit.text.strip(),
-            supports=(
-                ClaimSupport(
-                    evidence_id=unit.evidence_id,
-                    chunk_id=unit.chunk_id,
-                    quote=unit.text,
-                    locator=unit.locator.display(),
-                ),
-            ),
-        )
-        for unit in selected
-        if unit.text.strip()
-    )
-    if not claims:
-        return _refusal(
-            code,
-            model_calls=model_calls,
-            calls=calls,
-            trace=trace,
-        )
-    return AnswerResult(
-        status=AnswerStatus.ANSWERED,
-        answer="\n\n".join(claim.text for claim in claims),
-        claims=claims,
-        refusal_code=None,
-        model_calls=model_calls,
-        calls=calls,
-        answer_mode=AnswerMode.EXTRACTIVE_FALLBACK,
-        user_message=None,
-        trace={**trace, "extractive_fallback": True},
-    )
-
-
-def _matching_fallback_units(
-    question: str,
-    evidence: EvidenceBundle,
-    *,
-    intent: QuestionIntent,
-    limit: int,
-) -> tuple[EvidenceUnit, ...]:
-    """按问题关键词和意图对 top evidence units 做确定性窄选。"""
-    terms = _question_terms(question)
-    question_anchors = required_question_anchors(question)
-    ranked: list[tuple[int, int, EvidenceUnit]] = []
-    for index, unit in enumerate(evidence.units):
-        if unit.low_confidence_ocr:
-            continue
-        if question_anchors and not _units_support_question_anchor(
-            (unit,),
-            question_anchors,
-        ):
-            continue
-        searchable = (
-            f"{unit.source_label}\n{unit.text}"
-            if question_anchors
-            else unit.text
-        ).casefold()
-        score = sum(term.casefold() in searchable for term in terms)
-        if intent is QuestionIntent.PROCEDURE and any(
-            marker in unit.text
-            for marker in ("提交", "评估", "确认", "审批", "更新", "执行")
-        ):
-            score += 1
-        if intent is QuestionIntent.ACTOR and any(
-            marker in unit.text for marker in ("责任人", "负责人", "负责")
-        ):
-            score += 1
-        if intent is QuestionIntent.DELIVERABLE and any(
-            marker in unit.text for marker in ("输出", "报告", "文档", "《")
-        ):
-            score += 1
-        if intent is QuestionIntent.DEFINITION and any(
-            marker in unit.text for marker in ("是指", "定义", "简称", "即")
-        ):
-            score += 1
-        if score > 0:
-            ranked.append((-score, index, unit))
-    ranked.sort(key=lambda item: (item[0], item[1]))
-    if len(question_anchors) <= 1:
-        return tuple(item[2] for item in ranked[:limit])
-    selected: list[EvidenceUnit] = []
-    for anchor in question_anchors:
-        match = next(
-            (
-                item[2]
-                for item in ranked
-                if item[2] not in selected
-                and _units_support_question_anchor((item[2],), (anchor,))
-            ),
-            None,
-        )
-        if match is not None:
-            selected.append(match)
-    selected.extend(item[2] for item in ranked if item[2] not in selected)
-    return tuple(selected[:limit])
-
-
-def _question_terms(question: str) -> tuple[str, ...]:
-    normalized = question
-    for marker in (
-        "知识库",
-        "是否记载",
-        "是什么",
-        "什么是",
-        "需要",
-        "哪些",
-        "什么",
-        "如何",
-        "怎么",
-        "完成后",
-        "包括",
-        "内容",
-        "步骤",
-        "流程",
-    ):
-        normalized = normalized.replace(marker, " ")
-    raw_terms = re.findall(r"[A-Za-z0-9-]+|[\u4e00-\u9fff]{2,}", normalized)
-    terms: list[str] = []
-    for term in raw_terms:
-        if term not in terms:
-            terms.append(term)
-        if len(term) > _LONG_CHINESE_TERM_LENGTH and not term.isascii():
-            for start in range(len(term) - 2):
-                fragment = term[start : start + 3]
-                if fragment not in terms:
-                    terms.append(fragment)
-    return tuple(terms)
 
 
 def _refusal_message(code: RefusalCode) -> str:

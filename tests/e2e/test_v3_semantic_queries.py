@@ -113,7 +113,7 @@ def _scope_with_blocks(
         "请把蓝鹊小组的工作模式列出来",
     ),
 )
-def test_synonymous_questions_share_evidence_and_answer(
+def test_synonymous_questions_share_evidence_but_require_model(
     tmp_path: Path, question: str
 ) -> None:
     scope = _scope_with_document(tmp_path)
@@ -125,9 +125,10 @@ def test_synonymous_questions_share_evidence_and_answer(
             SearchRequest(scope=scope, text=question)
         )
 
-    assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
-    assert result.answer is not None
-    assert result.generation_mode == "extractive"
+    assert result.status is ConfidenceStatus.CONFIGURATION_REQUIRED
+    assert result.answer is None
+    assert result.generation_mode == "none"
+    assert result.generation_reason_code == "GENERATOR_NOT_CONFIGURED"
     assert len(result.evidence) == 1
     assert "轮值维护" in result.evidence[0].citation_text
     assert "专项修理" in result.evidence[0].citation_text
@@ -142,7 +143,7 @@ def test_synonymous_questions_share_evidence_and_answer(
     ),
 )
 def test_unsupported_relation_is_refused(tmp_path: Path, question: str) -> None:
-    """只有主题或语义近似、没有所问关系证据时一律拒答。"""
+    """无回答模型时，即使只有弱主题命中也统一明确拒答。"""
     scope = _scope_with_document(tmp_path)
 
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
@@ -150,13 +151,13 @@ def test_unsupported_relation_is_refused(tmp_path: Path, question: str) -> None:
             SearchRequest(scope=scope, text=question)
         )
 
-    assert result.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
+    assert result.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert result.answer is None
     assert result.evidence == ()
     assert result.generation_mode == "none"
 
 
-def test_structured_procedure_returns_lead_in_and_every_step(
+def test_structured_procedure_keeps_evidence_but_requires_model(
     tmp_path: Path,
 ) -> None:
     intro = "设备入库流程包括以下步骤："
@@ -178,9 +179,10 @@ def test_structured_procedure_returns_lead_in_and_every_step(
             SearchRequest(scope=scope, text="设备入库流程有哪些步骤？")
         )
 
-    assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
+    assert result.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert [item.citation_text for item in result.evidence] == [intro, *steps]
-    assert result.answer is not None
+    assert result.answer is None
+    assert result.generation_mode == "none"
 
 
 class _EvidenceTriggeredRewriter:

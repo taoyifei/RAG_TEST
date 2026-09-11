@@ -24,11 +24,7 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.query_text import (
-    context_label_variants,
-    normalize_document_label,
-    select_unique_label_owner,
-)
+from rag_app.core.query_text import select_unique_label_owner
 
 _MIN_TABLE_LABEL_LENGTH = 2
 _MAX_SEMANTIC_RANK = 10
@@ -53,21 +49,10 @@ _TABLE_HEADER_SEMANTICS = {
         r"负责部门|责任部门|责任单位"
     ),
 }
-_MODEL_REVIEWABLE_ANSWER_TYPES = frozenset(
-    {
-        "DEFINITION",
-        "PURPOSE",
-        "DUTIES",
-        "PROCEDURE",
-        "SECTION_SUMMARY",
-    }
-)
-_MIN_MODEL_REVIEW_OVERLAP = 0.4
-_MIN_MODEL_REVIEW_MULTI_CHAR_TERMS = 3
 _TableKey = tuple[str, str, str, str, str, str, str, str, tuple[str, ...]]
 _SpanKey = tuple[object, ...]
 _TableCells = dict[tuple[int, int], dict[_SpanKey, str]]
-_TablePiece = tuple[RankedChunk, SourceSpan, str]
+_EvidencePiece = tuple[RankedChunk, SourceSpan, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +168,7 @@ class EvidenceAssembler:
             ambiguous=ambiguous,
         )
 
-    def _assemble_candidates(  # noqa: PLR0912, PLR0915
+    def _assemble_candidates(
         self,
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
@@ -215,16 +200,6 @@ class EvidenceAssembler:
         )
         if stage_hierarchy is not None:
             return stage_hierarchy
-        descriptive_table = _descriptive_table_evidence(
-            unique_chunks, policy, context
-        )
-        if descriptive_table is not None:
-            return descriptive_table
-        definition_table = _definition_table_evidence(
-            unique_chunks, policy, context
-        )
-        if definition_table is not None:
-            return definition_table
         descriptive_list = _descriptive_list_evidence(
             unique_chunks, policy, context
         )
@@ -342,15 +317,11 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 quote,
                 table_relation=table_spans is not None,
             )
-            model_reviewable = _model_reviewable_span(
-                support,
-                quote,
-                relevance,
-                context,
-                minimum_overlap,
-            )
-            if support.status is not SupportStatus.SUPPORTED and not (
-                allow_uncertain and model_reviewable
+            # 模型候选只要求原文可引用并已通过本次有界检索排序；
+            # 确定性答案规则不能在生成前替模型判定内容是否相关。
+            if (
+                support.status is not SupportStatus.SUPPORTED
+                and not allow_uncertain
             ):
                 continue
             # 精确对象、温度属性与合法量值已逐项证明，中英词面差异不否定该证据。
@@ -367,7 +338,7 @@ def _ranked_citable_spans(  # noqa: PLR0913
                 relevance,
                 context,
                 minimum_overlap,
-                allow_semantic=allow_semantic,
+                allow_semantic=allow_semantic or allow_uncertain,
             )
         ):
             continue
@@ -384,61 +355,6 @@ def _ranked_citable_spans(  # noqa: PLR0913
         key=lambda item: (-item[0], item[1], item[2].chunk_start_char)
     )
     return tuple((span, quote, key) for _, _, span, quote, key in selected)
-
-
-def _model_reviewable_span(
-    support: AnswerSupport,
-    quote: str,
-    relevance: float,
-    context: EvidenceSelectionContext,
-    minimum_overlap: float,
-) -> bool:
-    """判断未直接支持的片段是否真能交给模型核验。
-
-    弱词面命中只属于召回候选，不能仅因存在模型能力就改写最终拒答状态。
-    结构化责任、计数、序号和列举必须先完成现有结构闭合；模型不能从同主题
-    片段推断缺失的责任关系或集合成员。
-
-    Args:
-        support: 当前片段的确定性支持判定。
-        quote: 未修改的真实 SourceSpan 文本。
-        relevance: 当前片段对原问题的词面相关度。
-        context: 当前请求共享的 QueryAnalysis 与路由上下文。
-        minimum_overlap: 普通 Evidence 的最低词面覆盖阈值。
-
-    Returns:
-        片段具有足够对象或表面覆盖、值得由已授权模型核验时为 True。
-
-    """
-    analysis = context.analysis
-    normalized_quote = quote.casefold()
-    reviewable = support.status is SupportStatus.SUPPORTED
-    if (
-        support.status is SupportStatus.UNSUPPORTED
-        and support.answer_type in _MODEL_REVIEWABLE_ANSWER_TYPES
-    ):
-        target = support.query_target.casefold().strip()
-        reviewable = bool(target and target in normalized_quote)
-    elif support.status is SupportStatus.UNCERTAIN:
-        identifiers = tuple(item.casefold() for item in analysis.identifiers)
-        phrases = tuple(item.casefold() for item in analysis.quoted_phrases)
-        if identifiers:
-            reviewable = all(item in normalized_quote for item in identifiers)
-        elif phrases:
-            reviewable = all(item in normalized_quote for item in phrases)
-        else:
-            query_terms = _lexical_terms(analysis.normalized_query)
-            overlap = query_terms & _lexical_terms(quote)
-            multi_char_overlap = sum(len(item) > 1 for item in overlap)
-            required_overlap = max(
-                _MIN_MODEL_REVIEW_OVERLAP,
-                minimum_overlap * 2,
-            )
-            reviewable = bool(query_terms) and (
-                relevance >= required_overlap
-                and multi_char_overlap >= _MIN_MODEL_REVIEW_MULTI_CHAR_TERMS
-            )
-    return reviewable
 
 
 def semantic_candidate_allowed(
@@ -544,71 +460,6 @@ def _table_intersections(
     return selected
 
 
-def _descriptive_table_evidence(
-    candidates: tuple[RankedChunk, ...],
-    policy: RetrievalPolicy,
-    context: EvidenceSelectionContext | None,
-) -> tuple[EvidenceItem, ...] | None:
-    """把同表唯一角色行的多段职责作为完整支持链，保留各自原文引用。"""
-    if context is None:
-        return None
-    request = evaluate_span_support(context.analysis, "")
-    if request.answer_type != "DUTIES":
-        return None
-    groups = _descriptive_table_groups(
-        candidates,
-        request.query_target,
-        context.analysis.semantics.source_qualifier,
-        context.analysis.semantics.context_qualifier,
-    )
-    if not groups:
-        return None
-    # 多个文档的同名角色不能悄悄拼成一个角色，保留明确的来源歧义。
-    if (
-        len(groups) != 1
-        or not groups[0]
-        or not _complete_table_pieces(groups[0])
-    ):
-        return ()
-    pieces = groups[0]
-    counts = Counter(piece[0].hydrated.chunk.chunk_id for piece in pieces)
-    if (
-        len(pieces)
-        > min(
-            policy.max_evidence_items,
-            policy.per_document_cap,
-            policy.per_section_cap,
-        )
-        or max(counts.values()) > policy.max_evidence_items_per_chunk
-        or sum(max(1, (len(piece[2]) + 3) // 4) for piece in pieces)
-        > policy.evidence_token_budget
-    ):
-        return ()
-    span_ids = list(dict.fromkeys(piece[1].node_id for piece in pieces))
-    metadata = freeze_json_object(
-        {
-            "answer_support": {
-                "status": SupportStatus.SUPPORTED.value,
-                "query_target": request.query_target,
-                "requested_relation_or_attribute": "职责",
-                "answer_type": "DUTIES",
-                "support_reason": "TABLE_ROW_ATTRIBUTE",
-                "supporting_span_ids": span_ids,
-            }
-        }
-    )
-    return tuple(
-        _evidence_item(candidate, span, quote, f"S{index}").model_copy(
-            update={
-                "metadata": freeze_json_object(
-                    {**dict(span.metadata), **dict(metadata)}
-                )
-            }
-        )
-        for index, (candidate, span, quote) in enumerate(pieces, 1)
-    )
-
-
 def _stage_hierarchy_evidence(  # noqa: PLR0911, PLR0912
     candidates: tuple[RankedChunk, ...],
     policy: RetrievalPolicy,
@@ -679,7 +530,7 @@ def _stage_hierarchy_evidence(  # noqa: PLR0911, PLR0912
     if len(eligible) != 1:
         return ()
     document_id = next(iter(eligible))
-    pieces: list[_TablePiece] = []
+    pieces: list[_EvidencePiece] = []
     for _group, members in sorted(
         grouped[document_id].items(), key=_stage_group_order
     ):
@@ -800,148 +651,6 @@ def _normalized_structure_text(value: str) -> str:
         r"[\s_\-—–/\\·:：()（）\[\]【】]+",
         "",
         value.casefold(),
-    )
-
-
-def _definition_table_evidence(
-    candidates: tuple[RankedChunk, ...],
-    policy: RetrievalPolicy,
-    context: EvidenceSelectionContext | None,
-) -> tuple[EvidenceItem, ...] | None:
-    """将术语或交付件记录的行名、表头和值闭合为一个支持组。"""
-    if (
-        context is None
-        or context.analysis.semantics.answer_type
-        is not RequestedAnswerType.DEFINITION
-        or not context.analysis.semantics.target
-    ):
-        return None
-    target = context.analysis.semantics.target.casefold()
-    source_qualifier = context.analysis.semantics.source_qualifier
-    tables: dict[
-        _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
-    ] = defaultdict(lambda: defaultdict(dict))
-    for candidate in candidates:
-        chunk = candidate.hydrated.chunk
-        if (
-            chunk.role.value != "table"
-            or not _regular_table_grid(chunk)
-            or (
-                source_qualifier is not None
-                and not source_qualifier_matches(
-                    candidate.hydrated.display_name,
-                    chunk.heading_path,
-                    source_qualifier,
-                )
-            )
-        ):
-            continue
-        for span in chunk.source_spans:
-            location = _table_location(chunk, span)
-            if location is None or span.is_repeated:
-                continue
-            quote = chunk.citation_text[
-                span.chunk_start_char : span.chunk_end_char
-            ].strip()
-            if quote:
-                key, row, column = location
-                tables[key][row, column][_span_key(chunk, span)] = (
-                    candidate,
-                    span,
-                    quote,
-                )
-    groups: list[tuple[_TablePiece, ...]] = []
-    definition_header = _TABLE_HEADER_SEMANTICS["DEFINITION"]
-    for cells in tables.values():
-        rows = {
-            row
-            for (row, column), pieces in cells.items()
-            if row > 0
-            and column == 0
-            and {piece[2].strip().casefold() for piece in pieces.values()}
-            == {target}
-        }
-        if len(rows) != 1:
-            continue
-        row = next(iter(rows))
-        available_columns = {
-            column
-            for (header_row, column), header in cells.items()
-            if header_row == 0
-            and column > 0
-            and cells.get((row, column))
-            and header
-        }
-        definition_columns = {
-            column
-            for column in available_columns
-            if any(
-                definition_header.search(piece[2])
-                for piece in cells[0, column].values()
-            )
-        }
-        subject_headers = {
-            piece[2].strip() for piece in cells.get((0, 0), {}).values()
-        }
-        record_row = any(
-            re.search(r"交付件|交付物|文档|表单|记录", header)
-            for header in subject_headers
-        )
-        selected_columns = (
-            available_columns
-            if record_row
-            else definition_columns or available_columns
-        )
-        if not selected_columns:
-            continue
-        pieces: list[_TablePiece] = list(cells[row, 0].values())
-        for column in sorted(selected_columns):
-            pieces.extend(cells[0, column].values())
-            pieces.extend(cells[row, column].values())
-        unique = tuple(
-            {
-                _span_key(candidate.hydrated.chunk, span): (
-                    candidate,
-                    span,
-                    quote,
-                )
-                for candidate, span, quote in pieces
-            }.values()
-        )
-        groups.append(unique)
-    if len(groups) != 1 or not groups[0]:
-        return None if not groups else ()
-    pieces = groups[0]
-    if not _complete_table_pieces(pieces) or not _list_pieces_fit(
-        pieces, policy
-    ):
-        return ()
-    span_ids = list(
-        dict.fromkeys(
-            span.node_id for _, span, _ in pieces if span.node_id is not None
-        )
-    )
-    metadata = freeze_json_object(
-        {
-            "answer_support": {
-                "status": SupportStatus.SUPPORTED.value,
-                "query_target": context.analysis.semantics.target,
-                "requested_relation_or_attribute": "定义",
-                "answer_type": "DEFINITION",
-                "support_reason": "TABLE_ROW_RECORD",
-                "supporting_span_ids": span_ids,
-            }
-        }
-    )
-    return tuple(
-        _evidence_item(candidate, span, quote, f"S{index}").model_copy(
-            update={
-                "metadata": freeze_json_object(
-                    {**dict(span.metadata), **dict(metadata)}
-                )
-            }
-        )
-        for index, (candidate, span, quote) in enumerate(pieces, 1)
     )
 
 
@@ -1145,200 +854,6 @@ def _list_pieces_fit(
         and sum(max(1, (len(piece[2]) + 3) // 4) for piece in pieces)
         <= policy.evidence_token_budget
     )
-
-
-def _descriptive_table_groups(
-    candidates: tuple[RankedChunk, ...],
-    target: str,
-    source_qualifier: str | None,
-    context_qualifier: str | None,
-) -> list[tuple[_TablePiece, ...]]:
-    context_labels = tuple(
-        (
-            candidate.hydrated.chunk.version.document_id,
-            " ".join(
-                (
-                    candidate.hydrated.display_name,
-                    *candidate.hydrated.chunk.heading_path,
-                )
-            ),
-        )
-        for candidate in candidates
-    )
-    context_owners = {
-        owner
-        for variant in context_label_variants(context_qualifier or "")
-        if (owner := select_unique_label_owner(variant, context_labels))
-        is not None
-    }
-    context_owner = (
-        next(iter(context_owners)) if len(context_owners) == 1 else None
-    )
-    tables: dict[
-        _TableKey, dict[tuple[int, int], dict[_SpanKey, _TablePiece]]
-    ] = defaultdict(lambda: defaultdict(dict))
-    table_contexts: dict[_TableKey, list[str]] = defaultdict(list)
-    for candidate in candidates:
-        chunk = candidate.hydrated.chunk
-        if (
-            chunk.role.value != "table"
-            or not _regular_table_grid(chunk)
-            or (
-                context_owner is not None
-                and chunk.version.document_id != context_owner
-            )
-            or (
-                source_qualifier is not None
-                and not source_qualifier_matches(
-                    candidate.hydrated.display_name,
-                    chunk.heading_path,
-                    source_qualifier,
-                )
-            )
-        ):
-            continue
-        for span in chunk.source_spans:
-            location = _table_location(chunk, span)
-            if location is None or span.is_repeated:
-                continue
-            quote = chunk.citation_text[
-                span.chunk_start_char : span.chunk_end_char
-            ]
-            if quote.strip():
-                key, row, column = location
-                table_contexts[key].append(
-                    " ".join(
-                        (
-                            candidate.hydrated.display_name,
-                            *chunk.heading_path,
-                            quote,
-                        )
-                    )
-                )
-                tables[key][row, column][_span_key(chunk, span)] = (
-                    candidate,
-                    span,
-                    quote,
-                )
-    context_tables = (
-        {
-            key
-            for key, values in table_contexts.items()
-            if any(
-                normalize_document_label(variant)
-                in normalize_document_label(" ".join(values))
-                for variant in context_label_variants(context_qualifier)
-            )
-        }
-        if context_qualifier
-        else set()
-    )
-    groups: list[tuple[_TablePiece, ...]] = []
-    for key, cells in tables.items():
-        if context_tables and key not in context_tables:
-            continue
-        columns = {
-            column
-            for (row, column), pieces in cells.items()
-            if row == 0
-            and column > 0
-            and any(
-                _TABLE_HEADER_SEMANTICS["DUTIES"].search(p[2].strip())
-                for p in pieces.values()
-            )
-        }
-        rows = {
-            row
-            for (row, column), pieces in cells.items()
-            if row > 0
-            and column == 0
-            and {p[2].strip().casefold() for p in pieces.values()} == {target}
-        }
-        if len(rows) != 1 or not columns:
-            continue
-        row = next(iter(rows))
-        subject = tuple(cells[row, 0].values())
-        values = tuple(
-            piece
-            for column in sorted(columns)
-            for piece in cells.get((row, column), {}).values()
-        )
-        if not values:
-            continue
-        pieces = (*subject, *sorted(values, key=_table_piece_order))
-        if any(
-            not _all_cell_nodes_present(
-                (
-                    *subject,
-                    *cells.get((row, column), {}).values(),
-                ),
-                row,
-                column,
-            )
-            for column in columns
-        ):
-            return [()]
-        groups.append(pieces)
-    return groups
-
-
-def _table_piece_order(piece: _TablePiece) -> tuple[int, int]:
-    span = piece[1]
-    return (
-        span.source_anchor.ordinal if span.source_anchor is not None else 0,
-        span.source_start_char or 0,
-    )
-
-
-def _all_cell_nodes_present(
-    pieces: tuple[_TablePiece, ...], row: int, column: int
-) -> bool:
-    actual = {piece[1].node_id for piece in pieces}
-    expected: set[str] = set()
-    for candidate, _, _ in pieces:
-        atoms = dict(candidate.hydrated.chunk.metadata).get("atoms", [])
-        if not isinstance(atoms, list):
-            continue
-        for atom in atoms:
-            if not isinstance(atom, dict):
-                continue
-            metadata = atom.get("metadata", {})
-            if (
-                not isinstance(metadata, dict)
-                or metadata.get("row_index") != row
-            ):
-                continue
-            cells = metadata.get("cell_source_node_ids", {})
-            if isinstance(cells, dict):
-                values = cells.get(str(column), [])
-                if isinstance(values, list):
-                    expected.update(
-                        value for value in values if isinstance(value, str)
-                    )
-    return not expected or expected <= actual
-
-
-def _complete_table_pieces(pieces: tuple[_TablePiece, ...]) -> bool:
-    """跨 chunk 的同一段落必须覆盖整个实际来源范围。"""
-    ranges: dict[str, list[SourceSpan]] = defaultdict(list)
-    for _, span, _ in pieces:
-        if span.node_id:
-            ranges[span.node_id].append(span)
-    for spans in ranges.values():
-        first = spans[0]
-        anchor = first.source_anchor
-        if anchor is None:
-            return False
-        cursor = anchor.source_start_char
-        if cursor is None or anchor.source_end_char is None:
-            return False
-        for span in sorted(spans, key=lambda s: s.source_start_char or 0):
-            if span.source_start_char != cursor or span.source_end_char is None:
-                return False
-            cursor = span.source_end_char
-        if cursor != anchor.source_end_char:
-            return False
-    return True
 
 
 def _requested_columns(

@@ -423,7 +423,7 @@ def test_responsible_party_uses_semantic_header_mapping() -> None:
     assert support["support_reason"] == "SOURCE_RELATION_AND_VALUE"
 
 
-def test_definition_closes_a_complete_delivery_record_row() -> None:
+def test_definition_selects_cell_without_rule_record_answer() -> None:
     candidate = _table(
         rows=(
             ("交付件名称", "责任角色", "交付件说明"),
@@ -442,16 +442,10 @@ def test_definition_closes_a_complete_delivery_record_row() -> None:
         context=_context("星环登记表是什么"),
     )
 
-    assert [item.citation_text for item in evidence] == [
-        "星环登记表",
-        "责任角色",
-        "资料协调员",
-        "交付件说明",
-        "记录设备进场状态",
-    ]
+    assert [item.citation_text for item in evidence] == ["记录设备进场状态"]
     assert all(
         dict(item.metadata)["answer_support"]["support_reason"]
-        == "TABLE_ROW_RECORD"
+        == "SOURCE_RELATION_AND_VALUE"
         for item in evidence
     )
 
@@ -477,11 +471,14 @@ def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
         context=_context("OPC 是啥？"),
     )
 
-    assert [item.citation_text for item in evidence] == [
-        "OPC",
-        "定义",
-        "对象过程控制。",
+    assert [item.citation_text.strip() for item in evidence] == [
+        "对象过程控制。"
     ]
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        != "TABLE_ROW_RECORD"
+        for item in evidence
+    )
     for item in evidence:
         span = item.source_spans[0]
         assert span.chunk_start_char == 0

@@ -204,7 +204,7 @@ def test_probe_sdk_index_embedding_and_reranker_share_persistent_limit(
         harness.close()
 
 
-def test_already_cached_registry_and_independent_registry_share_active_campaign(
+def test_product_requests_ignore_obsolete_global_active_campaign(
     tmp_path: Path,
 ) -> None:
     harness = build_product_harness(tmp_path)
@@ -263,11 +263,10 @@ def test_already_cached_registry_and_independent_registry_share_active_campaign(
         )
         assert first.status == "succeeded"
         assert providers.client_count == 1
-        assert second.status == "failed"
-        assert second.safe_error_code == "BLOCKED_BUDGET"
-        assert second.request_dispatched is False
-        assert ledger.summary("shared-campaign")["forwarded"] == 1
-        assert ledger.summary("shared-campaign")["locally_blocked"] == 1
+        assert second.status == "succeeded"
+        assert ledger.summary("shared-campaign")["forwarded"] == 0
+        assert ledger.summary("shared-campaign")["locally_blocked"] == 0
+        assert ledger.attempts("shared-campaign") == []
     finally:
         other.close()
         harness.close()

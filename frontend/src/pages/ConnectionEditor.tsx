@@ -185,7 +185,7 @@ export function ConnectionEditor({
           <input
             type="number"
             min={1}
-            max={20}
+            max={500}
             value={requestBudget}
             onChange={(e) => setRequestBudget(Number(e.target.value))}
           />

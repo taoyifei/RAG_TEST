@@ -77,7 +77,7 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 26
+        assert migration_count == 27
     finally:
         harness.close()
 
@@ -354,6 +354,83 @@ def test_active_page_profile_drives_dual_index_and_primary_query(
         assert (
             "PROFILE_RUNTIME_CONFIGURATION_INVALID"
             in invalid_plane["fallback_reason_codes"]
+        )
+    finally:
+        harness.close()
+
+
+def test_active_profile_status_uses_effective_dense_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """状态页应展示查询实际使用的 Active Profile 稠密合同。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "synthetic-aliyun-value")
+    harness = build_product_harness(tmp_path)
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _, _, jina_connection, aliyun_connection = create_provider_connections(
+            harness
+        )
+        validate_five_operations(harness, jina_connection, aliyun_connection)
+        activate_hot_standby_profile(
+            harness,
+            knowledge_base_id,
+            jina_connection,
+            aliyun_connection,
+        )
+        job = _wait_for_job(
+            harness,
+            harness.runtime.sdk.create_document(
+                project_id,
+                knowledge_base_id,
+                display_name="公开合成状态文档.docx",
+                content=build_package(
+                    "<w:p><w:r><w:t>活动方案状态使用公开合成文本。</w:t>"
+                    "</w:r></w:p>"
+                ),
+                media_type=_DOCX_MEDIA_TYPE,
+                idempotency_key="active-profile-effective-status",
+            ),
+        )
+        assert job.state.value == "succeeded"
+        active = harness.runtime.profiles.active_profile(knowledge_base_id)
+        assert active is not None
+        base_policy, base_egress, base_serving = (
+            harness.runtime.profiles.serving_contract(active)
+        )
+
+        def _active_serving_contract(*_: object) -> object:
+            return (
+                base_policy.model_copy(
+                    update={
+                        "dense_semantic_enabled": True,
+                        "dense_semantic_calibration_state": "ACTIVE_PROFILE",
+                        "dense_calibrated_vector_spaces": (
+                            "public-synthetic-vector-space",
+                        ),
+                    }
+                ),
+                base_egress,
+                base_serving,
+            )
+
+        monkeypatch.setattr(
+            harness.runtime.profiles,
+            "serving_contract",
+            _active_serving_contract,
+        )
+        response = harness.client.get(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings"
+        )
+
+        assert response.status_code == 200, response.text
+        data_plane = response.json()["retrieval_data_plane"]
+        assert data_plane["dense_calibration_state"] == "ACTIVE_PROFILE"
+        assert (
+            "DENSE_CALIBRATION_MISSING"
+            not in data_plane["fallback_reason_codes"]
         )
     finally:
         harness.close()

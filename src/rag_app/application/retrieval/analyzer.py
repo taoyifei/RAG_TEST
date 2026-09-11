@@ -295,6 +295,14 @@ def _query_constraints(text: str) -> tuple[QueryConstraint, ...]:
             raw = match.group(group)
             if kind is ConstraintKind.IDENTIFIER and _looks_like_phone(raw):
                 continue
+            # “哪一项/哪一步”是在询问对象，不是声明答案数量为一。
+            if (
+                pattern is _COUNT_NUMBER
+                and raw == "一"
+                and start > 0
+                and text[start - 1] == "哪"
+            ):
+                continue
             matches.append((start, end, kind, raw))
     for signal in _NEGATIONS:
         matches.extend(

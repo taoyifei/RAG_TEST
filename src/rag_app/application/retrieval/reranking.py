@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from itertools import zip_longest
 
 from rag_app.application.embedding_router import failure_category
 from rag_app.application.provider_health import (
@@ -73,13 +74,13 @@ class CircuitAwareReranker:
             实际 Provider 或明确 bypass 后的候选与模式。
 
         """
-        limited = candidates[: policy.rerank_candidate_limit]
-        output_limit = min(result_limit, len(limited))
-        if not enabled or not limited:
+        rrf_limited = candidates[: policy.rerank_candidate_limit]
+        output_limit = min(result_limit, len(rrf_limited))
+        if not enabled or not rrf_limited:
             return _bypass(
                 _restore_protected(
-                    limited[:output_limit],
-                    limited,
+                    rrf_limited[:output_limit],
+                    rrf_limited,
                     limit=output_limit,
                     must_keep_limit=policy.must_keep_limit,
                     required_candidate_ids=required_candidate_ids,
@@ -96,8 +97,8 @@ class CircuitAwareReranker:
                     raise
                 return _bypass(
                     _restore_protected(
-                        limited[:output_limit],
-                        limited,
+                        rrf_limited[:output_limit],
+                        rrf_limited,
                         limit=output_limit,
                         must_keep_limit=policy.must_keep_limit,
                         required_candidate_ids=required_candidate_ids,
@@ -107,8 +108,8 @@ class CircuitAwareReranker:
         if not self._circuit.allow_call(key):
             return _bypass(
                 _restore_protected(
-                    limited[:output_limit],
-                    limited,
+                    rrf_limited[:output_limit],
+                    rrf_limited,
                     limit=output_limit,
                     must_keep_limit=policy.must_keep_limit,
                     required_candidate_ids=required_candidate_ids,
@@ -118,6 +119,17 @@ class CircuitAwareReranker:
                     self._circuit.snapshot(key).reason_code
                 ),
             )
+        limited = _diversified_candidates(
+            candidates,
+            limit=policy.rerank_candidate_limit,
+        )
+        limited = _restore_protected(
+            limited,
+            candidates,
+            limit=len(limited),
+            must_keep_limit=policy.must_keep_limit,
+            required_candidate_ids=required_candidate_ids,
+        )
         request = RerankRequest(
             query=query,
             candidates=tuple(
@@ -141,8 +153,8 @@ class CircuitAwareReranker:
             self._circuit.record_failure(key, category)
             return _bypass(
                 _restore_protected(
-                    limited[:output_limit],
-                    limited,
+                    rrf_limited[:output_limit],
+                    rrf_limited,
                     limit=output_limit,
                     must_keep_limit=policy.must_keep_limit,
                     required_candidate_ids=required_candidate_ids,
@@ -179,6 +191,65 @@ def _bounded_text(candidate: RankedChunk, limit: int) -> str:
         return value
     head = int(limit * 0.7)
     return f"{value[:head]}\n[…]\n{value[-(limit - head - 5) :]}"
+
+
+def _diversified_candidates(
+    candidates: tuple[RankedChunk, ...], *, limit: int
+) -> tuple[RankedChunk, ...]:
+    """按逻辑通道轮询形成重排池，避免重复通道挤掉语义候选。
+
+    Args:
+        candidates: 已按 RRF 排序的完整有界候选。
+        limit: 发送给重排器的最大候选数。
+
+    Returns:
+        保留各召回家族覆盖且家族内维持 RRF 顺序的候选。
+
+    """
+    if len(candidates) <= limit:
+        return candidates
+    by_family: dict[str, list[RankedChunk]] = {}
+    for candidate in candidates:
+        families = {
+            _channel_family(item.channel) for item in candidate.contributions
+        }
+        for family in families:
+            by_family.setdefault(family, []).append(candidate)
+    if len(by_family) <= 1:
+        return candidates[:limit]
+
+    selected: list[RankedChunk] = []
+    selected_ids: set[str] = set()
+    families = tuple(sorted(by_family))
+    for row in zip_longest(
+        *(by_family[family] for family in families), fillvalue=None
+    ):
+        for candidate in row:
+            if candidate is None:
+                continue
+            chunk_id = candidate.hydrated.chunk.chunk_id
+            if chunk_id in selected_ids:
+                continue
+            selected.append(candidate)
+            selected_ids.add(chunk_id)
+            if len(selected) == limit:
+                return tuple(selected)
+    for candidate in candidates:
+        if len(selected) == limit:
+            break
+        chunk_id = candidate.hydrated.chunk.chunk_id
+        if chunk_id not in selected_ids:
+            selected.append(candidate)
+            selected_ids.add(chunk_id)
+    return tuple(selected)
+
+
+def _channel_family(channel: str) -> str:
+    """把原问、改写和 Provider 槽归并为同一逻辑召回家族。"""
+    for family in ("lexical", "structural", "dense"):
+        if channel.startswith(f"{family}:"):
+            return family
+    return channel
 
 
 def _validate_and_order(

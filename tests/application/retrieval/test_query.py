@@ -355,6 +355,20 @@ def test_analyzer_strips_only_boundary_discourse_particles() -> None:
     assert analysis.semantics.answer_type is RequestedAnswerType.ENUMERATION
 
 
+def test_analyzer_does_not_treat_which_step_as_a_fixed_count() -> None:
+    analysis = _analyze(
+        "我第一次接触开发中心的项目流程，想申请他们支持一个新项目，"
+        "应该从哪一步开始，后续通常怎么推进？"
+    )
+
+    assert analysis.semantics.answer_type is RequestedAnswerType.PROCEDURE
+    assert analysis.semantics.expected_count is None
+    assert not any(
+        constraint.raw_text == "一"
+        for constraint in analysis.semantics.constraints
+    )
+
+
 @pytest.mark.parametrize(
     ("question", "target", "relation", "answer_type"),
     (

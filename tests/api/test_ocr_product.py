@@ -278,7 +278,7 @@ def _active_ir(scenario: _Scenario) -> DocumentIR:
     return DocumentIR.model_validate_json(str(row[0]))
 
 
-def test_ocr_product_answers_image_fact_and_opens_the_scoped_source(
+def test_ocr_product_retrieves_image_fact_and_opens_the_scoped_source(
     tmp_path: Path,
 ) -> None:
     scenario = _prepare(tmp_path)
@@ -294,11 +294,11 @@ def test_ocr_product_answers_image_fact_and_opens_the_scoped_source(
         job = scenario.recognize()
         assert len(scenario.calls) == 1
         after = scenario.answer()
-        assert after["confidence"]["status"] == "ANSWERABLE"
-        assert (
-            "27" in after["answer"] and after["generation_mode"] == "extractive"
-        )
+        assert after["confidence"]["status"] == "CONFIGURATION_REQUIRED"
+        assert after["answer"] is None
+        assert after["generation_mode"] == "none"
         evidence = after["evidence"][0]
+        assert "27" in evidence["citation_text"]
         metadata = dict(evidence["metadata"])
         assert metadata["origin"] == "ocr"
         assert metadata["media_part_uri"] == "/word/media/ocr-source.png"

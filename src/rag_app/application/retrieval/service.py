@@ -1,4 +1,4 @@
-"""P07 Active Snapshot 到 extractive answer 的统一同步路由。"""
+"""P07 Active Snapshot 到模型证据回答的统一同步路由。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from time import perf_counter
 from typing import Literal
 
-from rag_app.application.answering import ExtractiveAnsweringService
 from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
@@ -184,8 +183,7 @@ class RetrievalService:
         self._dense = DenseChannel(query_embedding, vector_store)
         self._reranker = CircuitAwareReranker(reranker)
         reranker_descriptor = reranker.descriptor
-        self._answering = ExtractiveAnsweringService(generator)
-        self._generator = generator
+        self._default_generator_descriptor = generator.descriptor
         self._grounded: GroundedAnsweringService | None = None
         self._interpreter: QueryInterpretPort | None = None
         self._rewriter: QueryRewritePort | None = None
@@ -195,7 +193,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-structured-answer-v4",
+                "retrieval_implementation": "v3-07-grounded-answer-v10",
             }
         )
         self._egress = egress_policy
@@ -262,13 +260,11 @@ class RetrievalService:
 
         """
         configured = copy(self)
-        configured._grounded = GroundedAnsweringService(
-            generator, self._generator
-        )
+        configured._grounded = GroundedAnsweringService(generator)
         configured._interpreter = interpreter
         configured._rewriter = rewriter
         descriptor = getattr(
-            generator, "descriptor", self._generator.descriptor
+            generator, "descriptor", self._default_generator_descriptor
         )
         configured._data_plane_context = replace(
             self._data_plane_context,
@@ -344,7 +340,7 @@ class RetrievalService:
                 已交付后。
 
         Returns:
-            实际 route/rerank、证据、置信和 extractive answer。
+            实际 route/rerank、证据、置信和模型回答或明确拒答。
 
         Raises:
             IndexNotReady: 没有 Active Revision。
@@ -976,35 +972,25 @@ class RetrievalService:
                 _emit_stage(
                     on_stage,
                     "generation",
-                    {"mode": "final_only"},
+                    {"mode": "model_required"},
                     provider_calls,
                 )
-                answer = self._answering.answer(
-                    effective_analysis.original_query,
-                    evidence,
-                    confidence,
-                    analysis=effective_analysis,
+                # 正常查询必须由模型实际读取本次候选。未挂载模型时明确
+                # 拒答，不能调用确定性表格或摘录 renderer 代替生成。
+                answer = None
+                generation_reason = _generation_unavailable_reason(
+                    self._data_plane_context
                 )
-                generation_mode = "extractive" if answer is not None else "none"
-                if answer is not None:
-                    blocker = _configured_generation_blocker(
-                        self._data_plane_context
-                    )
-                    if blocker is None:
-                        generation_reason = "STRUCTURED_RENDERED"
-                    else:
-                        generation_mode = "extractive_fallback"
-                        generation_reason = blocker
-                        degraded.append(blocker)
+                degraded.append(generation_reason)
         except QueryCancelled as error:
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except StreamDeliveryError:
             raise
         except ValidationFailed as error:
-            # 模型输出校验已在 GroundedAnsweringService 内完成修复或回退；
-            # 这里逸出的 ValidationFailed 代表本地 renderer/最终发布合同损坏，
-            # 不能伪装成远程 Provider 不可用。
+            # 模型输出校验已在 GroundedAnsweringService 内完成修复；
+            # 这里逸出的 ValidationFailed 代表最终发布合同损坏，不能
+            # 伪装成远程 Provider 不可用。
             error.provider_calls = (*provider_calls, *error.provider_calls)
             raise
         except (RagError, ValueError) as error:
@@ -1020,15 +1006,7 @@ class RetrievalService:
                 }
             )
             answer = None
-        if (
-            answer is None
-            and not evidence
-            and any(
-                _diagnostic_support_status(item) in {"UNCERTAIN", "UNSUPPORTED"}
-                for item in model_evidence_candidates
-            )
-            and confidence.status is ConfidenceStatus.INSUFFICIENT_EVIDENCE
-        ):
+        if answer is None:
             blocked_status = _model_capability_status(
                 self._data_plane_context,
                 generation_reason,
@@ -1048,8 +1026,26 @@ class RetrievalService:
                 )
                 degraded.append(blocked_reason)
                 generation_reason = blocked_reason
+            elif (
+                self._grounded is not None
+                and confidence.status is ConfidenceStatus.ANSWERABLE
+            ):
+                # 直接证据只能作为模型输入；模型弃答或连续两次输出未通过
+                # 逐字引用校验时，不能让规则把检索状态冒充成最终答案状态。
+                failure_reason = generation_reason or "GENERATION_FAILED"
+                confidence = confidence.model_copy(
+                    update={
+                        "status": ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                        "score": 0.0,
+                        "reason_codes": tuple(
+                            dict.fromkeys(
+                                (*confidence.reason_codes, failure_reason)
+                            )
+                        ),
+                    }
+                )
         if on_claim is not None:
-            # 没有增量 claim 的拒答、摘录或 final-only 路径也必须在 final
+            # 没有增量 claim 的拒答或 final-only 路径也必须在 final
             # 前重查删除/撤权，且仍坚持请求开始时冻结的 revision。
             try:
                 self._validate_stream_sources(evidence, request, snapshot)
@@ -1406,7 +1402,7 @@ class RetrievalService:
                 "semantic_policy": "shared-query-semantics-v3-07",
                 "rewrite_policy": "bounded-rewrite-v3",
                 "answer_support_policy": "minimum-supported-set-v3-07",
-                "structured_renderer_policy": "source-span-renderer-v1",
+                "answer_generation_policy": "model-grounded-claims-v1",
             }
         )
         return BaseResultCacheKey(
@@ -1442,7 +1438,7 @@ class RetrievalService:
             limit=request.limit,
             dense_required=request.dense_required,
             generation_behavior=(
-                "grounded" if self._grounded is not None else "extractive"
+                "grounded" if self._grounded is not None else "model_required"
             ),
             include_related_content=request.include_related_content,
             related_policy_version=DISPLAY_POLICY.version,
@@ -1470,7 +1466,6 @@ class RetrievalService:
         if (
             result.status is ConfidenceStatus.ANSWERABLE
             and not rerank_dependency_failed(result.rerank_execution_mode)
-            and result.generation_mode != "extractive_fallback"
         ):
             _raise_if_cancelled(cancellation)
             self._cache.put(result.cache_key, result, ttl_seconds=300)
@@ -1852,14 +1847,25 @@ def _formal_span_is_current(
     item: EvidenceItem,
 ) -> bool:
     """正式引用采用引用片段内偏移，来源身份和原文字节仍必须完全匹配。"""
-    quote = chunk.citation_text[
+    raw_quote = chunk.citation_text[
         original.chunk_start_char : original.chunk_end_char
     ]
-    return (
-        span
-        == original.model_copy(
-            update={"chunk_start_char": 0, "chunk_end_char": len(quote)}
+    quote = raw_quote.strip()
+    leading_trim = len(raw_quote) - len(raw_quote.lstrip())
+    updates: dict[str, int] = {
+        "chunk_start_char": 0,
+        "chunk_end_char": len(quote),
+    }
+    if original.source_start_char is not None:
+        source_start = original.source_start_char + leading_trim
+        updates.update(
+            {
+                "source_start_char": source_start,
+                "source_end_char": source_start + len(quote),
+            }
         )
+    return (
+        span == original.model_copy(update=updates)
         and item.citation_text == quote
     )
 
@@ -2006,6 +2012,13 @@ def _configured_generation_blocker(
         已配置但被阻断时的具体原因；未配置或可用时为空。
 
     """
+    # OCR 等非回答用途会共享统一模型状态与语料授权字段；只有回答
+    # Provider 或模型身份实际存在时，才允许这些状态阻断 generation。
+    if (
+        context.generation_provider_id is None
+        and context.generation_model is None
+    ):
+        return None
     if context.model_configuration_state == "NOT_CONFIGURED":
         return None
     if context.model_configuration_state == "INVALID":
@@ -2049,7 +2062,7 @@ def _generation_unavailable_reason(
     return _configured_generation_blocker(context) or "GENERATOR_NOT_CONFIGURED"
 
 
-def _model_capability_status(
+def _model_capability_status(  # noqa: PLR0911
     context: QueryDataPlaneContext,
     reason: str | None,
 ) -> tuple[ConfidenceStatus, str] | None:
@@ -2064,65 +2077,73 @@ def _model_capability_status(
         时为空，由 Evidence 语义继续保持证据不足。
 
     """
-    normalized = (reason or "").upper()
-    projected: tuple[ConfidenceStatus, str] | None = None
-    if "BUDGET" in normalized:
-        projected = (
-            ConfidenceStatus.BUDGET_BLOCKED,
-            reason or "BLOCKED_BUDGET",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "CONFIGURATION",
-            "CREDENTIAL",
-            "AUTHENTICATION",
-            "GENERATOR_NOT_CONFIGURED",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.CONFIGURATION_REQUIRED,
-            reason or "CONFIGURATION_REQUIRED",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "POLICY_DENIED",
-            "NOT_AUTHORIZED",
-            "AUTHORIZATION_DENIED",
-            "AUTHORIZATION_REQUIRED",
-            "SOURCE_UNAVAILABLE",
-            "CORPUS_AUTHORIZATION",
-            "BUSINESS_AUTHORIZATION",
-            "BUSINESS_SOURCE",
-            "BUSINESS_MODEL_OPERATION",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.POLICY_DENIED,
-            reason or "POLICY_DENIED",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "PROVIDER_UNAVAILABLE",
-            "PROVIDER_RATE_LIMITED",
-            "PROVIDER_TIMEOUT",
-            "HTTP_429",
-            "CONNECT_TIMEOUT",
-            "READ_TIMEOUT",
-            "UPSTREAM",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.PROVIDER_UNAVAILABLE,
-            reason or "PROVIDER_UNAVAILABLE",
-        )
-    if projected is not None:
-        return projected
     blocker = _configured_generation_blocker(context)
+    for candidate in dict.fromkeys((reason, blocker)):
+        normalized = (candidate or "").upper()
+        if "BUDGET" in normalized:
+            return (
+                ConfidenceStatus.BUDGET_BLOCKED,
+                candidate or "BLOCKED_BUDGET",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "CONFIGURATION",
+                "CREDENTIAL",
+                "AUTHENTICATION",
+                "GENERATOR_NOT_CONFIGURED",
+            )
+        ):
+            return (
+                ConfidenceStatus.CONFIGURATION_REQUIRED,
+                candidate or "CONFIGURATION_REQUIRED",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "POLICY_DENIED",
+                "NOT_AUTHORIZED",
+                "AUTHORIZATION_DENIED",
+                "AUTHORIZATION_REQUIRED",
+                "SOURCE_UNAVAILABLE",
+                "CORPUS_AUTHORIZATION",
+                "CORPUS_MODEL_BINDING_CHANGED",
+                "BUSINESS_AUTHORIZATION",
+                "BUSINESS_SOURCE",
+                "BUSINESS_MODEL_OPERATION",
+            )
+        ):
+            return (
+                ConfidenceStatus.POLICY_DENIED,
+                candidate or "POLICY_DENIED",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "PROVIDER_UNAVAILABLE",
+                "PROVIDER_INVALID_RESPONSE",
+                "PROVIDER_RATE_LIMITED",
+                "PROVIDER_TIMEOUT",
+                "GENERATION_JSON_INVALID",
+                "GENERATION_OUTPUT_INVALID",
+                "HTTP_429",
+                "CONNECT_TIMEOUT",
+                "READ_TIMEOUT",
+                "UPSTREAM",
+            )
+        ):
+            return (
+                ConfidenceStatus.PROVIDER_UNAVAILABLE,
+                candidate or "PROVIDER_UNAVAILABLE",
+            )
     if blocker is not None:
-        return _model_capability_status(context, blocker)
+        # 配置层已经确认远程模型不可用；即使未来出现新的稳定原因码，
+        # 也必须按状态投影并终止，不能递归处理同一个未知原因。
+        if context.model_configuration_state == "INVALID":
+            return ConfidenceStatus.CONFIGURATION_REQUIRED, blocker
+        if context.budget_state in {"EXHAUSTED", "BLOCKED"}:
+            return ConfidenceStatus.BUDGET_BLOCKED, blocker
+        return ConfidenceStatus.POLICY_DENIED, blocker
     if (
         context.model_configuration_state == "NOT_CONFIGURED"
         and context.report_model_capability_blockers
