@@ -115,6 +115,43 @@ def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
 
 
 @pytest.mark.parametrize(
+    "claim",
+    [
+        "需要准备测试报告和版本需求确认记录。",
+        "上线前需要准备测试报告和版本需求确认记录。",
+    ],
+)
+def test_action_context_is_not_mistaken_for_a_changed_subject(
+    claim: str,
+) -> None:
+    """口语化时间和动作前缀不是模型新编的业务对象。"""
+    evidence, draft = _supported_draft(
+        "输入 | 测试报告、版本需求确认记录（灵畿系统）",
+        claim,
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "需要乙部门负责设备维护。",
+        "上线前乙部门负责设备维护。",
+    ],
+)
+def test_action_context_does_not_hide_a_changed_subject(claim: str) -> None:
+    evidence, draft = _supported_draft(
+        "甲部门负责设备维护。",
+        claim,
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+@pytest.mark.parametrize(
     "text,claim,code",
     [
         (
