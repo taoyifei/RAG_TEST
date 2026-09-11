@@ -158,7 +158,7 @@ class ProductModelSettings:
             "prompt": "grounded-chat-v2",
             "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
-            "validation": "claim-support-v3",
+            "validation": "claim-support-v4",
             "answer_selection": "shared-query-semantics-v1",
         }
         if settings.generation_connection_id:

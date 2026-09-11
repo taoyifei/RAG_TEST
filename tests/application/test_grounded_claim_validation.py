@@ -379,6 +379,105 @@ def test_role_and_duty_cannot_join_different_table_rows(location: str) -> None:
     assert error.value.code == "CLAIM_SOURCE_MISMATCH"
 
 
+def test_each_clause_can_bind_to_its_own_cited_source_group() -> None:
+    """一条回答可串联多个独立事实，但每个分句必须有自己的完整来源。"""
+    table_evidence, _ = _table_role_draft("质量主管负责组织验收。")
+    paragraph_evidence, _ = _supported_draft(
+        "需求发起方提交核心材料，完成项目报备登记。",
+        "需求发起方完成项目报备登记。",
+    )
+    paragraph = paragraph_evidence[0].model_copy(update={"evidence_id": "S3"})
+    supports = (
+        *(
+            ClaimSupport(
+                support_id=item.support_id,
+                quote=item.citation_text,
+            )
+            for item in table_evidence
+        ),
+        ClaimSupport(
+            support_id=paragraph.support_id,
+            quote=paragraph.citation_text,
+        ),
+    )
+    draft = AnswerDraft(
+        text=("质量主管负责组织验收；需求发起方完成项目报备登记。"),
+        cited_evidence_ids=tuple(support.support_id for support in supports),
+        claims=(
+            AnswerClaim(
+                text=("质量主管负责组织验收；需求发起方完成项目报备登记。"),
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(draft, (*table_evidence, paragraph))
+
+
+def test_complete_source_group_is_not_rejected_by_an_extra_citation() -> None:
+    """多引一个来源不能推翻已由单一表格行完整支持的事实。"""
+    table_evidence, _ = _table_role_draft("质量主管负责组织验收。")
+    paragraph_evidence, _ = _supported_draft(
+        "需求发起方完成项目报备登记。",
+        "需求发起方完成项目报备登记。",
+    )
+    paragraph = paragraph_evidence[0].model_copy(update={"evidence_id": "S3"})
+    supports = tuple(
+        ClaimSupport(
+            support_id=item.support_id,
+            quote=item.citation_text,
+        )
+        for item in (*table_evidence, paragraph)
+    )
+    draft = AnswerDraft(
+        text="质量主管负责组织验收。",
+        cited_evidence_ids=tuple(support.support_id for support in supports),
+        claims=(
+            AnswerClaim(
+                text="质量主管负责组织验收。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(draft, (*table_evidence, paragraph))
+
+
+def test_subject_and_action_cannot_be_borrowed_across_paragraphs() -> None:
+    """同一章节的两个段落也不能分别借出对象和动作来拼事实。"""
+    role_evidence, _ = _supported_draft("甲部门负责人。", "甲部门负责人。")
+    action_evidence, _ = _supported_draft("负责归档。", "负责归档。")
+    role = role_evidence[0].model_copy(update={"evidence_id": "S1"})
+    action = action_evidence[0].model_copy(
+        update={
+            "evidence_id": "S2",
+            "document_version_id": role.document_version_id,
+            "section_id": role.section_id,
+        }
+    )
+    supports = (
+        ClaimSupport(support_id="S1", quote=role.citation_text),
+        ClaimSupport(support_id="S2", quote=action.citation_text),
+    )
+    draft = AnswerDraft(
+        text="甲部门负责人负责归档。",
+        cited_evidence_ids=("S1", "S2"),
+        claims=(
+            AnswerClaim(
+                text="甲部门负责人负责归档。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, (role, action))
+    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
+
+
 def test_uncited_role_is_not_borrowed_from_question_or_other_evidence() -> None:
     evidence, draft = _table_role_draft(
         "质量主管负责组织验收。", cite_role=False

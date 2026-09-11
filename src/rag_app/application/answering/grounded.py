@@ -246,15 +246,23 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
 
 
 def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
-    """表格联合引用按真实行锚点分组，未知行只允许同一个来源节点。"""
-    base = (item.document_version_id, item.section_id, item.table_locator)
-    if not item.table_context and item.table_locator is None:
-        return {base}
+    """表格按真实行分组，普通正文按真实来源节点分组。"""
     groups: set[tuple[object, ...]] = set()
     for span in item.source_spans:
         anchor = span.source_anchor
         if anchor is None:
-            groups.add((*base, span.node_id))
+            continue
+        if not item.table_context and item.table_locator is None:
+            groups.add(
+                (
+                    "node",
+                    item.document_version_id,
+                    item.section_id,
+                    anchor.part_uri,
+                    anchor.story_kind,
+                    span.node_id,
+                )
+            )
             continue
         row_ends = [
             index + 1
@@ -267,8 +275,85 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
             row = (anchor.table_index, anchor.row_index)
         else:
             row = span.node_id
-        groups.add((*base, anchor.part_uri, anchor.story_kind, row))
+        groups.add(
+            (
+                "table-row",
+                item.document_version_id,
+                item.section_id,
+                item.table_locator,
+                anchor.part_uri,
+                anchor.story_kind,
+                row,
+            )
+        )
     return groups
+
+
+def _claim_source_texts(
+    claim: AnswerClaim, units: list[EvidenceItem]
+) -> tuple[str, ...]:
+    """按可独立证明事实的表格行或原文节点聚合逐字引用。"""
+    grouped: dict[tuple[object, ...], list[str]] = {}
+    for support, item in zip(claim.supports, units, strict=True):
+        groups = _source_groups(item)
+        if len(groups) != 1:
+            raise ValidationFailed(
+                "一个引用跨越不同来源结构。",
+                stage="answer.validate",
+                code="CLAIM_SOURCE_MISMATCH",
+            )
+        group = next(iter(groups))
+        grouped.setdefault(group, []).append(support.quote)
+    return tuple("\n".join(quotes) for quotes in grouped.values())
+
+
+def _validate_clause_support(
+    clause: str, clause_subject: str | None, support_text: str
+) -> None:
+    """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
+    source_clauses = _clauses_with_subject(support_text)
+    subjects = set(_NAMED_SUBJECT.findall(clause))
+    general_subject = _subject(clause)
+    if general_subject:
+        subjects.add(general_subject)
+    if any(subject not in support_text for subject in subjects):
+        raise ValidationFailed(
+            "事实偷换了所引资料的对象。",
+            stage="answer.validate",
+            code="CLAIM_OBJECT_CHANGED",
+        )
+    relevant_sources = [
+        text
+        for text, subject in source_clauses
+        if clause_subject is None
+        or subject is None
+        or clause_subject in subject
+    ]
+    numeric_sources = [
+        text
+        for text in relevant_sources
+        if _action_terms(clause) & _action_terms(text)
+        and _quantity_relation_matches(clause, text)
+    ]
+    if not _number_tokens(clause) <= _number_tokens("\n".join(numeric_sources)):
+        raise ValidationFailed(
+            "事实中的数字或单位缺少来源。",
+            stage="answer.validate",
+            code="CLAIM_NUMBER_UNSUPPORTED",
+        )
+    # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
+    predicate = _predicate(clause)
+    terms = _terms(predicate)
+    supported_terms = terms & _terms("\n".join(relevant_sources))
+    if not terms or len(supported_terms) / len(terms) < (
+        _MIN_SUPPORTED_BIGRAM_RATIO
+    ):
+        raise ValidationFailed(
+            "事实与所引原文缺少支持关系。",
+            stage="answer.validate",
+            code="CLAIM_TEXT_UNSUPPORTED",
+        )
+    _check_negations(clause, relevant_sources)
 
 
 def validate_grounded_draft(
@@ -312,65 +397,26 @@ def validate_grounded_draft(
                     code="CLAIM_QUOTE_INVALID",
                 )
             units.append(item)
-        # 同一事实可以联合同一行/段落的多个 span，不能混接不同表格角色。
-        source_groups = {
-            group for item in units for group in _source_groups(item)
-        }
-        if len(source_groups) != 1:
-            raise ValidationFailed(
-                "单条事实跨越不同来源结构。",
-                stage="answer.validate",
-                code="CLAIM_SOURCE_MISMATCH",
-            )
+        source_texts = _claim_source_texts(claim, units)
         support_text = "\n".join(support.quote for support in claim.supports)
-        source_clauses = _clauses_with_subject(support_text)
         for clause, clause_subject in _clauses_with_subject(claim.text):
-            subjects = set(_NAMED_SUBJECT.findall(clause))
-            general_subject = _subject(clause)
-            if general_subject:
-                subjects.add(general_subject)
-            if any(subject not in support_text for subject in subjects):
+            for source_text in source_texts:
+                try:
+                    _validate_clause_support(
+                        clause, clause_subject, source_text
+                    )
+                except ValidationFailed:
+                    continue
+                break
+            else:
+                # 联合所有引用仍不成立时保留精确语义错误；只有跨来源
+                # 拼接才能成立时，明确标记来源结构不一致。
+                _validate_clause_support(clause, clause_subject, support_text)
                 raise ValidationFailed(
-                    "事实偷换了所引资料的对象。",
+                    "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",
-                    code="CLAIM_OBJECT_CHANGED",
+                    code="CLAIM_SOURCE_MISMATCH",
                 )
-            relevant_sources = [
-                text
-                for text, subject in source_clauses
-                if clause_subject is None
-                or subject is None
-                or clause_subject in subject
-            ]
-            numeric_sources = [
-                text
-                for text in relevant_sources
-                if _action_terms(clause) & _action_terms(text)
-                and _quantity_relation_matches(clause, text)
-            ]
-            if not _number_tokens(clause) <= _number_tokens(
-                "\n".join(numeric_sources)
-            ):
-                raise ValidationFailed(
-                    "事实中的数字或单位缺少来源。",
-                    stage="answer.validate",
-                    code="CLAIM_NUMBER_UNSUPPORTED",
-                )
-            # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
-            predicate = _predicate(clause)
-            terms = _terms(predicate)
-            supported_terms = terms & _terms("\n".join(relevant_sources))
-            if (
-                not terms
-                or len(supported_terms) / len(terms)
-                < _MIN_SUPPORTED_BIGRAM_RATIO
-            ):
-                raise ValidationFailed(
-                    "事实与所引原文缺少支持关系。",
-                    stage="answer.validate",
-                    code="CLAIM_TEXT_UNSUPPORTED",
-                )
-            _check_negations(clause, relevant_sources)
 
 
 class GroundedAnsweringService:
