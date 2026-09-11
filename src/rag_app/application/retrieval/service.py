@@ -1852,14 +1852,25 @@ def _formal_span_is_current(
     item: EvidenceItem,
 ) -> bool:
     """正式引用采用引用片段内偏移，来源身份和原文字节仍必须完全匹配。"""
-    quote = chunk.citation_text[
+    raw_quote = chunk.citation_text[
         original.chunk_start_char : original.chunk_end_char
     ]
-    return (
-        span
-        == original.model_copy(
-            update={"chunk_start_char": 0, "chunk_end_char": len(quote)}
+    quote = raw_quote.strip()
+    leading_trim = len(raw_quote) - len(raw_quote.lstrip())
+    updates: dict[str, int] = {
+        "chunk_start_char": 0,
+        "chunk_end_char": len(quote),
+    }
+    if original.source_start_char is not None:
+        source_start = original.source_start_char + leading_trim
+        updates.update(
+            {
+                "source_start_char": source_start,
+                "source_end_char": source_start + len(quote),
+            }
         )
+    return (
+        span == original.model_copy(update=updates)
         and item.citation_text == quote
     )
 
@@ -2049,7 +2060,7 @@ def _generation_unavailable_reason(
     return _configured_generation_blocker(context) or "GENERATOR_NOT_CONFIGURED"
 
 
-def _model_capability_status(
+def _model_capability_status(  # noqa: PLR0911
     context: QueryDataPlaneContext,
     reason: str | None,
 ) -> tuple[ConfidenceStatus, str] | None:
@@ -2064,65 +2075,70 @@ def _model_capability_status(
         时为空，由 Evidence 语义继续保持证据不足。
 
     """
-    normalized = (reason or "").upper()
-    projected: tuple[ConfidenceStatus, str] | None = None
-    if "BUDGET" in normalized:
-        projected = (
-            ConfidenceStatus.BUDGET_BLOCKED,
-            reason or "BLOCKED_BUDGET",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "CONFIGURATION",
-            "CREDENTIAL",
-            "AUTHENTICATION",
-            "GENERATOR_NOT_CONFIGURED",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.CONFIGURATION_REQUIRED,
-            reason or "CONFIGURATION_REQUIRED",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "POLICY_DENIED",
-            "NOT_AUTHORIZED",
-            "AUTHORIZATION_DENIED",
-            "AUTHORIZATION_REQUIRED",
-            "SOURCE_UNAVAILABLE",
-            "CORPUS_AUTHORIZATION",
-            "BUSINESS_AUTHORIZATION",
-            "BUSINESS_SOURCE",
-            "BUSINESS_MODEL_OPERATION",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.POLICY_DENIED,
-            reason or "POLICY_DENIED",
-        )
-    elif any(
-        marker in normalized
-        for marker in (
-            "PROVIDER_UNAVAILABLE",
-            "PROVIDER_RATE_LIMITED",
-            "PROVIDER_TIMEOUT",
-            "HTTP_429",
-            "CONNECT_TIMEOUT",
-            "READ_TIMEOUT",
-            "UPSTREAM",
-        )
-    ):
-        projected = (
-            ConfidenceStatus.PROVIDER_UNAVAILABLE,
-            reason or "PROVIDER_UNAVAILABLE",
-        )
-    if projected is not None:
-        return projected
     blocker = _configured_generation_blocker(context)
+    for candidate in dict.fromkeys((reason, blocker)):
+        normalized = (candidate or "").upper()
+        if "BUDGET" in normalized:
+            return (
+                ConfidenceStatus.BUDGET_BLOCKED,
+                candidate or "BLOCKED_BUDGET",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "CONFIGURATION",
+                "CREDENTIAL",
+                "AUTHENTICATION",
+                "GENERATOR_NOT_CONFIGURED",
+            )
+        ):
+            return (
+                ConfidenceStatus.CONFIGURATION_REQUIRED,
+                candidate or "CONFIGURATION_REQUIRED",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "POLICY_DENIED",
+                "NOT_AUTHORIZED",
+                "AUTHORIZATION_DENIED",
+                "AUTHORIZATION_REQUIRED",
+                "SOURCE_UNAVAILABLE",
+                "CORPUS_AUTHORIZATION",
+                "CORPUS_MODEL_BINDING_CHANGED",
+                "BUSINESS_AUTHORIZATION",
+                "BUSINESS_SOURCE",
+                "BUSINESS_MODEL_OPERATION",
+            )
+        ):
+            return (
+                ConfidenceStatus.POLICY_DENIED,
+                candidate or "POLICY_DENIED",
+            )
+        if any(
+            marker in normalized
+            for marker in (
+                "PROVIDER_UNAVAILABLE",
+                "PROVIDER_RATE_LIMITED",
+                "PROVIDER_TIMEOUT",
+                "HTTP_429",
+                "CONNECT_TIMEOUT",
+                "READ_TIMEOUT",
+                "UPSTREAM",
+            )
+        ):
+            return (
+                ConfidenceStatus.PROVIDER_UNAVAILABLE,
+                candidate or "PROVIDER_UNAVAILABLE",
+            )
     if blocker is not None:
-        return _model_capability_status(context, blocker)
+        # 配置层已经确认远程模型不可用；即使未来出现新的稳定原因码，
+        # 也必须按状态投影并终止，不能递归处理同一个未知原因。
+        if context.model_configuration_state == "INVALID":
+            return ConfidenceStatus.CONFIGURATION_REQUIRED, blocker
+        if context.budget_state in {"EXHAUSTED", "BLOCKED"}:
+            return ConfidenceStatus.BUDGET_BLOCKED, blocker
+        return ConfidenceStatus.POLICY_DENIED, blocker
     if (
         context.model_configuration_state == "NOT_CONFIGURED"
         and context.report_model_capability_blockers
