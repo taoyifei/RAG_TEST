@@ -412,6 +412,35 @@ export interface RetrievalProfile {
   failover_enabled: boolean;
   activation_job_id?: string | null;
   effective_serving_fingerprint?: string;
+  retrieval_authorization?: RetrievalAuthorizationStatus;
+}
+
+export interface RetrievalAuthorizationStatus {
+  authorization_state:
+    | "NOT_REQUIRED"
+    | "MISSING"
+    | "APPROVED"
+    | "STALE_CORPUS"
+    | "STALE_PROFILE"
+    | "EXPIRED"
+    | "BLOCKED";
+  budget_state: "MISSING" | "AVAILABLE" | "EXHAUSTED" | "BLOCKED";
+  connection_budget_state: "READY" | "INSUFFICIENT" | "BLOCKED";
+  required_operations: Array<
+    "embedding.document" | "embedding.query" | "reranking"
+  >;
+  estimated_document_chunks: number;
+  estimated_document_requests_per_slot: number;
+  estimated_document_tokens_per_slot: number;
+  embedding_slot_count: number;
+  reason_codes: string[];
+}
+
+export interface RetrievalAuthorizationApproval {
+  expires_at: string;
+  request_limit: number;
+  estimated_token_limit: number;
+  operation_request_limits: Record<string, number>;
 }
 
 export interface AccessTokenSummary {
@@ -1434,6 +1463,20 @@ export const api = {
       `/api/v1/retrieval-profiles/${profileRevisionId}:activate`,
       "",
       jsonInit("POST", { confirmed_impact: impact }),
+    ),
+  retrievalAuthorization: (profileRevisionId: string) =>
+    request<RetrievalAuthorizationStatus>(
+      `/api/v1/retrieval-profiles/${profileRevisionId}/authorization`,
+      "",
+    ),
+  approveRetrievalAuthorization: (
+    profileRevisionId: string,
+    approval: RetrievalAuthorizationApproval,
+  ) =>
+    request<RetrievalAuthorizationStatus>(
+      `/api/v1/retrieval-profiles/${profileRevisionId}/authorization:approve`,
+      "",
+      jsonInit("POST", approval),
     ),
   listAccessTokens: () =>
     request<{ items: AccessTokenSummary[] }>("/api/v1/access-tokens", ""),

@@ -13,6 +13,7 @@ import {
   type ImpactPreview,
   type ProviderCatalog,
   type ProviderConnection,
+  type RetrievalAuthorizationStatus,
   type RetrievalProfile,
 } from "../api/client";
 import { EmptyState, ErrorPanel, Modal, StatusBadge } from "../components/ui";
@@ -37,6 +38,9 @@ export function RetrievalProfilesPage() {
   const lock = useRef(false);
   const [activationJob, setActivationJob] = useState<string>();
   const [confirmTest, setConfirmTest] = useState(false);
+  const [confirmAuthorization, setConfirmAuthorization] = useState(false);
+  const [retrievalAuthorization, setRetrievalAuthorization] =
+    useState<RetrievalAuthorizationStatus>();
   const [failover, setFailover] = useState(true);
   const [validationMessage, setValidationMessage] = useState("");
   const [draft, setDraft] = useState<RetrievalProfile>();
@@ -145,7 +149,11 @@ export function RetrievalProfilesPage() {
       const impact = await api.previewRetrievalProfile(
         next.profile_revision_id,
       );
+      const authorization = await api.retrievalAuthorization(
+        next.profile_revision_id,
+      );
       setDraft(next);
+      setRetrievalAuthorization(authorization);
       setValidationMessage("");
       setPreview(impact);
       await load();
@@ -159,6 +167,10 @@ export function RetrievalProfilesPage() {
 
   async function activate() {
     if (!draft || !preview || lock.current) return;
+    if (!retrievalAuthorizationReady(retrievalAuthorization)) {
+      setError(new Error("请先完成检索授权、累计预算和连接预算检查。"));
+      return;
+    }
     lock.current = true;
     setBusy(true);
     try {
@@ -169,6 +181,7 @@ export function RetrievalProfilesPage() {
       setActivationJob(activated.activation_job_id ?? undefined);
       setDraft(undefined);
       setPreview(undefined);
+      setRetrievalAuthorization(undefined);
       await load();
     } catch (reason) {
       setError(reason);
@@ -209,6 +222,56 @@ export function RetrievalProfilesPage() {
         if (result.status !== "succeeded") throw new Error("重排验证未通过。");
       }
       setValidationMessage("方案参数连接验证通过；检索质量仍需独立验证。");
+      setRetrievalAuthorization(
+        await api.retrievalAuthorization(draft.profile_revision_id),
+      );
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function approveRetrieval() {
+    if (!draft || !retrievalAuthorization || lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setConfirmAuthorization(false);
+    setError(undefined);
+    try {
+      const documentRequests =
+        retrievalAuthorization.estimated_document_requests_per_slot *
+        retrievalAuthorization.embedding_slot_count;
+      const operationRequestLimits = Object.fromEntries(
+        retrievalAuthorization.required_operations.map((operation) => [
+          operation,
+          operation === "embedding.document"
+            ? Math.max(1, documentRequests + 10)
+            : 200,
+        ]),
+      );
+      const requestLimit = Object.values(operationRequestLimits).reduce(
+        (total, value) => total + value,
+        0,
+      );
+      const estimatedTokenLimit = Math.min(
+        100_000_000,
+        retrievalProviderTokenLimit(draft, connections),
+      );
+      const expires = new Date();
+      expires.setUTCDate(expires.getUTCDate() + 30);
+      const approved = await api.approveRetrievalAuthorization(
+        draft.profile_revision_id,
+        {
+          expires_at: expires.toISOString(),
+          request_limit: requestLimit,
+          estimated_token_limit: estimatedTokenLimit,
+          operation_request_limits: operationRequestLimits,
+        },
+      );
+      setRetrievalAuthorization(approved);
+      await load();
     } catch (reason) {
       setError(reason);
     } finally {
@@ -341,7 +404,7 @@ export function RetrievalProfilesPage() {
                 min={1}
                 max={
                   connections.find((item) => item.connection_id === standby)
-                    ?.request_budget ?? 20
+                    ?.request_budget ?? 500
                 }
                 value={standbyRequests ?? ""}
                 onChange={(event) =>
@@ -401,10 +464,59 @@ export function RetrievalProfilesPage() {
               验证方案所用参数
             </button>
             {validationMessage && <p role="status">{validationMessage}</p>}
+            {retrievalAuthorization && (
+              <div className="stack">
+                <p>
+                  当前文档 {retrievalAuthorization.estimated_document_chunks}
+                  个检索片段；每个向量槽预计
+                  {retrievalAuthorization.estimated_document_requests_per_slot}
+                  次请求、
+                  {retrievalAuthorization.estimated_document_tokens_per_slot}个
+                  Token。
+                </p>
+                {retrievalAuthorization.connection_budget_state !== "READY" && (
+                  <p role="alert">
+                    连接预算未就绪，需先在模型服务中把请求预算和 Token
+                    预算提高到上述每槽需求，并重新验证方案。
+                  </p>
+                )}
+                {retrievalAuthorization.authorization_state === "APPROVED" &&
+                  retrievalAuthorization.budget_state === "AVAILABLE" && (
+                    <p role="status">
+                      当前真实文档的检索出网与累计预算已批准。
+                    </p>
+                  )}
+                {retrievalAuthorization.authorization_state === "APPROVED" &&
+                  retrievalAuthorization.budget_state !== "AVAILABLE" && (
+                    <p role="alert">
+                      当前检索累计预算已不可用，需要重新验证并批准新预算。
+                    </p>
+                  )}
+                {retrievalAuthorization.authorization_state ===
+                  "NOT_REQUIRED" && <p>当前知识库没有活动文档，无需批准。</p>}
+                {!retrievalAuthorizationReady(retrievalAuthorization) &&
+                  retrievalAuthorization.authorization_state !==
+                    "NOT_REQUIRED" && (
+                    <button
+                      disabled={
+                        busy ||
+                        !validationMessage ||
+                        retrievalAuthorization.connection_budget_state !==
+                          "READY"
+                      }
+                      onClick={() => setConfirmAuthorization(true)}
+                    >
+                      批准当前活动文档用于真实检索
+                    </button>
+                  )}
+              </div>
+            )}
           </div>
           <button
             className="primary"
-            disabled={busy}
+            disabled={
+              busy || !retrievalAuthorizationReady(retrievalAuthorization)
+            }
             onClick={() => void activate()}
           >
             {
@@ -427,6 +539,30 @@ export function RetrievalProfilesPage() {
             。可能消耗服务额度，累计预算以服务端为准。
           </p>
           <button onClick={() => void validateDraft()}>开始测试</button>
+        </Modal>
+      )}
+      {confirmAuthorization && retrievalAuthorization && (
+        <Modal
+          title="批准真实检索出网"
+          onClose={() => setConfirmAuthorization(false)}
+        >
+          <p>
+            将把当前活动文档发送给所选 Embedding
+            服务，并允许后续查询文本与候选片段用于 Embedding
+            和重排。授权绑定当前文档、方案、连接版本和模型，30
+            天后到期；文档或连接变化后自动失效。
+          </p>
+          <p>
+            当前估算：{retrievalAuthorization.estimated_document_chunks}
+            个片段，
+            {retrievalAuthorization.estimated_document_requests_per_slot}
+            次/向量槽，
+            {retrievalAuthorization.estimated_document_tokens_per_slot}
+            Token/向量槽。
+          </p>
+          <button className="primary" onClick={() => void approveRetrieval()}>
+            确认批准并建立累计预算
+          </button>
         </Modal>
       )}
       {activationJob && (
@@ -460,6 +596,7 @@ export function RetrievalProfilesPage() {
                   setStandbyRequests(profile.standby_budget?.requests);
                   setStandbyTokens(profile.standby_budget?.tokens);
                   setFailover(profile.failover_enabled);
+                  setRetrievalAuthorization(profile.retrieval_authorization);
                   setMinimumSupport(
                     Number(profile.retrieval_policy.minimum_support_items ?? 1),
                   );
@@ -514,6 +651,42 @@ function modelFor(
   )?.operation_models?.[operation]?.[0];
   if (!model) throw new Error("模型目录尚未就绪，请刷新后重试。");
   return model;
+}
+
+function retrievalAuthorizationReady(
+  status: RetrievalAuthorizationStatus | undefined,
+): boolean {
+  return Boolean(
+    status &&
+    ["APPROVED", "NOT_REQUIRED"].includes(status.authorization_state) &&
+    status.budget_state === "AVAILABLE" &&
+    status.connection_budget_state === "READY",
+  );
+}
+
+function retrievalProviderTokenLimit(
+  profile: RetrievalProfile,
+  connections: ProviderConnection[],
+): number {
+  const connectionIds = [
+    profile.primary_connection_id,
+    profile.standby_connection_id,
+    profile.reranker_connection_id,
+  ].filter((value): value is string => Boolean(value));
+  const limits = new Map<string, number>();
+  for (const connectionId of new Set(connectionIds)) {
+    const connection = connections.find(
+      (item) => item.connection_id === connectionId,
+    );
+    if (!connection) continue;
+    const tokenBudget = connection.token_budget ?? 4096;
+    const existing = limits.get(connection.provider_type);
+    limits.set(
+      connection.provider_type,
+      existing === undefined ? tokenBudget : Math.min(existing, tokenBudget),
+    );
+  }
+  return [...limits.values()].reduce((total, value) => total + value, 0);
 }
 
 function ProfileJob({
