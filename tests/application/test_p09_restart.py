@@ -1,8 +1,11 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic, sleep
+from typing import cast
 
-from rag_app.composition.p09_runtime import build_p09_runtime
+from rag_app.application.lifecycle import LifecycleService
+from rag_app.composition.p09_runtime import P09RuntimeHooks, build_p09_runtime
+from rag_app.core.errors import PolicyDenied
 from rag_app.core.models import Job
 from tests.adapters.parsers.docx.fixtures import build_package
 
@@ -78,9 +81,12 @@ def test_job_and_revision_status_survive_runtime_restart(
         assert recovered.revision_id == second_job.revision_id
         assert document.active_index_revision_id is None
         assert document.status.value == "deleted"
-        assert reopened.sdk.list_documents(
-            project.project_id, knowledge_base.knowledge_base_id
-        ) == ()
+        assert (
+            reopened.sdk.list_documents(
+                project.project_id, knowledge_base.knowledge_base_id
+            )
+            == ()
+        )
         assert reopened.sdk.health().pending_gc_items > 0
         assert reopened.control.gc_plan_items(plan.plan_id)
         assert (
@@ -118,3 +124,96 @@ def test_queued_job_is_recovered_and_completed_after_restart(
         )
         assert recovered.state.value == "succeeded"
         assert document.current_version_id == recovered.document_version_id
+
+
+def test_job_resolver_failure_is_persisted_instead_of_remaining_queued(
+    tmp_path: Path,
+) -> None:
+    """生命周期解析器在 claim 前失败时也必须留下可恢复的安全终态。"""
+
+    def reject_job(
+        _job_id: str, _fallback: LifecycleService
+    ) -> LifecycleService:
+        raise PolicyDenied(
+            "此资料尚未获准发送给远程检索服务。",
+            stage="retrieval.ingestion_authorization",
+            code="RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED",
+            retryable=True,
+        )
+
+    hooks = P09RuntimeHooks(
+        recover_jobs=False,
+        job_lifecycle_resolver=reject_job,
+    )
+    with build_p09_runtime(_PROFILE, data_dir=tmp_path, hooks=hooks) as runtime:
+        project = runtime.sdk.create_project("解析失败项目")
+        knowledge_base = runtime.sdk.create_knowledge_base(
+            project.project_id, "解析失败知识库"
+        )
+        queued = runtime.lifecycle.create_document(
+            project.project_id,
+            knowledge_base.knowledge_base_id,
+            display_name="resolver-failure.docx",
+            content=build_package(
+                "<w:p><w:r><w:t>解析器失败也不能无限排队。</w:t></w:r></w:p>"
+            ),
+            media_type=_MEDIA_TYPE,
+            idempotency_key="resolver-failure",
+        )
+
+        runtime.jobs.submit(queued.job_id)
+        failed = _wait(runtime, queued)
+
+        assert failed.state.value == "failed_retryable"
+        assert failed.error_code == (
+            "RETRIEVAL_INGESTION_AUTHORIZATION_REQUIRED"
+        )
+        assert failed.attempt == 0
+        assert runtime.store.pending_ingestion_jobs() == ()
+
+
+def test_outer_resolver_error_cannot_overwrite_completed_job(
+    tmp_path: Path,
+) -> None:
+    """代理在构建成功后抛错时，外层兜底不得覆盖已提交终态。"""
+
+    class CompleteThenRaise:
+        """先执行真实生命周期，再模拟代理退出异常。"""
+
+        def __init__(self, lifecycle: LifecycleService) -> None:
+            self._lifecycle = lifecycle
+
+        def run_ingestion(self, job_id: str) -> None:
+            self._lifecycle.run_ingestion(job_id)
+            raise RuntimeError("synthetic proxy exit")
+
+    def wrap_job(_job_id: str, fallback: LifecycleService) -> LifecycleService:
+        return cast(LifecycleService, CompleteThenRaise(fallback))
+
+    hooks = P09RuntimeHooks(
+        recover_jobs=False,
+        job_lifecycle_resolver=wrap_job,
+    )
+    with build_p09_runtime(_PROFILE, data_dir=tmp_path, hooks=hooks) as runtime:
+        project = runtime.sdk.create_project("终态保护项目")
+        knowledge_base = runtime.sdk.create_knowledge_base(
+            project.project_id, "终态保护知识库"
+        )
+        queued = runtime.lifecycle.create_document(
+            project.project_id,
+            knowledge_base.knowledge_base_id,
+            display_name="complete-before-error.docx",
+            content=build_package(
+                "<w:p><w:r><w:t>完成后异常不得覆盖成功。</w:t></w:r></w:p>"
+            ),
+            media_type=_MEDIA_TYPE,
+            idempotency_key="complete-before-outer-error",
+        )
+
+        runtime.jobs.submit(queued.job_id)
+        runtime.jobs.close()
+        completed = runtime.sdk.get_job(queued.job_id)
+
+        assert completed.state.value == "succeeded"
+        assert completed.error_code is None
+        assert runtime.store.pending_ingestion_jobs() == ()

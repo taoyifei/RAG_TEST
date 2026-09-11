@@ -109,6 +109,13 @@ class DurableJobRunner:
         self._executor.shutdown(wait=True, cancel_futures=False)
 
     def _discard(self, job_id: str, future: Future[None]) -> None:
+        error = future.exception()
+        if error is not None:
+            _LOGGER.error(
+                "持久 Job 执行器收到未处理异常：%s",
+                job_id,
+                exc_info=(type(error), error, error.__traceback__),
+            )
         with self._lock:
             if self._futures.get(job_id) is future:
                 self._futures.pop(job_id, None)

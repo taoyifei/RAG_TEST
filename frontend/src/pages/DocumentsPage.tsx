@@ -13,7 +13,7 @@ import { KnowledgeBaseModels } from "../components/KnowledgeBaseModels";
 import { DocumentImages } from "../components/DocumentImages";
 
 export function DocumentsPage({ go }: { go: (path: string) => void }) {
-  const { tokens, scope, setRevision } = useConsole();
+  const { tokens, scope } = useConsole();
   const [items, setItems] = useState<Document[]>([]);
   const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
@@ -59,14 +59,13 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
     setUploading(true);
     setError(undefined);
     try {
-      const job = await api.uploadDocument(
+      await api.uploadDocument(
         tokens.admin,
         scope.projectId,
         scope.kbId,
         file,
         createIdempotencyKey("document"),
       );
-      setRevision(job.revision_id);
       go("/jobs");
     } catch (reason) {
       setError(reason);
@@ -259,7 +258,7 @@ function DocumentActions({
   onError: (error: unknown) => void;
   onDeleted: () => void;
 }) {
-  const { tokens, scope, setRevision } = useConsole();
+  const { tokens, scope } = useConsole();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(document.display_name);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -284,7 +283,7 @@ function DocumentActions({
     reload();
   }
   async function version(file: File) {
-    const job = await api.uploadVersion(
+    await api.uploadVersion(
       tokens.admin,
       scope.projectId,
       scope.kbId,
@@ -292,7 +291,6 @@ function DocumentActions({
       file,
       createIdempotencyKey("version"),
     );
-    setRevision(job.revision_id);
     go("/jobs");
   }
   async function remove() {
@@ -369,9 +367,8 @@ function DocumentActions({
           kbId={scope.kbId}
           documentId={document.document_id}
           onClose={() => setImages(false)}
-          onSubmitted={(job) => {
+          onSubmitted={() => {
             setImages(false);
-            setRevision(job.revision_id);
             go("/jobs");
           }}
         />

@@ -1,51 +1,90 @@
 import { useEffect, useState } from "react";
-import { api, type ChunkPage, type RevisionInspection } from "../api/client";
+import {
+  ApiError,
+  api,
+  type ChunkPage,
+  type RevisionInspection,
+} from "../api/client";
 import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
 import { useConsole } from "../state/console-context";
 
 export function RevisionPage({ go }: { go?: (path: string) => void }) {
-  const { tokens, scope } = useConsole();
+  const { tokens, scope, setRevision: setScopeRevision } = useConsole();
   const [revision, setRevision] = useState<RevisionInspection>();
   const [chunks, setChunks] = useState<ChunkPage>();
   const [reports, setReports] = useState<Record<string, unknown>[]>([]);
-  const [error, setError] = useState<unknown>();
+  const [error, setError] = useState<{
+    revisionId: string;
+    reason: unknown;
+  }>();
+  const [unavailableRevisionId, setUnavailableRevisionId] = useState<string>();
   useEffect(() => {
     if (!scope.revisionId) return;
-    Promise.all([
-      api.inspectRevision(
+    let active = true;
+    const requestedRevisionId = scope.revisionId;
+    void api
+      .inspectRevision(
         tokens.admin,
         scope.projectId,
         scope.kbId,
-        scope.revisionId,
-      ),
-      api.listChunks(
-        tokens.admin,
-        scope.projectId,
-        scope.kbId,
-        scope.revisionId,
-      ),
-      api.revisionReports(
-        tokens.admin,
-        scope.projectId,
-        scope.kbId,
-        scope.revisionId,
-      ),
-    ])
-      .then(([r, c, p]) => {
+        requestedRevisionId,
+      )
+      .then(async (r) => {
+        const [c, p] = await Promise.all([
+          api.listChunks(
+            tokens.admin,
+            scope.projectId,
+            scope.kbId,
+            requestedRevisionId,
+          ),
+          api.revisionReports(
+            tokens.admin,
+            scope.projectId,
+            scope.kbId,
+            requestedRevisionId,
+          ),
+        ]);
+        if (!active) return;
         setRevision(r);
         setChunks(c);
         setReports(p.items);
+        setError(undefined);
+        setUnavailableRevisionId(undefined);
       })
-      .catch(setError);
-  }, [scope, tokens.admin]);
+      .catch((reason: unknown) => {
+        if (!active) return;
+        if (reason instanceof ApiError && reason.status === 404) {
+          setScopeRevision("");
+          setUnavailableRevisionId(requestedRevisionId);
+          return;
+        }
+        setError({ revisionId: requestedRevisionId, reason });
+      });
+    return () => {
+      active = false;
+    };
+  }, [scope, setScopeRevision, tokens.admin]);
+  if (
+    unavailableRevisionId &&
+    (!scope.revisionId || unavailableRevisionId === scope.revisionId)
+  )
+    return (
+      <EmptyState title="索引版本尚不可用">
+        {unavailableRevisionId}{" "}
+        尚未生成或已不存在。请从成功任务重新选择可读版本。{" "}
+        {go && <button onClick={() => go("/jobs")}>返回任务列表</button>}
+      </EmptyState>
+    );
   if (!scope.revisionId)
     return (
       <EmptyState title="尚未选择索引版本">
-        完成一次上传或从任务列表选择版本。
+        任务成功后，请从任务列表选择可用的索引版本。
       </EmptyState>
     );
-  if (error) return <ErrorPanel error={error} />;
-  if (!revision || !chunks) return <p className="loading">正在读取版本事实…</p>;
+  if (error?.revisionId === scope.revisionId)
+    return <ErrorPanel error={error.reason} />;
+  if (!revision || revision.revision_id !== scope.revisionId || !chunks)
+    return <p className="loading">正在读取版本事实…</p>;
   return (
     <section className="stack">
       <div className="section-heading">

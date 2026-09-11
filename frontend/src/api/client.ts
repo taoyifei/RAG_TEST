@@ -4,16 +4,15 @@ export type Project = components["schemas"]["Project"];
 export type KnowledgeBase = components["schemas"]["KnowledgeBase"];
 export type Document = components["schemas"]["Document"];
 export type DocumentVersion = components["schemas"]["DocumentVersion"];
-export type Job = components["schemas"]["Job"] & {
-  error_code?: string | null;
-  trace_id?: string | null;
-};
+export type Job = components["schemas"]["Job"];
 export type JobPage = components["schemas"]["JobPage"];
 export type RevisionInspection = components["schemas"]["RevisionInspection"];
 export type ChunkPage = components["schemas"]["ChunkPage"];
 export type QueryResponse = components["schemas"]["QueryResponse"];
 export type RetrievalDiagnostics =
   components["schemas"]["RetrievalDiagnostics"];
+export type RetrievalIngestionAuthorizationStatus =
+  components["schemas"]["RetrievalIngestionAuthorizationStatus"];
 export type SystemStatus = components["schemas"]["SystemStatus"];
 export type Evidence = components["schemas"]["EvidenceItem"];
 export type RelatedContent = components["schemas"]["RelatedContent"];
@@ -436,12 +435,8 @@ export interface RetrievalAuthorizationStatus {
   reason_codes: string[];
 }
 
-export interface RetrievalAuthorizationApproval {
-  expires_at: string;
-  request_limit: number;
-  estimated_token_limit: number;
-  operation_request_limits: Record<string, number>;
-}
+export type RetrievalAuthorizationApproval =
+  components["schemas"]["RetrievalAuthorizationApproval"];
 
 export interface AccessTokenSummary {
   token_id: string;
@@ -1475,6 +1470,20 @@ export const api = {
   ) =>
     request<RetrievalAuthorizationStatus>(
       `/api/v1/retrieval-profiles/${profileRevisionId}/authorization:approve`,
+      "",
+      jsonInit("POST", approval),
+    ),
+  retrievalIngestionAuthorization: (jobId: string) =>
+    request<RetrievalIngestionAuthorizationStatus>(
+      `/api/v1/jobs/${jobId}/retrieval-authorization`,
+      "",
+    ),
+  approveRetrievalIngestionAuthorization: (
+    jobId: string,
+    approval: RetrievalAuthorizationApproval,
+  ) =>
+    request<RetrievalIngestionAuthorizationStatus>(
+      `/api/v1/jobs/${jobId}/retrieval-authorization:approve`,
       "",
       jsonInit("POST", approval),
     ),

@@ -68,7 +68,7 @@ def test_supported_phase_data_upgrades_monotonically(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert [item.version for item in applied] == list(range(1, 28))
+    assert [item.version for item in applied] == list(range(1, 29))
     assert project is not None and project[0] == "升级保留项目"
     assert "provider_operation_events" in tables
     assert "provider_daily_budgets" in tables
@@ -82,6 +82,7 @@ def test_supported_phase_data_upgrades_monotonically(
     assert "product_feedback" in tables
     assert "corpus_authorization_manifests" in tables
     assert "retrieval_authorization_manifests" in tables
+    assert "retrieval_ingestion_authorization_manifests" in tables
 
 
 def test_legacy_fts_v1_is_preserved_and_requires_explicit_reindex(
@@ -201,7 +202,7 @@ def test_failed_migration_rolls_back_without_advancing_schema(
     shutil.copytree(_MIGRATIONS, migrations)
     MigrationRunner(connections, migrations).migrate()
     _seed_control_rows(connections)
-    (migrations / "0028_synthetic_failure.sql").write_text(
+    (migrations / "0029_synthetic_failure.sql").write_text(
         "CREATE TABLE must_rollback(value TEXT);\nINVALID SQL;\n",
         encoding="utf-8",
     )
@@ -223,6 +224,6 @@ def test_failed_migration_rolls_back_without_advancing_schema(
         rollback_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name='must_rollback'"
         ).fetchone()
-    assert migration_count == 27
+    assert migration_count == 28
     assert project_count == 1
     assert rollback_table is None

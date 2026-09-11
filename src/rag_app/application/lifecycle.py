@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 
 from rag_app.application.revision_builder import (
     IngestionDocument,
@@ -73,6 +74,9 @@ class LifecycleService:
         egress_allowed_slots: frozenset[str] = frozenset(),
         retrieval_profile_revision_id: str | None = None,
         content_identity: Callable[[str], str | None] | None = None,
+        ingestion_scope: (
+            Callable[[QueuedIngestion], AbstractContextManager[None]] | None
+        ) = None,
     ) -> None:
         """保存全部显式依赖和离线预算。
 
@@ -87,6 +91,7 @@ class LifecycleService:
             egress_allowed_slots: 当前 Profile 明确授权的远程索引 slot。
             retrieval_profile_revision_id: 队列需要冻结的产品 Profile Revision。
             content_identity: 可选知识库内容加工身份，入队后禁止漂移。
+            ingestion_scope: 可选的最终刷新快照真实检索授权范围。
 
         Returns:
             无返回值。
@@ -102,6 +107,7 @@ class LifecycleService:
         self._egress_allowed_slots = egress_allowed_slots
         self._retrieval_profile_revision_id = retrieval_profile_revision_id
         self._content_identity = content_identity
+        self._ingestion_scope = ingestion_scope
 
     def create_project(
         self, name: str, *, idempotency_key: str | None = None
@@ -696,6 +702,9 @@ class LifecycleService:
             tuple(sorted(version_ids)),
             self._content_fingerprint(identity),
         )
+        initial_revision_id = self._control.active_revision_id(
+            knowledge_base_id
+        )
         request = QueuedIngestion(
             job_id=deterministic_id("job", knowledge_base_id, revision_id),
             revision_id=revision_id,
@@ -703,6 +712,8 @@ class LifecycleService:
             target_document_version_id=document_version_id(document_id, digest),
             retrieval_profile_revision_id=self._retrieval_profile_revision_id,
             content_identity=identity,
+            initial_index_revision_id=initial_revision_id,
+            expected_index_revision_id=initial_revision_id,
             documents=tuple(
                 sorted(documents, key=lambda item: item.document.document_id)
             ),
@@ -769,6 +780,7 @@ class LifecycleService:
             documents=documents,
             activate_profile=True,
             expected_profile_revision_id=expected_profile_revision_id,
+            initial_index_revision_id=expected_index_revision_id,
             expected_index_revision_id=expected_index_revision_id,
             activation_validation_ids=activation_validation_ids,
             content_identity=identity,
@@ -791,6 +803,11 @@ class LifecycleService:
         if request is None:
             return
         try:
+            if request.job_id != job_id:
+                raise RevisionStateError(
+                    "持久请求与领取 Job 身份不一致。",
+                    stage="document.worker.job_identity",
+                )
             knowledge_base_id = request.documents[0].document.knowledge_base_id
             if (
                 self._current_content_identity(knowledge_base_id)
@@ -810,37 +827,47 @@ class LifecycleService:
                 )
             if not request.activate_profile:
                 request = self._refresh_ingestion_snapshot(request)
-            documents = tuple(
-                _ingestion_document(self._blob_store, item)
-                for item in request.documents
+            scope = (
+                nullcontext()
+                if self._ingestion_scope is None
+                else self._ingestion_scope(request)
             )
-            first = documents[0].document
-            result = self._builder.build_and_activate(
-                project_id=first.project_id,
-                knowledge_base_id=first.knowledge_base_id,
-                documents=documents,
-                idempotency_key=job_id,
-                budgets=self._budgets,
-                egress_allowed_slots=self._egress_allowed_slots,
-                attempt=max(1, self._store.get_job(job_id).attempt),
-                persistent_job_id=job_id,
-                persistent_revision_id=request.revision_id,
-                content_identity=request.content_identity,
-                content_identity_current=lambda: self._current_content_identity(
-                    knowledge_base_id
-                ),
-            )
-            if result.revision_id != request.revision_id:
-                raise AssertionError("持久请求与 Builder Revision 身份不一致。")
-            self._store.bind_job_document(
-                result.job_id,
-                request.target_document_id,
-                request.target_document_version_id,
-            )
-            self._store.mark_version_ready(
-                request.target_document_id,
-                request.target_document_version_id,
-            )
+            with scope:
+                documents = tuple(
+                    _ingestion_document(self._blob_store, item)
+                    for item in request.documents
+                )
+                first = documents[0].document
+                result = self._builder.build_and_activate(
+                    project_id=first.project_id,
+                    knowledge_base_id=first.knowledge_base_id,
+                    documents=documents,
+                    idempotency_key=job_id,
+                    budgets=self._budgets,
+                    egress_allowed_slots=self._egress_allowed_slots,
+                    attempt=max(1, self._store.get_job(job_id).attempt),
+                    persistent_job_id=job_id,
+                    persistent_revision_id=request.revision_id,
+                    content_identity=request.content_identity,
+                    content_identity_current=(
+                        lambda: self._current_content_identity(
+                            knowledge_base_id
+                        )
+                    ),
+                )
+                if result.revision_id != request.revision_id:
+                    raise AssertionError(
+                        "持久请求与 Builder Revision 身份不一致。"
+                    )
+                self._store.bind_job_document(
+                    result.job_id,
+                    request.target_document_id,
+                    request.target_document_version_id,
+                )
+                self._store.mark_version_ready(
+                    request.target_document_id,
+                    request.target_document_version_id,
+                )
         except Exception as error:
             retryable = isinstance(error, RagError) and error.retryable
             self._store.finish_ingestion(

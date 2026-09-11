@@ -1079,6 +1079,63 @@ class SqliteLifecycleStore:
             )
         return self.get_job(job_id)
 
+    def fail_unclaimed_ingestion(
+        self,
+        job_id: str,
+        *,
+        error_code: str,
+        safe_message: str,
+        retryable: bool,
+    ) -> None:
+        """只保存尚未被 Worker 领取的外层失败。
+
+        Args:
+            job_id: 目标 Job ID。
+            error_code: 稳定错误码。
+            safe_message: 安全消息。
+            retryable: 是否可安全重试。
+
+        Returns:
+            无返回值。
+
+        """
+        now = _now()
+        with self._connections.transaction(write=True) as connection:
+            job = connection.execute(
+                "SELECT j.attempt FROM ingestion_jobs j "
+                "JOIN ingestion_requests r ON r.job_id=j.job_id "
+                "WHERE j.job_id=? AND j.state='pending' "
+                "AND r.state='queued'",
+                (job_id,),
+            ).fetchone()
+            if job is None:
+                return
+            can_retry = retryable and int(job["attempt"]) < _MAX_JOB_ATTEMPTS
+            request_cursor = connection.execute(
+                "UPDATE ingestion_requests SET state='failed', "
+                "updated_at=? WHERE job_id=? AND state='queued'",
+                (now, job_id),
+            )
+            job_cursor = connection.execute(
+                "UPDATE ingestion_jobs SET state=?,stage='failed',"
+                "error_code=?,safe_message=?,retryable=?,updated_at=?,"
+                "finished_at=? WHERE job_id=? AND state='pending'",
+                (
+                    "failed_retryable" if can_retry else "failed_terminal",
+                    error_code,
+                    safe_message,
+                    int(can_retry),
+                    now,
+                    now,
+                    job_id,
+                ),
+            )
+            if request_cursor.rowcount != 1 or job_cursor.rowcount != 1:
+                raise Conflict(
+                    "未领取作业状态已被其他 Worker 修改。",
+                    stage="job.finish.unclaimed",
+                )
+
     def finish_ingestion(
         self,
         job_id: str,
@@ -1088,7 +1145,7 @@ class SqliteLifecycleStore:
         safe_message: str | None = None,
         retryable: bool = False,
     ) -> None:
-        """保存请求终态并补写 Builder 前失败的安全 Job 状态。
+        """保存已领取构建请求的终态和安全 Job 状态。
 
         Args:
             job_id: 目标 Job ID。
@@ -1103,11 +1160,19 @@ class SqliteLifecycleStore:
         """
         now = _now()
         with self._connections.transaction(write=True) as connection:
-            connection.execute(
-                "UPDATE ingestion_requests SET state=?, updated_at=? "
-                "WHERE job_id=? AND state!='cancelled'",
-                ("succeeded" if succeeded else "failed", now, job_id),
-            )
+            if succeeded:
+                connection.execute(
+                    "UPDATE ingestion_requests SET state='succeeded', "
+                    "updated_at=? WHERE job_id=? AND state!='cancelled'",
+                    (now, job_id),
+                )
+            else:
+                connection.execute(
+                    "UPDATE ingestion_requests SET state='failed', "
+                    "updated_at=? WHERE job_id=? "
+                    "AND state IN ('queued','running')",
+                    (now, job_id),
+                )
             if not succeeded:
                 job = connection.execute(
                     "SELECT attempt FROM ingestion_jobs WHERE job_id=?",
@@ -1122,7 +1187,8 @@ class SqliteLifecycleStore:
                     "UPDATE ingestion_jobs SET state=?, stage='failed', "
                     "error_code=?, safe_message=?, retryable=?, updated_at=?, "
                     "finished_at=? WHERE job_id=? AND state IN ("
-                    "'pending', 'running', 'interrupted', 'completed')",
+                    "'pending', 'running', 'interrupted', 'completed', "
+                    "'failed_retryable', 'failed_terminal')",
                     (
                         "failed_retryable" if can_retry else "failed_terminal",
                         error_code or "INGESTION_FAILED",
@@ -1150,7 +1216,10 @@ class SqliteLifecycleStore:
                 "document_version_id, revision_id, state, stage, attempt, "
                 "error_code, safe_message, retryable, cancel_requested, "
                 "(SELECT state FROM ingestion_requests r WHERE "
-                "r.job_id=ingestion_jobs.job_id) AS request_state FROM "
+                "r.job_id=ingestion_jobs.job_id) AS request_state, "
+                "(SELECT state FROM index_revisions revision WHERE "
+                "revision.index_revision_id=ingestion_jobs.revision_id) "
+                "AS revision_state FROM "
                 "ingestion_jobs WHERE job_id=?",
                 (job_id,),
             ).fetchone()
@@ -1170,6 +1239,12 @@ class SqliteLifecycleStore:
         error_code = (
             None if row["error_code"] is None else str(row["error_code"])
         )
+        public_state = _job_status(
+            str(row["state"]),
+            bool(row["cancel_requested"]),
+            error_code,
+            _optional(row["request_state"]),
+        )
         return Job(
             job_id=str(row["job_id"]),
             project_id=str(row["project_id"]),
@@ -1177,12 +1252,7 @@ class SqliteLifecycleStore:
             document_id=_optional(row["document_id"]),
             document_version_id=_optional(row["document_version_id"]),
             revision_id=str(row["revision_id"]),
-            state=_job_status(
-                str(row["state"]),
-                bool(row["cancel_requested"]),
-                error_code,
-                _optional(row["request_state"]),
-            ),
+            state=public_state,
             stage=(
                 "finalizing"
                 if row["request_state"] == "running"
@@ -1199,6 +1269,17 @@ class SqliteLifecycleStore:
             ),
             fencing_safe_status=(
                 "not_acquired" if lease is None else str(lease["state"])
+            ),
+            revision_available=(
+                public_state is JobStatus.SUCCEEDED
+                and row["revision_state"] in {"active", "retired"}
+            ),
+            required_action=(
+                "approve_retrieval"
+                if public_state is JobStatus.FAILED_RETRYABLE
+                and error_code is not None
+                and error_code.startswith("RETRIEVAL_INGESTION_")
+                else None
             ),
             slot_progress=tuple(
                 SlotProgress(
@@ -1301,32 +1382,60 @@ class SqliteLifecycleStore:
             回到 queued 的 Job。
 
         """
-        current = self.get_job(job_id)
-        if current.state is not JobStatus.FAILED_RETRYABLE:
-            raise RevisionStateError("作业当前不可重试。", stage="job.retry")
-        if current.attempt >= _MAX_JOB_ATTEMPTS:
-            raise RevisionStateError(
-                "作业已达到最大尝试次数。", stage="job.retry"
-            )
         with self._connections.transaction(write=True) as connection:
-            if current.document_id is not None:
-                _require_live_document(
-                    connection, current.document_id, "job.retry"
+            row = connection.execute(
+                "SELECT j.state,j.attempt,j.error_code,j.document_id,"
+                "j.retryable,r.state AS request_state FROM ingestion_jobs j "
+                "JOIN ingestion_requests r ON r.job_id=j.job_id "
+                "WHERE j.job_id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFound("作业不存在。", stage="job.retry")
+            if (
+                row["state"] != "failed_retryable"
+                or row["request_state"] != "failed"
+                or not row["retryable"]
+            ):
+                raise RevisionStateError(
+                    "作业当前不可重试。", stage="job.retry"
                 )
-            connection.execute(
+            error_code = _optional(row["error_code"])
+            if error_code is not None and error_code.startswith(
+                "RETRIEVAL_INGESTION_"
+            ):
+                raise RevisionStateError(
+                    "作业必须先完成真实检索授权。",
+                    stage="job.retry.authorization",
+                )
+            attempt = int(row["attempt"])
+            if attempt >= _MAX_JOB_ATTEMPTS:
+                raise RevisionStateError(
+                    "作业已达到最大尝试次数。", stage="job.retry"
+                )
+            document_id = _optional(row["document_id"])
+            if document_id is not None:
+                _require_live_document(connection, document_id, "job.retry")
+            now = _now()
+            request_cursor = connection.execute(
+                "UPDATE ingestion_requests SET state='queued', updated_at=? "
+                "WHERE job_id=? AND state='failed'",
+                (now, job_id),
+            )
+            job_cursor = connection.execute(
                 "UPDATE ingestion_jobs SET state='pending', "
                 "stage='retry_queued', "
                 "attempt=attempt+1, error_code=NULL, safe_message=NULL, "
                 "retryable=0, cancel_requested=0, updated_at=?, "
                 "finished_at=NULL "
-                "WHERE job_id=?",
-                (_now(), job_id),
+                "WHERE job_id=? AND state='failed_retryable' "
+                "AND attempt=? AND retryable=1",
+                (now, job_id, attempt),
             )
-            connection.execute(
-                "UPDATE ingestion_requests SET state='queued', updated_at=? "
-                "WHERE job_id=? AND state='failed'",
-                (_now(), job_id),
-            )
+            if request_cursor.rowcount != 1 or job_cursor.rowcount != 1:
+                raise Conflict(
+                    "作业重试状态已被其他请求修改。", stage="job.retry"
+                )
         return self.get_job(job_id)
 
     def list_artifacts(
