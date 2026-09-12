@@ -9,6 +9,7 @@ import unicodedata
 from rag_app.application.retrieval.semantics import (
     parse_query_semantics,
     split_explicit_source_scope,
+    strip_trailing_response_directive,
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
@@ -94,10 +95,11 @@ class QueryAnalyzer:
         normalized = " ".join(
             unicodedata.normalize("NFKC", request.text).strip().split()
         )
-        _, _semantic_body, semantic_start = split_explicit_source_scope(
+        _, semantic_body, semantic_start = split_explicit_source_scope(
             normalized
         )
-        signal_text = normalized[semantic_start:]
+        signal_text = strip_trailing_response_directive(semantic_body)
+        semantic_end = semantic_start + len(signal_text)
         folded = signal_text.casefold()
         identifiers = tuple(
             dict.fromkeys(
@@ -135,6 +137,8 @@ class QueryAnalyzer:
             reason_codes.append("NEGATION_PRESERVED")
         if semantic_start:
             reason_codes.append("SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS")
+        if signal_text != semantic_body:
+            reason_codes.append("RESPONSE_DIRECTIVE_EXCLUDED")
         conversation = tuple(
             {
                 "sha256": hashlib.sha256(turn.encode("utf-8")).hexdigest(),
@@ -144,7 +148,7 @@ class QueryAnalyzer:
         )
         constraints = tuple(
             constraint
-            for constraint in _query_constraints(normalized)
+            for constraint in _query_constraints(normalized[:semantic_end])
             if constraint.start_char >= semantic_start
         )
         semantics = parse_query_semantics(normalized).model_copy(

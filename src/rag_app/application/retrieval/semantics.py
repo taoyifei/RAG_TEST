@@ -73,6 +73,14 @@ _TRAILING_TARGET_SYNTAX = re.compile(
 _TRAILING_PARTICLES = re.compile(
     r"(?:(?:嘛|吧)[，,]|[呢吗呀啊？?。！!，,\s])+$"
 )
+_TRAILING_RESPONSE_DIRECTIVE = re.compile(
+    r"^\s*(?:(?:请|麻烦|烦请)\s*)?(?:(?:仅|只)\s*)?"
+    r"(?:(?:根据|依据|依照|结合)\s*)?"
+    r"(?:(?:上述|以上|现有)\s*)?"
+    r"(?:(?:原文|资料|文档|证据)(?:内容)?\s*)?"
+    r"(?:(?:完整|准确|如实|客观|详细|简要|逐项|分点|直接|清楚|明确)\s*)*"
+    r"(?:作答|回答|回复|说明|列出|列举)(?:即可|就行)?[。.!！\s]*$"
+)
 _SOURCE_QUALIFIED_DUTY = re.compile(
     r"^(?P<source>.+?(?:规范|文档|制度|手册))(?:里|中)"
     r"[，,：:\s]*(?P<target>.+)$"
@@ -223,6 +231,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     explicit_source, normalized, _body_start = split_explicit_source_scope(
         normalized
     )
+    normalized = strip_trailing_response_directive(normalized)
     core = _question_core(normalized)
 
     fill_blank = _QUOTED_FILL_BLANK.fullmatch(core)
@@ -661,6 +670,15 @@ def _fill_blank_anchor(template: str) -> str:
     if not anchors:
         return ""
     return max(anchors, key=lambda value: len(re.sub(r"\s+", "", value)))
+
+
+def strip_trailing_response_directive(value: str) -> str:
+    """排除问号后的纯回答方式指令，保留新增业务条件。"""
+    core = value.strip()
+    for marker in re.finditer(r"[?？]", core):
+        if _TRAILING_RESPONSE_DIRECTIVE.fullmatch(core[marker.end() :]):
+            return core[: marker.end()].rstrip()
+    return core
 
 
 def _question_core(value: str) -> str:
