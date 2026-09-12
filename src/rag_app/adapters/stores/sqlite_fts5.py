@@ -1394,7 +1394,7 @@ def _structural_score(
             RequestedAnswerType.PURPOSE,
             RequestedAnswerType.SECTION_SUMMARY,
         }
-        and relation_heading
+        and (target_heading_exact or relation_heading)
         and (source_match or target_document or target_heading or target_body)
     ):
         score += 9.0

@@ -906,6 +906,26 @@ def test_new_typed_relations_require_target_and_relation_support(
     assert support["status"] == "SUPPORTED"
 
 
+def test_quoted_restriction_is_not_mistaken_for_unknown_information() -> None:
+    """被禁止对象中的“无记录”是精确主题，不是资料缺失声明。"""
+    target = "口头确认、无记录调整、未审批修改"
+    statement = f"变更控制要求规定，严禁{target}。"
+    candidates = _candidates(
+        _paragraph("其他流程不得跳过双人复核。")
+        + _paragraph(statement)
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context(
+            f"文档对“{target}”有什么禁止或限制性要求？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [statement]
+
+
 def test_new_typed_relations_do_not_borrow_another_relation() -> None:
     candidates = _candidates(
         _paragraph("星环登记表由资料协调员负责维护。")

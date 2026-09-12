@@ -480,6 +480,29 @@ def evaluate_span_support(
     )
 
 
+def _quoted_restriction_supports(
+    relation: str,
+    answer_type: str,
+    clause: str,
+    analysis: QueryAnalysis,
+) -> bool:
+    """识别带精确引号对象的禁止条款，避免把“无记录”误作缺失值。"""
+    return (
+        answer_type == RequestedAnswerType.SECTION_SUMMARY.value
+        and relation == "限制要求"
+        and bool(analysis.quoted_phrases)
+        and all(
+            _normalized(item) in clause for item in analysis.quoted_phrases
+        )
+        and bool(
+            re.search(
+                r"禁止|不得|严禁|不允许|不可|不能|不准|仅限|只允许",
+                clause,
+            )
+        )
+    )
+
+
 def _clause_supports(  # noqa: PLR0911
     target: str,
     relation: str,
@@ -487,8 +510,16 @@ def _clause_supports(  # noqa: PLR0911
     clause: str,
     analysis: QueryAnalysis,
 ) -> bool:
-    if _UNKNOWN.search(clause) or answer_type in _TYPED_ANSWER_VALUES:
-        return not _UNKNOWN.search(clause) and _descriptive_clause_supports(
+    unknown = bool(
+        _UNKNOWN.search(clause)
+    ) and not _quoted_restriction_supports(
+        relation,
+        answer_type,
+        clause,
+        analysis,
+    )
+    if unknown or answer_type in _TYPED_ANSWER_VALUES:
+        return not unknown and _descriptive_clause_supports(
             target, relation, answer_type, clause, analysis
         )
     if answer_type in {"MONEY", "AREA", "CONTACT", "TEMPERATURE"}:

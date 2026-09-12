@@ -345,9 +345,17 @@ def test_source_scoped_structural_search_finds_late_short_heading(
             ),
             tuple(hit.chunk_id for hit in hits),
         )
+        target_chunk_ids = {
+            item.chunk.chunk_id
+            for item in hydrated
+            if item.chunk.heading_path[-1:] == ("预期",)
+        }
 
-        assert any(
-            item.chunk.heading_path[-1:] == ("预期",) for item in hydrated
+        assert target_chunk_ids
+        assert all(
+            hit.match_type == "STRUCTURAL_SECTION_HEADING_BODY"
+            for hit in hits
+            if hit.chunk_id in target_chunk_ids
         )
     finally:
         runtime.close()
