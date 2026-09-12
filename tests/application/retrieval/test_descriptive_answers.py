@@ -257,6 +257,37 @@ def test_role_table_keeps_raw_cells_for_model_instead_of_combining_answer() -> (
     assert selection.answer_support_set == ()
 
 
+def test_flat_role_sections_keep_heading_context_for_model_candidates() -> None:
+    blocks = "".join(
+        _paragraph(text)
+        for text in (
+            "4 部门职责",
+            "4.1 合成总经理",
+            "制定公开合成目标。",
+            "协调公开合成资源。",
+            "4.2 合成财务",
+            "在合成总经理领导下核对公开合成账目。",
+        )
+    )
+    candidates = _remote_candidates(_candidates(blocks))
+    selection = EvidenceAssembler().assemble_sets(
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context("合成总经理是干嘛的 负责什么的"),
+        include_model_candidates=True,
+    )
+    by_quote = {
+        item.citation_text: item.source_label
+        for item in selection.model_evidence_candidates
+    }
+
+    assert "制定公开合成目标。" in by_quote
+    assert "协调公开合成资源。" in by_quote
+    assert "合成总经理" in by_quote["制定公开合成目标。"]
+    assert "合成总经理" in by_quote["协调公开合成资源。"]
+    assert "合成财务" in by_quote["在合成总经理领导下核对公开合成账目。"]
+
+
 @pytest.mark.parametrize(
     "modes",
     [

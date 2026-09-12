@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from enum import StrEnum
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, StrictInt, field_validator, model_validator
 
@@ -47,6 +47,16 @@ class TokenCountResult(FrozenModel):
     tokenizer_id: str = Field(min_length=1, max_length=256)
     exact: bool
     model_compatibility: tuple[str, ...] = ()
+
+
+class ChunkContextDependency(FrozenModel):
+    """Chunk 使用的真实结构上下文节点关系。"""
+
+    relationship_type: Literal["heading_context"] = "heading_context"
+    source_node_id: str = Field(pattern=r"^node_[0-9a-f]{32}$")
+    origin: Literal["document_heading", "inferred_numbered_heading"] = (
+        "document_heading"
+    )
 
 
 class SourceSpan(MetadataModel):
@@ -278,6 +288,7 @@ class Chunk(MetadataModel):
     )
     child_group_ids: tuple[str, ...] = ()
     note_refs: tuple[str, ...] = ()
+    context_dependencies: tuple[ChunkContextDependency, ...] = ()
     source_spans: tuple[SourceSpan, ...] = Field(min_length=1)
     citation_text: str = Field(min_length=1, repr=False)
     embedding_text: str = Field(min_length=1, repr=False)
@@ -341,6 +352,16 @@ class Chunk(MetadataModel):
             raise ValueError("child group refs 禁止重复。")
         if len(self.note_refs) != len(set(self.note_refs)):
             raise ValueError("note refs 禁止重复。")
+        dependency_ids = tuple(
+            dependency.source_node_id
+            for dependency in self.context_dependencies
+        )
+        if len(dependency_ids) != len(set(dependency_ids)):
+            raise ValueError("context dependencies 禁止重复来源节点。")
+        if self.context_dependencies and len(self.context_dependencies) != len(
+            self.heading_path
+        ):
+            raise ValueError("context dependencies 必须逐级对应 heading_path。")
         return self
 
 

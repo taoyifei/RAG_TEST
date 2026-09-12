@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rag_app.core.models import (
+    ChunkContextDependency,
     ChunkRole,
     DocumentNode,
     SourceAnchor,
@@ -43,6 +44,7 @@ class AtomicUnit:
     note_refs: tuple[str, ...] = ()
     table_header_fragments: tuple[SourceFragment, ...] = ()
     structural_context: str = ""
+    context_dependencies: tuple[ChunkContextDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +57,7 @@ class RunPlan:
     neighbor_group_id: str
     heading_path: tuple[str, ...]
     atoms: tuple[AtomicUnit, ...]
+    context_dependencies: tuple[ChunkContextDependency, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +67,7 @@ class SectionPlan:
     section_id: str
     heading_path: tuple[str, ...]
     runs: tuple[RunPlan, ...]
+    context_dependencies: tuple[ChunkContextDependency, ...] = ()
 
 
 def has_visible_text(text: str) -> bool:

@@ -62,6 +62,7 @@ def validate_chunks(
             raise ValueError("child group ref 指向不存在的 neighbor group。")
         if any(note_id not in nodes for note_id in chunk.note_refs):
             raise ValueError("note ref 指向不存在的 Document IR 节点。")
+        _validate_context_dependencies(chunk, nodes)
         _validate_link(chunk, by_id, previous=True)
         _validate_link(chunk, by_id, previous=False)
     _validate_no_neighbor_cycles(chunks, by_id)
@@ -147,6 +148,36 @@ def _node_source_text(node: DocumentNode) -> str:
             or ""
         )
     return ""
+
+
+def _validate_context_dependencies(
+    chunk: Chunk,
+    nodes: dict[str, DocumentNode],
+) -> None:
+    """核对标题路径与真实 IR 节点之间的有序依赖。"""
+    if not chunk.context_dependencies:
+        # 旧 revision 的 Chunk JSON 没有该字段，仍允许只读加载与复验。
+        return
+    labels: list[str] = []
+    for dependency in chunk.context_dependencies:
+        node = nodes.get(dependency.source_node_id)
+        if node is None:
+            raise ValueError("context dependency 指向 Document IR 之外的节点。")
+        expected_kind = (
+            NodeKind.HEADING
+            if dependency.origin == "document_heading"
+            else NodeKind.PARAGRAPH
+        )
+        if node.kind is not expected_kind:
+            raise ValueError("context dependency 来源类型与 origin 不一致。")
+        if (
+            node.text_payload is None
+            or not node.text_payload.exact_text.strip()
+        ):
+            raise ValueError("context dependency 必须指向非空文本节点。")
+        labels.append(node.text_payload.exact_text.strip())
+    if tuple(labels) != chunk.heading_path:
+        raise ValueError("context dependencies 与 heading_path 文本不一致。")
 
 
 def _crosses_sections(

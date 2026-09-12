@@ -487,6 +487,40 @@ def test_duty_question_preserves_leading_project_context() -> None:
 
 
 @pytest.mark.parametrize(
+    "question",
+    (
+        "总经理是干嘛的 负责什么的",
+        "总经理是干嘛的，负责哪些工作？",
+        "总经理主要做什么、管哪些事？",
+    ),
+)
+def test_compound_spoken_duty_question_keeps_one_target(question: str) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.target == "总经理"
+    assert semantics.relation == "职责"
+    assert semantics.answer_type is RequestedAnswerType.DUTIES
+    assert semantics.source == "RULE"
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "如果总经理负责什么项目，应该先登记？",
+        "总经理负责什么的项目需要先审批？",
+        "总经理先负责什么，再由副总复核？",
+    ),
+)
+def test_duty_words_inside_condition_or_order_remain_facts(
+    question: str,
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.answer_type is RequestedAnswerType.FACT
+    assert semantics.relation != "职责"
+
+
+@pytest.mark.parametrize(
     ("question", "target", "relation", "answer_type", "source"),
     (
         (

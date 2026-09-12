@@ -94,27 +94,34 @@
     "token_p95": 258,
     "total_citable_source_chars": 46,
     "unique_covered_source_chars": 42,
-    "whitespace_only_citable_char_count": 0,
-    "whitespace_only_citable_node_count": 0,
     "warnings": [
       "PROVISIONAL_CHUNKING_PARAMETERS",
       "HEADER_FOOTER_METADATA_ONLY",
       "COMMENTS_METADATA_ONLY"
-    ]
+    ],
+    "whitespace_only_citable_char_count": 0,
+    "whitespace_only_citable_node_count": 0
   },
   "chunks": [
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_43a5a5fb529b320f2c4997a4523d8701",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_4e739533f398a1f5a9a4bdf492e07ca1",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "1.\t一级列表",
       "content_sha256": "6b6287890801c29ba8ab9f693aaf28bba44de2e6e7144f1c816c874130c1a4d2",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：列表\n\n1.\t一级列表",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:列表 1. 一级列表",
       "metadata": [
@@ -251,16 +258,23 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_f7d4061ef65fd32f66febc9a8898be3a",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_0fd1b07063b6ec827d8f38e0a28c5d96",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "1.a)\t二级列表",
       "content_sha256": "1005c4badd5bc1186fedc23d6813df9147ec9551c367411c5ab3814d43a2242b",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：列表\n\n1.a)\t二级列表",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:列表 1.a) 二级列表",
       "metadata": [
@@ -397,16 +411,23 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_8d8a70b4712213882c38f42c9a44ea93",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_8d08ec15bf641d667ee5c6e640d1f37f",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "列甲 | 列乙 | 列丙\n合并值 | 丙一\n合并值 | 丙二",
       "content_sha256": "0855fca9bc3825dc3bb039bc26742295a3bb36df0ea10e31f91cd188d4b1ea6d",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：表格\n结构：[列1] 列甲 | [列2] 列乙 | [列3] 列丙\n[列1] 合并值 | [列3] 丙一\n[列1] 合并值 | [列3] 丙二\n\n列甲 | 列乙 | 列丙\n合并值 | 丙一\n合并值 | 丙二",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:表格 结构:[列1] 列甲|[列2] 列乙|[列3] 列丙 [列1] 合并值|[列3] 丙一 [列1] 合并值|[列3] 丙二 列甲|列乙|列丙 合并值|丙一 合并值|丙二",
       "metadata": [
@@ -876,16 +897,23 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_2df704e6e16dc9ea93717cfa308560cd",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_1334606a32e0f0cf6b3d0f181f5c9732",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "正文与图：\n换行后正文跨页后正文",
       "content_sha256": "8aa0647fa2be24b44fbda369b1244395438177646ef4e86c951d18cc9012081e",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：正文\n\n正文与图：\n换行后正文跨页后正文",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:正文 正文与图:换行后正文跨页后正文",
       "metadata": [
@@ -966,16 +994,23 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_d82c50125d5ff116ff3e7586b00b50be",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_aed2a1c5fd2ae35e6e5e215a5f6d8d32",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：图片元数据\n\n合成图片说明",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:图片元数据 合成图片说明",
       "metadata": [
@@ -1068,16 +1103,23 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_2671e3a06f8e0ccde1f4841c59473fe1",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_b0341c974f94246d0e0cf95da59692b7",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "合成图片说明",
       "content_sha256": "dc55b63624586de22164b7139adc35da12409d12c8ecd2214a90533ecf130a00",
+      "context_dependencies": [
+        {
+          "origin": "document_heading",
+          "relationship_type": "heading_context",
+          "source_node_id": "node_442f03eb0a5b12d01a852ffa8fb47977"
+        }
+      ],
       "embedding_text": "文档：v3-00-synthetic.docx\n位置：合成一级标题\n类型：图片元数据\n\n合成图片说明",
       "heading_path": [
         "合成一级标题"
       ],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 位置:合成一级标题 类型:图片元数据 合成图片说明",
       "metadata": [
@@ -1170,14 +1212,15 @@
     },
     {
       "child_group_ids": [],
-      "chunk_id": "chunk_383f71b6cd94d2f5e5e2f728d4d6a771",
-      "chunker_fingerprint": "sha256:e816ad5fceff8262f4c2c72b973c3ab110e3804327f2a45d95e7e8b54c4800e9",
+      "chunk_id": "chunk_6da5395406f8ee42e13cfd5629fc6143",
+      "chunker_fingerprint": "sha256:c317b236a79c177d7392d98f0892445b89bb85fb7aa55ed9447724e076645fd3",
       "citation_text": "文本框正文",
       "content_sha256": "103b237c925ac846592ee5fe68c7383fcb13270d52d68653e8525dcda72427d0",
+      "context_dependencies": [],
       "embedding_text": "文档：v3-00-synthetic.docx\n类型：文本框\n\n文本框正文",
       "heading_path": [],
       "identifiers": [],
-      "index_revision_id": "irev_b52c1cdc16161d4caab94310a549b52c",
+      "index_revision_id": "irev_6c8da5e2d4d62eeb8304c425fe0f960a",
       "knowledge_base_id": "kb_22222222222222222222222222222222",
       "lexical_text": "文档:v3-00-synthetic.docx 类型:文本框 文本框正文",
       "metadata": [

@@ -6,10 +6,11 @@ V3 的 canonical 正文字段是 `citation_text`。`Chunk.text` 仅为只读兼�
 字符串；代码不得同时维护两份可变正文。旧 HTTP/API payload 在迁移完成前仍可由 legacy
 adapter 输出原 `text` 字段。
 
-本阶段不修改现有 active collection、生产 alias、SQLite/Qdrant schema 或公共 HTTP/SDK
-schema。Parser、Chunker、TokenCounter、chunk payload schema 或策略的变化都会改变
-`index_fingerprint`，因此 V3 数据必须在 P06 创建新 `IndexRevision`，不能写入旧 active
-collection。
+现有 active collection、生产 alias 和 SQLite/Qdrant 表结构不做原地修改。3.1.0 在
+canonical Chunk 中新增默认空的 `context_dependencies`，并通过 Chunk 只读 HTTP/SDK
+投影公开；旧 JSON 缺失该字段时仍按空元组读取。Parser、Chunker、TokenCounter、chunk
+payload 或策略变化都会改变 `index_fingerprint`，因此新数据必须创建 `IndexRevision`，
+不能写入旧 active collection。
 
 ## 双向适配
 
@@ -22,7 +23,7 @@ collection。
 
 `core_chunk_to_legacy()` 显式把基础 V3 字段降级为旧 Chunk。调用方必须提供只用于显示的
 文件名。原文与重复来源可以映射；旧 payload 无法表达的派生编号、separator、child groups、
-note refs 或复杂结构会返回以下损失 warning：
+note refs、context dependencies 或复杂结构会返回以下损失 warning：
 
 ```text
 CHUNK_V3_SPAN_NOT_EXPRESSIBLE_IN_LEGACY
@@ -48,6 +49,10 @@ Index fingerprint 覆盖 Chunker descriptor/version、完整 `ChunkingPolicy`、
 exact/estimated 标志与模型兼容性、required slot 上限和 chunk payload schema version 3。
 纯文件重命名不改变 document/chunk 稳定身份；内容、结构、策略或跨度变化必须创建不同 ID
 和 revision。
+
+`docx-structural-v3@3.1.0` 的隐式编号标题与有类型 context dependency 属于有效分块语义
+变化。3.0.x Chunk 仍可读取和服务，但不能把旧 `heading_path` 或空 dependency 冒充为新
+索引；升级必须走新 revision 的完整构建、回读验证和原子激活。
 
 ## 回滚与安全
 
