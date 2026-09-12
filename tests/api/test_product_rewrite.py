@@ -152,6 +152,15 @@ def test_invalid_json_records_the_one_dispatched_call(
     assert result.calls[0].observed_tokens == 70
 
 
+def test_product_grounded_answers_have_bounded_long_output_capacity(
+    rewrite_model: RewriteFixture,
+) -> None:
+    """长篇多条款回答使用 4k 上限，解释和改写仍各自降低预算。"""
+    model, _, _, _ = rewrite_model
+
+    assert model.adapter.config.max_output_tokens == 4096
+
+
 @pytest.mark.parametrize(
     "before,after",
     [
