@@ -42,7 +42,10 @@ from tests.application.retrieval.test_descriptive_answers import (
     _candidates,
     _paragraph,
 )
-from tests.application.retrieval.test_evidence_table_coordinates import _context
+from tests.application.retrieval.test_evidence_table_coordinates import (
+    _context,
+    _table,
+)
 
 
 @pytest.mark.parametrize(
@@ -304,6 +307,37 @@ def test_role_mentioned_as_object_cannot_be_promoted_to_subject(
 ) -> None:
     """职责对象必须来自来源主语，不能只在原文任意位置出现。"""
     evidence, draft = _supported_draft(source, claim)
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+@pytest.mark.parametrize(
+    ("source", "claim"),
+    (
+        ("由资料部门记录归档结果。", "资料部门记录归档结果。"),
+        (
+            "交接流程由行政部负责，并负责核对交接记录。",
+            "交接流程由行政部负责，并负责核对交接记录。",
+        ),
+    ),
+)
+def test_explicit_passive_agent_remains_the_supported_subject(
+    source: str, claim: str
+) -> None:
+    """“由某主体负责或执行”是明确施事，不能被误判为对象偷换。"""
+    evidence, draft = _supported_draft(source, claim)
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_explicit_passive_agent_still_rejects_a_changed_subject() -> None:
+    evidence, draft = _supported_draft(
+        "交接流程由行政部负责。",
+        "品质部负责交接流程。",
+    )
 
     with pytest.raises(ValidationFailed) as error:
         validate_grounded_draft(draft, evidence)
@@ -1028,6 +1062,140 @@ def _table_role_draft(
         claims=(AnswerClaim(text=claim, supports=supports),),
         generation_mode="llm",
     )
+
+
+def _whole_row_table_draft(
+    claim: str,
+    citations: tuple[str, ...],
+    *,
+    rows: tuple[tuple[str, ...], ...] | None = None,
+    heading_path: tuple[str, ...] = (),
+) -> tuple[tuple[EvidenceItem, ...], AnswerDraft, QueryAnalysis]:
+    """用完整行支持组构造一个只引用指定单元格的回答。"""
+    context = _context("“蔚蓝泵”对应的内容或要求是什么？")
+    candidate = _table() if rows is None else _table(rows=rows)
+    if heading_path:
+        chunk = candidate.hydrated.chunk.model_copy(
+            update={"heading_path": heading_path}
+        )
+        candidate = candidate.model_copy(
+            update={
+                "hydrated": candidate.hydrated.model_copy(
+                    update={"chunk": chunk}
+                )
+            }
+        )
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=context,
+    )
+    by_text = {item.citation_text: item for item in evidence}
+    assert set(citations) <= set(by_text)
+    supports = tuple(
+        ClaimSupport(
+            support_id=by_text[text].support_id,
+            quote=text,
+        )
+        for text in citations
+    )
+    return (
+        evidence,
+        AnswerDraft(
+            text=claim,
+            cited_evidence_ids=tuple(
+                support.support_id for support in supports
+            ),
+            claims=(AnswerClaim(text=claim, supports=supports),),
+            generation_mode="llm",
+        ),
+        context.analysis,
+    )
+
+
+def test_verified_table_column_combines_header_and_numeric_value() -> None:
+    """同一认证列的表头和值可共同证明带单位数值。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：上限温度为 63 ℃。",
+        ("蔚蓝泵", "上限温度", "63 ℃"),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_verified_table_column_does_not_lend_number_to_another_header() -> None:
+    """同一行其他列的数值也不能被换到所述属性下。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：流量为 63 ℃。",
+        ("蔚蓝泵", "流量", "上限温度", "63 ℃"),
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_NUMBER_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "citations",
+    (
+        ("上限温度", "63 ℃"),
+        ("蔚蓝泵", "63 ℃"),
+    ),
+)
+def test_table_target_requires_joint_label_header_and_value(
+    citations: tuple[str, ...],
+) -> None:
+    """应用层不能只凭元数据或裸值补出表格行列关系。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：上限温度为 63 ℃。",
+        citations,
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_QUERY_TARGET_MISMATCH"
+
+
+def test_verified_table_accepts_one_character_value_with_header_unit() -> None:
+    """认证表格中的单字符值可与同列表头单位闭合，仍保留列约束。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：设备检测项目包括流量计，校准标准为7次/年。",
+        ("蔚蓝泵", "检测项目", "流量计", "校准次数（次/年）", "7"),
+        rows=(
+            ("机型", "检测项目", "校准次数（次/年）"),
+            ("蔚蓝泵", "流量计", "7"),
+            ("白桦泵", "压力计", "9"),
+        ),
+        heading_path=("设备检测校准标准",),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_verified_table_keeps_numeric_continuation_in_the_same_column() -> None:
+    """同一单元格逗号后的数值续项沿用本列属性，不变成无主数字。"""
+    definition = (
+        "员工轻伤（损失工作日低于 15 天）或直接损失 500 元以上，"
+        "20000 元以下"
+    )
+    evidence, draft, analysis = _whole_row_table_draft(
+        f"蔚蓝泵：事故定义为{definition}。",
+        ("蔚蓝泵", "事故定义", definition),
+        rows=(
+            ("等级", "事故定义"),
+            ("蔚蓝泵", definition),
+            ("白桦泵", "设备停机 7 天"),
+        ),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
 
 
 @pytest.mark.parametrize(

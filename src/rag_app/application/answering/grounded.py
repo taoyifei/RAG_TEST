@@ -34,10 +34,14 @@ from rag_app.core.query_text import (
     section_heading_path_owns_target,
 )
 
-_QUANTITY_UNIT = (
+_QUANTITY_UNIT_ATOM = (
     r"(?:%|％|万元|亿元|元|毫秒|分钟|小时|秒|天|周|个月|年|月|"
     r"毫米|厘米|千米|米|公斤|千克|毫克|克|吨|升|毫升|次|个|"
-    r"台|件|人|℃|[A-Za-zμµΩ°]+(?:/[A-Za-z]+)?)"
+    r"台|件|人|双|套|副|只|张|支|瓶|组|批|份|条|顶|块|辆|"
+    r"艘|架|门|床|℃|[A-Za-zμµΩ°]+)"
+)
+_QUANTITY_UNIT = (
+    rf"(?:{_QUANTITY_UNIT_ATOM})(?:\s*/\s*(?:{_QUANTITY_UNIT_ATOM}))*"
 )
 _NUMBER = re.compile(
     rf"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*{_QUANTITY_UNIT})?"
@@ -75,6 +79,7 @@ _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.
 _MIN_QUOTE_CHARS = 2
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.35
 _MIN_NEGATION_SHARED_TERMS = 2
+_MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
     r"(?:(?:并|且|同时|以及)?由)\s*"
     r"([A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]{1,16}"
@@ -201,6 +206,8 @@ class _ClaimSourceGroup:
     support_text: str
     trusted_subjects: frozenset[str]
     trusted_contexts: frozenset[str]
+    trusted_term_contexts: frozenset[str] = frozenset()
+    table_columns: tuple[str, ...] = ()
 
 
 def _terms(text: str) -> set[str]:
@@ -269,6 +276,34 @@ def _number_tokens(text: str) -> set[str]:
     text = _QUANTITY_RANGE.sub(close_range, text)
     return identifiers | range_tokens | {
         re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)
+    }
+
+
+def _table_number_tokens(text: str) -> set[str]:
+    """将认证同列中分开的纯数值和复合单位闭合为数量 token。"""
+    tokens = _number_tokens(text)
+    bare_numbers = {
+        token
+        for token in tokens
+        if re.fullmatch(r"[+-]?\d+(?:[.,:/-]\d+)*", token)
+    }
+    unit_candidates: list[str] = []
+    for line in text.splitlines():
+        unit_candidates.append(line.strip(" \t:：。；;"))
+        unit_candidates.extend(
+            value.strip()
+            for value in re.findall(r"[（(]([^()（）]+)[）)]", line)
+        )
+        _prefix, separator, suffix = line.rpartition("：")
+        if separator:
+            unit_candidates.append(suffix.strip())
+    units = {
+        re.sub(r"\s+", "", unit)
+        for unit in unit_candidates
+        if re.fullmatch(_QUANTITY_UNIT, unit)
+    }
+    return tokens | {
+        number + unit for number in bare_numbers for unit in units
     }
 
 
@@ -358,14 +393,20 @@ def _source_has_explicit_subject(subject: str, text: str) -> bool:
         for candidate in _standalone_subjects(text)
     ):
         return True
+    if any(
+        _same_subject(subject, candidate)
+        for candidate in _NAMED_SUBJECT.findall(text)
+    ):
+        return True
     for match in re.finditer(re.escape(subject), text, re.IGNORECASE):
         clause_start = max(
             (text.rfind(delimiter, 0, match.start()) + 1)
             for delimiter in "\n。；;.!！？?，,:："
         )
+        prefix = text[clause_start : match.start()]
+        prefix = _LEADING_AGENT_PREFIX.sub("", prefix)
         if (
-            _SUBJECT_CLAUSE_PREFIX.fullmatch(text[clause_start : match.start()])
-            is None
+            _SUBJECT_CLAUSE_PREFIX.fullmatch(prefix) is None
         ):
             continue
         if _DUTY_ACTION_PREFIX.match(text[match.end() :]) is not None:
@@ -379,7 +420,24 @@ def _validate_claim_target(
     *,
     source_groups: tuple[_ClaimSourceGroup, ...] = (),
 ) -> None:
-    """职责回答必须明确指向查询主体或由认证标题唯一补全。"""
+    """职责或表格回答必须绑定本次查询目标。"""
+    if (
+        analysis is not None
+        and analysis.semantics.answer_type
+        is RequestedAnswerType.SECTION_SUMMARY
+        and analysis.semantics.relation == "对应内容"
+        and analysis.semantics.target
+    ):
+        if any(
+            analysis.semantics.target in group.trusted_contexts
+            for group in source_groups
+        ):
+            return
+        raise ValidationFailed(
+            "表格事实没有闭合所问行名、列头和值。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_TARGET_MISMATCH",
+        )
     if (
         analysis is None
         or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
@@ -586,6 +644,65 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
     return groups
 
 
+def _table_cell_coordinate(
+    item: EvidenceItem,
+) -> tuple[tuple[object, ...], int, int] | None:
+    """读取 Evidence 的唯一逻辑表格、行和列坐标。"""
+    cells: set[tuple[tuple[object, ...], int, int]] = set()
+    for span in item.source_spans:
+        anchor = span.source_anchor
+        if anchor is None or span.node_id is None:
+            continue
+        path = span.structural_path
+        located = False
+        for index in range(len(path) - 2):
+            if not path[index].startswith("tbl:"):
+                continue
+            row = re.fullmatch(r"tr:(\d+)", path[index + 1])
+            column = re.fullmatch(r"tc:(\d+)", path[index + 2])
+            if row is None or column is None:
+                continue
+            if any(part.startswith("tbl:") for part in path[index + 1 :]):
+                continue
+            cells.add(
+                (
+                    (
+                        item.document_version_id,
+                        item.section_id,
+                        item.table_locator,
+                        anchor.part_uri,
+                        anchor.story_kind,
+                        path[: index + 1],
+                    ),
+                    int(row[1]),
+                    int(column[1]),
+                )
+            )
+            located = True
+        if located:
+            continue
+        if (
+            anchor.table_index is not None
+            and anchor.row_index is not None
+            and anchor.cell_index is not None
+        ):
+            cells.add(
+                (
+                    (
+                        item.document_version_id,
+                        item.section_id,
+                        item.table_locator,
+                        anchor.part_uri,
+                        anchor.story_kind,
+                        ("table-index", anchor.table_index),
+                    ),
+                    anchor.row_index,
+                    anchor.cell_index,
+                )
+            )
+    return next(iter(cells)) if len(cells) == 1 else None
+
+
 def _trusted_duty_subjects(
     item: EvidenceItem,
     analysis: QueryAnalysis | None,
@@ -658,6 +775,148 @@ def _trusted_section_contexts(
     return {target}
 
 
+def _trusted_table_contexts(
+    item: EvidenceItem,
+    analysis: QueryAnalysis | None,
+) -> set[str]:
+    """读取与真实表格坐标和完整行支持组闭合的查询行名。"""
+    if (
+        analysis is None
+        or analysis.semantics.answer_type
+        is not RequestedAnswerType.SECTION_SUMMARY
+        or analysis.semantics.relation != "对应内容"
+        or not analysis.semantics.target
+        or item.table_locator is None
+        or not item.table_context
+        or _table_cell_coordinate(item) is None
+    ):
+        return set()
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return set()
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    item_node_ids = {
+        span.node_id for span in item.source_spans if span.node_id is not None
+    }
+    if (
+        support.get("status") != "SUPPORTED"
+        or support.get("answer_type")
+        != RequestedAnswerType.SECTION_SUMMARY.value
+        or support.get("support_reason") != "TABLE_ROW_CONTENT"
+        or support.get("requested_relation_or_attribute") != "对应内容"
+        or not isinstance(target, str)
+        or target != analysis.semantics.target
+        or not isinstance(supporting_ids, list)
+        or not item_node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
+    ):
+        return set()
+    return {target}
+
+
+def _joined_table_columns(
+    columns: dict[tuple[object, ...], dict[int, list[str]]],
+) -> tuple[str, ...]:
+    """只联合至少跨两个真实行的同列表头和值。"""
+    joined: list[str] = []
+    for column in sorted(columns, key=repr):
+        rows = columns[column]
+        if len(rows) < _MIN_TABLE_COLUMN_ROWS:
+            continue
+        quotes = tuple(
+            dict.fromkeys(
+                quote
+                for row in sorted(rows)
+                for quote in rows[row]
+            )
+        )
+        joined.append("\n".join(quotes))
+    return tuple(joined)
+
+
+def _closed_table_contexts(
+    cells: list[
+        tuple[
+            tuple[object, ...],
+            int,
+            int,
+            str,
+            str,
+            tuple[str, ...],
+        ]
+    ],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """只有行名、目标行值和同列表头齐全时才认证表格语境。"""
+    targets = {target for _table, _row, _column, _quote, target, _path in cells}
+    if len(targets) != 1:
+        return frozenset(), frozenset()
+    target = next(iter(targets))
+    labels = {
+        (table, row, column)
+        for table, row, column, quote, _target, _path in cells
+        if quote.strip() == target.strip()
+    }
+    if len(labels) != 1:
+        return frozenset(), frozenset()
+    table, target_row, label_column = next(iter(labels))
+    value_columns = {
+        column
+        for candidate_table, row, column, _quote, _target, _path in cells
+        if candidate_table == table
+        and row == target_row
+        and column != label_column
+    }
+    closed_columns = {
+        column
+        for column in value_columns
+        if any(
+            candidate_table == table
+            and candidate_column == column
+            and row < target_row
+            for candidate_table, row, candidate_column, _quote, _target, _path
+            in cells
+        )
+    }
+    if not closed_columns:
+        return frozenset(), frozenset()
+    headings = frozenset(
+        heading
+        for candidate_table, _row, column, _quote, _target, path in cells
+        if candidate_table == table
+        and (column == label_column or column in closed_columns)
+        for heading in path
+    )
+    return frozenset({target}), headings
+
+
+def _merge_table_numeric_continuations(
+    clauses: list[tuple[str, str | None]],
+    table_columns: tuple[str, ...],
+) -> list[tuple[str, str | None]]:
+    """把唯一同列支持的逗号后纯数值续项绑定回前一分句。"""
+    merged: list[tuple[str, str | None]] = []
+    for clause, subject in clauses:
+        numbers = _number_tokens(clause)
+        if merged and numbers:
+            previous, previous_subject = merged[-1]
+            matching_columns = [
+                column
+                for column in table_columns
+                if numbers <= _table_number_tokens(column)
+                and _action_terms(previous) & _action_terms(column)
+            ]
+            if len(matching_columns) == 1:
+                merged[-1] = (
+                    f"{previous}，{clause}",
+                    previous_subject,
+                )
+                continue
+        merged.append((clause, subject))
+    return merged
+
+
 def _claim_source_groups(
     claim: AnswerClaim,
     units: list[EvidenceItem],
@@ -667,6 +926,23 @@ def _claim_source_groups(
     grouped: dict[tuple[object, ...], list[str]] = {}
     trusted: dict[tuple[object, ...], set[str]] = {}
     contexts: dict[tuple[object, ...], set[str]] = {}
+    table_cells: dict[
+        tuple[object, ...],
+        list[
+            tuple[
+                tuple[object, ...],
+                int,
+                int,
+                str,
+                str,
+                tuple[str, ...],
+            ]
+        ],
+    ] = {}
+    table_columns: dict[
+        tuple[object, ...],
+        dict[tuple[object, ...], dict[int, list[str]]],
+    ] = {}
     for support, item in zip(claim.supports, units, strict=True):
         groups = _source_groups(item)
         if len(groups) != 1:
@@ -683,14 +959,42 @@ def _claim_source_groups(
         contexts.setdefault(group, set()).update(
             _trusted_section_contexts(item, analysis)
         )
-    return tuple(
-        _ClaimSourceGroup(
-            support_text="\n".join(quotes),
-            trusted_subjects=frozenset(trusted.get(group, set())),
-            trusted_contexts=frozenset(contexts.get(group, set())),
+        table_contexts = _trusted_table_contexts(item, analysis)
+        coordinate = _table_cell_coordinate(item)
+        if group[0] == "table-row-content" and coordinate is not None:
+            table, row, column = coordinate
+            table_columns.setdefault(group, {}).setdefault(
+                (*table, column), {}
+            ).setdefault(row, []).append(support.quote)
+            if table_contexts:
+                table_cells.setdefault(group, []).append(
+                    (
+                        table,
+                        row,
+                        column,
+                        support.quote,
+                        next(iter(table_contexts)),
+                        item.heading_path,
+                    )
+                )
+    result: list[_ClaimSourceGroup] = []
+    for group, quotes in grouped.items():
+        table_context, table_terms = _closed_table_contexts(
+            table_cells.get(group, [])
         )
-        for group, quotes in grouped.items()
-    )
+        result.append(
+            _ClaimSourceGroup(
+                support_text="\n".join(quotes),
+                trusted_subjects=frozenset(trusted.get(group, set())),
+                trusted_contexts=frozenset(contexts.get(group, set()))
+                | table_context,
+                trusted_term_contexts=table_terms,
+                table_columns=_joined_table_columns(
+                    table_columns.get(group, {})
+                ),
+            )
+        )
+    return tuple(result)
 
 
 def _strip_trusted_context_prefix(
@@ -710,11 +1014,13 @@ def _strip_trusted_context_prefix(
         escaped = re.escape(context.strip())
         if not escaped:
             continue
+        framed = rf"[‘'“\"]?{escaped}[’'”\"]?"
         patterns = (
-            rf"^\s*{escaped}\s*[:：]\s*",
-            rf"^\s*{escaped}\s*(?:包括|包含)(?:\s*[:：])?\s*",
-            rf"^\s*关于\s*{escaped}\s*[,，:：]\s*",
-            rf"^\s*在\s*{escaped}\s*(?:中|内)\s*[,，:：]?\s*",
+            rf"^\s*{framed}\s*[:：]\s*",
+            rf"^\s*{framed}\s*(?:包括|包含)(?:\s*[:：])?\s*",
+            rf"^\s*{framed}\s*对应(?:的)?\s*",
+            rf"^\s*关于\s*{framed}\s*[,，:：]\s*",
+            rf"^\s*在\s*{framed}\s*(?:中|内)\s*[,，:：]?\s*",
         )
         for pattern in patterns:
             match = re.match(pattern, clause, re.IGNORECASE)
@@ -726,12 +1032,14 @@ def _strip_trusted_context_prefix(
 def _validate_clause_support(
     clause: str,
     clause_subject: str | None,
-    support_text: str,
-    *,
-    trusted_subjects: frozenset[str] = frozenset(),
-    trusted_contexts: frozenset[str] = frozenset(),
+    source_group: _ClaimSourceGroup,
 ) -> None:
     """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
+    support_text = source_group.support_text
+    trusted_subjects = source_group.trusted_subjects
+    trusted_contexts = source_group.trusted_contexts
+    trusted_term_contexts = source_group.trusted_term_contexts
+    table_columns = source_group.table_columns
     factual_clause = _strip_trusted_context_prefix(clause, trusted_contexts)
     if factual_clause != clause:
         clause = factual_clause
@@ -774,7 +1082,16 @@ def _validate_clause_support(
         if _action_terms(clause) & _action_terms(text)
         and _quantity_relation_matches(clause, text)
     ]
-    if not _number_tokens(clause) <= _number_tokens("\n".join(numeric_sources)):
+    table_numeric_sources = [
+        text
+        for text in table_columns
+        if _action_terms(clause) & _action_terms(text)
+        and _quantity_relation_matches(clause, text)
+    ]
+    supported_numbers = _number_tokens("\n".join(numeric_sources))
+    for text in table_numeric_sources:
+        supported_numbers.update(_table_number_tokens(text))
+    if not _number_tokens(clause) <= supported_numbers:
         raise ValidationFailed(
             "事实中的数字或单位缺少来源。",
             stage="answer.validate",
@@ -791,8 +1108,11 @@ def _validate_clause_support(
     # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
     predicate = _predicate(clause)
     terms = _terms(predicate)
-    supported_terms = terms & _terms("\n".join(relevant_sources))
-    if not terms or len(supported_terms) / len(terms) < (
+    source_terms = terms & _terms("\n".join(relevant_sources))
+    supported_terms = terms & _terms(
+        "\n".join((*relevant_sources, *trusted_term_contexts))
+    )
+    if not terms or not source_terms or len(supported_terms) / len(terms) < (
         _MIN_SUPPORTED_BIGRAM_RATIO
     ):
         raise ValidationFailed(
@@ -840,7 +1160,10 @@ def validate_grounded_draft(
                 or not item.source_spans
                 or any(not span.is_citable for span in item.source_spans)
                 or support.quote not in item.citation_text
-                or len(support.quote.strip()) < _MIN_QUOTE_CHARS
+                or (
+                    len(support.quote.strip()) < _MIN_QUOTE_CHARS
+                    and not _trusted_table_contexts(item, analysis)
+                )
             ):
                 raise ValidationFailed(
                     "引用原文无法核验。",
@@ -863,15 +1186,22 @@ def validate_grounded_draft(
         factual_text = _strip_trusted_context_prefix(
             claim.text, claim_contexts
         )
-        for clause, clause_subject in _clauses_with_subject(factual_text):
+        claim_table_columns = tuple(
+            column
+            for group in source_groups
+            for column in group.table_columns
+        )
+        clauses = _merge_table_numeric_continuations(
+            _clauses_with_subject(factual_text),
+            claim_table_columns,
+        )
+        for clause, clause_subject in clauses:
             for source_group in source_groups:
                 try:
                     _validate_clause_support(
                         clause,
                         clause_subject,
-                        source_group.support_text,
-                        trusted_subjects=source_group.trusted_subjects,
-                        trusted_contexts=source_group.trusted_contexts,
+                        source_group,
                     )
                 except ValidationFailed:
                     continue
@@ -882,16 +1212,24 @@ def validate_grounded_draft(
                 _validate_clause_support(
                     clause,
                     clause_subject,
-                    support_text,
-                    trusted_subjects=frozenset(
-                        subject
-                        for group in source_groups
-                        for subject in group.trusted_subjects
-                    ),
-                    trusted_contexts=frozenset(
-                        context
-                        for group in source_groups
-                        for context in group.trusted_contexts
+                    _ClaimSourceGroup(
+                        support_text=support_text,
+                        trusted_subjects=frozenset(
+                            subject
+                            for group in source_groups
+                            for subject in group.trusted_subjects
+                        ),
+                        trusted_contexts=frozenset(
+                            context
+                            for group in source_groups
+                            for context in group.trusted_contexts
+                        ),
+                        trusted_term_contexts=frozenset(
+                            context
+                            for group in source_groups
+                            for context in group.trusted_term_contexts
+                        ),
+                        table_columns=claim_table_columns,
                     ),
                 )
                 raise ValidationFailed(

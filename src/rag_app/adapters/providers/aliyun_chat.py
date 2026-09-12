@@ -33,9 +33,15 @@ from rag_app.core.models import (
     ProviderCall,
     ProviderHealth,
     ProviderHealthStatus,
+    RequestedAnswerType,
 )
 from rag_app.core.models.common import FrozenModel, freeze_json_object
-from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft, EvidenceItem
+from rag_app.core.models.retrieval import (
+    AnswerClaim,
+    AnswerDraft,
+    ClaimSupport,
+    EvidenceItem,
+)
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
 from rag_app.core.query_text import (
@@ -61,8 +67,10 @@ _GROUNDED_SYSTEM = (
     "source_structure是服务端来源位置：联合表格引用必须属于同一文档版本、"
     "section_id、table_locator和同一行；structural_path中的tr标识行。"
     "若多个证据还带有相同的verified_table_row_label，则服务端已闭合"
-    "该目标行、最近的完整表头和非空值，它们可以共同支持一条表格映射；"
-    "该字段不能代替逐字quote，行名和所用表头仍须引用相应证据。"
+    "该目标行、最近的完整表头和非空值，它们可以共同支持一条表格映射。"
+    "你必须逐字引用实际使用的值；服务端会按认证坐标补齐该值所属的"
+    "行名和同列表头引用，不会补值或跨行、跨列借用。表格事实优先写成"
+    "‘行名：列名：值’的近似摘录，不添加‘对应的内容’等解释性套话。"
     "每条写明角色或对象的事实，其supports必须同时包含对象原文和相应职责原文；"
     "对象和职责分属不同ID时，列出这两个ID的逐字quote。职责正文证据若带有"
     "verified_duty_owner，可仅用它确定该证据正文的职责主体；该字段不是原文，"
@@ -138,7 +146,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v6", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v7", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
@@ -642,6 +650,7 @@ def _verified_table_row_label(item: EvidenceItem) -> str | None:
         or support.get("status") != "SUPPORTED"
         or support.get("answer_type") != "SECTION_SUMMARY"
         or support.get("support_reason") != "TABLE_ROW_CONTENT"
+        or support.get("requested_relation_or_attribute") != "对应内容"
         or not isinstance(target, str)
         or not isinstance(supporting_ids, list)
         or not node_ids.intersection(
@@ -650,6 +659,319 @@ def _verified_table_row_label(item: EvidenceItem) -> str | None:
     ):
         return None
     return target
+
+
+@dataclass(frozen=True, slots=True)
+class _TableCell:
+    """一个能跨转换格式稳定比较的表格单元格坐标。"""
+
+    table_key: tuple[object, ...]
+    row: int
+    column: int
+
+
+@dataclass(frozen=True, slots=True)
+class _TableCertificate:
+    """Evidence 层对一组完整表格行证据的认证。"""
+
+    document_version_id: str | None
+    section_id: str | None
+    table_locator: str
+    target: str
+    supporting_node_ids: tuple[str, ...]
+
+
+def _table_cell(item: EvidenceItem) -> _TableCell | None:
+    """读取 Evidence 的唯一逻辑表格单元格，拒绝模糊或嵌套坐标。"""
+    cells: set[_TableCell] = set()
+    for span in item.source_spans:
+        anchor = span.source_anchor
+        if anchor is None or span.node_id is None:
+            continue
+        path = span.structural_path
+        located = False
+        for index in range(len(path) - 2):
+            if not path[index].startswith("tbl:"):
+                continue
+            row = re.fullmatch(r"tr:(\d+)", path[index + 1])
+            column = re.fullmatch(r"tc:(\d+)", path[index + 2])
+            if row is None or column is None:
+                continue
+            if any(part.startswith("tbl:") for part in path[index + 1 :]):
+                continue
+            cells.add(
+                _TableCell(
+                    table_key=(
+                        item.document_version_id,
+                        item.section_id,
+                        item.table_locator,
+                        anchor.part_uri,
+                        anchor.story_kind,
+                        path[: index + 1],
+                    ),
+                    row=int(row[1]),
+                    column=int(column[1]),
+                )
+            )
+            located = True
+        if located:
+            continue
+        if (
+            anchor.table_index is not None
+            and anchor.row_index is not None
+            and anchor.cell_index is not None
+        ):
+            cells.add(
+                _TableCell(
+                    table_key=(
+                        item.document_version_id,
+                        item.section_id,
+                        item.table_locator,
+                        anchor.part_uri,
+                        anchor.story_kind,
+                        ("table-index", anchor.table_index),
+                    ),
+                    row=anchor.row_index,
+                    column=anchor.cell_index,
+                )
+            )
+    return next(iter(cells)) if len(cells) == 1 else None
+
+
+def _table_certificate(
+    item: EvidenceItem, request: GenerationRequest
+) -> _TableCertificate | None:
+    """读取与本次查询目标完全一致的表格支持认证。"""
+    target = _verified_table_row_label(item)
+    semantics = request.typed_semantics
+    semantics_target = (
+        None if semantics is None else semantics.target
+    )
+    if (
+        target is None
+        or (
+            semantics is not None
+            and (
+                semantics.answer_type
+                is not RequestedAnswerType.SECTION_SUMMARY
+                or semantics.relation != "对应内容"
+            )
+        )
+        or (
+            semantics_target is not None
+            and target.strip() != semantics_target.strip()
+        )
+    ):
+        return None
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    raw_ids = support.get("supporting_span_ids")
+    if not isinstance(raw_ids, list):
+        return None
+    node_ids = tuple(
+        sorted({value for value in raw_ids if isinstance(value, str)})
+    )
+    if not node_ids or item.table_locator is None:
+        return None
+    return _TableCertificate(
+        document_version_id=item.document_version_id,
+        section_id=item.section_id,
+        table_locator=item.table_locator,
+        target=target,
+        supporting_node_ids=node_ids,
+    )
+
+
+def _item_node_ids(item: EvidenceItem) -> frozenset[str]:
+    """返回 Evidence 实际引用的节点集合。"""
+    return frozenset(
+        span.node_id for span in item.source_spans if span.node_id is not None
+    )
+
+
+def _deduplicate_table_items(
+    items: Iterable[EvidenceItem],
+) -> tuple[EvidenceItem, ...]:
+    """按真实节点和原文去重，避免同一单元格候选重复占用引用上限。"""
+    result: list[EvidenceItem] = []
+    seen: set[tuple[frozenset[str], str]] = set()
+    for item in items:
+        key = (_item_node_ids(item), item.citation_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return tuple(result)
+
+
+def _close_verified_table_supports(
+    claim: AnswerClaim, request: GenerationRequest
+) -> AnswerClaim:
+    """只为模型已选表格值补齐认证行名及其同列表头引用。"""
+    evidence = {item.support_id: item for item in request.evidence}
+    selected = tuple(evidence[support.support_id] for support in claim.supports)
+    pool = request.answer_support_set or request.evidence
+    located_pool = tuple(
+        (item, certificate, cell)
+        for item in pool
+        if (certificate := _table_certificate(item, request)) is not None
+        and (cell := _table_cell(item)) is not None
+    )
+    selected_locations = tuple(
+        (item, certificate, cell)
+        for item in selected
+        if (certificate := _table_certificate(item, request)) is not None
+        and (cell := _table_cell(item)) is not None
+    )
+    additions: list[EvidenceItem] = []
+    groups = {
+        (certificate, cell.table_key)
+        for _item, certificate, cell in selected_locations
+    }
+    for certificate, table_key in sorted(groups, key=repr):
+        candidates = tuple(
+            (item, cell)
+            for item, candidate_certificate, cell in located_pool
+            if candidate_certificate == certificate
+            and cell.table_key == table_key
+        )
+        labels = tuple(
+            (item, cell)
+            for item, cell in candidates
+            if item.citation_text.strip() == certificate.target.strip()
+        )
+        label_positions = {(cell.row, cell.column) for _item, cell in labels}
+        if len(label_positions) != 1:
+            continue
+        target_row, label_column = next(iter(label_positions))
+        selected_columns = {
+            cell.column
+            for _item, candidate_certificate, cell in selected_locations
+            if candidate_certificate == certificate
+            and cell.table_key == table_key
+            and cell.row == target_row
+            and cell.column != label_column
+        }
+        if not selected_columns:
+            continue
+        group_additions: list[EvidenceItem] = [labels[0][0]]
+        for column in sorted(selected_columns):
+            header_rows = {
+                cell.row
+                for _item, cell in candidates
+                if cell.column == column and cell.row < target_row
+            }
+            if not header_rows:
+                group_additions.clear()
+                break
+            header_row = max(header_rows)
+            group_additions.extend(
+                item
+                for item, cell in candidates
+                if cell.row == header_row and cell.column == column
+            )
+        additions.extend(_deduplicate_table_items(group_additions))
+    if not additions:
+        return claim
+    supports = list(claim.supports)
+    seen_ids = {support.support_id for support in supports}
+    seen_nodes = set().union(*(_item_node_ids(item) for item in selected))
+    for item in _deduplicate_table_items(additions):
+        node_ids = _item_node_ids(item)
+        if item.support_id in seen_ids or node_ids & seen_nodes:
+            continue
+        supports.append(
+            ClaimSupport(
+                support_id=item.support_id,
+                quote=item.citation_text,
+            )
+        )
+        seen_ids.add(item.support_id)
+        seen_nodes.update(node_ids)
+    return AnswerClaim(text=claim.text, supports=tuple(supports))
+
+
+def _closed_verified_table_target(
+    claim: AnswerClaim, request: GenerationRequest
+) -> str | None:
+    """确认 claim 已同时引用唯一目标行、所用值及其同列表头。"""
+    evidence = {item.support_id: item for item in request.evidence}
+    located = tuple(
+        (item, certificate, cell)
+        for support in claim.supports
+        if (item := evidence[support.support_id])
+        and (certificate := _table_certificate(item, request)) is not None
+        and (cell := _table_cell(item)) is not None
+    )
+    groups = {
+        (certificate, cell.table_key)
+        for _item, certificate, cell in located
+    }
+    if len(groups) != 1:
+        return None
+    certificate, table_key = next(iter(groups))
+    labels = tuple(
+        cell
+        for item, candidate_certificate, cell in located
+        if candidate_certificate == certificate
+        and cell.table_key == table_key
+        and item.citation_text.strip() == certificate.target.strip()
+    )
+    label_positions = {(cell.row, cell.column) for cell in labels}
+    if len(label_positions) != 1:
+        return None
+    target_row, label_column = next(iter(label_positions))
+    value_columns = {
+        cell.column
+        for _item, candidate_certificate, cell in located
+        if candidate_certificate == certificate
+        and cell.table_key == table_key
+        and cell.row == target_row
+        and cell.column != label_column
+    }
+    if not value_columns or any(
+        not any(
+            candidate_certificate == certificate
+            and cell.table_key == table_key
+            and cell.column == column
+            and cell.row < target_row
+            for _item, candidate_certificate, cell in located
+        )
+        for column in value_columns
+    ):
+        return None
+    return certificate.target
+
+
+def _normalize_verified_table_claim(
+    claim: AnswerClaim, request: GenerationRequest
+) -> AnswerClaim:
+    """将已闭合表格事实的解释性前缀收束成认证行名展示。"""
+    target = _closed_verified_table_target(claim, request)
+    if target is None:
+        return claim
+    escaped = re.escape(target.strip())
+    framed = rf"[‘'“\"]?{escaped}[’'”\"]?"
+    row_noun = (
+        r"(?:项|类别|类型|级别|等级|事故|岗位|工种|角色|型号|"
+        r"记录|情况|条款|阶段|版本)?"
+    )
+    patterns = (
+        rf"^\s*在[^。；;！？?\n]{{1,160}}(?:中|内)\s*[,，]\s*"
+        rf"{framed}\s*{row_noun}\s*对应(?:的)?\s*",
+        rf"^\s*对于\s*{framed}\s*{row_noun}\s*[,，:：]\s*",
+        rf"^\s*{framed}\s*{row_noun}\s*对应(?:的)?\s*",
+        rf"^\s*{framed}\s*[:：]\s*",
+    )
+    for pattern in patterns:
+        match = re.match(pattern, claim.text, re.IGNORECASE)
+        if match is None:
+            continue
+        remainder = claim.text[match.end() :].strip()
+        if remainder:
+            return claim.model_copy(update={"text": f"{target}：{remainder}"})
+    return claim
 
 
 class AliyunChatAdapter:
@@ -1082,28 +1404,14 @@ def _grounded_claims(
     raw = payload["claims"]
     if not isinstance(raw, list) or len(raw) > _MAX_CLAIMS:
         raise ValueError("生成 claims 数量无效。")
-    claims = tuple(AnswerClaim.model_validate(item) for item in raw)
-    evidence = {item.support_id: item for item in request.evidence}
-    for claim in claims:
-        seen: set[str] = set()
-        for support in claim.supports:
-            source = evidence.get(support.support_id)
-            if (
-                source is None
-                or not source.publishable
-                or support.quote not in source.citation_text
-                or support.support_id in seen
-            ):
-                raise ValueError("生成引用未匹配本次证据。")
-            seen.add(support.support_id)
-    return claims
+    return tuple(_grounded_claim(item, request) for item in raw)
 
 
 def _grounded_claim(
-    raw: dict[str, object], request: GenerationRequest
+    raw: object, request: GenerationRequest
 ) -> AnswerClaim:
     """校验一个刚闭合 claim 的结构与逐字来源，不检查业务语义。"""
-    if set(raw) != {"text", "supports"}:
+    if not isinstance(raw, dict) or set(raw) != {"text", "supports"}:
         raise ValueError("生成 claim 字段无效。")
     claim = AnswerClaim.model_validate(raw)
     evidence = {item.support_id: item for item in request.evidence}
@@ -1118,4 +1426,5 @@ def _grounded_claim(
         ):
             raise ValueError("生成引用未匹配本次证据。")
         seen.add(support.support_id)
-    return claim
+    closed = _close_verified_table_supports(claim, request)
+    return _normalize_verified_table_claim(closed, request)

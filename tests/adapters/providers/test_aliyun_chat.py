@@ -14,6 +14,8 @@ from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
     AliyunChatConfig,
     ChatMessage,
+    _grounded_claim,
+    _grounded_claims,
     _grounded_evidence_payload,
     chat_payload,
     message_token_estimate,
@@ -247,6 +249,149 @@ def _generation_request() -> GenerationRequest:
             ),
         ),
     )
+
+
+def _certified_table_request() -> GenerationRequest:
+    """构造包含行名、分段表头和值的通用认证表格请求。"""
+    specs = (
+        ("S1", "虹桥泵", 1, 0, 0),
+        ("S2", "流量", 0, 1, 0),
+        ("S3", "L/min", 0, 1, 1),
+        ("S4", "27 L/min", 1, 1, 0),
+        ("S5", "上限温度", 0, 2, 0),
+        ("S6", "63 ℃", 1, 2, 0),
+    )
+    node_ids = [f"node_{index:032x}" for index in range(1, len(specs) + 1)]
+    items: list[EvidenceItem] = []
+    for index, (support_id, text, row, column, paragraph) in enumerate(specs):
+        path = (
+            "body",
+            "tbl:0",
+            f"tr:{row}",
+            f"tc:{column}",
+            f"p:{paragraph}",
+        )
+        anchor = SourceAnchor(
+            part_uri="/word/document.xml",
+            story_kind=StoryKind.BODY,
+            structural_path=path,
+            ordinal=index,
+        )
+        span = SourceSpan(
+            node_id=node_ids[index],
+            source_anchor=anchor,
+            structural_path=path,
+            chunk_start_char=0,
+            chunk_end_char=len(text),
+            source_start_char=0,
+            source_end_char=len(text),
+        )
+        items.append(
+            EvidenceItem(
+                evidence_id=support_id,
+                chunk_id=f"chunk_{index + 1:032x}",
+                source_label="合成设备参数表",
+                citation_text=text,
+                source_spans=(span,),
+                document_version_id="dver_" + "1" * 32,
+                section_id="public-section",
+                table_locator="public-table",
+                table_context=True,
+                metadata={
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "query_target": "虹桥泵",
+                        "requested_relation_or_attribute": "对应内容",
+                        "answer_type": "SECTION_SUMMARY",
+                        "support_reason": "TABLE_ROW_CONTENT",
+                        "supporting_span_ids": node_ids,
+                    }
+                },
+            )
+        )
+    evidence = tuple(items)
+    return GenerationRequest(
+        query="虹桥泵对应哪些参数？",
+        citation_protocol="grounded-support-v1",
+        evidence=evidence,
+        answer_support_set=evidence,
+        model_evidence_candidates=evidence,
+        typed_semantics=QuerySemantics(
+            target="虹桥泵",
+            relation="对应内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+        ),
+    )
+
+
+def test_table_claim_closes_only_selected_value_row_and_column() -> None:
+    """同步和流式解析都只补模型已选值的认证行名与同列表头。"""
+    request = _certified_table_request()
+    raw = {
+        "text": (
+            "在《合成设备参数表》的“运行参数”中，“虹桥泵”型号对应的"
+            "流量为 27 L/min。"
+        ),
+        "supports": [{"support_id": "S4", "quote": "27 L/min"}],
+    }
+
+    incremental = _grounded_claim(raw, request)
+    complete = _grounded_claims(
+        json.dumps({"claims": [raw]}, ensure_ascii=False), request
+    )
+
+    assert complete == (incremental,)
+    assert incremental.text == "虹桥泵：流量为 27 L/min。"
+    assert [support.support_id for support in incremental.supports] == [
+        "S4",
+        "S1",
+        "S2",
+        "S3",
+    ]
+    assert not {"S5", "S6"} & {
+        support.support_id for support in incremental.supports
+    }
+
+
+def test_table_claim_does_not_close_header_from_another_table() -> None:
+    """认证元数据相同也不能越过真实表格路径补表头。"""
+    request = _certified_table_request()
+    moved: list[EvidenceItem] = []
+    for item in request.evidence:
+        if item.support_id not in {"S2", "S3"}:
+            moved.append(item)
+            continue
+        span = item.source_spans[0]
+        assert span.source_anchor is not None
+        path = tuple(
+            "tbl:1" if part == "tbl:0" else part
+            for part in span.structural_path
+        )
+        moved_span = span.model_copy(
+            update={
+                "structural_path": path,
+                "source_anchor": span.source_anchor.model_copy(
+                    update={"structural_path": path}
+                ),
+            }
+        )
+        moved.append(item.model_copy(update={"source_spans": (moved_span,)}))
+    separated = request.model_copy(
+        update={
+            "evidence": tuple(moved),
+            "answer_support_set": tuple(moved),
+            "model_evidence_candidates": tuple(moved),
+        }
+    )
+    raw = {
+        "text": "虹桥泵：流量为 27 L/min。",
+        "supports": [{"support_id": "S4", "quote": "27 L/min"}],
+    }
+
+    claim = _grounded_claim(raw, separated)
+
+    assert [support.support_id for support in claim.supports] == ["S4"]
 
 
 def test_generate_binds_server_quotes_and_explicit_repair(tmp_path: Path):
