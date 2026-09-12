@@ -331,6 +331,46 @@ def test_structural_role_heading_supports_body_only_duty_quote() -> None:
     )
 
 
+def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
+    """Word 字母列表标记不是来源主语，不能阻断认证标题主体。"""
+    source = "a）策划公司质量管理模式，制定质量方针、目标。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph(source)
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    draft = AnswerDraft(
+        text="总经理负责策划公司质量管理模式，制定质量方针、目标。",
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text="总经理负责策划公司质量管理模式，制定质量方针、目标。",
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote=source,
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft,
+        evidence,
+        analysis=_general_manager_duty_analysis(),
+    )
+
+
 def test_structural_role_binds_omitted_claim_subject_without_repair() -> None:
     """模型省略主语时，只允许认证标题确定主体并由服务端明确展示。"""
     evidence = EvidenceAssembler().assemble(

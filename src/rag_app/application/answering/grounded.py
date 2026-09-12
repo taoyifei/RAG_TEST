@@ -113,6 +113,9 @@ _STANDALONE_SUBJECT = re.compile(
     r"服务|应用|模块|组件|设备|系统|模式|库|管代))"
 )
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
+_LEADING_LIST_MARKER = re.compile(
+    r"^\s*(?:(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)"
+)
 _DUTY_ACTION_PREFIX = re.compile(
     r"^\s*(?:[）)】\]]\s*)?(?:不仅|还|也|同时)?"
     r"(?:(?:应当|必须|可以|应|须|需|可|已)?"
@@ -185,7 +188,9 @@ def _terms(text: str) -> set[str]:
 
 
 def _subject(text: str) -> str | None:
-    subject_text = _LEADING_ACTION_CONTEXT.sub("", text)
+    subject_text = _LEADING_LIST_MARKER.sub(
+        "", _LEADING_ACTION_CONTEXT.sub("", text)
+    )
     without_modal = _LEADING_MODAL.sub("", subject_text)
     if without_modal != subject_text and _MODAL_ACTION.match(without_modal):
         return None
@@ -280,7 +285,10 @@ def _same_subject(left: str, right: str) -> bool:
 
 def _leading_explicit_subject(text: str) -> str | None:
     """读取分句开头且后接职责动作的完整岗位标签。"""
-    subject_text = _LEADING_MODAL.sub("", _LEADING_ACTION_CONTEXT.sub("", text))
+    subject_text = _LEADING_LIST_MARKER.sub(
+        "",
+        _LEADING_MODAL.sub("", _LEADING_ACTION_CONTEXT.sub("", text)),
+    )
     match = _STANDALONE_SUBJECT.match(subject_text)
     if (
         match is None

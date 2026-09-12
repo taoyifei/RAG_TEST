@@ -38,6 +38,7 @@ _LIST_LEAD_IN = re.compile(
 _NUMBERED_STAGE_HEADING = re.compile(r"^\d+\.\d+(?:\.\d+)?\s+\S")
 _FLOW_ARCHITECTURE_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*)?\s*流程架构$")
 _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
+_LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$")
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
 _TABLE_HEADER_SEMANTICS = {
@@ -1212,8 +1213,10 @@ def _duty_heading_supports(
             quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
             ]
-            if not quote.strip() or re.search(
-                r"未提供|未确定|暂无|未知", quote
+            if (
+                not quote.strip()
+                or _LIST_MARKER_ONLY.fullmatch(quote)
+                or re.search(r"未提供|未确定|暂无|未知", quote)
             ):
                 continue
             supports[_span_key(chunk, span)] = AnswerSupport(
