@@ -24,7 +24,8 @@ DocumentIR
   -> Chunk[] + ChunkingReport
 ```
 
-- 标题开启 section；标题前内容进入稳定 root section。
+- 标题开启 section；标题前内容进入稳定 root section。旧 `.doc` 转换后若标题样式
+  丢失，Chunker 可从受限的正文编号标题恢复 section，但不改写 `DocumentIR`。
 - 主正文、表格、notes、图片 metadata、页眉页脚、Text Box、Comments 使用独立 run。
 - pack 不跨 section、run 或 neighbor group，不重排、不删除 atom。
 - neighbor 只连接同一 document version 和 group 的连续 chunk，链接必须双向且无环。
@@ -34,8 +35,10 @@ DocumentIR
 
 Canonical 字段包括 project、knowledge base、index revision、document version、role、
 parent、section、neighbor、previous/next、child groups、note refs、三种文本、heading
-path、identifiers、token 元数据、内容摘要和 metadata。`Chunk.text` 是只读属性，返回
-`citation_text`，因此没有第二份可变正文。
+path、`context_dependencies`、identifiers、token 元数据、内容摘要和 metadata。
+`context_dependencies` 按 `heading_path` 顺序保存 `heading_context`、真实来源 node ID
+及 `document_heading` / `inferred_numbered_heading` 来源类型。`Chunk.text` 是只读属性，
+返回 `citation_text`，因此没有第二份可变正文。
 
 `chunk_id` 由以下内容规范化生成：
 
@@ -98,6 +101,12 @@ path、identifiers、token 元数据、内容摘要和 metadata。`Chunk.text` �
 ## 结构策略
 
 - 列表按 numId、level 和 restart group 保留身份，派生编号进入 citation。
+- 对 BODY 顶层普通段落，保守识别阿拉伯数字层级标题和中文序号标题。识别只使用
+  编号、短标题形态和当前编号序列；长条款、动作句、计量值以及连续目录簇不提升为标题。
+- 混合编号按已出现的真实序列确定父子关系；找不到编号父级时只保留当前真实标题，
+  不挂到上一章，也不伪造不存在的标题节点。
+- 推断标题段落仍作为原文进入 `citation_text`，其 node 同时成为后续 Chunk 的显式
+  context dependency；因此来源覆盖率与可引用性不靠复制标题或隐藏字符维持。
 - 表格按 row 打包；cell 坐标、gridSpan、vMerge 和 omitted cell 留在 metadata/span anchor。
 - notes 默认独立 `NOTE` chunk，正文只保留 note refs；orphan note 仍可索引并标记。
 - 图片仅在 alt/caption 具有语义时形成 `IMAGE_METADATA`；media bytes 和 OCR 不进入 Chunk。
@@ -110,3 +119,10 @@ path、identifiers、token 元数据、内容摘要和 metadata。`Chunk.text` �
 表格 row/cell、列表标签、orphan、稳定 ID、required slot 上限、warning 和耗时。报告只验证
 结构与安全不变量，不能证明真实检索质量。结构消融复用同一 IR snapshot 比较三个候选，
 不调用真实 Embedding，不选择最佳候选。
+
+## 3.1.0 索引影响
+
+缺失样式标题恢复和有类型的结构依赖会改变标题路径、Embedding/FTS 输入、Chunk ID 与
+index fingerprint，因此 descriptor 为 `docx-structural-v3@3.1.0`。已有 3.0.x revision
+保持只读兼容，不会原地补写依赖；目标知识库必须构建、校验并原子激活一个新 revision
+后，查询才能使用新的标题上下文。
