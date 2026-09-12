@@ -678,7 +678,9 @@ def _descriptive_clause_supports(  # noqa: PLR0911
         remainder = clause.replace(target, "", 1).strip(" ：:")
         return _target_matches(target, clause, strict=True) and bool(
             re.search(
-                r"(?:规定|要求|包括|包含|说明|应当|必须|[:：]).+", remainder
+                r"(?:规定|要求|包括|包含|说明|应当|必须|禁止|不得|"
+                r"严禁|不允许|不可|不能|不准|须|需)|[:：].+",
+                remainder,
             )
         )
     if answer_type == "PROCEDURE":

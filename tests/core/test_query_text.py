@@ -3,6 +3,8 @@ from __future__ import annotations
 from rag_app.core.query_text import (
     context_label_variants,
     duty_heading_path_owns_target,
+    normalize_section_heading_label,
+    section_heading_path_owns_target,
     select_unique_label_owner,
 )
 
@@ -68,4 +70,24 @@ def test_duty_heading_owner_uses_exact_role_boundary() -> None:
     assert not duty_heading_path_owns_target(
         "总经理",
         ("4.1 总经理", "4.1.1 生产经理"),
+    )
+
+
+def test_section_heading_normalization_removes_word_markers_and_numbering() -> (
+    None
+):
+    assert (
+        normalize_section_heading_label("3.6.3 生产通知单审核后的处理\ue004")
+        == "生产通知单审核后的处理"
+    )
+
+
+def test_section_heading_owner_requires_the_deepest_exact_heading() -> None:
+    assert section_heading_path_owns_target(
+        "出库领发",
+        ("5 仓库管理", "5.4 出库领发"),
+    )
+    assert not section_heading_path_owns_target(
+        "出库领发",
+        ("5.4 出库领发", "5.4.1 特殊放行"),
     )

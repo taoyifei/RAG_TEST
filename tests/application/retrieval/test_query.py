@@ -476,6 +476,78 @@ def test_document_target_does_not_invent_an_explicit_source_qualifier() -> None:
     assert semantics.source_qualifier is None
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    (
+        (
+            "请根据《蓝熊管理制度》中的规定，出库领发具体有哪些要求？",
+            (
+                "出库领发",
+                "蓝熊管理制度",
+                None,
+                "章节内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "依据《蓝熊管理制度》，文档对“手动修改”有什么禁止或限制性要求？",
+            (
+                "手动修改",
+                "蓝熊管理制度",
+                None,
+                "限制要求",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "根据《蓝熊管理制度》的“安全事故考核”，“一般”对应的内容或要求是什么？",
+            (
+                "一般",
+                "蓝熊管理制度",
+                "安全事故考核",
+                "对应内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "在《蓝熊操作手册》中，测试用例如何导入？",
+            (
+                "测试用例",
+                "蓝熊操作手册",
+                None,
+                "导入",
+                RequestedAnswerType.PROCEDURE,
+            ),
+        ),
+    ),
+)
+def test_explicit_document_scope_is_parsed_before_question_semantics(
+    question: str,
+    expected: tuple[
+        str,
+        str,
+        str | None,
+        str,
+        RequestedAnswerType,
+    ],
+) -> None:
+    semantics = _analyze(question).semantics
+    (
+        target,
+        source_qualifier,
+        context_qualifier,
+        relation,
+        answer_type,
+    ) = expected
+
+    assert semantics.target == target
+    assert semantics.source_qualifier == source_qualifier
+    assert semantics.context_qualifier == context_qualifier
+    assert semantics.relation == relation
+    assert semantics.answer_type is answer_type
+    assert semantics.source == "RULE"
+
+
 def test_duty_question_preserves_leading_project_context() -> None:
     semantics = _analyze(
         "做蓝熊交付项目时，测试负责人平时主要管哪些事？"
