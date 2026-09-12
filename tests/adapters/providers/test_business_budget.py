@@ -30,6 +30,7 @@ from rag_app.adapters.providers.budget_revision import (
 )
 from rag_app.adapters.providers.budget_transport import (
     BudgetedTransport,
+    _chat_request_valid,
     _response_observation,
     provider_budget_scope,
     provider_data_scope,
@@ -143,6 +144,22 @@ def _reserve(
         step_id=step,
         request=request,
     )
+
+
+def test_generation_transport_matches_product_sixteen_k_input_contract(
+) -> None:
+    """回答模型允许的 16k 输入不能在共用 HTTP 边界被旧上限误拒。"""
+    payload = {
+        "model": "qwen3.7-flash",
+        "messages": [{"role": "user", "content": "公开合成资料"}],
+        "stream": False,
+        "enable_thinking": False,
+        "max_tokens": 1536,
+        "response_format": {"type": "json_object"},
+    }
+
+    assert _chat_request_valid(payload, "generation", 16_384, 1536, ())
+    assert not _chat_request_valid(payload, "generation", 16_385, 1536, ())
 
 
 def test_old_campaign_serialization_and_approval_checksum_are_unchanged():

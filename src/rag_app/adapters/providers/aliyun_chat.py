@@ -75,13 +75,17 @@ _GROUNDED_SYSTEM = (
     "不得把一个来源组的对象与另一个来源组的动作拼成事实。"
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
-    "职责问题的每条claim必须明确写出typed_semantics.target对应的职责主体；"
-    "没有该主体的逐字来源或同证据verified_duty_owner时不得借用其他岗位职责。"
+    "职责原文已写出主体时保留完整主体；正文省略主体但证据带有"
+    "verified_duty_owner时，text只写正文原子事实，不要自行补写主体，"
+    "主体由服务端核验后展示。没有逐字主体或verified_duty_owner时"
+    "不得借用其他岗位职责。"
     "evidence是检索、融合与重排后的有界候选证据；请自行选择与问题相关的候选。"
     "相关候选的逐字原文可以支持事实，但检索排名或相关性分数本身不能证明事实。"
-    "章节要求、原文说明、填空补全和表格对应内容优先逐项保留原文措辞，"
-    "不要引入原文没有的列表编号、概括标签或主语；复合条款拆成可由单个"
-    "来源组完整证明的claim。"
+    "章节要求、原文说明、填空补全、职责和表格对应内容采用近似摘录："
+    "一条原子分句对应一条claim，尽量逐字复用原文，不把多项内容改写成"
+    "新的复合句。不要引入原文没有的列表编号、概括标签或主语；"
+    "复合条款拆成可由单个来源组完整证明的claim。每条claim最多8个supports，"
+    "同一support_id在一条claim内最多使用一次。"
     '仅输出JSON对象，格式为{"claims":[{"text":"事实概括",'
     '"supports":[{"support_id":"提供的ID","quote":"逐字原文"}]}]}。'
     "每条事实至少一个引用，每个quote必须逐字来自相应ID的证据。"
@@ -134,7 +138,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v5", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v6", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:

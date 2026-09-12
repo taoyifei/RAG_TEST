@@ -415,6 +415,9 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "候选证据" in prompt
         assert "不同来源组回答不同事实，拆成多条claim" in prompt
         assert "verified_duty_owner" in prompt
+        assert "一条原子分句对应一条claim" in prompt
+        assert "text只写正文原子事实" in prompt
+        assert "同一support_id在一条claim内最多使用一次" in prompt
         content = json.loads(messages[1]["content"])
         assert content["typed_semantics"]["answer_type"] == "DUTIES"
         assert "answer_support_set" not in content

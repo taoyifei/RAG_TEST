@@ -233,6 +233,36 @@ def test_grounded_hard_constraints_close_observed_counterexamples(
 
 
 @pytest.mark.parametrize(
+    "claim",
+    (
+        "处罚幅度为 100-500 元。",
+        "处罚幅度为 100 至 500 元。",
+        "处罚幅度为 100—500 元。",
+    ),
+)
+def test_equivalent_quantity_ranges_share_unit_across_endpoints(
+    claim: str,
+) -> None:
+    """区间分隔符和左端省略单位不应制造数值支持误报。"""
+    evidence, draft = _supported_draft(
+        "处罚幅度为 100 元～ 500 元。", claim
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_quantity_range_still_rejects_a_changed_endpoint() -> None:
+    evidence, draft = _supported_draft(
+        "处罚幅度为 100 元～ 500 元。", "处罚幅度为 100-600 元。"
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_NUMBER_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
     ("source", "claim"),
     (
         (
@@ -371,7 +401,18 @@ def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
     )
 
 
-def test_exact_section_heading_can_supply_only_its_verified_context() -> None:
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "外部采购生产通知单审核后的特殊处理：退回业务组重办。",
+        "外部采购生产通知单审核后的特殊处理包括退回业务组重办。",
+        "关于外部采购生产通知单审核后的特殊处理，退回业务组重办。",
+        "在外部采购生产通知单审核后的特殊处理中，退回业务组重办。",
+    ),
+)
+def test_exact_section_heading_can_supply_only_its_verified_context(
+    claim_text: str,
+) -> None:
     """精确节标题可补展示语境，正文事实仍必须来自同组逐字引用。"""
     evidence = EvidenceAssembler().assemble(
         _candidates(
@@ -389,7 +430,7 @@ def test_exact_section_heading_can_supply_only_its_verified_context() -> None:
         ),
     )
     claim = AnswerClaim(
-        text="外部采购生产通知单审核后的特殊处理：退回业务组重办。",
+        text=claim_text,
         supports=(
             ClaimSupport(
                 support_id=evidence[0].support_id,
@@ -411,6 +452,46 @@ def test_exact_section_heading_can_supply_only_its_verified_context() -> None:
             "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
         ).analysis,
     )
+
+
+def test_verified_section_context_does_not_accept_a_changed_subject() -> None:
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 内容")
+            + _paragraph("4.3 特殊处理")
+            + _paragraph("退回业务组重办。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("特殊处理具体有哪些要求？"),
+    )
+    claim = AnswerClaim(
+        text="相邻部门包括退回业务组重办。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="退回业务组重办。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(
+            draft,
+            evidence,
+            analysis=_context("特殊处理具体有哪些要求？").analysis,
+        )
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
 
 
 def test_leading_presentation_number_is_not_a_factual_quantity() -> None:

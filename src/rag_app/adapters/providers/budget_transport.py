@@ -82,7 +82,7 @@ _CHAT_OPERATIONS = frozenset(
     {"generation", "query.interpret", "query.rewrite", "image.ocr"}
 )
 _CHAT_LIMITS = {
-    "generation": (6144, 1536),
+    "generation": (16_384, 1536),
     "query.interpret": (1536, 384),
     "query.rewrite": (1024, 256),
     "image.ocr": (2560, 4096),

@@ -34,11 +34,20 @@ from rag_app.core.query_text import (
     section_heading_path_owns_target,
 )
 
+_QUANTITY_UNIT = (
+    r"(?:%|％|万元|亿元|元|毫秒|分钟|小时|秒|天|周|个月|年|月|"
+    r"毫米|厘米|千米|米|公斤|千克|毫克|克|吨|升|毫升|次|个|"
+    r"台|件|人|℃|[A-Za-zμµΩ°]+(?:/[A-Za-z]+)?)"
+)
 _NUMBER = re.compile(
-    r"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*(?:%|％|万元|亿元|元|"
-    r"毫秒|分钟|小时|秒|天|周|个月|年|月|毫米|厘米|千米|米|"
-    r"公斤|千克|毫克|克|吨|升|毫升|次|个|台|件|人|℃|"
-    r"[A-Za-zμµΩ°]+(?:/[A-Za-z]+)?))?"
+    rf"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*{_QUANTITY_UNIT})?"
+)
+_QUANTITY_RANGE = re.compile(
+    rf"(?P<left>[+-]?\d+(?:[.,:/]\d+)*)\s*"
+    rf"(?P<left_unit>{_QUANTITY_UNIT})?\s*"
+    rf"(?:-|–|—|~|～|至|到)\s*"
+    rf"(?P<right>[+-]?\d+(?:[.,:/]\d+)*)\s*"
+    rf"(?P<right_unit>{_QUANTITY_UNIT})"
 )
 _IDENTIFIER = re.compile(
     r"(?<![A-Za-z0-9_])(?=[A-Za-z0-9_-]*\d)"
@@ -185,6 +194,15 @@ class GroundedOutcome:
     published_support_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _ClaimSourceGroup:
+    """一个不可跨越的来源组及服务端认证的展示语境。"""
+
+    support_text: str
+    trusted_subjects: frozenset[str]
+    trusted_contexts: frozenset[str]
+
+
 def _terms(text: str) -> set[str]:
     # 只统一温度属性与摄氏单位名称，不翻译其他内容或改变词汇支持阈值。
     text = _TEMPERATURE_ATTRIBUTE.sub("温度", text)
@@ -236,7 +254,20 @@ def _number_tokens(text: str) -> set[str]:
     identifiers = {"id:" + value for value in _IDENTIFIER.findall(text)}
     text = _IDENTIFIER.sub(" ", text)
     text = _CELSIUS_QUANTITY.sub(r"\g<value>℃", text)
-    return identifiers | {
+    range_tokens: set[str] = set()
+
+    def close_range(match: re.Match[str]) -> str:
+        """把等价区间写法投影成带单位的两个端点。"""
+        right_unit = re.sub(r"\s+", "", match["right_unit"])
+        left_unit = re.sub(
+            r"\s+", "", match["left_unit"] or right_unit
+        )
+        range_tokens.add(match["left"] + left_unit)
+        range_tokens.add(match["right"] + right_unit)
+        return " "
+
+    text = _QUANTITY_RANGE.sub(close_range, text)
+    return identifiers | range_tokens | {
         re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)
     }
 
@@ -346,7 +377,7 @@ def _validate_claim_target(
     claim: AnswerClaim,
     analysis: QueryAnalysis | None,
     *,
-    source_groups: tuple[tuple[str, frozenset[str]], ...] = (),
+    source_groups: tuple[_ClaimSourceGroup, ...] = (),
 ) -> None:
     """职责回答必须明确指向查询主体或由认证标题唯一补全。"""
     if (
@@ -368,9 +399,9 @@ def _validate_claim_target(
     trusted_target_in_every_group = bool(source_groups) and all(
         any(
             _same_subject(candidate, analysis.semantics.target)
-            for candidate in trusted_subjects
+            for candidate in group.trusted_subjects
         )
-        for _, trusted_subjects in source_groups
+        for group in source_groups
     )
     if not trusted_target_in_every_group:
         raise ValidationFailed(
@@ -631,7 +662,7 @@ def _claim_source_groups(
     claim: AnswerClaim,
     units: list[EvidenceItem],
     analysis: QueryAnalysis | None,
-) -> tuple[tuple[str, frozenset[str]], ...]:
+) -> tuple[_ClaimSourceGroup, ...]:
     """按来源组聚合逐字引用及其同组结构化职责主体。"""
     grouped: dict[tuple[object, ...], list[str]] = {}
     trusted: dict[tuple[object, ...], set[str]] = {}
@@ -653,12 +684,43 @@ def _claim_source_groups(
             _trusted_section_contexts(item, analysis)
         )
     return tuple(
-        (
-            "\n".join((*sorted(contexts.get(group, set())), *quotes)),
-            frozenset(trusted.get(group, set())),
+        _ClaimSourceGroup(
+            support_text="\n".join(quotes),
+            trusted_subjects=frozenset(trusted.get(group, set())),
+            trusted_contexts=frozenset(contexts.get(group, set())),
         )
         for group, quotes in grouped.items()
     )
+
+
+def _strip_trusted_context_prefix(
+    clause: str, trusted_contexts: frozenset[str]
+) -> str:
+    """只移除句首精确认证的章节展示前缀，不把标题当正文事实。
+
+    Args:
+        clause: 模型输出的单个分句。
+        trusted_contexts: 与当前来源节点闭合的精确章节标题。
+
+    Returns:
+        去掉受控展示框架后的事实正文；未精确命中时保持原文。
+
+    """
+    for context in sorted(trusted_contexts, key=len, reverse=True):
+        escaped = re.escape(context.strip())
+        if not escaped:
+            continue
+        patterns = (
+            rf"^\s*{escaped}\s*[:：]\s*",
+            rf"^\s*{escaped}\s*(?:包括|包含)(?:\s*[:：])?\s*",
+            rf"^\s*关于\s*{escaped}\s*[,，:：]\s*",
+            rf"^\s*在\s*{escaped}\s*(?:中|内)\s*[,，:：]?\s*",
+        )
+        for pattern in patterns:
+            match = re.match(pattern, clause, re.IGNORECASE)
+            if match is not None and clause[match.end() :].strip():
+                return clause[match.end() :].strip()
+    return clause
 
 
 def _validate_clause_support(
@@ -667,8 +729,13 @@ def _validate_clause_support(
     support_text: str,
     *,
     trusted_subjects: frozenset[str] = frozenset(),
+    trusted_contexts: frozenset[str] = frozenset(),
 ) -> None:
     """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
+    factual_clause = _strip_trusted_context_prefix(clause, trusted_contexts)
+    if factual_clause != clause:
+        clause = factual_clause
+        clause_subject = _leading_explicit_subject(clause) or _subject(clause)
     source_clauses = _clauses_with_subject(support_text)
     source_subjects = {
         detected
@@ -788,14 +855,23 @@ def validate_grounded_draft(
             source_groups=source_groups,
         )
         support_text = "\n".join(support.quote for support in claim.supports)
-        for clause, clause_subject in _clauses_with_subject(claim.text):
-            for source_text, trusted_subjects in source_groups:
+        claim_contexts = frozenset(
+            context
+            for group in source_groups
+            for context in group.trusted_contexts
+        )
+        factual_text = _strip_trusted_context_prefix(
+            claim.text, claim_contexts
+        )
+        for clause, clause_subject in _clauses_with_subject(factual_text):
+            for source_group in source_groups:
                 try:
                     _validate_clause_support(
                         clause,
                         clause_subject,
-                        source_text,
-                        trusted_subjects=trusted_subjects,
+                        source_group.support_text,
+                        trusted_subjects=source_group.trusted_subjects,
+                        trusted_contexts=source_group.trusted_contexts,
                     )
                 except ValidationFailed:
                     continue
@@ -809,8 +885,13 @@ def validate_grounded_draft(
                     support_text,
                     trusted_subjects=frozenset(
                         subject
-                        for _, trusted_subjects in source_groups
-                        for subject in trusted_subjects
+                        for group in source_groups
+                        for subject in group.trusted_subjects
+                    ),
+                    trusted_contexts=frozenset(
+                        context
+                        for group in source_groups
+                        for context in group.trusted_contexts
                     ),
                 )
                 raise ValidationFailed(
