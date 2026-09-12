@@ -73,9 +73,24 @@ _TRAILING_TARGET_SYNTAX = re.compile(
 _TRAILING_PARTICLES = re.compile(
     r"(?:(?:嘛|吧)[，,]|[呢吗呀啊？?。！!，,\s])+$"
 )
+_TRAILING_RESPONSE_DIRECTIVE = re.compile(
+    r"^\s*(?:(?:请|麻烦|烦请)\s*)?(?:(?:仅|只)\s*)?"
+    r"(?:(?:根据|依据|依照|结合)\s*)?"
+    r"(?:(?:上述|以上|现有)\s*)?"
+    r"(?:(?:原文|资料|文档|证据)(?:内容)?\s*)?"
+    r"(?:(?:完整|准确|如实|客观|详细|简要|逐项|分点|直接|清楚|明确)\s*)*"
+    r"(?:作答|回答|回复|说明|列出|列举)(?:即可|就行)?[。.!！\s]*$"
+)
 _SOURCE_QUALIFIED_DUTY = re.compile(
     r"^(?P<source>.+?(?:规范|文档|制度|手册))(?:里|中)"
     r"[，,：:\s]*(?P<target>.+)$"
+)
+_EXPLICIT_SOURCE_SCOPE = re.compile(
+    r"^(?:(?:根据|依据|依照|按照|参照)\s*《(?P<based_on>[^》\r\n]+)》"
+    r"(?:(?:中|里|内)(?:的(?:规定|内容|说明)?)?|"
+    r"的(?:规定|内容|说明)?|规定|内容|说明)?|"
+    r"(?:在|从)\s*《(?P<within>[^》\r\n]+)》"
+    r"(?:中|里|内))\s*[，,：:\s]*(?P<body>.+)$"
 )
 _PURPOSE_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?(?P<relation>目的|目标|作用)"
@@ -100,6 +115,40 @@ _SECTION_SUMMARY = re.compile(
     rf"^(?P<target>.+?(?:第{_NUMERAL}(?:章|节)|章节|章|节|管理要求|"
     r"工作要求|要求))(?:(?:是|指)?(?:什么|啥)|如何规定)?$"
 )
+_QUOTED_TABLE_CONTENT = re.compile(
+    r"^(?:[“\"](?P<context>[^”\"]{1,120})[”\"][，,]\s*)?"
+    r"[“\"](?P<target>[^”\"]{1,120})[”\"](?:所)?对应的"
+    r"(?:内容或要求|内容|要求)(?:是|为)?(?:什么|啥)$"
+)
+_QUOTED_TOPIC_REQUIREMENTS = re.compile(
+    r"^(?:(?:文档|资料|原文)(?:中)?(?:对|关于)\s*)"
+    r"[“\"](?P<target>[^”\"]{1,120})[”\"](?:有|作出|提出|规定)?"
+    r"(?:什么|哪些|怎样的)(?P<restriction>禁止或限制性|禁止性|限制性)?"
+    r"要求$"
+)
+_QUOTED_TOPIC_EXPLANATION = re.compile(
+    r"^(?:(?:文档|资料|原文)(?:中)?(?:对|关于)\s*)"
+    r"[“\"](?P<target>[^”\"]{1,600})[”\"]"
+    r"(?:作了|给出|进行了|有)?(?:什么|哪些|怎样的)?"
+    r"(?:具体)?(?:说明|规定|描述)$"
+)
+_QUOTED_CONTENT_REQUEST = re.compile(
+    r"^[“\"](?P<target>[^”\"]{1,600})[”\"]"
+    r"(?:这项|这一项)?内容的(?:完整)?(?:规定|说明|原文)"
+    r"(?:是|为)?(?:什么|啥)$"
+)
+_GENERAL_REQUIREMENTS = re.compile(
+    r"^(?P<target>.+?)(?:具体)?(?:都)?(?:有|包含)?哪些要求$"
+)
+_ROLE_REQUIREMENT_TARGET = re.compile(
+    r"(?:经理|主管|负责人|专员|工程师|管理员|操作员|岗位|角色|部门|部)$"
+)
+_QUOTED_FILL_BLANK = re.compile(
+    r"^(?:补全|填写|填入|还原)(?:以下)?(?:条款|原文|句子)?"
+    r"(?:中的|里的|中|里)?(?:缺失的)?(?:数值|数字|内容|空白)?\s*[：:]?\s*"
+    r"[“\"](?P<template>[^”\"]{3,600})[”\"]$"
+)
+_BLANK = re.compile(r"_{2,}|＿{2,}|(?:□\s*){2,}|…{2,}|\[\s*\]")
 _DEFINITION_PREFIX = re.compile(r"^(?:什么|啥)是(?P<target>.+)$")
 _DEFINITION_SUFFIX = re.compile(
     r"^(?P<target>.+?)(?:(?:说白了|简单来说|通俗地说)?"
@@ -179,7 +228,24 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
 
     """
     normalized = unicodedata.normalize("NFKC", query).strip()
+    explicit_source, normalized, _body_start = split_explicit_source_scope(
+        normalized
+    )
+    normalized = strip_trailing_response_directive(normalized)
     core = _question_core(normalized)
+
+    fill_blank = _QUOTED_FILL_BLANK.fullmatch(core)
+    if fill_blank is not None:
+        target = _fill_blank_anchor(fill_blank["template"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=explicit_source,
+                relation="原文内容",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source="RULE",
+                reason_codes=("QUOTED_FILL_BLANK_SYNTAX",),
+            )
 
     fact_core = _FACT_QUESTION_END.sub("", core).strip()
     fact_attribute = _FACT_ATTRIBUTE_SUFFIX.search(fact_core)
@@ -189,7 +255,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation=fact_attribute.group(0),
                 answer_type=RequestedAnswerType.FACT,
                 source="RULE",
@@ -204,7 +270,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation=purpose.groupdict().get("relation") or "目的",
                 answer_type=RequestedAnswerType.PURPOSE,
                 source="RULE",
@@ -219,7 +285,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="责任角色",
                 answer_type=RequestedAnswerType.RESPONSIBLE_PARTY,
                 source="RULE",
@@ -236,7 +302,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 context_qualifier=context_qualifier,
                 relation="职责",
                 answer_type=RequestedAnswerType.DUTIES,
@@ -248,13 +314,86 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 ),
             )
 
+    table_content = _QUOTED_TABLE_CONTENT.fullmatch(core)
+    if table_content is not None:
+        return QuerySemantics(
+            target=_clean_target(table_content["target"], duty=False),
+            source_qualifier=explicit_source,
+            context_qualifier=_clean_target(
+                table_content.groupdict().get("context") or "",
+                duty=False,
+            )
+            or None,
+            relation="对应内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("TABLE_ROW_CONTENT_QUESTION_SYNTAX",),
+        )
+
+    topic_requirements = _QUOTED_TOPIC_REQUIREMENTS.fullmatch(core)
+    if topic_requirements is not None:
+        return QuerySemantics(
+            target=_clean_target(topic_requirements["target"], duty=False),
+            source_qualifier=explicit_source,
+            relation=(
+                "限制要求" if topic_requirements["restriction"] else "章节内容"
+            ),
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("TOPIC_REQUIREMENTS_QUESTION_SYNTAX",),
+        )
+
+    topic_explanation = _QUOTED_TOPIC_EXPLANATION.fullmatch(core)
+    if topic_explanation is not None:
+        return QuerySemantics(
+            target=_clean_target(topic_explanation["target"], duty=False),
+            source_qualifier=explicit_source,
+            relation="原文内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("QUOTED_TOPIC_EXPLANATION_SYNTAX",),
+        )
+
+    content_request = _QUOTED_CONTENT_REQUEST.fullmatch(core)
+    if content_request is not None:
+        return QuerySemantics(
+            target=_clean_target(content_request["target"], duty=False),
+            source_qualifier=explicit_source,
+            relation="原文内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("QUOTED_CONTENT_REQUEST_SYNTAX",),
+        )
+
+    general_requirements = _GENERAL_REQUIREMENTS.fullmatch(core)
+    if general_requirements is not None:
+        target, source = _target_and_source(general_requirements["target"])
+        if target:
+            if _ROLE_REQUIREMENT_TARGET.search(target):
+                return QuerySemantics(
+                    target=target,
+                    source_qualifier=source or explicit_source,
+                    relation="职责",
+                    answer_type=RequestedAnswerType.DUTIES,
+                    source="RULE",
+                    reason_codes=("DUTY_REQUIREMENTS_QUESTION_SYNTAX",),
+                )
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation="章节内容",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source="RULE",
+                reason_codes=("SECTION_REQUIREMENTS_QUESTION_SYNTAX",),
+            )
+
     section = _SECTION_SUMMARY.fullmatch(core)
     if section is not None:
         target, source = _target_and_source(section["target"])
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="章节内容",
                 answer_type=RequestedAnswerType.SECTION_SUMMARY,
                 source="RULE",
@@ -280,7 +419,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="定义",
                 answer_type=RequestedAnswerType.DEFINITION,
                 source="RULE",
@@ -293,7 +432,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="工作模式",
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
@@ -306,7 +445,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="主要阶段",
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
@@ -319,7 +458,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="主要阶段",
                 answer_type=RequestedAnswerType.COUNT,
                 source="RULE",
@@ -332,7 +471,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         if target:
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation="交付物",
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
@@ -348,7 +487,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
             action = procedure["action"]
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation=(
                     "导入"
                     if action == "导进去"
@@ -374,7 +513,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
             relation = "主要阶段" if "流程" in target else "组成"
             return QuerySemantics(
                 target=target,
-                source_qualifier=source,
+                source_qualifier=source or explicit_source,
                 relation=relation,
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
@@ -383,7 +522,10 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
 
     relation_match = _RELATION.search(normalized)
     if relation_match is None:
-        return _fallback_semantics(normalized)
+        return _fallback_semantics(
+            normalized,
+            source_qualifier=explicit_source,
+        )
 
     prefix = normalized[: relation_match.start()]
     suffix = normalized[relation_match.end() :]
@@ -428,6 +570,7 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         return QuerySemantics(
             relation=relation,
             answer_type=answer_type,
+            source_qualifier=explicit_source,
             source="ORIGINAL_FALLBACK",
             reason_codes=("QUERY_SEMANTICS_UNKNOWN",),
         )
@@ -438,12 +581,13 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         return QuerySemantics(
             relation=relation,
             answer_type=RequestedAnswerType.UNKNOWN,
+            source_qualifier=explicit_source,
             source="ORIGINAL_FALLBACK",
             reason_codes=("QUERY_TARGET_UNKNOWN",),
         )
     return QuerySemantics(
         target=target,
-        source_qualifier=source,
+        source_qualifier=source or explicit_source,
         relation=relation,
         answer_type=answer_type,
         expected_count=expected_count,
@@ -453,7 +597,11 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     )
 
 
-def _fallback_semantics(query: str) -> QuerySemantics:
+def _fallback_semantics(
+    query: str,
+    *,
+    source_qualifier: str | None = None,
+) -> QuerySemantics:
     answer_type = (
         RequestedAnswerType.FACT
         if re.search(
@@ -464,9 +612,32 @@ def _fallback_semantics(query: str) -> QuerySemantics:
     )
     return QuerySemantics(
         answer_type=answer_type,
+        source_qualifier=source_qualifier,
         source="ORIGINAL_FALLBACK",
         reason_codes=("QUERY_SEMANTICS_UNKNOWN",),
     )
+
+
+def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
+    """从书名号边界提取显式来源，并仅解析其后的实际问题。
+
+    Args:
+        value: 已完成 NFKC 规范化的完整问题。
+
+    Returns:
+        动态来源标签、实际问题及它在原文中的起始位置；
+        未命中时保留原文并返回零偏移。
+
+    """
+    candidate = _LEADING_REQUEST.sub("", value.strip()).strip()
+    match = _EXPLICIT_SOURCE_SCOPE.fullmatch(candidate)
+    if match is None:
+        return None, value, 0
+    source = (match["based_on"] or match["within"]).strip(" 的")
+    body = match["body"].strip()
+    candidate_start = value.find(candidate)
+    body_start = candidate_start + match.start("body")
+    return (source or None), body, body_start
 
 
 def _clean_target(value: str, *, duty: bool) -> str:
@@ -486,6 +657,28 @@ def _clean_target(value: str, *, duty: bool) -> str:
         target = _LEADING_CONTEXT_CLAUSE.sub("", target).strip()
         target = re.sub(r"(?:的)?(?:主要|核心|具体)$", "", target).strip()
     return target
+
+
+def _fill_blank_anchor(template: str) -> str:
+    """从填空模板两侧选择最长连续原文锚点。"""
+    parts = (
+        re.sub(r"^[（(]?[一二三四五六七八九十百\d]+[）).、]?\s*", "", part)
+        .strip(" \t\r\n，,：:；;。！？?")
+        for part in _BLANK.split(template)
+    )
+    anchors = tuple(part for part in parts if part)
+    if not anchors:
+        return ""
+    return max(anchors, key=lambda value: len(re.sub(r"\s+", "", value)))
+
+
+def strip_trailing_response_directive(value: str) -> str:
+    """排除问号后的纯回答方式指令，保留新增业务条件。"""
+    core = value.strip()
+    for marker in re.finditer(r"[?？]", core):
+        if _TRAILING_RESPONSE_DIRECTIVE.fullmatch(core[marker.end() :]):
+            return core[: marker.end()].rstrip()
+    return core
 
 
 def _question_core(value: str) -> str:
@@ -589,4 +782,8 @@ def _number_value(value: str) -> int | None:
     return digits.get(value)
 
 
-__all__ = ["parse_query_semantics", "source_qualifier_matches"]
+__all__ = [
+    "parse_query_semantics",
+    "source_qualifier_matches",
+    "split_explicit_source_scope",
+]

@@ -18,7 +18,7 @@ from rag_app.adapters.providers.http_common import ProviderHttpClient
 from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.clients.resilience import StreamCancellation
-from rag_app.core.errors import ProviderInvalidResponse, StreamDeliveryError
+from rag_app.core.errors import ProviderInvalidResponse
 from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
@@ -183,7 +183,7 @@ def test_stream_rejects_duplicate_claim_field_without_publishing(
     assert emitted == []
 
 
-def test_invalid_later_claim_is_not_published_or_repaired_after_prefix(
+def test_invalid_later_claim_is_buffered_and_never_publishes_a_prefix(
     tmp_path: Path,
 ) -> None:
     source_text = "资料员每周核对设备清单。"
@@ -228,19 +228,20 @@ def test_invalid_later_claim_is_not_published_or_repaired_after_prefix(
     service = GroundedAnsweringService(adapter)
     emitted = []
     try:
-        with pytest.raises(StreamDeliveryError) as captured:
-            service.answer(
-                "资料员多久核对一次设备清单？",
-                evidence,
-                ConfidenceDecision(
-                    status=ConfidenceStatus.ANSWERABLE,
-                    score=1.0,
-                ),
-                on_claim=emitted.append,
-                cancellation=StreamCancellation(),
-            )
+        outcome = service.answer(
+            "资料员多久核对一次设备清单？",
+            evidence,
+            ConfidenceDecision(
+                status=ConfidenceStatus.ANSWERABLE,
+                score=1.0,
+            ),
+            on_claim=emitted.append,
+            cancellation=StreamCancellation(),
+        )
     finally:
         adapter.close()
-    assert [claim.text for claim in emitted] == ["资料员每周核对设备清单。"]
-    assert len(captured.value.provider_calls) == 1
-    assert captured.value.provider_calls[0].reason_code.startswith("CLAIM_")
+    assert emitted == []
+    assert outcome.answer is None
+    assert outcome.reason_code == "CLAIM_FREQUENCY_UNSUPPORTED"
+    assert len(outcome.calls) == 2
+    assert all(call.reason_code.startswith("CLAIM_") for call in outcome.calls)

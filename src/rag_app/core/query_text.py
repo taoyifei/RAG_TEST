@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 
 _DOCUMENT_EXTENSION = re.compile(r"\.(?:docx?|pdf|txt|md)$")
 _STRUCTURAL_SEPARATOR = re.compile(r"[\s_.\-—–/\\·:：()（）\[\]【】]+")
+_PRIVATE_USE_CHARACTER = re.compile(r"[\ue000-\uf8ff]")
 _APPROXIMATE_LABEL_MINIMUM_LENGTH = 6
 _APPROXIMATE_LABEL_MINIMUM_SCORE = 0.8
 _APPROXIMATE_LABEL_MINIMUM_MARGIN = 0.15
@@ -62,10 +63,47 @@ def normalize_duty_heading_label(value: str) -> str:
         去除章节编号和职责后缀后的精确标签；不会做子串或模糊匹配。
 
     """
+    return _DUTY_LABEL_SUFFIX.sub("", normalize_section_heading_label(value))
+
+
+def normalize_section_heading_label(value: str) -> str:
+    """规范化通用章节标题，同时保留标题的完整语义边界。
+
+    Args:
+        value: 查询目标或标题路径中的一个完整标题。
+
+    Returns:
+        去除章节编号、格式分隔符和旧 Word 私用区标记后的精确标签。
+
+    """
     normalized = unicodedata.normalize("NFKC", value).casefold().strip()
     normalized = _STRUCTURAL_NUMBER_PREFIX.sub("", normalized)
     normalized = _STRUCTURAL_SEPARATOR.sub("", normalized)
-    return _DUTY_LABEL_SUFFIX.sub("", normalized)
+    return _PRIVATE_USE_CHARACTER.sub("", normalized)
+
+
+def section_heading_path_owns_target(
+    target: str,
+    heading_path: Iterable[str],
+) -> bool:
+    """检查最后一个有效标题是否与章节查询目标完全相同。
+
+    Args:
+        target: 已从章节问句中提取的完整目标。
+        heading_path: Chunk 冻结的逐级标题路径。
+
+    Returns:
+        最深有效标题去格式后与查询目标完全相同时返回 True。
+
+    """
+    normalized_target = normalize_section_heading_label(target)
+    labels = tuple(
+        normalize_section_heading_label(heading) for heading in heading_path
+    )
+    return bool(normalized_target) and any(
+        label == normalized_target and not any(labels[index + 1 :])
+        for index, label in enumerate(labels)
+    )
 
 
 def duty_heading_path_owns_target(
@@ -171,5 +209,7 @@ __all__ = [
     "normalize_document_label",
     "normalize_duty_heading_label",
     "normalize_identifier",
+    "normalize_section_heading_label",
+    "section_heading_path_owns_target",
     "select_unique_label_owner",
 ]

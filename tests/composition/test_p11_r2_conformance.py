@@ -138,6 +138,28 @@ def test_evidence_compatibility_input_drives_resolved_policy(
         harness.close()
 
 
+def test_product_profile_defaults_fit_long_sections_and_complete_table_rows(
+    tmp_path: Path,
+) -> None:
+    """产品默认值须容纳典型长章节以及表头与整行证据。"""
+    harness = build_product_harness(tmp_path)
+    try:
+        _, kb = create_project_and_knowledge_base(harness)
+        _, _, jina, aliyun = create_provider_connections(harness)
+        profile = harness.runtime.control.create_profile(
+            _draft(kb, jina, aliyun)
+        )
+
+        policy = harness.runtime.profiles._resolve(profile).retrieval._policy
+
+        assert policy.max_evidence_items == 16
+        assert policy.per_document_cap == 16
+        assert policy.per_section_cap == 16
+        assert policy.max_evidence_items_per_chunk == 8
+    finally:
+        harness.close()
+
+
 def test_failover_changes_serving_but_preserves_index(tmp_path: Path) -> None:
     harness = build_product_harness(tmp_path)
     try:

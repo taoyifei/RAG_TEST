@@ -290,6 +290,77 @@ def test_structural_channel_accepts_generic_document_suffix_in_qualifier(
         runtime.close()
 
 
+def test_source_scoped_structural_search_finds_late_short_heading(
+    tmp_path: Path,
+) -> None:
+    """显式来源不能因文件名命中大量早期块而淹没后部短标题。"""
+    runtime, project_id, knowledge_base_id = runtime_with_kb(tmp_path)
+    early = "".join(
+        _heading(1, f"常规章节{index}")
+        + _paragraph(f"第{index}项按一般要求填写。")
+        for index in range(140)
+    )
+    selected = _document_blocks(
+        project_id,
+        knowledge_base_id,
+        "蓝熊测试开发工程师篇",
+        early
+        + _heading(1, "预期")
+        + _paragraph("按实际情况填写，并与操作步骤逐项对应。"),
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            documents=(selected,),
+            idempotency_key="source-scoped-late-short-heading",
+            budgets=runtime.default_budgets(),
+        )
+        revision = runtime.control.revision_vector_spec(
+            result.revision_id
+        ).revision
+
+        hits = runtime.components.lexical_store.search_structural_candidates(
+            StructuralSearchRequest(
+                revision=revision,
+                query=(
+                    "根据《蓝熊测试开发工程师篇》，"
+                    "预期具体有哪些要求？"
+                ),
+                target="预期",
+                relation="章节内容",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source_qualifier="蓝熊测试开发工程师篇",
+                limit=5,
+            )
+        )
+        hydrated = runtime.control.hydrate_chunks(
+            runtime.control.active_query_snapshot(
+                KnowledgeBaseScope(
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                ),
+                serving_fingerprint=runtime.components.serving_fingerprint,
+                retrieval_policy=RetrievalPolicy(),
+            ),
+            tuple(hit.chunk_id for hit in hits),
+        )
+        target_chunk_ids = {
+            item.chunk.chunk_id
+            for item in hydrated
+            if item.chunk.heading_path[-1:] == ("预期",)
+        }
+
+        assert target_chunk_ids
+        assert all(
+            hit.match_type == "STRUCTURAL_SECTION_HEADING_BODY"
+            for hit in hits
+            if hit.chunk_id in target_chunk_ids
+        )
+    finally:
+        runtime.close()
+
+
 def test_structural_channel_closes_split_role_table_header_and_target_row(
     tmp_path: Path,
 ) -> None:

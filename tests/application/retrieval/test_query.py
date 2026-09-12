@@ -447,6 +447,26 @@ def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
             "章节内容",
             RequestedAnswerType.SECTION_SUMMARY,
         ),
+        (
+            "根据《蓝熊岗位规范》，生产经理具体有哪些要求？",
+            "生产经理",
+            "职责",
+            RequestedAnswerType.DUTIES,
+        ),
+        (
+            "根据《蓝熊岗位规范》，生产经理具体有哪些要求？"
+            " 请依据资料逐项回答。",
+            "生产经理",
+            "职责",
+            RequestedAnswerType.DUTIES,
+        ),
+        (
+            "根据《蓝熊质量制度》，请补全条款中的数值："
+            "“（二）每月____前由检验部检查改善”",
+            "前由检验部检查改善",
+            "原文内容",
+            RequestedAnswerType.SECTION_SUMMARY,
+        ),
     ),
 )
 def test_analyzer_supports_general_typed_question_semantics(
@@ -474,6 +494,155 @@ def test_document_target_does_not_invent_an_explicit_source_qualifier() -> None:
     semantics = _analyze("蓝熊工作规范的目的是什么").semantics
 
     assert semantics.source_qualifier is None
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    (
+        (
+            "请根据《蓝熊管理制度》中的规定，出库领发具体有哪些要求？",
+            (
+                "出库领发",
+                "蓝熊管理制度",
+                None,
+                "章节内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "依据《蓝熊管理制度》，文档对“手动修改”有什么禁止或限制性要求？",
+            (
+                "手动修改",
+                "蓝熊管理制度",
+                None,
+                "限制要求",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "根据《蓝熊管理制度》的“安全事故考核”，“一般”对应的内容或要求是什么？",
+            (
+                "一般",
+                "蓝熊管理制度",
+                "安全事故考核",
+                "对应内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "根据《蓝熊管理制度》的“安全事故考核”，"
+            "“一般”对应的内容或要求是什么？ 请仅依据原文完整作答。",
+            (
+                "一般",
+                "蓝熊管理制度",
+                "安全事故考核",
+                "对应内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+        (
+            "在《蓝熊操作手册》中，测试用例如何导入？",
+            (
+                "测试用例",
+                "蓝熊操作手册",
+                None,
+                "导入",
+                RequestedAnswerType.PROCEDURE,
+            ),
+        ),
+        (
+            "根据《蓝熊管理制度》，“经常掌握储备情况”这项内容的完整规定是什么？",
+            (
+                "经常掌握储备情况",
+                "蓝熊管理制度",
+                None,
+                "原文内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
+    ),
+)
+def test_explicit_document_scope_is_parsed_before_question_semantics(
+    question: str,
+    expected: tuple[
+        str,
+        str,
+        str | None,
+        str,
+        RequestedAnswerType,
+    ],
+) -> None:
+    semantics = _analyze(question).semantics
+    (
+        target,
+        source_qualifier,
+        context_qualifier,
+        relation,
+        answer_type,
+    ) = expected
+
+    assert semantics.target == target
+    assert semantics.source_qualifier == source_qualifier
+    assert semantics.context_qualifier == context_qualifier
+    assert semantics.relation == relation
+    assert semantics.answer_type is answer_type
+    assert semantics.source == "RULE"
+
+
+def test_business_condition_after_question_is_not_discarded() -> None:
+    """回答形式后缀可裁剪，新增业务条件必须继续影响问题语义。"""
+    analysis = _analyze(
+        "“一般”对应的内容是什么？请只回答处理期限超过5天的情况。"
+    )
+
+    assert analysis.semantics.target is None
+    assert analysis.semantics.source == "ORIGINAL_FALLBACK"
+    assert any(
+        constraint.raw_text == "超过"
+        for constraint in analysis.semantics.constraints
+    )
+
+
+def test_pure_response_directive_is_not_an_answer_constraint() -> None:
+    """“仅依据原文”描述回答方式，不要求证据正文包含“仅”字。"""
+    analysis = _analyze(
+        "“一般”对应的内容是什么？请仅依据原文完整作答。"
+    )
+
+    assert analysis.semantics.target == "一般"
+    assert all(
+        constraint.raw_text != "仅"
+        for constraint in analysis.semantics.constraints
+    )
+    assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
+
+
+def test_source_label_signals_do_not_become_answer_constraints() -> None:
+    analysis = _analyze("根据《GM-09仓库管理制度》，出库领发具体有哪些要求？")
+
+    assert analysis.identifiers == ()
+    assert analysis.numbers == ()
+    assert all(
+        constraint.raw_text not in {"GM-09", "09"}
+        for constraint in analysis.semantics.constraints
+    )
+    assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes
+
+
+def test_answer_body_signals_remain_constraints_after_source_scope() -> None:
+    analysis = _analyze(
+        "根据《GM-09仓库管制度》，“ABC-123”的保管期限是否超过 3 年？"
+    )
+
+    assert analysis.identifiers == ("ABC-123",)
+    assert "3" in analysis.numbers
+    assert "09" not in analysis.numbers
+    assert {
+        constraint.raw_text for constraint in analysis.semantics.constraints
+    } >= {
+        "ABC-123",
+        "3",
+    }
 
 
 def test_duty_question_preserves_leading_project_context() -> None:

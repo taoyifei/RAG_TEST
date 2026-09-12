@@ -30,6 +30,7 @@ from rag_app.adapters.providers.budget_revision import (
 )
 from rag_app.adapters.providers.budget_transport import (
     BudgetedTransport,
+    _chat_request_valid,
     _response_observation,
     provider_budget_scope,
     provider_data_scope,
@@ -143,6 +144,23 @@ def _reserve(
         step_id=step,
         request=request,
     )
+
+
+def test_generation_transport_matches_product_grounded_token_contract(
+) -> None:
+    """完整长答案使用的 16k 输入和 4k 输出均须通过发送边界。"""
+    payload = {
+        "model": "qwen3.7-flash",
+        "messages": [{"role": "user", "content": "公开合成资料"}],
+        "stream": False,
+        "enable_thinking": False,
+        "max_tokens": 4096,
+        "response_format": {"type": "json_object"},
+    }
+
+    assert _chat_request_valid(payload, "generation", 16_384, 4096, ())
+    assert not _chat_request_valid(payload, "generation", 16_385, 4096, ())
+    assert not _chat_request_valid(payload, "generation", 16_384, 4097, ())
 
 
 def test_old_campaign_serialization_and_approval_checksum_are_unchanged():

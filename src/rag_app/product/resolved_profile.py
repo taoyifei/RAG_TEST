@@ -204,11 +204,13 @@ def resolve_retrieval_policy(
         if canonical in merged and merged[canonical] != value:
             raise ValueError(f"Evidence 参数冲突：{canonical}。")
         merged[canonical] = value
-    # 职责表的一行可由多个段落共同支持，总证据数和 token 上限仍保持不变。
+    # 典型长章节和“表头 + 行名 + 多个非空值”需要超过八个来源 span；
+    # token 预算仍是总输入硬上限，显式配置继续覆盖这些产品默认值。
     policy = RetrievalPolicy.model_validate(
         {
-            "per_document_cap": 8,
-            "per_section_cap": 8,
+            "max_evidence_items": 16,
+            "per_document_cap": 16,
+            "per_section_cap": 16,
             "max_evidence_items_per_chunk": 8,
             **merged,
         }

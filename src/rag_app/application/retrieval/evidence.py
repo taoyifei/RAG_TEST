@@ -26,6 +26,8 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_section_heading_label,
+    section_heading_path_owns_target,
     select_unique_label_owner,
 )
 
@@ -38,6 +40,7 @@ _LIST_LEAD_IN = re.compile(
 _NUMBERED_STAGE_HEADING = re.compile(r"^\d+\.\d+(?:\.\d+)?\s+\S")
 _FLOW_ARCHITECTURE_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*)?\s*流程架构$")
 _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
+_LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$")
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
 _TABLE_HEADER_SEMANTICS = {
@@ -246,6 +249,7 @@ class EvidenceAssembler:
         packing_order = _evidence_packing_order(
             ranked_by_chunk,
             diversify_chunks=allow_uncertain,
+            priority_keys=set(support_overrides),
         )
         for candidate, span, quote, span_key in packing_order:
             if len(evidence) >= policy.max_evidence_items:
@@ -304,24 +308,41 @@ def _evidence_packing_order(
     ranked_by_chunk: _RankedChunkSpans,
     *,
     diversify_chunks: bool,
+    priority_keys: set[_SpanKey] | None = None,
 ) -> tuple[_PackablePiece, ...]:
-    """按 Chunk 多样性或原候选顺序展开待打包 span。"""
+    """先保留结构认证 span，再按 Chunk 多样性展开其余候选。"""
     if not diversify_chunks:
         return tuple(
             (candidate, *piece)
             for candidate, spans in ranked_by_chunk
             for piece in spans
         )
-    # 模型候选先横向覆盖不同 Chunk，再补同 Chunk 的第二个 span。
-    # 否则一个表格 Chunk 可独占总上限，掩盖已召回的后续原文。
-    return tuple(
-        (candidate, *spans[span_index])
-        for span_index in range(
-            max((len(spans) for _, spans in ranked_by_chunk), default=0)
+    priorities = priority_keys or set()
+
+    def interleave(*, priority: bool) -> tuple[_PackablePiece, ...]:
+        groups = tuple(
+            (
+                candidate,
+                tuple(
+                    piece
+                    for piece in spans
+                    if (piece[2] in priorities) is priority
+                ),
+            )
+            for candidate, spans in ranked_by_chunk
         )
-        for candidate, spans in ranked_by_chunk
-        if span_index < len(spans)
-    )
+        return tuple(
+            (candidate, *spans[span_index])
+            for span_index in range(
+                max((len(spans) for _, spans in groups), default=0)
+            )
+            for candidate, spans in groups
+            if span_index < len(spans)
+        )
+
+    # 认证结构关系不能被同轮的语义候选挤出总上限；每一层仍横向覆盖
+    # 不同 Chunk，避免一个大表格或长段落独占模型输入。
+    return (*interleave(priority=True), *interleave(priority=False))
 
 
 def _ranked_citable_spans(  # noqa: PLR0913
@@ -448,7 +469,7 @@ def _span_key(chunk: Chunk, span: SourceSpan) -> _SpanKey:
     )
 
 
-def _table_intersections(
+def _table_intersections(  # noqa: PLR0912
     candidates: tuple[RankedChunk, ...],
     context: EvidenceSelectionContext | None,
 ) -> dict[str, set[_SpanKey]]:
@@ -464,6 +485,7 @@ def _table_intersections(
         defaultdict(lambda: defaultdict(dict))
     )
     members: dict[_TableKey, set[str]] = defaultdict(set)
+    headings: dict[_TableKey, set[tuple[str, ...]]] = defaultdict(set)
     for candidate in candidates:
         chunk = candidate.hydrated.chunk
         if chunk.role.value != "table":
@@ -476,6 +498,7 @@ def _table_intersections(
             if not _table_coordinate_is_trusted(chunk, span, row, column):
                 continue
             members[table_key].add(chunk.chunk_id)
+            headings[table_key].add(chunk.heading_path)
             quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
             ].strip()
@@ -484,19 +507,64 @@ def _table_intersections(
     query = context.analysis.normalized_query.casefold()
     selected: dict[str, set[_SpanKey]] = {}
     for table_key, cells in tables.items():
+        context_qualifier = context.analysis.semantics.context_qualifier
+        if context_qualifier and not any(
+            _heading_path_contains_label(context_qualifier, path)
+            for path in headings[table_key]
+        ):
+            continue
         rows = {
             row
             for (row, column), values in cells.items()
             if row > 0 and column == 0 and _label_matches(values, query)
         }
         columns = _requested_columns(cells, rows, context)
-        if len(rows) != 1 or len(columns) != 1:
+        whole_row = (
+            len(rows) == 1
+            and not columns
+            and context.analysis.semantics.answer_type
+            is RequestedAnswerType.SECTION_SUMMARY
+            and context.analysis.semantics.relation == "对应内容"
+        )
+        if whole_row:
+            row = next(iter(rows))
+            columns = {
+                column
+                for (cell_row, column), values in cells.items()
+                if cell_row == row and column > 0 and values
+            }
+        if (
+            len(rows) != 1
+            or not columns
+            or (not whole_row and len(columns) != 1)
+        ):
             continue
-        values = cells.get((next(iter(rows)), next(iter(columns))), {})
-        if not values or len(set(values.values())) != 1:
+        row = next(iter(rows))
+        selected_values: set[_SpanKey] = set()
+        for column in columns:
+            values = cells.get((row, column), {})
+            if not values or (not whole_row and len(set(values.values())) != 1):
+                selected_values.clear()
+                break
+            selected_values.update(values)
+        if not selected_values:
             continue
+        # “对应内容”不是一组失去语义的裸值：行名证明所问对象，最近的
+        # 完整前置表头证明每个值的列含义。标题行可以位于表头之前。
+        if whole_row:
+            selected_values.update(cells.get((row, 0), {}))
+            header_rows = {
+                cell_row
+                for cell_row, _column in cells
+                if cell_row < row
+                and all(cells.get((cell_row, column)) for column in columns)
+            }
+            if header_rows:
+                header_row = max(header_rows)
+                for column in columns:
+                    selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
-            selected.setdefault(chunk_id, set()).update(values)
+            selected.setdefault(chunk_id, set()).update(selected_values)
     return selected
 
 
@@ -958,10 +1026,23 @@ def _context_supports(
     if context is None:
         return {}
     supports = _section_heading_supports(candidates, context)
+    semantics = context.analysis.semantics
+    target = semantics.target
     headers: dict[tuple[_TableKey, int], set[str]] = defaultdict(set)
     chunks = {
         item.hydrated.chunk.chunk_id: item.hydrated.chunk for item in candidates
     }
+    whole_row_relation = (
+        semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
+        and semantics.relation == "对应内容"
+        and bool(target)
+    )
+    table_row_nodes: dict[
+        tuple[_TableKey, int], list[tuple[int, int, int, str]]
+    ] = defaultdict(list)
+    table_relation_nodes: dict[
+        _TableKey, list[tuple[int, int, int, str]]
+    ] = defaultdict(list)
     for chunk in chunks.values():
         for span in chunk.source_spans:
             location = _table_location(chunk, span)
@@ -971,6 +1052,41 @@ def _context_supports(
                         span.chunk_start_char : span.chunk_end_char
                     ]
                 )
+            key = _span_key(chunk, span)
+            if (
+                location is not None
+                and key in table_spans.get(chunk.chunk_id, set())
+                and span.node_id
+            ):
+                located_node = (
+                    location[1],
+                    location[2],
+                    -1
+                    if span.source_start_char is None
+                    else span.source_start_char,
+                    span.node_id,
+                )
+                table_row_nodes[location[0], location[1]].append(located_node)
+                if whole_row_relation:
+                    table_relation_nodes[location[0]].append(located_node)
+    grouped_row_nodes = {
+        group: tuple(
+            dict.fromkeys(
+                node_id
+                for _row, _column, _source_start, node_id in sorted(nodes)
+            )
+        )
+        for group, nodes in table_row_nodes.items()
+    }
+    grouped_relation_nodes = {
+        table_key: tuple(
+            dict.fromkeys(
+                node_id
+                for _row, _column, _source_start, node_id in sorted(nodes)
+            )
+        )
+        for table_key, nodes in table_relation_nodes.items()
+    }
     for chunk in chunks.values():
         for span in chunk.source_spans:
             key = _span_key(chunk, span)
@@ -979,6 +1095,25 @@ def _context_supports(
                 key in table_spans.get(chunk.chunk_id, set())
                 and location is not None
             ):
+                row_nodes = (
+                    grouped_relation_nodes.get(location[0], ())
+                    if whole_row_relation
+                    else grouped_row_nodes.get((location[0], location[1]), ())
+                )
+                if (
+                    whole_row_relation
+                    and row_nodes
+                    and target
+                ):
+                    supports[key] = AnswerSupport(
+                        status=SupportStatus.SUPPORTED,
+                        query_target=target,
+                        requested_relation_or_attribute="对应内容",
+                        answer_type=semantics.answer_type.value,
+                        support_reason="TABLE_ROW_CONTENT",
+                        supporting_span_ids=row_nodes,
+                    )
+                    continue
                 labels = headers[location[0], location[2]]
                 if len(labels) == 1:
                     supports[key] = evaluate_span_support(
@@ -1004,6 +1139,11 @@ def _section_heading_supports(  # noqa: PLR0912
     semantics = context.analysis.semantics
     if semantics.answer_type is RequestedAnswerType.DUTIES:
         return _duty_heading_supports(candidates, context)
+    if semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY:
+        heading_supports = _exact_section_heading_supports(candidates, context)
+        return heading_supports or _direct_section_summary_supports(
+            candidates, context
+        )
     if (
         semantics.answer_type
         not in {
@@ -1017,8 +1157,6 @@ def _section_heading_supports(  # noqa: PLR0912
         return {}
     if semantics.answer_type is RequestedAnswerType.PURPOSE:
         relation_pattern = re.compile(r"目的|目标|作用|用途|宗旨")
-    elif semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY:
-        relation_pattern = re.compile(r"管理要求|工作要求|规定|要求|章节")
     elif semantics.answer_type is RequestedAnswerType.ENUMERATION:
         relation_pattern = re.compile(
             rf"{re.escape(semantics.relation or '')}|"
@@ -1150,6 +1288,150 @@ def _section_heading_supports(  # noqa: PLR0912
     return supports
 
 
+def _exact_section_heading_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """用精确标题归属将同一章节正文闭合为完整支持组。
+
+    Args:
+        candidates: 本次有界召回及结构扩展候选。
+        context: 已冻结的章节查询语义。
+
+    Returns:
+        每个文档中唯一精确章节的全部可引用正文支持。
+
+    """
+    semantics = context.analysis.semantics
+    target = semantics.target
+    if not target:
+        return {}
+    grouped: dict[tuple[str, str, str], list[tuple[Chunk, SourceSpan]]] = (
+        defaultdict(list)
+    )
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        if chunk.role.value in {"table", "image_metadata", "header_footer"}:
+            continue
+        if semantics.source_qualifier and not source_qualifier_matches(
+            candidate.hydrated.display_name,
+            chunk.heading_path,
+            semantics.source_qualifier,
+        ):
+            continue
+        if (
+            not chunk.context_dependencies
+            or len(chunk.context_dependencies) != len(chunk.heading_path)
+            or not section_heading_path_owns_target(target, chunk.heading_path)
+        ):
+            continue
+        dependency_ids = {
+            dependency.source_node_id
+            for dependency in chunk.context_dependencies
+        }
+        group = (
+            chunk.version.document_id,
+            chunk.version.document_version_id,
+            chunk.section_id,
+        )
+        for span in chunk.source_spans:
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if (
+                not span.node_id
+                or not span.is_citable
+                or span.is_repeated
+                or span.span_type is SourceSpanKind.SEPARATOR
+                or span.node_id in dependency_ids
+                or not quote.strip()
+                or _LIST_MARKER_ONLY.fullmatch(quote)
+                or re.search(r"未提供|未确定|暂无|未知", quote)
+            ):
+                continue
+            grouped[group].append((chunk, span))
+    groups_by_document: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
+    for group in grouped:
+        groups_by_document[group[0]].add(group)
+    eligible_groups = {
+        next(iter(groups))
+        for groups in groups_by_document.values()
+        if len(groups) == 1
+    }
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    for group in eligible_groups:
+        pieces = grouped[group]
+        span_ids = tuple(
+            dict.fromkeys(
+                span.node_id
+                for _chunk, span in pieces
+                if span.node_id is not None
+            )
+        )
+        if not span_ids:
+            continue
+        support = AnswerSupport(
+            status=SupportStatus.SUPPORTED,
+            query_target=target,
+            requested_relation_or_attribute=semantics.relation or "章节内容",
+            answer_type=semantics.answer_type.value,
+            support_reason="SECTION_HEADING_BODY",
+            supporting_span_ids=span_ids,
+        )
+        for chunk, span in pieces:
+            supports[_span_key(chunk, span)] = support
+    return supports
+
+
+def _direct_section_summary_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """仅接受分句本身同时命中对象与规范关系的支持。"""
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    semantics = context.analysis.semantics
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        if chunk.role.value in {"table", "image_metadata", "header_footer"}:
+            continue
+        if semantics.source_qualifier and not source_qualifier_matches(
+            candidate.hydrated.display_name,
+            chunk.heading_path,
+            semantics.source_qualifier,
+        ):
+            continue
+        for span in chunk.source_spans:
+            if (
+                not span.is_citable
+                or span.is_repeated
+                or span.span_type is SourceSpanKind.SEPARATOR
+            ):
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            support = evaluate_span_support(
+                context.analysis,
+                quote,
+                span_id=span.node_id or "",
+            )
+            if support.status is SupportStatus.SUPPORTED:
+                supports[_span_key(chunk, span)] = support
+    return supports
+
+
+def _heading_path_contains_label(
+    target: str,
+    heading_path: tuple[str, ...],
+) -> bool:
+    """按完整标题边界匹配表格所在章节。"""
+    normalized_target = normalize_section_heading_label(target)
+    return bool(normalized_target) and any(
+        normalize_section_heading_label(heading) == normalized_target
+        for heading in heading_path
+    )
+
+
 def _duty_heading_supports(
     candidates: tuple[RankedChunk, ...],
     context: EvidenceSelectionContext,
@@ -1194,8 +1476,10 @@ def _duty_heading_supports(
             quote = chunk.citation_text[
                 span.chunk_start_char : span.chunk_end_char
             ]
-            if not quote.strip() or re.search(
-                r"未提供|未确定|暂无|未知", quote
+            if (
+                not quote.strip()
+                or _LIST_MARKER_ONLY.fullmatch(quote)
+                or re.search(r"未提供|未确定|暂无|未知", quote)
             ):
                 continue
             supports[_span_key(chunk, span)] = AnswerSupport(
@@ -1650,10 +1934,22 @@ def _minimal_support_set(
         documents = {item.document_id for item in supported}
         if len(documents) > 1:
             return (), True
+    selected = (
+        supported
+        if semantics.answer_type is RequestedAnswerType.DUTIES
+        else _first_complete_support_group(supported)
+    )
+    return selected, False
+
+
+def _first_complete_support_group(
+    supported: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """返回首项声明的同文档完整来源节点组。"""
     first = supported[0]
     metadata = dict(first.metadata).get("answer_support")
     if not isinstance(metadata, dict):
-        return (first,), False
+        return (first,)
     nodes = metadata.get("supporting_span_ids", [])
     required_nodes = (
         {node for node in nodes if isinstance(node, str)}
@@ -1661,7 +1957,7 @@ def _minimal_support_set(
         else set()
     )
     if not required_nodes:
-        return (first,), False
+        return (first,)
     grouped = tuple(
         item
         for item in supported
@@ -1672,8 +1968,8 @@ def _minimal_support_set(
         span.node_id for item in grouped for span in item.source_spans
     }
     if not required_nodes <= present_nodes:
-        return (), False
-    return grouped, False
+        return ()
+    return grouped
 
 
 def _renumber_evidence(

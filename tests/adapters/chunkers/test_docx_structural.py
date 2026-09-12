@@ -534,6 +534,24 @@ def test_explicit_heading_dependency_keeps_document_structure_origin() -> None:
     )
 
 
+def test_empty_explicit_heading_does_not_create_context_dependency() -> None:
+    """空标题样式段落不能成为后续正文的标题路径或来源依赖。"""
+    document_ir = parse_package(
+        build_package(
+            '<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr></w:p>'
+            + _paragraph("版本修订记录")
+            + _paragraph("公开合成版本说明。")
+        ),
+        name="empty-explicit-heading.docx",
+    ).document_ir
+
+    chunks = _chunk(document_ir).chunks
+
+    assert chunks
+    assert all("" not in chunk.heading_path for chunk in chunks)
+    assert all(not chunk.context_dependencies for chunk in chunks)
+
+
 def test_inferred_children_follow_numbered_explicit_parent() -> None:
     document_ir = parse_package(
         build_package(

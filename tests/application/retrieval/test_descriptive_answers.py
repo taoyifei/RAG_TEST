@@ -282,8 +282,12 @@ def test_flat_role_sections_use_exact_heading_owner_for_duty_support() -> None:
     }
 
     assert [item.citation_text for item in selection.answer_support_set] == [
-        "制定公开合成目标。"
+        "制定公开合成目标。",
+        "协调公开合成资源。",
     ]
+    assert [
+        item.citation_text for item in selection.model_evidence_candidates[:2]
+    ] == ["制定公开合成目标。", "协调公开合成资源。"]
     assert "制定公开合成目标。" in by_quote
     assert "协调公开合成资源。" in by_quote
     assert "合成总经理" in by_quote["制定公开合成目标。"]
@@ -300,6 +304,27 @@ def test_flat_role_sections_use_exact_heading_owner_for_duty_support() -> None:
         == "SECTION_HEADING_BODY"
         for item in manager_candidates
     )
+
+
+@pytest.mark.parametrize(
+    ("quote", "supported"),
+    [
+        ("总经理负责制定质量方针。", True),
+        ("总经理主持质量评审。", True),
+        ("在公司治理中，总经理履行临机处理权。", True),
+        ("在总经理领导下，财务部负责会计核算。", False),
+        ("负责贯彻总经理的各项决策。", False),
+        ("协助总经理制定质量方针。", False),
+    ],
+)
+def test_duty_text_requires_target_as_grammatical_subject(
+    quote: str, supported: bool
+) -> None:
+    analysis = _context("总经理负责什么").analysis
+
+    result = evaluate_span_support(analysis, quote)
+
+    assert (result.status.value == "SUPPORTED") is supported
 
 
 def test_duty_heading_does_not_borrow_nested_or_sibling_role_body() -> None:
@@ -881,6 +906,26 @@ def test_new_typed_relations_require_target_and_relation_support(
     assert support["status"] == "SUPPORTED"
 
 
+def test_quoted_restriction_is_not_mistaken_for_unknown_information() -> None:
+    """被禁止对象中的“无记录”是精确主题，不是资料缺失声明。"""
+    target = "口头确认、无记录调整、未审批修改"
+    statement = f"变更控制要求规定，严禁{target}。"
+    candidates = _candidates(
+        _paragraph("其他流程不得跳过双人复核。")
+        + _paragraph(statement)
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context(
+            f"文档对“{target}”有什么禁止或限制性要求？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [statement]
+
+
 def test_new_typed_relations_do_not_borrow_another_relation() -> None:
     candidates = _candidates(
         _paragraph("星环登记表由资料协调员负责维护。")
@@ -925,6 +970,204 @@ def test_document_purpose_uses_heading_and_first_body_source() -> None:
         dict(evidence[0].metadata)["answer_support"]["support_reason"]
         == "SECTION_HEADING_BODY"
     )
+
+
+def test_source_scoped_exact_section_keeps_its_complete_body_only() -> None:
+    selected = (
+        "出库前核对领料凭证。",
+        "发放时由领发双方签字。",
+        "完成后登记批次与数量。",
+    )
+    candidates = (
+        *_candidates(
+            _heading("出库领发")
+            + "".join(_paragraph(item) for item in selected)
+            + _heading("特殊放行", level=2)
+            + _paragraph("特殊放行须另行审批。"),
+            display_name="蓝熊管理制度.docx",
+            document_id="doc_" + "a" * 32,
+        ),
+        *_candidates(
+            _heading("出库领发") + _paragraph("白鹭仓库采用单人领料。"),
+            display_name="白鹭管理制度.docx",
+            document_id="doc_" + "b" * 32,
+        ),
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("根据《蓝熊管理制度》，出库领发具体有哪些要求？"),
+    )
+
+    assert [item.citation_text for item in evidence] == list(selected)
+    assert all(item.display_name == "蓝熊管理制度.docx" for item in evidence)
+    supports = [dict(item.metadata)["answer_support"] for item in evidence]
+    assert all(
+        item["support_reason"] == "SECTION_HEADING_BODY" for item in supports
+    )
+    assert all(len(item["supporting_span_ids"]) == 3 for item in supports)
+
+
+def test_source_scoped_restriction_requires_target_in_the_clause() -> None:
+    selected = "已审核的任务禁止手动修改。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("任务执行中不得断电。") + _paragraph(selected),
+            display_name="蓝熊管理制度.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "依据《蓝熊管理制度》，文档对“手动修改”有什么禁止或限制性要求？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
+
+
+def test_source_scoped_quoted_explanation_accepts_the_exact_source_clause() -> (
+    None
+):
+    selected = "注：品质部为公司质量管理部门。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph(selected),
+            display_name="GM-01 质量管理机构图.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《GM-01 质量管理机构图》，"
+            "文档对“注：品质部为公司质量管理部门”作了什么具体说明？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
+
+
+def test_source_scoped_quoted_anchor_returns_its_complete_clause() -> None:
+    selected = "库管员应经常掌握储备情况，及时提出补充计划。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph(selected),
+            display_name="蓝熊仓库管理制度.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊仓库管理制度》，"
+            "“经常掌握储备情况”这项内容的完整规定是什么？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
+
+
+def test_source_scoped_table_row_closes_headers_label_and_values() -> None:
+    values = ("扣减两分。", "三个工作日内整改。", "保留复核记录。")
+    blocks = (
+        _heading("安全事故考核")
+        + "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/>"
+        "<w:gridCol/></w:tblGrid><w:tr><w:tc>"
+        + _paragraph("等级")
+        + "</w:tc><w:tc>"
+        + _paragraph("扣分")
+        + "</w:tc><w:tc>"
+        + _paragraph("处理")
+        + "</w:tc><w:tc>"
+        + _paragraph("记录")
+        + "</w:tc></w:tr><w:tr><w:tc>"
+        + _paragraph("一般")
+        + "</w:tc><w:tc>"
+        + _paragraph(values[0])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[1])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[2])
+        + "</w:tc></w:tr></w:tbl>"
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        _candidates(blocks, display_name="蓝熊管理制度.docx"),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊管理制度》的“安全事故考核”，“一般”对应的内容或要求是什么？"
+        ),
+    )
+
+    expected = {"一般", "扣分", "处理", "记录", *values}
+    assert {item.citation_text for item in evidence} == expected
+    assert len(evidence) == len(expected)
+    supports = [dict(item.metadata)["answer_support"] for item in evidence]
+    assert all(
+        item["support_reason"] == "TABLE_ROW_CONTENT" for item in supports
+    )
+    assert all(
+        len(item["supporting_span_ids"]) == len(expected) for item in supports
+    )
+
+
+def test_source_scoped_table_row_accepts_a_title_before_the_header() -> None:
+    values = ("毛玉洁", "2025.09.10", "更新测试流程")
+    blocks = (
+        "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/>"
+        "<w:gridCol/></w:tblGrid><w:tr><w:tc>"
+        + _paragraph("版本修订记录")
+        + "</w:tc><w:tc></w:tc><w:tc></w:tc><w:tc></w:tc></w:tr>"
+        "<w:tr><w:tc>"
+        + _paragraph("版本号")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订人")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订日期")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订说明")
+        + "</w:tc></w:tr><w:tr><w:tc>"
+        + _paragraph("1.1.0")
+        + "</w:tc><w:tc>"
+        + _paragraph(values[0])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[1])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[2])
+        + "</w:tc></w:tr></w:tbl>"
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        _candidates(blocks, display_name="蓝熊测试手册.docx"),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊测试手册》，“1.1.0”对应的内容或要求是什么？"
+        ),
+    )
+
+    assert {item.citation_text for item in evidence} == {
+        "1.1.0",
+        "修订人",
+        "修订日期",
+        "修订说明",
+        *values,
+    }
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "TABLE_ROW_CONTENT"
+        for item in evidence
+    )
+
+
+def test_source_scoped_fill_blank_returns_complete_matching_clause() -> None:
+    selected = "（二）每月7日前由检验部检查改善。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("每月汇总一次其他记录。") + _paragraph(selected),
+            display_name="蓝熊质量制度.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊质量制度》，请补全条款中的数值："
+            "“（二）每月____前由检验部检查改善”"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
 
 
 def test_document_purpose_prefers_shallow_scope_over_local_purpose() -> None:

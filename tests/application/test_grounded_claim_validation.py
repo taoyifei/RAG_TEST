@@ -42,7 +42,10 @@ from tests.application.retrieval.test_descriptive_answers import (
     _candidates,
     _paragraph,
 )
-from tests.application.retrieval.test_evidence_table_coordinates import _context
+from tests.application.retrieval.test_evidence_table_coordinates import (
+    _context,
+    _table,
+)
 
 
 @pytest.mark.parametrize(
@@ -104,6 +107,25 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
         generation_mode="llm",
     )
     validate_grounded_draft(draft, evidence)
+
+
+def test_compound_identifier_subject_is_supported_by_exact_source() -> None:
+    """类型加型号的复合对象不能因只抽取型号而误拒逐字事实。"""
+    source = "设备 MX-41 的维护周期为 14 天。"
+    evidence, draft = _supported_draft(source, source)
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_compound_identifier_subject_rejects_changed_identifier() -> None:
+    """标识符准入仍要求同一引用中存在完全相同的型号。"""
+    evidence, draft = _supported_draft(
+        "设备 MX-41 的维护周期为 14 天。",
+        "设备 MX-42 的维护周期为 14 天。",
+    )
+
+    with pytest.raises(ValidationFailed):
+        validate_grounded_draft(draft, evidence)
 
 
 def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
@@ -214,6 +236,36 @@ def test_grounded_hard_constraints_close_observed_counterexamples(
 
 
 @pytest.mark.parametrize(
+    "claim",
+    (
+        "处罚幅度为 100-500 元。",
+        "处罚幅度为 100 至 500 元。",
+        "处罚幅度为 100—500 元。",
+    ),
+)
+def test_equivalent_quantity_ranges_share_unit_across_endpoints(
+    claim: str,
+) -> None:
+    """区间分隔符和左端省略单位不应制造数值支持误报。"""
+    evidence, draft = _supported_draft(
+        "处罚幅度为 100 元～ 500 元。", claim
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_quantity_range_still_rejects_a_changed_endpoint() -> None:
+    evidence, draft = _supported_draft(
+        "处罚幅度为 100 元～ 500 元。", "处罚幅度为 100-600 元。"
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_NUMBER_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
     ("source", "claim"),
     (
         (
@@ -255,6 +307,37 @@ def test_role_mentioned_as_object_cannot_be_promoted_to_subject(
 ) -> None:
     """职责对象必须来自来源主语，不能只在原文任意位置出现。"""
     evidence, draft = _supported_draft(source, claim)
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+@pytest.mark.parametrize(
+    ("source", "claim"),
+    (
+        ("由资料部门记录归档结果。", "资料部门记录归档结果。"),
+        (
+            "交接流程由行政部负责，并负责核对交接记录。",
+            "交接流程由行政部负责，并负责核对交接记录。",
+        ),
+    ),
+)
+def test_explicit_passive_agent_remains_the_supported_subject(
+    source: str, claim: str
+) -> None:
+    """“由某主体负责或执行”是明确施事，不能被误判为对象偷换。"""
+    evidence, draft = _supported_draft(source, claim)
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_explicit_passive_agent_still_rejects_a_changed_subject() -> None:
+    evidence, draft = _supported_draft(
+        "交接流程由行政部负责。",
+        "品质部负责交接流程。",
+    )
 
     with pytest.raises(ValidationFailed) as error:
         validate_grounded_draft(draft, evidence)
@@ -310,6 +393,268 @@ def test_structural_role_heading_supports_body_only_duty_quote() -> None:
         evidence,
         analysis=_general_manager_duty_analysis(),
     )
+
+
+def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
+    """Word 字母列表标记不是来源主语，不能阻断认证标题主体。"""
+    source = "a）策划公司质量管理模式，制定质量方针、目标。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph(source)
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    draft = AnswerDraft(
+        text="总经理负责策划公司质量管理模式，制定质量方针、目标。",
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text="总经理负责策划公司质量管理模式，制定质量方针、目标。",
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote=source,
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft,
+        evidence,
+        analysis=_general_manager_duty_analysis(),
+    )
+
+
+@pytest.mark.parametrize(
+    "claim_text",
+    (
+        "外部采购生产通知单审核后的特殊处理：退回业务组重办。",
+        "外部采购生产通知单审核后的特殊处理包括退回业务组重办。",
+        "关于外部采购生产通知单审核后的特殊处理，退回业务组重办。",
+        "在外部采购生产通知单审核后的特殊处理中，退回业务组重办。",
+    ),
+)
+def test_exact_section_heading_can_supply_only_its_verified_context(
+    claim_text: str,
+) -> None:
+    """精确节标题可补展示语境，正文事实仍必须来自同组逐字引用。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 内容")
+            + _paragraph("4.3 外部采购生产通知单审核后的特殊处理")
+            + _paragraph("退回业务组重办。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context(
+            "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
+        ),
+    )
+    claim = AnswerClaim(
+        text=claim_text,
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="退回业务组重办。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft,
+        evidence,
+        analysis=_context(
+            "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
+        ).analysis,
+    )
+
+
+def test_verified_section_context_does_not_accept_a_changed_subject() -> None:
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 内容")
+            + _paragraph("4.3 特殊处理")
+            + _paragraph("退回业务组重办。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("特殊处理具体有哪些要求？"),
+    )
+    claim = AnswerClaim(
+        text="相邻部门包括退回业务组重办。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="退回业务组重办。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(
+            draft,
+            evidence,
+            analysis=_context("特殊处理具体有哪些要求？").analysis,
+        )
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_leading_presentation_number_is_not_a_factual_quantity() -> None:
+    evidence, draft = _supported_draft(
+        "员工轻伤的损失工作日低于 15 天。",
+        "1. 员工轻伤的损失工作日低于 15 天。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "source,claim",
+    [
+        (
+            "协助总经理制定并落实各部门的质量方针和质量目标。",
+            "行政部协助总经理制定并落实各部门的质量方针和质量目标。",
+        ),
+        (
+            "负责贯彻总经理的各项决策，协调各部门工作，并对总经理负责。",
+            "行政部负责贯彻总经理的各项决策，协调各部门工作，并对总经理负责。",
+        ),
+    ],
+)
+def test_department_subject_does_not_absorb_manager_object(
+    source: str, claim: str
+) -> None:
+    """行政部是主语，总经理作为协助或负责对象时不能被提升为主语。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.3 行政部")
+            + _paragraph(source)
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("行政部负责什么"),
+    )
+    draft = AnswerDraft(
+        text=claim,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text=claim,
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote=source,
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+    analysis = QueryAnalysis(
+        original_query="行政部负责什么",
+        normalized_query="行政部负责什么",
+        semantics=QuerySemantics(
+            target="行政部",
+            relation="职责",
+            answer_type=RequestedAnswerType.DUTIES,
+            source="RULE",
+        ),
+        conversation_fingerprint=canonical_sha256({"conversation": []}),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_embedded_agent_cannot_hide_behind_a_valid_leading_subject() -> None:
+    """同一分句由另一个对象承接职责时，仍须核验该显式施事。"""
+    evidence, draft = _supported_draft(
+        "甲部门负责归档并销毁记录。",
+        "甲部门负责归档并由乙部门负责销毁记录。",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_structural_role_binds_omitted_claim_subject_without_repair() -> None:
+    """模型省略主语时，只允许认证标题确定主体并由服务端明确展示。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    claim = AnswerClaim(
+        text="主持质量评审。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="主持质量评审。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_general_manager_duty_analysis(),
+    )
+
+    assert outcome.answer == "总经理：主持质量评审。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert generator.generate.call_count == 1
 
 
 def test_structural_role_rejects_explicit_conflicting_body_subject() -> None:
@@ -435,6 +780,69 @@ def test_structural_duty_claim_streams_without_repair() -> None:
     assert requests[0].repair_reason is None
 
 
+def test_structural_duty_omitted_subject_streams_bound_target() -> None:
+    """流式路径在发布前绑定认证主体，并与最终草稿保持一致。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    raw_claim = AnswerClaim(
+        text="主持质量评审。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="主持质量评审。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=raw_claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(raw_claim,),
+        generation_mode="llm",
+    )
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        del request
+        assert not cancellation.is_cancelled()
+        on_claim(raw_claim)
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_general_manager_duty_analysis(),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert [claim.text for claim in emitted] == ["总经理：主持质量评审。"]
+    assert outcome.answer == "总经理：主持质量评审。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+
+
 @pytest.mark.parametrize(
     "claim",
     ("主持生产调度会。", "生产经理主持生产调度会。"),
@@ -477,6 +885,72 @@ def test_grounded_negation_stays_bound_to_its_action_and_keeps_paraphrases(
 ) -> None:
     evidence, draft = _supported_draft(text, claim)
     validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "text,claim",
+    [
+        (
+            "文控负责按要求管理文件，发放文件要及时，准确，无误，"
+            "收发文件时要登记，没有手续文件不得发放。",
+            "文控负责按要求管理文件，发放文件要及时，准确，无误，"
+            "收发文件时要登记，没有手续文件不得发放。",
+        ),
+        (
+            "财务人员负责汇报财务状况。定期或不定期汇报财务收支，"
+            "以便领导及时决策。",
+            "财务人员负责汇报财务状况，定期或不定期汇报财务收支，"
+            "以便领导及时决策。",
+        ),
+        (
+            "生产经理负责抓好安全环保工作，确保安全生产无事故，"
+            "环保指标达标。"
+            "对生产事故要及时组织人员分析，定出防范措施。",
+            "生产经理负责抓好安全环保工作，确保安全生产无事故，"
+            "环保指标达标，并对生产事故及时组织人员分析，定出防范措施。",
+        ),
+    ],
+)
+def test_negation_alignment_uses_the_best_matching_atomic_action(
+    text: str, claim: str
+) -> None:
+    """同段其他动作的否定词不能污染当前原子动作。"""
+    evidence, draft = _supported_draft(text, claim)
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_enumeration_lead_in_does_not_hide_first_items_negation() -> None:
+    """引导句与首项合并输出时，否定仍应绑定到冒号后的原子动作。"""
+    source = (
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理:\n"
+        "(一)进入作业区未佩戴防护装备。"
+    )
+    evidence, draft = _supported_draft(
+        source,
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理: "
+        "进入作业区未佩戴防护装备。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_enumeration_lead_in_does_not_authorize_dropped_negation() -> None:
+    """拆分列举引导句不能放松首项本身的否定约束。"""
+    source = (
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理:\n"
+        "(一)进入作业区未佩戴防护装备。"
+    )
+    evidence, draft = _supported_draft(
+        source,
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理: "
+        "进入作业区佩戴防护装备。",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_NEGATION_CHANGED"
 
 
 @pytest.mark.parametrize(
@@ -621,6 +1095,140 @@ def _table_role_draft(
         claims=(AnswerClaim(text=claim, supports=supports),),
         generation_mode="llm",
     )
+
+
+def _whole_row_table_draft(
+    claim: str,
+    citations: tuple[str, ...],
+    *,
+    rows: tuple[tuple[str, ...], ...] | None = None,
+    heading_path: tuple[str, ...] = (),
+) -> tuple[tuple[EvidenceItem, ...], AnswerDraft, QueryAnalysis]:
+    """用完整行支持组构造一个只引用指定单元格的回答。"""
+    context = _context("“蔚蓝泵”对应的内容或要求是什么？")
+    candidate = _table() if rows is None else _table(rows=rows)
+    if heading_path:
+        chunk = candidate.hydrated.chunk.model_copy(
+            update={"heading_path": heading_path}
+        )
+        candidate = candidate.model_copy(
+            update={
+                "hydrated": candidate.hydrated.model_copy(
+                    update={"chunk": chunk}
+                )
+            }
+        )
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=context,
+    )
+    by_text = {item.citation_text: item for item in evidence}
+    assert set(citations) <= set(by_text)
+    supports = tuple(
+        ClaimSupport(
+            support_id=by_text[text].support_id,
+            quote=text,
+        )
+        for text in citations
+    )
+    return (
+        evidence,
+        AnswerDraft(
+            text=claim,
+            cited_evidence_ids=tuple(
+                support.support_id for support in supports
+            ),
+            claims=(AnswerClaim(text=claim, supports=supports),),
+            generation_mode="llm",
+        ),
+        context.analysis,
+    )
+
+
+def test_verified_table_column_combines_header_and_numeric_value() -> None:
+    """同一认证列的表头和值可共同证明带单位数值。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：上限温度为 63 ℃。",
+        ("蔚蓝泵", "上限温度", "63 ℃"),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_verified_table_column_does_not_lend_number_to_another_header() -> None:
+    """同一行其他列的数值也不能被换到所述属性下。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：流量为 63 ℃。",
+        ("蔚蓝泵", "流量", "上限温度", "63 ℃"),
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_NUMBER_UNSUPPORTED"
+
+
+@pytest.mark.parametrize(
+    "citations",
+    (
+        ("上限温度", "63 ℃"),
+        ("蔚蓝泵", "63 ℃"),
+    ),
+)
+def test_table_target_requires_joint_label_header_and_value(
+    citations: tuple[str, ...],
+) -> None:
+    """应用层不能只凭元数据或裸值补出表格行列关系。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：上限温度为 63 ℃。",
+        citations,
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_QUERY_TARGET_MISMATCH"
+
+
+def test_verified_table_accepts_one_character_value_with_header_unit() -> None:
+    """认证表格中的单字符值可与同列表头单位闭合，仍保留列约束。"""
+    evidence, draft, analysis = _whole_row_table_draft(
+        "蔚蓝泵：设备检测项目包括流量计，校准标准为7次/年。",
+        ("蔚蓝泵", "检测项目", "流量计", "校准次数（次/年）", "7"),
+        rows=(
+            ("机型", "检测项目", "校准次数（次/年）"),
+            ("蔚蓝泵", "流量计", "7"),
+            ("白桦泵", "压力计", "9"),
+        ),
+        heading_path=("设备检测校准标准",),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_verified_table_keeps_numeric_continuation_in_the_same_column() -> None:
+    """同一单元格逗号后的数值续项沿用本列属性，不变成无主数字。"""
+    definition = (
+        "员工轻伤（损失工作日低于 15 天）或直接损失 500 元以上，"
+        "20000 元以下"
+    )
+    evidence, draft, analysis = _whole_row_table_draft(
+        f"蔚蓝泵：事故定义为{definition}。",
+        ("蔚蓝泵", "事故定义", definition),
+        rows=(
+            ("等级", "事故定义"),
+            ("蔚蓝泵", definition),
+            ("白桦泵", "设备停机 7 天"),
+        ),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
 
 
 @pytest.mark.parametrize(
@@ -769,6 +1377,55 @@ def test_subject_and_action_cannot_be_borrowed_across_paragraphs() -> None:
     assert error.value.code == "CLAIM_SOURCE_MISMATCH"
 
 
+def test_table_row_metadata_without_real_table_cannot_join_paragraphs() -> None:
+    """内部支持标签不能把普通段落伪装成同一张表的闭合关系。"""
+    role_evidence, _ = _supported_draft("质量主管。", "质量主管。")
+    action_evidence, _ = _supported_draft("负责组织验收。", "负责组织验收。")
+    role_node = role_evidence[0].source_spans[0].node_id
+    action_node = action_evidence[0].source_spans[0].node_id
+    assert role_node is not None and action_node is not None
+    support = {
+        "answer_support": {
+            "status": "SUPPORTED",
+            "query_target": "质量主管",
+            "requested_relation_or_attribute": "对应内容",
+            "answer_type": "SECTION_SUMMARY",
+            "support_reason": "TABLE_ROW_CONTENT",
+            "supporting_span_ids": [role_node, action_node],
+        }
+    }
+    role = role_evidence[0].model_copy(
+        update={"evidence_id": "S1", "metadata": support}
+    )
+    action = action_evidence[0].model_copy(
+        update={
+            "evidence_id": "S2",
+            "document_version_id": role.document_version_id,
+            "section_id": role.section_id,
+            "metadata": support,
+        }
+    )
+    supports = (
+        ClaimSupport(support_id="S1", quote=role.citation_text),
+        ClaimSupport(support_id="S2", quote=action.citation_text),
+    )
+    draft = AnswerDraft(
+        text="质量主管负责组织验收。",
+        cited_evidence_ids=("S1", "S2"),
+        claims=(
+            AnswerClaim(
+                text="质量主管负责组织验收。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, (role, action))
+    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
+
+
 def test_uncited_role_is_not_borrowed_from_question_or_other_evidence() -> None:
     evidence, draft = _table_role_draft(
         "质量主管负责组织验收。", cite_role=False
@@ -895,6 +1552,55 @@ def test_changed_role_repairs_before_stream_publish() -> None:
     assert len(requests) == 2
     assert requests[0].repair_reason is None
     assert requests[1].repair_reason == "CLAIM_OBJECT_CHANGED"
+
+
+def test_stream_buffers_valid_prefix_until_whole_draft_is_valid() -> None:
+    """后续事实失败时，前缀不得先发布；修复后只发布终版。"""
+    evidence, valid_draft = _supported_draft(
+        "甲部门保存 14 天。", "甲部门保存 14 天。"
+    )
+    _, invalid_draft = _supported_draft(
+        "甲部门保存 14 天。", "甲部门保存 4 天。"
+    )
+    first = valid_draft.model_copy(
+        update={
+            "text": f"{valid_draft.text}\n{invalid_draft.text}",
+            "claims": (*valid_draft.claims, *invalid_draft.claims),
+        }
+    )
+    drafts = iter((first, valid_draft))
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        del request
+        assert not cancellation.is_cancelled()
+        draft = next(drafts)
+        for claim in draft.claims:
+            on_claim(claim)
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "甲部门保存多久？",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert emitted == [valid_draft.claims[0]]
+    assert outcome.answer == "甲部门保存 14 天。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert generator.generate_stream.call_count == 2
 
 
 def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:
@@ -1071,3 +1777,35 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
     assert result.reason_code == "PROVIDER_TIMEOUT"
     assert result.published_support_ids == ()
     assert generator.generate.call_count == 1
+
+
+def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
+    None
+):
+    """已有直接支持时，生成器不再接收仅相关的宽候选。"""
+    support, draft = _supported_draft(
+        "合成设备的保管期限为 14 天。",
+        "合成设备的保管期限为 14 天。",
+    )
+    distractor, _ = _supported_draft(
+        "相邻设备由其他团队维护。",
+        "相邻设备由其他团队维护。",
+    )
+    distractor_item = distractor[0].model_copy(update={"evidence_id": "S2"})
+    broad_candidates = (*support, distractor_item)
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多少？",
+        broad_candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
+    request = generator.generate.call_args.args[0]
+    assert request.evidence == broad_candidates
+    assert request.answer_support_set == support
+    assert request.model_evidence_candidates == support

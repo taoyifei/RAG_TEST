@@ -51,6 +51,7 @@ _CONTEXT_REFERENCE = re.compile(
 _MAX_REWRITE_CHARS = 512
 _MAX_INTERPRET_FIELD_CHARS = 512
 _MAX_GROUNDED_INPUT_TOKENS = 16_384
+_MAX_GROUNDED_OUTPUT_TOKENS = 4096
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
         "AMBIGUOUS_ACTION_QUESTION_SYNTAX",
@@ -157,6 +158,8 @@ class ProductGroundedModel:
                 model=settings.generation_model,
                 egress_allowed=True,
                 max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+                max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+                json_mode="json_object",
             ),
         )
 
