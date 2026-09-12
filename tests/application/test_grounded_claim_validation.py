@@ -920,6 +920,39 @@ def test_negation_alignment_uses_the_best_matching_atomic_action(
     validate_grounded_draft(draft, evidence)
 
 
+def test_enumeration_lead_in_does_not_hide_first_items_negation() -> None:
+    """引导句与首项合并输出时，否定仍应绑定到冒号后的原子动作。"""
+    source = (
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理:\n"
+        "(一)进入作业区未佩戴防护装备。"
+    )
+    evidence, draft = _supported_draft(
+        source,
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理: "
+        "进入作业区未佩戴防护装备。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_enumeration_lead_in_does_not_authorize_dropped_negation() -> None:
+    """拆分列举引导句不能放松首项本身的否定约束。"""
+    source = (
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理:\n"
+        "(一)进入作业区未佩戴防护装备。"
+    )
+    evidence, draft = _supported_draft(
+        source,
+        "有下列情形之一者，经核实，由安全部门根据情节轻重给予处理: "
+        "进入作业区佩戴防护装备。",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_NEGATION_CHANGED"
+
+
 @pytest.mark.parametrize(
     "text,claim",
     [

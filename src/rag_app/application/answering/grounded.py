@@ -68,6 +68,10 @@ _CELSIUS_QUANTITY = re.compile(
 _TEMPORAL_FREQUENCY = re.compile(
     r"每(?:秒|分钟|小时|日|天|周|星期|月|季度|季|年|次)"
 )
+_ENUMERATION_LEAD_IN = re.compile(
+    r"下列|如下|以下|包括|包含|列举|事项|情形|行为|要求|内容|步骤|"
+    r"阶段|项目|种类"
+)
 _NEGATION = re.compile(
     r"不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
     r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
@@ -332,11 +336,31 @@ def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
     for sentence in re.split(r"[。；;！!？?\n]", text):
         normalized_sentence = _LEADING_ACTION_CONTEXT.sub("", sentence)
         subject: str | None = None
-        for clause in re.split(r"[，,]", normalized_sentence):
-            if clause.strip():
-                subject = _subject(clause) or subject
-                clauses.append((clause, subject))
+        for segment in _split_enumeration_lead_in(normalized_sentence):
+            for clause in re.split(r"[，,]", segment):
+                if clause.strip():
+                    subject = _subject(clause) or subject
+                    clauses.append((clause, subject))
     return clauses
+
+
+def _split_enumeration_lead_in(sentence: str) -> tuple[str, ...]:
+    """将列举引导句与首项拆开，同时保留时间、比例和普通标签冒号。"""
+    for match in re.finditer(r"[:：]", sentence):
+        prefix = sentence[: match.start()]
+        suffix = sentence[match.end() :]
+        if (
+            prefix.strip()
+            and suffix.strip()
+            and _ENUMERATION_LEAD_IN.search(prefix)
+            and not (
+                prefix[-1:].isdigit()
+                or suffix[:1].isdigit()
+                or suffix.startswith("//")
+            )
+        ):
+            return prefix, suffix
+    return (sentence,)
 
 
 def _standalone_subjects(text: str) -> set[str]:
