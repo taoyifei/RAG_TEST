@@ -519,6 +519,16 @@ def test_document_target_does_not_invent_an_explicit_source_qualifier() -> None:
                 RequestedAnswerType.PROCEDURE,
             ),
         ),
+        (
+            "根据《蓝熊管理制度》，“经常掌握储备情况”这项内容的完整规定是什么？",
+            (
+                "经常掌握储备情况",
+                "蓝熊管理制度",
+                None,
+                "原文内容",
+                RequestedAnswerType.SECTION_SUMMARY,
+            ),
+        ),
     ),
 )
 def test_explicit_document_scope_is_parsed_before_question_semantics(

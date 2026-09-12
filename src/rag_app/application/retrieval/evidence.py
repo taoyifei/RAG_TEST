@@ -1061,36 +1061,35 @@ def _context_supports(
                 key in table_spans.get(chunk.chunk_id, set())
                 and location is not None
             ):
+                row_nodes = grouped_row_nodes.get(
+                    (location[0], location[1]), ()
+                )
+                if (
+                    semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
+                    and semantics.relation == "对应内容"
+                    and row_nodes
+                    and target
+                ):
+                    supports[key] = AnswerSupport(
+                        status=SupportStatus.SUPPORTED,
+                        query_target=target,
+                        requested_relation_or_attribute="对应内容",
+                        answer_type=semantics.answer_type.value,
+                        support_reason="TABLE_ROW_CONTENT",
+                        supporting_span_ids=row_nodes,
+                    )
+                    continue
                 labels = headers[location[0], location[2]]
                 if len(labels) == 1:
-                    row_nodes = grouped_row_nodes.get(
-                        (location[0], location[1]), ()
+                    supports[key] = evaluate_span_support(
+                        context.analysis,
+                        chunk.citation_text[
+                            span.chunk_start_char : span.chunk_end_char
+                        ],
+                        span_id=span.node_id or "",
+                        table_relation=True,
+                        table_header=next(iter(labels)),
                     )
-                    if (
-                        semantics.answer_type
-                        is RequestedAnswerType.SECTION_SUMMARY
-                        and semantics.relation == "对应内容"
-                        and row_nodes
-                        and target
-                    ):
-                        supports[key] = AnswerSupport(
-                            status=SupportStatus.SUPPORTED,
-                            query_target=target,
-                            requested_relation_or_attribute="对应内容",
-                            answer_type=semantics.answer_type.value,
-                            support_reason="TABLE_ROW_CONTENT",
-                            supporting_span_ids=row_nodes,
-                        )
-                    else:
-                        supports[key] = evaluate_span_support(
-                            context.analysis,
-                            chunk.citation_text[
-                                span.chunk_start_char : span.chunk_end_char
-                            ],
-                            span_id=span.node_id or "",
-                            table_relation=True,
-                            table_header=next(iter(labels)),
-                        )
         neighbor = chunks.get(chunk.next_chunk_id or "")
         if neighbor is not None:
             supports.update(_linked_span_supports(context, chunk, neighbor))

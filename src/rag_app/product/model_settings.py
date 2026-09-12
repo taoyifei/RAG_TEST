@@ -158,8 +158,8 @@ class ProductModelSettings:
             "prompt": "grounded-chat-v4",
             "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
-            "validation": "claim-support-v12",
-            "answer_selection": "shared-query-semantics-v5",
+            "validation": "claim-support-v13",
+            "answer_selection": "shared-query-semantics-v6",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

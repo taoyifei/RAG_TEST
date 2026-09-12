@@ -1024,6 +1024,23 @@ def test_source_scoped_quoted_explanation_accepts_the_exact_source_clause() -> (
     assert [item.citation_text for item in evidence] == [selected]
 
 
+def test_source_scoped_quoted_anchor_returns_its_complete_clause() -> None:
+    selected = "库管员应经常掌握储备情况，及时提出补充计划。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph(selected),
+            display_name="蓝熊仓库管理制度.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊仓库管理制度》，"
+            "“经常掌握储备情况”这项内容的完整规定是什么？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
+
+
 def test_source_scoped_table_row_returns_all_non_label_cells() -> None:
     values = ("扣减两分。", "三个工作日内整改。", "保留复核记录。")
     blocks = (
@@ -1064,6 +1081,48 @@ def test_source_scoped_table_row_returns_all_non_label_cells() -> None:
     )
     assert all(
         len(item["supporting_span_ids"]) == len(values) for item in supports
+    )
+
+
+def test_source_scoped_table_row_accepts_a_title_before_the_header() -> None:
+    values = ("毛玉洁", "2025.09.10", "更新测试流程")
+    blocks = (
+        "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/>"
+        "<w:gridCol/></w:tblGrid><w:tr><w:tc>"
+        + _paragraph("版本修订记录")
+        + "</w:tc><w:tc></w:tc><w:tc></w:tc><w:tc></w:tc></w:tr>"
+        "<w:tr><w:tc>"
+        + _paragraph("版本号")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订人")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订日期")
+        + "</w:tc><w:tc>"
+        + _paragraph("修订说明")
+        + "</w:tc></w:tr><w:tr><w:tc>"
+        + _paragraph("1.1.0")
+        + "</w:tc><w:tc>"
+        + _paragraph(values[0])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[1])
+        + "</w:tc><w:tc>"
+        + _paragraph(values[2])
+        + "</w:tc></w:tr></w:tbl>"
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        _candidates(blocks, display_name="蓝熊测试手册.docx"),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊测试手册》，“1.1.0”对应的内容或要求是什么？"
+        ),
+    )
+
+    assert {item.citation_text for item in evidence} == set(values)
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "TABLE_ROW_CONTENT"
+        for item in evidence
     )
 
 

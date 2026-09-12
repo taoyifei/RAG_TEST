@@ -124,6 +124,11 @@ _QUOTED_TOPIC_EXPLANATION = re.compile(
     r"(?:作了|给出|进行了|有)?(?:什么|哪些|怎样的)?"
     r"(?:具体)?(?:说明|规定|描述)$"
 )
+_QUOTED_CONTENT_REQUEST = re.compile(
+    r"^[“\"](?P<target>[^”\"]{1,600})[”\"]"
+    r"(?:这项|这一项)?内容的(?:完整)?(?:规定|说明|原文)"
+    r"(?:是|为)?(?:什么|啥)$"
+)
 _GENERAL_REQUIREMENTS = re.compile(
     r"^(?P<target>.+?)(?:具体)?(?:都)?(?:有|包含)?哪些要求$"
 )
@@ -316,6 +321,17 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
             answer_type=RequestedAnswerType.SECTION_SUMMARY,
             source="RULE",
             reason_codes=("QUOTED_TOPIC_EXPLANATION_SYNTAX",),
+        )
+
+    content_request = _QUOTED_CONTENT_REQUEST.fullmatch(core)
+    if content_request is not None:
+        return QuerySemantics(
+            target=_clean_target(content_request["target"], duty=False),
+            source_qualifier=explicit_source,
+            relation="原文内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("QUOTED_CONTENT_REQUEST_SYNTAX",),
         )
 
     general_requirements = _GENERAL_REQUIREMENTS.fullmatch(core)
