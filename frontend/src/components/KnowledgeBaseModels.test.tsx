@@ -122,6 +122,7 @@ it("明确区分本地确定性检索，并由管理员一次批准当前活动�
     model_authorization_state: "MISSING",
     budget_state: "MISSING",
     required_operations: ["generation", "query.interpret", "query.rewrite"],
+    pending_operations: [],
     fallback_reason_codes: ["CORPUS_AUTHORIZATION_MISSING"],
   };
   vi.spyOn(api, "modelSettings").mockResolvedValue({
@@ -196,4 +197,99 @@ it("明确区分本地确定性检索，并由管理员一次批准当前活动�
     }),
   );
   expect(await screen.findByText(/已批准当前版本/)).toBeVisible();
+});
+
+it("远程图片识别待选图时只批准问答用途并给出后续入口", async () => {
+  const user = userEvent.setup();
+  const missing: CorpusAuthorizationStatus = {
+    corpus_authorization_state: "MISSING",
+    model_configuration_state: "CONFIGURED",
+    model_authorization_state: "MISSING",
+    budget_state: "MISSING",
+    required_operations: ["generation", "query.interpret", "query.rewrite"],
+    pending_operations: ["image.ocr"],
+    fallback_reason_codes: ["CORPUS_AUTHORIZATION_MISSING"],
+  };
+  vi.spyOn(api, "modelSettings").mockResolvedValue({
+    ...settings,
+    generation_connection_id: "conn_test",
+    generation_model: "qwen3.7-flash",
+    rewrite_enabled: true,
+    ocr_connection_id: "conn_test",
+    ocr_model: "qwen3.5-ocr",
+    ocr_enabled: true,
+    corpus_authorization: missing,
+  });
+  const approved: CorpusAuthorizationStatus = {
+    ...missing,
+    corpus_authorization_state: "APPROVED",
+    model_authorization_state: "APPROVED",
+    budget_state: "AVAILABLE",
+    fallback_reason_codes: [],
+    manifest: {
+      manifest_id: `cauth_${"a".repeat(32)}`,
+      project_id: `prj_${"b".repeat(32)}`,
+      knowledge_base_id: `kb_${"c".repeat(32)}`,
+      active_index_revision_id: `irev_${"d".repeat(32)}`,
+      active_document_digest: `sha256:${"e".repeat(64)}`,
+      active_document_count: 2,
+      provider_connection_id: "conn_test",
+      provider_model: "qwen3.7-flash",
+      operation_binding_identity: `sha256:${"f".repeat(64)}`,
+      operations: ["generation", "query.interpret", "query.rewrite"],
+      authorization_id: "synthetic-authorization",
+      budget_campaign_id: "synthetic-budget",
+      created_at: "2030-01-01T00:00:00+00:00",
+      expires_at: "2030-02-01T00:00:00+00:00",
+      policy_revision: "corpus-authorization-v1",
+      approved_by_session_id: "sess_test",
+    },
+  };
+  const approve = vi
+    .spyOn(api, "approveCorpusAuthorization")
+    .mockResolvedValue(approved);
+
+  render(<KnowledgeBaseModels kbId="kb_test" />);
+  expect(
+    await screen.findByText(/图片识别已启用，但尚未选择具体图片/),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "批准当前活动资料" }));
+  expect(
+    screen.getByText(/本次批准不包含图片识别/),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/本次用途：回答生成、问题意图解释、问题改写/),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "确认批准当前版本" }));
+  await waitFor(() => expect(approve).toHaveBeenCalledTimes(1));
+  expect(approve.mock.calls[0][1].operations).toEqual([
+    "generation",
+    "query.interpret",
+    "query.rewrite",
+  ]);
+});
+
+it("只有远程图片识别且尚未选图时不展示无效批准按钮", async () => {
+  vi.spyOn(api, "modelSettings").mockResolvedValue({
+    ...settings,
+    ocr_connection_id: "conn_test",
+    ocr_model: "qwen3.5-ocr",
+    ocr_enabled: true,
+    corpus_authorization: {
+      corpus_authorization_state: "NOT_REQUIRED",
+      model_configuration_state: "NOT_CONFIGURED",
+      model_authorization_state: "NOT_REQUIRED",
+      budget_state: "NOT_REQUIRED",
+      required_operations: [],
+      pending_operations: ["image.ocr"],
+      fallback_reason_codes: [],
+    },
+  });
+
+  render(<KnowledgeBaseModels kbId="kb_test" />);
+  expect(await screen.findByText(/图片识别待选择图片/)).toBeVisible();
+  expect(screen.getByText(/请在下方文档行打开“图片识别”/)).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "批准当前活动资料" }),
+  ).not.toBeInTheDocument();
 });

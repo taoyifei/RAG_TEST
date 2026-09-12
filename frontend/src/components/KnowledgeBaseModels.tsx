@@ -70,6 +70,12 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
                 {authorizationLabel(settings.corpus_authorization)}
               </p>
             )}
+            {settings?.corpus_authorization &&
+              pendingOcrSelection(settings.corpus_authorization) && (
+                <p role="status">
+                  图片识别已启用，但尚未选择具体图片。请在下方文档行打开“图片识别”选择；当前可先批准问答用途。
+                </p>
+              )}
           </div>
           <div className="row-actions">
             {settings?.retrieval_data_plane?.retrieval_data_plane ===
@@ -145,12 +151,23 @@ function authorizationReady(status: CorpusAuthorizationStatus): boolean {
   );
 }
 
+function pendingOcrSelection(status: CorpusAuthorizationStatus): boolean {
+  return (status.pending_operations ?? []).includes("image.ocr");
+}
+
 function authorizationLabel(status: CorpusAuthorizationStatus): string {
-  if (status.required_operations.length === 0) return "当前配置不需要出网批准";
+  if (status.required_operations.length === 0) {
+    return pendingOcrSelection(status)
+      ? "图片识别待选择图片，当前没有可批准的远程用途"
+      : "当前配置不需要出网批准";
+  }
   if (authorizationReady(status)) {
-    return `已批准当前版本，有效至 ${new Date(
+    const approved = `已批准当前版本，有效至 ${new Date(
       status.manifest?.expires_at ?? "",
     ).toLocaleString()}`;
+    return pendingOcrSelection(status)
+      ? `${approved}；图片识别待选择图片`
+      : approved;
   }
   const labels: Record<string, string> = {
     MISSING: "尚未批准当前活动语料",
@@ -224,6 +241,11 @@ function AuthorizationEditor({
         <p role="status">
           本次用途：{status.required_operations.map(operationLabel).join("、")}
         </p>
+        {pendingOcrSelection(status) && (
+          <p role="status">
+            图片识别尚未选择具体图片，本次批准不包含图片识别。请在下方文档行选择图片后，再批准新增用途。
+          </p>
+        )}
         <label>
           有效天数
           <input
@@ -453,7 +475,7 @@ function ModelEditor({
           启用文档图片识别
         </label>
         <p>
-          模型设置保存后，请回到知识库卡片明确批准当前活动资料；浏览器不需要管理
+          回答模型保存后可批准当前问答用途。启用远程图片识别时，请先在下方文档行打开“图片识别”选择具体图片，再批准新增的图片识别用途；浏览器不需要管理
           source hash。
         </p>
         {error !== undefined && <ErrorPanel error={error} />}

@@ -317,6 +317,126 @@ def test_all_corpus_operations_keep_a_stable_binding_identity(
         harness.close()
 
 
+def test_remote_ocr_without_selected_media_does_not_block_qa_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """远程 OCR 待选图时只批准当前可执行的问答用途。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _grounded_response(request)
+
+    harness = build_product_harness(
+        tmp_path,
+        transport_factory=lambda _: httpx.MockTransport(respond),
+    )
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, _, aliyun_connection_id = create_provider_connections(harness)
+        saved = harness.client.put(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+            headers=harness.write_headers,
+            json={
+                "generation_connection_id": aliyun_connection_id,
+                "generation_model": "qwen3.7-flash",
+                "rewrite_enabled": True,
+                "ocr_connection_id": aliyun_connection_id,
+                "ocr_model": "qwen3.5-ocr",
+                "ocr_enabled": True,
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        authorization = saved.json()["corpus_authorization"]
+        assert authorization["model_configuration_state"] == "CONFIGURED"
+        assert authorization["required_operations"] == [
+            "generation",
+            "query.interpret",
+            "query.rewrite",
+        ]
+        assert authorization["pending_operations"] == ["image.ocr"]
+        assert not requests
+
+        operations = authorization["required_operations"]
+        approved = harness.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+            "corpus-authorization:approve",
+            headers=harness.write_headers,
+            json={
+                "operations": operations,
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 6,
+                "estimated_token_limit": 20_000,
+                "operation_request_limits": dict.fromkeys(operations, 2),
+            },
+        )
+
+        assert approved.status_code == 200, approved.text
+        approved_status = approved.json()
+        assert approved_status["model_authorization_state"] == "APPROVED"
+        assert approved_status["budget_state"] == "AVAILABLE"
+        assert approved_status["manifest"]["operations"] == operations
+        assert approved_status["pending_operations"] == ["image.ocr"]
+        campaign = ProviderBudgetLedger(
+            harness.runtime.data_dir / "provider-budget.sqlite3",
+            read_only=True,
+        ).campaign(approved_status["manifest"]["budget_campaign_id"])
+        assert campaign.approved_media_hashes == ()
+        assert not requests
+
+        generated = harness.client.post(
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer",
+            headers=harness.write_headers,
+            json={"query": "设备 MX-41 的维护周期是多少？"},
+        )
+        assert generated.status_code == 200, generated.text
+        assert generated.json()["generation_called_this_request"] is True
+        assert generated.json()["generation_mode"] == "llm"
+        assert len(requests) == 1
+
+        ocr_only = harness.client.put(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+            headers=harness.write_headers,
+            json={
+                "ocr_connection_id": aliyun_connection_id,
+                "ocr_model": "qwen3.5-ocr",
+                "ocr_enabled": True,
+            },
+        )
+        assert ocr_only.status_code == 200, ocr_only.text
+        ocr_status = ocr_only.json()["corpus_authorization"]
+        assert ocr_status["corpus_authorization_state"] == "NOT_REQUIRED"
+        assert ocr_status["required_operations"] == []
+        assert ocr_status["pending_operations"] == ["image.ocr"]
+
+        rejected = harness.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+            "corpus-authorization:approve",
+            headers=harness.write_headers,
+            json={
+                "operations": ["image.ocr"],
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 1,
+                "estimated_token_limit": 1_000,
+                "operation_request_limits": {"image.ocr": 1},
+            },
+        )
+        assert rejected.status_code == 409, rejected.text
+        assert "尚未选择可批准的媒体" in rejected.text
+        assert len(requests) == 1
+    finally:
+        harness.close()
+
+
 def test_local_data_plane_is_persisted_in_history_and_safe_trace(
     tmp_path: Path,
 ) -> None:

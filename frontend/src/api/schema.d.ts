@@ -1637,6 +1637,12 @@ export interface components {
              */
             model_configuration_state: "NOT_CONFIGURED" | "CONFIGURED" | "INVALID";
             /**
+             * Pending Operations
+             * @description 已启用但尚未形成可批准数据范围的远程用途。
+             * @default []
+             */
+            pending_operations: ("generation" | "query.interpret" | "query.rewrite" | "image.ocr")[];
+            /**
              * Required Operations
              * @default []
              */
