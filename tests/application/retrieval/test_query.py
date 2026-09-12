@@ -548,6 +548,34 @@ def test_explicit_document_scope_is_parsed_before_question_semantics(
     assert semantics.source == "RULE"
 
 
+def test_source_label_signals_do_not_become_answer_constraints() -> None:
+    analysis = _analyze("根据《GM-09仓库管理制度》，出库领发具体有哪些要求？")
+
+    assert analysis.identifiers == ()
+    assert analysis.numbers == ()
+    assert all(
+        constraint.raw_text not in {"GM-09", "09"}
+        for constraint in analysis.semantics.constraints
+    )
+    assert "SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS" in analysis.reason_codes
+
+
+def test_answer_body_signals_remain_constraints_after_source_scope() -> None:
+    analysis = _analyze(
+        "根据《GM-09仓库管制度》，“ABC-123”的保管期限是否超过 3 年？"
+    )
+
+    assert analysis.identifiers == ("ABC-123",)
+    assert "3" in analysis.numbers
+    assert "09" not in analysis.numbers
+    assert {
+        constraint.raw_text for constraint in analysis.semantics.constraints
+    } >= {
+        "ABC-123",
+        "3",
+    }
+
+
 def test_duty_question_preserves_leading_project_context() -> None:
     semantics = _analyze(
         "做蓝熊交付项目时，测试负责人平时主要管哪些事？"

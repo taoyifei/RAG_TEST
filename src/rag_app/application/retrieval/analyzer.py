@@ -6,7 +6,10 @@ import hashlib
 import re
 import unicodedata
 
-from rag_app.application.retrieval.semantics import parse_query_semantics
+from rag_app.application.retrieval.semantics import (
+    parse_query_semantics,
+    split_explicit_source_scope,
+)
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     ConstraintKind,
@@ -91,25 +94,29 @@ class QueryAnalyzer:
         normalized = " ".join(
             unicodedata.normalize("NFKC", request.text).strip().split()
         )
-        folded = normalized.casefold()
+        _, _semantic_body, semantic_start = split_explicit_source_scope(
+            normalized
+        )
+        signal_text = normalized[semantic_start:]
+        folded = signal_text.casefold()
         identifiers = tuple(
             dict.fromkeys(
                 match.group(0).strip()
                 for pattern in (_IDENTIFIER, _STANDARD)
-                for match in pattern.finditer(normalized)
+                for match in pattern.finditer(signal_text)
                 if not _looks_like_phone(match.group(0))
             )
         )
         quoted = tuple(
             dict.fromkeys(
                 match.group(1).strip()
-                for match in _QUOTED.finditer(normalized)
+                for match in _QUOTED.finditer(signal_text)
                 if match.group(1).strip()
             )
         )
-        numbers = tuple(dict.fromkeys(_NUMBER.findall(normalized)))
-        units = tuple(dict.fromkeys(_UNITS.findall(normalized)))
-        dates = tuple(dict.fromkeys(_DATE_VERSION.findall(normalized)))
+        numbers = tuple(dict.fromkeys(_NUMBER.findall(signal_text)))
+        units = tuple(dict.fromkeys(_UNITS.findall(signal_text)))
+        dates = tuple(dict.fromkeys(_DATE_VERSION.findall(signal_text)))
         structural = tuple(term for term in _TABLE_TERMS if term in folded)
         negations = tuple(term for term in _NEGATIONS if term in folded)
         language: list[str] = []
@@ -126,6 +133,8 @@ class QueryAnalyzer:
             reason_codes.append("TABLE_SIGNAL")
         if negations:
             reason_codes.append("NEGATION_PRESERVED")
+        if semantic_start:
+            reason_codes.append("SOURCE_SCOPE_EXCLUDED_FROM_CONSTRAINTS")
         conversation = tuple(
             {
                 "sha256": hashlib.sha256(turn.encode("utf-8")).hexdigest(),
@@ -133,7 +142,11 @@ class QueryAnalyzer:
             }
             for turn in request.conversation_context[-8:]
         )
-        constraints = _query_constraints(normalized)
+        constraints = tuple(
+            constraint
+            for constraint in _query_constraints(normalized)
+            if constraint.start_char >= semantic_start
+        )
         semantics = parse_query_semantics(normalized).model_copy(
             update={"constraints": constraints}
         )

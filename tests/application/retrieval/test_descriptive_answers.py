@@ -1005,6 +1005,25 @@ def test_source_scoped_restriction_requires_target_in_the_clause() -> None:
     assert [item.citation_text for item in evidence] == [selected]
 
 
+def test_source_scoped_quoted_explanation_accepts_the_exact_source_clause() -> (
+    None
+):
+    selected = "注：品质部为公司质量管理部门。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph(selected),
+            display_name="GM-01 质量管理机构图.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《GM-01 质量管理机构图》，"
+            "文档对“注：品质部为公司质量管理部门”作了什么具体说明？"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
+
+
 def test_source_scoped_table_row_returns_all_non_label_cells() -> None:
     values = ("扣减两分。", "三个工作日内整改。", "保留复核记录。")
     blocks = (

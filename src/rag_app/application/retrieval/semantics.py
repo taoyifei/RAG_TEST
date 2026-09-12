@@ -118,6 +118,12 @@ _QUOTED_TOPIC_REQUIREMENTS = re.compile(
     r"(?:什么|哪些|怎样的)(?P<restriction>禁止或限制性|禁止性|限制性)?"
     r"要求$"
 )
+_QUOTED_TOPIC_EXPLANATION = re.compile(
+    r"^(?:(?:文档|资料|原文)(?:中)?(?:对|关于)\s*)"
+    r"[“\"](?P<target>[^”\"]{1,600})[”\"]"
+    r"(?:作了|给出|进行了|有)?(?:什么|哪些|怎样的)?"
+    r"(?:具体)?(?:说明|规定|描述)$"
+)
 _GENERAL_REQUIREMENTS = re.compile(
     r"^(?P<target>.+?)(?:具体)?(?:都)?(?:有|包含)?哪些要求$"
 )
@@ -200,7 +206,9 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
 
     """
     normalized = unicodedata.normalize("NFKC", query).strip()
-    explicit_source, normalized = _explicit_source_scope(normalized)
+    explicit_source, normalized, _body_start = split_explicit_source_scope(
+        normalized
+    )
     core = _question_core(normalized)
 
     fact_core = _FACT_QUESTION_END.sub("", core).strip()
@@ -297,6 +305,17 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
             answer_type=RequestedAnswerType.SECTION_SUMMARY,
             source="RULE",
             reason_codes=("TOPIC_REQUIREMENTS_QUESTION_SYNTAX",),
+        )
+
+    topic_explanation = _QUOTED_TOPIC_EXPLANATION.fullmatch(core)
+    if topic_explanation is not None:
+        return QuerySemantics(
+            target=_clean_target(topic_explanation["target"], duty=False),
+            source_qualifier=explicit_source,
+            relation="原文内容",
+            answer_type=RequestedAnswerType.SECTION_SUMMARY,
+            source="RULE",
+            reason_codes=("QUOTED_TOPIC_EXPLANATION_SYNTAX",),
         )
 
     general_requirements = _GENERAL_REQUIREMENTS.fullmatch(core)
@@ -543,23 +562,26 @@ def _fallback_semantics(
     )
 
 
-def _explicit_source_scope(value: str) -> tuple[str | None, str]:
+def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
     """从书名号边界提取显式来源，并仅解析其后的实际问题。
 
     Args:
         value: 已完成 NFKC 规范化的完整问题。
 
     Returns:
-        动态来源标签与去除来源语法后的实际问题；未命中时保留原文。
+        动态来源标签、实际问题及它在原文中的起始位置；
+        未命中时保留原文并返回零偏移。
 
     """
     candidate = _LEADING_REQUEST.sub("", value.strip()).strip()
     match = _EXPLICIT_SOURCE_SCOPE.fullmatch(candidate)
     if match is None:
-        return None, value
+        return None, value, 0
     source = (match["based_on"] or match["within"]).strip(" 的")
     body = match["body"].strip()
-    return (source or None), body
+    candidate_start = value.find(candidate)
+    body_start = candidate_start + match.start("body")
+    return (source or None), body, body_start
 
 
 def _clean_target(value: str, *, duty: bool) -> str:
@@ -682,4 +704,8 @@ def _number_value(value: str) -> int | None:
     return digits.get(value)
 
 
-__all__ = ["parse_query_semantics", "source_qualifier_matches"]
+__all__ = [
+    "parse_query_semantics",
+    "source_qualifier_matches",
+    "split_explicit_source_scope",
+]

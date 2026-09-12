@@ -676,6 +676,8 @@ def _descriptive_clause_supports(  # noqa: PLR0911
         )
     if answer_type == "SECTION_SUMMARY":
         remainder = clause.replace(target, "", 1).strip(" ：:")
+        if relation == "原文内容":
+            return _target_matches(target, clause, strict=True)
         return _target_matches(target, clause, strict=True) and bool(
             re.search(
                 r"(?:规定|要求|包括|包含|说明|应当|必须|禁止|不得|"
