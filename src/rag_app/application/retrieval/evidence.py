@@ -549,6 +549,20 @@ def _table_intersections(  # noqa: PLR0912
             selected_values.update(values)
         if not selected_values:
             continue
+        # “对应内容”不是一组失去语义的裸值：行名证明所问对象，最近的
+        # 完整前置表头证明每个值的列含义。标题行可以位于表头之前。
+        if whole_row:
+            selected_values.update(cells.get((row, 0), {}))
+            header_rows = {
+                cell_row
+                for cell_row, _column in cells
+                if cell_row < row
+                and all(cells.get((cell_row, column)) for column in columns)
+            }
+            if header_rows:
+                header_row = max(header_rows)
+                for column in columns:
+                    selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
             selected.setdefault(chunk_id, set()).update(selected_values)
     return selected
@@ -1018,9 +1032,17 @@ def _context_supports(
     chunks = {
         item.hydrated.chunk.chunk_id: item.hydrated.chunk for item in candidates
     }
-    table_row_nodes: dict[tuple[_TableKey, int], list[tuple[int, int, str]]] = (
-        defaultdict(list)
+    whole_row_relation = (
+        semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
+        and semantics.relation == "对应内容"
+        and bool(target)
     )
+    table_row_nodes: dict[
+        tuple[_TableKey, int], list[tuple[int, int, int, str]]
+    ] = defaultdict(list)
+    table_relation_nodes: dict[
+        _TableKey, list[tuple[int, int, int, str]]
+    ] = defaultdict(list)
     for chunk in chunks.values():
         for span in chunk.source_spans:
             location = _table_location(chunk, span)
@@ -1036,22 +1058,34 @@ def _context_supports(
                 and key in table_spans.get(chunk.chunk_id, set())
                 and span.node_id
             ):
-                table_row_nodes[location[0], location[1]].append(
-                    (
-                        location[2],
-                        -1
-                        if span.source_start_char is None
-                        else span.source_start_char,
-                        span.node_id,
-                    )
+                located_node = (
+                    location[1],
+                    location[2],
+                    -1
+                    if span.source_start_char is None
+                    else span.source_start_char,
+                    span.node_id,
                 )
+                table_row_nodes[location[0], location[1]].append(located_node)
+                if whole_row_relation:
+                    table_relation_nodes[location[0]].append(located_node)
     grouped_row_nodes = {
         group: tuple(
             dict.fromkeys(
-                node_id for _column, _source_start, node_id in sorted(nodes)
+                node_id
+                for _row, _column, _source_start, node_id in sorted(nodes)
             )
         )
         for group, nodes in table_row_nodes.items()
+    }
+    grouped_relation_nodes = {
+        table_key: tuple(
+            dict.fromkeys(
+                node_id
+                for _row, _column, _source_start, node_id in sorted(nodes)
+            )
+        )
+        for table_key, nodes in table_relation_nodes.items()
     }
     for chunk in chunks.values():
         for span in chunk.source_spans:
@@ -1061,12 +1095,13 @@ def _context_supports(
                 key in table_spans.get(chunk.chunk_id, set())
                 and location is not None
             ):
-                row_nodes = grouped_row_nodes.get(
-                    (location[0], location[1]), ()
+                row_nodes = (
+                    grouped_relation_nodes.get(location[0], ())
+                    if whole_row_relation
+                    else grouped_row_nodes.get((location[0], location[1]), ())
                 )
                 if (
-                    semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
-                    and semantics.relation == "对应内容"
+                    whole_row_relation
                     and row_nodes
                     and target
                 ):

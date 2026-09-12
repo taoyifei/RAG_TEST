@@ -42,6 +42,7 @@ from rag_app.core.query_text import (
     context_label_variants,
     normalize_document_label,
     normalize_identifier,
+    normalize_section_heading_label,
     select_unique_label_owner,
 )
 
@@ -370,6 +371,50 @@ class SqliteFtsStore:
                 )
             parsed = _parse_structural_rows(rows)
             anchor_ids = _structural_document_anchor_ids(parsed, request)
+            if len(anchor_ids) == 1:
+                # 显式来源已经唯一定位文档后，改用对象/关系在该文档内
+                # 再检索一次。否则文件名位于每个 FTS 行的 title 字段，
+                # 大文档前部大量短块会淹没后部的短标题（如“预期”）。
+                document_id = next(iter(anchor_ids))
+                scoped_text = " ".join(
+                    value
+                    for value in (
+                        request.target,
+                        *context_variants,
+                        request.relation,
+                    )
+                    if value
+                )
+                scoped_expression = self._query_expression(scoped_text, table)
+                if scoped_expression:
+                    scoped_rows = connection.execute(
+                        "SELECT c.chunk_json, d.display_name, "  # noqa: S608
+                        f"bm25({table}, 0.0, 0.0, 0.0, "
+                        "4.0, 3.0, 6.0, 1.0) AS lexical_rank "
+                        f"FROM {table} JOIN chunks c "
+                        f"ON c.row_id={table}.rowid "
+                        "JOIN index_revisions r "
+                        "ON r.index_revision_id=c.revision_id "
+                        "JOIN documents d ON d.document_id=c.document_id "
+                        f"WHERE {table} MATCH ? AND c.revision_id=? "
+                        "AND c.document_id=? AND r.project_id=? "
+                        "AND r.knowledge_base_id=? AND d.deleted_at IS NULL "
+                        "AND d.lifecycle_status='active' "
+                        "ORDER BY lexical_rank ASC, c.chunk_id ASC LIMIT ?",
+                        (
+                            scoped_expression,
+                            revision.index_revision_id,
+                            document_id,
+                            revision.project_id,
+                            revision.knowledge_base_id,
+                            scan_limit,
+                        ),
+                    ).fetchall()
+                    rows = [*scoped_rows, *rows]
+                    parsed = _parse_structural_rows(rows)
+                    anchor_ids = _structural_document_anchor_ids(
+                        parsed, request
+                    )
             remaining = _STRUCTURAL_SCAN_CAP - len(parsed)
             if len(anchor_ids) == 1 and remaining > 0:
                 document_id = next(iter(anchor_ids))
@@ -484,6 +529,7 @@ class SqliteFtsStore:
                 request,
                 document_target_match=(
                     unique_anchor is not None
+                    and request.source_qualifier is None
                     and chunk.version.document_id == unique_anchor
                 ),
                 table_closure=_chunk_in_table_closure(
@@ -1105,7 +1151,12 @@ def _structural_table_closure_rows(
             RequestedAnswerType.DEFINITION,
             RequestedAnswerType.DUTIES,
             RequestedAnswerType.RESPONSIBLE_PARTY,
+            RequestedAnswerType.SECTION_SUMMARY,
         }
+        or (
+            request.answer_type is RequestedAnswerType.SECTION_SUMMARY
+            and request.relation != "对应内容"
+        )
         or not request.target
     ):
         return {}
@@ -1183,7 +1234,9 @@ def _chunk_in_table_closure(
     if chunk.parent_node_id not in closure_rows:
         return False
     rows = _chunk_table_row_indices(chunk)
-    return 0 in rows or bool(rows & closure_rows[chunk.parent_node_id])
+    target_rows = closure_rows[chunk.parent_node_id]
+    preceding_rows = {max(0, row - 1) for row in target_rows}
+    return bool(rows & ({0, *preceding_rows} | set(target_rows)))
 
 
 def _structural_stage_group(
@@ -1256,6 +1309,11 @@ def _structural_score(
     target_display = _structural_contains(request.target, display_name)
     target_document = target_display or document_target_match
     target_heading = _structural_contains(request.target, heading)
+    normalized_target = normalize_section_heading_label(request.target or "")
+    target_heading_exact = bool(normalized_target) and any(
+        normalize_section_heading_label(item) == normalized_target
+        for item in chunk.heading_path
+    )
     target_body = _structural_contains(request.target, searchable)
     context_variants = context_label_variants(request.context_qualifier or "")
     context_heading = any(
@@ -1296,6 +1354,7 @@ def _structural_score(
         8.0 * float(source_match)
         + 8.0 * float(target_document)
         + 7.0 * float(target_heading)
+        + 12.0 * float(target_heading_exact)
         + 4.0 * float(target_body)
         + 10.0 * float(context_heading)
         + 7.0 * float(context_body)

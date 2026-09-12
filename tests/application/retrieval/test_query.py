@@ -447,6 +447,19 @@ def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
             "章节内容",
             RequestedAnswerType.SECTION_SUMMARY,
         ),
+        (
+            "根据《蓝熊岗位规范》，生产经理具体有哪些要求？",
+            "生产经理",
+            "职责",
+            RequestedAnswerType.DUTIES,
+        ),
+        (
+            "根据《蓝熊质量制度》，请补全条款中的数值："
+            "“（二）每月____前由检验部检查改善”",
+            "前由检验部检查改善",
+            "原文内容",
+            RequestedAnswerType.SECTION_SUMMARY,
+        ),
     ),
 )
 def test_analyzer_supports_general_typed_question_semantics(

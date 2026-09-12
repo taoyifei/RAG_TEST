@@ -1041,7 +1041,7 @@ def test_source_scoped_quoted_anchor_returns_its_complete_clause() -> None:
     assert [item.citation_text for item in evidence] == [selected]
 
 
-def test_source_scoped_table_row_returns_all_non_label_cells() -> None:
+def test_source_scoped_table_row_closes_headers_label_and_values() -> None:
     values = ("扣减两分。", "三个工作日内整改。", "保留复核记录。")
     blocks = (
         _heading("安全事故考核")
@@ -1073,14 +1073,15 @@ def test_source_scoped_table_row_returns_all_non_label_cells() -> None:
         ),
     )
 
-    assert {item.citation_text for item in evidence} == set(values)
-    assert len(evidence) == len(values)
+    expected = {"一般", "扣分", "处理", "记录", *values}
+    assert {item.citation_text for item in evidence} == expected
+    assert len(evidence) == len(expected)
     supports = [dict(item.metadata)["answer_support"] for item in evidence]
     assert all(
         item["support_reason"] == "TABLE_ROW_CONTENT" for item in supports
     )
     assert all(
-        len(item["supporting_span_ids"]) == len(values) for item in supports
+        len(item["supporting_span_ids"]) == len(expected) for item in supports
     )
 
 
@@ -1118,12 +1119,35 @@ def test_source_scoped_table_row_accepts_a_title_before_the_header() -> None:
         ),
     )
 
-    assert {item.citation_text for item in evidence} == set(values)
+    assert {item.citation_text for item in evidence} == {
+        "1.1.0",
+        "修订人",
+        "修订日期",
+        "修订说明",
+        *values,
+    }
     assert all(
         dict(item.metadata)["answer_support"]["support_reason"]
         == "TABLE_ROW_CONTENT"
         for item in evidence
     )
+
+
+def test_source_scoped_fill_blank_returns_complete_matching_clause() -> None:
+    selected = "（二）每月7日前由检验部检查改善。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("每月汇总一次其他记录。") + _paragraph(selected),
+            display_name="蓝熊质量制度.docx",
+        ),
+        _POLICY,
+        context=_context(
+            "根据《蓝熊质量制度》，请补全条款中的数值："
+            "“（二）每月____前由检验部检查改善”"
+        ),
+    )
+
+    assert [item.citation_text for item in evidence] == [selected]
 
 
 def test_document_purpose_prefers_shallow_scope_over_local_purpose() -> None:

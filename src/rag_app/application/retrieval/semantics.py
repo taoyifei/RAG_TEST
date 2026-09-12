@@ -132,6 +132,15 @@ _QUOTED_CONTENT_REQUEST = re.compile(
 _GENERAL_REQUIREMENTS = re.compile(
     r"^(?P<target>.+?)(?:具体)?(?:都)?(?:有|包含)?哪些要求$"
 )
+_ROLE_REQUIREMENT_TARGET = re.compile(
+    r"(?:经理|主管|负责人|专员|工程师|管理员|操作员|岗位|角色|部门|部)$"
+)
+_QUOTED_FILL_BLANK = re.compile(
+    r"^(?:补全|填写|填入|还原)(?:以下)?(?:条款|原文|句子)?"
+    r"(?:中的|里的|中|里)?(?:缺失的)?(?:数值|数字|内容|空白)?\s*[：:]?\s*"
+    r"[“\"](?P<template>[^”\"]{3,600})[”\"]$"
+)
+_BLANK = re.compile(r"_{2,}|＿{2,}|(?:□\s*){2,}|…{2,}|\[\s*\]")
 _DEFINITION_PREFIX = re.compile(r"^(?:什么|啥)是(?P<target>.+)$")
 _DEFINITION_SUFFIX = re.compile(
     r"^(?P<target>.+?)(?:(?:说白了|简单来说|通俗地说)?"
@@ -215,6 +224,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         normalized
     )
     core = _question_core(normalized)
+
+    fill_blank = _QUOTED_FILL_BLANK.fullmatch(core)
+    if fill_blank is not None:
+        target = _fill_blank_anchor(fill_blank["template"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=explicit_source,
+                relation="原文内容",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source="RULE",
+                reason_codes=("QUOTED_FILL_BLANK_SYNTAX",),
+            )
 
     fact_core = _FACT_QUESTION_END.sub("", core).strip()
     fact_attribute = _FACT_ATTRIBUTE_SUFFIX.search(fact_core)
@@ -338,6 +360,15 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     if general_requirements is not None:
         target, source = _target_and_source(general_requirements["target"])
         if target:
+            if _ROLE_REQUIREMENT_TARGET.search(target):
+                return QuerySemantics(
+                    target=target,
+                    source_qualifier=source or explicit_source,
+                    relation="职责",
+                    answer_type=RequestedAnswerType.DUTIES,
+                    source="RULE",
+                    reason_codes=("DUTY_REQUIREMENTS_QUESTION_SYNTAX",),
+                )
             return QuerySemantics(
                 target=target,
                 source_qualifier=source or explicit_source,
@@ -617,6 +648,19 @@ def _clean_target(value: str, *, duty: bool) -> str:
         target = _LEADING_CONTEXT_CLAUSE.sub("", target).strip()
         target = re.sub(r"(?:的)?(?:主要|核心|具体)$", "", target).strip()
     return target
+
+
+def _fill_blank_anchor(template: str) -> str:
+    """从填空模板两侧选择最长连续原文锚点。"""
+    parts = (
+        re.sub(r"^[（(]?[一二三四五六七八九十百\d]+[）).、]?\s*", "", part)
+        .strip(" \t\r\n，,：:；;。！？?")
+        for part in _BLANK.split(template)
+    )
+    anchors = tuple(part for part in parts if part)
+    if not anchors:
+        return ""
+    return max(anchors, key=lambda value: len(re.sub(r"\s+", "", value)))
 
 
 def _question_core(value: str) -> str:
