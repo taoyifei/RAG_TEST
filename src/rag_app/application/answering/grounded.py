@@ -29,7 +29,10 @@ from rag_app.core.ports import (
     GenerationRequest,
     GeneratorPort,
 )
-from rag_app.core.query_text import duty_heading_path_owns_target
+from rag_app.core.query_text import (
+    duty_heading_path_owns_target,
+    section_heading_path_owns_target,
+)
 
 _NUMBER = re.compile(
     r"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*(?:%|％|万元|亿元|元|"
@@ -119,7 +122,7 @@ _STANDALONE_SUBJECT = re.compile(
 )
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
 _LEADING_LIST_MARKER = re.compile(
-    r"^\s*(?:(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)"
+    r"^\s*(?:[（(]?(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*)"
 )
 _DUTY_ACTION_PREFIX = re.compile(
     r"^\s*(?:[）)】\]]\s*)?(?:不仅|还|也|同时)?"
@@ -229,6 +232,7 @@ def _predicate(text: str) -> str:
 
 def _number_tokens(text: str) -> set[str]:
     # 标识独立保留，防止尾号吸附后续英文属性，也不能通过改尾号偷换对象。
+    text = _LEADING_LIST_MARKER.sub("", text)
     identifiers = {"id:" + value for value in _IDENTIFIER.findall(text)}
     text = _IDENTIFIER.sub(" ", text)
     text = _CELSIUS_QUANTITY.sub(r"\g<value>℃", text)
@@ -465,6 +469,50 @@ def _check_negations(clause: str, source_clauses: list[str]) -> None:
 
 def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
     """表格按真实行分组，普通正文按真实来源节点分组。"""
+    support = dict(item.metadata).get("answer_support")
+    table_node_ids = {
+        span.node_id
+        for span in item.source_spans
+        if span.node_id is not None
+        and span.source_anchor is not None
+        and (
+            (
+                span.source_anchor.table_index is not None
+                and span.source_anchor.row_index is not None
+            )
+            or any(
+                re.fullmatch(r"tr:\d+", part)
+                for part in span.source_anchor.structural_path
+            )
+        )
+    }
+    if (
+        item.table_locator is not None
+        and item.table_context
+        and isinstance(support, dict)
+        and support.get("support_reason") == "TABLE_ROW_CONTENT"
+    ):
+        supporting_ids = support.get("supporting_span_ids")
+        if (
+            isinstance(supporting_ids, list)
+            and supporting_ids
+            and table_node_ids.intersection(
+                value for value in supporting_ids if isinstance(value, str)
+            )
+        ):
+            return {
+                (
+                    "table-row-content",
+                    item.document_version_id,
+                    item.section_id,
+                    item.table_locator,
+                    tuple(
+                        value
+                        for value in supporting_ids
+                        if isinstance(value, str)
+                    ),
+                )
+            }
     groups: set[tuple[object, ...]] = set()
     for span in item.source_spans:
         anchor = span.source_anchor
@@ -542,6 +590,43 @@ def _trusted_duty_subjects(
     return {target}
 
 
+def _trusted_section_contexts(
+    item: EvidenceItem,
+    analysis: QueryAnalysis | None,
+) -> set[str]:
+    """读取由精确标题路径与完整支持组共同认证的章节语境。"""
+    if (
+        analysis is None
+        or analysis.semantics.answer_type
+        is not RequestedAnswerType.SECTION_SUMMARY
+        or not analysis.semantics.target
+    ):
+        return set()
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return set()
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    item_node_ids = {
+        span.node_id for span in item.source_spans if span.node_id is not None
+    }
+    if (
+        support.get("status") != "SUPPORTED"
+        or support.get("answer_type")
+        != RequestedAnswerType.SECTION_SUMMARY.value
+        or support.get("support_reason") != "SECTION_HEADING_BODY"
+        or not isinstance(target, str)
+        or target != analysis.semantics.target
+        or not section_heading_path_owns_target(target, item.heading_path)
+        or not isinstance(supporting_ids, list)
+        or not item_node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
+    ):
+        return set()
+    return {target}
+
+
 def _claim_source_groups(
     claim: AnswerClaim,
     units: list[EvidenceItem],
@@ -550,6 +635,7 @@ def _claim_source_groups(
     """按来源组聚合逐字引用及其同组结构化职责主体。"""
     grouped: dict[tuple[object, ...], list[str]] = {}
     trusted: dict[tuple[object, ...], set[str]] = {}
+    contexts: dict[tuple[object, ...], set[str]] = {}
     for support, item in zip(claim.supports, units, strict=True):
         groups = _source_groups(item)
         if len(groups) != 1:
@@ -563,8 +649,14 @@ def _claim_source_groups(
         trusted.setdefault(group, set()).update(
             _trusted_duty_subjects(item, analysis)
         )
+        contexts.setdefault(group, set()).update(
+            _trusted_section_contexts(item, analysis)
+        )
     return tuple(
-        ("\n".join(quotes), frozenset(trusted.get(group, set())))
+        (
+            "\n".join((*sorted(contexts.get(group, set())), *quotes)),
+            frozenset(trusted.get(group, set())),
+        )
         for group, quotes in grouped.items()
     )
 
@@ -787,7 +879,8 @@ class GroundedAnsweringService:
         )
         for attempt in range(2):
             _raise_if_cancelled(cancellation)
-            published: list[AnswerClaim] = []
+            buffered: list[AnswerClaim] = []
+            delivered: list[AnswerClaim] = []
             try:
                 generation_request = GenerationRequest(
                     query=query,
@@ -805,18 +898,18 @@ class GroundedAnsweringService:
                 )
                 if on_claim is not None and callable(stream_generate):
 
-                    def publish(
+                    def validate_and_buffer(
                         claim: AnswerClaim,
-                        published_claims: list[AnswerClaim] = published,
+                        buffered_claims: list[AnswerClaim] = buffered,
                     ) -> None:
-                        """逐条执行完整业务证据门，再允许 HTTP 层发布。
+                        """逐条执行证据门，整份草稿收束前只在内存缓冲。
 
                         Args:
                             claim: Adapter 刚形成的完整来源匹配事实。
-                            published_claims: 本次尝试已成功交付的事实列表。
+                            buffered_claims: 本次尝试已核验但尚未交付的事实。
 
                         Returns:
-                            无返回值；发布回调返回后才记录为已交付。
+                            无返回值；模型完整响应通过后才统一交付。
 
                         """
                         _raise_if_cancelled(cancellation)
@@ -833,23 +926,19 @@ class GroundedAnsweringService:
                             evidence,
                             analysis=analysis,
                         )
-                        rendered_claim = _render_claim_target(claim, analysis)
-                        if rendered_claim in published_claims:
+                        if claim in buffered_claims:
                             raise ValidationFailed(
                                 "模型重复输出同一事实。",
                                 stage="answer.validate",
                                 code="DUPLICATE_CLAIM",
                             )
-                        on_claim(rendered_claim)
-                        # HTTP 交付回调返回才算已发布；来源或授权门禁拒绝时
-                        # 不能把尚未发送的 claim 误报为 partial 前缀。
-                        published_claims.append(rendered_claim)
+                        buffered_claims.append(claim)
 
                     if cancellation is None:
                         raise RuntimeError("流式生成缺少 cancellation。")
                     draft = stream_generate(
                         generation_request,
-                        on_claim=publish,
+                        on_claim=validate_and_buffer,
                         cancellation=cancellation,
                     )
                 else:
@@ -863,12 +952,19 @@ class GroundedAnsweringService:
                     _render_claim_target(claim, analysis)
                     for claim in draft.claims
                 )
-                if published and rendered_claims != tuple(published):
+                if buffered and draft.claims != tuple(buffered):
                     raise ValidationFailed(
                         "增量事实与最终草稿不一致。",
                         stage="answer.validate",
                         code="STREAMED_CLAIMS_MISMATCH",
                     )
+                if on_claim is not None:
+                    # 只有完整 JSON、最终 claims 列表和所有事实都已通过后，
+                    # 才开始向 HTTP 流发布，杜绝“合法前缀 + 失败终态”。
+                    for rendered_claim in rendered_claims:
+                        _raise_if_cancelled(cancellation)
+                        on_claim(rendered_claim)
+                        delivered.append(rendered_claim)
                 # 只发布已逐条核验的 claim，忽略任何多余模型正文。
                 answer = "\n".join(
                     claim.text
@@ -904,7 +1000,7 @@ class GroundedAnsweringService:
                     )
                 )
                 reason = error.code
-                if published:
+                if delivered:
                     raise _partial_stream_error(calls) from error
                 if reason == "GENERATION_ABSTAINED":
                     break
@@ -918,13 +1014,13 @@ class GroundedAnsweringService:
                     )
                 )
                 reason = error.code
-                if published:
+                if delivered:
                     raise _partial_stream_error(calls) from error
                 if isinstance(error, ProviderInvalidResponse):
                     continue
                 break
             except ValueError as error:
-                if published:
+                if delivered:
                     raise _partial_stream_error(calls) from error
                 reason = "GENERATION_OUTPUT_INVALID"
         return GroundedOutcome(

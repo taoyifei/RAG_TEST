@@ -371,6 +371,57 @@ def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
     )
 
 
+def test_exact_section_heading_can_supply_only_its_verified_context() -> None:
+    """精确节标题可补展示语境，正文事实仍必须来自同组逐字引用。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 内容")
+            + _paragraph("4.3 外部采购生产通知单审核后的特殊处理")
+            + _paragraph("退回业务组重办。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context(
+            "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
+        ),
+    )
+    claim = AnswerClaim(
+        text="外部采购生产通知单审核后的特殊处理：退回业务组重办。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="退回业务组重办。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft,
+        evidence,
+        analysis=_context(
+            "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
+        ).analysis,
+    )
+
+
+def test_leading_presentation_number_is_not_a_factual_quantity() -> None:
+    evidence, draft = _supported_draft(
+        "员工轻伤的损失工作日低于 15 天。",
+        "1. 员工轻伤的损失工作日低于 15 天。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
 @pytest.mark.parametrize(
     "source,claim",
     [
@@ -1044,6 +1095,55 @@ def test_subject_and_action_cannot_be_borrowed_across_paragraphs() -> None:
     assert error.value.code == "CLAIM_SOURCE_MISMATCH"
 
 
+def test_table_row_metadata_without_real_table_cannot_join_paragraphs() -> None:
+    """内部支持标签不能把普通段落伪装成同一张表的闭合关系。"""
+    role_evidence, _ = _supported_draft("质量主管。", "质量主管。")
+    action_evidence, _ = _supported_draft("负责组织验收。", "负责组织验收。")
+    role_node = role_evidence[0].source_spans[0].node_id
+    action_node = action_evidence[0].source_spans[0].node_id
+    assert role_node is not None and action_node is not None
+    support = {
+        "answer_support": {
+            "status": "SUPPORTED",
+            "query_target": "质量主管",
+            "requested_relation_or_attribute": "对应内容",
+            "answer_type": "SECTION_SUMMARY",
+            "support_reason": "TABLE_ROW_CONTENT",
+            "supporting_span_ids": [role_node, action_node],
+        }
+    }
+    role = role_evidence[0].model_copy(
+        update={"evidence_id": "S1", "metadata": support}
+    )
+    action = action_evidence[0].model_copy(
+        update={
+            "evidence_id": "S2",
+            "document_version_id": role.document_version_id,
+            "section_id": role.section_id,
+            "metadata": support,
+        }
+    )
+    supports = (
+        ClaimSupport(support_id="S1", quote=role.citation_text),
+        ClaimSupport(support_id="S2", quote=action.citation_text),
+    )
+    draft = AnswerDraft(
+        text="质量主管负责组织验收。",
+        cited_evidence_ids=("S1", "S2"),
+        claims=(
+            AnswerClaim(
+                text="质量主管负责组织验收。",
+                supports=supports,
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, (role, action))
+    assert error.value.code == "CLAIM_SOURCE_MISMATCH"
+
+
 def test_uncited_role_is_not_borrowed_from_question_or_other_evidence() -> None:
     evidence, draft = _table_role_draft(
         "质量主管负责组织验收。", cite_role=False
@@ -1170,6 +1270,55 @@ def test_changed_role_repairs_before_stream_publish() -> None:
     assert len(requests) == 2
     assert requests[0].repair_reason is None
     assert requests[1].repair_reason == "CLAIM_OBJECT_CHANGED"
+
+
+def test_stream_buffers_valid_prefix_until_whole_draft_is_valid() -> None:
+    """后续事实失败时，前缀不得先发布；修复后只发布终版。"""
+    evidence, valid_draft = _supported_draft(
+        "甲部门保存 14 天。", "甲部门保存 14 天。"
+    )
+    _, invalid_draft = _supported_draft(
+        "甲部门保存 14 天。", "甲部门保存 4 天。"
+    )
+    first = valid_draft.model_copy(
+        update={
+            "text": f"{valid_draft.text}\n{invalid_draft.text}",
+            "claims": (*valid_draft.claims, *invalid_draft.claims),
+        }
+    )
+    drafts = iter((first, valid_draft))
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        del request
+        assert not cancellation.is_cancelled()
+        draft = next(drafts)
+        for claim in draft.claims:
+            on_claim(claim)
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "甲部门保存多久？",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert emitted == [valid_draft.claims[0]]
+    assert outcome.answer == "甲部门保存 14 天。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert generator.generate_stream.call_count == 2
 
 
 def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:

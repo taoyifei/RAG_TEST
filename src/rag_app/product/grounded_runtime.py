@@ -157,6 +157,7 @@ class ProductGroundedModel:
                 model=settings.generation_model,
                 egress_allowed=True,
                 max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+                json_mode="json_object",
             ),
         )
 

@@ -14,6 +14,7 @@ from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
     AliyunChatConfig,
     ChatMessage,
+    _grounded_evidence_payload,
     chat_payload,
     message_token_estimate,
 )
@@ -224,6 +225,15 @@ def test_unknown_compatible_model_does_not_receive_qwen_fields():
     assert "response_format" not in payload
 
 
+def test_qwen_json_object_mode_sets_response_contract() -> None:
+    payload = chat_payload(
+        (ChatMessage(role="user", content="合成问题"),),
+        AliyunChatConfig(model="qwen3.7-flash", json_mode="json_object"),
+    )
+
+    assert payload["response_format"] == {"type": "json_object"}
+
+
 def _generation_request() -> GenerationRequest:
     return GenerationRequest(
         query="协调员负责什么？",
@@ -429,7 +439,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         adapter.close()
 
 
-def test_generation_projects_only_verified_structural_duty_owner(
+def test_generation_projects_only_verified_structural_contexts(
     tmp_path: Path,
 ) -> None:
     requests: list[httpx.Request] = []
@@ -501,6 +511,64 @@ def test_generation_projects_only_verified_structural_duty_owner(
             content["evidence"][0]["source_structure"]["verified_duty_owner"]
             == "总经理"
         )
+
+        section = item.model_copy(
+            update={
+                "heading_path": ("4 内容", "4.3 特殊处理"),
+                "metadata": {
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "query_target": "特殊处理",
+                        "requested_relation_or_attribute": "章节内容",
+                        "answer_type": "SECTION_SUMMARY",
+                        "support_reason": "SECTION_HEADING_BODY",
+                        "supporting_span_ids": [node_id],
+                    }
+                },
+            }
+        )
+        section_payload = _grounded_evidence_payload(section)
+        section_structure = section_payload["source_structure"]
+        assert isinstance(section_structure, dict)
+        assert section_structure["verified_section_owner"] == "特殊处理"
+
+        table_path = ("body", "tbl:0", "tr:2", "tc:1", "p:0")
+        table_span = span.model_copy(
+            update={
+                "structural_path": table_path,
+                "source_anchor": anchor.model_copy(
+                    update={"structural_path": table_path}
+                ),
+            }
+        )
+        table = item.model_copy(
+            update={
+                "source_spans": (table_span,),
+                "table_locator": "public-table",
+                "table_context": True,
+                "metadata": {
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "query_target": "一般",
+                        "requested_relation_or_attribute": "对应内容",
+                        "answer_type": "SECTION_SUMMARY",
+                        "support_reason": "TABLE_ROW_CONTENT",
+                        "supporting_span_ids": [node_id],
+                    }
+                },
+            }
+        )
+        table_payload = _grounded_evidence_payload(table)
+        table_structure = table_payload["source_structure"]
+        assert isinstance(table_structure, dict)
+        assert table_structure["verified_table_row_label"] == "一般"
+
+        plain_payload = _grounded_evidence_payload(
+            table.model_copy(update={"table_context": False})
+        )
+        plain_structure = plain_payload["source_structure"]
+        assert isinstance(plain_structure, dict)
+        assert "verified_table_row_label" not in plain_structure
     finally:
         adapter.close()
 

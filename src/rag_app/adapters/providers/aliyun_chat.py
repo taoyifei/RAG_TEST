@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Literal
@@ -37,7 +38,10 @@ from rag_app.core.models.common import FrozenModel, freeze_json_object
 from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft, EvidenceItem
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
-from rag_app.core.query_text import duty_heading_path_owns_target
+from rag_app.core.query_text import (
+    duty_heading_path_owns_target,
+    section_heading_path_owns_target,
+)
 from rag_app.core.tokenization import estimate_tokens
 from rag_app.generation.streaming_claims import IncrementalClaimsParser
 
@@ -56,10 +60,14 @@ _GROUNDED_SYSTEM = (
     "同一表格行的角色单元格与职责单元格可共同支持一句概括。"
     "source_structure是服务端来源位置：联合表格引用必须属于同一文档版本、"
     "section_id、table_locator和同一行；structural_path中的tr标识行。"
+    "若多个证据还带有相同的verified_table_row_label，则服务端已闭合"
+    "该目标行、最近的完整表头和非空值，它们可以共同支持一条表格映射；"
+    "该字段不能代替逐字quote，行名和所用表头仍须引用相应证据。"
     "每条写明角色或对象的事实，其supports必须同时包含对象原文和相应职责原文；"
     "对象和职责分属不同ID时，列出这两个ID的逐字quote。职责正文证据若带有"
     "verified_duty_owner，可仅用它确定该证据正文的职责主体；该字段不是原文，"
-    "不能放进quote。完整岗位名必须与typed_semantics.target精确相同，不能用"
+    "不能放进quote。verified_section_owner只可补充精确章节语境，不能补充正文事实。"
+    "完整岗位名必须与typed_semantics.target精确相同，不能用"
     "子串、父岗位、下级岗位或相邻标题替代。"
     "不能从问题、其他未引用证据或其他表格行借用对象；分条概括也须逐条满足。"
     "一条claim内的每个分句必须由一个完整来源组独立支持；普通正文来源组是"
@@ -71,6 +79,9 @@ _GROUNDED_SYSTEM = (
     "没有该主体的逐字来源或同证据verified_duty_owner时不得借用其他岗位职责。"
     "evidence是检索、融合与重排后的有界候选证据；请自行选择与问题相关的候选。"
     "相关候选的逐字原文可以支持事实，但检索排名或相关性分数本身不能证明事实。"
+    "章节要求、原文说明、填空补全和表格对应内容优先逐项保留原文措辞，"
+    "不要引入原文没有的列表编号、概括标签或主语；复合条款拆成可由单个"
+    "来源组完整证明的claim。"
     '仅输出JSON对象，格式为{"claims":[{"text":"事实概括",'
     '"supports":[{"support_id":"提供的ID","quote":"逐字原文"}]}]}。'
     "每条事实至少一个引用，每个quote必须逐字来自相应ID的证据。"
@@ -123,7 +134,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v4", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v5", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
@@ -535,6 +546,12 @@ def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
     verified_owner = _verified_duty_owner(item)
     if verified_owner is not None:
         source_structure["verified_duty_owner"] = verified_owner
+    verified_section = _verified_section_owner(item)
+    if verified_section is not None:
+        source_structure["verified_section_owner"] = verified_section
+    verified_table_row = _verified_table_row_label(item)
+    if verified_table_row is not None:
+        source_structure["verified_table_row_label"] = verified_table_row
     return {
         "support_id": item.support_id,
         "text": item.citation_text,
@@ -562,6 +579,70 @@ def _verified_duty_owner(item: EvidenceItem) -> str | None:
             value for value in supporting_ids if isinstance(value, str)
         )
         or not duty_heading_path_owns_target(target, item.heading_path)
+    ):
+        return None
+    return target
+
+
+def _verified_section_owner(item: EvidenceItem) -> str | None:
+    """投影与当前正文节点闭合的精确章节标题。"""
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    node_ids = {
+        span.node_id for span in item.source_spans if span.node_id is not None
+    }
+    if (
+        support.get("status") != "SUPPORTED"
+        or support.get("answer_type") != "SECTION_SUMMARY"
+        or support.get("support_reason") != "SECTION_HEADING_BODY"
+        or not isinstance(target, str)
+        or not isinstance(supporting_ids, list)
+        or not node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
+        or not section_heading_path_owns_target(target, item.heading_path)
+    ):
+        return None
+    return target
+
+
+def _verified_table_row_label(item: EvidenceItem) -> str | None:
+    """投影 Evidence 已闭合的动态表格行名，不维护业务值映射。"""
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    node_ids = {
+        span.node_id
+        for span in item.source_spans
+        if span.node_id is not None
+        and span.source_anchor is not None
+        and (
+            (
+                span.source_anchor.table_index is not None
+                and span.source_anchor.row_index is not None
+            )
+            or any(
+                re.fullmatch(r"tr:\d+", part)
+                for part in span.source_anchor.structural_path
+            )
+        )
+    }
+    if (
+        item.table_locator is None
+        or not item.table_context
+        or support.get("status") != "SUPPORTED"
+        or support.get("answer_type") != "SECTION_SUMMARY"
+        or support.get("support_reason") != "TABLE_ROW_CONTENT"
+        or not isinstance(target, str)
+        or not isinstance(supporting_ids, list)
+        or not node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
     ):
         return None
     return target
