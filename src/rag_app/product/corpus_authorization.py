@@ -124,6 +124,10 @@ class CorpusAuthorizationStatus(FrozenModel):
     model_authorization_state: ModelAuthorizationState
     budget_state: BudgetState
     required_operations: tuple[CorpusOperation, ...] = ()
+    pending_operations: tuple[CorpusOperation, ...] = Field(
+        default=(),
+        description="已启用但尚未形成可批准数据范围的远程用途。",
+    )
     manifest: CorpusAuthorizationManifest | None = None
     fallback_reason_codes: tuple[str, ...] = ()
 
@@ -329,12 +333,14 @@ class CorpusAuthorizationStore:
         """
         settings = self._models.get(knowledge_base_id)
         required = self._required_operations(settings)
+        pending = self._pending_operations(settings)
         if not required:
             return CorpusAuthorizationStatus(
                 corpus_authorization_state="NOT_REQUIRED",
                 model_configuration_state="NOT_CONFIGURED",
                 model_authorization_state="NOT_REQUIRED",
                 budget_state="NOT_REQUIRED",
+                pending_operations=pending,
             )
         try:
             self._operation_bindings(settings, required)
@@ -345,6 +351,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state="BLOCKED",
                 budget_state="BLOCKED",
                 required_operations=required,
+                pending_operations=pending,
                 fallback_reason_codes=("MODEL_CONFIGURATION_INVALID",),
             )
         manifest = self._latest_manifest(knowledge_base_id)
@@ -355,6 +362,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state="MISSING",
                 budget_state="MISSING",
                 required_operations=required,
+                pending_operations=pending,
                 fallback_reason_codes=("CORPUS_AUTHORIZATION_MISSING",),
             )
         try:
@@ -366,6 +374,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state="BLOCKED",
                 budget_state="BLOCKED",
                 required_operations=required,
+                pending_operations=pending,
                 manifest=manifest,
                 fallback_reason_codes=("ACTIVE_REVISION_UNAVAILABLE",),
             )
@@ -378,6 +387,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state="EXPIRED",
                 budget_state="BLOCKED",
                 required_operations=required,
+                pending_operations=pending,
                 manifest=manifest,
                 fallback_reason_codes=("BUSINESS_AUTHORIZATION_EXPIRED",),
             )
@@ -388,6 +398,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state="BLOCKED",
                 budget_state="BLOCKED",
                 required_operations=required,
+                pending_operations=pending,
                 manifest=manifest,
                 fallback_reason_codes=(corpus_reason,),
             )
@@ -407,6 +418,7 @@ class CorpusAuthorizationStore:
                 model_authorization_state=model_state,
                 budget_state="BLOCKED",
                 required_operations=required,
+                pending_operations=pending,
                 manifest=manifest,
                 fallback_reason_codes=(model_reason,),
             )
@@ -417,6 +429,7 @@ class CorpusAuthorizationStore:
             model_authorization_state="APPROVED",
             budget_state=budget_state,
             required_operations=required,
+            pending_operations=pending,
             manifest=manifest,
             fallback_reason_codes=(
                 () if budget_reason is None else (budget_reason,)
@@ -510,11 +523,26 @@ class CorpusAuthorizationStore:
             if settings.rewrite_enabled:
                 operations.append("query.interpret")
                 operations.append("query.rewrite")
-        if settings.ocr_enabled and settings.ocr_connection_id != (
-            LOCAL_OCR_CONNECTION_ID
+        if (
+            settings.ocr_enabled
+            and settings.ocr_connection_id != LOCAL_OCR_CONNECTION_ID
+            and settings.ocr_media_hashes
         ):
             operations.append("image.ocr")
         return tuple(operations)
+
+    @staticmethod
+    def _pending_operations(
+        settings: KnowledgeBaseModelSettings,
+    ) -> tuple[CorpusOperation, ...]:
+        """返回已启用但尚未形成可批准数据范围的远程用途。"""
+        if (
+            settings.ocr_enabled
+            and settings.ocr_connection_id != LOCAL_OCR_CONNECTION_ID
+            and not settings.ocr_media_hashes
+        ):
+            return ("image.ocr",)
+        return ()
 
     def _operation_bindings(
         self,

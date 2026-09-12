@@ -918,6 +918,21 @@
             "title": "Model Configuration State",
             "type": "string"
           },
+          "pending_operations": {
+            "default": [],
+            "description": "已启用但尚未形成可批准数据范围的远程用途。",
+            "items": {
+              "enum": [
+                "generation",
+                "query.interpret",
+                "query.rewrite",
+                "image.ocr"
+              ],
+              "type": "string"
+            },
+            "title": "Pending Operations",
+            "type": "array"
+          },
           "required_operations": {
             "default": [],
             "items": {
