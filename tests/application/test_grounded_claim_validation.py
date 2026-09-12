@@ -371,9 +371,23 @@ def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
     )
 
 
-def test_department_suffix_precedes_assisted_manager() -> None:
-    """“行政部协助总经理”应绑定行政部，不能吞并宾语总经理。"""
-    source = "协助总经理制定并落实各部门的质量方针和质量目标。"
+@pytest.mark.parametrize(
+    "source,claim",
+    [
+        (
+            "协助总经理制定并落实各部门的质量方针和质量目标。",
+            "行政部协助总经理制定并落实各部门的质量方针和质量目标。",
+        ),
+        (
+            "负责贯彻总经理的各项决策，协调各部门工作，并对总经理负责。",
+            "行政部负责贯彻总经理的各项决策，协调各部门工作，并对总经理负责。",
+        ),
+    ],
+)
+def test_department_subject_does_not_absorb_manager_object(
+    source: str, claim: str
+) -> None:
+    """行政部是主语，总经理作为协助或负责对象时不能被提升为主语。"""
     evidence = EvidenceAssembler().assemble(
         _candidates(
             _paragraph("4 部门的职责")
@@ -387,7 +401,6 @@ def test_department_suffix_precedes_assisted_manager() -> None:
         ),
         context=_context("行政部负责什么"),
     )
-    claim = "行政部协助总经理制定并落实各部门的质量方针和质量目标。"
     draft = AnswerDraft(
         text=claim,
         cited_evidence_ids=(evidence[0].support_id,),
@@ -417,6 +430,19 @@ def test_department_suffix_precedes_assisted_manager() -> None:
     )
 
     validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
+def test_embedded_agent_cannot_hide_behind_a_valid_leading_subject() -> None:
+    """同一分句由另一个对象承接职责时，仍须核验该显式施事。"""
+    evidence, draft = _supported_draft(
+        "甲部门负责归档并销毁记录。",
+        "甲部门负责归档并由乙部门负责销毁记录。",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
 
 
 def test_structural_role_binds_omitted_claim_subject_without_repair() -> None:

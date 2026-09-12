@@ -64,11 +64,12 @@ _MIN_QUOTE_CHARS = 2
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.35
 _MIN_NEGATION_SHARED_TERMS = 2
 _NAMED_SUBJECT = re.compile(
+    r"(?:(?:并|且|同时|以及)?由)\s*"
     r"([A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]{1,16}"
-    r"(?:负责人|经理|主管|专员|工程师|设备|系统|模式))"
-    r"\s*(?:负责|承担|的(?:核心)?职责|的(?:维护)?周期)"
+    r"(?:负责人|经理|主管|专员|工程师|部门|人员|设备|系统|模式|部))"
+    r"\s*(?:负责(?!人)|承担|的(?:核心)?职责|的(?:维护)?周期)"
 )
-_ACTION_MODIFIER = r"(?:牵头|主要|直接|统一|共同|定期)"
+_ACTION_MODIFIER = r"(?:牵头|主要|直接|统一|共同|定期|自行|独立|擅自)"
 _ACTION_VERB = (
     r"负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
     r"保存|归档|销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|"
@@ -91,6 +92,10 @@ _LEADING_MODAL = re.compile(
     r"^\s*(?:(?:还|就|再|也|都|只)?"
     r"(?:需要|应该|应当|必须|可以|要|得|应|须|需|可))"
     r"(?:把|将)?\s*"
+)
+_LEADING_AGENT_PREFIX = re.compile(r"^\s*(?:(?:并|且|同时|以及)\s*)?由\s*")
+_LEADING_OBJECT_PREFIX = re.compile(
+    r"^\s*(?:(?:并|且|同时|以及)\s*)?(?:对|向|给|为|与|同|跟)\s*"
 )
 _MODAL_ACTION = re.compile(
     r"^(?:准备|整理|提交|上传|填报|填写|确认|补充|完成|检查|核对|"
@@ -195,6 +200,9 @@ def _subject(text: str) -> str | None:
     if without_modal != subject_text and _MODAL_ACTION.match(without_modal):
         return None
     subject_text = without_modal
+    if _LEADING_OBJECT_PREFIX.match(subject_text) is not None:
+        return None
+    subject_text = _LEADING_AGENT_PREFIX.sub("", subject_text)
     if re.match(
         rf"^\s*(?:{_ACTION_MODIFIER})?(?:{_DUTY_ACTION_VERB})",
         subject_text,
@@ -289,15 +297,15 @@ def _leading_explicit_subject(text: str) -> str | None:
         "",
         _LEADING_MODAL.sub("", _LEADING_ACTION_CONTEXT.sub("", text)),
     )
+    if _LEADING_OBJECT_PREFIX.match(subject_text) is not None:
+        return None
+    subject_text = _LEADING_AGENT_PREFIX.sub("", subject_text)
     if _DUTY_ACTION_PREFIX.match(subject_text) is not None:
         return None
-    match = _STANDALONE_SUBJECT.match(subject_text)
-    if (
-        match is None
-        or _DUTY_ACTION_PREFIX.match(subject_text[match.end() :]) is None
-    ):
+    match = _ENTITY_SUBJECT.match(subject_text)
+    if match is None:
         return None
-    return match[0]
+    return match[1]
 
 
 def _source_has_explicit_subject(subject: str, text: str) -> bool:
