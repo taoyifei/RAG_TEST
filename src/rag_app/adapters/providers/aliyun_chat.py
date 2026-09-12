@@ -37,6 +37,7 @@ from rag_app.core.models.common import FrozenModel, freeze_json_object
 from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft, EvidenceItem
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
+from rag_app.core.query_text import duty_heading_path_owns_target
 from rag_app.core.tokenization import estimate_tokens
 from rag_app.generation.streaming_claims import IncrementalClaimsParser
 
@@ -56,7 +57,10 @@ _GROUNDED_SYSTEM = (
     "source_structure是服务端来源位置：联合表格引用必须属于同一文档版本、"
     "section_id、table_locator和同一行；structural_path中的tr标识行。"
     "每条写明角色或对象的事实，其supports必须同时包含对象原文和相应职责原文；"
-    "对象和职责分属不同ID时，列出这两个ID的逐字quote。"
+    "对象和职责分属不同ID时，列出这两个ID的逐字quote。职责正文证据若带有"
+    "verified_duty_owner，可仅用它确定该证据正文的职责主体；该字段不是原文，"
+    "不能放进quote。完整岗位名必须与typed_semantics.target精确相同，不能用"
+    "子串、父岗位、下级岗位或相邻标题替代。"
     "不能从问题、其他未引用证据或其他表格行借用对象；分条概括也须逐条满足。"
     "一条claim内的每个分句必须由一个完整来源组独立支持；普通正文来源组是"
     "同一anchor节点，表格来源组是同一行。需要用不同来源组回答不同事实，拆成多条claim；"
@@ -64,7 +68,7 @@ _GROUNDED_SYSTEM = (
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
     "职责问题的每条claim必须明确写出typed_semantics.target对应的职责主体；"
-    "没有该主体的逐字来源时不得借用其他岗位职责。"
+    "没有该主体的逐字来源或同证据verified_duty_owner时不得借用其他岗位职责。"
     "evidence是检索、融合与重排后的有界候选证据；请自行选择与问题相关的候选。"
     "相关候选的逐字原文可以支持事实，但检索排名或相关性分数本身不能证明事实。"
     '仅输出JSON对象，格式为{"claims":[{"text":"事实概括",'
@@ -119,7 +123,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v3", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v4", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
@@ -511,27 +515,56 @@ def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
 
 def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
     """投影一个有界证据，不复制检索分数或内部元数据。"""
+    source_structure: dict[str, object] = {
+        "document_version_id": item.document_version_id,
+        "section_id": item.section_id,
+        "table_locator": item.table_locator,
+        "heading_path": item.heading_path,
+        "anchors": [
+            {
+                "part_uri": span.source_anchor.part_uri,
+                "story_kind": span.source_anchor.story_kind,
+                "structural_path": span.structural_path,
+                "table_index": span.source_anchor.table_index,
+                "row_index": span.source_anchor.row_index,
+            }
+            for span in item.source_spans
+            if span.source_anchor is not None
+        ],
+    }
+    verified_owner = _verified_duty_owner(item)
+    if verified_owner is not None:
+        source_structure["verified_duty_owner"] = verified_owner
     return {
         "support_id": item.support_id,
         "text": item.citation_text,
-        "source_structure": {
-            "document_version_id": item.document_version_id,
-            "section_id": item.section_id,
-            "table_locator": item.table_locator,
-            "heading_path": item.heading_path,
-            "anchors": [
-                {
-                    "part_uri": span.source_anchor.part_uri,
-                    "story_kind": span.source_anchor.story_kind,
-                    "structural_path": span.structural_path,
-                    "table_index": span.source_anchor.table_index,
-                    "row_index": span.source_anchor.row_index,
-                }
-                for span in item.source_spans
-                if span.source_anchor is not None
-            ],
-        },
+        "source_structure": source_structure,
     }
+
+
+def _verified_duty_owner(item: EvidenceItem) -> str | None:
+    """只投影证据层已认证且仍与当前来源 span 闭合的职责主体。"""
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return None
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    node_ids = {
+        span.node_id for span in item.source_spans if span.node_id is not None
+    }
+    if (
+        support.get("status") != "SUPPORTED"
+        or support.get("answer_type") != "DUTIES"
+        or support.get("support_reason") != "SECTION_HEADING_BODY"
+        or not isinstance(target, str)
+        or not isinstance(supporting_ids, list)
+        or not node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
+        or not duty_heading_path_owns_target(target, item.heading_path)
+    ):
+        return None
+    return target
 
 
 class AliyunChatAdapter:

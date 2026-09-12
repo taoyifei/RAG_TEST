@@ -24,7 +24,10 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.query_text import select_unique_label_owner
+from rag_app.core.query_text import (
+    duty_heading_path_owns_target,
+    select_unique_label_owner,
+)
 
 _MIN_TABLE_LABEL_LENGTH = 2
 _MAX_SEMANTIC_RANK = 10
@@ -999,6 +1002,8 @@ def _section_heading_supports(  # noqa: PLR0912
 ) -> dict[_SpanKey, AnswerSupport]:
     """用真实标题路径与首个正文 SourceSpan 闭合节级关系。"""
     semantics = context.analysis.semantics
+    if semantics.answer_type is RequestedAnswerType.DUTIES:
+        return _duty_heading_supports(candidates, context)
     if (
         semantics.answer_type
         not in {
@@ -1142,6 +1147,65 @@ def _section_heading_supports(  # noqa: PLR0912
             support_reason="SECTION_HEADING_BODY",
             supporting_span_ids=(span.node_id,) if span.node_id else (),
         )
+    return supports
+
+
+def _duty_heading_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """用经来源节点认证的精确岗位标题归属职责正文。
+
+    Args:
+        candidates: 本次有界召回及结构扩展候选。
+        context: 已冻结的职责查询语义。
+
+    Returns:
+        仅包含精确岗位节正文的 span 支持；标题自身不作为职责正文。
+
+    """
+    semantics = context.analysis.semantics
+    target = semantics.target
+    if not target:
+        return {}
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        if chunk.role.value in {"table", "image_metadata", "header_footer"}:
+            continue
+        if (
+            not chunk.context_dependencies
+            or len(chunk.context_dependencies) != len(chunk.heading_path)
+            or not duty_heading_path_owns_target(target, chunk.heading_path)
+        ):
+            continue
+        dependency_ids = {
+            dependency.source_node_id
+            for dependency in chunk.context_dependencies
+        }
+        for span in chunk.source_spans:
+            if (
+                not span.is_citable
+                or span.is_repeated
+                or span.span_type is SourceSpanKind.SEPARATOR
+                or span.node_id in dependency_ids
+            ):
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if not quote.strip() or re.search(
+                r"未提供|未确定|暂无|未知", quote
+            ):
+                continue
+            supports[_span_key(chunk, span)] = AnswerSupport(
+                status=SupportStatus.SUPPORTED,
+                query_target=target,
+                requested_relation_or_attribute=semantics.relation or "职责",
+                answer_type=semantics.answer_type.value,
+                support_reason="SECTION_HEADING_BODY",
+                supporting_span_ids=(span.node_id,) if span.node_id else (),
+            )
     return supports
 
 

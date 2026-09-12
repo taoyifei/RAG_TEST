@@ -29,6 +29,7 @@ from rag_app.core.ports import (
     GenerationRequest,
     GeneratorPort,
 )
+from rag_app.core.query_text import duty_heading_path_owns_target
 
 _NUMBER = re.compile(
     r"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*(?:%|％|万元|亿元|元|"
@@ -424,11 +425,49 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
     return groups
 
 
-def _claim_source_texts(
-    claim: AnswerClaim, units: list[EvidenceItem]
-) -> tuple[str, ...]:
-    """按可独立证明事实的表格行或原文节点聚合逐字引用。"""
+def _trusted_duty_subjects(
+    item: EvidenceItem,
+    analysis: QueryAnalysis | None,
+) -> set[str]:
+    """读取同一 Evidence 内由精确标题路径认证的职责主体。"""
+    if (
+        analysis is None
+        or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
+        or not analysis.semantics.target
+    ):
+        return set()
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict):
+        return set()
+    target = support.get("query_target")
+    supporting_ids = support.get("supporting_span_ids")
+    item_node_ids = {
+        span.node_id for span in item.source_spans if span.node_id is not None
+    }
+    if (
+        support.get("status") != "SUPPORTED"
+        or support.get("answer_type") != RequestedAnswerType.DUTIES.value
+        or support.get("support_reason") != "SECTION_HEADING_BODY"
+        or not isinstance(target, str)
+        or not _same_subject(target, analysis.semantics.target)
+        or not duty_heading_path_owns_target(target, item.heading_path)
+        or not isinstance(supporting_ids, list)
+        or not item_node_ids.intersection(
+            value for value in supporting_ids if isinstance(value, str)
+        )
+    ):
+        return set()
+    return {target}
+
+
+def _claim_source_groups(
+    claim: AnswerClaim,
+    units: list[EvidenceItem],
+    analysis: QueryAnalysis | None,
+) -> tuple[tuple[str, frozenset[str]], ...]:
+    """按来源组聚合逐字引用及其同组结构化职责主体。"""
     grouped: dict[tuple[object, ...], list[str]] = {}
+    trusted: dict[tuple[object, ...], set[str]] = {}
     for support, item in zip(claim.supports, units, strict=True):
         groups = _source_groups(item)
         if len(groups) != 1:
@@ -439,20 +478,41 @@ def _claim_source_texts(
             )
         group = next(iter(groups))
         grouped.setdefault(group, []).append(support.quote)
-    return tuple("\n".join(quotes) for quotes in grouped.values())
+        trusted.setdefault(group, set()).update(
+            _trusted_duty_subjects(item, analysis)
+        )
+    return tuple(
+        ("\n".join(quotes), frozenset(trusted.get(group, set())))
+        for group, quotes in grouped.items()
+    )
 
 
 def _validate_clause_support(
-    clause: str, clause_subject: str | None, support_text: str
+    clause: str,
+    clause_subject: str | None,
+    support_text: str,
+    *,
+    trusted_subjects: frozenset[str] = frozenset(),
 ) -> None:
     """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
     source_clauses = _clauses_with_subject(support_text)
+    source_subjects = {
+        detected
+        for source_clause, subject in source_clauses
+        if (detected := subject or _leading_explicit_subject(source_clause))
+    }
     subjects = set(_NAMED_SUBJECT.findall(clause))
     general_subject = _leading_explicit_subject(clause) or _subject(clause)
     if general_subject:
         subjects.add(general_subject)
     if any(
         not _source_has_explicit_subject(subject, support_text)
+        and not (
+            not source_subjects
+            and any(
+                _same_subject(subject, trusted) for trusted in trusted_subjects
+            )
+        )
         for subject in subjects
     ):
         raise ValidationFailed(
@@ -548,13 +608,16 @@ def validate_grounded_draft(
                     code="CLAIM_QUOTE_INVALID",
                 )
             units.append(item)
-        source_texts = _claim_source_texts(claim, units)
+        source_groups = _claim_source_groups(claim, units, analysis)
         support_text = "\n".join(support.quote for support in claim.supports)
         for clause, clause_subject in _clauses_with_subject(claim.text):
-            for source_text in source_texts:
+            for source_text, trusted_subjects in source_groups:
                 try:
                     _validate_clause_support(
-                        clause, clause_subject, source_text
+                        clause,
+                        clause_subject,
+                        source_text,
+                        trusted_subjects=trusted_subjects,
                     )
                 except ValidationFailed:
                     continue
@@ -562,7 +625,16 @@ def validate_grounded_draft(
             else:
                 # 联合所有引用仍不成立时保留精确语义错误；只有跨来源
                 # 拼接才能成立时，明确标记来源结构不一致。
-                _validate_clause_support(clause, clause_subject, support_text)
+                _validate_clause_support(
+                    clause,
+                    clause_subject,
+                    support_text,
+                    trusted_subjects=frozenset(
+                        subject
+                        for _, trusted_subjects in source_groups
+                        for subject in trusted_subjects
+                    ),
+                )
                 raise ValidationFailed(
                     "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",

@@ -42,6 +42,7 @@ from tests.application.retrieval.test_descriptive_answers import (
     _candidates,
     _paragraph,
 )
+from tests.application.retrieval.test_evidence_table_coordinates import _context
 
 
 @pytest.mark.parametrize(
@@ -271,6 +272,88 @@ def test_standalone_role_heading_can_support_its_following_duty() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_structural_role_heading_supports_body_only_duty_quote() -> None:
+    """经认证的精确标题只补主体，职责动作仍由同组正文逐字证明。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    assert [item.citation_text for item in evidence] == ["主持质量评审。"]
+    draft = AnswerDraft(
+        text="总经理主持质量评审。",
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text="总经理主持质量评审。",
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote="主持质量评审。",
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft,
+        evidence,
+        analysis=_general_manager_duty_analysis(),
+    )
+
+
+def test_structural_role_rejects_explicit_conflicting_body_subject() -> None:
+    """标题不能把正文中明确写出的另一个岗位改成查询岗位。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("生产经理主持生产调度会。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    draft = AnswerDraft(
+        text="总经理主持生产调度会。",
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text="总经理主持生产调度会。",
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote="生产经理主持生产调度会。",
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(
+            draft,
+            evidence,
+            analysis=_general_manager_duty_analysis(),
+        )
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
 def _general_manager_duty_analysis() -> QueryAnalysis:
     """返回本次回归所需的稳定职责查询语义。"""
     return QueryAnalysis(
@@ -284,6 +367,72 @@ def _general_manager_duty_analysis() -> QueryAnalysis:
         ),
         conversation_fingerprint=canonical_sha256({"conversation": []}),
     )
+
+
+def test_structural_duty_claim_streams_without_repair() -> None:
+    """标题归属与正文动作闭合后，首条职责可以直接通过流式发布门。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    claim = AnswerClaim(
+        text="总经理主持质量评审。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="主持质量评审。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+    requests: list[GenerationRequest] = []
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        assert not cancellation.is_cancelled()
+        requests.append(request)
+        on_claim(claim)
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_general_manager_duty_analysis(),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert emitted == [claim]
+    assert outcome.answer == "总经理主持质量评审。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert len(requests) == 1
+    assert requests[0].repair_reason is None
 
 
 @pytest.mark.parametrize(

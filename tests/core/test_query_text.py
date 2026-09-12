@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rag_app.core.query_text import (
     context_label_variants,
+    duty_heading_path_owns_target,
     select_unique_label_owner,
 )
 
@@ -45,3 +46,26 @@ def test_unique_label_owner_does_not_fuzzy_match_short_target() -> None:
     )
 
     assert owner is None
+
+
+def test_duty_heading_owner_uses_exact_role_boundary() -> None:
+    assert duty_heading_path_owns_target(
+        "总经理",
+        ("4 部门的职责", "4.1 总经理岗位职责"),
+    )
+    assert duty_heading_path_owns_target(
+        "总经理",
+        ("四、部门的职责", "一、总经理的安全职责"),
+    )
+    assert not duty_heading_path_owns_target(
+        "总经理",
+        ("4 部门的职责", "4.7 生产经理"),
+    )
+    assert not duty_heading_path_owns_target(
+        "总经理",
+        ("4 部门的职责", "4.2 副总经理"),
+    )
+    assert not duty_heading_path_owns_target(
+        "总经理",
+        ("4.1 总经理", "4.1.1 生产经理"),
+    )

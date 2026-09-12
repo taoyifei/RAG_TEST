@@ -12,6 +12,15 @@ _STRUCTURAL_SEPARATOR = re.compile(r"[\s_.\-—–/\\·:：()（）\[\]【】]+"
 _APPROXIMATE_LABEL_MINIMUM_LENGTH = 6
 _APPROXIMATE_LABEL_MINIMUM_SCORE = 0.8
 _APPROXIMATE_LABEL_MINIMUM_MARGIN = 0.15
+_STRUCTURAL_NUMBER_PREFIX = re.compile(
+    r"^\s*(?:(?:第[零一二三四五六七八九十百两\d]+(?:章|节|条|项)\s*)|"
+    r"(?:(?:[1-9]\d{0,3}(?:[.．][1-9]\d{0,2}){0,5})|"
+    r"[一二三四五六七八九十百]{1,4})"
+    r"(?:[、.．)）]\s*|\s+|(?=[A-Za-z\u3400-\u9fff])))"
+)
+_DUTY_LABEL_SUFFIX = re.compile(
+    r"(?:的)?(?:(?:岗位|安全|主要|核心|工作)?)职责$"
+)
 
 
 def normalize_identifier(identifier: str) -> str:
@@ -41,6 +50,46 @@ def normalize_document_label(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold().strip()
     normalized = _DOCUMENT_EXTENSION.sub("", normalized)
     return _STRUCTURAL_SEPARATOR.sub("", normalized)
+
+
+def normalize_duty_heading_label(value: str) -> str:
+    """规范化职责标题，同时保留岗位名称的完整边界。
+
+    Args:
+        value: 查询主体或标题路径中的一个完整标题。
+
+    Returns:
+        去除章节编号和职责后缀后的精确标签；不会做子串或模糊匹配。
+
+    """
+    normalized = unicodedata.normalize("NFKC", value).casefold().strip()
+    normalized = _STRUCTURAL_NUMBER_PREFIX.sub("", normalized)
+    normalized = _STRUCTURAL_SEPARATOR.sub("", normalized)
+    return _DUTY_LABEL_SUFFIX.sub("", normalized)
+
+
+def duty_heading_path_owns_target(
+    target: str,
+    heading_path: Iterable[str],
+) -> bool:
+    """检查标题路径是否含有与查询主体完全相同的职责所有者。
+
+    Args:
+        target: 已从职责问句中提取的完整主体。
+        heading_path: Chunk 冻结的逐级标题路径。
+
+    Returns:
+        某一级标题去格式后与主体完全相同时返回 True。
+
+    """
+    normalized_target = normalize_duty_heading_label(target)
+    labels = tuple(
+        normalize_duty_heading_label(heading) for heading in heading_path
+    )
+    return bool(normalized_target) and any(
+        label == normalized_target and not any(labels[index + 1 :])
+        for index, label in enumerate(labels)
+    )
 
 
 def context_label_variants(value: str) -> tuple[str, ...]:
@@ -118,7 +167,9 @@ def select_unique_label_owner(
 
 __all__ = [
     "context_label_variants",
+    "duty_heading_path_owns_target",
     "normalize_document_label",
+    "normalize_duty_heading_label",
     "normalize_identifier",
     "select_unique_label_owner",
 ]
