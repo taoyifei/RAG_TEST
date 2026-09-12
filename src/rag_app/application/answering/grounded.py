@@ -313,9 +313,12 @@ def _source_has_explicit_subject(subject: str, text: str) -> bool:
 
 
 def _validate_claim_target(
-    claim: AnswerClaim, analysis: QueryAnalysis | None
+    claim: AnswerClaim,
+    analysis: QueryAnalysis | None,
+    *,
+    source_groups: tuple[tuple[str, frozenset[str]], ...] = (),
 ) -> None:
-    """职责回答必须明确指向本次查询的职责主体。"""
+    """职责回答必须明确指向查询主体或由认证标题唯一补全。"""
     if (
         analysis is None
         or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
@@ -324,12 +327,46 @@ def _validate_claim_target(
         return
     clauses = _clauses_with_subject(claim.text)
     subject = _leading_explicit_subject(clauses[0][0]) if clauses else None
-    if subject is None or not _same_subject(subject, analysis.semantics.target):
+    if subject is not None:
+        if _same_subject(subject, analysis.semantics.target):
+            return
         raise ValidationFailed(
             "职责事实没有明确回答所问岗位。",
             stage="answer.validate",
             code="CLAIM_QUERY_TARGET_MISMATCH",
         )
+    trusted_target_in_every_group = bool(source_groups) and all(
+        any(
+            _same_subject(candidate, analysis.semantics.target)
+            for candidate in trusted_subjects
+        )
+        for _, trusted_subjects in source_groups
+    )
+    if not trusted_target_in_every_group:
+        raise ValidationFailed(
+            "职责事实没有明确回答所问岗位。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_TARGET_MISMATCH",
+        )
+
+
+def _render_claim_target(
+    claim: AnswerClaim, analysis: QueryAnalysis | None
+) -> AnswerClaim:
+    """为经结构认证但省略主语的职责事实添加明确展示标签。"""
+    if (
+        analysis is None
+        or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
+        or not analysis.semantics.target
+    ):
+        return claim
+    clauses = _clauses_with_subject(claim.text)
+    subject = _leading_explicit_subject(clauses[0][0]) if clauses else None
+    if subject is not None:
+        return claim
+    return claim.model_copy(
+        update={"text": f"{analysis.semantics.target}：{claim.text}"}
+    )
 
 
 def _negations(text: str) -> set[str]:
@@ -590,7 +627,6 @@ def validate_grounded_draft(
             code="GENERATION_ABSTAINED",
         )
     for claim in draft.claims:
-        _validate_claim_target(claim, analysis)
         units: list[EvidenceItem] = []
         for support in claim.supports:
             item = by_id.get(support.support_id)
@@ -609,6 +645,11 @@ def validate_grounded_draft(
                 )
             units.append(item)
         source_groups = _claim_source_groups(claim, units, analysis)
+        _validate_claim_target(
+            claim,
+            analysis,
+            source_groups=source_groups,
+        )
         support_text = "\n".join(support.quote for support in claim.supports)
         for clause, clause_subject in _clauses_with_subject(claim.text):
             for source_text, trusted_subjects in source_groups:
@@ -747,16 +788,17 @@ class GroundedAnsweringService:
                             evidence,
                             analysis=analysis,
                         )
-                        if claim in published_claims:
+                        rendered_claim = _render_claim_target(claim, analysis)
+                        if rendered_claim in published_claims:
                             raise ValidationFailed(
                                 "模型重复输出同一事实。",
                                 stage="answer.validate",
                                 code="DUPLICATE_CLAIM",
                             )
-                        on_claim(claim)
+                        on_claim(rendered_claim)
                         # HTTP 交付回调返回才算已发布；来源或授权门禁拒绝时
                         # 不能把尚未发送的 claim 误报为 partial 前缀。
-                        published_claims.append(claim)
+                        published_claims.append(rendered_claim)
 
                     if cancellation is None:
                         raise RuntimeError("流式生成缺少 cancellation。")
@@ -772,7 +814,11 @@ class GroundedAnsweringService:
                     reason = draft.reason_code
                     break
                 validate_grounded_draft(draft, evidence, analysis=analysis)
-                if published and draft.claims != tuple(published):
+                rendered_claims = tuple(
+                    _render_claim_target(claim, analysis)
+                    for claim in draft.claims
+                )
+                if published and rendered_claims != tuple(published):
                     raise ValidationFailed(
                         "增量事实与最终草稿不一致。",
                         stage="answer.validate",
@@ -785,7 +831,7 @@ class GroundedAnsweringService:
                     + " ".join(
                         f"[{support.support_id}]" for support in claim.supports
                     )
-                    for claim in draft.claims
+                    for claim in rendered_claims
                 )
                 return GroundedOutcome(
                     answer,

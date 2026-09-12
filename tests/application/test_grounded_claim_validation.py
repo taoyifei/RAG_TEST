@@ -312,6 +312,52 @@ def test_structural_role_heading_supports_body_only_duty_quote() -> None:
     )
 
 
+def test_structural_role_binds_omitted_claim_subject_without_repair() -> None:
+    """模型省略主语时，只允许认证标题确定主体并由服务端明确展示。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    claim = AnswerClaim(
+        text="主持质量评审。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="主持质量评审。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_general_manager_duty_analysis(),
+    )
+
+    assert outcome.answer == "总经理：主持质量评审。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert generator.generate.call_count == 1
+
+
 def test_structural_role_rejects_explicit_conflicting_body_subject() -> None:
     """标题不能把正文中明确写出的另一个岗位改成查询岗位。"""
     evidence = EvidenceAssembler().assemble(
@@ -433,6 +479,69 @@ def test_structural_duty_claim_streams_without_repair() -> None:
     assert outcome.reason_code == "CLAIMS_VALIDATED"
     assert len(requests) == 1
     assert requests[0].repair_reason is None
+
+
+def test_structural_duty_omitted_subject_streams_bound_target() -> None:
+    """流式路径在发布前绑定认证主体，并与最终草稿保持一致。"""
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.1 总经理")
+            + _paragraph("主持质量评审。")
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("总经理干嘛的"),
+    )
+    raw_claim = AnswerClaim(
+        text="主持质量评审。",
+        supports=(
+            ClaimSupport(
+                support_id=evidence[0].support_id,
+                quote="主持质量评审。",
+            ),
+        ),
+    )
+    draft = AnswerDraft(
+        text=raw_claim.text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(raw_claim,),
+        generation_mode="llm",
+    )
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        del request
+        assert not cancellation.is_cancelled()
+        on_claim(raw_claim)
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_general_manager_duty_analysis(),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert [claim.text for claim in emitted] == ["总经理：主持质量评审。"]
+    assert outcome.answer == "总经理：主持质量评审。 [S1]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
 
 
 @pytest.mark.parametrize(
