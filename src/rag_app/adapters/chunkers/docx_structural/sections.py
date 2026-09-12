@@ -116,6 +116,11 @@ def _body_sections(
         ]
     ] = []
     for node in ordered:
+        if node.kind is NodeKind.HEADING and (
+            node.text_payload is None
+            or not node.text_payload.exact_text.strip()
+        ):
+            continue
         inferred = inferred_headings.get(node.node_id)
         if node.kind is NodeKind.HEADING or inferred is not None:
             label = (
