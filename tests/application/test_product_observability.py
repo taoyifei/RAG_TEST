@@ -9,16 +9,47 @@ import pytest
 
 from rag_app.composition.product_runtime import build_product_runtime
 from rag_app.core.errors import PolicyDenied, ProviderInvalidResponse
+from rag_app.core.identifiers import canonical_json
 from rag_app.core.models import (
     EmbeddingRequest,
     EmbeddingRequestRole,
     ProviderCall,
 )
+from rag_app.product.control_store import _active_index_contract_mismatch
 from rag_app.product.provider_runtime import build_offline_mock_transport
 from tests.product_support import (
     build_product_harness,
     create_provider_connections,
 )
+
+
+def test_active_index_contract_detects_stale_chunker() -> None:
+    """Profile 指纹相同也不能掩盖镜像升级后的旧分块合同。"""
+    current = {
+        "chunker_identity": {
+            "component_id": "docx-structural-v3",
+            "version": "3.1.0",
+        }
+    }
+    row: dict[str, object] = {
+        "index_revision_id": "irev_" + "1" * 32,
+        "active_index_fingerprint": "sha256:" + "2" * 64,
+        "profile_fingerprint": "sha256:" + "2" * 64,
+        "chunker_identity_json": canonical_json(current["chunker_identity"]),
+    }
+
+    assert not _active_index_contract_mismatch(row, current)
+
+    stale = {
+        **row,
+        "chunker_identity_json": canonical_json(
+            {
+                "component_id": "docx-structural-v3",
+                "version": "3.0.2",
+            }
+        ),
+    }
+    assert _active_index_contract_mismatch(stale, current)
 
 
 def test_standby_daily_budget_survives_runtime_restart(

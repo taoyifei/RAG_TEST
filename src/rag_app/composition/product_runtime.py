@@ -58,7 +58,7 @@ from rag_app.composition.profiles import (
     RagProfile,
     default_offline_profile,
 )
-from rag_app.core.errors import RagError
+from rag_app.core.errors import RagError, ReindexRequired
 from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
@@ -865,6 +865,13 @@ class ProductProfileResolver:
             profile = self.active_profile(knowledge_base_id)
             service = fallback
             if profile is not None:
+                if self._control.profile_reindex_required(
+                    profile.profile_revision_id
+                ):
+                    raise ReindexRequired(
+                        "活动索引合同已过期，请完成重建后重试。",
+                        stage="retrieval.snapshot",
+                    )
                 service_generation = self._service_generation_locked(profile)
                 service = service_generation.resource.retrieval
             if self._models is not None:

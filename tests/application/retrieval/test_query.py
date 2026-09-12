@@ -491,6 +491,7 @@ def test_duty_question_preserves_leading_project_context() -> None:
     (
         "总经理是干嘛的 负责什么的",
         "总经理是干嘛的，负责哪些工作？",
+        "总经理干嘛的负责什么",
         "总经理主要做什么、管哪些事？",
     ),
 )

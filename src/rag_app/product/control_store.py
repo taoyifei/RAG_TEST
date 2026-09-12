@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from sqlite3 import Row
 
@@ -43,6 +43,37 @@ _MAX_DISPLAY_NAME = 200
 _MAX_VALIDATION_PAGE = 200
 _MAX_USAGE_PAGE = 1000
 _P11_DIMENSION = 1024
+_INDEX_CONTRACT_COLUMNS = (
+    ("parser_identity", "parser_identity_json"),
+    ("parsing_policy", "parsing_policy_json"),
+    ("chunker_identity", "chunker_identity_json"),
+    ("chunking_policy", "chunking_policy_json"),
+    ("lexical_schema", "lexical_schema_json"),
+    ("chunk_payload_schema", "chunk_payload_schema_json"),
+)
+
+
+def _active_index_contract_mismatch(
+    row: Row | Mapping[str, object],
+    index_contract: Mapping[str, object],
+) -> bool:
+    """比较活动索引的冻结合同与当前运行时代码合同。"""
+    if (
+        row["index_revision_id"] is None
+        or row["active_index_fingerprint"] != row["profile_fingerprint"]
+    ):
+        return True
+    for key, column in _INDEX_CONTRACT_COLUMNS:
+        expected = index_contract.get(key)
+        if expected is None:
+            continue
+        try:
+            actual = json.loads(str(row[column]))
+        except (TypeError, ValueError):
+            return True
+        if canonical_json(actual) != canonical_json(expected):
+            return True
+    return False
 
 
 class ProductControlStore:
@@ -1143,28 +1174,63 @@ class ProductControlStore:
 
         """
         with self._connections.transaction() as connection:
-            active = connection.execute(
-                "SELECT count(*) AS count FROM retrieval_profile_revisions "
-                "WHERE status='active'"
-            ).fetchone()
-            mismatches = connection.execute(
-                "SELECT count(*) AS count FROM retrieval_profile_revisions p "
+            profiles = connection.execute(
+                "SELECT p.profile_revision_id, "
+                "p.index_semantic_fingerprint AS profile_fingerprint, "
+                "r.index_revision_id, "
+                "r.index_fingerprint AS active_index_fingerprint, "
+                "r.parser_identity_json, r.parsing_policy_json, "
+                "r.chunker_identity_json, r.chunking_policy_json, "
+                "r.lexical_schema_json, r.chunk_payload_schema_json "
+                "FROM retrieval_profile_revisions p "
                 "JOIN knowledge_bases k "
                 "ON k.knowledge_base_id=p.knowledge_base_id "
                 "LEFT JOIN index_revisions r "
                 "ON r.index_revision_id=k.active_revision_id "
-                "WHERE p.status='active' AND (r.index_revision_id IS NULL "
-                "OR r.index_fingerprint<>p.index_semantic_fingerprint)"
-            ).fetchone()
-            profiles = connection.execute(
-                "SELECT profile_revision_id FROM retrieval_profile_revisions "
-                "WHERE status='active' ORDER BY profile_revision_id"
+                "WHERE p.status='active' ORDER BY p.profile_revision_id"
             ).fetchall()
+        reindex_required = any(
+            _active_index_contract_mismatch(row, self.index_contract)
+            for row in profiles
+        )
         return {
-            "active_profile_count": int(active["count"]) if active else 0,
-            "active_profile_ids": [str(row[0]) for row in profiles],
-            "reindex_required": bool(mismatches and mismatches["count"]),
+            "active_profile_count": len(profiles),
+            "active_profile_ids": [
+                str(row["profile_revision_id"]) for row in profiles
+            ],
+            "reindex_required": reindex_required,
         }
+
+    def profile_reindex_required(self, profile_revision_id: str) -> bool:
+        """判断指定活动 Profile 的索引是否匹配当前代码合同。
+
+        Args:
+            profile_revision_id: 单次查询已冻结的活动 Profile Revision。
+
+        Returns:
+            索引缺失、指纹不符、合同过期或 Profile 已切换时返回 True。
+
+        """
+        with self._connections.transaction() as connection:
+            row = connection.execute(
+                "SELECT p.profile_revision_id, "
+                "p.index_semantic_fingerprint AS profile_fingerprint, "
+                "r.index_revision_id, "
+                "r.index_fingerprint AS active_index_fingerprint, "
+                "r.parser_identity_json, r.parsing_policy_json, "
+                "r.chunker_identity_json, r.chunking_policy_json, "
+                "r.lexical_schema_json, r.chunk_payload_schema_json "
+                "FROM retrieval_profile_revisions p "
+                "JOIN knowledge_bases k "
+                "ON k.knowledge_base_id=p.knowledge_base_id "
+                "LEFT JOIN index_revisions r "
+                "ON r.index_revision_id=k.active_revision_id "
+                "WHERE p.profile_revision_id=? AND p.status='active'",
+                (profile_revision_id,),
+            ).fetchone()
+        return row is None or _active_index_contract_mismatch(
+            row, self.index_contract
+        )
 
     def _optional_embedding_connection(
         self,

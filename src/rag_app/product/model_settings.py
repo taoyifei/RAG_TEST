@@ -155,11 +155,11 @@ class ProductModelSettings:
         """
         identity: dict[str, object] = {
             "settings": settings.model_dump(),
-            "prompt": "grounded-chat-v3",
+            "prompt": "grounded-chat-v4",
             "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
-            "validation": "claim-support-v5",
-            "answer_selection": "shared-query-semantics-v2",
+            "validation": "claim-support-v6",
+            "answer_selection": "shared-query-semantics-v3",
         }
         if settings.generation_connection_id:
             connection = self.control.get_connection(

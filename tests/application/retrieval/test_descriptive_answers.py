@@ -257,7 +257,7 @@ def test_role_table_keeps_raw_cells_for_model_instead_of_combining_answer() -> (
     assert selection.answer_support_set == ()
 
 
-def test_flat_role_sections_keep_heading_context_for_model_candidates() -> None:
+def test_flat_role_sections_use_exact_heading_owner_for_duty_support() -> None:
     blocks = "".join(
         _paragraph(text)
         for text in (
@@ -281,11 +281,48 @@ def test_flat_role_sections_keep_heading_context_for_model_candidates() -> None:
         for item in selection.model_evidence_candidates
     }
 
+    assert [item.citation_text for item in selection.answer_support_set] == [
+        "制定公开合成目标。"
+    ]
     assert "制定公开合成目标。" in by_quote
     assert "协调公开合成资源。" in by_quote
     assert "合成总经理" in by_quote["制定公开合成目标。"]
     assert "合成总经理" in by_quote["协调公开合成资源。"]
     assert "合成财务" in by_quote["在合成总经理领导下核对公开合成账目。"]
+    manager_candidates = tuple(
+        item
+        for item in selection.model_evidence_candidates
+        if item.citation_text in {"制定公开合成目标。", "协调公开合成资源。"}
+    )
+    assert len(manager_candidates) == 2
+    assert all(
+        dict(item.metadata)["answer_support"]["support_reason"]
+        == "SECTION_HEADING_BODY"
+        for item in manager_candidates
+    )
+
+
+def test_duty_heading_does_not_borrow_nested_or_sibling_role_body() -> None:
+    blocks = "".join(
+        _paragraph(text)
+        for text in (
+            "4 部门职责",
+            "4.1 总经理",
+            "制定公司质量目标。",
+            "4.1.1 生产经理",
+            "主持生产调度会。",
+            "4.2 副总经理",
+            "组织设备验收。",
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        _candidates(blocks),
+        _POLICY,
+        context=_context("总经理干嘛的负责什么"),
+    )
+
+    assert [item.citation_text for item in evidence] == ["制定公司质量目标。"]
 
 
 @pytest.mark.parametrize(

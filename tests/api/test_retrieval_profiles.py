@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from tests.product_support import (
     build_product_harness,
@@ -46,7 +47,9 @@ def test_profile_requires_validation_then_previews_and_activates(
     monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "synthetic-aliyun-value")
     harness = build_product_harness(tmp_path)
     try:
-        _, knowledge_base_id = create_project_and_knowledge_base(harness)
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
         _, _, jina_connection, aliyun_connection = create_provider_connections(
             harness
         )
@@ -77,5 +80,25 @@ def test_profile_requires_validation_then_previews_and_activates(
         activated.raise_for_status()
         assert activated.json()["status"] == "active"
         assert harness.runtime.sdk.health().active_profile_count == 1
+        issued = harness.client.post(
+            "/api/v1/access-tokens",
+            headers=harness.write_headers,
+            json={
+                "name": "过期索引查询回归",
+                "scopes": ["query:read"],
+                "project_id": project_id,
+                "knowledge_base_id": knowledge_base_id,
+            },
+        )
+        issued.raise_for_status()
+        with TestClient(harness.client.app) as external:
+            blocked_query = external.post(
+                f"/api/v1/projects/{project_id}/knowledge-bases/"
+                f"{knowledge_base_id}:search",
+                headers={"Authorization": f"Bearer {issued.json()['token']}"},
+                json={"query": "公开合成职责"},
+            )
+        assert blocked_query.status_code == 409
+        assert blocked_query.json()["error"]["code"] == "REINDEX_REQUIRED"
     finally:
         harness.close()

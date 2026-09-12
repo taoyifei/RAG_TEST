@@ -404,6 +404,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "这两个ID的逐字quote" in prompt
         assert "候选证据" in prompt
         assert "不同来源组回答不同事实，拆成多条claim" in prompt
+        assert "verified_duty_owner" in prompt
         content = json.loads(messages[1]["content"])
         assert content["typed_semantics"]["answer_type"] == "DUTIES"
         assert "answer_support_set" not in content
@@ -418,11 +419,88 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert locations[0]["table_locator"] == "public-table"
         assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
         assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"
+        assert all("verified_duty_owner" not in item for item in locations)
         candidate_location = content["evidence"][2]["source_structure"]
         assert candidate_location["anchors"][0]["structural_path"][2] == "tr:1"
         assert "CLAIM_OBJECT_CHANGED" in messages[2]["content"]
         assert "把不同来源组支持的事实拆开" in messages[2]["content"]
         assert len(requests) == 1
+    finally:
+        adapter.close()
+
+
+def test_generation_projects_only_verified_structural_duty_owner(
+    tmp_path: Path,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_response('{"claims":[]}'))
+
+    text = "主持质量评审。"
+    path = ("body", "p:2")
+    node_id = "node_" + "9" * 32
+    anchor = SourceAnchor(
+        part_uri="/word/document.xml",
+        story_kind=StoryKind.BODY,
+        structural_path=path,
+        ordinal=2,
+    )
+    span = SourceSpan(
+        node_id=node_id,
+        source_anchor=anchor,
+        structural_path=path,
+        chunk_start_char=0,
+        chunk_end_char=len(text),
+        source_start_char=0,
+        source_end_char=len(text),
+    )
+    item = (
+        _generation_request()
+        .evidence[0]
+        .model_copy(
+            update={
+                "citation_text": text,
+                "heading_path": ("4 部门的职责", "4.1 总经理"),
+                "source_spans": (span,),
+                "metadata": {
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "query_target": "总经理",
+                        "requested_relation_or_attribute": "职责",
+                        "answer_type": "DUTIES",
+                        "support_reason": "SECTION_HEADING_BODY",
+                        "supporting_span_ids": [node_id],
+                    }
+                },
+            }
+        )
+    )
+    adapter = _adapter(tmp_path, handler)
+    try:
+        adapter.generate(
+            _generation_request().model_copy(
+                update={
+                    "evidence": (item,),
+                    "model_evidence_candidates": (item,),
+                    "answer_support_set": (item,),
+                    "typed_semantics": QuerySemantics(
+                        target="总经理",
+                        relation="职责",
+                        answer_type=RequestedAnswerType.DUTIES,
+                        source="RULE",
+                    ),
+                }
+            )
+        )
+        messages = json.loads(requests[0].content)["messages"]
+        content = json.loads(messages[1]["content"])
+
+        assert (
+            content["evidence"][0]["source_structure"]["verified_duty_owner"]
+            == "总经理"
+        )
     finally:
         adapter.close()
 

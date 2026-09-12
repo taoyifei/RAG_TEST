@@ -21,7 +21,10 @@ _DUTY_ACTION = (
     r"(?:(?:都|主要)?(?:要|需要|得)?)(?:是)?(?:做|管)"
     r"(?:什么|啥|些(?:什么|啥)?|哪些)(?:事|工作|事项|内容)?(?:的)?)"
 )
-_DUTY_CONNECTOR = r"(?:\s+|[，,、/；;]\s*|(?:以及|并且|还有|和|及)\s*)"
+_DUTY_CONNECTOR = (
+    r"(?:\s+|[，,、/；;]\s*|(?:以及|并且|还有|和|及)\s*|"
+    r"(?<=的)(?=(?:职责|负责|承担|干|做|管)))"
+)
 _DUTY = re.compile(
     rf"{_DUTY_MODIFIERS}{_DUTY_ACTION}(?:工作|事项|内容)?"
     rf"(?:{_DUTY_CONNECTOR}{_DUTY_MODIFIERS}{_DUTY_ACTION}"
