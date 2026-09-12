@@ -371,6 +371,54 @@ def test_structural_duty_ignores_alphabetic_list_marker_as_subject() -> None:
     )
 
 
+def test_department_suffix_precedes_assisted_manager() -> None:
+    """“行政部协助总经理”应绑定行政部，不能吞并宾语总经理。"""
+    source = "协助总经理制定并落实各部门的质量方针和质量目标。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph("4 部门的职责")
+            + _paragraph("4.3 行政部")
+            + _paragraph(source)
+        ),
+        RetrievalPolicy(
+            per_document_cap=8,
+            per_section_cap=8,
+            max_evidence_items_per_chunk=8,
+        ),
+        context=_context("行政部负责什么"),
+    )
+    claim = "行政部协助总经理制定并落实各部门的质量方针和质量目标。"
+    draft = AnswerDraft(
+        text=claim,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text=claim,
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id,
+                        quote=source,
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+    analysis = QueryAnalysis(
+        original_query="行政部负责什么",
+        normalized_query="行政部负责什么",
+        semantics=QuerySemantics(
+            target="行政部",
+            relation="职责",
+            answer_type=RequestedAnswerType.DUTIES,
+            source="RULE",
+        ),
+        conversation_fingerprint=canonical_sha256({"conversation": []}),
+    )
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
 def test_structural_role_binds_omitted_claim_subject_without_repair() -> None:
     """模型省略主语时，只允许认证标题确定主体并由服务端明确展示。"""
     evidence = EvidenceAssembler().assemble(
@@ -644,6 +692,39 @@ def test_grounded_negation_stays_bound_to_its_action_and_keeps_paraphrases(
     claim: str,
 ) -> None:
     evidence, draft = _supported_draft(text, claim)
+    validate_grounded_draft(draft, evidence)
+
+
+@pytest.mark.parametrize(
+    "text,claim",
+    [
+        (
+            "文控负责按要求管理文件，发放文件要及时，准确，无误，"
+            "收发文件时要登记，没有手续文件不得发放。",
+            "文控负责按要求管理文件，发放文件要及时，准确，无误，"
+            "收发文件时要登记，没有手续文件不得发放。",
+        ),
+        (
+            "财务人员负责汇报财务状况。定期或不定期汇报财务收支，"
+            "以便领导及时决策。",
+            "财务人员负责汇报财务状况，定期或不定期汇报财务收支，"
+            "以便领导及时决策。",
+        ),
+        (
+            "生产经理负责抓好安全环保工作，确保安全生产无事故，"
+            "环保指标达标。"
+            "对生产事故要及时组织人员分析，定出防范措施。",
+            "生产经理负责抓好安全环保工作，确保安全生产无事故，"
+            "环保指标达标，并对生产事故及时组织人员分析，定出防范措施。",
+        ),
+    ],
+)
+def test_negation_alignment_uses_the_best_matching_atomic_action(
+    text: str, claim: str
+) -> None:
+    """同段其他动作的否定词不能污染当前原子动作。"""
+    evidence, draft = _supported_draft(text, claim)
+
     validate_grounded_draft(draft, evidence)
 
 

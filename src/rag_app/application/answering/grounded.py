@@ -100,17 +100,17 @@ _ENTITY_SUBJECT = re.compile(
     r"^\s*((?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
     r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
     r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
-    r"服务|应用|模块|组件|设备|系统|模式|库)))"
+    r"服务|应用|模块|组件|设备|系统|模式|库|部)))"
     r"\s*(?=(?:(?:应当|必须|可以|应|须|需|可|已)?"
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
-    rf"(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB}))"
+    rf"(?:{_ACTION_MODIFIER})?(?:{_DUTY_ACTION_VERB}))"
     r"|的(?:核心)?职责|的(?:维护)?周期)"
 )
 _STANDALONE_SUBJECT = re.compile(
     r"(?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
     r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
     r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
-    r"服务|应用|模块|组件|设备|系统|模式|库|管代))"
+    r"服务|应用|模块|组件|设备|系统|模式|库|管代|部))"
 )
 _SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
 _LEADING_LIST_MARKER = re.compile(
@@ -196,7 +196,7 @@ def _subject(text: str) -> str | None:
         return None
     subject_text = without_modal
     if re.match(
-        rf"^\s*(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB})",
+        rf"^\s*(?:{_ACTION_MODIFIER})?(?:{_DUTY_ACTION_VERB})",
         subject_text,
     ):
         return None
@@ -289,6 +289,8 @@ def _leading_explicit_subject(text: str) -> str | None:
         "",
         _LEADING_MODAL.sub("", _LEADING_ACTION_CONTEXT.sub("", text)),
     )
+    if _DUTY_ACTION_PREFIX.match(subject_text) is not None:
+        return None
     match = _STANDALONE_SUBJECT.match(subject_text)
     if (
         match is None
@@ -398,16 +400,35 @@ def _action_terms(text: str) -> set[str]:
     return _terms(_NEGATION.sub("", _NUMBER.sub("", text)))
 
 
+def _best_negation_sources(clause: str, sources: list[str]) -> list[str]:
+    """将极性绑定到词汇重合最高的原子动作，而非同段相邻动作。"""
+    action = _action_terms(clause)
+    if action:
+        signature = action
+        source_signature = _action_terms
+    else:
+        # “无误”一类短状态去掉否定词后没有二元词，保留原词才能对齐。
+        signature = _terms(_NUMBER.sub("", _predicate(clause)))
+
+        def source_signature(text: str) -> set[str]:
+            return _terms(_NUMBER.sub("", _predicate(text)))
+
+    if not signature:
+        return []
+    minimum = min(_MIN_NEGATION_SHARED_TERMS, len(signature))
+    scored = [
+        (len(source_signature(source) & signature), source)
+        for source in sources
+    ]
+    best = max((score for score, _ in scored), default=0)
+    if best < minimum:
+        return []
+    return [source for score, source in scored if score == best]
+
+
 def _check_negations(clause: str, source_clauses: list[str]) -> None:
     """只比较同一动作的极性，不能借用其他职责中的否定词。"""
-    action = _action_terms(clause)
-    relevant = [
-        source
-        for source in source_clauses
-        if action
-        and len(_action_terms(source) & action)
-        >= min(_MIN_NEGATION_SHARED_TERMS, len(action))
-    ]
+    relevant = _best_negation_sources(clause, source_clauses)
     expected = _negations(clause)
     # “不同需求”不是动作否定，但仍不能把明确的异同关系反转为“相同”。
     if _SAME_RELATION.search(clause) and any(
