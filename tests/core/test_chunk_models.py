@@ -8,6 +8,7 @@ from rag_app.adapters.chunkers.docx_structural.validation import (
 )
 from rag_app.core.models import (
     Chunk,
+    ChunkContextDependency,
     ChunkingPolicy,
     ChunkingReport,
     DocumentVersionRef,
@@ -86,6 +87,50 @@ def test_chunk_requires_gapless_citation_span_coverage() -> None:
     )
     with pytest.raises(ValidationError):
         _chunk((span,))
+
+
+def test_chunk_context_dependencies_are_ordered_and_legacy_optional() -> None:
+    anchor = _anchor()
+    span = SourceSpan(
+        node_id=f"node_{'6' * 32}",
+        source_anchor=anchor,
+        structural_path=anchor.structural_path,
+        chunk_start_char=0,
+        chunk_end_char=3,
+        source_start_char=0,
+        source_end_char=3,
+    )
+    legacy_payload = _chunk((span,)).model_dump(mode="json")
+    legacy_payload["heading_path"] = ["旧版标题"]
+    legacy_payload.pop("context_dependencies")
+
+    legacy = Chunk.model_validate(legacy_payload)
+    assert legacy.heading_path == ("旧版标题",)
+    assert legacy.context_dependencies == ()
+
+    dependency = ChunkContextDependency(
+        source_node_id=f"node_{'7' * 32}",
+        origin="inferred_numbered_heading",
+    )
+    with pytest.raises(ValidationError, match="逐级对应"):
+        Chunk.model_validate(
+            {
+                **legacy_payload,
+                "heading_path": ["一级", "二级"],
+                "context_dependencies": [dependency.model_dump(mode="json")],
+            }
+        )
+    with pytest.raises(ValidationError, match="重复来源节点"):
+        Chunk.model_validate(
+            {
+                **legacy_payload,
+                "heading_path": ["一级", "二级"],
+                "context_dependencies": [
+                    dependency.model_dump(mode="json"),
+                    dependency.model_dump(mode="json"),
+                ],
+            }
+        )
 
 
 def test_quote_validator_rejects_separator_and_cross_source_quote() -> None:

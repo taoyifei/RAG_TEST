@@ -64,7 +64,7 @@ class DocxStructuralChunker:
     descriptor = ComponentDescriptor(
         kind=ComponentKind.CHUNKER,
         name="docx-structural-v3",
-        version="3.0.2",
+        version="3.1.0",
         mode=ProviderMode.LOCAL,
         capabilities=ComponentCapabilities(),
     )
@@ -228,6 +228,11 @@ class DocxStructuralChunker:
                 note_id for atom in atoms for note_id in atom.note_refs
             )
         )
+        context_dependencies = first.context_dependencies
+        if any(
+            atom.context_dependencies != context_dependencies for atom in atoms
+        ):
+            raise ValueError("同一 pack 的 context dependencies 必须一致。")
         span_identity = tuple(
             span.model_dump(mode="json", exclude_none=False)
             for span in rendered.spans
@@ -264,6 +269,7 @@ class DocxStructuralChunker:
                 neighbor_group_id=first.neighbor_group_id,
                 child_group_ids=child_groups,
                 note_refs=note_refs,
+                context_dependencies=context_dependencies,
                 source_spans=rendered.spans,
                 citation_text=rendered.text,
                 embedding_text=embedded,

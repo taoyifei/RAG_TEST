@@ -117,7 +117,7 @@ def _identity() -> FrozenBaselineIdentity:
         ),
         chunker=ComponentIdentity(
             component_id="docx-structural-v3",
-            version="3.0.2",
+            version="3.1.0",
             policy_sha256=_digest("chunking-policy"),
         ),
         chunks=chunks,

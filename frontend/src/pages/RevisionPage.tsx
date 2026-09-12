@@ -146,6 +146,22 @@ export function RevisionPage({ go }: { go?: (path: string) => void }) {
             <p>{chunk.embedding_text}</p>
             <h4>关键词文本</h4>
             <p>{chunk.lexical_text}</p>
+            <h4>结构路径</h4>
+            <p>{chunk.heading_path.join(" / ") || "无标题上下文"}</p>
+            <h4>结构依赖</h4>
+            {chunk.context_dependencies.length > 0 ? (
+              <ul>
+                {chunk.context_dependencies.map((dependency) => (
+                  <li key={dependency.source_node_id}>
+                    <code>{dependency.relationship_type}</code> ·{" "}
+                    {dependency.origin}·{" "}
+                    <code>{dependency.source_node_id}</code>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p>无显式结构依赖</p>
+            )}
             <pre>{JSON.stringify(chunk.source_spans, null, 2)}</pre>
           </details>
         ))}

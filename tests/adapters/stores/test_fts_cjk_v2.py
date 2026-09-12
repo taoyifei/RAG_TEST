@@ -187,6 +187,63 @@ def test_structural_channel_ranks_document_heading_and_body(
         runtime.close()
 
 
+def test_flat_numbered_heading_context_is_indexed_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    runtime, project_id, knowledge_base_id = runtime_with_kb(tmp_path)
+    long_duties = "".join(
+        _paragraph(
+            f"{label}）负责公开合成质量目标、资源协调、交付复核与改进闭环。" * 5
+        )
+        for label in ("a", "b", "c", "d")
+    )
+    selected = _document_blocks(
+        project_id,
+        knowledge_base_id,
+        "合成岗位职责",
+        _paragraph("4 部门职责")
+        + _paragraph("4.1 合成总经理")
+        + long_duties
+        + _paragraph("4.2 合成财务")
+        + _paragraph("在合成总经理领导下核对公开合成账目。"),
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            documents=(selected,),
+            idempotency_key="flat-heading-context",
+            budgets=runtime.default_budgets(),
+        )
+        spec = runtime.control.revision_vector_spec(result.revision_id)
+
+        hits = runtime.components.lexical_store.search(
+            LexicalSearchRequest(
+                revision=spec.revision,
+                query="合成总经理",
+                limit=20,
+            )
+        )
+        manager_chunks = [
+            hit.chunk
+            for hit in hits
+            if hit.chunk.heading_path[-1:] == ("4.1 合成总经理",)
+        ]
+
+        assert manager_chunks
+        assert hits[0].chunk.heading_path[-1:] == ("4.1 合成总经理",)
+        assert any(
+            "合成总经理" not in chunk.citation_text for chunk in manager_chunks
+        )
+        assert all(chunk.context_dependencies for chunk in manager_chunks)
+        assert all(
+            len(chunk.context_dependencies) == len(chunk.heading_path)
+            for chunk in manager_chunks
+        )
+    finally:
+        runtime.close()
+
+
 def test_structural_channel_accepts_generic_document_suffix_in_qualifier(
     tmp_path: Path,
 ) -> None:

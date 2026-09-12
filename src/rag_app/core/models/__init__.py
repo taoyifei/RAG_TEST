@@ -12,6 +12,7 @@ from rag_app.core.models.answer_stream import (
 )
 from rag_app.core.models.chunk import (
     Chunk,
+    ChunkContextDependency,
     ChunkingContext,
     ChunkingPolicy,
     ChunkingReport,
@@ -211,6 +212,7 @@ __all__ = [
     "CellGrid",
     "ChannelHit",
     "Chunk",
+    "ChunkContextDependency",
     "ChunkEmbeddingState",
     "ChunkPage",
     "ChunkRole",

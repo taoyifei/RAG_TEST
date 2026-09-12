@@ -116,6 +116,14 @@
             "title": "Content Sha256",
             "type": "string"
           },
+          "context_dependencies": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ChunkContextDependency"
+            },
+            "title": "Context Dependencies",
+            "type": "array"
+          },
           "embedding_text": {
             "minLength": 1,
             "title": "Embedding Text",
@@ -287,6 +295,37 @@
           "content_sha256"
         ],
         "title": "Chunk",
+        "type": "object"
+      },
+      "ChunkContextDependency": {
+        "additionalProperties": false,
+        "description": "Chunk 使用的真实结构上下文节点关系。",
+        "properties": {
+          "origin": {
+            "default": "document_heading",
+            "enum": [
+              "document_heading",
+              "inferred_numbered_heading"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "relationship_type": {
+            "const": "heading_context",
+            "default": "heading_context",
+            "title": "Relationship Type",
+            "type": "string"
+          },
+          "source_node_id": {
+            "pattern": "^node_[0-9a-f]{32}$",
+            "title": "Source Node Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_node_id"
+        ],
+        "title": "ChunkContextDependency",
         "type": "object"
       },
       "ChunkPage": {

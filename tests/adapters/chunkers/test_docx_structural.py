@@ -74,6 +74,11 @@ def _chunk(
     )
 
 
+def _paragraph(text: str) -> str:
+    """构造不带标题样式的合成段落。"""
+    return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
+
+
 def test_all_p04_fixtures_respect_parser_boundary() -> None:
     parsed_count = 0
     rejected_count = 0
@@ -101,6 +106,459 @@ def test_all_p04_fixtures_respect_parser_boundary() -> None:
             )
     assert parsed_count == 18
     assert rejected_count == 2
+
+
+def test_flat_numbered_headings_propagate_auditable_dependencies() -> None:
+    blocks = "".join(
+        _paragraph(text)
+        for text in (
+            "4 部门职责",
+            "4.1 合成经理",
+            "a）制定公开合成质量目标并组织落实。",
+            "b）协调公开合成资源并跟踪交付风险。",
+            "c）批准公开合成制度并检查执行结果。",
+            "d）组织公开合成复盘并推动持续改进。",
+            "4.2 合成财务",
+            "在合成经理领导下，负责公开合成账目核对。",
+        )
+    )
+    document_ir = parse_package(
+        build_package(blocks), name="flat-numbered-headings.docx"
+    ).document_ir
+    result = _chunk(
+        document_ir,
+        policy=ChunkingPolicy(
+            target_tokens=180,
+            hard_max_tokens=240,
+            overlap_cap_tokens=24,
+            min_tail_tokens=32,
+            profile_hard_cap=240,
+        ),
+    )
+    nodes_by_text = {node.text.strip(): node for node in document_ir.nodes}
+    manager_node = nodes_by_text["4.1 合成经理"]
+    department_node = nodes_by_text["4 部门职责"]
+    manager_duty_nodes = {
+        nodes_by_text[text].node_id
+        for text in (
+            "a）制定公开合成质量目标并组织落实。",
+            "b）协调公开合成资源并跟踪交付风险。",
+            "c）批准公开合成制度并检查执行结果。",
+            "d）组织公开合成复盘并推动持续改进。",
+        )
+    }
+    manager_chunks = [
+        chunk
+        for chunk in result.chunks
+        if manager_duty_nodes
+        & {span.node_id for span in chunk.source_spans if span.node_id}
+    ]
+
+    assert len(manager_chunks) >= 2
+    assert all(
+        chunk.heading_path == ("4 部门职责", "4.1 合成经理")
+        for chunk in manager_chunks
+    )
+    assert all(
+        tuple(
+            dependency.source_node_id
+            for dependency in chunk.context_dependencies
+        )
+        == (department_node.node_id, manager_node.node_id)
+        for chunk in manager_chunks
+    )
+    assert all(
+        {dependency.origin for dependency in chunk.context_dependencies}
+        == {"inferred_numbered_heading"}
+        for chunk in manager_chunks
+    )
+    finance_chunk = next(
+        chunk
+        for chunk in result.chunks
+        if "公开合成账目核对" in chunk.citation_text
+    )
+    assert finance_chunk.heading_path == ("4 部门职责", "4.2 合成财务")
+    assert result.report.source_span_coverage == 1.0
+    assert result.report.missing_source_chars == 0
+    assert (
+        sum("4.1 合成经理" in chunk.citation_text for chunk in result.chunks)
+        == 1
+    )
+
+    repeated = _chunk(
+        document_ir,
+        policy=ChunkingPolicy(
+            target_tokens=180,
+            hard_max_tokens=240,
+            overlap_cap_tokens=24,
+            min_tail_tokens=32,
+            profile_hard_cap=240,
+        ),
+    )
+    assert tuple(chunk.chunk_id for chunk in repeated.chunks) == tuple(
+        chunk.chunk_id for chunk in result.chunks
+    )
+
+
+def test_implicit_heading_rejects_toc_clusters_clauses_and_measurements() -> (
+    None
+):
+    texts = (
+        "1、总则",
+        "2、安全管理委员会",
+        "3、消防安全管理制度",
+        "以下为正文",
+        "1、总则",
+        "为加强公开合成安全管理，制定本制度。",
+        "4.1.2 专用量具的制作",
+        "4.1.2.1采购部根据制作计划联系合成供应商",
+        "4.1.4.4 验收合格的专用量具在编号后加刻管理编号后办理入库手续",
+        "3.7.2 在制品质量检验由品质部负责检验。\ue004",
+        "100 分（暂定）",
+        "20%",
+    )
+    document_ir = parse_package(
+        build_package("".join(_paragraph(text) for text in texts)),
+        name="heading-negative-cases.docx",
+    ).document_ir
+    result = _chunk(document_ir)
+    nodes = [
+        node for node in document_ir.nodes if node.text.strip() in set(texts)
+    ]
+    first_toc_ids = {node.node_id for node in nodes[:3]}
+    actual_heading = next(
+        node for node in nodes[3:] if node.text.strip() == "1、总则"
+    )
+    clause = next(
+        node for node in nodes if node.text.strip().startswith("4.1.2.1采购部")
+    )
+    long_clause = next(
+        node for node in nodes if node.text.strip().startswith("4.1.4.4 验收")
+    )
+    legacy_clause = next(
+        node for node in nodes if node.text.strip().startswith("3.7.2 在制品")
+    )
+    dependency_ids = {
+        dependency.source_node_id
+        for chunk in result.chunks
+        for dependency in chunk.context_dependencies
+    }
+    clause_chunk = next(
+        chunk
+        for chunk in result.chunks
+        if clause.node_id
+        in {span.node_id for span in chunk.source_spans if span.node_id}
+    )
+
+    assert first_toc_ids.isdisjoint(dependency_ids)
+    assert actual_heading.node_id in dependency_ids
+    assert clause.node_id not in dependency_ids
+    assert long_clause.node_id not in dependency_ids
+    assert legacy_clause.node_id not in dependency_ids
+    assert clause_chunk.heading_path[-1] == "4.1.2 专用量具的制作"
+    assert all(
+        "100 分" not in heading and "20%" not in heading
+        for chunk in result.chunks
+        for heading in chunk.heading_path
+    )
+    assert result.report.source_span_coverage == 1.0
+
+
+def test_toc_cluster_stops_at_numbering_reset_without_body_separator() -> None:
+    texts = (
+        "1、总则",
+        "2、安全管理委员会",
+        "3、消防安全管理制度",
+        "4、安全生产教育制度",
+        "1、总则",
+        "本制度用于公开合成验证。",
+    )
+    document_ir = parse_package(
+        build_package("".join(_paragraph(text) for text in texts)),
+        name="toc-followed-by-body.docx",
+    ).document_ir
+    result = _chunk(document_ir)
+    ordered = [
+        node
+        for node in document_ir.nodes
+        if node.kind is NodeKind.PARAGRAPH and node.text.strip()
+    ]
+    dependency_ids = {
+        dependency.source_node_id
+        for chunk in result.chunks
+        for dependency in chunk.context_dependencies
+    }
+
+    assert {node.node_id for node in ordered[:4]}.isdisjoint(dependency_ids)
+    assert ordered[4].node_id in dependency_ids
+    body_chunk = next(
+        chunk
+        for chunk in result.chunks
+        if "公开合成验证" in chunk.citation_text
+    )
+    assert body_chunk.heading_path == ("1、总则",)
+
+
+def test_mixed_flat_numbering_preserves_parent_child_series() -> None:
+    texts = (
+        "1、目的",
+        "目的正文。",
+        "2.范围",
+        "范围正文。",
+        "3、职责",
+        "职责正文。",
+        "4、安全生产责任制度",
+        "一.合成总经理的安全职责",
+        "组织公开合成安全检查。",
+        "二.合成生产经理的安全职责",
+        "落实公开合成现场措施。",
+        "5、安全生产检查制度",
+        "1.安全检查的内容",
+        "检查公开合成设备。",
+        "2.安全检查的形式",
+        "开展公开合成巡检。",
+        "6、附则",
+        "附则正文。",
+    )
+    result = _chunk(
+        parse_package(
+            build_package("".join(_paragraph(text) for text in texts)),
+            name="mixed-flat-numbering.docx",
+        ).document_ir
+    )
+    chunks_by_phrase = {
+        phrase: next(
+            chunk for chunk in result.chunks if phrase in chunk.citation_text
+        )
+        for phrase in (
+            "范围正文",
+            "组织公开合成安全检查",
+            "落实公开合成现场措施",
+            "检查公开合成设备",
+            "开展公开合成巡检",
+            "附则正文",
+        )
+    }
+
+    assert chunks_by_phrase["范围正文"].heading_path == ("2.范围",)
+    assert chunks_by_phrase["组织公开合成安全检查"].heading_path == (
+        "4、安全生产责任制度",
+        "一.合成总经理的安全职责",
+    )
+    assert chunks_by_phrase["落实公开合成现场措施"].heading_path == (
+        "4、安全生产责任制度",
+        "二.合成生产经理的安全职责",
+    )
+    assert chunks_by_phrase["检查公开合成设备"].heading_path == (
+        "5、安全生产检查制度",
+        "1.安全检查的内容",
+    )
+    assert chunks_by_phrase["开展公开合成巡检"].heading_path == (
+        "5、安全生产检查制度",
+        "2.安全检查的形式",
+    )
+    assert chunks_by_phrase["附则正文"].heading_path == ("6、附则",)
+
+
+def test_chinese_top_level_can_contain_arabic_flat_subheadings() -> None:
+    texts = (
+        "一、目的",
+        "目的正文。",
+        "二、范围",
+        "范围正文。",
+        "三、内容",
+        "1、入库验收",
+        "执行公开合成入库检查。",
+        "2、出库领发",
+        "执行公开合成出库检查。",
+        "四、附表",
+        "附表正文。",
+    )
+    result = _chunk(
+        parse_package(
+            build_package("".join(_paragraph(text) for text in texts)),
+            name="chinese-parent-arabic-child.docx",
+        ).document_ir
+    )
+    inbound = next(
+        chunk for chunk in result.chunks if "入库检查" in chunk.citation_text
+    )
+    outbound = next(
+        chunk for chunk in result.chunks if "出库检查" in chunk.citation_text
+    )
+    appendix = next(
+        chunk for chunk in result.chunks if "附表正文" in chunk.citation_text
+    )
+
+    assert inbound.heading_path == ("三、内容", "1、入库验收")
+    assert outbound.heading_path == ("三、内容", "2、出库领发")
+    assert appendix.heading_path == ("四、附表",)
+
+
+def test_short_numbered_titles_keep_internal_comma_colon_and_question() -> None:
+    texts = (
+        "4、安全教育",
+        "1.质量管理，技术培训教育制度",
+        "培训公开合成正文。",
+        "2.年度整体考核：",
+        "考核公开合成正文。",
+        "3.如何识别现场风险？",
+        "风险公开合成正文。",
+        "5、附则",
+        "附则公开合成正文。",
+    )
+    result = _chunk(
+        parse_package(
+            build_package("".join(_paragraph(text) for text in texts)),
+            name="punctuated-numbered-headings.docx",
+        ).document_ir
+    )
+
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "培训公开合成" in chunk.citation_text
+    ).heading_path == ("4、安全教育", "1.质量管理，技术培训教育制度")
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "考核公开合成" in chunk.citation_text
+    ).heading_path == ("4、安全教育", "2.年度整体考核：")
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "风险公开合成" in chunk.citation_text
+    ).heading_path == ("4、安全教育", "3.如何识别现场风险？")
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "附则公开合成" in chunk.citation_text
+    ).heading_path == ("5、附则",)
+
+
+def test_missing_numbered_parent_does_not_attach_to_prior_root() -> None:
+    texts = (
+        "3、职责",
+        "职责公开合成正文。",
+        "4.1总则",
+        "总则公开合成正文。",
+        "4.2质量管理",
+        "质量公开合成正文。",
+        "5、附则",
+        "附则公开合成正文。",
+    )
+    result = _chunk(
+        parse_package(
+            build_package("".join(_paragraph(text) for text in texts)),
+            name="missing-numbered-parent.docx",
+        ).document_ir
+    )
+
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "总则公开合成" in chunk.citation_text
+    ).heading_path == ("4.1总则",)
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "质量公开合成" in chunk.citation_text
+    ).heading_path == ("4.2质量管理",)
+    assert next(
+        chunk
+        for chunk in result.chunks
+        if "附则公开合成" in chunk.citation_text
+    ).heading_path == ("5、附则",)
+
+
+def test_chinese_numbered_subheading_is_relative_to_arabic_parent() -> None:
+    document_ir = parse_package(
+        build_package(
+            "".join(
+                _paragraph(text)
+                for text in (
+                    "6、安全生产责任制度",
+                    "一.总经理的安全职责",
+                    "组织公开合成安全检查并闭环隐患。",
+                    "二.生产经理的安全职责",
+                    "落实公开合成现场安全措施。",
+                )
+            )
+        ),
+        name="mixed-numbered-headings.docx",
+    ).document_ir
+    result = _chunk(document_ir)
+    manager_chunk = next(
+        chunk for chunk in result.chunks if "闭环隐患" in chunk.citation_text
+    )
+    production_chunk = next(
+        chunk
+        for chunk in result.chunks
+        if "现场安全措施" in chunk.citation_text
+    )
+
+    assert manager_chunk.heading_path == (
+        "6、安全生产责任制度",
+        "一.总经理的安全职责",
+    )
+    assert production_chunk.heading_path == (
+        "6、安全生产责任制度",
+        "二.生产经理的安全职责",
+    )
+    assert all(
+        len(chunk.context_dependencies) == len(chunk.heading_path)
+        for chunk in (manager_chunk, production_chunk)
+    )
+
+
+def test_explicit_heading_dependency_keeps_document_structure_origin() -> None:
+    document_ir = parse_package(
+        build_package(
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            "<w:r><w:t>合成范围</w:t></w:r></w:p>"
+            + _paragraph("公开合成正文。")
+        ),
+        name="explicit-heading-dependency.docx",
+    ).document_ir
+    chunk = next(
+        chunk
+        for chunk in _chunk(document_ir).chunks
+        if "公开合成正文" in chunk.citation_text
+    )
+
+    assert chunk.heading_path == ("合成范围",)
+    assert len(chunk.context_dependencies) == 1
+    assert chunk.context_dependencies[0].origin == "document_heading"
+    assert chunk.context_dependencies[0].source_node_id == next(
+        node.node_id for node in document_ir.nodes if node.text == "合成范围"
+    )
+
+
+def test_inferred_children_follow_numbered_explicit_parent() -> None:
+    document_ir = parse_package(
+        build_package(
+            '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>'
+            "<w:r><w:t>4 部门职责</w:t></w:r></w:p>"
+            + _paragraph("4.1 合成经理")
+            + _paragraph("制定公开合成质量目标。")
+            + _paragraph("4.2 合成财务")
+            + _paragraph("核对公开合成账目。")
+        ),
+        name="mixed-explicit-inferred-headings.docx",
+    ).document_ir
+    result = _chunk(document_ir)
+    manager = next(
+        chunk for chunk in result.chunks if "质量目标" in chunk.citation_text
+    )
+    finance = next(
+        chunk for chunk in result.chunks if "合成账目" in chunk.citation_text
+    )
+
+    assert manager.heading_path == ("4 部门职责", "4.1 合成经理")
+    assert finance.heading_path == ("4 部门职责", "4.2 合成财务")
+    assert tuple(
+        dependency.origin for dependency in manager.context_dependencies
+    ) == ("document_heading", "inferred_numbered_heading")
 
 
 def test_heading_context_is_not_counted_as_missing_citable_text() -> None:
@@ -230,7 +688,8 @@ def test_rename_is_stable_but_content_and_policy_change_ids() -> None:
 
 def test_document_identity_scopes_version_node_and_chunk_ids() -> None:
     case = next(
-        item for item in _cases()
+        item
+        for item in _cases()
         if item.name == "03-numbering-restart-override.docx"
     )
     first_context = context(document_id=f"doc_{'1' * 32}")
@@ -258,12 +717,16 @@ def test_document_identity_scopes_version_node_and_chunk_ids() -> None:
 
     first_chunks = _chunk(first).chunks
     assert first.version == repeated.version == renamed.version
-    assert tuple(node.node_id for node in first.nodes) == tuple(
-        node.node_id for node in repeated.nodes
-    ) == tuple(node.node_id for node in renamed.nodes)
-    assert tuple(chunk.chunk_id for chunk in first_chunks) == tuple(
-        chunk.chunk_id for chunk in _chunk(repeated).chunks
-    ) == tuple(chunk.chunk_id for chunk in _chunk(renamed).chunks)
+    assert (
+        tuple(node.node_id for node in first.nodes)
+        == tuple(node.node_id for node in repeated.nodes)
+        == tuple(node.node_id for node in renamed.nodes)
+    )
+    assert (
+        tuple(chunk.chunk_id for chunk in first_chunks)
+        == tuple(chunk.chunk_id for chunk in _chunk(repeated).chunks)
+        == tuple(chunk.chunk_id for chunk in _chunk(renamed).chunks)
+    )
     assert first.version != other_document.version
     assert tuple(node.node_id for node in first.nodes) != tuple(
         node.node_id for node in other_document.nodes
@@ -346,9 +809,7 @@ def test_report_and_validator_detect_adversarial_chunk_corruption() -> None:
         update={
             "source_spans": tuple(
                 span.model_copy(
-                    update={
-                        "source_anchor": nodes_by_id[span.node_id].anchor
-                    }
+                    update={"source_anchor": nodes_by_id[span.node_id].anchor}
                 )
                 if span.node_id is not None
                 else span

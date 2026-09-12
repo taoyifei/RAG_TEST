@@ -341,6 +341,24 @@ def _represented_heading_context(
     nodes = {node.node_id: node for node in document_ir.nodes}
     represented: set[str] = set()
     for chunk in chunks:
+        dependency_nodes = tuple(
+            nodes.get(dependency.source_node_id)
+            for dependency in chunk.context_dependencies
+        )
+        dependency_labels = tuple(
+            node.text_payload.exact_text.strip()
+            for node in dependency_nodes
+            if node is not None and node.text_payload is not None
+        )
+        if (
+            len(dependency_labels) == len(chunk.context_dependencies)
+            and dependency_labels == chunk.heading_path
+        ):
+            represented.update(
+                dependency.source_node_id
+                for dependency in chunk.context_dependencies
+            )
+    for chunk in chunks:
         for span in chunk.source_spans:
             node = nodes.get(span.node_id or "")
             if node is None:

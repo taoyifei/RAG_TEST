@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from dataclasses import dataclass
 from pathlib import PurePath
 
 from rag_app.adapters.chunkers.docx_structural.atoms import (
@@ -13,8 +14,15 @@ from rag_app.adapters.chunkers.docx_structural.atoms import (
     SourceFragment,
     node_text_fragments,
 )
+from rag_app.adapters.chunkers.docx_structural.implicit_headings import (
+    InferredHeading,
+    classify_numbered_heading,
+    infer_numbered_headings,
+    resolve_heading_level,
+)
 from rag_app.adapters.chunkers.docx_structural.tables import build_table_run
 from rag_app.core.models import (
+    ChunkContextDependency,
     ChunkingPolicy,
     ChunkRole,
     DocumentIR,
@@ -34,6 +42,15 @@ _IMAGE_FILE_SUFFIXES = frozenset(
     {".bmp", ".emf", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp", ".wmf"}
 )
 _IMAGE_PLACEHOLDERS = frozenset({"[pic]", "[image]", "[picture]"})
+
+
+@dataclass(frozen=True, slots=True)
+class _BodySectionContext:
+    """一次 BODY section 规划共用的结构上下文。"""
+
+    section_id: str
+    heading_path: tuple[str, ...]
+    context_dependencies: tuple[ChunkContextDependency, ...]
 
 
 def plan_sections(
@@ -81,44 +98,109 @@ def _body_sections(
         )
     ]
     ordered = sorted(candidates, key=_node_order)
+    inferred_headings = infer_numbered_headings(ordered)
     heading_path: list[str] = []
+    heading_series: list[InferredHeading | None] = []
+    context_dependencies: list[ChunkContextDependency] = []
     current_section_id = _stable_label(
         "section",
         document_ir.version.document_version_id,
         "root",
     )
-    section_entries: list[tuple[str, tuple[str, ...], DocumentNode]] = []
+    section_entries: list[
+        tuple[
+            str,
+            tuple[str, ...],
+            tuple[ChunkContextDependency, ...],
+            DocumentNode,
+        ]
+    ] = []
     for node in ordered:
-        if node.kind is NodeKind.HEADING:
+        inferred = inferred_headings.get(node.node_id)
+        if node.kind is NodeKind.HEADING or inferred is not None:
+            label = (
+                inferred.label
+                if inferred is not None
+                else (
+                    node.text_payload.exact_text.strip()
+                    if node.text_payload
+                    else ""
+                )
+            )
+            numbered_structure = inferred or classify_numbered_heading(
+                node.node_id,
+                label,
+            )
             level = dict(node.metadata).get("heading_level")
             resolved_level = (
-                level if isinstance(level, int) and level > 0 else 1
+                resolve_heading_level(inferred, heading_series)
+                if inferred is not None
+                else (level if isinstance(level, int) and level > 0 else 1)
             )
             del heading_path[resolved_level - 1 :]
-            heading_path.append(
-                node.text_payload.exact_text if node.text_payload else ""
+            del heading_series[resolved_level - 1 :]
+            del context_dependencies[resolved_level - 1 :]
+            heading_path.append(label)
+            heading_series.append(numbered_structure)
+            context_dependencies.append(
+                ChunkContextDependency(
+                    source_node_id=node.node_id,
+                    origin=(
+                        "inferred_numbered_heading"
+                        if inferred is not None
+                        else "document_heading"
+                    ),
+                )
             )
             current_section_id = _stable_label(
                 "section",
                 document_ir.version.document_version_id,
                 node.node_id,
             )
-            continue
-        section_entries.append((current_section_id, tuple(heading_path), node))
+            if inferred is None:
+                continue
+        section_entries.append(
+            (
+                current_section_id,
+                tuple(heading_path),
+                tuple(context_dependencies),
+                node,
+            )
+        )
     grouped: list[SectionPlan] = []
-    for section_id, path in _ordered_section_keys(section_entries):
+    for section_id, path, dependencies in _ordered_section_keys(
+        section_entries
+    ):
         entries = [
             node
-            for item_section, item_path, node in section_entries
-            if item_section == section_id and item_path == path
+            for (
+                item_section,
+                item_path,
+                item_dependencies,
+                node,
+            ) in section_entries
+            if item_section == section_id
+            and item_path == path
+            and item_dependencies == dependencies
         ]
-        runs = _body_runs(document_ir, entries, section_id, path, note_refs)
+        section_context = _BodySectionContext(
+            section_id=section_id,
+            heading_path=path,
+            context_dependencies=dependencies,
+        )
+        runs = _body_runs(
+            document_ir,
+            entries,
+            section_context,
+            note_refs,
+        )
         if runs:
             grouped.append(
                 SectionPlan(
                     section_id=section_id,
                     heading_path=path,
                     runs=runs,
+                    context_dependencies=dependencies,
                 )
             )
     return tuple(grouped)
@@ -127,10 +209,12 @@ def _body_sections(
 def _body_runs(
     document_ir: DocumentIR,
     entries: list[DocumentNode],
-    section_id: str,
-    heading_path: tuple[str, ...],
+    section_context: _BodySectionContext,
     note_refs: dict[str, tuple[str, ...]],
 ) -> tuple[RunPlan, ...]:
+    section_id = section_context.section_id
+    heading_path = section_context.heading_path
+    context_dependencies = section_context.context_dependencies
     runs: list[RunPlan] = []
     pending: list[AtomicUnit] = []
     pending_key: tuple[ChunkRole, object, object] | None = None
@@ -169,6 +253,8 @@ def _body_runs(
                 child_group_ids=atom.child_group_ids,
                 note_refs=atom.note_refs,
                 table_header_fragments=atom.table_header_fragments,
+                structural_context=atom.structural_context,
+                context_dependencies=atom.context_dependencies,
             )
             for atom in pending
         )
@@ -180,6 +266,7 @@ def _body_runs(
                 neighbor_group_id=group_id,
                 heading_path=heading_path,
                 atoms=normalized,
+                context_dependencies=context_dependencies,
             )
         )
         pending = []
@@ -193,13 +280,19 @@ def _body_runs(
                 node,
                 section_id=section_id,
                 heading_path=heading_path,
+                context_dependencies=context_dependencies,
             )
             if table_run is not None:
                 runs.append(table_run)
             continue
         if node.kind is NodeKind.IMAGE:
             flush()
-            image_atom = _image_atom(node, section_id, heading_path)
+            image_atom = _image_atom(
+                node,
+                section_id,
+                heading_path,
+                context_dependencies,
+            )
             if image_atom is not None:
                 runs.append(_single_atom_run(document_ir, image_atom))
             continue
@@ -240,6 +333,7 @@ def _body_runs(
                     }
                 ),
                 note_refs=note_refs.get(node.node_id, ()),
+                context_dependencies=context_dependencies,
             )
         )
     flush()
@@ -407,6 +501,7 @@ def _image_atom(
     node: DocumentNode,
     section_id: str,
     heading_path: tuple[str, ...],
+    context_dependencies: tuple[ChunkContextDependency, ...],
 ) -> AtomicUnit | None:
     attributes = node.image_attributes
     if attributes is None:
@@ -440,6 +535,7 @@ def _image_atom(
             ("media_type", attributes.media_type),
             ("ocr_state", "disabled"),
         ),
+        context_dependencies=context_dependencies,
     )
 
 
@@ -455,6 +551,7 @@ def _single_atom_run(
         neighbor_group_id=atom.neighbor_group_id,
         heading_path=atom.heading_path,
         atoms=(atom,),
+        context_dependencies=atom.context_dependencies,
     )
 
 
@@ -514,11 +611,22 @@ def _has_text_box_ancestor(
 
 
 def _ordered_section_keys(
-    entries: list[tuple[str, tuple[str, ...], DocumentNode]],
-) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    keys: list[tuple[str, tuple[str, ...]]] = []
-    for section_id, path, _ in entries:
-        key = (section_id, path)
+    entries: list[
+        tuple[
+            str,
+            tuple[str, ...],
+            tuple[ChunkContextDependency, ...],
+            DocumentNode,
+        ]
+    ],
+) -> tuple[
+    tuple[str, tuple[str, ...], tuple[ChunkContextDependency, ...]], ...
+]:
+    keys: list[
+        tuple[str, tuple[str, ...], tuple[ChunkContextDependency, ...]]
+    ] = []
+    for section_id, path, dependencies, _ in entries:
+        key = (section_id, path, dependencies)
         if key not in keys:
             keys.append(key)
     return tuple(keys)

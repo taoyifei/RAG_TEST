@@ -386,7 +386,8 @@ it("旧会话中的计划 Revision 先检查存在性，404 时不再并发读�
   expect(go).toHaveBeenCalledWith("/jobs");
 });
 
-it("成功或已退役的可读 Revision 通过检查后再读取内容与报告", async () => {
+it("可读 Revision 通过检查后展示内容与结构依赖", async () => {
+  const user = userEvent.setup();
   consoleState.scope.revisionId = "irev_readable";
   vi.spyOn(api, "inspectRevision").mockResolvedValue({
     activation_history: [],
@@ -411,8 +412,46 @@ it("成功或已退役的可读 Revision 通过检查后再读取内容与报告
     writer_status: "committed",
   });
   const listChunks = vi.spyOn(api, "listChunks").mockResolvedValue({
-    items: [],
-    total: 0,
+    items: [
+      {
+        child_group_ids: [],
+        chunk_id: "chunk_test",
+        chunker_fingerprint: "sha256:test",
+        citation_text: "负责公开合成质量目标。",
+        content_sha256: "sha256:test",
+        context_dependencies: [
+          {
+            origin: "inferred_numbered_heading",
+            relationship_type: "heading_context",
+            source_node_id: "node_heading",
+          },
+        ],
+        embedding_text:
+          "位置：4 部门职责 / 4.1 合成经理\n负责公开合成质量目标。",
+        heading_path: ["4 部门职责", "4.1 合成经理"],
+        identifiers: [],
+        index_revision_id: "irev_readable",
+        knowledge_base_id: "kb_test",
+        lexical_text: "4 部门职责 4.1 合成经理 负责公开合成质量目标",
+        metadata: [],
+        neighbor_group_id: "group_test",
+        note_refs: [],
+        project_id: "prj_test",
+        role: "text",
+        schema_version: "3",
+        section_id: "section_test",
+        source_spans: [],
+        token_count: 20,
+        token_count_is_estimate: false,
+        tokenizer_id: "test",
+        version: {
+          content_sha256: "sha256:document",
+          document_id: "doc_test",
+          document_version_id: "dver_test",
+        },
+      },
+    ],
+    total: 1,
     offset: 0,
     page_size: 50,
     next_offset: null,
@@ -426,6 +465,12 @@ it("成功或已退役的可读 Revision 通过检查后再读取内容与报告
   expect(
     await screen.findByRole("heading", { name: "索引版本" }),
   ).toBeVisible();
+  await user.click(screen.getByText("text · section_test · chunk_test"));
+  expect(screen.getByText("4 部门职责 / 4.1 合成经理")).toBeVisible();
+  expect(
+    screen.getByText("inferred_numbered_heading", { exact: false }),
+  ).toBeVisible();
+  expect(screen.getByText("node_heading", { exact: false })).toBeVisible();
   expect(listChunks).toHaveBeenCalledWith(
     "session",
     "prj_test",

@@ -14,6 +14,7 @@ from rag_app.adapters.chunkers.docx_structural.rendering import (
     separator_fragment,
 )
 from rag_app.core.models import (
+    ChunkContextDependency,
     ChunkRole,
     DocumentIR,
     DocumentNode,
@@ -45,6 +46,7 @@ def build_table_run(
     *,
     section_id: str,
     heading_path: tuple[str, ...],
+    context_dependencies: tuple[ChunkContextDependency, ...] = (),
 ) -> RunPlan | None:
     """把一张表规划为独立 group 和完整 row 原子。
 
@@ -53,6 +55,7 @@ def build_table_run(
         table: 当前 TABLE 节点。
         section_id: 表格所在 section。
         heading_path: 表格所在标题路径。
+        context_dependencies: 标题路径对应的真实节点依赖。
 
     Returns:
         至少含一个非空 row 时返回 RunPlan，否则返回 None。
@@ -108,6 +111,7 @@ def build_table_run(
             child_group_ids=child_groups,
             table_header_fragments=header_fragments,
             structural_context=logical_context,
+            context_dependencies=context_dependencies,
         )
         atoms.append(atom)
         if is_header and header_phase:
@@ -131,6 +135,7 @@ def build_table_run(
         neighbor_group_id=group_id,
         heading_path=heading_path,
         atoms=tuple(atoms),
+        context_dependencies=context_dependencies,
     )
 
 

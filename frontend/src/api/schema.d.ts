@@ -1334,6 +1334,11 @@ export interface components {
             citation_text: string;
             /** Content Sha256 */
             content_sha256: string;
+            /**
+             * Context Dependencies
+             * @default []
+             */
+            context_dependencies: components["schemas"]["ChunkContextDependency"][];
             /** Embedding Text */
             embedding_text: string;
             /**
@@ -1408,6 +1413,26 @@ export interface components {
             /** Tokenizer Id */
             tokenizer_id: string;
             version: components["schemas"]["DocumentVersionRef"];
+        };
+        /**
+         * ChunkContextDependency
+         * @description Chunk 使用的真实结构上下文节点关系。
+         */
+        ChunkContextDependency: {
+            /**
+             * Origin
+             * @default document_heading
+             * @enum {string}
+             */
+            origin: "document_heading" | "inferred_numbered_heading";
+            /**
+             * Relationship Type
+             * @default heading_context
+             * @constant
+             */
+            relationship_type: "heading_context";
+            /** Source Node Id */
+            source_node_id: string;
         };
         /**
          * ChunkPage
