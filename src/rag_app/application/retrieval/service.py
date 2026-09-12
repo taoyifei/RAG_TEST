@@ -194,7 +194,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-grounded-answer-v16",
+                "retrieval_implementation": "v3-07-grounded-answer-v17",
             }
         )
         self._egress = egress_policy
@@ -963,7 +963,8 @@ class RetrievalService:
                         )
 
                 generated = self._grounded.answer(
-                    effective_analysis.original_query,
+                    effective_analysis.resolved_query
+                    or effective_analysis.normalized_query,
                     generation_evidence,
                     confidence,
                     answer_support_set=evidence,

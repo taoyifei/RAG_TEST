@@ -239,7 +239,11 @@ class _StructuredInterpreter:
 class _EvidenceEchoGenerator:
     """仅按收到的证据构造可验证 claim，不按问题返回预置答案。"""
 
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
     def generate(self, request: GenerationRequest) -> AnswerDraft:
+        self.queries.append(request.query)
         return self._draft(request)
 
     def generate_stream(
@@ -251,6 +255,7 @@ class _EvidenceEchoGenerator:
     ) -> AnswerDraft:
         """用同一确定性草稿模拟 Provider 的逐条完整 claim。"""
         assert not cancellation.is_cancelled()
+        self.queries.append(request.query)
         draft = self._draft(request)
         on_claim(draft.claims[0])
         return draft
@@ -323,11 +328,40 @@ def test_synonymous_questions_are_equivalent_for_sync_and_streaming(
     )
 
 
+def test_response_style_directive_is_not_sent_to_generator(
+    tmp_path: Path,
+) -> None:
+    """只有语义问题进入生成器，原始请求仍可在分析中审计。"""
+    scope = _scope_with_document(tmp_path)
+    generator = _EvidenceEchoGenerator()
+    semantic_question = "蓝鹊小组有哪些工作模式？"
+    resolved_question = "蓝鹊小组有哪些工作模式?"
+
+    with build_p07_runtime(
+        _PROFILE, data_dir=tmp_path, policy=_PRODUCT_EVIDENCE_POLICY
+    ) as runtime:
+        service = runtime.retrieval.with_generation(
+            generator,
+            serving_identity=canonical_sha256("response-directive-boundary"),
+        )
+        result = service.search_and_answer(
+            SearchRequest(
+                scope=scope,
+                text=semantic_question + "请仅依据原文完整作答。",
+            ),
+            cache_result=False,
+        )
+
+    assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
+    assert generator.queries == [resolved_question]
+
+
 def test_evidence_shortfall_rewrite_reaches_lexical_dense_and_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     scope = _scope_with_document(tmp_path)
     rewriter = _EvidenceTriggeredRewriter()
+    generator = _EvidenceEchoGenerator()
 
     with build_p07_runtime(_PROFILE, data_dir=tmp_path) as runtime:
         routed_queries: list[str] = []
@@ -344,7 +378,7 @@ def test_evidence_shortfall_rewrite_reaches_lexical_dense_and_evidence(
 
         monkeypatch.setattr(router, "embed_query", record_embed)
         service = runtime.retrieval.with_generation(
-            _EvidenceEchoGenerator(),
+            generator,
             serving_identity=canonical_sha256("semantic-rewrite-test"),
             rewriter=rewriter,
         )
@@ -362,6 +396,7 @@ def test_evidence_shortfall_rewrite_reaches_lexical_dense_and_evidence(
     ]
     assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
     assert result.answer is not None
+    assert generator.queries == ["蓝鹊小组有哪些工作模式"]
     assert result.evidence
     assert result.rewrite_reason_code == "REWRITE_APPLIED"
     assert result.diagnostics is not None
@@ -391,12 +426,13 @@ def test_interpretation_is_consumed_once_by_structural_retrieval_and_evidence(
         namespace="interpreted-duties",
     )
     interpreter = _StructuredInterpreter()
+    generator = _EvidenceEchoGenerator()
 
     with build_p07_runtime(
         _PROFILE, data_dir=tmp_path, policy=_PRODUCT_EVIDENCE_POLICY
     ) as runtime:
         service = runtime.retrieval.with_generation(
-            _EvidenceEchoGenerator(),
+            generator,
             serving_identity=canonical_sha256("structured-interpret-test"),
             interpreter=interpreter,
         )
@@ -410,6 +446,7 @@ def test_interpretation_is_consumed_once_by_structural_retrieval_and_evidence(
     assert original.semantics.source == "ORIGINAL_FALLBACK"
     assert result.status is ConfidenceStatus.ANSWERABLE, result.model_dump()
     assert result.answer is not None
+    assert generator.queries == ["甲部门的职责是什么?"]
     assert result.interpret_reason_code == "INTERPRET_APPLIED"
     assert result.interpret_called_this_request is False
     assert result.diagnostics is not None

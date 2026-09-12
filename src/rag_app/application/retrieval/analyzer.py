@@ -100,6 +100,7 @@ class QueryAnalyzer:
         )
         signal_text = strip_trailing_response_directive(semantic_body)
         semantic_end = semantic_start + len(signal_text)
+        resolved = normalized[:semantic_start] + signal_text
         folded = signal_text.casefold()
         identifiers = tuple(
             dict.fromkeys(
@@ -157,7 +158,7 @@ class QueryAnalyzer:
         return QueryAnalysis(
             original_query=request.text,
             normalized_query=normalized,
-            resolved_query=normalized,
+            resolved_query=resolved,
             semantics=semantics,
             quoted_phrases=quoted,
             identifiers=identifiers,
@@ -213,7 +214,9 @@ class QueryAnalyzer:
             update={
                 "original_query": original.original_query,
                 "normalized_query": original.normalized_query,
-                "resolved_query": rewritten.normalized_query,
+                "resolved_query": (
+                    rewritten.resolved_query or rewritten.normalized_query
+                ),
                 "semantics": semantics,
                 "quoted_phrases": original.quoted_phrases,
                 "identifiers": original.identifiers,
@@ -268,7 +271,9 @@ class QueryAnalyzer:
             update={
                 "original_query": original.original_query,
                 "normalized_query": original.normalized_query,
-                "resolved_query": interpreted.normalized_query,
+                "resolved_query": (
+                    interpreted.resolved_query or interpreted.normalized_query
+                ),
                 "semantics": resolved_semantics,
                 "quoted_phrases": original.quoted_phrases,
                 "identifiers": original.identifiers,

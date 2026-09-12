@@ -1292,7 +1292,7 @@ class GroundedAnsweringService:
         """最多两次生成；正文缺失、权限和索引错误不允许模型覆盖。
 
         Args:
-            query: 用户的原始问题。
+            query: 已排除纯回答格式指令并完成必要改写的问题。
             evidence: 已通过资源和引用检查的有限资料。
             confidence: 检索置信状态，不允许越过硬性拒绝。
             answer_support_set: 已直接支持所问关系的最小集合，供模型核验使用。

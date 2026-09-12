@@ -601,6 +601,7 @@ def test_business_condition_after_question_is_not_discarded() -> None:
         constraint.raw_text == "超过"
         for constraint in analysis.semantics.constraints
     )
+    assert analysis.resolved_query == analysis.normalized_query
 
 
 def test_pure_response_directive_is_not_an_answer_constraint() -> None:
@@ -614,7 +615,24 @@ def test_pure_response_directive_is_not_an_answer_constraint() -> None:
         constraint.raw_text != "仅"
         for constraint in analysis.semantics.constraints
     )
+    assert analysis.original_query.endswith("请仅依据原文完整作答。")
+    assert analysis.normalized_query.endswith("请仅依据原文完整作答。")
+    assert analysis.resolved_query == "“一般”对应的内容是什么?"
     assert "RESPONSE_DIRECTIVE_EXCLUDED" in analysis.reason_codes
+
+
+def test_response_directive_free_variant_reaches_retrieval() -> None:
+    """原问保留供审计，纯作答方式不污染补充检索变体。"""
+    analysis = _analyze(
+        "“一般”对应的内容是什么？请仅依据原文完整作答。"
+    )
+
+    variants = RuleBasedNormalizer().expand(analysis)
+
+    assert tuple(variant.text for variant in variants) == (
+        analysis.original_query,
+        "“一般”对应的内容是什么?",
+    )
 
 
 def test_source_label_signals_do_not_become_answer_constraints() -> None:

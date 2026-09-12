@@ -36,8 +36,9 @@ class RuleBasedNormalizer:
 
         """
         variants = [_variant(analysis.original_query, "original")]
-        if analysis.normalized_query != analysis.original_query:
-            variants.append(_variant(analysis.normalized_query, "normalized"))
+        resolved = analysis.resolved_query or analysis.normalized_query
+        if resolved != analysis.original_query:
+            variants.append(_variant(resolved, "normalized"))
         return tuple(variants[:2])
 
 
