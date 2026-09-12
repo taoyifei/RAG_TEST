@@ -1,5 +1,6 @@
 """引用有效不代表事实成立：对象、数字、否定和来源结构的反例。"""
 
+from collections.abc import Callable
 from unittest.mock import Mock
 
 import pytest
@@ -32,6 +33,7 @@ from rag_app.core.models import (
     RequestedAnswerType,
     RetrievalPolicy,
 )
+from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.product.model_settings import (
     KnowledgeBaseModelSettings,
     ProductModelSettings,
@@ -192,6 +194,11 @@ def test_action_context_does_not_hide_a_changed_subject(claim: str) -> None:
             "甲部门保存 7 天。",
             "CLAIM_NUMBER_UNSUPPORTED",
         ),
+        (
+            "资料员每周核对设备清单。",
+            "资料员每月核对设备清单。",
+            "CLAIM_FREQUENCY_UNSUPPORTED",
+        ),
     ],
 )
 def test_grounded_hard_constraints_close_observed_counterexamples(
@@ -203,6 +210,101 @@ def test_grounded_hard_constraints_close_observed_counterexamples(
     with pytest.raises(ValidationFailed) as error:
         validate_grounded_draft(draft, evidence)
     assert error.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("source", "claim"),
+    (
+        (
+            "协助总经理制定并落实各部门的质量方针和质量目标的分解和实施监督；"
+            "负责贯彻总经理的各项决策，协调好各部门的工作，并对总经理负责。",
+            "总经理负责贯彻各项决策，协调各部门工作，并对总经理负责。",
+        ),
+        (
+            "协助总经理制定并落实本公司的质量方针和质量目标的分解和实施监督；"
+            "指导、协调、监督和检查其分管部门的工作。",
+            "总经理协助制定并落实公司的质量方针和质量目标的分解和实施监督；"
+            "指导、协调、监督和检查其分管部门的工作。",
+        ),
+        (
+            "主持开好生产调度会、专题会和各种例会，检查督促会议指令的落实情况，"
+            "经常深入车间、岗位监督检查工作，抓好车间内部管理，"
+            "落实好每月生产经营工作计划，抓好车间成本核算和考核工作。",
+            "总经理主持开好生产调度会、专题会和各种例会，"
+            "检查督促会议指令的落实情况，经常深入车间、岗位监督检查工作，"
+            "抓好车间内部管理，落实好每月生产经营工作计划，"
+            "抓好车间成本核算和考核工作。",
+        ),
+        (
+            "副总经理负责组织生产调度。",
+            "总经理负责组织生产调度。",
+        ),
+        (
+            "协助 总经理制定质量目标。",
+            "总经理制定质量目标。",
+        ),
+        (
+            "副 总经理负责组织生产调度。",
+            "总经理负责组织生产调度。",
+        ),
+    ),
+)
+def test_role_mentioned_as_object_cannot_be_promoted_to_subject(
+    source: str, claim: str
+) -> None:
+    """职责对象必须来自来源主语，不能只在原文任意位置出现。"""
+    evidence, draft = _supported_draft(source, claim)
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_standalone_role_heading_can_support_its_following_duty() -> None:
+    """同一来源组内的独立岗位标题可以为后续职责提供对象。"""
+    evidence, draft = _supported_draft(
+        "4.1 总经理\n主持质量评审。",
+        "总经理主持质量评审。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def _general_manager_duty_analysis() -> QueryAnalysis:
+    """返回本次回归所需的稳定职责查询语义。"""
+    return QueryAnalysis(
+        original_query="总经理干嘛的",
+        normalized_query="总经理干嘛的",
+        semantics=QuerySemantics(
+            target="总经理",
+            relation="职责",
+            answer_type=RequestedAnswerType.DUTIES,
+            source="RULE",
+        ),
+        conversation_fingerprint=canonical_sha256({"conversation": []}),
+    )
+
+
+@pytest.mark.parametrize(
+    "claim",
+    ("主持生产调度会。", "生产经理主持生产调度会。"),
+)
+def test_duty_claim_must_name_the_requested_role(claim: str) -> None:
+    """候选原文真实也不能回答另一个岗位的职责问题。"""
+    evidence, draft = _supported_draft(
+        "4.7 生产经理\n主持生产调度会。",
+        claim,
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(
+            draft,
+            evidence,
+            analysis=_general_manager_duty_analysis(),
+        )
+
+    assert error.value.code == "CLAIM_QUERY_TARGET_MISMATCH"
 
 
 @pytest.mark.parametrize(
@@ -542,6 +644,25 @@ def test_validation_upgrade_does_not_reuse_legacy_fallback_cache() -> None:
     assert settings == KnowledgeBaseModelSettings()
 
 
+def test_role_validation_upgrade_invalidates_previous_answer_cache() -> None:
+    """对象主语与职责目标合同升级后不能复用上一版回答缓存。"""
+    settings = KnowledgeBaseModelSettings()
+    previous_identity = canonical_sha256(
+        {
+            "settings": settings.model_dump(),
+            "prompt": "grounded-chat-v2",
+            "interpret": "bounded-interpret-v1",
+            "rewrite": "bounded-rewrite-v3",
+            "validation": "claim-support-v4",
+            "answer_selection": "shared-query-semantics-v1",
+        }
+    )
+
+    models = ProductModelSettings(Mock(), Mock())
+
+    assert models.serving_identity(settings) != previous_identity
+
+
 def _supported_draft(
     text: str, claim: str
 ) -> tuple[tuple[EvidenceItem, ...], AnswerDraft]:
@@ -561,6 +682,70 @@ def _supported_draft(
         ),
         generation_mode="llm",
     )
+
+
+def test_changed_role_repairs_before_stream_publish() -> None:
+    """首条职责偷换不能形成 partial 前缀，修复尝试仍可安全发布。"""
+    wrong_source = (
+        "协助总经理制定并落实各部门的质量方针和质量目标；"
+        "负责贯彻总经理的各项决策，协调好各部门的工作，并对总经理负责。"
+    )
+    wrong_evidence, wrong_draft = _supported_draft(
+        wrong_source,
+        "总经理负责贯彻各项决策，协调各部门工作，并对总经理负责。",
+    )
+    correct_source = "4.1 总经理\n主持质量评审。"
+    correct_evidence, _ = _supported_draft(
+        correct_source,
+        "总经理主持质量评审。",
+    )
+    correct_item = correct_evidence[0].model_copy(update={"evidence_id": "S2"})
+    correct_claim = AnswerClaim(
+        text="总经理主持质量评审。",
+        supports=(ClaimSupport(support_id="S2", quote=correct_source),),
+    )
+    correct_draft = AnswerDraft(
+        text=correct_claim.text,
+        cited_evidence_ids=("S2",),
+        claims=(correct_claim,),
+        generation_mode="llm",
+    )
+    drafts = iter((wrong_draft, correct_draft))
+    requests: list[GenerationRequest] = []
+
+    def generate_stream(
+        request: GenerationRequest,
+        *,
+        on_claim: Callable[[AnswerClaim], None],
+        cancellation: CancellationPort,
+    ) -> AnswerDraft:
+        assert not cancellation.is_cancelled()
+        requests.append(request)
+        draft = next(drafts)
+        on_claim(draft.claims[0])
+        return draft
+
+    generator = Mock()
+    generator.generate_stream.side_effect = generate_stream
+    cancellation = Mock()
+    cancellation.is_cancelled.return_value = False
+    emitted: list[AnswerClaim] = []
+
+    outcome = GroundedAnsweringService(generator).answer(
+        "总经理干嘛的",
+        (*wrong_evidence, correct_item),
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        analysis=_general_manager_duty_analysis(),
+        on_claim=emitted.append,
+        cancellation=cancellation,
+    )
+
+    assert emitted == [correct_claim]
+    assert outcome.answer == "总经理主持质量评审。 [S2]"
+    assert outcome.reason_code == "CLAIMS_VALIDATED"
+    assert len(requests) == 2
+    assert requests[0].repair_reason is None
+    assert requests[1].repair_reason == "CLAIM_OBJECT_CHANGED"
 
 
 def test_invalid_claim_gets_only_one_repair_and_preserves_both_calls() -> None:

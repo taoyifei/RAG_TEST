@@ -22,6 +22,7 @@ from rag_app.core.models import (
     EvidenceItem,
     ProviderCall,
     QueryAnalysis,
+    RequestedAnswerType,
 )
 from rag_app.core.ports import (
     CancellationPort,
@@ -47,6 +48,9 @@ _CELSIUS_QUANTITY = re.compile(
     r"(?:摄氏度|℃|°\s*c|(?:degrees?\s+)?celsius)(?![A-Za-z])",
     re.IGNORECASE,
 )
+_TEMPORAL_FREQUENCY = re.compile(
+    r"每(?:秒|分钟|小时|日|天|周|星期|月|季度|季|年|次)"
+)
 _NEGATION = re.compile(
     r"不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
     r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
@@ -68,6 +72,10 @@ _ACTION_VERB = (
     r"负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
     r"保存|归档|销毁|执行|提供|记录|属于|位于|采用|包括|包含|参与|"
     r"用于|用来|支持|拥有|具备|配备|完成|启动|停止"
+)
+_DUTY_ACTION_VERB = (
+    rf"(?:{_ACTION_VERB})|协助|贯彻|制定|落实|指导|监督|主持|督促|"
+    r"抓好|策划|确保|营造|任命|明确|确定|推行|报告"
 )
 _LEADING_ACTION_CONTEXT = re.compile(
     r"^\s*(?:在)?(?:"
@@ -96,6 +104,25 @@ _ENTITY_SUBJECT = re.compile(
     r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|尚未|没有|未|无|不)?"
     rf"(?:{_ACTION_MODIFIER})?(?:{_ACTION_VERB}))"
     r"|的(?:核心)?职责|的(?:维护)?周期)"
+)
+_STANDALONE_SUBJECT = re.compile(
+    r"(?:[A-Za-z][A-Za-z0-9_-]*|[\u4e00-\u9fff]某|"
+    r"[\u4e00-\u9fff]{1,24}?(?:负责人|经理|主管|专员|工程师|部门|团队|"
+    r"单位|机构|公司|中心|用户|客户|人员|岗位|角色|小组|委员会|平台|"
+    r"服务|应用|模块|组件|设备|系统|模式|库|管代))"
+)
+_SECTION_NUMBER_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\s*")
+_DUTY_ACTION_PREFIX = re.compile(
+    r"^\s*(?:[）)】\]]\s*)?(?:不仅|还|也|同时)?"
+    r"(?:(?:应当|必须|可以|应|须|需|可|已)?"
+    r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
+    r"尚未|没有|未|无|不)?"
+    rf"(?:{_ACTION_MODIFIER})?(?:{_DUTY_ACTION_VERB})"
+    r"|的(?:核心)?职责|的(?:维护)?周期)"
+)
+_SUBJECT_CLAUSE_PREFIX = re.compile(
+    r"^\s*(?:(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]?\s*)?"
+    r"[（(【\[]?\s*$"
 )
 _NOT_SUBJECTS = frozenset(
     {
@@ -196,6 +223,11 @@ def _number_tokens(text: str) -> set[str]:
     }
 
 
+def _frequency_tokens(text: str) -> set[str]:
+    """保留不带阿拉伯数字的周期词，防止每周被概括成每月。"""
+    return set(_TEMPORAL_FREQUENCY.findall(text))
+
+
 def _quantity_relation_matches(clause: str, source: str) -> bool:
     """温度不能借用其他属性的同值数量；表格纯数值片段保留支持资格。"""
     if not _TEMPERATURE_ATTRIBUTE.search(clause):
@@ -221,6 +253,82 @@ def _clauses_with_subject(text: str) -> list[tuple[str, str | None]]:
                 subject = _subject(clause) or subject
                 clauses.append((clause, subject))
     return clauses
+
+
+def _standalone_subjects(text: str) -> set[str]:
+    """提取同一来源组中的独立岗位标题或表格角色单元。"""
+    subjects: set[str] = set()
+    for raw_line in text.splitlines():
+        line = _SECTION_NUMBER_PREFIX.sub("", raw_line).strip(
+            " \t:：。；;.!！？?"
+        )
+        for alias in re.split(r"[/／、]", line):
+            value = alias.strip()
+            if _STANDALONE_SUBJECT.fullmatch(value):
+                subjects.add(value)
+    return subjects
+
+
+def _same_subject(left: str, right: str) -> bool:
+    """按完整职责标签比较对象，禁止把较长岗位名当成短岗位名。"""
+    return (
+        re.sub(r"\s+", "", left).casefold()
+        == re.sub(r"\s+", "", right).casefold()
+    )
+
+
+def _leading_explicit_subject(text: str) -> str | None:
+    """读取分句开头且后接职责动作的完整岗位标签。"""
+    subject_text = _LEADING_MODAL.sub("", _LEADING_ACTION_CONTEXT.sub("", text))
+    match = _STANDALONE_SUBJECT.match(subject_text)
+    if (
+        match is None
+        or _DUTY_ACTION_PREFIX.match(subject_text[match.end() :]) is None
+    ):
+        return None
+    return match[0]
+
+
+def _source_has_explicit_subject(subject: str, text: str) -> bool:
+    """要求对象在来源中处于主语或独立标题位置。"""
+    if any(
+        _same_subject(subject, candidate)
+        for candidate in _standalone_subjects(text)
+    ):
+        return True
+    for match in re.finditer(re.escape(subject), text, re.IGNORECASE):
+        clause_start = max(
+            (text.rfind(delimiter, 0, match.start()) + 1)
+            for delimiter in "\n。；;.!！？?，,:："
+        )
+        if (
+            _SUBJECT_CLAUSE_PREFIX.fullmatch(text[clause_start : match.start()])
+            is None
+        ):
+            continue
+        if _DUTY_ACTION_PREFIX.match(text[match.end() :]) is not None:
+            return True
+    return False
+
+
+def _validate_claim_target(
+    claim: AnswerClaim, analysis: QueryAnalysis | None
+) -> None:
+    """职责回答必须明确指向本次查询的职责主体。"""
+    if (
+        analysis is None
+        or analysis.semantics.answer_type is not RequestedAnswerType.DUTIES
+        or not analysis.semantics.target
+    ):
+        return
+    clauses = _clauses_with_subject(claim.text)
+    subject = _leading_explicit_subject(clauses[0][0]) if clauses else None
+    if subject is None or not _same_subject(subject, analysis.semantics.target):
+        raise ValidationFailed(
+            "职责事实没有明确回答所问岗位。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_TARGET_MISMATCH",
+        )
 
 
 def _negations(text: str) -> set[str]:
@@ -340,10 +448,13 @@ def _validate_clause_support(
     """核验一个分句的对象、数值、措辞和否定均由同一来源组支持。"""
     source_clauses = _clauses_with_subject(support_text)
     subjects = set(_NAMED_SUBJECT.findall(clause))
-    general_subject = _subject(clause)
+    general_subject = _leading_explicit_subject(clause) or _subject(clause)
     if general_subject:
         subjects.add(general_subject)
-    if any(subject not in support_text for subject in subjects):
+    if any(
+        not _source_has_explicit_subject(subject, support_text)
+        for subject in subjects
+    ):
         raise ValidationFailed(
             "事实偷换了所引资料的对象。",
             stage="answer.validate",
@@ -354,7 +465,7 @@ def _validate_clause_support(
         for text, subject in source_clauses
         if clause_subject is None
         or subject is None
-        or clause_subject in subject
+        or _same_subject(clause_subject, subject)
     ]
     numeric_sources = [
         text
@@ -367,6 +478,14 @@ def _validate_clause_support(
             "事实中的数字或单位缺少来源。",
             stage="answer.validate",
             code="CLAIM_NUMBER_UNSUPPORTED",
+        )
+    if not _frequency_tokens(clause) <= _frequency_tokens(
+        "\n".join(relevant_sources)
+    ):
+        raise ValidationFailed(
+            "事实中的周期频率缺少来源。",
+            stage="answer.validate",
+            code="CLAIM_FREQUENCY_UNSUPPORTED",
         )
     # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
     predicate = _predicate(clause)
@@ -384,13 +503,17 @@ def _validate_clause_support(
 
 
 def validate_grounded_draft(
-    draft: AnswerDraft, evidence: tuple[EvidenceItem, ...]
+    draft: AnswerDraft,
+    evidence: tuple[EvidenceItem, ...],
+    *,
+    analysis: QueryAnalysis | None = None,
 ) -> None:
     """校验逐字支持、来源关系与关键事实，允许有词汇依据的自然概括。
 
     Args:
         draft: 模型的结构化事实草稿。
         evidence: 本次已通过范围筛选的有限证据。
+        analysis: 可选的服务端查询语义，用于约束职责主体。
 
     Returns:
         无返回值；校验通过后调用方才可发布。
@@ -407,6 +530,7 @@ def validate_grounded_draft(
             code="GENERATION_ABSTAINED",
         )
     for claim in draft.claims:
+        _validate_claim_target(claim, analysis)
         units: list[EvidenceItem] = []
         for support in claim.supports:
             item = by_id.get(support.support_id)
@@ -549,6 +673,7 @@ class GroundedAnsweringService:
                                 generation_mode="llm",
                             ),
                             evidence,
+                            analysis=analysis,
                         )
                         if claim in published_claims:
                             raise ValidationFailed(
@@ -574,7 +699,7 @@ class GroundedAnsweringService:
                 if draft.reason_code == "GENERATION_ABSTAINED":
                     reason = draft.reason_code
                     break
-                validate_grounded_draft(draft, evidence)
+                validate_grounded_draft(draft, evidence, analysis=analysis)
                 if published and draft.claims != tuple(published):
                     raise ValidationFailed(
                         "增量事实与最终草稿不一致。",

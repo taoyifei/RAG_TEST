@@ -63,6 +63,8 @@ _GROUNDED_SYSTEM = (
     "不得把一个来源组的对象与另一个来源组的动作拼成事实。"
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
+    "职责问题的每条claim必须明确写出typed_semantics.target对应的职责主体；"
+    "没有该主体的逐字来源时不得借用其他岗位职责。"
     "evidence是检索、融合与重排后的有界候选证据；请自行选择与问题相关的候选。"
     "相关候选的逐字原文可以支持事实，但检索排名或相关性分数本身不能证明事实。"
     '仅输出JSON对象，格式为{"claims":[{"text":"事实概括",'
@@ -117,7 +119,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v1", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v3", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
