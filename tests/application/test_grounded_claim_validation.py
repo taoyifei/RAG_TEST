@@ -106,6 +106,25 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_compound_identifier_subject_is_supported_by_exact_source() -> None:
+    """类型加型号的复合对象不能因只抽取型号而误拒逐字事实。"""
+    source = "设备 MX-41 的维护周期为 14 天。"
+    evidence, draft = _supported_draft(source, source)
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_compound_identifier_subject_rejects_changed_identifier() -> None:
+    """标识符准入仍要求同一引用中存在完全相同的型号。"""
+    evidence, draft = _supported_draft(
+        "设备 MX-41 的维护周期为 14 天。",
+        "设备 MX-42 的维护周期为 14 天。",
+    )
+
+    with pytest.raises(ValidationFailed):
+        validate_grounded_draft(draft, evidence)
+
+
 def test_purpose_wording_does_not_become_part_of_the_subject() -> None:
     """“用于记录”中的用途连接词不能被误识别为业务对象。"""
     evidence, draft = _supported_draft(
@@ -1180,3 +1199,35 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
     assert result.reason_code == "PROVIDER_TIMEOUT"
     assert result.published_support_ids == ()
     assert generator.generate.call_count == 1
+
+
+def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
+    None
+):
+    """已有直接支持时，生成器不再接收仅相关的宽候选。"""
+    support, draft = _supported_draft(
+        "合成设备的保管期限为 14 天。",
+        "合成设备的保管期限为 14 天。",
+    )
+    distractor, _ = _supported_draft(
+        "相邻设备由其他团队维护。",
+        "相邻设备由其他团队维护。",
+    )
+    distractor_item = distractor[0].model_copy(update={"evidence_id": "S2"})
+    broad_candidates = (*support, distractor_item)
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多少？",
+        broad_candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
+    request = generator.generate.call_args.args[0]
+    assert request.evidence == broad_candidates
+    assert request.answer_support_set == support
+    assert request.model_evidence_candidates == support

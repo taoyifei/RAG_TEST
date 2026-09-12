@@ -282,8 +282,12 @@ def test_flat_role_sections_use_exact_heading_owner_for_duty_support() -> None:
     }
 
     assert [item.citation_text for item in selection.answer_support_set] == [
-        "制定公开合成目标。"
+        "制定公开合成目标。",
+        "协调公开合成资源。",
     ]
+    assert [
+        item.citation_text for item in selection.model_evidence_candidates[:2]
+    ] == ["制定公开合成目标。", "协调公开合成资源。"]
     assert "制定公开合成目标。" in by_quote
     assert "协调公开合成资源。" in by_quote
     assert "合成总经理" in by_quote["制定公开合成目标。"]
@@ -300,6 +304,27 @@ def test_flat_role_sections_use_exact_heading_owner_for_duty_support() -> None:
         == "SECTION_HEADING_BODY"
         for item in manager_candidates
     )
+
+
+@pytest.mark.parametrize(
+    ("quote", "supported"),
+    [
+        ("总经理负责制定质量方针。", True),
+        ("总经理主持质量评审。", True),
+        ("在公司治理中，总经理履行临机处理权。", True),
+        ("在总经理领导下，财务部负责会计核算。", False),
+        ("负责贯彻总经理的各项决策。", False),
+        ("协助总经理制定质量方针。", False),
+    ],
+)
+def test_duty_text_requires_target_as_grammatical_subject(
+    quote: str, supported: bool
+) -> None:
+    analysis = _context("总经理负责什么").analysis
+
+    result = evaluate_span_support(analysis, quote)
+
+    assert (result.status.value == "SUPPORTED") is supported
 
 
 def test_duty_heading_does_not_borrow_nested_or_sibling_role_body() -> None:

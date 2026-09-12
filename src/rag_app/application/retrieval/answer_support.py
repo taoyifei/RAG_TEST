@@ -136,6 +136,16 @@ _TABLE_HEADER_TYPES = {
 _NAMED_ARTIFACT_TARGET = re.compile(
     r"(?:登记表|申请表|清单|台账|文档|报告|记录|方案|计划|表|单)$"
 )
+_DUTY_SUBJECT_ACTION = (
+    r"(?:(?:应当|必须|可以|应|须|需|可|已)?"
+    r"(?:不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
+    r"尚未|没有|未|无|不)?"
+    r"(?:牵头|主要|直接|统一|共同|定期)?"
+    r"(?:负责(?!人)|承担|组织|协调|审批|批准|维护|检修|检查|核对|"
+    r"保存|归档|销毁|执行|提供|记录|参与|完成|协助|贯彻|制定|"
+    r"落实|指导|监督|主持|督促|抓好|策划|确保|营造|任命|明确|"
+    r"确定|推行|报告|履行|配备))"
+)
 
 
 def _normalized(text: str) -> str:
@@ -602,12 +612,7 @@ def _descriptive_clause_supports(  # noqa: PLR0911
             return count is None or count >= analysis.semantics.ordinal
         return True
     if answer_type == "DUTIES":
-        return _target_matches(target, clause, strict=True) and bool(
-            re.search(
-                r"(?:负责(?!人|者)|职责(?:是|为|包括|[:：])|承担|牵头).+",
-                clause.replace(target, "", 1),
-            )
-        )
+        return _duty_subject_supports(target, clause)
     if answer_type == "RESPONSIBLE_PARTY":
         actions = tuple(
             word
@@ -695,6 +700,41 @@ def _descriptive_clause_supports(  # noqa: PLR0911
             )
         )
     return False
+
+
+def _duty_subject_supports(target: str, clause: str) -> bool:
+    """只把完整目标岗位作为职责主语的正文判为直接支持。
+
+    Args:
+        target: 查询解析出的完整岗位名。
+        clause: 单个规范化来源分句。
+
+    Returns:
+        目标位于句首主语位置且紧接职责关系或职责动作时返回 True。
+
+    """
+    if not target:
+        return False
+    prefix = (
+        r"^\s*(?:(?:\d+(?:\.\d+)*|[a-z])\s*[.)、）]?\s*)?"
+        r"(?:在[^，,。；;]{1,30}[，,]\s*)?[（(【\[]?\s*"
+    )
+    relation = (
+        r"(?:的)?(?:(?:岗位|安全|主要|核心|工作)?)职责"
+        r"(?:是|为|包括|包含|[:：])"
+    )
+    return bool(
+        re.match(
+            prefix
+            + re.escape(target)
+            + r"\s*(?:[）)】\]]\s*)?(?:"
+            + relation
+            + "|"
+            + _DUTY_SUBJECT_ACTION
+            + ")",
+            clause,
+        )
+    )
 
 
 def _source_corrects_count_premise(analysis: QueryAnalysis, text: str) -> bool:

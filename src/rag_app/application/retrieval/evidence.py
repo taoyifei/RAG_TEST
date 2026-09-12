@@ -246,6 +246,7 @@ class EvidenceAssembler:
         packing_order = _evidence_packing_order(
             ranked_by_chunk,
             diversify_chunks=allow_uncertain,
+            priority_keys=set(support_overrides),
         )
         for candidate, span, quote, span_key in packing_order:
             if len(evidence) >= policy.max_evidence_items:
@@ -304,24 +305,41 @@ def _evidence_packing_order(
     ranked_by_chunk: _RankedChunkSpans,
     *,
     diversify_chunks: bool,
+    priority_keys: set[_SpanKey] | None = None,
 ) -> tuple[_PackablePiece, ...]:
-    """按 Chunk 多样性或原候选顺序展开待打包 span。"""
+    """先保留结构认证 span，再按 Chunk 多样性展开其余候选。"""
     if not diversify_chunks:
         return tuple(
             (candidate, *piece)
             for candidate, spans in ranked_by_chunk
             for piece in spans
         )
-    # 模型候选先横向覆盖不同 Chunk，再补同 Chunk 的第二个 span。
-    # 否则一个表格 Chunk 可独占总上限，掩盖已召回的后续原文。
-    return tuple(
-        (candidate, *spans[span_index])
-        for span_index in range(
-            max((len(spans) for _, spans in ranked_by_chunk), default=0)
+    priorities = priority_keys or set()
+
+    def interleave(*, priority: bool) -> tuple[_PackablePiece, ...]:
+        groups = tuple(
+            (
+                candidate,
+                tuple(
+                    piece
+                    for piece in spans
+                    if (piece[2] in priorities) is priority
+                ),
+            )
+            for candidate, spans in ranked_by_chunk
         )
-        for candidate, spans in ranked_by_chunk
-        if span_index < len(spans)
-    )
+        return tuple(
+            (candidate, *spans[span_index])
+            for span_index in range(
+                max((len(spans) for _, spans in groups), default=0)
+            )
+            for candidate, spans in groups
+            if span_index < len(spans)
+        )
+
+    # 认证结构关系不能被同轮的语义候选挤出总上限；每一层仍横向覆盖
+    # 不同 Chunk，避免一个大表格或长段落独占模型输入。
+    return (*interleave(priority=True), *interleave(priority=False))
 
 
 def _ranked_citable_spans(  # noqa: PLR0913
@@ -1650,10 +1668,22 @@ def _minimal_support_set(
         documents = {item.document_id for item in supported}
         if len(documents) > 1:
             return (), True
+    selected = (
+        supported
+        if semantics.answer_type is RequestedAnswerType.DUTIES
+        else _first_complete_support_group(supported)
+    )
+    return selected, False
+
+
+def _first_complete_support_group(
+    supported: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """返回首项声明的同文档完整来源节点组。"""
     first = supported[0]
     metadata = dict(first.metadata).get("answer_support")
     if not isinstance(metadata, dict):
-        return (first,), False
+        return (first,)
     nodes = metadata.get("supporting_span_ids", [])
     required_nodes = (
         {node for node in nodes if isinstance(node, str)}
@@ -1661,7 +1691,7 @@ def _minimal_support_set(
         else set()
     )
     if not required_nodes:
-        return (first,), False
+        return (first,)
     grouped = tuple(
         item
         for item in supported
@@ -1672,8 +1702,8 @@ def _minimal_support_set(
         span.node_id for item in grouped for span in item.source_spans
     }
     if not required_nodes <= present_nodes:
-        return (), False
-    return grouped, False
+        return ()
+    return grouped
 
 
 def _renumber_evidence(

@@ -292,6 +292,14 @@ def _leading_explicit_subject(text: str) -> str | None:
 
 def _source_has_explicit_subject(subject: str, text: str) -> bool:
     """要求对象在来源中处于主语或独立标题位置。"""
+    if _IDENTIFIER.fullmatch(subject):
+        return bool(
+            re.search(
+                r"(?<![A-Za-z0-9_])" + re.escape(subject) + r"(?![A-Za-z0-9_])",
+                text,
+                re.IGNORECASE,
+            )
+        )
     if any(
         _same_subject(subject, candidate)
         for candidate in _standalone_subjects(text)
@@ -753,7 +761,7 @@ class GroundedAnsweringService:
                         None if analysis is None else analysis.semantics
                     ),
                     answer_support_set=direct_support,
-                    model_evidence_candidates=evidence,
+                    model_evidence_candidates=direct_support or evidence,
                 )
                 stream_generate = getattr(
                     self.generator, "generate_stream", None
