@@ -10,6 +10,7 @@ import { useConsole } from "../state/console-context";
 import { downloadFile } from "../utils/download";
 import { ErrorPanel, Modal, StatusBadge } from "./ui";
 import { OcrEvidenceSource } from "./DocumentImages";
+import { PdfEvidenceSource } from "./PdfEvidenceSource";
 import { QueryFeedback } from "./QueryFeedback";
 
 export function historyTime(value: string): string {
@@ -254,6 +255,12 @@ export function HistoryTrace({
                     evidence={evidence}
                     projectId={entry.project_id}
                     kbId={entry.knowledge_base_id}
+                  />
+                  <PdfEvidenceSource
+                    evidence={evidence}
+                    projectId={entry.project_id}
+                    kbId={entry.knowledge_base_id}
+                    token={tokens.admin}
                   />
                   <small>{evidence.selection_reason}</small>
                   <button

@@ -172,6 +172,15 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
                   </span>
                 ))}
               </div>
+              {item.pdf_progress && (
+                <p role="status">
+                  PDF：{item.pdf_progress.parsed_pages}/
+                  {item.pdf_progress.total_pages} 页 ·{" "}
+                  {pdfModeLabel(item.pdf_progress.parser_mode)} ·{" "}
+                  {item.pdf_progress.parser_model}
+                  {item.pdf_progress.truncated ? " · 页数截断" : ""}
+                </p>
+              )}
             </div>
             <div>
               <StatusBadge value={item.state} />
@@ -259,6 +268,28 @@ export function JobsPage({ go }: { go: (path: string) => void }) {
             <dd>{selected.revision_id}</dd>
             <dt>任务标识</dt>
             <dd>{selected.job_id}</dd>
+            {selected.pdf_progress && (
+              <>
+                <dt>PDF 总页数</dt>
+                <dd>{selected.pdf_progress.total_pages}</dd>
+                <dt>已解析页数</dt>
+                <dd>{selected.pdf_progress.parsed_pages}</dd>
+                <dt>失败物理页</dt>
+                <dd>
+                  {selected.pdf_progress.failed_page_indices.length
+                    ? selected.pdf_progress.failed_page_indices
+                        .map((page) => page + 1)
+                        .join("、")
+                    : "无"}
+                </dd>
+                <dt>解析模式</dt>
+                <dd>{pdfModeLabel(selected.pdf_progress.parser_mode)}</dd>
+                <dt>解析模型</dt>
+                <dd>{selected.pdf_progress.parser_model}</dd>
+                <dt>页数截断</dt>
+                <dd>{selected.pdf_progress.truncated ? "是" : "否"}</dd>
+              </>
+            )}
           </dl>
           <p>
             {selected.retryable
@@ -501,4 +532,10 @@ function stageLabel(stage: string): string {
       } as Record<string, string>
     )[stage] || "文档处理"
   );
+}
+
+function pdfModeLabel(mode: string): string {
+  return mode === "paddle_official_api"
+    ? "PaddleOCR 官方 API"
+    : "本地/自托管 PaddleOCR";
 }

@@ -86,6 +86,7 @@ export function operationLabel(operation: string): string {
         "query.interpret": "问题意图解释",
         "query.rewrite": "问题改写",
         "image.ocr": "图片文字识别",
+        "document.parse": "PDF 文档解析",
       } as Record<string, string>
     )[operation] ?? "未知能力"
   );

@@ -84,6 +84,48 @@
         "title": "ActivateProfileRequest",
         "type": "object"
       },
+      "ArtifactDescriptor": {
+        "additionalProperties": false,
+        "description": "经逻辑引用授权后的 Artifact 摘要。",
+        "properties": {
+          "artifact_id": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "document_version_id": {
+            "pattern": "^dver_[0-9a-f]{32}$",
+            "title": "Document Version Id",
+            "type": "string"
+          },
+          "media_type": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Media Type",
+            "type": "string"
+          },
+          "role": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          },
+          "size_bytes": {
+            "minimum": 0.0,
+            "title": "Size Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "document_version_id",
+          "media_type",
+          "size_bytes",
+          "role"
+        ],
+        "title": "ArtifactDescriptor",
+        "type": "object"
+      },
       "Chunk": {
         "additionalProperties": false,
         "description": "不依赖向量存储实现的 canonical Chunk V3。",
@@ -518,7 +560,9 @@
                 "enum": [
                   "workspace_host",
                   "beijing_dashscope",
-                  "custom"
+                  "custom",
+                  "self_hosted",
+                  "official_api"
                 ],
                 "type": "string"
               },
@@ -532,6 +576,18 @@
             "exclusiveMinimum": 0.0,
             "title": "Expected Version",
             "type": "integer"
+          },
+          "ocr_api_base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocr Api Base Url"
           },
           "region": {
             "anyOf": [
@@ -678,7 +734,9 @@
             "enum": [
               "workspace_host",
               "beijing_dashscope",
-              "custom"
+              "custom",
+              "self_hosted",
+              "official_api"
             ],
             "title": "Endpoint Mode",
             "type": "string"
@@ -689,11 +747,24 @@
             "title": "Endpoint Profile",
             "type": "string"
           },
+          "ocr_api_base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ocr Api Base Url"
+          },
           "provider_type": {
             "enum": [
               "jina",
               "aliyun-model-studio",
-              "openai-compatible"
+              "openai-compatible",
+              "paddleocr"
             ],
             "title": "Provider Type",
             "type": "string"
@@ -1137,7 +1208,8 @@
             "enum": [
               "jina",
               "aliyun-model-studio",
-              "openai-compatible"
+              "openai-compatible",
+              "paddleocr"
             ],
             "title": "Provider Type",
             "type": "string"
@@ -1998,6 +2070,54 @@
             "title": "Metadata",
             "type": "array"
           },
+          "ocr_verification_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OcrVerificationState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "page_index": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Index"
+          },
+          "pdf_block_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Block Id"
+          },
+          "pdf_table_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Table Id"
+          },
           "publishable": {
             "default": true,
             "title": "Publishable",
@@ -2047,6 +2167,16 @@
             "minLength": 1,
             "title": "Selection Reason",
             "type": "string"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceSpanKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source_label": {
             "minLength": 1,
@@ -2301,6 +2431,16 @@
           "lease_owner": {
             "title": "Lease Owner",
             "type": "boolean"
+          },
+          "pdf_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PdfPageProgress"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "project_id": {
             "pattern": "^prj_[0-9a-f]{32}$",
@@ -2611,6 +2751,47 @@
             "title": "Ocr Revision",
             "type": "integer"
           },
+          "pdf_parser_connection_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Parser Connection Id"
+          },
+          "pdf_parser_enabled": {
+            "default": false,
+            "title": "Pdf Parser Enabled",
+            "type": "boolean"
+          },
+          "pdf_parser_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Parser Model"
+          },
+          "pdf_poll_timeout_seconds": {
+            "default": 600.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 7200.0,
+            "title": "Pdf Poll Timeout Seconds",
+            "type": "number"
+          },
+          "pdf_request_timeout_seconds": {
+            "default": 300.0,
+            "exclusiveMinimum": 0.0,
+            "maximum": 3600.0,
+            "title": "Pdf Request Timeout Seconds",
+            "type": "number"
+          },
           "rewrite_enabled": {
             "default": false,
             "title": "Rewrite Enabled",
@@ -2762,6 +2943,71 @@
         ],
         "title": "OcrConfirmation",
         "type": "object"
+      },
+      "OcrVerificationState": {
+        "description": "最终答案中高风险视觉文字的复核状态。",
+        "enum": [
+          "VERIFIED",
+          "CONFLICT",
+          "UNVERIFIED"
+        ],
+        "title": "OcrVerificationState",
+        "type": "string"
+      },
+      "PdfPageProgress": {
+        "additionalProperties": false,
+        "description": "供持久 Job 页面展示的非敏感 PDF 解析进度。",
+        "properties": {
+          "failed_page_indices": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Failed Page Indices",
+            "type": "array"
+          },
+          "parsed_pages": {
+            "minimum": 0.0,
+            "title": "Parsed Pages",
+            "type": "integer"
+          },
+          "parser_mode": {
+            "$ref": "#/components/schemas/PdfParserMode"
+          },
+          "parser_model": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Parser Model",
+            "type": "string"
+          },
+          "total_pages": {
+            "exclusiveMinimum": 0.0,
+            "title": "Total Pages",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "parser_mode",
+          "parser_model",
+          "total_pages",
+          "parsed_pages"
+        ],
+        "title": "PdfPageProgress",
+        "type": "object"
+      },
+      "PdfParserMode": {
+        "description": "PDF 文档解析的两个受支持执行位置。",
+        "enum": [
+          "paddle_self_hosted",
+          "paddle_official_api"
+        ],
+        "title": "PdfParserMode",
+        "type": "string"
       },
       "Project": {
         "additionalProperties": false,
@@ -5165,6 +5411,33 @@
         "additionalProperties": false,
         "description": "由稳定逻辑段组成的格式内来源位置。",
         "properties": {
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bbox"
+          },
           "cell_index": {
             "anyOf": [
               {
@@ -5181,6 +5454,42 @@
             "minimum": 0.0,
             "title": "Ordinal",
             "type": "integer"
+          },
+          "page_height": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Height"
+          },
+          "page_index": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Index"
+          },
+          "page_width": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Width"
           },
           "paragraph_index": {
             "anyOf": [
@@ -5199,6 +5508,32 @@
             "minLength": 1,
             "title": "Part Uri",
             "type": "string"
+          },
+          "pdf_block_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Block Id"
+          },
+          "pdf_table_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pdf Table Id"
           },
           "relationship_id": {
             "anyOf": [
@@ -5411,6 +5746,7 @@
         "description": "citation 字符的来源语义。",
         "enum": [
           "original_text",
+          "pdf_parsed_text",
           "ocr_text",
           "diagram_relation",
           "derived_caption_or_association",
@@ -6477,7 +6813,8 @@
               "generation",
               "query.interpret",
               "query.rewrite",
-              "image.ocr"
+              "image.ocr",
+              "document.parse"
             ],
             "title": "Operation",
             "type": "string"
@@ -14043,7 +14380,7 @@
         ]
       },
       "post": {
-        "description": "受控接收 DOC 或 DOCX 并创建新逻辑文档。",
+        "description": "受控接收 DOC、DOCX 或 PDF 并创建新逻辑文档。",
         "operationId": "_create_document_api_v1_projects__project_id__knowledge_bases__kb_id__documents_post",
         "parameters": [
           {
@@ -15465,7 +15802,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
+                  "additionalProperties": {
+                    "items": {
+                      "$ref": "#/components/schemas/ArtifactDescriptor"
+                    },
+                    "type": "array"
+                  },
                   "title": "Response  List Artifacts Api V1 Projects  Project Id  Knowledge Bases  Kb Id  Documents  Document Id  Versions  Dver  Artifacts Get",
                   "type": "object"
                 }

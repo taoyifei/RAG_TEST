@@ -32,6 +32,7 @@ export function ConnectionCreator({
   const [endpointMode, setEndpointMode] = useState("workspace_host");
   const [apiHost, setApiHost] = useState("");
   const [apiBaseUrl, setApiBaseUrl] = useState("");
+  const [ocrApiBaseUrl, setOcrApiBaseUrl] = useState("");
   const [rerankProtocol, setRerankProtocol] = useState<
     "tei" | "jina-compatible"
   >("tei");
@@ -41,6 +42,8 @@ export function ConnectionCreator({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const endpointPreview = previewAliyunEndpoint(endpointMode, apiHost);
+  const paddle = provider === "paddleocr";
+  const paddleSelfHosted = paddle && endpointMode === "self_hosted";
   async function createConnection(event: FormEvent) {
     event.preventDefault();
     if (provider === "aliyun-model-studio" && endpointPreview.error) {
@@ -72,7 +75,9 @@ export function ConnectionCreator({
             ? endpointMode
             : provider === "openai-compatible"
               ? "custom"
-              : undefined,
+              : paddle
+                ? endpointMode
+                : undefined,
         api_host:
           provider === "aliyun-model-studio"
             ? endpointPreview.endpoint
@@ -80,7 +85,12 @@ export function ConnectionCreator({
         workspace_id:
           provider === "aliyun-model-studio" ? workspaceId : undefined,
         region: provider === "aliyun-model-studio" ? "cn-beijing" : undefined,
-        api_base_url: provider === "openai-compatible" ? apiBaseUrl : undefined,
+        api_base_url:
+          provider === "openai-compatible" || paddleSelfHosted
+            ? apiBaseUrl
+            : undefined,
+        ocr_api_base_url:
+          paddleSelfHosted && ocrApiBaseUrl.trim() ? ocrApiBaseUrl : undefined,
         rerank_protocol:
           provider === "openai-compatible" ? rerankProtocol : undefined,
         rerank_path:
@@ -115,12 +125,23 @@ export function ConnectionCreator({
             onChange={(event) => {
               const next = event.target.value as ProviderType;
               setProvider(next);
+              setEndpointMode(
+                next === "paddleocr"
+                  ? "self_hosted"
+                  : next === "aliyun-model-studio"
+                    ? "workspace_host"
+                    : next === "openai-compatible"
+                      ? "custom"
+                      : "",
+              );
               setDisplayName(
                 next === "jina"
                   ? "Jina 主连接"
                   : next === "aliyun-model-studio"
                     ? "百炼备用连接"
-                    : "自定义模型连接",
+                    : next === "paddleocr"
+                      ? "PaddleOCR PDF 解析"
+                      : "自定义模型连接",
               );
             }}
           >
@@ -160,9 +181,9 @@ export function ConnectionCreator({
               value={credentialValue}
               onChange={(event) => setCredentialValue(event.target.value)}
               autoComplete="off"
-              required={provider !== "openai-compatible"}
+              required={provider !== "openai-compatible" && !paddleSelfHosted}
               placeholder={
-                provider === "openai-compatible"
+                provider === "openai-compatible" || paddleSelfHosted
                   ? "无鉴权服务可留空"
                   : undefined
               }
@@ -195,7 +216,9 @@ export function ConnectionCreator({
               placeholder={
                 provider === "openai-compatible"
                   ? "OPENAI_API_KEY"
-                  : "JINA_API_KEY"
+                  : provider === "paddleocr"
+                    ? "PADDLEOCR_ACCESS_TOKEN"
+                    : "JINA_API_KEY"
               }
               pattern="[A-Z][A-Z0-9_]+"
               required
@@ -259,6 +282,49 @@ export function ConnectionCreator({
               模型 ID
               不在此处固定；连接保存后，在各能力测试和知识库配置中填写服务实际暴露的模型
               ID。
+            </p>
+          </>
+        )}
+        {paddle && (
+          <>
+            <label>
+              PaddleOCR 模式
+              <select
+                value={endpointMode}
+                onChange={(event) => setEndpointMode(event.target.value)}
+              >
+                <option value="self_hosted">本地/自托管完整产线</option>
+                <option value="official_api">PaddleOCR 官方 API</option>
+              </select>
+            </label>
+            {paddleSelfHosted && (
+              <>
+                <label className="span-two">
+                  文档解析 Base URL
+                  <input
+                    type="url"
+                    value={apiBaseUrl}
+                    onChange={(event) => setApiBaseUrl(event.target.value)}
+                    placeholder="http://127.0.0.1:8080"
+                    required
+                  />
+                </label>
+                <label className="span-two">
+                  PP-OCRv6 复核 Base URL（可选）
+                  <input
+                    type="url"
+                    value={ocrApiBaseUrl}
+                    onChange={(event) => setOcrApiBaseUrl(event.target.value)}
+                    placeholder="http://127.0.0.1:8081"
+                  />
+                </label>
+              </>
+            )}
+            <p className="span-two">
+              {paddleSelfHosted
+                ? "文档解析地址调用 /layout-parsing；可另填 PP-OCRv6 服务地址供高风险原子调用 /ocr，未填时保持未复核。API Key 可留空。"
+                : "官方模式使用当前凭据中的 Access Token，通过 PaddleOCR 3.7.0 官方 SDK 提交与轮询。"}
+              保存连接不会立即发送文件，测试连接需另行发起。
             </p>
           </>
         )}

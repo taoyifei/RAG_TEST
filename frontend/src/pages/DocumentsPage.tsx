@@ -108,7 +108,7 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
           <input
             data-testid="new-document-file"
             type="file"
-            accept=".doc,.docx"
+            accept=".doc,.docx,.pdf"
             disabled={uploading}
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -236,7 +236,7 @@ export function DocumentsPage({ go }: { go: (path: string) => void }) {
       )}
       {!items.length && (
         <EmptyState title="暂无文档">
-          上传 DOC 或 DOCX 后，系统会创建不可变版本与新的索引版本。
+          上传 DOC、DOCX 或 PDF 后，系统会创建不可变版本与新的索引版本。
         </EmptyState>
       )}
     </section>
@@ -338,7 +338,7 @@ function DocumentActions({
         <input
           data-testid={`version-${document.document_id}`}
           type="file"
-          accept=".doc,.docx"
+          accept=".doc,.docx,.pdf"
           onChange={(e) => {
             const file = e.target.files?.[0];
             e.target.value = "";
@@ -346,6 +346,7 @@ function DocumentActions({
           }}
         />
       </label>
+      <small>新版本必须与当前逻辑文档保持相同文件格式。</small>
       <button onClick={inspect}>详情</button>
       <button
         onClick={() => {

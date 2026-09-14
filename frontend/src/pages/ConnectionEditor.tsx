@@ -27,6 +27,9 @@ export function ConnectionEditor({
   const [mode, setMode] = useState<string>(connection.endpoint_mode ?? "");
   const [host, setHost] = useState(connection.api_host ?? "");
   const [baseUrl, setBaseUrl] = useState(connection.api_base_url ?? "");
+  const [ocrBaseUrl, setOcrBaseUrl] = useState(
+    connection.ocr_api_base_url ?? "",
+  );
   const [rerankProtocol, setRerankProtocol] = useState<
     "tei" | "jina-compatible"
   >(connection.rerank_protocol ?? "tei");
@@ -47,6 +50,8 @@ export function ConnectionEditor({
   const [error, setError] = useState<unknown>();
   const aliyun = connection.provider_type === "aliyun-model-studio";
   const custom = connection.provider_type === "openai-compatible";
+  const paddle = connection.provider_type === "paddleocr";
+  const paddleSelfHosted = paddle && mode === "self_hosted";
   const endpointPreview = previewAliyunEndpoint(mode, host);
 
   async function save(event: FormEvent) {
@@ -85,6 +90,14 @@ export function ConnectionEditor({
               rerank_path: rerankPath.trim() || null,
             }
           : {}),
+        ...(paddle
+          ? {
+              endpoint_mode: mode,
+              api_base_url: paddleSelfHosted ? baseUrl : null,
+              ocr_api_base_url:
+                paddleSelfHosted && ocrBaseUrl.trim() ? ocrBaseUrl : null,
+            }
+          : {}),
       });
       await onSaved();
     } catch (reason) {
@@ -107,7 +120,9 @@ export function ConnectionEditor({
           ? "编辑百炼连接"
           : custom
             ? "编辑自定义模型连接"
-            : "编辑 Jina 连接"
+            : paddle
+              ? "编辑 PaddleOCR 连接"
+              : "编辑 Jina 连接"
       }
       onClose={() => {
         if (!saving && !rotating) onCancel();
@@ -241,6 +256,49 @@ export function ConnectionEditor({
             </p>
           </>
         )}
+        {paddle && (
+          <>
+            <label>
+              PaddleOCR 模式
+              <select
+                value={mode}
+                onChange={(event) => setMode(event.target.value)}
+              >
+                <option value="self_hosted">本地/自托管完整产线</option>
+                <option value="official_api">PaddleOCR 官方 API</option>
+              </select>
+            </label>
+            {paddleSelfHosted && (
+              <>
+                <label className="span-two">
+                  文档解析 Base URL
+                  <input
+                    type="url"
+                    value={baseUrl}
+                    onChange={(event) => setBaseUrl(event.target.value)}
+                    placeholder="http://127.0.0.1:8080"
+                    required
+                  />
+                </label>
+                <label className="span-two">
+                  PP-OCRv6 复核 Base URL（可选）
+                  <input
+                    type="url"
+                    value={ocrBaseUrl}
+                    onChange={(event) => setOcrBaseUrl(event.target.value)}
+                    placeholder="http://127.0.0.1:8081"
+                  />
+                </label>
+              </>
+            )}
+            <p className="span-two">
+              {paddleSelfHosted
+                ? "文档解析使用 /layout-parsing；仅在另配 PP-OCRv6 地址时对最终高风险原子调用 /ocr，未配置则标为未复核。"
+                : "官方模式由 PaddleOCR SDK 使用当前 Access Token 调用文档解析与 PP-OCRv6。"}
+              模式或地址变化后需要重新执行连接测试。
+            </p>
+          </>
+        )}
         <label>
           请求预算
           <input
@@ -320,8 +378,10 @@ export function ConnectionEditor({
                   value={secret}
                   onChange={(event) => setSecret(event.target.value)}
                   autoComplete="off"
-                  required={!custom}
-                  placeholder={custom ? "无鉴权服务可留空" : undefined}
+                  required={!custom && !paddleSelfHosted}
+                  placeholder={
+                    custom || paddleSelfHosted ? "无鉴权服务可留空" : undefined
+                  }
                 />
               </label>
               <button disabled={rotating}>确认更换密钥</button>

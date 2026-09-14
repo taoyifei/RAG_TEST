@@ -39,6 +39,11 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
                   回答：
                   {settings.generation_model ?? "未配置，使用证据摘录回答"} ·
                   问题改写：{settings.rewrite_enabled ? "已开启" : "已关闭"} ·
+                  PDF 解析：
+                  {settings.pdf_parser_enabled
+                    ? settings.pdf_parser_model
+                    : "已关闭"}
+                  {" · "}
                   图片识别：
                   {settings.ocr_enabled ? settings.ocr_model : "已关闭"}
                 </>
@@ -92,7 +97,7 @@ export function KnowledgeBaseModels({ kbId }: { kbId: string }) {
                 </button>
               )}
             <button disabled={!settings} onClick={() => setEditing(true)}>
-              设置回答与图片识别
+              设置回答、PDF 解析与图片识别
             </button>
           </div>
         </div>
@@ -316,6 +321,7 @@ function operationLabel(operation: string): string {
       "query.interpret": "问题意图解释",
       "query.rewrite": "问题改写",
       "image.ocr": "图片识别",
+      "document.parse": "PDF 文档解析",
     }[operation] ?? operation
   );
 }
@@ -384,6 +390,7 @@ function ModelEditor({
     return connection && model ? JSON.stringify([connection, model]) : "";
   }
   const generationChoices = choices("generation");
+  const pdfChoices = choices("document.parse");
   const ocrChoices = choices("image.ocr");
   const generationConnection = connections.find(
     (connection) => connection.connection_id === value.generation_connection_id,
@@ -394,6 +401,10 @@ function ModelEditor({
     ? JSON.stringify([value.generation_connection_id, ""])
     : selected(value.generation_connection_id, value.generation_model);
   const ocrSelection = selected(value.ocr_connection_id, value.ocr_model);
+  const pdfSelection = selected(
+    value.pdf_parser_connection_id,
+    value.pdf_parser_model,
+  );
   async function save(event: FormEvent) {
     event.preventDefault();
     if (pending) return;
@@ -407,6 +418,10 @@ function ModelEditor({
     }
     if (customGeneration && !value.generation_model?.trim()) {
       setError(new Error("请填写自定义回答模型 ID。"));
+      return;
+    }
+    if (value.pdf_parser_enabled && !value.pdf_parser_connection_id) {
+      setError(new Error("启用 PDF 解析前请选择 PaddleOCR 连接与模型。"));
       return;
     }
     setPending(true);
@@ -432,7 +447,9 @@ function ModelEditor({
         onSubmit={(event) => void save(event)}
       >
         <p>
-          保存只更新配置。启用后的问答与图片识别会使用对应服务，并受已有调用授权和预算限制。
+          保存只更新配置。新上传 PDF 会使用所选 PaddleOCR；已有 PDF
+          需要创建新索引 Revision
+          后才会采用新解析身份。问答与图片识别仍受已有调用授权和预算限制。
         </p>
         <p role="status">
           已选择模型不等于连接已验证、资料已授权或本次已调用；请以查询结果与历史中的调用状态为准。
@@ -509,6 +526,93 @@ function ModelEditor({
           />
           启用问题改写
         </label>
+        <label>
+          PDF 解析模型
+          <select
+            value={pdfSelection}
+            disabled={pending || !catalog}
+            onChange={(event) => {
+              const [connection, model] = event.target.value
+                ? (JSON.parse(event.target.value) as string[])
+                : [null, null];
+              setValue({
+                ...value,
+                pdf_parser_connection_id: connection ?? null,
+                pdf_parser_model: model ?? null,
+                pdf_parser_enabled: connection
+                  ? value.pdf_parser_enabled
+                  : false,
+              });
+            }}
+          >
+            <option value="">未配置</option>
+            {pdfSelection &&
+              !pdfChoices.some((item) => item.value === pdfSelection) && (
+                <option value={pdfSelection}>
+                  当前配置不可用 · {value.pdf_parser_model}
+                </option>
+              )}
+            {pdfChoices.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={value.pdf_parser_enabled}
+            disabled={pending || !value.pdf_parser_connection_id}
+            onChange={(event) =>
+              setValue({
+                ...value,
+                pdf_parser_enabled: event.target.checked,
+              })
+            }
+          />
+          启用 PDF 文档解析
+        </label>
+        <div className="form-grid">
+          <label>
+            PDF 单次请求超时（秒）
+            <input
+              type="number"
+              min={1}
+              max={3600}
+              value={value.pdf_request_timeout_seconds}
+              disabled={pending || !value.pdf_parser_connection_id}
+              onChange={(event) =>
+                setValue({
+                  ...value,
+                  pdf_request_timeout_seconds: Number(event.target.value),
+                })
+              }
+            />
+          </label>
+          <label>
+            官方任务轮询超时（秒）
+            <input
+              type="number"
+              min={1}
+              max={7200}
+              value={value.pdf_poll_timeout_seconds}
+              disabled={pending || !value.pdf_parser_connection_id}
+              onChange={(event) =>
+                setValue({
+                  ...value,
+                  pdf_poll_timeout_seconds: Number(event.target.value),
+                })
+              }
+            />
+          </label>
+        </div>
+        <p>
+          本地连接调用完整产线的 <code>/layout-parsing</code>
+          ；官方连接由 PaddleOCR SDK
+          提交和轮询。解析选项、模型或连接版本变化会要求新索引
+          Revision；只修改回答模型不会重跑 PDF。
+        </p>
         <label>
           图片识别模型
           <select
