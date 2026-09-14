@@ -23,7 +23,7 @@ from rag_app.core.errors import RagError
 from rag_app.core.events import TraceEvent
 from rag_app.core.models import ParseResult, RetrievalPolicy, SystemStatus
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.ports import ConversationPort, TracePort
+from rag_app.core.ports import ConversationPort, ParserPort, TracePort
 from rag_app.core.ports.query_history import QueryHistoryPort
 from rag_app.query_executor import QueryExecutor
 from rag_app.sdk import RagSdk
@@ -105,6 +105,7 @@ class P09RuntimeHooks:
     conversation: ConversationPort | None = None
     retrieval_policy: RetrievalPolicy | None = None
     document_enricher: Callable[[ParseResult], ParseResult] | None = None
+    parser_resolver: Callable[[ParserPort], ParserPort] | None = None
     content_identity: Callable[[str], str | None] | None = None
     prepare_trace: Callable[[str, TraceMode], None] | None = None
 
@@ -140,6 +141,7 @@ def build_p09_runtime(
         trace_sink=None if hooks is None else hooks.trace_sink,
         policy=None if hooks is None else hooks.retrieval_policy,
         document_enricher=None if hooks is None else hooks.document_enricher,
+        parser_resolver=None if hooks is None else hooks.parser_resolver,
     )
     persistence = retrieval_runtime.persistence
     store = SqliteLifecycleStore(

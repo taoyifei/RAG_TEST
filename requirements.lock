@@ -36,6 +36,8 @@ pycparser==3.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
+pypdf==6.18.1
+pypdfium2==5.13.0
 Pygments==2.20.0
 pytest==9.1.1
 pytest-asyncio==1.4.0

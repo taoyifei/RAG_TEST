@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from enum import StrEnum
@@ -25,6 +26,9 @@ _SAFE_NODE_METADATA_KEYS = frozenset(
         "heading_level",
         "legacy_flattened_table",
         "num_id",
+        "origin",
+        "pdf_block_label",
+        "pdf_table_parse",
         "repeated_header",
         "row_span",
         "style_hidden",
@@ -61,6 +65,15 @@ class ParseContext(FrozenModel):
     """不进入解析策略指纹的运行时文档身份。"""
 
     document: DocumentRef
+    job_id: str | None = Field(default=None, pattern=r"^job_[0-9a-f]{32}$")
+    revision_id: str | None = Field(
+        default=None, pattern=r"^irev_[0-9a-f]{32}$"
+    )
+    page_progress: Callable[[int, tuple[int, ...], bool], None] | None = Field(
+        default=None,
+        exclude=True,
+        repr=False,
+    )
     cancel_check: Callable[[], None] | None = Field(
         default=None,
         exclude=True,
@@ -179,6 +192,12 @@ class SourceAnchor(FrozenModel):
     relationship_id: str | None = Field(default=None, min_length=1)
     source_start_char: StrictInt | None = Field(default=None, ge=0)
     source_end_char: StrictInt | None = Field(default=None, ge=0)
+    page_index: StrictInt | None = Field(default=None, ge=0)
+    page_width: float | None = Field(default=None, gt=0.0)
+    page_height: float | None = Field(default=None, gt=0.0)
+    bbox: tuple[float, float, float, float] | None = None
+    pdf_block_id: str | None = Field(default=None, min_length=1, max_length=128)
+    pdf_table_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("part_uri")
     @classmethod
@@ -204,6 +223,43 @@ class SourceAnchor(FrozenModel):
             raise ValueError("source char range 必须同时提供起点和终点。")
         if start is not None and end is not None and end < start:
             raise ValueError("source char range 终点不能早于起点。")
+        page_values = (self.page_width, self.page_height)
+        if self.page_index is None and any(
+            value is not None
+            for value in (
+                *page_values,
+                self.bbox,
+                self.pdf_block_id,
+                self.pdf_table_id,
+            )
+        ):
+            raise ValueError("PDF 来源字段必须同时提供 page_index。")
+        if (self.page_width is None) != (self.page_height is None):
+            raise ValueError("PDF 页面宽高必须同时提供或同时省略。")
+        if (
+            self.page_width is not None
+            and self.page_height is not None
+            and not all(
+                math.isfinite(value)
+                for value in (self.page_width, self.page_height)
+            )
+        ):
+            raise ValueError("PDF 页面宽高必须是有限数值。")
+        if self.bbox is not None:
+            left, top, right, bottom = self.bbox
+            if (
+                not all(
+                    math.isfinite(value) for value in (left, top, right, bottom)
+                )
+                or min(left, top) < 0
+                or right <= left
+                or bottom <= top
+            ):
+                raise ValueError("PDF bbox 必须是非负且前进的矩形。")
+            if self.page_width is not None and right > self.page_width:
+                raise ValueError("PDF bbox 超出页面宽度。")
+            if self.page_height is not None and bottom > self.page_height:
+                raise ValueError("PDF bbox 超出页面高度。")
         return self
 
 
@@ -479,6 +535,12 @@ class ParseReport(FrozenModel):
     issues: tuple[ParseIssue, ...] = ()
     elapsed_seconds: float = Field(default=0.0, ge=0.0, exclude=True)
     warnings: tuple[str, ...] = ()
+    pdf_page_count: StrictInt | None = Field(default=None, gt=0)
+    pdf_parsed_page_count: StrictInt | None = Field(default=None, ge=0)
+    pdf_failed_page_indices: tuple[StrictInt, ...] = ()
+    pdf_parser_mode: str | None = Field(default=None, max_length=80)
+    pdf_parser_model: str | None = Field(default=None, max_length=160)
+    pdf_page_count_mismatch: bool = False
 
     @model_validator(mode="after")
     def _validate_coverage(self) -> Self:
@@ -487,6 +549,29 @@ class ParseReport(FrozenModel):
         keys = [key for key, _ in self.story_counts]
         if len(keys) != len(set(keys)):
             raise ValueError("story_counts 禁止重复 story。")
+        if self.pdf_page_count is None:
+            if (
+                self.pdf_parsed_page_count is not None
+                or self.pdf_failed_page_indices
+                or self.pdf_parser_mode is not None
+                or self.pdf_parser_model is not None
+                or self.pdf_page_count_mismatch
+            ):
+                raise ValueError("PDF 解析报告必须提供总页数。")
+            return self
+        if self.pdf_parsed_page_count is None:
+            raise ValueError("PDF 解析报告必须提供已解析页数。")
+        if self.pdf_parsed_page_count > self.pdf_page_count:
+            raise ValueError("PDF 已解析页数不能超过总页数。")
+        if any(
+            index >= self.pdf_page_count
+            for index in self.pdf_failed_page_indices
+        ):
+            raise ValueError("PDF 失败页索引超出总页数。")
+        if len(self.pdf_failed_page_indices) != len(
+            set(self.pdf_failed_page_indices)
+        ):
+            raise ValueError("PDF 失败页索引禁止重复。")
         return self
 
     @property

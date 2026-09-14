@@ -34,6 +34,7 @@ from rag_app.core.models.management import (
     QueuedIngestion,
     SlotProgress,
 )
+from rag_app.core.models.pdf import PdfPageProgress
 
 _MAX_PAGE_SIZE = 200
 _DEFAULT_MAX_PENDING_JOBS = 64
@@ -1236,6 +1237,10 @@ class SqliteLifecycleStore:
                 "WHERE revision_id=? ORDER BY slot_id",
                 (str(row["revision_id"]),),
             ).fetchall()
+            pdf_progress_row = connection.execute(
+                "SELECT progress_json FROM pdf_job_progress WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
         error_code = (
             None if row["error_code"] is None else str(row["error_code"])
         )
@@ -1289,6 +1294,13 @@ class SqliteLifecycleStore:
                     total=int(slot["expected_chunk_count"]),
                 )
                 for slot in slots
+            ),
+            pdf_progress=(
+                None
+                if pdf_progress_row is None
+                else PdfPageProgress.model_validate_json(
+                    str(pdf_progress_row["progress_json"])
+                )
             ),
         )
 

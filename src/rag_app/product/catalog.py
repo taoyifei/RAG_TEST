@@ -29,8 +29,8 @@ class CatalogProvider(BaseModel):
     endpoint_profiles: tuple[str, ...] = ("default",)
 
 
-CATALOG_VERSION: Final = "2026-09-14.2"
-CAPABILITY_CATALOG_VERSION: Final = "2026-09-14.2"
+CATALOG_VERSION: Final = "2026-09-14.3"
+CAPABILITY_CATALOG_VERSION: Final = "2026-09-14.3"
 # Provider 选项可以独立扩展；只有实际 Embedding 请求合同变化时才升级它。
 # 保留该版本可避免新增 Provider 让既有 Jina/百炼 Profile 误触发重建索引。
 EMBEDDING_CONTRACT_VERSION: Final = "2026-09-14.1"
@@ -89,6 +89,15 @@ _PROVIDERS: Final = (
         ),
         models=(),
         operation_models={},
+    ),
+    CatalogProvider(
+        provider_type="paddleocr",
+        display_name="PaddleOCR",
+        operations=("document.parse",),
+        models=("PaddleOCR-VL-1.6", "PP-StructureV3"),
+        operation_models={
+            "document.parse": ("PaddleOCR-VL-1.6", "PP-StructureV3"),
+        },
     ),
 )
 

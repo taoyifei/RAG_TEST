@@ -12,6 +12,10 @@ from rag_app.adapters.stores.sqlite_embedding_cache import SqliteEmbeddingCache
 from rag_app.adapters.stores.sqlite_fts5 import SqliteFtsStore
 from rag_app.adapters.stores.sqlite_lifecycle import SqliteLifecycleStore
 from rag_app.adapters.stores.sqlite_migrations import MigrationRunner
+from rag_app.adapters.stores.sqlite_pdf import (
+    SqlitePdfParseCache,
+    SqlitePdfProgressStore,
+)
 
 __all__ = [
     "FilesystemBlobStore",
@@ -24,4 +28,6 @@ __all__ = [
     "SqliteEmbeddingCache",
     "SqliteFtsStore",
     "SqliteLifecycleStore",
+    "SqlitePdfParseCache",
+    "SqlitePdfProgressStore",
 ]

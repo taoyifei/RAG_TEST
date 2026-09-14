@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
-from pydantic import Field, StrictFloat, StrictInt, field_validator
+from enum import StrEnum
+from typing import Self
 
-from rag_app.core.models.chunk import Chunk, SourceSpan
+from pydantic import (
+    Field,
+    StrictFloat,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
+
+from rag_app.core.models.chunk import Chunk, SourceSpan, SourceSpanKind
 from rag_app.core.models.common import FrozenModel, MetadataModel
 from rag_app.core.models.document import KnowledgeBaseScope
 from rag_app.core.models.lifecycle import IndexRevisionRef
@@ -35,6 +44,14 @@ class SearchHit(MetadataModel):
     channels: tuple[str, ...]
 
 
+class OcrVerificationState(StrEnum):
+    """最终答案中高风险视觉文字的复核状态。"""
+
+    VERIFIED = "VERIFIED"
+    CONFLICT = "CONFLICT"
+    UNVERIFIED = "UNVERIFIED"
+
+
 class EvidenceItem(MetadataModel):
     """进入回答阶段且可回溯来源的证据。"""
 
@@ -52,6 +69,11 @@ class EvidenceItem(MetadataModel):
     section_id: str | None = None
     table_locator: str | None = None
     table_context: bool = False
+    page_index: StrictInt | None = Field(default=None, ge=0)
+    source_kind: SourceSpanKind | None = None
+    pdf_block_id: str | None = Field(default=None, min_length=1, max_length=128)
+    pdf_table_id: str | None = Field(default=None, min_length=1, max_length=128)
+    ocr_verification_state: OcrVerificationState | None = None
     selection_reason: str = Field(default="retrieval_candidate", min_length=1)
     publishable: bool = True
     retrieval_origins: tuple[str, ...] = ()
@@ -71,6 +93,26 @@ class EvidenceItem(MetadataModel):
 
         """
         return self.evidence_id
+
+
+class OcrClaimVerification(FrozenModel):
+    """一次有界 PP-OCRv6 复核的脱敏结果。"""
+
+    state: OcrVerificationState
+    support_states: tuple[tuple[str, OcrVerificationState], ...]
+    provider_calls: tuple[ProviderCall, ...] = ()
+    reason_code: str = Field(min_length=1, max_length=120)
+
+    @model_validator(mode="after")
+    def _validate_supports(self) -> Self:
+        support_ids = [item[0] for item in self.support_states]
+        if not support_ids or any(not item for item in support_ids):
+            raise ValueError("OCR 复核必须绑定至少一个 Support ID。")
+        if len(support_ids) != len(set(support_ids)):
+            raise ValueError("OCR 复核 Support ID 禁止重复。")
+        if any(state is not self.state for _, state in self.support_states):
+            raise ValueError("本次 OCR 复核的 Support 状态必须一致。")
+        return self
 
 
 class ClaimSupport(FrozenModel):

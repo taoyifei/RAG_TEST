@@ -40,6 +40,13 @@ def endpoint_identity(connection: ProviderConnection) -> str:
         if connection.api_base_url is None:
             raise ValueError("兼容服务 Base URL 缺失。")
         endpoint = connection.api_base_url
+    elif connection.provider_type == "paddleocr":
+        if connection.endpoint_mode == "official_api":
+            endpoint = "https://paddleocr.aistudio-app.com"
+        elif connection.api_base_url is not None:
+            endpoint = connection.api_base_url
+        else:
+            raise ValueError("PaddleOCR Base URL 缺失。")
     else:
         endpoint = resolve_endpoint(
             AliyunEndpointConfig.model_validate(

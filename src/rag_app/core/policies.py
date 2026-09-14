@@ -92,6 +92,7 @@ class ParsingPolicy(FrozenModel):
         UnknownIndexableContentPolicy.REJECT
     )
     max_file_bytes: StrictInt = Field(default=128 * 1024 * 1024, gt=0)
+    max_pdf_pages: StrictInt = Field(default=500, gt=0, le=5000)
     max_uncompressed_bytes: StrictInt = Field(
         default=512 * 1024 * 1024,
         gt=0,
@@ -130,10 +131,7 @@ class ParsingPolicy(FrozenModel):
             raise ValueError("custom heading style 名称不能为空。")
         if len(names) != len(set(names)):
             raise ValueError("custom heading style 名称禁止重复。")
-        if any(
-            level < 1 or level > _MAX_HEADING_LEVEL
-            for _, level in value
-        ):
+        if any(level < 1 or level > _MAX_HEADING_LEVEL for _, level in value):
             raise ValueError("custom heading style 层级必须在一到九之间。")
         return value
 

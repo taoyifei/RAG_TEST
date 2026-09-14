@@ -15,11 +15,17 @@ dependencies = [
   "pillow==12.3.0",
   "pydantic==2.13.4",
   "pydantic-settings==2.14.2",
+  "pypdf==6.18.1",
+  "pypdfium2==5.13.0",
   "python-docx==1.2.0",
   "qdrant-client==1.18.0",
   "tokenizers==0.23.1",
   "uvicorn==0.51.0",
 ]
+
+[project.optional-dependencies]
+# 官方托管 API 客户端随 PaddleOCR 核心包发布；默认安装不引入其较重依赖。
+paddleocr-official-api = ["paddleocr==3.7.0"]
 
 [project.scripts]
 rag-app = "rag_app.cli:main"

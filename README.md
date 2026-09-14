@@ -1,6 +1,6 @@
-# Word 文档 RAG
+# Universal 文档 RAG
 
-这是一个可追溯、可增量更新、可恢复的 DOC/DOCX 检索增强生成产品。默认
+这是一个可追溯、可增量更新、可恢复的 DOC/DOCX/PDF 检索增强生成产品。默认
 `rag-app serve` 提供中文管理控制台和稳定 API；V1 使用 SQLite 保存产品状态，
 使用正式 Qdrant Server 保存向量。Jina 与阿里云百炼凭据由管理员在页面配置，
 不会写入镜像或浏览器存储。
@@ -54,7 +54,9 @@ Live Ready。
 和图片文字识别模型。页面同时显示当前活动 Profile、Index Revision、Embedding、
 Reranker、向量覆盖、校准、资料授权和预算状态。远程调用还需要管理员批准服务端根据
 当前活动 Revision 计算的语料清单；新版本、删除、恢复、Revision 或模型变化都会使旧
-批准失效，不会静默跟随。默认未配置或未授权时使用结构化本地回答；配置有效时只以
+批准失效，不会静默跟随。PDF 的 PaddleOCR 解析设置也进入内容与索引身份；修改
+解析模式、模型、端点或选项需要新 Index Revision，单独修改 LLM 不重跑 PDF 解析。
+默认未配置或未授权时使用结构化本地回答；配置有效时只以
 最小充分支持集生成回答，并校验引用、对象、数字、单位、否定、数量和版本。模型失败
 但证据闭合时发布 `extractive_fallback` 并保留退化原因；证据不闭合时才拒答或要求
 澄清。
@@ -73,6 +75,22 @@ DOCX 原生文字与表格优先。文档“图片识别”先扫描内嵌媒体
 图片运行 OCR；缓存命中不重复调用。未完成或不支持的媒体会单独列出，保留可用
 原生文字。OCR 新增文本进入新索引版本，引用标记为“图片识别文字”并可打开
 受权限保护的原图；未提供的坐标或置信度不会补造。当前不支持 EMF 转换。
+
+## PDF 上传与 PaddleOCR
+
+PDF 原件按不可变 `document_version_id` 保存，先在本地检查 `%PDF-`、损坏、加密和
+真实物理页数，再统一交给 PaddleOCR 文档解析；`pypdf.extract_text()` 只判断是否有
+原生文本层，不作为第二套正文。系统支持自托管完整 `PaddleOCR-VL-1.6` 产线的
+`POST /layout-parsing`，也支持 PaddleOCR 3.7.0 官方 Python SDK 的
+`PaddleOCRClient.parse_document`。两条路径都标准化为同一个 `PdfParseResult`，映射
+进现有 Document IR、结构化 Chunker、检索、Rerank、Grounded Answer、History 和
+Trace。
+
+引用展示原始 PDF 物理页，并通过当前证据绑定的同一文档版本下载原件；不会用新版本
+替换旧回答的来源。自托管 Compose 样例和 `max_num_input_imgs: null` 配置见
+[PaddleOCR-VL Demo](deployment/paddleocr/README.md)。本地高风险字符复核可额外配置
+PP-OCRv6 `/ocr` 服务；未配置、无 bbox 或响应不足时状态保持 `UNVERIFIED`，不会伪装
+为已复核。
 
 “问答历史”按时间、知识库、结果和正文关键字查找请求，并用既有主密钥加密
 问题及答案，默认保留七天；“Operational Trace”在独立数据库中只保存安全身份、
@@ -130,7 +148,7 @@ python scripts/release.py budget-plan --config <本地非秘密配置> \
 
 ## 主要组成
 
-- `src/rag_app/`：安全 DOC/DOCX 解析、产品状态、检索、引用、备份与 API。
+- `src/rag_app/`：安全 DOC/DOCX/PDF 解析、产品状态、检索、引用、备份与 API。
 - `frontend/`：React/TypeScript 中文控制台与 Playwright 测试。
 - `compose.yaml` 与 `Dockerfile`：V1 默认的简单容器路径。
 - `evaluation/`：独立评测 schema、证据校验和指标计算。

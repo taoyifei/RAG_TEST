@@ -117,6 +117,7 @@ def node_text_fragments(node: DocumentNode) -> tuple[SourceFragment, ...]:
     raw_origin = dict(node.metadata).get("origin")
     origin = raw_origin if isinstance(raw_origin, str) else None
     source_kinds = {
+        "pdf_parsed": SourceSpanKind.PDF_PARSED_TEXT,
         "ocr": SourceSpanKind.OCR_TEXT,
         "diagram_relation": SourceSpanKind.DIAGRAM_RELATION,
         "derived_caption_or_association": (

@@ -19,6 +19,7 @@ class SourceSpanKind(StrEnum):
     """citation 字符的来源语义。"""
 
     ORIGINAL_TEXT = "original_text"
+    PDF_PARSED_TEXT = "pdf_parsed_text"
     OCR_TEXT = "ocr_text"
     DIAGRAM_RELATION = "diagram_relation"
     DERIVED_CAPTION_OR_ASSOCIATION = "derived_caption_or_association"

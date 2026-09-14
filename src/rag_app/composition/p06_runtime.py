@@ -28,7 +28,7 @@ from rag_app.composition.registry import (
 )
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import DocumentEmbeddingBudget, ParseResult
-from rag_app.core.ports import ChunkValidationPort, TracePort
+from rag_app.core.ports import ChunkValidationPort, ParserPort, TracePort
 
 
 @dataclass(slots=True)
@@ -93,6 +93,7 @@ def build_p06_runtime(
     data_dir: str | Path | None = None,
     trace_sink: TracePort | None = None,
     document_enricher: Callable[[ParseResult], ParseResult] | None = None,
+    parser_resolver: Callable[[ParserPort], ParserPort] | None = None,
 ) -> P06Runtime:
     """构造无隐藏默认策略的 P06 本地运行时。
 
@@ -101,6 +102,7 @@ def build_p06_runtime(
         data_dir: 可选显式本地数据根覆盖。
         trace_sink: 可选宿主持久化 Trace 适配器。
         document_enricher: 可选原生解析后增补钩子。
+        parser_resolver: 可选格式路由包装器；不替换 Registry 基础 Parser。
 
     Returns:
         完整拥有资源的 P06 运行时。
@@ -160,11 +162,19 @@ def build_p06_runtime(
         cast(ChunkValidationPort, components.chunker),
     )
     embedding = DocumentEmbeddingService(cache, control, providers)
+    parser = (
+        components.parser
+        if parser_resolver is None
+        else parser_resolver(components.parser)
+    )
+    contracts = resolved_contracts(components)
+    if parser is not components.parser:
+        contracts["parser_identity"] = parser.descriptor.model_dump(mode="json")
     builder = RevisionBuilder(
         document_enricher=document_enricher,
         trace=components.trace_sink,
         control=control,
-        parser=components.parser,
+        parser=parser,
         parsing_policy=components.parsing_policy,
         chunker=components.chunker,
         chunking_policy=components.chunking_policy,
@@ -179,7 +189,7 @@ def build_p06_runtime(
         validator=validator,
         slots=components.embedding_topology.slots,
         index_fingerprint=components.index_fingerprint,
-        resolved_contracts=resolved_contracts(components),
+        resolved_contracts=contracts,
     )
     database_identity = canonical_sha256(connections.database_identity())
     return P06Runtime(
