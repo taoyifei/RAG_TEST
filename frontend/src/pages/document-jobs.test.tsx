@@ -92,6 +92,11 @@ beforeEach(() => {
     ocr_connection_id: null,
     ocr_model: null,
     ocr_enabled: false,
+    pdf_parser_connection_id: null,
+    pdf_parser_model: null,
+    pdf_parser_enabled: false,
+    pdf_request_timeout_seconds: 300,
+    pdf_poll_timeout_seconds: 600,
     budget_campaign_id: null,
   });
   vi.spyOn(api, "listDocuments").mockResolvedValue({
@@ -125,6 +130,64 @@ it("上传回执只进入任务页，不把计划 Revision 当成可读版本", 
 
   await waitFor(() => expect(go).toHaveBeenCalledWith("/jobs"));
   expect(consoleState.setRevision).not.toHaveBeenCalled();
+});
+
+it("PDF 上传沿用同一文档入口并保留实际媒体类型", async () => {
+  const user = userEvent.setup();
+  const go = vi.fn();
+  const upload = vi.spyOn(api, "uploadDocument").mockResolvedValue({
+    ...job,
+    state: "queued",
+    stage: "queued",
+    safe_error: null,
+    error_code: null,
+  });
+  render(<DocumentsPage go={go} />);
+  await screen.findByText("无当前版本，尚不可检索");
+
+  const pdf = new File(["%PDF-1.7\nsynthetic"], "十二页合成.pdf", {
+    type: "application/pdf",
+  });
+  await user.upload(screen.getByTestId("new-document-file"), pdf);
+
+  expect(upload).toHaveBeenCalledWith(
+    "session",
+    "prj_test",
+    "kb_test",
+    pdf,
+    expect.any(String),
+  );
+  await waitFor(() => expect(go).toHaveBeenCalledWith("/jobs"));
+});
+
+it("PDF 任务列表展示页数完整性、解析路径和模型", async () => {
+  const pdfJob: Job = {
+    ...job,
+    state: "running",
+    stage: "parsing",
+    safe_error: null,
+    error_code: null,
+    pdf_progress: {
+      parser_mode: "paddle_self_hosted",
+      parser_model: "PaddleOCR-VL-1.6",
+      total_pages: 12,
+      parsed_pages: 10,
+      failed_page_indices: [10, 11],
+      truncated: true,
+    },
+  };
+  vi.mocked(api.listJobs).mockResolvedValue({
+    ...scope,
+    total: 1,
+    items: [pdfJob],
+  });
+
+  render(<JobsPage go={vi.fn()} />);
+
+  expect(await screen.findByText(/PDF：10\/12 页/)).toBeVisible();
+  expect(screen.getByText(/本地 PaddleOCR/)).toBeVisible();
+  expect(screen.getByText(/PaddleOCR-VL-1.6/)).toBeVisible();
+  expect(screen.getByText(/页数截断/)).toBeVisible();
 });
 
 it("无当前版本明确不可检索，204删除二次确认并刷新列表", async () => {

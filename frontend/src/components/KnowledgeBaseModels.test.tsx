@@ -16,6 +16,11 @@ const settings: KnowledgeBaseModelSettings = {
   ocr_connection_id: null,
   ocr_model: null,
   ocr_enabled: false,
+  pdf_parser_connection_id: null,
+  pdf_parser_model: null,
+  pdf_parser_enabled: false,
+  pdf_request_timeout_seconds: 300,
+  pdf_poll_timeout_seconds: 600,
   budget_campaign_id: null,
 };
 beforeEach(() => {
