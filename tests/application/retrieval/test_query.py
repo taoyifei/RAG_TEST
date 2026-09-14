@@ -525,6 +525,39 @@ def test_role_shaped_action_question_stays_duties(question: str) -> None:
     assert semantics.reason_codes == ("DUTY_ROLE_ACTION_QUESTION_SYNTAX",)
 
 
+@pytest.mark.parametrize(
+    ("question", "target", "source_text"),
+    (
+        ("zpx禁止做什么", "zpx", "zpx禁止在高温环境运行。"),
+        (
+            "设备 AX-77 不得进行哪些操作",
+            "设备 AX-77",
+            "设备 AX-77 不得进行离线校准操作。",
+        ),
+        (
+            "蓝熊模块不能开展什么行为？",
+            "蓝熊模块",
+            "蓝熊模块不能开展外部同步行为。",
+        ),
+    ),
+)
+def test_prohibition_question_preserves_relation_without_role_semantics(
+    question: str, target: str, source_text: str
+) -> None:
+    analysis = _analyze(question)
+    semantics = analysis.semantics
+
+    assert semantics.target == target
+    assert semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
+    assert semantics.relation == "限制要求"
+    assert semantics.source == "RULE"
+    assert semantics.reason_codes == ("PROHIBITION_QUESTION_SYNTAX",)
+    assert (
+        evaluate_span_support(analysis, source_text).status
+        is SupportStatus.SUPPORTED
+    )
+
+
 def test_typed_semantics_preserve_internal_question_characters() -> None:
     semantics = _analyze("谁的咖啡由谁负责").semantics
 

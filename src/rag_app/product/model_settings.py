@@ -190,7 +190,7 @@ class ProductModelSettings:
             "interpret": "bounded-interpret-v2",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v17",
-            "answer_selection": "shared-query-semantics-v11",
+            "answer_selection": "shared-query-semantics-v12",
             "generation_output": "grounded-output-4096-v1",
         }
         if settings.generation_connection_id:
