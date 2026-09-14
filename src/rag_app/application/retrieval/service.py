@@ -1428,7 +1428,7 @@ class RetrievalService:
                 "variants": tuple(
                     variant.identity for variant in plan.variants
                 ),
-                "semantic_policy": "shared-query-semantics-v3-08",
+                "semantic_policy": "shared-query-semantics-v3-09",
                 "rewrite_policy": "bounded-rewrite-v3",
                 "answer_support_policy": "minimum-supported-set-v3-08",
                 "answer_generation_policy": "model-grounded-claims-v1",

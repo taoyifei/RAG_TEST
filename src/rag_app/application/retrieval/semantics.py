@@ -111,6 +111,12 @@ _RESPONSIBLE_SUFFIX = re.compile(
 _RESPONSIBLE_PREFIX = re.compile(
     r"^(?:由)?谁(?:来)?(?:负责|牵头|管理|受理)(?P<target>.+)$"
 )
+_PROHIBITION_QUESTION = re.compile(
+    r"^(?P<target>.+?)(?:的)?"
+    r"(?:禁止|不得|不能|不允许|不可|不准|严禁|不应当|不应该|不应)"
+    r"(?:(?:做|进行|执行|开展|实施|从事|采取)?"
+    r"(?:什么|啥|哪些|哪类)(?:事|事情|事项|行为|操作|活动|措施)?)$"
+)
 _SECTION_SUMMARY = re.compile(
     rf"^(?P<target>.+?(?:第{_NUMERAL}(?:章|节)|章节|章|节|管理要求|"
     r"工作要求|要求))(?:(?:是|指)?(?:什么|啥)|如何规定)?$"
@@ -292,6 +298,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.RESPONSIBLE_PARTY,
                 source="RULE",
                 reason_codes=("RESPONSIBLE_PARTY_QUESTION_SYNTAX",),
+            )
+
+    prohibition = _PROHIBITION_QUESTION.fullmatch(core)
+    if prohibition is not None:
+        target, source = _target_and_source(prohibition["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation="限制要求",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source="RULE",
+                reason_codes=("PROHIBITION_QUESTION_SYNTAX",),
             )
 
     duty = _DUTY.search(normalized)
