@@ -1,4 +1,4 @@
-"""版本化且禁止任意 Provider、模型和 Base URL 的内置目录。"""
+"""版本化 Provider 能力目录与自定义模型协议边界。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,10 @@ from pydantic import BaseModel, ConfigDict
 from rag_app.adapters.providers.aliyun_models import (
     ALIYUN_GROUNDED_CHAT_MODELS,
 )
+
+_MAX_CUSTOM_MODEL_LENGTH = 200
+_CONTROL_CODEPOINT_LIMIT = 32
+_DELETE_CODEPOINT = 127
 
 
 class CatalogProvider(BaseModel):
@@ -25,9 +29,11 @@ class CatalogProvider(BaseModel):
     endpoint_profiles: tuple[str, ...] = ("default",)
 
 
-CATALOG_VERSION: Final = "2026-09-14.1"
-# 新增生成能力不改变已落盘的 Embedding 数学合同和向量缓存身份。
-CAPABILITY_CATALOG_VERSION: Final = "2026-09-14.1"
+CATALOG_VERSION: Final = "2026-09-14.2"
+CAPABILITY_CATALOG_VERSION: Final = "2026-09-14.2"
+# Provider 选项可以独立扩展；只有实际 Embedding 请求合同变化时才升级它。
+# 保留该版本可避免新增 Provider 让既有 Jina/百炼 Profile 误触发重建索引。
+EMBEDDING_CONTRACT_VERSION: Final = "2026-09-14.1"
 _PROVIDERS: Final = (
     CatalogProvider(
         provider_type="jina",
@@ -69,6 +75,20 @@ _PROVIDERS: Final = (
             "image.ocr": ("qwen3.5-ocr",),
         },
         regions=("cn-beijing",),
+    ),
+    CatalogProvider(
+        provider_type="openai-compatible",
+        display_name="OpenAI-compatible",
+        operations=(
+            "embedding.document",
+            "embedding.query",
+            "reranking",
+            "generation",
+            "query.interpret",
+            "query.rewrite",
+        ),
+        models=(),
+        operation_models={},
     ),
 )
 
@@ -129,14 +149,31 @@ def validate_model(
 
     """
     provider = require_provider(provider_type)
-    if operation not in provider.operations or model not in provider.models:
+    if operation not in provider.operations:
+        raise ValueError("Provider、模型和操作组合不在内置目录中。")
+    if provider_type == "openai-compatible":
+        if (
+            not model
+            or model != model.strip()
+            or len(model) > _MAX_CUSTOM_MODEL_LENGTH
+            or any(
+                ord(character) < _CONTROL_CODEPOINT_LIMIT
+                or ord(character) == _DELETE_CODEPOINT
+                for character in model
+            )
+        ):
+            raise ValueError("自定义模型 ID 必须为 1 到 200 个可见字符。")
+        return
+    if model not in provider.models:
         raise ValueError("Provider、模型和操作组合不在内置目录中。")
     if model not in provider.operation_models.get(operation, ()):
         raise ValueError("模型用途与 Provider 操作不匹配。")
 
 
 __all__ = [
+    "CAPABILITY_CATALOG_VERSION",
     "CATALOG_VERSION",
+    "EMBEDDING_CONTRACT_VERSION",
     "CatalogProvider",
     "provider_catalog",
     "require_provider",

@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from pathlib import Path
 from threading import RLock
+from typing import Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,6 +24,13 @@ from rag_app.adapters.providers import (
     JinaRerankerConfig,
     JinaRerankerV35Adapter,
     JinaV5TextEmbeddingAdapter,
+    OpenAICompatibleChatAdapter,
+    OpenAICompatibleChatConfig,
+    OpenAICompatibleEmbeddingAdapter,
+    OpenAICompatibleEmbeddingConfig,
+    OpenAICompatibleRerankerAdapter,
+    OpenAICompatibleRerankerConfig,
+    openai_compatible_chat_payload,
 )
 from rag_app.adapters.providers.aliyun_chat import (
     CHAT_COMPLETIONS_PATH,
@@ -79,10 +87,15 @@ from rag_app.product.ocr_contract import (
     ProductOcrAdapter,
     ProductOcrPolicy,
 )
+from rag_app.product.openai_compatible import (
+    OPENAI_COMPATIBLE_PROVIDER,
+    normalize_rerank_protocol,
+)
 from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_embedding,
 )
+from rag_app.product.verification import operation_policy_identity
 
 TransportFactory = Callable[[ProviderConnection], httpx.BaseTransport]
 _SYNTHETIC_TEXT = "验收示例：审批完成后归档。"
@@ -154,6 +167,9 @@ class ProviderRuntimeRegistry:
         self._budget_ledger_path = budget_ledger_path
         self._local_ocr_adapter = local_ocr_adapter
         self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
+        self._client_validation_modes: dict[
+            tuple[str, int, int, str], Literal["mock", "live"]
+        ] = {}
         self._lock = RLock()
 
     @property
@@ -194,6 +210,13 @@ class ProviderRuntimeRegistry:
 
         """
         return self._local_ocr_adapter is not None
+
+    def requires_campaign(self, connection_id: str) -> bool:
+        """判断连接是否仍受内置 Provider 活动批准账本约束。"""
+        return (
+            self._control.get_connection(connection_id).provider_type
+            != OPENAI_COMPATIBLE_PROVIDER
+        )
 
     def validate(
         self,
@@ -240,8 +263,9 @@ class ProviderRuntimeRegistry:
             for key in tuple(self._clients):
                 if key[0] == connection_id:
                     self._clients.pop(key).close()
+                    self._client_validation_modes.pop(key, None)
 
-    def _validate(
+    def _validate(  # noqa: PLR0915
         self,
         connection_id: str,
         *,
@@ -268,7 +292,10 @@ class ProviderRuntimeRegistry:
         started = datetime.now(UTC)
         monotonic_start = time.monotonic()
         status = "succeeded"
-        category = "mock_200" if self._transport_factory else "live_200"
+        validation_mode: Literal["mock", "live"] = (
+            "mock" if self._transport_factory else "live"
+        )
+        category = f"{validation_mode}_200"
         safe_error: str | None = None
         dimension: int | None = None
         observed_tokens: int | None = None
@@ -284,11 +311,14 @@ class ProviderRuntimeRegistry:
         try:
             diagnostics.endpoint_host = urlsplit(_base_url(connection)).hostname
             resolved_endpoint_identity = canonical_sha256(_base_url(connection))
-            client, credential_key_version = self._client(connection)
+            client, credential_key_version, validation_mode = self._client(
+                connection
+            )
+            category = f"{validation_mode}_200"
             diagnostics.request_dispatched = True
             diagnostics.stage = "transport"
             response = client.post(
-                _path(connection.provider_type, operation),
+                _path(connection, operation),
                 json=request_payload,
                 extensions={"rag_chat_operation": operation}
                 if operation
@@ -377,12 +407,12 @@ class ProviderRuntimeRegistry:
             provider_model=model,
             credential_key_version=credential_key_version,
             request_policy_identity=(
-                canonical_sha256({"model": model, "operation": operation})
+                operation_policy_identity(connection, model, operation)
                 if spec is None
                 else spec.policy_identity(operation)
             ),
             endpoint_identity=resolved_endpoint_identity,
-            validation_mode="mock" if self._transport_factory else "live",
+            validation_mode=validation_mode,
             started_at=started.isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
             status=status,
@@ -424,7 +454,11 @@ class ProviderRuntimeRegistry:
         document_policy_identity: str,
         query_policy_identity: str,
         resolved: ResolvedEmbeddingSpec | None = None,
-    ) -> JinaV5TextEmbeddingAdapter | AliyunQwen37EmbeddingAdapter:
+    ) -> (
+        JinaV5TextEmbeddingAdapter
+        | AliyunQwen37EmbeddingAdapter
+        | OpenAICompatibleEmbeddingAdapter
+    ):
         """创建使用页面托管连接且调用时解密的 Embedding adapter。
 
         Args:
@@ -485,7 +519,7 @@ class ProviderRuntimeRegistry:
                         "query_task": query["task"],
                     }
                 )
-            else:
+            elif connection.provider_type == "aliyun-model-studio":
                 common.update(
                     {
                         "document_text_type": document["text_type"],
@@ -496,6 +530,12 @@ class ProviderRuntimeRegistry:
         if connection.provider_type == "jina":
             return JinaV5TextEmbeddingAdapter(
                 JinaEmbeddingConfig.model_validate(common),
+                http_client=http_client,
+                api_key_resolver=resolver,
+            )
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            return OpenAICompatibleEmbeddingAdapter(
+                OpenAICompatibleEmbeddingConfig.model_validate(common),
                 http_client=http_client,
                 api_key_resolver=resolver,
             )
@@ -519,7 +559,7 @@ class ProviderRuntimeRegistry:
         connection_id: str,
         *,
         model: str,
-    ) -> JinaRerankerV35Adapter:
+    ) -> JinaRerankerV35Adapter | OpenAICompatibleRerankerAdapter:
         """创建调用时解析页面托管密钥的 Jina Reranker。
 
         Args:
@@ -532,8 +572,28 @@ class ProviderRuntimeRegistry:
         """
         connection = self._control.get_connection(connection_id)
         validate_model(connection.provider_type, model, "reranking")
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            if (
+                connection.rerank_protocol is None
+                or connection.rerank_path is None
+            ):
+                raise ValueError("兼容 Reranker 协议配置不完整。")
+            return OpenAICompatibleRerankerAdapter(
+                OpenAICompatibleRerankerConfig(
+                    model=model,
+                    protocol=normalize_rerank_protocol(
+                        connection.rerank_protocol
+                    ),
+                    path=connection.rerank_path,
+                    egress_allowed=True,
+                ),
+                http_client=self._adapter_http_client(
+                    connection, reranker_mode="remote"
+                ),
+                api_key_resolver=self._secret_resolver(connection),
+            )
         if connection.provider_type != "jina":
-            raise ValueError("V1 Reranker 只支持 Jina。")
+            raise ValueError("Reranker 连接类型不受支持。")
         return JinaRerankerV35Adapter(
             JinaRerankerConfig(model=model, egress_allowed=True),
             http_client=self._adapter_http_client(
@@ -556,14 +616,15 @@ class ProviderRuntimeRegistry:
         for client in self._clients.values():
             client.close()
         self._clients.clear()
+        self._client_validation_modes.clear()
 
     def chat_adapter(
         self,
         connection_id: str,
         *,
         model: str,
-        config: AliyunChatConfig | None = None,
-    ) -> AliyunChatAdapter:
+        config: AliyunChatConfig | OpenAICompatibleChatConfig | None = None,
+    ) -> AliyunChatAdapter | OpenAICompatibleChatAdapter:
         """复用已保存百炼连接，生成与改写不隐式重试 HTTP。
 
         Args:
@@ -580,6 +641,31 @@ class ProviderRuntimeRegistry:
         resolved = config or AliyunChatConfig(model=model, egress_allowed=True)
         if resolved.model != model:
             raise ValueError("回答策略与模型引用不一致。")
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            compatible = (
+                resolved
+                if isinstance(resolved, OpenAICompatibleChatConfig)
+                else OpenAICompatibleChatConfig(
+                    model=model,
+                    egress_allowed=resolved.egress_allowed,
+                    max_input_tokens=resolved.max_input_tokens,
+                    max_output_tokens=resolved.max_output_tokens,
+                    max_messages=resolved.max_messages,
+                    prompt_version=resolved.prompt_version,
+                )
+            )
+            return OpenAICompatibleChatAdapter(
+                compatible,
+                http_client=self._adapter_http_client(
+                    connection,
+                    max_attempts=1,
+                ),
+                api_key_resolver=self._secret_resolver(connection),
+            )
+        if connection.provider_type != "aliyun-model-studio":
+            raise ValueError("回答连接只支持百炼或 OpenAI-compatible。")
+        if isinstance(resolved, OpenAICompatibleChatConfig):
+            raise ValueError("百炼连接不能使用兼容 Chat 策略。")
         return AliyunChatAdapter(
             resolved,
             http_client=self._adapter_http_client(
@@ -626,7 +712,7 @@ class ProviderRuntimeRegistry:
             raise ValueError("资料授权引用的 Provider Connection 已停用。")
         validate_model(connection.provider_type, model, operation)
         endpoint = _base_url(connection).rstrip("/") + _path(
-            connection.provider_type, operation
+            connection, operation
         )
         return provider_request_identity(
             endpoint,
@@ -749,7 +835,7 @@ class ProviderRuntimeRegistry:
 
     def _client(
         self, connection: ProviderConnection
-    ) -> tuple[httpx.Client, int]:
+    ) -> tuple[httpx.Client, int, Literal["mock", "live"]]:
         if not connection.enabled:
             raise _ProviderConfigurationError(
                 "连接已停用。", stage="provider.config"
@@ -766,19 +852,26 @@ class ProviderRuntimeRegistry:
         )
         existing = self._clients.get(cache_key)
         if existing is not None:
-            return existing, key_version
+            return (
+                existing,
+                key_version,
+                self._client_validation_modes[cache_key],
+            )
         self.invalidate_credential(connection.credential_id)
-        headers = {"Authorization": f"Bearer {secret}"}
+        headers = {"Authorization": f"Bearer {secret}"} if secret else {}
         transport = (
             None
             if self._transport_factory is None
             else self._transport_factory(connection)
         )
-        client = httpx.Client(
-            base_url=_base_url(connection),
-            headers=headers,
-            timeout=httpx.Timeout(10.0),
-            transport=BudgetedTransport(
+        validation_mode: Literal["mock", "live"] = (
+            "mock" if isinstance(transport, httpx.MockTransport) else "live"
+        )
+        resolved_transport: httpx.BaseTransport | None
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            resolved_transport = transport
+        else:
+            resolved_transport = BudgetedTransport(
                 transport,
                 ledger_path=self._budget_ledger_path,
                 identity={
@@ -786,12 +879,18 @@ class ProviderRuntimeRegistry:
                     "configuration_version": connection.configuration_version,
                     "credential_key_version": key_version,
                 },
-            ),
+            )
+        client = httpx.Client(
+            base_url=_base_url(connection),
+            headers=headers,
+            timeout=httpx.Timeout(10.0),
+            transport=resolved_transport,
             follow_redirects=False,
             trust_env=False,
         )
         self._clients[cache_key] = client
-        return client, key_version
+        self._client_validation_modes[cache_key] = validation_mode
+        return client, key_version, validation_mode
 
     def _secret_resolver(
         self, connection: ProviderConnection
@@ -818,8 +917,11 @@ class ProviderRuntimeRegistry:
             if self._transport_factory is None
             else self._transport_factory(connection)
         )
-        client = httpx.Client(
-            transport=BudgetedTransport(
+        resolved_transport: httpx.BaseTransport | None
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            resolved_transport = transport
+        else:
+            resolved_transport = BudgetedTransport(
                 transport,
                 ledger_path=self._budget_ledger_path,
                 identity=lambda: {
@@ -829,7 +931,9 @@ class ProviderRuntimeRegistry:
                         connection.credential_id
                     ).key_version,
                 },
-            ),
+            )
+        client = httpx.Client(
+            transport=resolved_transport,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
             follow_redirects=False,
             trust_env=False,
@@ -858,6 +962,10 @@ class ProviderRuntimeRegistry:
                 if parse_response_error_code
                 and connection.provider_type == "aliyun-model-studio"
                 else None
+            ),
+            allow_http=connection.provider_type == OPENAI_COMPATIBLE_PROVIDER,
+            use_budget_transport=(
+                connection.provider_type != OPENAI_COMPATIBLE_PROVIDER
             ),
         )
 
@@ -903,7 +1011,7 @@ def build_offline_mock_transport(
     )
 
 
-def _payload(
+def _payload(  # noqa: PLR0911
     connection: ProviderConnection,
     operation: str,
     model: str,
@@ -911,6 +1019,13 @@ def _payload(
     resolved: ResolvedEmbeddingSpec | None = None,
 ) -> dict[str, object]:
     if operation in {"generation", "query.interpret", "query.rewrite"}:
+        if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            return openai_compatible_chat_payload(
+                (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
+                OpenAICompatibleChatConfig(
+                    model=model, egress_allowed=True, max_output_tokens=256
+                ),
+            )
         return chat_payload(
             (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
             AliyunChatConfig(model=model, max_output_tokens=256),
@@ -918,6 +1033,15 @@ def _payload(
     if operation == "image.ocr":
         return synthetic_ocr_payload(model)
     if operation == "reranking":
+        if (
+            connection.provider_type == OPENAI_COMPATIBLE_PROVIDER
+            and connection.rerank_protocol == "tei"
+        ):
+            return {
+                "query": _SYNTHETIC_TEXT,
+                "texts": list(_SYNTHETIC_RERANK_DOCUMENTS),
+                "truncate": False,
+            }
         return {
             "documents": list(_SYNTHETIC_RERANK_DOCUMENTS),
             "model": model,
@@ -926,6 +1050,12 @@ def _payload(
             "top_n": len(_SYNTHETIC_RERANK_DOCUMENTS),
         }
     is_document = operation.endswith("document")
+    if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        return {
+            "model": model,
+            "input": [_SYNTHETIC_TEXT],
+            "encoding_format": "float",
+        }
     if connection.provider_type == "jina":
         config = JinaEmbeddingConfig(
             slot_id="validation",
@@ -980,6 +1110,11 @@ def _validation_spec(
         if policy:
             raise ValueError("Reranker 暂不支持可编辑请求策略。")
         return None
+    if (
+        connection.provider_type == OPENAI_COMPATIBLE_PROVIDER
+        and dimension is None
+    ):
+        raise ValueError("兼容 Embedding 验证必须提供 expected_dimension。")
     return resolve_embedding(
         connection,
         model,
@@ -1012,7 +1147,7 @@ def _probe_response_contract(
     )
 
 
-def _validate_payload(  # noqa: PLR0912
+def _validate_payload(  # noqa: PLR0912, PLR0915
     provider_type: str,
     operation: str,
     payload: object,
@@ -1030,10 +1165,16 @@ def _validate_payload(  # noqa: PLR0912
         return None, decoded.usage.total_tokens or None
     if not isinstance(payload, dict):
         raise TypeError("响应必须为 object。")
-    if provider_type == "jina":
+    if provider_type in {"jina", OPENAI_COMPATIBLE_PROVIDER}:
         observed_model = payload.get("model")
-        if observed_model != expected_model:
+        if provider_type == "jina" and observed_model != expected_model:
             raise ValueError("Jina 响应模型不匹配。")
+        if (
+            provider_type == OPENAI_COMPATIBLE_PROVIDER
+            and observed_model is not None
+            and observed_model != expected_model
+        ):
+            raise ValueError("兼容响应模型不匹配。")
     if operation == "reranking":
         results = payload["results"]
         if not isinstance(results, list):
@@ -1060,8 +1201,13 @@ def _validate_payload(  # noqa: PLR0912
                 raise ValueError("Reranker document 回显与索引不一致。")
         if set(scores) != set(range(len(_SYNTHETIC_RERANK_DOCUMENTS))):
             raise _ValidationError("RERANK_CANDIDATE_MISSING")
-        return None, usage_tokens(payload)
-    if provider_type == "jina":
+        return None, (
+            None
+            if provider_type == OPENAI_COMPATIBLE_PROVIDER
+            and payload.get("usage") is None
+            else usage_tokens(payload)
+        )
+    if provider_type in {"jina", OPENAI_COMPATIBLE_PROVIDER}:
         vectors = payload["data"]
         index_field = "index"
     else:
@@ -1097,7 +1243,12 @@ def _validate_payload(  # noqa: PLR0912
         if "维度" in str(error):
             raise _ValidationError("EMBEDDING_DIMENSION_MISMATCH") from None
         raise
-    return dimension, usage_tokens(payload)
+    return dimension, (
+        None
+        if provider_type == OPENAI_COMPATIBLE_PROVIDER
+        and payload.get("usage") is None
+        else usage_tokens(payload)
+    )
 
 
 def _estimated_tokens(
@@ -1129,6 +1280,13 @@ def _estimated_tokens(
 def _base_url(connection: ProviderConnection) -> str:
     if connection.provider_type == "jina":
         return "https://api.jina.ai"
+    if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        if connection.api_base_url is None:
+            raise _ProviderConfigurationError(
+                "兼容服务 Base URL 缺失。",
+                stage="provider.openai_compatible.config",
+            )
+        return connection.api_base_url
     try:
         return resolve_endpoint(
             AliyunEndpointConfig.model_validate(
@@ -1146,9 +1304,20 @@ def _base_url(connection: ProviderConnection) -> str:
         ) from None
 
 
-def _path(provider_type: str, operation: str) -> str:
-    if provider_type == "jina":
+def _path(connection: ProviderConnection, operation: str) -> str:
+    if connection.provider_type == "jina":
         return "/v1/rerank" if operation == "reranking" else "/v1/embeddings"
+    if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        if operation == "reranking":
+            if connection.rerank_path is None:
+                raise _ProviderConfigurationError(
+                    "兼容 Reranker Path 缺失。",
+                    stage="provider.openai_compatible.config",
+                )
+            return connection.rerank_path
+        if operation in {"generation", "query.interpret", "query.rewrite"}:
+            return "/chat/completions"
+        return "/embeddings"
     if operation in {
         "generation",
         "query.interpret",

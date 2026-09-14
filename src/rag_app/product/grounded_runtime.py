@@ -22,6 +22,10 @@ from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
     provider_data_scope,
 )
+from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatAdapter,
+    OpenAICompatibleChatConfig,
+)
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
@@ -165,17 +169,14 @@ class ProductGroundedModel:
             or not settings.generation_model
         ):
             raise ValueError("回答模型尚未配置。")
+        self._campaign_required = providers.requires_campaign(
+            settings.generation_connection_id
+        )
         self.adapters = tuple(
             providers.chat_adapter(
                 settings.generation_connection_id,
                 model=model,
-                config=AliyunChatConfig(
-                    model=model,
-                    egress_allowed=True,
-                    max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
-                    max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
-                    json_mode="json_object",
-                ),
+                config=self._chat_config(model),
             )
             for model in settings.generation_models
         )
@@ -225,6 +226,9 @@ class ProductGroundedModel:
     def _scope(
         self, operation: str, source_hashes: tuple[str, ...] = ()
     ) -> Iterator[None]:
+        if not self._campaign_required:
+            yield
+            return
         campaign_id = self.settings.budget_campaign_id
         if campaign_id is None:
             raise PolicyDenied(
@@ -252,7 +256,28 @@ class ProductGroundedModel:
         ):
             yield
 
-    def _rotation_candidates(self) -> tuple[AliyunChatAdapter, ...]:
+    def _chat_config(
+        self, model: str
+    ) -> AliyunChatConfig | OpenAICompatibleChatConfig:
+        """按连接协议创建模型配置，不用内置模型形状限制自定义 ID。"""
+        if not self._campaign_required:
+            return OpenAICompatibleChatConfig(
+                model=model,
+                egress_allowed=True,
+                max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+                max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+            )
+        return AliyunChatConfig(
+            model=model,
+            egress_allowed=True,
+            max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+            max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+            json_mode="json_object",
+        )
+
+    def _rotation_candidates(
+        self,
+    ) -> tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]:
         """优先跳过本进程已经确认额度耗尽的模型。"""
         with self._rotation_lock:
             available = tuple(
@@ -265,7 +290,9 @@ class ProductGroundedModel:
 
     def _call_with_rotation(
         self,
-        action: Callable[[AliyunChatAdapter], _RotationResult],
+        action: Callable[
+            [AliyunChatAdapter | OpenAICompatibleChatAdapter], _RotationResult
+        ],
         *,
         can_rotate: Callable[[], bool] | None = None,
     ) -> tuple[_RotationResult, tuple[ProviderCall, ...]]:

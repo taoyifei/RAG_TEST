@@ -443,3 +443,140 @@ it("按验证、批准、激活顺序恢复真实检索方案", async () => {
   await user.click(activation);
   await waitFor(() => expect(activate).toHaveBeenCalledOnce());
 });
+
+it("兼容连接用自由模型和维度组成检索草稿且无需 Campaign", async () => {
+  sessionStorage.setItem(
+    "rag.console.scope",
+    JSON.stringify({
+      projectId: "prj_custom",
+      kbId: "kb_custom",
+      revisionId: "irev_custom",
+    }),
+  );
+  vi.spyOn(api, "resumeSession").mockRejectedValue(
+    new Error("synthetic no session"),
+  );
+  vi.spyOn(api, "providerCatalog").mockResolvedValue({
+    catalog_version: "synthetic",
+    providers: [
+      {
+        provider_type: "openai-compatible",
+        display_name: "OpenAI-compatible",
+        models: [],
+        operations: ["embedding.document", "embedding.query", "reranking"],
+        operation_models: {},
+        regions: [],
+        endpoint_profiles: ["default"],
+      },
+    ],
+  });
+  vi.spyOn(api, "listConnections").mockResolvedValue({
+    items: [
+      {
+        connection_id: "conn_custom_primary",
+        credential_id: "cred_custom_primary",
+        display_name: "兼容主服务",
+        provider_type: "openai-compatible",
+        configuration_version: 1,
+        status: "configured",
+        request_budget: 30,
+        token_budget: 20000,
+        api_base_url: "http://127.0.0.1:18080/v1",
+      },
+      {
+        connection_id: "conn_custom_standby",
+        credential_id: "cred_custom_standby",
+        display_name: "兼容备用服务",
+        provider_type: "openai-compatible",
+        configuration_version: 1,
+        status: "configured",
+        request_budget: 20,
+        token_budget: 10000,
+        api_base_url: "http://127.0.0.1:18081/v1",
+      },
+    ],
+  });
+  vi.spyOn(api, "listRetrievalProfiles").mockResolvedValue({ items: [] });
+  const create = vi
+    .spyOn(api, "createRetrievalProfile")
+    .mockImplementation((knowledgeBaseId, body) =>
+      Promise.resolve({
+        ...body,
+        knowledge_base_id: knowledgeBaseId,
+        profile_revision_id: "pfr_custom",
+        status: "draft",
+        index_semantic_fingerprint: "custom-index",
+        serving_fingerprint: "custom-serving",
+      } as RetrievalProfile),
+    );
+  vi.spyOn(api, "previewRetrievalProfile").mockResolvedValue({
+    impact: "NEW_INDEX_REVISION_REQUIRED",
+    proposed_profile_revision_id: "pfr_custom",
+    index_fingerprint_changed: true,
+    serving_fingerprint_changed: true,
+  });
+  vi.spyOn(api, "retrievalAuthorization").mockResolvedValue({
+    authorization_state: "NOT_REQUIRED",
+    budget_state: "AVAILABLE",
+    connection_budget_state: "READY",
+    required_operations: ["embedding.document", "embedding.query", "reranking"],
+    estimated_document_chunks: 9,
+    estimated_document_requests_per_slot: 1,
+    estimated_document_tokens_per_slot: 100,
+    embedding_slot_count: 2,
+    reason_codes: [],
+  });
+
+  const user = userEvent.setup();
+  render(
+    <ConsoleProvider>
+      <RetrievalProfilesPage />
+    </ConsoleProvider>,
+  );
+  await user.selectOptions(
+    await screen.findByLabelText("主向量连接"),
+    "conn_custom_primary",
+  );
+  await user.type(screen.getByLabelText("主向量模型 ID"), "vendor/embed-v7");
+  await user.clear(screen.getByLabelText("主向量维度"));
+  await user.type(screen.getByLabelText("主向量维度"), "3");
+  await user.selectOptions(
+    screen.getByLabelText("备用向量连接"),
+    "conn_custom_standby",
+  );
+  await user.type(screen.getByLabelText("备用向量模型 ID"), "other/embed-v3");
+  await user.clear(screen.getByLabelText("备用向量维度"));
+  await user.type(screen.getByLabelText("备用向量维度"), "4");
+  await user.type(screen.getByLabelText("重排模型 ID"), "vendor/ranker-v5");
+  await user.click(screen.getByRole("button", { name: "创建并预览影响" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create).toHaveBeenCalledWith(
+    "kb_custom",
+    expect.objectContaining({
+      primary_connection_id: "conn_custom_primary",
+      primary_embedding_model: "vendor/embed-v7",
+      primary_dimension: 3,
+      primary_document_policy: {
+        role: "document",
+        encoding_format: "float",
+        normalized: true,
+      },
+      primary_query_policy: {
+        role: "query",
+        encoding_format: "float",
+        normalized: true,
+      },
+      standby_connection_id: "conn_custom_standby",
+      standby_embedding_model: "other/embed-v3",
+      standby_dimension: 4,
+      reranker_connection_id: "conn_custom_primary",
+      reranker_model: "vendor/ranker-v5",
+    }),
+  );
+  expect(
+    await screen.findByText(/当前连接模式或资料状态不需要 Campaign 批准/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: /批准当前活动文档/ }),
+  ).not.toBeInTheDocument();
+});

@@ -798,9 +798,12 @@ class ProductProfileResolver:
         if self._models is None:
             raise RuntimeError("Product Model Settings 尚未绑定。")
         model_authorized = authorization_status is None or (
-            authorization_status.corpus_authorization_state == "APPROVED"
-            and authorization_status.model_authorization_state == "APPROVED"
-            and authorization_status.budget_state == "AVAILABLE"
+            authorization_status.corpus_authorization_state
+            in {"APPROVED", "NOT_REQUIRED"}
+            and authorization_status.model_authorization_state
+            in {"APPROVED", "NOT_REQUIRED"}
+            and authorization_status.budget_state
+            in {"AVAILABLE", "NOT_REQUIRED"}
         )
         cache_identity_only = _can_reuse_generation_cache(authorization_status)
         if not settings.generation_connection_id or not (
@@ -2368,6 +2371,11 @@ def _product_egress(
         if profile.standby_connection_id is None
         else control.get_connection(profile.standby_connection_id)
     )
+    reranker = (
+        None
+        if profile.reranker_connection_id is None
+        else control.get_connection(profile.reranker_connection_id)
+    )
     budget = dict(profile.standby_budget)
     request_budget = _bounded_budget(
         budget.get("requests"),
@@ -2383,7 +2391,9 @@ def _product_egress(
         remote_reranking=profile.reranker_connection_id is not None,
         remote_document_embedding_jina="jina" in providers,
         remote_query_embedding_jina="jina" in providers,
-        remote_reranking_jina=profile.reranker_connection_id is not None,
+        remote_reranking_jina=(
+            reranker is not None and reranker.provider_type == "jina"
+        ),
         remote_document_embedding_aliyun=("aliyun-model-studio" in providers),
         remote_query_embedding_aliyun=(
             "aliyun-model-studio" in providers and profile.failover_enabled

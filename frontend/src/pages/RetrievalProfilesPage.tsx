@@ -26,7 +26,13 @@ export function RetrievalProfilesPage() {
   const [catalog, setCatalog] = useState<ProviderCatalog>();
   const [profiles, setProfiles] = useState<RetrievalProfile[]>([]);
   const [primary, setPrimary] = useState("");
+  const [primaryModel, setPrimaryModel] = useState("");
+  const [primaryDimension, setPrimaryDimension] = useState(1024);
   const [standby, setStandby] = useState("");
+  const [standbyModel, setStandbyModel] = useState("");
+  const [standbyDimension, setStandbyDimension] = useState(1024);
+  const [reranker, setReranker] = useState("");
+  const [rerankerModel, setRerankerModel] = useState("");
   const [instruction, setInstruction] = useState("");
   const [minimumSupport, setMinimumSupport] = useState(1);
   const [maxEvidence, setMaxEvidence] = useState(8);
@@ -92,38 +98,64 @@ export function RetrievalProfilesPage() {
     setBusy(true);
     setError(undefined);
     try {
-      const primaryModel = modelFor(catalog, "jina", "embedding.document");
-      const standbyModel = standby
-        ? modelFor(catalog, "aliyun-model-studio", "embedding.document")
+      const primaryConnection = requireConnection(connections, primary);
+      const standbyConnection = standby
+        ? requireConnection(connections, standby)
+        : undefined;
+      const rerankerConnection = reranker
+        ? requireConnection(connections, reranker)
+        : undefined;
+      const resolvedPrimaryModel = selectedModel(
+        catalog,
+        primaryConnection,
+        "embedding.document",
+        primaryModel,
+      );
+      const resolvedStandbyModel = standbyConnection
+        ? selectedModel(
+            catalog,
+            standbyConnection,
+            "embedding.document",
+            standbyModel,
+          )
         : null;
-      const rerankerModel = modelFor(catalog, "jina", "reranking");
+      const resolvedRerankerModel = rerankerConnection
+        ? selectedModel(catalog, rerankerConnection, "reranking", rerankerModel)
+        : null;
+      const primaryPolicies = embeddingPolicies(
+        primaryConnection,
+        base?.primary_connection_id === primary
+          ? {
+              document: base.primary_document_policy,
+              query: base.primary_query_policy,
+            }
+          : undefined,
+      );
+      const standbyPolicies = standbyConnection
+        ? embeddingPolicies(
+            standbyConnection,
+            base?.standby_connection_id === standby
+              ? {
+                  document: base.standby_document_policy,
+                  query: base.standby_query_policy,
+                }
+              : undefined,
+            instruction,
+          )
+        : { document: {}, query: {} };
       const next = await api.createRetrievalProfile(scope.kbId, {
         primary_connection_id: primary,
-        primary_embedding_model: primaryModel,
-        primary_dimension: base?.primary_dimension ?? 1024,
-        primary_document_policy: base?.primary_document_policy ?? {
-          task: "retrieval.passage",
-          normalized: true,
-        },
-        primary_query_policy: base?.primary_query_policy ?? {
-          task: "retrieval.query",
-          normalized: true,
-        },
+        primary_embedding_model: resolvedPrimaryModel,
+        primary_dimension: primaryDimension,
+        primary_document_policy: primaryPolicies.document,
+        primary_query_policy: primaryPolicies.query,
         standby_connection_id: standby || null,
-        standby_embedding_model: standby ? standbyModel : null,
-        standby_dimension: standby ? (base?.standby_dimension ?? 1024) : null,
-        standby_document_policy: standby
-          ? (base?.standby_document_policy ?? { text_type: "document" })
-          : {},
-        standby_query_policy: standby
-          ? {
-              ...base?.standby_query_policy,
-              text_type: "query",
-              query_instruct: instruction.trim() ? instruction : undefined,
-            }
-          : {},
-        reranker_connection_id: base ? base.reranker_connection_id : primary,
-        reranker_model: base ? base.reranker_model : rerankerModel,
+        standby_embedding_model: resolvedStandbyModel,
+        standby_dimension: standby ? standbyDimension : null,
+        standby_document_policy: standbyPolicies.document,
+        standby_query_policy: standbyPolicies.query,
+        reranker_connection_id: reranker || null,
+        reranker_model: resolvedRerankerModel,
         failover_enabled: Boolean(standby) && failover,
         standby_budget: standby
           ? {
@@ -287,9 +319,29 @@ export function RetrievalProfilesPage() {
       </EmptyState>
     );
   }
-  const jina = connections.filter((item) => item.provider_type === "jina");
-  const aliyun = connections.filter(
-    (item) => item.provider_type === "aliyun-model-studio",
+  const primaryOptions = connections.filter(
+    (item) =>
+      item.enabled !== false &&
+      ["jina", "openai-compatible"].includes(item.provider_type),
+  );
+  const standbyOptions = connections.filter(
+    (item) =>
+      item.enabled !== false &&
+      ["aliyun-model-studio", "openai-compatible"].includes(item.provider_type),
+  );
+  const rerankerOptions = connections.filter(
+    (item) =>
+      item.enabled !== false &&
+      ["jina", "openai-compatible"].includes(item.provider_type),
+  );
+  const primaryConnection = connections.find(
+    (item) => item.connection_id === primary,
+  );
+  const standbyConnection = connections.find(
+    (item) => item.connection_id === standby,
+  );
+  const rerankerConnection = connections.find(
+    (item) => item.connection_id === reranker,
   );
   return (
     <section className="stack">
@@ -307,17 +359,64 @@ export function RetrievalProfilesPage() {
           主向量连接
           <select
             value={primary}
-            onChange={(event) => setPrimary(event.target.value)}
+            onChange={(event) => {
+              const previous = primary;
+              const nextId = event.target.value;
+              const next = connections.find(
+                (item) => item.connection_id === nextId,
+              );
+              setPrimary(nextId);
+              setPrimaryModel(
+                defaultModel(catalog, next, "embedding.document"),
+              );
+              if (next?.provider_type !== "openai-compatible") {
+                setPrimaryDimension(1024);
+              }
+              if (!base && (!reranker || reranker === previous)) {
+                setReranker(nextId);
+                setRerankerModel(defaultModel(catalog, next, "reranking"));
+              }
+            }}
             required
           >
-            <option value="">选择 Jina 连接</option>
-            {jina.map((item) => (
+            <option value="">选择主向量连接</option>
+            {primaryOptions.map((item) => (
               <option key={item.connection_id} value={item.connection_id}>
                 {item.display_name}
               </option>
             ))}
           </select>
         </label>
+        {primaryConnection?.provider_type === "openai-compatible" ? (
+          <>
+            <label>
+              主向量模型 ID
+              <input
+                value={primaryModel}
+                onChange={(event) => setPrimaryModel(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              主向量维度
+              <input
+                type="number"
+                min={1}
+                value={primaryDimension}
+                onChange={(event) =>
+                  setPrimaryDimension(Number(event.target.value))
+                }
+                required
+              />
+            </label>
+          </>
+        ) : (
+          primaryConnection && (
+            <p>
+              主模型：{primaryModel || "目录加载中"} · {primaryDimension} 维
+            </p>
+          )
+        )}
         <label>
           备用向量连接
           <select
@@ -327,19 +426,51 @@ export function RetrievalProfilesPage() {
               const connection = connections.find(
                 (item) => item.connection_id === event.target.value,
               );
+              setStandbyModel(
+                defaultModel(catalog, connection, "embedding.document"),
+              );
+              setStandbyDimension(
+                connection?.provider_type === "openai-compatible"
+                  ? primaryDimension
+                  : 1024,
+              );
               setStandbyRequests(connection?.request_budget);
               setStandbyTokens(connection?.token_budget);
             }}
           >
             <option value="">不启用备用连接</option>
-            {aliyun.map((item) => (
+            {standbyOptions.map((item) => (
               <option key={item.connection_id} value={item.connection_id}>
                 {item.display_name}
               </option>
             ))}
           </select>
         </label>
-        {standby && (
+        {standbyConnection?.provider_type === "openai-compatible" && (
+          <>
+            <label>
+              备用向量模型 ID
+              <input
+                value={standbyModel}
+                onChange={(event) => setStandbyModel(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              备用向量维度
+              <input
+                type="number"
+                min={1}
+                value={standbyDimension}
+                onChange={(event) =>
+                  setStandbyDimension(Number(event.target.value))
+                }
+                required
+              />
+            </label>
+          </>
+        )}
+        {standbyConnection?.provider_type === "aliyun-model-studio" && (
           <details className="span-two">
             <summary>高级设置</summary>
             <label>
@@ -352,6 +483,38 @@ export function RetrievalProfilesPage() {
               />
             </label>
           </details>
+        )}
+        <label>
+          重排连接
+          <select
+            value={reranker}
+            onChange={(event) => {
+              const connection = connections.find(
+                (item) => item.connection_id === event.target.value,
+              );
+              setReranker(event.target.value);
+              setRerankerModel(defaultModel(catalog, connection, "reranking"));
+            }}
+          >
+            <option value="">不启用重排</option>
+            {rerankerOptions.map((item) => (
+              <option key={item.connection_id} value={item.connection_id}>
+                {item.display_name} · 重排
+              </option>
+            ))}
+          </select>
+        </label>
+        {rerankerConnection?.provider_type === "openai-compatible" ? (
+          <label>
+            重排模型 ID
+            <input
+              value={rerankerModel}
+              onChange={(event) => setRerankerModel(event.target.value)}
+              required
+            />
+          </label>
+        ) : (
+          rerankerConnection && <p>重排模型：{rerankerModel}</p>
         )}
         {standby && (
           <label>
@@ -393,7 +556,8 @@ export function RetrievalProfilesPage() {
           />
         </label>
         <p className="span-two">
-          Jina 任务类型：文档 retrieval.passage，查询 retrieval.query（只读）。
+          内置连接沿用其目录请求参数；自定义连接显式绑定 document/query
+          角色。所有模型 ID 与维度以当前表单值参与验证和指纹计算。
         </p>
         {standby && (
           <>
@@ -493,7 +657,9 @@ export function RetrievalProfilesPage() {
                     </p>
                   )}
                 {retrievalAuthorization.authorization_state ===
-                  "NOT_REQUIRED" && <p>当前知识库没有活动文档，无需批准。</p>}
+                  "NOT_REQUIRED" && (
+                  <p>当前连接模式或资料状态不需要 Campaign 批准。</p>
+                )}
                 {!retrievalAuthorizationReady(retrievalAuthorization) &&
                   retrievalAuthorization.authorization_state !==
                     "NOT_REQUIRED" && (
@@ -589,7 +755,13 @@ export function RetrievalProfilesPage() {
                 onClick={() => {
                   setBase(profile);
                   setPrimary(profile.primary_connection_id);
+                  setPrimaryModel(profile.primary_embedding_model);
+                  setPrimaryDimension(profile.primary_dimension);
                   setStandby(profile.standby_connection_id ?? "");
+                  setStandbyModel(profile.standby_embedding_model ?? "");
+                  setStandbyDimension(profile.standby_dimension ?? 1024);
+                  setReranker(profile.reranker_connection_id ?? "");
+                  setRerankerModel(profile.reranker_model ?? "");
                   setInstruction(
                     String(profile.standby_query_policy.query_instruct ?? ""),
                   );
@@ -641,16 +813,92 @@ export function RetrievalProfilesPage() {
   );
 }
 
-function modelFor(
+function defaultModel(
   catalog: ProviderCatalog | undefined,
-  providerType: ProviderConnection["provider_type"],
+  connection: ProviderConnection | undefined,
   operation: string,
 ): string {
-  const model = catalog?.providers.find(
-    (item) => item.provider_type === providerType,
-  )?.operation_models?.[operation]?.[0];
-  if (!model) throw new Error("模型目录尚未就绪，请刷新后重试。");
+  if (!connection) return "";
+  return (
+    catalog?.providers.find(
+      (item) => item.provider_type === connection.provider_type,
+    )?.operation_models?.[operation]?.[0] ?? ""
+  );
+}
+
+function selectedModel(
+  catalog: ProviderCatalog | undefined,
+  connection: ProviderConnection,
+  operation: string,
+  input: string,
+): string {
+  const model = input.trim() || defaultModel(catalog, connection, operation);
+  if (!model) throw new Error("请填写所选连接实际暴露的模型 ID。");
   return model;
+}
+
+function requireConnection(
+  connections: ProviderConnection[],
+  connectionId: string,
+): ProviderConnection {
+  const connection = connections.find(
+    (item) => item.connection_id === connectionId,
+  );
+  if (!connection) throw new Error("所选连接不存在或已不可用，请刷新后重试。");
+  return connection;
+}
+
+type EmbeddingPolicies = {
+  document: Record<string, unknown>;
+  query: Record<string, unknown>;
+};
+
+function embeddingPolicies(
+  connection: ProviderConnection,
+  preserved?: EmbeddingPolicies,
+  queryInstruction = "",
+): EmbeddingPolicies {
+  if (connection.provider_type === "openai-compatible") {
+    return {
+      document: {
+        ...preserved?.document,
+        role: "document",
+        encoding_format: "float",
+        normalized: true,
+      },
+      query: {
+        ...preserved?.query,
+        role: "query",
+        encoding_format: "float",
+        normalized: true,
+      },
+    };
+  }
+  if (connection.provider_type === "jina") {
+    return {
+      document: {
+        ...preserved?.document,
+        task: "retrieval.passage",
+        normalized: true,
+      },
+      query: {
+        ...preserved?.query,
+        task: "retrieval.query",
+        normalized: true,
+      },
+    };
+  }
+  return {
+    document: {
+      ...preserved?.document,
+      text_type: "document",
+    },
+    query: {
+      ...preserved?.query,
+      text_type: "query",
+      query_instruct: queryInstruction.trim() || undefined,
+    },
+  };
 }
 
 function retrievalAuthorizationReady(

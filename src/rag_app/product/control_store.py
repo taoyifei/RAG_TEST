@@ -32,12 +32,23 @@ from rag_app.product.models import (
     RetrievalProfileDraft,
     RetrievalProfileRevision,
 )
+from rag_app.product.openai_compatible import (
+    OPENAI_COMPATIBLE_PROVIDER,
+    normalize_base_url,
+    normalize_rerank_path,
+    normalize_rerank_protocol,
+)
 from rag_app.product.quality import ProductQualityStore
 from rag_app.product.resolved_profile import (
     resolve_embedding,
     resolve_retrieval_policy,
 )
-from rag_app.product.verification import profile_specs, validation_is_current
+from rag_app.product.verification import (
+    endpoint_identity,
+    operation_policy_identity,
+    profile_specs,
+    validation_is_current,
+)
 
 _MAX_DISPLAY_NAME = 200
 _MAX_VALIDATION_PAGE = 200
@@ -148,7 +159,10 @@ class ProductControlStore:
             {
                 "endpoint_mode": draft.endpoint_mode,
                 "api_host": draft.api_host,
+                "api_base_url": draft.api_base_url,
                 "region": region,
+                "rerank_path": draft.rerank_path,
+                "rerank_protocol": draft.rerank_protocol,
                 "request_budget": request_budget,
                 "token_budget": token_budget,
                 "workspace_id": workspace_id,
@@ -200,6 +214,9 @@ class ProductControlStore:
             "workspace_id",
             "endpoint_mode",
             "api_host",
+            "api_base_url",
+            "rerank_protocol",
+            "rerank_path",
             "region",
             "request_budget",
             "token_budget",
@@ -781,10 +798,7 @@ class ProductControlStore:
                 "evidence_policy": evidence_policy,
                 "reranker": None
                 if reranker is None
-                else {
-                    "model": reranker_model,
-                    "provider": reranker.provider_type,
-                },
+                else _reranker_serving_identity(reranker, reranker_model or ""),
                 "retrieval_policy": retrieval_policy,
                 "standby_budget": standby_budget,
                 "connection_budgets": [
@@ -1098,11 +1112,10 @@ class ProductControlStore:
                     "reranking",
                     profile.reranker_model or "",
                     None,
-                    canonical_sha256(
-                        {
-                            "model": profile.reranker_model,
-                            "operation": "reranking",
-                        }
+                    operation_policy_identity(
+                        self.get_connection(profile.reranker_connection_id),
+                        profile.reranker_model or "",
+                        "reranking",
                     ),
                 )
             )
@@ -1259,7 +1272,7 @@ class ProductControlStore:
         return connection
 
 
-def _validate_v1_profile_contract(  # noqa: PLR0913, PLR0917
+def _validate_v1_profile_contract(  # noqa: PLR0912, PLR0913, PLR0917
     primary: ProviderConnection,
     primary_dimension: int,
     primary_document_policy: dict[str, object],
@@ -1270,24 +1283,66 @@ def _validate_v1_profile_contract(  # noqa: PLR0913, PLR0917
     standby_query_policy: dict[str, object],
     reranker: ProviderConnection | None,
 ) -> None:
-    """拒绝页面配置偏离 P11 已实现的固定 Provider 合同。"""
-    if primary.provider_type != "jina" or primary_dimension != _P11_DIMENSION:
-        raise ValueError("P11 Primary 必须是 1024 维 Jina Embedding。")
-    if primary_document_policy.get("task") != "retrieval.passage":
-        raise ValueError("Jina document task 必须是 retrieval.passage。")
-    if primary_query_policy.get("task") != "retrieval.query":
-        raise ValueError("Jina query task 必须是 retrieval.query。")
+    """保持内置 Provider 合同，并允许显式兼容协议作为独立实现。"""
+    if primary.provider_type == "jina":
+        if primary_dimension != _P11_DIMENSION:
+            raise ValueError("P11 Jina Primary 必须是 1024 维。")
+        if primary_document_policy.get("task") != "retrieval.passage":
+            raise ValueError("Jina document task 必须是 retrieval.passage。")
+        if primary_query_policy.get("task") != "retrieval.query":
+            raise ValueError("Jina query task 必须是 retrieval.query。")
+    elif primary.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        _validate_custom_embedding_roles(
+            primary_document_policy, primary_query_policy
+        )
+    else:
+        raise ValueError("Primary 只支持 Jina 或 OpenAI-compatible Embedding。")
     if standby is not None:
-        if standby.provider_type != "aliyun-model-studio":
-            raise ValueError("P11 Standby 必须是阿里云百炼。")
-        if standby_dimension != _P11_DIMENSION:
-            raise ValueError("P11 Standby 必须是 1024 维。")
-        if standby_document_policy.get("text_type") != "document":
-            raise ValueError("百炼 document text_type 必须是 document。")
-        if standby_query_policy.get("text_type") != "query":
-            raise ValueError("百炼 query text_type 必须是 query。")
-    if reranker is not None and reranker.provider_type != "jina":
-        raise ValueError("P11 Reranker 必须是 Jina。")
+        if standby.provider_type == "aliyun-model-studio":
+            if standby_dimension != _P11_DIMENSION:
+                raise ValueError("P11 百炼 Standby 必须是 1024 维。")
+            if standby_document_policy.get("text_type") != "document":
+                raise ValueError("百炼 document text_type 必须是 document。")
+            if standby_query_policy.get("text_type") != "query":
+                raise ValueError("百炼 query text_type 必须是 query。")
+        elif standby.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+            _validate_custom_embedding_roles(
+                standby_document_policy, standby_query_policy
+            )
+        else:
+            raise ValueError("Standby 只支持百炼或 OpenAI-compatible。")
+    if reranker is not None and reranker.provider_type not in {
+        "jina",
+        OPENAI_COMPATIBLE_PROVIDER,
+    }:
+        raise ValueError("Reranker 只支持 Jina 或 OpenAI-compatible。")
+
+
+def _validate_custom_embedding_roles(
+    document_policy: dict[str, object], query_policy: dict[str, object]
+) -> None:
+    if document_policy.get("role") != "document":
+        raise ValueError("兼容 Embedding document role 必须是 document。")
+    if query_policy.get("role") != "query":
+        raise ValueError("兼容 Embedding query role 必须是 query。")
+
+
+def _reranker_serving_identity(
+    connection: ProviderConnection, model: str
+) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "model": model,
+        "provider": connection.provider_type,
+    }
+    if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        identity.update(
+            {
+                "endpoint_identity": endpoint_identity(connection),
+                "protocol": connection.rerank_protocol,
+                "path": connection.rerank_path,
+            }
+        )
+    return identity
 
 
 def _connection(row: Row) -> ProviderConnection:
@@ -1306,10 +1361,12 @@ def _connection(row: Row) -> ProviderConnection:
             else str(row["last_validation_id"])
         ),
         configuration_version=int(row["configuration_version"]),
-        endpoint_mode=config.get("endpoint_mode") or (
-            "workspace_host" if row["provider_type"] == "jina" else ""
-        ),
+        endpoint_mode=config.get("endpoint_mode")
+        or ("workspace_host" if row["provider_type"] == "jina" else ""),
         api_host=config.get("api_host"),
+        api_base_url=config.get("api_base_url"),
+        rerank_protocol=config.get("rerank_protocol"),
+        rerank_path=config.get("rerank_path"),
         workspace_id=config.get("workspace_id"),
         region=config.get("region"),
         request_budget=int(config["request_budget"]),
@@ -1456,6 +1513,15 @@ def validate_connection_metadata(
     if draft.endpoint_profile not in provider.endpoint_profiles:
         raise ValueError("Endpoint Profile 不在内置目录中。")
     if draft.provider_type == "aliyun-model-studio":
+        if any(
+            value is not None
+            for value in (
+                draft.api_base_url,
+                draft.rerank_protocol,
+                draft.rerank_path,
+            )
+        ):
+            raise ValueError("百炼连接不能保存兼容服务端点配置。")
         config = AliyunEndpointConfig.model_validate(
             {
                 "workspace_id": draft.workspace_id,
@@ -1470,10 +1536,30 @@ def validate_connection_metadata(
                 "api_host": resolve_endpoint(config),
             }
         )
+    if draft.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        if any(
+            value is not None
+            for value in (draft.workspace_id, draft.region, draft.api_host)
+        ):
+            raise ValueError("兼容服务不能保存百炼端点配置。")
+        protocol = normalize_rerank_protocol(draft.rerank_protocol)
+        return draft.model_copy(
+            update={
+                "endpoint_mode": "custom",
+                "api_base_url": normalize_base_url(draft.api_base_url),
+                "rerank_protocol": protocol,
+                "rerank_path": normalize_rerank_path(
+                    draft.rerank_path, protocol
+                ),
+            }
+        )
     if (
         draft.workspace_id is not None
         or draft.region is not None
         or draft.api_host is not None
+        or draft.api_base_url is not None
+        or draft.rerank_protocol is not None
+        or draft.rerank_path is not None
         or draft.endpoint_mode != "workspace_host"
     ):
         raise ValueError("Jina 连接不能保存百炼端点配置。")

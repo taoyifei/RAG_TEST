@@ -91,7 +91,7 @@ class CircuitAwareReranker:
         key = CircuitKey(descriptor.name, "reranking", descriptor.version)
         if descriptor.capabilities.permits_network:
             try:
-                EgressGuard.require_reranking(egress)
+                EgressGuard.require_reranking(egress, descriptor.name)
             except PolicyDenied:
                 if not policy.bypass_policy_denied:
                     raise

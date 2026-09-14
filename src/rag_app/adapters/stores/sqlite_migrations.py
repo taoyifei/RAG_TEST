@@ -13,6 +13,7 @@ from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.core.errors import ValidationFailed
 
 _MIGRATION_NAME = re.compile(r"^(?P<version>[0-9]{4})_[a-z0-9_]+\.sql$")
+_FOREIGN_KEYS_OFF_DIRECTIVE = "-- migration: foreign_keys=off"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,15 +133,26 @@ class MigrationRunner:
     def _apply(self, version: int, checksum: str, sql: str) -> None:
         connection = self._connections.connect()
         applied_at = datetime.now(UTC).isoformat()
+        foreign_keys_off = sql.lstrip().startswith(_FOREIGN_KEYS_OFF_DIRECTIVE)
         try:
-            script = (
-                "BEGIN IMMEDIATE;\n"
-                f"{sql}\n"
-                "INSERT INTO schema_migrations(version, checksum, applied_at) "
-                f"VALUES ({version}, '{checksum}', '{applied_at}');\n"
-                "COMMIT;"
-            )
-            connection.executescript(script)
+            if foreign_keys_off:
+                self._apply_parent_table_rebuild(
+                    connection,
+                    version=version,
+                    checksum=checksum,
+                    applied_at=applied_at,
+                    sql=sql,
+                )
+            else:
+                script = (
+                    "BEGIN IMMEDIATE;\n"
+                    f"{sql}\n"
+                    "INSERT INTO schema_migrations(version, checksum, "
+                    "applied_at) "
+                    f"VALUES ({version}, '{checksum}', '{applied_at}');\n"
+                    "COMMIT;"
+                )
+                connection.executescript(script)
         except sqlite3.Error as error:
             if connection.in_transaction:
                 connection.rollback()
@@ -154,6 +166,55 @@ class MigrationRunner:
             ) from None
         finally:
             connection.close()
+
+    @staticmethod
+    def _apply_parent_table_rebuild(
+        connection: sqlite3.Connection,
+        *,
+        version: int,
+        checksum: str,
+        applied_at: str,
+        sql: str,
+    ) -> None:
+        """在事务外关闭外键，重建后逐表核对再提交。
+
+        SQLite 不允许在事务中切换 ``foreign_keys``。只有带仓库内显式
+        directive 的迁移能走此路径；任一外键不一致都会回滚表重建和版本记录。
+
+        Args:
+            connection: 当前迁移独占连接。
+            version: 待写入版本号。
+            checksum: 已校验的迁移文件摘要。
+            applied_at: UTC 应用时间。
+            sql: 包含显式 directive 的迁移正文。
+
+        Returns:
+            完整提交时无返回值。
+
+        Raises:
+            sqlite3.IntegrityError: 重建后的任一外键不成立。
+
+        """
+        connection.execute("PRAGMA foreign_keys=OFF")
+        try:
+            connection.executescript("BEGIN IMMEDIATE;\n" + sql)
+            violations = connection.execute(
+                "PRAGMA foreign_key_check"
+            ).fetchall()
+            if violations:
+                raise sqlite3.IntegrityError(
+                    "migration foreign_key_check failed"
+                )
+            connection.execute(
+                "INSERT INTO schema_migrations(version, checksum, applied_at) "
+                "VALUES (?, ?, ?)",
+                (version, checksum, applied_at),
+            )
+            connection.commit()
+        finally:
+            if connection.in_transaction:
+                connection.rollback()
+            connection.execute("PRAGMA foreign_keys=ON")
 
 
 __all__ = ["AppliedMigration", "MigrationRunner"]

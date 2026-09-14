@@ -22,6 +22,15 @@ from rag_app.adapters.providers.legacy import (
     LegacyInternalRerankerAdapter,
     LegacyTeiEmbeddingAdapter,
 )
+from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatAdapter,
+    OpenAICompatibleChatConfig,
+    OpenAICompatibleEmbeddingAdapter,
+    OpenAICompatibleEmbeddingConfig,
+    OpenAICompatibleRerankerAdapter,
+    OpenAICompatibleRerankerConfig,
+    openai_compatible_chat_payload,
+)
 
 __all__ = [
     "AliyunQwen37EmbeddingAdapter",
@@ -34,6 +43,13 @@ __all__ = [
     "LegacyInternalRerankerAdapter",
     "LegacyTeiEmbeddingAdapter",
     "LexicalOverlapRerankerAdapter",
+    "OpenAICompatibleChatAdapter",
+    "OpenAICompatibleChatConfig",
+    "OpenAICompatibleEmbeddingAdapter",
+    "OpenAICompatibleEmbeddingConfig",
+    "OpenAICompatibleRerankerAdapter",
+    "OpenAICompatibleRerankerConfig",
     "ProviderHttpClient",
     "ProviderHttpError",
+    "openai_compatible_chat_payload",
 ]

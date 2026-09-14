@@ -15,6 +15,7 @@ from rag_app.product.models import (
     ProviderValidationRun,
     RetrievalProfileRevision,
 )
+from rag_app.product.openai_compatible import OPENAI_COMPATIBLE_PROVIDER
 from rag_app.product.resolved_profile import (
     ResolvedEmbeddingSpec,
     resolve_embedding,
@@ -33,10 +34,14 @@ def endpoint_identity(connection: ProviderConnection) -> str:
         规范化端点摘要。
 
     """
-    endpoint = (
-        "https://api.jina.ai"
-        if connection.provider_type == "jina"
-        else resolve_endpoint(
+    if connection.provider_type == "jina":
+        endpoint = "https://api.jina.ai"
+    elif connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        if connection.api_base_url is None:
+            raise ValueError("兼容服务 Base URL 缺失。")
+        endpoint = connection.api_base_url
+    else:
+        endpoint = resolve_endpoint(
             AliyunEndpointConfig.model_validate(
                 {
                     "workspace_id": connection.workspace_id,
@@ -46,8 +51,22 @@ def endpoint_identity(connection: ProviderConnection) -> str:
                 }
             )
         )
-    )
     return canonical_sha256(endpoint)
+
+
+def operation_policy_identity(
+    connection: ProviderConnection,
+    model: str,
+    operation: str,
+) -> str:
+    """生成非 Embedding 操作的端点与协议绑定身份。"""
+    payload: dict[str, object] = {"model": model, "operation": operation}
+    if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
+        payload["endpoint_identity"] = endpoint_identity(connection)
+        if operation == "reranking":
+            payload["rerank_protocol"] = connection.rerank_protocol
+            payload["rerank_path"] = connection.rerank_path
+    return canonical_sha256(payload)
 
 
 def profile_specs(

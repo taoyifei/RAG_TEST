@@ -17,7 +17,7 @@ from rag_app.core.models.common import (
     freeze_json_object,
 )
 from rag_app.core.models.search import RetrievalPolicy
-from rag_app.product.catalog import CATALOG_VERSION, validate_model
+from rag_app.product.catalog import EMBEDDING_CONTRACT_VERSION, validate_model
 from rag_app.product.models import ProviderConnection
 
 
@@ -37,6 +37,12 @@ class _QwenQueryPolicy(FrozenModel):
     normalized: StrictBool = True
 
 
+class _OpenAICompatiblePolicy(FrozenModel):
+    role: Literal["document", "query"]
+    encoding_format: Literal["float"] = "float"
+    normalized: StrictBool = True
+
+
 class ResolvedEmbeddingSpec(FrozenModel):
     """不含 Secret 的完整向量行为和连接引用。"""
 
@@ -51,6 +57,7 @@ class ResolvedEmbeddingSpec(FrozenModel):
     document_policy: JsonObject
     query_policy: JsonObject
     catalog_version: str
+    endpoint_identity: str | None = None
 
     @field_validator("document_policy", "query_policy", mode="before")
     @classmethod
@@ -67,7 +74,9 @@ class ResolvedEmbeddingSpec(FrozenModel):
             可稳定序列化的实际请求合同。
 
         """
-        return self.model_dump(mode="json", exclude={"connection_id"})
+        return self.model_dump(
+            mode="json", exclude={"connection_id"}, exclude_none=True
+        )
 
     def policy_identity(self, operation: str) -> str:
         """为验证记录生成角色绑定身份。
@@ -79,20 +88,21 @@ class ResolvedEmbeddingSpec(FrozenModel):
             含模型、维度和实际参数的稳定摘要。
 
         """
-        return canonical_sha256(
-            {
-                "provider": self.provider,
-                "model": self.model,
-                "dimension": self.dimension,
-                "operation": operation,
-                "normalization": self.normalization,
-                "adapter_revision": self.adapter_revision,
-                "catalog_version": self.catalog_version,
-                "policy": self.document_policy
-                if operation == "embedding.document"
-                else self.query_policy,
-            }
-        )
+        identity: dict[str, object] = {
+            "provider": self.provider,
+            "model": self.model,
+            "dimension": self.dimension,
+            "operation": operation,
+            "normalization": self.normalization,
+            "adapter_revision": self.adapter_revision,
+            "catalog_version": self.catalog_version,
+            "policy": self.document_policy
+            if operation == "embedding.document"
+            else self.query_policy,
+        }
+        if self.endpoint_identity is not None:
+            identity["endpoint_identity"] = self.endpoint_identity
+        return canonical_sha256(identity)
 
 
 def resolve_embedding(
@@ -125,6 +135,33 @@ def resolve_embedding(
                 "历史参数需显式迁移：Qwen instruction 改为 query_instruct；"
                 "归一化使用 normalized=true；Jina 不支持 instruction。"
             )
+    if connection.provider_type == "openai-compatible":
+        if connection.api_base_url is None:
+            raise ValueError("兼容 Embedding 缺少 Base URL。")
+        document = _OpenAICompatiblePolicy.model_validate(
+            {"role": "document", **document_policy}
+        ).model_dump()
+        query = _OpenAICompatiblePolicy.model_validate(
+            {"role": "query", **query_policy}
+        ).model_dump()
+        if document["role"] != "document" or query["role"] != "query":
+            raise ValueError("兼容 Embedding 的 document/query 角色不可互换。")
+        if not document["normalized"] or not query["normalized"]:
+            raise ValueError("当前适配器只支持 normalized=true（l2-v1）。")
+        return ResolvedEmbeddingSpec(
+            connection_id=connection.connection_id,
+            provider=connection.provider_type,
+            provider_id="openai-compatible-embedding",
+            model=model,
+            dimension=dimension,
+            normalization="l2-v1",
+            adapter_revision="1",
+            max_input_tokens=32768,
+            document_policy=freeze_json_object(document),
+            query_policy=freeze_json_object(query),
+            catalog_version=EMBEDDING_CONTRACT_VERSION,
+            endpoint_identity=canonical_sha256(connection.api_base_url),
+        )
     defaults: JinaEmbeddingConfig | AliyunQwen37EmbeddingConfig
     if connection.provider_type == "jina":
         defaults = JinaEmbeddingConfig(
@@ -177,7 +214,7 @@ def resolve_embedding(
         max_input_tokens=defaults.max_input_tokens,
         document_policy=freeze_json_object(document),
         query_policy=freeze_json_object(query),
-        catalog_version=CATALOG_VERSION,
+        catalog_version=EMBEDDING_CONTRACT_VERSION,
     )
 
 

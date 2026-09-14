@@ -26,6 +26,11 @@ export function ConnectionEditor({
   const [workspace, setWorkspace] = useState(connection.workspace_id ?? "");
   const [mode, setMode] = useState<string>(connection.endpoint_mode ?? "");
   const [host, setHost] = useState(connection.api_host ?? "");
+  const [baseUrl, setBaseUrl] = useState(connection.api_base_url ?? "");
+  const [rerankProtocol, setRerankProtocol] = useState<
+    "tei" | "jina-compatible"
+  >(connection.rerank_protocol ?? "tei");
+  const [rerankPath, setRerankPath] = useState(connection.rerank_path ?? "");
   const [requestBudget, setRequestBudget] = useState(
     connection.request_budget ?? 5,
   );
@@ -41,6 +46,7 @@ export function ConnectionEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>();
   const aliyun = connection.provider_type === "aliyun-model-studio";
+  const custom = connection.provider_type === "openai-compatible";
   const endpointPreview = previewAliyunEndpoint(mode, host);
 
   async function save(event: FormEvent) {
@@ -71,6 +77,14 @@ export function ConnectionEditor({
               region: "cn-beijing",
             }
           : {}),
+        ...(custom
+          ? {
+              endpoint_mode: "custom",
+              api_base_url: baseUrl,
+              rerank_protocol: rerankProtocol,
+              rerank_path: rerankPath.trim() || null,
+            }
+          : {}),
       });
       await onSaved();
     } catch (reason) {
@@ -88,7 +102,13 @@ export function ConnectionEditor({
 
   return (
     <Modal
-      title={aliyun ? "编辑百炼连接" : "编辑 Jina 连接"}
+      title={
+        aliyun
+          ? "编辑百炼连接"
+          : custom
+            ? "编辑自定义模型连接"
+            : "编辑 Jina 连接"
+      }
       onClose={() => {
         if (!saving && !rotating) onCancel();
       }}
@@ -180,6 +200,47 @@ export function ConnectionEditor({
             )}
           </>
         )}
+        {custom && (
+          <>
+            <label className="span-two">
+              API Base URL
+              <input
+                type="url"
+                value={baseUrl}
+                onChange={(event) => setBaseUrl(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              Rerank 协议
+              <select
+                value={rerankProtocol}
+                onChange={(event) =>
+                  setRerankProtocol(
+                    event.target.value as "tei" | "jina-compatible",
+                  )
+                }
+              >
+                <option value="tei">TEI</option>
+                <option value="jina-compatible">Jina-compatible</option>
+              </select>
+            </label>
+            <label>
+              Rerank 路径（可选）
+              <input
+                value={rerankPath}
+                onChange={(event) => setRerankPath(event.target.value)}
+                placeholder={
+                  rerankProtocol === "tei" ? "/rerank" : "/v1/rerank"
+                }
+              />
+            </label>
+            <p className="span-two">
+              Base URL、Rerank
+              协议或路径变化后，既有成功记录会失效，需重新测试对应能力。
+            </p>
+          </>
+        )}
         <label>
           请求预算
           <input
@@ -259,7 +320,8 @@ export function ConnectionEditor({
                   value={secret}
                   onChange={(event) => setSecret(event.target.value)}
                   autoComplete="off"
-                  required
+                  required={!custom}
+                  placeholder={custom ? "无鉴权服务可留空" : undefined}
                 />
               </label>
               <button disabled={rotating}>确认更换密钥</button>

@@ -87,6 +87,7 @@ beforeEach(() => {
   vi.spyOn(api, "modelSettings").mockResolvedValue({
     generation_connection_id: null,
     generation_model: null,
+    generation_fallback_models: [],
     rewrite_enabled: false,
     ocr_connection_id: null,
     ocr_model: null,

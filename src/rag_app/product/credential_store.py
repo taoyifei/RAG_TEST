@@ -104,8 +104,13 @@ class CredentialStore:
         """
         require_provider(provider_type)
         cipher = self._require_cipher()
-        if not secret_value or len(secret_value) > _MAX_SECRET_LENGTH:
-            raise ValueError("API Key 必须为 1 到 4096 个字符。")
+        if len(secret_value) > _MAX_SECRET_LENGTH or (
+            not secret_value and provider_type != "openai-compatible"
+        ):
+            raise ValueError(
+                "内置 Provider 的 API Key 必须为 1 到 4096 个字符；"
+                "兼容服务可留空表示无鉴权。"
+            )
         credential_id = _identifier("cred")
         key_version = 1
         ciphertext, nonce = cipher.encrypt(
@@ -186,6 +191,13 @@ class CredentialStore:
         cipher = self._require_cipher()
         key_version = int(row["key_version"]) + 1
         provider_type = str(row["provider_type"])
+        if len(secret_value) > _MAX_SECRET_LENGTH or (
+            not secret_value and provider_type != "openai-compatible"
+        ):
+            raise ValueError(
+                "内置 Provider 的 API Key 必须为 1 到 4096 个字符；"
+                "兼容服务可留空表示无鉴权。"
+            )
         ciphertext, nonce = cipher.encrypt(
             secret_value,
             aad=SecretAad(
@@ -340,6 +352,8 @@ def _identifier(prefix: str) -> str:
 
 
 def _masked_hint(value: str) -> str:
+    if not value:
+        return "未配置（无鉴权）"
     visible = (
         value[-_MASKED_SUFFIX_LENGTH:]
         if len(value) >= _MASKED_SUFFIX_LENGTH

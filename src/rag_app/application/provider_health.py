@@ -277,7 +277,7 @@ class EgressGuard:
 
         Args:
             policy: 默认拒绝的项目策略。
-            provider_id: ``jina`` 或 ``aliyun-qwen37``。
+            provider_id: ``jina``、``aliyun-qwen37`` 或受信任兼容适配器。
 
         Returns:
             无返回值。
@@ -295,7 +295,7 @@ class EgressGuard:
                 and policy.remote_query_embedding_aliyun
                 and policy.allow_aliyun_embedding_failover
             )
-        else:
+        elif provider_id != "openai-compatible":
             allowed = False
         if not allowed:
             raise PolicyDenied(
@@ -312,7 +312,7 @@ class EgressGuard:
 
         Args:
             policy: 默认拒绝的项目策略。
-            provider_id: ``jina`` 或 ``aliyun-qwen37``。
+            provider_id: ``jina``、``aliyun-qwen37`` 或受信任兼容适配器。
 
         Returns:
             无返回值。
@@ -326,7 +326,7 @@ class EgressGuard:
             allowed = allowed and policy.remote_document_embedding_jina
         elif provider_id == "aliyun-qwen37":
             allowed = allowed and policy.remote_document_embedding_aliyun
-        else:
+        elif provider_id != "openai-compatible":
             allowed = False
         if not allowed:
             raise PolicyDenied(
@@ -336,22 +336,28 @@ class EgressGuard:
             )
 
     @staticmethod
-    def require_reranking(policy: EgressPolicy) -> None:
-        """检查 Jina Reranker 的双重授权。
+    def require_reranking(policy: EgressPolicy, provider_id: str) -> None:
+        """检查已注册 Reranker 的总授权与内置厂商附加授权。
 
         Args:
             policy: 默认拒绝的项目策略。
+            provider_id: Reranker descriptor 中的非 Secret 组件名。
 
         Returns:
             无返回值。
 
         Raises:
-            PolicyDenied: 总授权或 Jina 授权缺失。
+            PolicyDenied: 总授权或对应 Provider 授权缺失。
 
         """
-        if not (policy.remote_reranking and policy.remote_reranking_jina):
+        allowed = policy.remote_reranking
+        if provider_id.startswith("jina"):
+            allowed = allowed and policy.remote_reranking_jina
+        elif not provider_id.startswith("openai-compatible"):
+            allowed = False
+        if not allowed:
             raise PolicyDenied(
-                "Jina Reranker 出网未授权。",
+                "Reranker 出网未授权。",
                 stage="provider.egress",
             )
 

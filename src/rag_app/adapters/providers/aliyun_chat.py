@@ -749,16 +749,13 @@ def _table_certificate(
     """读取与本次查询目标完全一致的表格支持认证。"""
     target = _verified_table_row_label(item)
     semantics = request.typed_semantics
-    semantics_target = (
-        None if semantics is None else semantics.target
-    )
+    semantics_target = None if semantics is None else semantics.target
     if (
         target is None
         or (
             semantics is not None
             and (
-                semantics.answer_type
-                is not RequestedAnswerType.SECTION_SUMMARY
+                semantics.answer_type is not RequestedAnswerType.SECTION_SUMMARY
                 or semantics.relation != "对应内容"
             )
         )
@@ -910,8 +907,7 @@ def _closed_verified_table_target(
         and (cell := _table_cell(item)) is not None
     )
     groups = {
-        (certificate, cell.table_key)
-        for _item, certificate, cell in located
+        (certificate, cell.table_key) for _item, certificate, cell in located
     }
     if len(groups) != 1:
         return None
@@ -1016,6 +1012,10 @@ class AliyunChatAdapter:
         """
         return self.descriptor.capabilities
 
+    def _generation_stage(self) -> str:
+        """返回生成合同失败所归属的 Provider 阶段。"""
+        return "provider.aliyun.generation"
+
     def complete(
         self,
         messages: tuple[ChatMessage, ...],
@@ -1091,7 +1091,7 @@ class AliyunChatAdapter:
             raise invalid_response_error(
                 "GENERATION_CLAIMS_INVALID",
                 failed,
-                stage="provider.aliyun.generation",
+                stage=self._generation_stage(),
             ) from None
         ids = tuple(
             dict.fromkeys(
@@ -1176,7 +1176,7 @@ class AliyunChatAdapter:
             raise invalid_response_error(
                 "GENERATION_CLAIMS_INVALID",
                 failed,
-                stage="provider.aliyun.generation",
+                stage=self._generation_stage(),
             ) from None
         if claims != tuple(emitted):
             failed = completion.call.model_copy(
@@ -1188,7 +1188,7 @@ class AliyunChatAdapter:
             raise invalid_response_error(
                 "STREAMED_CLAIMS_MISMATCH",
                 failed,
-                stage="provider.aliyun.generation",
+                stage=self._generation_stage(),
             )
         ids = tuple(
             dict.fromkeys(
@@ -1412,9 +1412,7 @@ def _grounded_claims(
     return tuple(_grounded_claim(item, request) for item in raw)
 
 
-def _grounded_claim(
-    raw: object, request: GenerationRequest
-) -> AnswerClaim:
+def _grounded_claim(raw: object, request: GenerationRequest) -> AnswerClaim:
     """校验一个刚闭合 claim 的结构与逐字来源，不检查业务语义。"""
     if not isinstance(raw, dict) or set(raw) != {"text", "supports"}:
         raise ValueError("生成 claim 字段无效。")

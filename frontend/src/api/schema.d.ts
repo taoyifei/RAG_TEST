@@ -1494,6 +1494,8 @@ export interface components {
          * @description 版本受控的非 Secret 连接编辑，未知字段一律拒绝。
          */
         ConnectionPatchRequest: {
+            /** Api Base Url */
+            api_base_url?: string | null;
             /** Api Host */
             api_host?: string | null;
             /** Display Name */
@@ -1501,13 +1503,17 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             /** Endpoint Mode */
-            endpoint_mode?: ("workspace_host" | "beijing_dashscope") | null;
+            endpoint_mode?: ("workspace_host" | "beijing_dashscope" | "custom") | null;
             /** Expected Version */
             expected_version: number;
             /** Region */
             region?: "cn-beijing" | null;
             /** Request Budget */
             request_budget?: number | null;
+            /** Rerank Path */
+            rerank_path?: string | null;
+            /** Rerank Protocol */
+            rerank_protocol?: ("tei" | "jina-compatible") | null;
             /** Token Budget */
             token_budget?: number | null;
             /** Workspace Id */
@@ -1518,6 +1524,8 @@ export interface components {
          * @description Provider Connection 非 Secret 配置。
          */
         ConnectionRequest: {
+            /** Api Base Url */
+            api_base_url?: string | null;
             /** Api Host */
             api_host?: string | null;
             credential?: components["schemas"]["CredentialRequest"] | null;
@@ -1530,7 +1538,7 @@ export interface components {
              * @default workspace_host
              * @enum {string}
              */
-            endpoint_mode: "workspace_host" | "beijing_dashscope";
+            endpoint_mode: "workspace_host" | "beijing_dashscope" | "custom";
             /**
              * Endpoint Profile
              * @default default
@@ -1541,7 +1549,7 @@ export interface components {
              * Provider Type
              * @enum {string}
              */
-            provider_type: "jina" | "aliyun-model-studio";
+            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible";
             /** Region */
             region?: "cn-beijing" | null;
             /**
@@ -1549,6 +1557,10 @@ export interface components {
              * @default 5
              */
             request_budget: number;
+            /** Rerank Path */
+            rerank_path?: string | null;
+            /** Rerank Protocol */
+            rerank_protocol?: ("tei" | "jina-compatible") | null;
             /**
              * Token Budget
              * @default 4096
@@ -1708,7 +1720,7 @@ export interface components {
              * Provider Type
              * @enum {string}
              */
-            provider_type: "jina" | "aliyun-model-studio";
+            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible";
             /** Secret Value */
             secret_value?: string | null;
             /**
@@ -2949,7 +2961,7 @@ export interface components {
              * Authorization State
              * @enum {string}
              */
-            authorization_state: "MISSING" | "APPROVED" | "STALE_JOB" | "STALE_PROFILE" | "EXPIRED" | "BLOCKED";
+            authorization_state: "NOT_REQUIRED" | "MISSING" | "APPROVED" | "STALE_JOB" | "STALE_PROFILE" | "EXPIRED" | "BLOCKED";
             /**
              * Budget State
              * @enum {string}

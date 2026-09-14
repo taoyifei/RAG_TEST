@@ -344,7 +344,7 @@ class CorpusAuthorizationStore:
                 pending_operations=pending,
             )
         try:
-            self._operation_bindings(settings, required)
+            bindings = self._operation_bindings(settings, required)
         except (RagError, ValueError, KeyError):
             return CorpusAuthorizationStatus(
                 corpus_authorization_state="MISSING",
@@ -354,6 +354,18 @@ class CorpusAuthorizationStore:
                 required_operations=required,
                 pending_operations=pending,
                 fallback_reason_codes=("MODEL_CONFIGURATION_INVALID",),
+            )
+        if not any(
+            self._providers.requires_campaign(connection_id)
+            for _, connection_id, _ in bindings
+        ):
+            return CorpusAuthorizationStatus(
+                corpus_authorization_state="NOT_REQUIRED",
+                model_configuration_state="CONFIGURED",
+                model_authorization_state="NOT_REQUIRED",
+                budget_state="NOT_REQUIRED",
+                required_operations=required,
+                pending_operations=pending,
             )
         manifest = self._latest_manifest(knowledge_base_id)
         if manifest is None:

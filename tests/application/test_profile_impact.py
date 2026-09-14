@@ -6,6 +6,10 @@ from pathlib import Path
 
 import pytest
 
+from rag_app.product.catalog import (
+    CATALOG_VERSION,
+    EMBEDDING_CONTRACT_VERSION,
+)
 from rag_app.product.models import ImpactKind, RetrievalProfileDraft
 from tests.product_support import (
     build_product_harness,
@@ -113,6 +117,15 @@ def test_profile_fingerprint_impact_and_credential_rotation(
             == "NEW_INDEX_REVISION_REQUIRED"
         )
         assert first.index_semantic_fingerprint == before_rotation
+        # 新增 Provider 会升级产品目录，但不应改变未改配置的旧向量合同。
+        assert CATALOG_VERSION == "2026-09-14.2"
+        assert EMBEDDING_CONTRACT_VERSION == "2026-09-14.1"
+        assert dict(first.primary_resolved)["catalog_version"] == (
+            EMBEDDING_CONTRACT_VERSION
+        )
+        assert dict(first.standby_resolved)["catalog_version"] == (
+            EMBEDDING_CONTRACT_VERSION
+        )
     finally:
         harness.close()
 

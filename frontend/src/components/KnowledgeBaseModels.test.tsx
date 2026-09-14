@@ -11,6 +11,7 @@ import { KnowledgeBaseModels } from "./KnowledgeBaseModels";
 const settings: KnowledgeBaseModelSettings = {
   generation_connection_id: null,
   generation_model: null,
+  generation_fallback_models: [],
   rewrite_enabled: false,
   ocr_connection_id: null,
   ocr_model: null,
@@ -254,9 +255,7 @@ it("远程图片识别待选图时只批准问答用途并给出后续入口", a
     await screen.findByText(/图片识别已启用，但尚未选择具体图片/),
   ).toBeVisible();
   await user.click(screen.getByRole("button", { name: "批准当前活动资料" }));
-  expect(
-    screen.getByText(/本次批准不包含图片识别/),
-  ).toBeVisible();
+  expect(screen.getByText(/本次批准不包含图片识别/)).toBeVisible();
   expect(
     screen.getByText(/本次用途：回答生成、问题意图解释、问题改写/),
   ).toBeVisible();
@@ -292,4 +291,91 @@ it("只有远程图片识别且尚未选图时不展示无效批准按钮", asyn
   expect(
     screen.queryByRole("button", { name: "批准当前活动资料" }),
   ).not.toBeInTheDocument();
+});
+
+it("兼容回答连接保留自由模型链且不会要求 Campaign 批准", async () => {
+  const user = userEvent.setup();
+  const customSettings: KnowledgeBaseModelSettings = {
+    ...settings,
+    generation_connection_id: "conn_custom",
+    generation_model: "vendor/chat-primary",
+    generation_fallback_models: ["vendor/chat-backup"],
+    rewrite_enabled: true,
+    corpus_authorization: {
+      corpus_authorization_state: "NOT_REQUIRED",
+      model_configuration_state: "CONFIGURED",
+      model_authorization_state: "NOT_REQUIRED",
+      budget_state: "NOT_REQUIRED",
+      required_operations: ["generation", "query.interpret", "query.rewrite"],
+      pending_operations: [],
+      fallback_reason_codes: [],
+    },
+  };
+  vi.mocked(api.modelSettings).mockResolvedValue(customSettings);
+  vi.mocked(api.providerCatalog).mockResolvedValue({
+    catalog_version: "synthetic",
+    providers: [
+      {
+        provider_type: "openai-compatible",
+        display_name: "OpenAI-compatible",
+        operations: ["generation", "query.interpret", "query.rewrite"],
+        models: [],
+        regions: [],
+        endpoint_profiles: ["default"],
+        operation_models: {},
+      },
+    ],
+  });
+  vi.mocked(api.listConnections).mockResolvedValue({
+    items: [
+      {
+        connection_id: "conn_custom",
+        credential_id: "cred_custom",
+        provider_type: "openai-compatible",
+        display_name: "内部兼容服务",
+        enabled: true,
+        status: "configured",
+        configuration_version: 1,
+        endpoint_mode: "custom",
+        api_base_url: "http://127.0.0.1:18080/v1",
+      },
+    ],
+  });
+  const save = vi
+    .spyOn(api, "saveModelSettings")
+    .mockImplementation((_kb, value) => Promise.resolve(value));
+  const validate = vi.spyOn(api, "validateConnection");
+
+  render(<KnowledgeBaseModels kbId="kb_custom" />);
+  expect(
+    await screen.findByText(/当前连接模式不需要 Campaign 批准/),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("button", { name: "批准当前活动资料" }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "设置回答与图片识别" }));
+  const model = await screen.findByLabelText("自定义回答模型 ID");
+  expect(model).toHaveValue("vendor/chat-primary");
+  expect(screen.getByLabelText("备用回答模型 ID（可选）")).toHaveValue(
+    "vendor/chat-backup",
+  );
+  await user.clear(model);
+  await user.type(model, "private/chat:v9");
+  await user.clear(screen.getByLabelText("备用回答模型 ID（可选）"));
+  await user.type(
+    screen.getByLabelText("备用回答模型 ID（可选）"),
+    "private/chat:v8\nprivate/chat:v7",
+  );
+  await user.click(screen.getByRole("button", { name: "保存设置" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save).toHaveBeenCalledWith(
+    "kb_custom",
+    expect.objectContaining({
+      generation_connection_id: "conn_custom",
+      generation_model: "private/chat:v9",
+      generation_fallback_models: ["private/chat:v8", "private/chat:v7"],
+      rewrite_enabled: true,
+    }),
+  );
+  expect(validate).not.toHaveBeenCalled();
 });
