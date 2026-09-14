@@ -20,6 +20,78 @@ import { strToU8, zipSync } from "fflate";
 import { createServer, type ServerResponse } from "node:http";
 import type { ChunkPage, QueryResponse } from "../src/api/client";
 
+test("项目和知识库逻辑删除清理活动列表与当前 scope", async ({
+  page,
+}, testInfo) => {
+  await authenticate(page);
+  const suffix = `delete-${testInfo.project.name}-${testInfo.parallelIndex}`;
+  const projectName = `离线项目 ${suffix}`;
+  const knowledgeBaseName = `中文知识库 ${suffix}`;
+  await createScope(page, suffix);
+  const selectedUrl = new URL(page.url());
+  const projectId = selectedUrl.searchParams.get("project")!;
+  const kbId = selectedUrl.searchParams.get("knowledgeBase")!;
+
+  await navigate(page, "知识库");
+  const knowledgeBaseCard = page.getByRole("article").filter({
+    hasText: knowledgeBaseName,
+  });
+  await knowledgeBaseCard.getByRole("button", { name: "删除" }).click();
+  const kbDialog = page.getByRole("dialog", {
+    name: `删除知识库“${knowledgeBaseName}”`,
+  });
+  await expect(kbDialog).toContainText(
+    "本轮采用逻辑删除，不执行物理数据清理。",
+  );
+  await kbDialog.getByRole("button", { name: "确认删除知识库" }).click();
+  await expect(knowledgeBaseCard).toHaveCount(0);
+  await expect(page).toHaveURL((url) => {
+    return (
+      url.pathname === "/knowledge-bases" &&
+      url.searchParams.get("project") === projectId &&
+      !url.searchParams.has("knowledgeBase") &&
+      !url.searchParams.has("revision")
+    );
+  });
+  const kbStateResponse = await page.request.get(
+    `/api/v1/projects/${projectId}/knowledge-bases/${kbId}`,
+  );
+  expect(kbStateResponse.ok(), await kbStateResponse.text()).toBeTruthy();
+  expect((await kbStateResponse.json()) as { status: string }).toMatchObject({
+    status: "deleting",
+  });
+  await navigate(page, "文档管理");
+  await expect(page.getByText("请先选择知识库")).toBeVisible();
+
+  await page.getByRole("button", { name: "管理项目", exact: true }).click();
+  const projectCard = page.getByRole("article").filter({
+    hasText: projectName,
+  });
+  await projectCard.getByRole("button", { name: "删除" }).click();
+  const projectDialog = page.getByRole("dialog", {
+    name: `删除项目“${projectName}”`,
+  });
+  await expect(projectDialog).toContainText("将从当前 Demo 列表移除此项目。");
+  await expect(projectDialog).toContainText(
+    "本轮采用逻辑归档，不执行物理数据清理。",
+  );
+  await projectDialog.getByRole("button", { name: "确认归档项目" }).click();
+  await expect(projectCard).toHaveCount(0);
+  await expect(page).toHaveURL((url) => {
+    return url.pathname === "/projects" && url.searchParams.size === 0;
+  });
+  const projectStateResponse = await page.request.get(
+    `/api/v1/projects/${projectId}`,
+  );
+  expect(
+    projectStateResponse.ok(),
+    await projectStateResponse.text(),
+  ).toBeTruthy();
+  expect(
+    (await projectStateResponse.json()) as { status: string },
+  ).toMatchObject({ status: "archived" });
+});
+
 test("相关内容 unit_synthetic 提示与真实授权原文入口", async ({
   page,
 }, testInfo) => {

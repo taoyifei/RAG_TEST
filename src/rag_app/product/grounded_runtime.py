@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from threading import RLock
 from typing import TypeVar
 
-from pydantic import Field, StrictInt, model_validator
+from pydantic import Field, StrictInt, ValidationError, model_validator
 
 from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
@@ -21,6 +21,10 @@ from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
 from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
     provider_data_scope,
+)
+from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatAdapter,
+    OpenAICompatibleChatConfig,
 )
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.application.retrieval.rewrite_constraints import (
@@ -109,9 +113,11 @@ class _InterpretPayload(FrozenModel):
     target: str = Field(min_length=1, max_length=_MAX_INTERPRET_FIELD_CHARS)
     relation: str = Field(min_length=1, max_length=160)
     answer_type: RequestedAnswerType
-    expected_count: StrictInt | None = Field(ge=1)
-    ordinal: StrictInt | None = Field(ge=1)
-    source_qualifier: str | None = Field(max_length=_MAX_INTERPRET_FIELD_CHARS)
+    expected_count: StrictInt | None = Field(default=None, ge=1)
+    ordinal: StrictInt | None = Field(default=None, ge=1)
+    source_qualifier: str | None = Field(
+        default=None, max_length=_MAX_INTERPRET_FIELD_CHARS
+    )
 
     @model_validator(mode="after")
     def _validate_shape(self) -> _InterpretPayload:
@@ -163,17 +169,14 @@ class ProductGroundedModel:
             or not settings.generation_model
         ):
             raise ValueError("回答模型尚未配置。")
+        self._campaign_required = providers.requires_campaign(
+            settings.generation_connection_id
+        )
         self.adapters = tuple(
             providers.chat_adapter(
                 settings.generation_connection_id,
                 model=model,
-                config=AliyunChatConfig(
-                    model=model,
-                    egress_allowed=True,
-                    max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
-                    max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
-                    json_mode="json_object",
-                ),
+                config=self._chat_config(model),
             )
             for model in settings.generation_models
         )
@@ -223,6 +226,9 @@ class ProductGroundedModel:
     def _scope(
         self, operation: str, source_hashes: tuple[str, ...] = ()
     ) -> Iterator[None]:
+        if not self._campaign_required:
+            yield
+            return
         campaign_id = self.settings.budget_campaign_id
         if campaign_id is None:
             raise PolicyDenied(
@@ -250,7 +256,28 @@ class ProductGroundedModel:
         ):
             yield
 
-    def _rotation_candidates(self) -> tuple[AliyunChatAdapter, ...]:
+    def _chat_config(
+        self, model: str
+    ) -> AliyunChatConfig | OpenAICompatibleChatConfig:
+        """按连接协议创建模型配置，不用内置模型形状限制自定义 ID。"""
+        if not self._campaign_required:
+            return OpenAICompatibleChatConfig(
+                model=model,
+                egress_allowed=True,
+                max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+                max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+            )
+        return AliyunChatConfig(
+            model=model,
+            egress_allowed=True,
+            max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+            max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+            json_mode="json_object",
+        )
+
+    def _rotation_candidates(
+        self,
+    ) -> tuple[AliyunChatAdapter | OpenAICompatibleChatAdapter, ...]:
         """优先跳过本进程已经确认额度耗尽的模型。"""
         with self._rotation_lock:
             available = tuple(
@@ -263,7 +290,9 @@ class ProductGroundedModel:
 
     def _call_with_rotation(
         self,
-        action: Callable[[AliyunChatAdapter], _RotationResult],
+        action: Callable[
+            [AliyunChatAdapter | OpenAICompatibleChatAdapter], _RotationResult
+        ],
         *,
         can_rotate: Callable[[], bool] | None = None,
     ) -> tuple[_RotationResult, tuple[ProviderCall, ...]]:
@@ -384,7 +413,7 @@ class ProductGroundedModel:
                 hashes.add(str(row[0]))
         return tuple(sorted(hashes))
 
-    def interpret(
+    def interpret(  # noqa: PLR0911
         self, request: SearchRequest, analysis: QueryAnalysis
     ) -> InterpretOutcome:
         """规则低置信时至多调用一次严格结构化问题解释。
@@ -418,9 +447,9 @@ class ProductGroundedModel:
                 role="system",
                 content=(
                     "你只解释资料检索问题的意图，不能回答问题。"
-                    "只输出一个 JSON 对象，且必须完整包含 standalone_query、"
-                    "target、relation、answer_type、expected_count、ordinal、"
-                    "source_qualifier 七个字段，不得添加字段。"
+                    "只输出一个 JSON 对象，必须包含 standalone_query、target、"
+                    "relation、answer_type，不得添加字段。expected_count、ordinal、"
+                    "source_qualifier 没有值时可以省略或设为 null。"
                     "answer_type 只能是 FACT、DEFINITION、PURPOSE、DUTIES、"
                     "RESPONSIBLE_PARTY、ENUMERATION、COUNT、ORDINAL_ITEM、"
                     "PROCEDURE 或 SECTION_SUMMARY。原对象、编号、日期、数字、"
@@ -492,10 +521,22 @@ class ProductGroundedModel:
             return InterpretOutcome(
                 calls=calls, reason_code=error.code, attempted=True
             )
+        except json.JSONDecodeError:
+            return InterpretOutcome(
+                calls=calls,
+                reason_code="INTERPRET_JSON_INVALID",
+                attempted=True,
+            )
+        except ValidationError:
+            return InterpretOutcome(
+                calls=calls,
+                reason_code="INTERPRET_SCHEMA_INVALID",
+                attempted=True,
+            )
         except (TypeError, ValueError, KeyError):
             return InterpretOutcome(
                 calls=calls,
-                reason_code="INTERPRET_INVALID",
+                reason_code="INTERPRET_SCHEMA_INVALID",
                 attempted=True,
             )
 

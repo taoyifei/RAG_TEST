@@ -4,10 +4,10 @@ import {
   api,
   type ProviderCatalog,
   type CredentialSummary,
+  type ProviderType,
 } from "../api/client";
 import { ErrorPanel, Modal } from "../components/ui";
 import { previewAliyunEndpoint } from "./aliyun-endpoint";
-type ProviderType = "jina" | "aliyun-model-studio";
 type CredentialSource =
   | "database_encrypted"
   | "environment_managed"
@@ -31,6 +31,11 @@ export function ConnectionCreator({
   const [workspaceId, setWorkspaceId] = useState("");
   const [endpointMode, setEndpointMode] = useState("workspace_host");
   const [apiHost, setApiHost] = useState("");
+  const [apiBaseUrl, setApiBaseUrl] = useState("");
+  const [rerankProtocol, setRerankProtocol] = useState<
+    "tei" | "jina-compatible"
+  >("tei");
+  const [rerankPath, setRerankPath] = useState("");
   const [existingCredential, setExistingCredential] = useState("");
 
   const [busy, setBusy] = useState(false);
@@ -63,7 +68,11 @@ export function ConnectionCreator({
                   source === "database_encrypted" ? credentialValue : undefined,
               },
         endpoint_mode:
-          provider === "aliyun-model-studio" ? endpointMode : undefined,
+          provider === "aliyun-model-studio"
+            ? endpointMode
+            : provider === "openai-compatible"
+              ? "custom"
+              : undefined,
         api_host:
           provider === "aliyun-model-studio"
             ? endpointPreview.endpoint
@@ -71,6 +80,13 @@ export function ConnectionCreator({
         workspace_id:
           provider === "aliyun-model-studio" ? workspaceId : undefined,
         region: provider === "aliyun-model-studio" ? "cn-beijing" : undefined,
+        api_base_url: provider === "openai-compatible" ? apiBaseUrl : undefined,
+        rerank_protocol:
+          provider === "openai-compatible" ? rerankProtocol : undefined,
+        rerank_path:
+          provider === "openai-compatible" && rerankPath.trim()
+            ? rerankPath
+            : undefined,
       });
       setCredentialValue("");
       setEnvironmentName("");
@@ -99,7 +115,13 @@ export function ConnectionCreator({
             onChange={(event) => {
               const next = event.target.value as ProviderType;
               setProvider(next);
-              setDisplayName(next === "jina" ? "Jina 主连接" : "百炼备用连接");
+              setDisplayName(
+                next === "jina"
+                  ? "Jina 主连接"
+                  : next === "aliyun-model-studio"
+                    ? "百炼备用连接"
+                    : "自定义模型连接",
+              );
             }}
           >
             {catalog?.providers.map((item) => (
@@ -138,7 +160,12 @@ export function ConnectionCreator({
               value={credentialValue}
               onChange={(event) => setCredentialValue(event.target.value)}
               autoComplete="off"
-              required
+              required={provider !== "openai-compatible"}
+              placeholder={
+                provider === "openai-compatible"
+                  ? "无鉴权服务可留空"
+                  : undefined
+              }
             />
           </label>
         ) : source === "existing" ? (
@@ -165,7 +192,11 @@ export function ConnectionCreator({
             <input
               value={environmentName}
               onChange={(event) => setEnvironmentName(event.target.value)}
-              placeholder="JINA_API_KEY"
+              placeholder={
+                provider === "openai-compatible"
+                  ? "OPENAI_API_KEY"
+                  : "JINA_API_KEY"
+              }
               pattern="[A-Z][A-Z0-9_]+"
               required
             />
@@ -181,6 +212,54 @@ export function ConnectionCreator({
                 required
               />
             </label>
+          </>
+        )}
+        {provider === "openai-compatible" && (
+          <>
+            <label className="span-two">
+              API Base URL
+              <input
+                type="url"
+                value={apiBaseUrl}
+                onChange={(event) => setApiBaseUrl(event.target.value)}
+                placeholder="http://127.0.0.1:8080/v1"
+                required
+              />
+            </label>
+            <p className="span-two">
+              填写服务根地址，例如 <code>http://127.0.0.1:8080/v1</code>
+              。Embedding 使用 <code>/embeddings</code>，Chat 使用
+              <code>/chat/completions</code>。
+            </p>
+            <label>
+              Rerank 协议
+              <select
+                value={rerankProtocol}
+                onChange={(event) =>
+                  setRerankProtocol(
+                    event.target.value as "tei" | "jina-compatible",
+                  )
+                }
+              >
+                <option value="tei">TEI</option>
+                <option value="jina-compatible">Jina-compatible</option>
+              </select>
+            </label>
+            <label>
+              Rerank 路径（可选）
+              <input
+                value={rerankPath}
+                onChange={(event) => setRerankPath(event.target.value)}
+                placeholder={
+                  rerankProtocol === "tei" ? "/rerank" : "/v1/rerank"
+                }
+              />
+            </label>
+            <p className="span-two">
+              模型 ID
+              不在此处固定；连接保存后，在各能力测试和知识库配置中填写服务实际暴露的模型
+              ID。
+            </p>
           </>
         )}
         {provider === "aliyun-model-studio" && (

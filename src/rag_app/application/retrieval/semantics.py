@@ -141,8 +141,10 @@ _GENERAL_REQUIREMENTS = re.compile(
     r"^(?P<target>.+?)(?:具体)?(?:都)?(?:有|包含)?哪些要求$"
 )
 _ROLE_REQUIREMENT_TARGET = re.compile(
-    r"(?:经理|主管|负责人|专员|工程师|管理员|操作员|岗位|角色|部门|部)$"
+    r"(?:经理|主管|负责人|专员|工程师|管理员|操作员|岗位|角色|"
+    r"部门|部|团队|小组|.{2,}员)$"
 )
+_EXPLICIT_DUTY_CLAUSE = re.compile(r".+(?:负责|承担|牵头).+")
 _QUOTED_FILL_BLANK = re.compile(
     r"^(?:补全|填写|填入|还原)(?:以下)?(?:条款|原文|句子)?"
     r"(?:中的|里的|中|里)?(?:缺失的)?(?:数值|数字|内容|空白)?\s*[：:]?\s*"
@@ -300,6 +302,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
         context_qualifier = _context_qualifier(prefix)
         target, source = _target_and_source(prefix, duty=True)
         if target:
+            ambiguous_action = "干" in duty.group(0)
+            role_shaped = bool(
+                _ROLE_REQUIREMENT_TARGET.search(target)
+                or _EXPLICIT_DUTY_CLAUSE.fullmatch(prefix.rstrip("，, "))
+            )
+            if ambiguous_action and not role_shaped:
+                return QuerySemantics(
+                    target=target,
+                    source_qualifier=source or explicit_source,
+                    context_qualifier=context_qualifier,
+                    source="ORIGINAL_FALLBACK",
+                    reason_codes=("AMBIGUOUS_ACTION_QUESTION_SYNTAX",),
+                )
             return QuerySemantics(
                 target=target,
                 source_qualifier=source or explicit_source,
@@ -308,8 +323,8 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.DUTIES,
                 source="RULE",
                 reason_codes=(
-                    "AMBIGUOUS_ACTION_QUESTION_SYNTAX"
-                    if "干" in duty.group(0)
+                    "DUTY_ROLE_ACTION_QUESTION_SYNTAX"
+                    if ambiguous_action
                     else "DUTY_QUESTION_SYNTAX",
                 ),
             )
@@ -662,8 +677,9 @@ def _clean_target(value: str, *, duty: bool) -> str:
 def _fill_blank_anchor(template: str) -> str:
     """从填空模板两侧选择最长连续原文锚点。"""
     parts = (
-        re.sub(r"^[（(]?[一二三四五六七八九十百\d]+[）).、]?\s*", "", part)
-        .strip(" \t\r\n，,：:；;。！？?")
+        re.sub(
+            r"^[（(]?[一二三四五六七八九十百\d]+[）).、]?\s*", "", part
+        ).strip(" \t\r\n，,：:；;。！？?")
         for part in _BLANK.split(template)
     )
     anchors = tuple(part for part in parts if part)

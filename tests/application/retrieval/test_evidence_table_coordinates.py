@@ -456,7 +456,7 @@ def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
     candidate = _table(
         rows=(
             ("术语", " 定义 "),
-            (" OPC ", " 对象过程控制。 "),
+            (" QVK ", " 质量验证键。 "),
         )
     )
 
@@ -468,12 +468,10 @@ def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
             per_document_cap=8,
             per_section_cap=8,
         ),
-        context=_context("OPC 是啥？"),
+        context=_context("QVK 是啥？"),
     )
 
-    assert [item.citation_text.strip() for item in evidence] == [
-        "对象过程控制。"
-    ]
+    assert [item.citation_text.strip() for item in evidence] == ["质量验证键。"]
     assert all(
         dict(item.metadata)["answer_support"]["support_reason"]
         != "TABLE_ROW_RECORD"
@@ -486,3 +484,59 @@ def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
         assert span.source_end_char - span.source_start_char == len(
             item.citation_text
         )
+
+
+@pytest.mark.parametrize(
+    "question",
+    ("zpx 是什么", "ZPX 是什么", "Zpx 是什么", "zPx 是什么", "ＺＰＸ 是什么"),
+)
+def test_term_table_row_lookup_uses_ascii_case_insensitive_identity(
+    question: str,
+) -> None:
+    candidate = _table(
+        rows=(
+            ("术语", "解释"),
+            ("ZPX", "ZPX（Zero Process Exchange）是合成流程交换约定。"),
+            ("ZPY", "ZPY 是另一条独立记录。"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=_context(question),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "ZPX（Zero Process Exchange）是合成流程交换约定。"
+    ]
+    assert "ZPY" not in evidence[0].citation_text
+
+
+def test_missing_acronym_does_not_borrow_another_table_row() -> None:
+    """低置信自然问法没有同名行时不能从相邻术语拼出答案。"""
+    candidate = _table(
+        rows=(
+            ("术语", "解释"),
+            ("ZPX", "ZPX 是合成流程交换约定。"),
+            ("ZPY", "ZPY 是另一条独立记录。"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=_context("不存在的缩写是干啥的"),
+    )
+
+    assert evidence == ()

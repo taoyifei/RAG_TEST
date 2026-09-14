@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -216,4 +216,137 @@ it("取消不会写入或测试，轮换失败清空密钥且保留连接字段"
   expect(cancel).toHaveBeenCalledOnce();
   expect(update).not.toHaveBeenCalled();
   expect(validate).not.toHaveBeenCalled();
+});
+
+it("创建自定义兼容连接时保存自由端点、协议且允许无鉴权", async () => {
+  const user = userEvent.setup();
+  const custom: ProviderConnection = {
+    connection_id: "conn_custom",
+    credential_id: "cred_custom",
+    display_name: "内部兼容服务",
+    provider_type: "openai-compatible",
+    status: "configured",
+    configuration_version: 1,
+    endpoint_mode: "custom",
+    api_base_url: "http://127.0.0.1:18080/v1",
+    rerank_protocol: "jina-compatible",
+    rerank_path: "/v1/rank",
+  };
+  vi.spyOn(api, "providerCatalog").mockResolvedValue({
+    catalog_version: "synthetic",
+    providers: [
+      {
+        provider_type: "openai-compatible",
+        display_name: "OpenAI-compatible",
+        models: [],
+        operations: ["embedding.document", "generation", "reranking"],
+        operation_models: {},
+        regions: [],
+        endpoint_profiles: ["default"],
+      },
+    ],
+  });
+  vi.spyOn(api, "listCredentials").mockResolvedValue({ items: [] });
+  vi.spyOn(api, "listConnections").mockResolvedValue({ items: [] });
+  vi.spyOn(api, "listDailyProviderUsage").mockResolvedValue({ items: [] });
+  const create = vi.spyOn(api, "createConnection").mockResolvedValue(custom);
+
+  render(<ModelServicesPage />);
+  await user.click(await screen.findByRole("button", { name: "新增连接" }));
+  await user.selectOptions(
+    screen.getByLabelText("服务商"),
+    "openai-compatible",
+  );
+  expect(screen.getByLabelText("服务密钥")).not.toBeRequired();
+  await user.type(
+    screen.getByLabelText("API Base URL"),
+    "http://127.0.0.1:18080/v1/",
+  );
+  await user.selectOptions(
+    screen.getByLabelText("Rerank 协议"),
+    "jina-compatible",
+  );
+  await user.type(screen.getByLabelText("Rerank 路径（可选）"), "/v1/rank");
+  await user.click(screen.getByRole("button", { name: "保存连接" }));
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create.mock.calls[0][0]).toMatchObject({
+    provider_type: "openai-compatible",
+    endpoint_mode: "custom",
+    api_base_url: "http://127.0.0.1:18080/v1/",
+    rerank_protocol: "jina-compatible",
+    rerank_path: "/v1/rank",
+    credential: {
+      provider_type: "openai-compatible",
+      source: "database_encrypted",
+      secret_value: "",
+    },
+  });
+});
+
+it("编辑兼容端点会保存完整身份并允许轮换为空密钥", async () => {
+  const user = userEvent.setup();
+  const custom: ProviderConnection = {
+    connection_id: "conn_custom",
+    credential_id: "cred_custom",
+    display_name: "内部兼容服务",
+    provider_type: "openai-compatible",
+    status: "configured",
+    configuration_version: 4,
+    endpoint_mode: "custom",
+    api_base_url: "http://127.0.0.1:18080/v1",
+    rerank_protocol: "tei",
+    rerank_path: "/rerank",
+  };
+  const update = vi.spyOn(api, "updateConnection").mockResolvedValue(custom);
+  const rotate = vi.spyOn(api, "rotateCredential").mockResolvedValue({
+    credential_id: "cred_custom",
+    provider_type: "openai-compatible",
+    configured: true,
+    source: "database_encrypted",
+    masked_hint: "未配置（无鉴权）",
+    key_version: 2,
+    status: "active",
+  });
+  render(
+    <ConnectionEditor
+      connection={custom}
+      credential={{
+        credential_id: "cred_custom",
+        provider_type: "openai-compatible",
+        configured: true,
+        source: "database_encrypted",
+        masked_hint: "未配置（无鉴权）",
+        key_version: 1,
+        status: "active",
+      }}
+      onSaved={() => Promise.resolve()}
+      onCancel={() => undefined}
+    />,
+  );
+  await user.clear(screen.getByLabelText("API Base URL"));
+  await user.type(
+    screen.getByLabelText("API Base URL"),
+    "http://127.0.0.1:19090/openai/v1",
+  );
+  await user.selectOptions(
+    screen.getByLabelText("Rerank 协议"),
+    "jina-compatible",
+  );
+  await user.clear(screen.getByLabelText("Rerank 路径（可选）"));
+  await user.type(screen.getByLabelText("Rerank 路径（可选）"), "/rank");
+  await user.click(screen.getByRole("button", { name: "保存修改" }));
+  expect(update).toHaveBeenCalledWith(
+    "conn_custom",
+    expect.objectContaining({
+      expected_version: 4,
+      endpoint_mode: "custom",
+      api_base_url: "http://127.0.0.1:19090/openai/v1",
+      rerank_protocol: "jina-compatible",
+      rerank_path: "/rank",
+    }),
+  );
+  await user.click(screen.getByRole("button", { name: "更换密钥" }));
+  expect(screen.getByLabelText("新服务密钥")).not.toBeRequired();
+  await user.click(screen.getByRole("button", { name: "确认更换密钥" }));
+  await waitFor(() => expect(rotate).toHaveBeenCalledWith("cred_custom", ""));
 });

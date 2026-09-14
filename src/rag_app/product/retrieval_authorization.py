@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import Field, StrictInt, model_validator
 
@@ -46,6 +46,7 @@ RetrievalAuthorizationState = Literal[
     "BLOCKED",
 ]
 RetrievalIngestionAuthorizationState = Literal[
+    "NOT_REQUIRED",
     "MISSING",
     "APPROVED",
     "STALE_JOB",
@@ -601,6 +602,13 @@ class RetrievalAuthorizationStore:
             != self._ingestion_snapshot_identity(refreshed)
         ):
             raise self._ingestion_blocked("RETRIEVAL_INGESTION_JOB_CHANGED")
+        requirements = cast(Mapping[str, object], current["requirements"])
+        if not cast(bool, requirements["campaign_required"]):
+            status = self._ingestion_status(current)
+            if status.authorization_state != "NOT_REQUIRED":
+                raise self._ingestion_blocked(self._ingestion_reason(status))
+            yield
+            return
         status = self._ingestion_status(current)
         manifest = status.manifest
         if (
@@ -611,7 +619,6 @@ class RetrievalAuthorizationStore:
         ):
             reason = self._ingestion_reason(status)
             raise self._ingestion_blocked(reason)
-        requirements = cast(Mapping[str, object], current["requirements"])
         campaign_reason = self._campaign_binding_reason(
             manifest, current, requirements
         )
@@ -690,6 +697,13 @@ class RetrievalAuthorizationStore:
                 reason_codes=("RETRIEVAL_CONFIGURATION_INVALID",),
             )
         budget_issues = cast(tuple[str, ...], requirements["budget_issues"])
+        if not cast(bool, requirements["campaign_required"]):
+            return self._status_result(
+                requirements,
+                authorization_state="NOT_REQUIRED",
+                budget_state="AVAILABLE",
+                connection_budget_state="READY",
+            )
         if snapshot["active_document_count"] == 0:
             return self._status_result(
                 requirements,
@@ -826,6 +840,12 @@ class RetrievalAuthorizationStore:
             BudgetBlockedError: 任一授权身份、预算或数据范围不再匹配。
 
         """
+        profile = self._control.get_profile(profile_revision_id)
+        snapshot = self._snapshot(profile.knowledge_base_id)
+        requirements = self._requirements(profile, snapshot)
+        if not cast(bool, requirements["campaign_required"]):
+            yield
+            return
         status = self.status(profile_revision_id)
         public_manifest = status.manifest
         if (
@@ -924,7 +944,7 @@ class RetrievalAuthorizationStore:
         manifest = self._latest_ingestion_manifest(
             cast(str, snapshot["job_id"])
         )
-        base = {
+        base: Any = {
             "job_id": cast(str, snapshot["job_id"]),
             "profile_revision_id": cast(str, snapshot["profile_revision_id"]),
             "predecessor_index_revision_id": cast(
@@ -991,6 +1011,15 @@ class RetrievalAuthorizationStore:
                 manifest=manifest,
                 reason_codes=("RETRIEVAL_INGESTION_PROFILE_INVALID",),
             )
+        if not cast(bool, requirements["campaign_required"]):
+            return RetrievalIngestionAuthorizationStatus(
+                **base,
+                authorization_state="NOT_REQUIRED",
+                budget_state="AVAILABLE",
+                connection_budget_state="READY",
+                next_action="continue",
+                approval_allowed=False,
+            )
         if manifest is None:
             return RetrievalIngestionAuthorizationStatus(
                 **base,
@@ -1040,7 +1069,9 @@ class RetrievalAuthorizationStore:
             )
         if manifest.profile_binding_identity != requirements[
             "profile_binding_identity"
-        ] or set(manifest.operations) != set(requirements["operations"]):
+        ] or set(manifest.operations) != set(
+            cast(tuple[RetrievalOperation, ...], requirements["operations"])
+        ):
             return RetrievalIngestionAuthorizationStatus(
                 **base,
                 authorization_state="STALE_PROFILE",
@@ -1387,7 +1418,7 @@ class RetrievalAuthorizationStore:
             "source_hashes": hashes,
             "source_document_count": len(ordered),
             "source_size_bytes": sum(
-                int(item["size_bytes"]) for item in ordered
+                int(cast(int | str, item["size_bytes"])) for item in ordered
             ),
             "requirements": requirements,
         }
@@ -1494,6 +1525,10 @@ class RetrievalAuthorizationStore:
             "recommended_operation_request_limits": operation_limits,
             "recommended_request_limit": request_cap * len(operations),
             "configuration_available": True,
+            "campaign_required": any(
+                self._providers.requires_campaign(connection_id)
+                for _, connection_id, _, _ in bindings
+            ),
         }
 
     @staticmethod
@@ -1545,6 +1580,7 @@ class RetrievalAuthorizationStore:
             ),
             "recommended_request_limit": 0,
             "configuration_available": False,
+            "campaign_required": True,
         }
 
     @staticmethod
@@ -1758,6 +1794,10 @@ class RetrievalAuthorizationStore:
             "document_tokens_total": tokens_per_slot
             * len(embedding_connections),
             "budget_issues": tuple(dict.fromkeys(issues)),
+            "campaign_required": any(
+                self._providers.requires_campaign(connection_id)
+                for _, connection_id, _, _ in bindings
+            ),
         }
 
     @staticmethod
@@ -1946,7 +1986,9 @@ class RetrievalAuthorizationStore:
             profile_revision_id=str(row["profile_revision_id"]),
             source_index_revision_id=str(row["source_index_revision_id"]),
             active_document_digest=str(row["active_document_digest"]),
-            active_document_count=int(row["active_document_count"]),
+            active_document_count=int(
+                cast(int | str, row["active_document_count"])
+            ),
             profile_binding_identity=str(row["profile_binding_identity"]),
             operations=tuple(json.loads(str(row["operations_json"]))),
             authorization_id=str(row["authorization_id"]),
@@ -2045,7 +2087,13 @@ class RetrievalAuthorizationStore:
             == snapshot["active_document_count"]
             and manifest.profile_binding_identity
             == requirements["profile_binding_identity"]
-            and set(manifest.operations) == set(requirements["operations"])
+            and set(manifest.operations)
+            == set(
+                cast(
+                    tuple[RetrievalOperation, ...],
+                    requirements["operations"],
+                )
+            )
             and (
                 not isinstance(
                     manifest, RetrievalIngestionAuthorizationManifest
@@ -2113,8 +2161,10 @@ class RetrievalAuthorizationStore:
             target_index_revision_id=str(row["target_index_revision_id"]),
             source_binding_digest=str(row["source_binding_digest"]),
             active_document_digest=str(row["active_document_digest"]),
-            source_document_count=int(row["source_document_count"]),
-            source_size_bytes=int(row["source_size_bytes"]),
+            source_document_count=int(
+                cast(int | str, row["source_document_count"])
+            ),
+            source_size_bytes=int(cast(int | str, row["source_size_bytes"])),
             profile_binding_identity=str(row["profile_binding_identity"]),
             operations=tuple(json.loads(str(row["operations_json"]))),
             authorization_id=str(row["authorization_id"]),

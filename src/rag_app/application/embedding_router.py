@@ -764,6 +764,9 @@ def _require_query_egress(
     if slot.provider_id.startswith("aliyun-qwen37"):
         EgressGuard.require_query_embedding(policy, "aliyun-qwen37")
         return
+    if slot.provider_id.startswith("openai-compatible"):
+        EgressGuard.require_query_embedding(policy, "openai-compatible")
+        return
     raise PolicyDenied(
         "未知远程 Query Embedding 目的地未授权。",
         stage="provider.egress",

@@ -90,32 +90,35 @@ class SessionRequest(_RequestModel):
 class CredentialRequest(_RequestModel):
     """创建环境或数据库托管 Credential。"""
 
-    provider_type: Literal["jina", "aliyun-model-studio"]
+    provider_type: Literal["jina", "aliyun-model-studio", "openai-compatible"]
     source: Literal["environment_managed", "database_encrypted"]
     environment_name: str | None = None
     secret_value: str | None = Field(
-        default=None, min_length=1, max_length=4096
+        default=None, min_length=0, max_length=4096
     )
 
 
 class RotateCredentialRequest(_RequestModel):
     """页面托管 Credential 轮换请求。"""
 
-    secret_value: str = Field(min_length=1, max_length=4096)
+    secret_value: str = Field(min_length=0, max_length=4096)
 
 
 class ConnectionRequest(_RequestModel):
     """Provider Connection 非 Secret 配置。"""
 
     display_name: str = Field(min_length=1, max_length=200)
-    provider_type: Literal["jina", "aliyun-model-studio"]
+    provider_type: Literal["jina", "aliyun-model-studio", "openai-compatible"]
     credential_id: str | None = None
     credential: CredentialRequest | None = None
     endpoint_profile: Literal["default"] = "default"
-    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] = (
+    endpoint_mode: Literal["workspace_host", "beijing_dashscope", "custom"] = (
         "workspace_host"
     )
     api_host: str | None = Field(default=None, max_length=300)
+    api_base_url: str | None = Field(default=None, max_length=2048)
+    rerank_protocol: Literal["tei", "jina-compatible"] | None = None
+    rerank_path: str | None = Field(default=None, max_length=300)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
     region: Literal["cn-beijing"] | None = None
     request_budget: int = Field(default=5, ge=1, le=500)
@@ -128,8 +131,13 @@ class ConnectionPatchRequest(_RequestModel):
     expected_version: int = Field(gt=0)
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
-    endpoint_mode: Literal["workspace_host", "beijing_dashscope"] | None = None
+    endpoint_mode: (
+        Literal["workspace_host", "beijing_dashscope", "custom"] | None
+    ) = None
     api_host: str | None = Field(default=None, max_length=300)
+    api_base_url: str | None = Field(default=None, max_length=2048)
+    rerank_protocol: Literal["tei", "jina-compatible"] | None = None
+    rerank_path: str | None = Field(default=None, max_length=300)
     region: Literal["cn-beijing"] | None = None
     request_budget: int | None = Field(default=None, ge=1, le=500)
     token_budget: int | None = Field(default=None, ge=1, le=1_000_000)

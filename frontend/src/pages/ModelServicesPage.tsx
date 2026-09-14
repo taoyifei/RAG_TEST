@@ -17,6 +17,7 @@ type Probe = {
   connection: ProviderConnection;
   operation: string;
   model: string;
+  expectedDimension: number | null;
 };
 
 export function ModelServicesPage() {
@@ -31,6 +32,10 @@ export function ModelServicesPage() {
   const [editing, setEditing] = useState<ProviderConnection>();
   const [records, setRecords] = useState<ProviderConnection>();
   const [confirmation, setConfirmation] = useState<Probe>();
+  const [modelInputs, setModelInputs] = useState<Record<string, string>>({});
+  const [dimensionInputs, setDimensionInputs] = useState<
+    Record<string, string>
+  >({});
   const [error, setError] = useState<unknown>();
   const pendingRef = useRef(new Set<string>());
   const [pending, setPending] = useState<string[]>([]);
@@ -69,7 +74,7 @@ export function ModelServicesPage() {
       await api.validateConnection(probe.connection.connection_id, {
         operation: probe.operation,
         model: probe.model,
-        expected_dimension: probe.operation === "reranking" ? null : 1024,
+        expected_dimension: probe.expectedDimension,
       });
       await load();
     } catch (reason) {
@@ -117,9 +122,19 @@ export function ModelServicesPage() {
                   <h3>{connection.display_name}</h3>
                   <p>
                     {provider?.display_name ?? connection.provider_type} ·{" "}
-                    {connection.region === "cn-beijing" ? "北京" : "默认地域"} ·{" "}
-                    {connection.enabled === false ? "已停用" : "已保存"}
+                    {connection.provider_type === "openai-compatible"
+                      ? `Base URL：${connection.api_base_url ?? "未配置"}`
+                      : connection.region === "cn-beijing"
+                        ? "北京"
+                        : "默认地域"}{" "}
+                    · {connection.enabled === false ? "已停用" : "已保存"}
                   </p>
+                  {connection.provider_type === "openai-compatible" && (
+                    <small>
+                      Rerank：{connection.rerank_protocol ?? "tei"} ·{" "}
+                      {connection.rerank_path ?? "使用协议默认路径"}
+                    </small>
+                  )}
                   <small>
                     密钥：{credential?.masked_hint ?? "未配置"} ·{" "}
                     {credential?.configured ? "已保存" : "本地配置待完善"}
@@ -145,23 +160,48 @@ export function ModelServicesPage() {
               </div>
               <div className="capability-list">
                 {(provider?.operations ?? []).map((operation) => {
-                  const model = provider?.operation_models?.[operation]?.[0];
+                  const key = `${connection.connection_id}:${operation}`;
+                  const custom =
+                    connection.provider_type === "openai-compatible";
+                  const embedding = operation.startsWith("embedding.");
+                  const latestForOperation = runs.find(
+                    (item) => item.operation === operation,
+                  );
+                  const model = custom
+                    ? (modelInputs[key] ??
+                      latestForOperation?.provider_model ??
+                      "")
+                    : (provider?.operation_models?.[operation]?.[0] ?? "");
+                  const dimensionText = custom
+                    ? (dimensionInputs[key] ??
+                      (latestForOperation?.dimension
+                        ? String(latestForOperation.dimension)
+                        : ""))
+                    : embedding
+                      ? "1024"
+                      : "";
+                  const expectedDimension = embedding
+                    ? Number(dimensionText)
+                    : null;
                   const run = runs.find(
                     (item) =>
                       item.operation === operation &&
-                      item.provider_model === model,
+                      item.provider_model === model &&
+                      (!custom ||
+                        !embedding ||
+                        item.dimension === expectedDimension),
                   );
                   const stale =
                     run &&
                     (run.is_current === false ||
                       run.configuration_version !==
                         connection.configuration_version ||
-                      run.credential_key_version !== credential?.key_version ||
-                      run.catalog_version !== catalog?.catalog_version);
+                      run.credential_key_version !== credential?.key_version);
                   const incomplete =
-                    connection.provider_type === "aliyun-model-studio" &&
-                    connection.endpoint_mode !== "beijing_dashscope" &&
-                    !connection.api_host;
+                    (connection.provider_type === "aliyun-model-studio" &&
+                      connection.endpoint_mode !== "beijing_dashscope" &&
+                      !connection.api_host) ||
+                    (custom && !connection.api_base_url);
                   const status = incomplete
                     ? "configuration_incomplete"
                     : stale
@@ -175,19 +215,53 @@ export function ModelServicesPage() {
                               : "not_verified"
                           : "failed"
                         : "not_verified";
-                  const key = `${connection.connection_id}:${operation}`;
-                  const configurable = [
-                    "generation",
-                    "query.interpret",
-                    "query.rewrite",
-                    "image.ocr",
-                  ].includes(operation);
+                  const configurable =
+                    [
+                      "generation",
+                      "query.interpret",
+                      "query.rewrite",
+                      "image.ocr",
+                    ].includes(operation) && !custom;
                   return (
                     <div className="capability" key={operation}>
                       <strong>{operationLabel(operation)}</strong>
                       <StatusBadge
                         value={configurable ? "not_verified" : status}
                       />
+                      {custom && (
+                        <>
+                          <label>
+                            {operationLabel(operation)}模型 ID
+                            <input
+                              value={model}
+                              onChange={(event) =>
+                                setModelInputs((current) => ({
+                                  ...current,
+                                  [key]: event.target.value,
+                                }))
+                              }
+                              placeholder="填写服务实际暴露的模型 ID"
+                            />
+                          </label>
+                          {embedding && (
+                            <label>
+                              期望 Embedding 维度
+                              <input
+                                type="number"
+                                min={1}
+                                value={dimensionText}
+                                onChange={(event) =>
+                                  setDimensionInputs((current) => ({
+                                    ...current,
+                                    [key]: event.target.value,
+                                  }))
+                                }
+                                placeholder="例如 1024"
+                              />
+                            </label>
+                          )}
+                        </>
+                      )}
                       {configurable && (
                         <small>
                           {model} ·
@@ -203,7 +277,7 @@ export function ModelServicesPage() {
                           </small>
                           {incomplete && (
                             <p className="failure-message">
-                              配置尚未完整，请补充 API Host。本次未发送请求。
+                              配置尚未完整，请补充服务端点。本次未发送请求。
                             </p>
                           )}
                           {run?.status === "failed" && !stale && (
@@ -214,12 +288,20 @@ export function ModelServicesPage() {
                           <button
                             disabled={
                               !model ||
+                              (embedding &&
+                                (!Number.isInteger(Number(expectedDimension)) ||
+                                  Number(expectedDimension) < 1)) ||
                               connection.enabled === false ||
                               pending.includes(key)
                             }
                             onClick={() =>
                               model &&
-                              setConfirmation({ connection, operation, model })
+                              setConfirmation({
+                                connection,
+                                operation,
+                                model,
+                                expectedDimension,
+                              })
                             }
                           >
                             {pending.includes(key)

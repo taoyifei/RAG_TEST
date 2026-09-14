@@ -234,6 +234,7 @@ export interface Tokens {
 export interface KnowledgeBaseModelSettings {
   generation_connection_id: string | null;
   generation_model: string | null;
+  generation_fallback_models: string[];
   rewrite_enabled: boolean;
   ocr_connection_id: string | null;
   ocr_model: string | null;
@@ -244,6 +245,8 @@ export interface KnowledgeBaseModelSettings {
   corpus_authorization?: CorpusAuthorizationStatus;
   retrieval_data_plane?: RetrievalDataPlaneStatus;
 }
+
+export type ProviderType = "jina" | "aliyun-model-studio" | "openai-compatible";
 
 export type CorpusAuthorizationStatus =
   components["schemas"]["CorpusAuthorizationStatus"];
@@ -301,7 +304,7 @@ export interface ConsoleSession {
 
 export interface CredentialSummary {
   credential_id: string;
-  provider_type: "jina" | "aliyun-model-studio";
+  provider_type: ProviderType;
   configured: boolean;
   source: "environment_managed" | "database_encrypted";
   masked_hint: string;
@@ -312,21 +315,24 @@ export interface CredentialSummary {
 export interface ProviderConnection {
   connection_id: string;
   display_name: string;
-  provider_type: "jina" | "aliyun-model-studio";
+  provider_type: ProviderType;
   credential_id: string;
   status: string;
   workspace_id?: string | null;
   region?: string | null;
   configuration_version: number;
-  endpoint_mode?: "workspace_host" | "beijing_dashscope" | "";
+  endpoint_mode?: "workspace_host" | "beijing_dashscope" | "custom" | "";
   api_host?: string | null;
+  api_base_url?: string | null;
+  rerank_protocol?: "tei" | "jina-compatible" | null;
+  rerank_path?: string | null;
   request_budget?: number;
   token_budget?: number;
   enabled?: boolean;
 }
 
 export interface CatalogProvider {
-  provider_type: "jina" | "aliyun-model-studio";
+  provider_type: ProviderType;
   display_name: string;
   operations: string[];
   models: string[];
@@ -901,6 +907,7 @@ export const api = {
     const {
       generation_connection_id,
       generation_model,
+      generation_fallback_models,
       rewrite_enabled,
       ocr_connection_id,
       ocr_model,
@@ -913,6 +920,7 @@ export const api = {
       jsonInit("PUT", {
         generation_connection_id,
         generation_model,
+        generation_fallback_models,
         rewrite_enabled,
         ocr_connection_id,
         ocr_model,
@@ -929,6 +937,12 @@ export const api = {
       token,
       jsonInit("POST", { name }, key),
     ),
+  deleteProject: (token: string, projectId: string) =>
+    request<Project>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}`,
+      token,
+      { method: "DELETE" },
+    ),
   listKnowledgeBases: (token: string, projectId: string, offset = 0) =>
     request<Page<KnowledgeBase>>(
       `/api/v1/projects/${projectId}/knowledge-bases?offset=${offset}`,
@@ -944,6 +958,12 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases`,
       token,
       jsonInit("POST", { name, description: "" }, key),
+    ),
+  deleteKnowledgeBase: (token: string, projectId: string, kbId: string) =>
+    request<KnowledgeBase>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/knowledge-bases/${encodeURIComponent(kbId)}`,
+      token,
+      { method: "DELETE" },
     ),
   listDocuments: (token: string, projectId: string, kbId: string, offset = 0) =>
     request<Page<Document>>(

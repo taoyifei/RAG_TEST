@@ -1469,6 +1469,25 @@ def test_role_validation_upgrade_invalidates_previous_answer_cache() -> None:
     assert models.serving_identity(settings) != previous_identity
 
 
+def test_interpret_contract_upgrade_invalidates_cache() -> None:
+    settings = KnowledgeBaseModelSettings()
+    previous_identity = canonical_sha256(
+        {
+            "settings": settings.model_dump(),
+            "prompt": "grounded-chat-v7",
+            "interpret": "bounded-interpret-v1",
+            "rewrite": "bounded-rewrite-v3",
+            "validation": "claim-support-v17",
+            "answer_selection": "shared-query-semantics-v10",
+            "generation_output": "grounded-output-4096-v1",
+        }
+    )
+
+    models = ProductModelSettings(Mock(), Mock())
+
+    assert models.serving_identity(settings) != previous_identity
+
+
 def _supported_draft(
     text: str, claim: str
 ) -> tuple[tuple[EvidenceItem, ...], AnswerDraft]:

@@ -120,8 +120,7 @@ def approved_payload_contracts(
             if credential_versions is not None:
                 request_identities.add(
                     provider_request_identity(
-                        _base_url(connection)
-                        + _path(connection.provider_type, operation),
+                        _base_url(connection) + _path(connection, operation),
                         payload["model"],
                         {
                             "connection_id": connection.connection_id,

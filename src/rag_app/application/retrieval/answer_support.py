@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 
 from rag_app.application.retrieval.semantics import parse_query_semantics
 from rag_app.core.models import QueryAnalysis, RequestedAnswerType
+from rag_app.core.query_text import normalize_semantic_text
 
 
 class SupportStatus(StrEnum):
@@ -125,7 +125,9 @@ _TYPED_ANSWER_TYPES = frozenset(
 )
 _TYPED_ANSWER_VALUES = frozenset(item.value for item in _TYPED_ANSWER_TYPES)
 _TABLE_HEADER_TYPES = {
-    "DEFINITION": re.compile(r"定义|释义|说明|含义|描述|交付件说明|内容说明"),
+    "DEFINITION": re.compile(
+        r"定义|释义|解释|说明|含义|描述|交付件说明|内容说明"
+    ),
     "PURPOSE": re.compile(r"目的|目标|作用|用途|宗旨"),
     "DUTIES": re.compile(r"职责|工作内容|岗位任务|负责事项|主要工作|任务说明"),
     "RESPONSIBLE_PARTY": re.compile(
@@ -149,7 +151,7 @@ _DUTY_SUBJECT_ACTION = (
 
 
 def _normalized(text: str) -> str:
-    value = unicodedata.normalize("NFKC", text).casefold()
+    value = normalize_semantic_text(text)
     # 词形统一仅用于关系动词，不给产品实体添加演示别名。
     for source, target in (
         ("纠正", "更正"),

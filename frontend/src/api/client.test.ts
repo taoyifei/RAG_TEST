@@ -60,6 +60,29 @@ describe("API 客户端契约", () => {
     expect(fetchMock.mock.calls[0][1]?.credentials).toBe("same-origin");
   });
 
+  it("项目与知识库删除使用各自的 DELETE 端点", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ project_id: "项目/一" })),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ knowledge_base_id: "知识库/一" })),
+      );
+
+    await api.deleteProject("admin", "项目/一");
+    await api.deleteKnowledgeBase("admin", "项目/一", "知识库/一");
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "/api/v1/projects/%E9%A1%B9%E7%9B%AE%2F%E4%B8%80",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      "/api/v1/projects/%E9%A1%B9%E7%9B%AE%2F%E4%B8%80/knowledge-bases/%E7%9F%A5%E8%AF%86%E5%BA%93%2F%E4%B8%80",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("DELETE");
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe("DELETE");
+  });
+
   it("历史关键词参数化且正文保存选择只作用于该次请求", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

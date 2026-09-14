@@ -144,10 +144,13 @@ function retrievalLabel(
 }
 
 function authorizationReady(status: CorpusAuthorizationStatus): boolean {
-  return (
-    status.corpus_authorization_state === "APPROVED" &&
-    status.model_authorization_state === "APPROVED" &&
-    status.budget_state === "AVAILABLE"
+  return Boolean(
+    (status.corpus_authorization_state === "APPROVED" &&
+      status.model_authorization_state === "APPROVED" &&
+      status.budget_state === "AVAILABLE") ||
+    (status.corpus_authorization_state === "NOT_REQUIRED" &&
+      status.model_authorization_state === "NOT_REQUIRED" &&
+      status.budget_state === "NOT_REQUIRED"),
   );
 }
 
@@ -156,6 +159,15 @@ function pendingOcrSelection(status: CorpusAuthorizationStatus): boolean {
 }
 
 function authorizationLabel(status: CorpusAuthorizationStatus): string {
+  if (
+    status.corpus_authorization_state === "NOT_REQUIRED" &&
+    status.model_authorization_state === "NOT_REQUIRED" &&
+    status.budget_state === "NOT_REQUIRED"
+  ) {
+    return pendingOcrSelection(status)
+      ? "当前连接无需 Campaign；图片识别待选择图片"
+      : "当前连接模式不需要 Campaign 批准";
+  }
   if (status.required_operations.length === 0) {
     return pendingOcrSelection(status)
       ? "图片识别待选择图片，当前没有可批准的远程用途"
@@ -322,6 +334,9 @@ function ModelEditor({
   const [value, setValue] = useState(initial);
   const [catalog, setCatalog] = useState<ProviderCatalog>();
   const [connections, setConnections] = useState<ProviderConnection[]>([]);
+  const [fallbackText, setFallbackText] = useState(
+    initial.generation_fallback_models.join("\n"),
+  );
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<unknown>();
   useEffect(() => {
@@ -347,10 +362,22 @@ function ModelEditor({
         const provider = catalog?.providers.find(
           (entry) => entry.provider_type === connection.provider_type,
         );
-        return (provider?.operation_models[operation] ?? []).map((model) => ({
-          value: JSON.stringify([connection.connection_id, model]),
-          label: `${connection.display_name} · ${model}`,
-        }));
+        const fixed = (provider?.operation_models[operation] ?? []).map(
+          (model) => ({
+            value: JSON.stringify([connection.connection_id, model]),
+            label: `${connection.display_name} · ${model}`,
+          }),
+        );
+        if (
+          connection.provider_type === "openai-compatible" &&
+          provider?.operations.includes(operation)
+        ) {
+          fixed.push({
+            value: JSON.stringify([connection.connection_id, ""]),
+            label: `${connection.display_name} · 填写模型 ID`,
+          });
+        }
+        return fixed;
       });
   }
   function selected(connection: string | null, model: string | null) {
@@ -358,18 +385,40 @@ function ModelEditor({
   }
   const generationChoices = choices("generation");
   const ocrChoices = choices("image.ocr");
-  const generationSelection = selected(
-    value.generation_connection_id,
-    value.generation_model,
+  const generationConnection = connections.find(
+    (connection) => connection.connection_id === value.generation_connection_id,
   );
+  const customGeneration =
+    generationConnection?.provider_type === "openai-compatible";
+  const generationSelection = customGeneration
+    ? JSON.stringify([value.generation_connection_id, ""])
+    : selected(value.generation_connection_id, value.generation_model);
   const ocrSelection = selected(value.ocr_connection_id, value.ocr_model);
   async function save(event: FormEvent) {
     event.preventDefault();
     if (pending) return;
+    const fallbackModels = fallbackText
+      .split(/[\n,]/)
+      .map((model) => model.trim())
+      .filter(Boolean);
+    if (fallbackModels.length > 4) {
+      setError(new Error("备用回答模型最多填写 4 个。"));
+      return;
+    }
+    if (customGeneration && !value.generation_model?.trim()) {
+      setError(new Error("请填写自定义回答模型 ID。"));
+      return;
+    }
     setPending(true);
     setError(undefined);
     try {
-      onSaved(await api.saveModelSettings(kbId, value));
+      onSaved(
+        await api.saveModelSettings(kbId, {
+          ...value,
+          generation_model: value.generation_model?.trim() || null,
+          generation_fallback_models: fallbackModels,
+        }),
+      );
     } catch (reason) {
       setError(reason);
     } finally {
@@ -400,9 +449,13 @@ function ModelEditor({
               setValue({
                 ...value,
                 generation_connection_id: connection ?? null,
-                generation_model: model ?? null,
+                generation_model: connection ? (model ?? "") : null,
+                generation_fallback_models: connection
+                  ? value.generation_fallback_models
+                  : [],
                 rewrite_enabled: connection ? value.rewrite_enabled : false,
               });
+              if (!connection) setFallbackText("");
             }}
           >
             <option value="">未配置 · 使用证据摘录回答</option>
@@ -421,6 +474,30 @@ function ModelEditor({
             ))}
           </select>
         </label>
+        {customGeneration && (
+          <label>
+            自定义回答模型 ID
+            <input
+              value={value.generation_model ?? ""}
+              onChange={(event) =>
+                setValue({ ...value, generation_model: event.target.value })
+              }
+              placeholder="例如 internal/chat-model:latest"
+              required
+            />
+          </label>
+        )}
+        {value.generation_connection_id && (
+          <label>
+            备用回答模型 ID（可选）
+            <textarea
+              value={fallbackText}
+              onChange={(event) => setFallbackText(event.target.value)}
+              rows={3}
+              placeholder="每行一个，按顺序回退，最多 4 个"
+            />
+          </label>
+        )}
         <label className="checkbox-label">
           <input
             type="checkbox"

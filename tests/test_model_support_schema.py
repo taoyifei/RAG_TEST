@@ -14,7 +14,7 @@ from rag_app.model_contracts import (
 @pytest.mark.parametrize(
     ("question", "intent", "max_claims"),
     (
-        ("OPC是什么？", "DEFINITION", 2),
+        ("QVK是什么？", "DEFINITION", 2),
         ("需求变更需要经过哪些审批步骤？", "PROCEDURE", 4),
         ("验收测试包括哪些内容？", "LIST", 4),
         ("验收测试由谁负责？", "ACTOR", 4),
@@ -48,9 +48,8 @@ def test_answer_schema_uses_intent_limited_support_ids(
     claim_schema = schema["properties"]["claims"]
     support_schema = claim_schema["items"]["properties"]["support_ids"]
 
-    assert (
-        request.user_payload["question_profile"]["primary_operation"]
-        == ("LIST" if intent in {"ACTOR", "DELIVERABLE"} else intent)
+    assert request.user_payload["question_profile"]["primary_operation"] == (
+        "LIST" if intent in {"ACTOR", "DELIVERABLE"} else intent
     )
     assert request.user_payload["max_claims"] == max_claims
     assert claim_schema["maxItems"] == max_claims

@@ -41,6 +41,9 @@ class ProviderConnectionDraft(FrozenModel):
     endpoint_profile: str = "default"
     endpoint_mode: str = "workspace_host"
     api_host: str | None = None
+    api_base_url: str | None = None
+    rerank_protocol: str | None = None
+    rerank_path: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=500)
@@ -61,6 +64,9 @@ class ProviderConnection(FrozenModel):
     last_validation_id: str | None = None
     endpoint_mode: str = "workspace_host"
     api_host: str | None = None
+    api_base_url: str | None = None
+    rerank_protocol: str | None = None
+    rerank_path: str | None = None
     workspace_id: str | None = None
     region: str | None = None
     request_budget: StrictInt = Field(default=5, ge=1, le=500)

@@ -123,6 +123,8 @@ class ProviderHttpClient:
         response_error_code: (
             Callable[[httpx.Response], str | None] | None
         ) = None,
+        allow_http: bool = False,
+        use_budget_transport: bool = True,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -139,6 +141,8 @@ class ProviderHttpClient:
             observer: 可选脱敏调用观察器；失败不得覆盖业务结果。
             defer_success_observation: 是否等待响应语义校验后再观察成功。
             response_error_code: 可选的 Provider 安全错误码解析器。
+            allow_http: 是否允许 Demo 内网兼容端点使用明文 HTTP。
+            use_budget_transport: 是否安装内置 Provider 活动预算传输。
 
         Returns:
             无返回值。
@@ -149,7 +153,8 @@ class ProviderHttpClient:
         """
         parsed = urlparse(base_url)
         if (
-            parsed.scheme != "https"
+            parsed.scheme
+            not in ({"http", "https"} if allow_http else {"https"})
             or not parsed.hostname
             or parsed.query
             or parsed.fragment
@@ -157,20 +162,20 @@ class ProviderHttpClient:
             or parsed.password
         ):
             raise ValueError(
-                "Provider base_url 必须是无凭据和 query 的 HTTPS URL。"
+                "Provider base_url 必须是无凭据和 query 的受支持 URL。"
             )
         if max_attempts <= 0 or max_response_bytes <= 0:
             raise ValueError("HTTP 尝试次数和响应上限必须为正数。")
         self._base_url = base_url.rstrip("/")
-        self._client = budgeted_client(
-            client
-            or httpx.Client(
-                timeout=httpx.Timeout(
-                    connect=5.0, read=30.0, write=30.0, pool=5.0
-                ),
-                follow_redirects=False,
-                trust_env=False,
-            )
+        resolved_client = client or httpx.Client(
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+            follow_redirects=False,
+            trust_env=False,
+        )
+        self._client = (
+            budgeted_client(resolved_client)
+            if use_budget_transport
+            else resolved_client
         )
         self._max_attempts = max_attempts
         self._max_response_bytes = max_response_bytes
@@ -491,9 +496,10 @@ class ProviderHttpClient:
                                 continue
                         category = _status_category(status)
                         if category is not None:
-                            reason_code = self._safe_response_error_code(
-                                response
-                            ) or f"HTTP_{status}"
+                            reason_code = (
+                                self._safe_response_error_code(response)
+                                or f"HTTP_{status}"
+                            )
                             call = self._call(
                                 provider_id,
                                 operation,
@@ -509,9 +515,7 @@ class ProviderHttpClient:
                                 encountered_rate_limit,
                             )
                             self._observe(call)
-                            raise ProviderHttpError(
-                                category, reason_code, call
-                            )
+                            raise ProviderHttpError(category, reason_code, call)
                         content_type = response.headers.get("content-type", "")
                         if "text/event-stream" not in content_type.casefold():
                             raise self._contract_failure(
@@ -734,9 +738,7 @@ class ProviderHttpClient:
         )
         return diagnostics, category
 
-    def _safe_response_error_code(
-        self, response: httpx.Response
-    ) -> str | None:
+    def _safe_response_error_code(self, response: httpx.Response) -> str | None:
         """只把有限错误外壳交给受信解析器，不保存响应正文。"""
         resolver = self._response_error_code
         if resolver is None:

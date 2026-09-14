@@ -8,9 +8,7 @@ const desktopBaseUrl =
   externalBaseUrl ??
   "http://127.0.0.1:8091";
 const mobileBaseUrl =
-  process.env.P10_MOBILE_BASE_URL ??
-  externalBaseUrl ??
-  "http://127.0.0.1:8092";
+  process.env.P10_MOBILE_BASE_URL ?? externalBaseUrl ?? "http://127.0.0.1:8092";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -52,7 +50,7 @@ export default defineConfig({
         // 两个视口项目使用独立临时 Product Runtime，避免跨项目共享
         // 生产等价限流桶和数据状态；每个项目内部仍串行执行真实门禁。
         // dev.py 会把当前解释器目录放在 PATH 首位；CI 不要求仓库内另建 .venv。
-        command: `python ../scripts/serve_p10.py --port ${port} --frontend-dir dist`,
+        command: `python ../scripts/serve_p10.py --port ${port} --frontend-dir dist --custom-provider-loopback`,
         cwd: ".",
         url: `http://127.0.0.1:${port}/ready`,
         reuseExistingServer: false,

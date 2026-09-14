@@ -9,8 +9,13 @@ import pytest
 
 from rag_app.adapters.stores import MigrationRunner, SqliteConnectionFactory
 from rag_app.core.errors import ValidationFailed
+from rag_app.product.control_store import ProductControlStore
 from rag_app.product.credential_store import CredentialStore
 from rag_app.product.crypto import SecretCipher, initialize_master_key
+from rag_app.product.models import (
+    ProviderConnectionDraft,
+    RetrievalProfileDraft,
+)
 
 _ROOT = Path(__file__).resolve().parents[2]
 _MIGRATIONS = _ROOT / "migrations" / "universal_rag"
@@ -68,7 +73,7 @@ def test_supported_phase_data_upgrades_monotonically(
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert [item.version for item in applied] == list(range(1, 29))
+    assert [item.version for item in applied] == list(range(1, 30))
     assert project is not None and project[0] == "升级保留项目"
     assert "provider_operation_events" in tables
     assert "provider_daily_budgets" in tables
@@ -202,7 +207,7 @@ def test_failed_migration_rolls_back_without_advancing_schema(
     shutil.copytree(_MIGRATIONS, migrations)
     MigrationRunner(connections, migrations).migrate()
     _seed_control_rows(connections)
-    (migrations / "0029_synthetic_failure.sql").write_text(
+    (migrations / "0030_synthetic_failure.sql").write_text(
         "CREATE TABLE must_rollback(value TEXT);\nINVALID SQL;\n",
         encoding="utf-8",
     )
@@ -224,6 +229,88 @@ def test_failed_migration_rolls_back_without_advancing_schema(
         rollback_table = connection.execute(
             "SELECT name FROM sqlite_master WHERE name='must_rollback'"
         ).fetchone()
-    assert migration_count == 28
+    assert migration_count == 29
     assert project_count == 1
     assert rollback_table is None
+
+
+def test_openai_compatible_upgrade_preserves_provider_references(
+    tmp_path: Path,
+) -> None:
+    """重建 Provider 父表后保留连接、Profile、调用事件与外键。"""
+    database = tmp_path / "provider-upgrade.sqlite3"
+    connections = SqliteConnectionFactory(database, journal_mode="DELETE")
+    MigrationRunner(
+        connections,
+        _migration_subset(tmp_path / "old", 28),
+    ).migrate()
+    _seed_control_rows(connections)
+    cipher = SecretCipher(initialize_master_key(tmp_path / "master-key"))
+    credentials = CredentialStore(connections, cipher)
+    control = ProductControlStore(connections, credentials)
+    credential = credentials.create_encrypted("jina", "synthetic-before-29")
+    provider = control.create_connection(
+        ProviderConnectionDraft(
+            display_name="升级前 Jina",
+            provider_type="jina",
+            credential_id=credential.credential_id,
+        )
+    )
+    profile = control.create_profile(
+        RetrievalProfileDraft(
+            knowledge_base_id="kb_upgrade",
+            primary_connection_id=provider.connection_id,
+            primary_embedding_model="jina-embeddings-v5-text-small",
+            primary_dimension=1024,
+            primary_document_policy={"task": "retrieval.passage"},
+            primary_query_policy={"task": "retrieval.query"},
+        )
+    )
+    control.record_provider_operation(
+        provider.connection_id,
+        operation="embedding.query",
+        status_category="SUCCESS",
+        latency_ms=3,
+        estimated_tokens=2,
+        observed_tokens=None,
+        retry_count=0,
+        rate_limited=False,
+    )
+
+    MigrationRunner(connections, _MIGRATIONS).migrate()
+
+    upgraded_credentials = CredentialStore(connections, cipher)
+    upgraded_control = ProductControlStore(connections, upgraded_credentials)
+    custom_credential = upgraded_credentials.create_encrypted(
+        "openai-compatible", ""
+    )
+    custom = upgraded_control.create_connection(
+        ProviderConnectionDraft(
+            display_name="升级后兼容服务",
+            provider_type="openai-compatible",
+            credential_id=custom_credential.credential_id,
+            api_base_url="http://127.0.0.1:9000/v1/",
+            rerank_protocol="tei",
+        )
+    )
+    with connections.transaction() as connection:
+        foreign_key_violations = connection.execute(
+            "PRAGMA foreign_key_check"
+        ).fetchall()
+        event_count = int(
+            connection.execute(
+                "SELECT count(*) FROM provider_operation_events "
+                "WHERE connection_id=?",
+                (provider.connection_id,),
+            ).fetchone()[0]
+        )
+
+    assert foreign_key_violations == []
+    upgraded_provider = upgraded_control.get_connection(provider.connection_id)
+    assert upgraded_provider.display_name == "升级前 Jina"
+    assert upgraded_control.get_profile(profile.profile_revision_id).status == (
+        "draft"
+    )
+    assert event_count == 1
+    assert custom.provider_type == "openai-compatible"
+    assert custom.api_base_url == "http://127.0.0.1:9000/v1"

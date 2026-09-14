@@ -464,6 +464,18 @@
         "additionalProperties": false,
         "description": "版本受控的非 Secret 连接编辑，未知字段一律拒绝。",
         "properties": {
+          "api_base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Base Url"
+          },
           "api_host": {
             "anyOf": [
               {
@@ -505,7 +517,8 @@
               {
                 "enum": [
                   "workspace_host",
-                  "beijing_dashscope"
+                  "beijing_dashscope",
+                  "custom"
                 ],
                 "type": "string"
               },
@@ -545,6 +558,33 @@
             ],
             "title": "Request Budget"
           },
+          "rerank_path": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Path"
+          },
+          "rerank_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "tei",
+                  "jina-compatible"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Protocol"
+          },
           "token_budget": {
             "anyOf": [
               {
@@ -582,6 +622,18 @@
         "additionalProperties": false,
         "description": "Provider Connection 非 Secret 配置。",
         "properties": {
+          "api_base_url": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Base Url"
+          },
           "api_host": {
             "anyOf": [
               {
@@ -625,7 +677,8 @@
             "default": "workspace_host",
             "enum": [
               "workspace_host",
-              "beijing_dashscope"
+              "beijing_dashscope",
+              "custom"
             ],
             "title": "Endpoint Mode",
             "type": "string"
@@ -639,7 +692,8 @@
           "provider_type": {
             "enum": [
               "jina",
-              "aliyun-model-studio"
+              "aliyun-model-studio",
+              "openai-compatible"
             ],
             "title": "Provider Type",
             "type": "string"
@@ -662,6 +716,33 @@
             "minimum": 1.0,
             "title": "Request Budget",
             "type": "integer"
+          },
+          "rerank_path": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Path"
+          },
+          "rerank_protocol": {
+            "anyOf": [
+              {
+                "enum": [
+                  "tei",
+                  "jina-compatible"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Protocol"
           },
           "token_budget": {
             "default": 4096,
@@ -1055,7 +1136,8 @@
           "provider_type": {
             "enum": [
               "jina",
-              "aliyun-model-studio"
+              "aliyun-model-studio",
+              "openai-compatible"
             ],
             "title": "Provider Type",
             "type": "string"
@@ -1064,7 +1146,7 @@
             "anyOf": [
               {
                 "maxLength": 4096,
-                "minLength": 1,
+                "minLength": 0,
                 "type": "string"
               },
               {
@@ -4305,6 +4387,7 @@
           },
           "authorization_state": {
             "enum": [
+              "NOT_REQUIRED",
               "MISSING",
               "APPROVED",
               "STALE_JOB",
@@ -4982,7 +5065,7 @@
         "properties": {
           "secret_value": {
             "maxLength": 4096,
-            "minLength": 1,
+            "minLength": 0,
             "title": "Secret Value",
             "type": "string"
           }

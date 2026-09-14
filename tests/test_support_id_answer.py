@@ -312,11 +312,11 @@ def test_answer_must_cover_every_explicit_source_id() -> None:
 def test_deliverables_preserve_source_and_actor_relationships() -> None:
     bundle = _bundle(
         _ranked(
-            "chunk-opc",
+            "chunk-qvk",
             "责任人为测试工程师，测试完成后输出《验收测试报告》。",
-            file_path="OPC规范.docx",
-            source_id="source-opc",
-            neighbor_group_id="opc-test",
+            file_path="QVK规范.docx",
+            source_id="source-qvk",
+            neighbor_group_id="qvk-test",
         ),
         _ranked(
             "chunk-delivery",
@@ -336,7 +336,7 @@ def test_deliverables_preserve_source_and_actor_relationships() -> None:
             {
                 "claims": [
                     {
-                        "text": ("OPC规范由测试工程师输出《验收测试报告》。"),
+                        "text": ("QVK规范由测试工程师输出《验收测试报告》。"),
                         "support_ids": [first_id],
                     },
                     {
@@ -362,7 +362,7 @@ def test_deliverables_preserve_source_and_actor_relationships() -> None:
     assert "测试工程师" in result.claims[0].text
     assert "《测试交付报告》" in result.claims[1].text
     assert "当前证据未说明责任人" in result.claims[1].text
-    assert result.claims[0].supports[0].chunk_id == "chunk-opc"
+    assert result.claims[0].supports[0].chunk_id == "chunk-qvk"
     assert result.claims[1].supports[0].chunk_id == "chunk-delivery"
 
 
@@ -442,8 +442,8 @@ def test_compare_and_decision_keep_each_claim_in_one_source_group(
 def test_final_support_quality_is_recorded_without_changing_selection() -> None:
     bundle = _bundle(
         _ranked(
-            "opc-owner",
-            "OPC owner 负责组织启动评审。",
+            "qvk-owner",
+            "QVK owner 负责组织启动评审。",
             rank=6,
             score=0.0393,
         )
@@ -455,13 +455,13 @@ def test_final_support_quality_is_recorded_without_changing_selection() -> None:
             {
                 "claims": [
                     {
-                        "text": "OPC owner 负责组织启动评审。",
+                        "text": "QVK owner 负责组织启动评审。",
                         "support_ids": [support_id],
                     }
                 ]
             }
         )
-    ).answer("我是 OPC owner，项目开始了我要干啥", bundle)
+    ).answer("我是 QVK owner，项目开始了我要干啥", bundle)
 
     assert result.status is AnswerStatus.ANSWERED
     assert result.trace["selected_support_ranks"] == [6]
@@ -528,8 +528,8 @@ def test_supported_double_abstention_refuses_without_rule_answer() -> None:
             "验收测试包括功能验收、非功能验收、数据验收和文档验收。",
         ),
         (
-            "OPC是什么？",
-            "OPC是面向项目交付的协同开发流程。",
+            "QVK是什么？",
+            "QVK是面向项目交付的合成协同流程。",
         ),
     ),
 )
