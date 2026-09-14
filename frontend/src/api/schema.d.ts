@@ -2203,6 +2203,11 @@ export interface components {
             budget_campaign_id?: string | null;
             /** Generation Connection Id */
             generation_connection_id?: string | null;
+            /**
+             * Generation Fallback Models
+             * @default []
+             */
+            generation_fallback_models: string[];
             /** Generation Model */
             generation_model?: string | null;
             /** Ocr Connection Id */
