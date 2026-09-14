@@ -88,7 +88,6 @@ def test_numbers_dates_negation_and_scope_cannot_change(
             "设备维护方面，甲部门的职责有哪些？",
         ),
         ("张三负责记录归档，干啥？", "张三在记录归档方面的职责是什么？"),
-        ("ZX-471 控制模块具体干什么？", "ZX-471 控制模块的职责是什么？"),
         (
             "甲部门负责设备维护，具体干什么？",
             "甲部门负责设备维护，具体干什么？",
@@ -101,6 +100,25 @@ def test_colloquial_grammar_and_topic_reordering_are_allowed(
     request = _request(before)
     assert rewrite_constraint_reason(request, after) is None
     assert request.text == before
+
+
+def test_ambiguous_product_action_cannot_be_rewritten_as_duties() -> None:
+    """产品用途问法不能在没有角色语法时被擅自收窄为职责。"""
+    assert (
+        rewrite_constraint_reason(
+            _request("ZX-471 控制模块具体干什么？"),
+            "ZX-471 控制模块的职责是什么？",
+        )
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
+
+
+def test_acronym_negation_cannot_be_removed_by_rewrite() -> None:
+    """合成缩写的否定关系与普通业务对象使用同一硬约束。"""
+    assert (
+        rewrite_constraint_reason(_request("zpx禁止做什么"), "zpx做什么")
+        == "REWRITE_CONSTRAINT_CHANGED"
+    )
 
 
 def test_pronoun_can_resolve_only_to_scoped_conversation_object() -> None:

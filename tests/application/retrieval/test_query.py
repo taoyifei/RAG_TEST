@@ -490,6 +490,10 @@ def test_analyzer_supports_general_typed_question_semantics(
         "ZPX是干啥的",
         "Zpx 是干嘛的",
         "某系统是干啥的",
+        "协调系统是干啥的",
+        "管理平台是干啥的",
+        "组织架构是干啥的",
+        "会员是干啥的",
     ),
 )
 def test_ambiguous_action_question_does_not_invent_role_semantics(
@@ -503,7 +507,15 @@ def test_ambiguous_action_question_does_not_invent_role_semantics(
     assert semantics.reason_codes == ("AMBIGUOUS_ACTION_QUESTION_SYNTAX",)
 
 
-@pytest.mark.parametrize("question", ("测试负责人是干啥的", "蓝熊团队干嘛的"))
+@pytest.mark.parametrize(
+    "question",
+    (
+        "测试负责人是干啥的",
+        "蓝熊团队干嘛的",
+        "乘务员是干啥的",
+        "质量协调员是干啥的",
+    ),
+)
 def test_role_shaped_action_question_stays_duties(question: str) -> None:
     semantics = _analyze(question).semantics
 
@@ -636,9 +648,7 @@ def test_business_condition_after_question_is_not_discarded() -> None:
 
 def test_pure_response_directive_is_not_an_answer_constraint() -> None:
     """“仅依据原文”描述回答方式，不要求证据正文包含“仅”字。"""
-    analysis = _analyze(
-        "“一般”对应的内容是什么？请仅依据原文完整作答。"
-    )
+    analysis = _analyze("“一般”对应的内容是什么？请仅依据原文完整作答。")
 
     assert analysis.semantics.target == "一般"
     assert all(
@@ -653,9 +663,7 @@ def test_pure_response_directive_is_not_an_answer_constraint() -> None:
 
 def test_response_directive_free_variant_reaches_retrieval() -> None:
     """原问保留供审计，纯作答方式不污染补充检索变体。"""
-    analysis = _analyze(
-        "“一般”对应的内容是什么？请仅依据原文完整作答。"
-    )
+    analysis = _analyze("“一般”对应的内容是什么？请仅依据原文完整作答。")
 
     variants = RuleBasedNormalizer().expand(analysis)
 
