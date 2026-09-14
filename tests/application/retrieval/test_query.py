@@ -395,10 +395,10 @@ def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
 @pytest.mark.parametrize(
     ("question", "target", "relation", "answer_type"),
     (
-        ("什么是OPC", "OPC", "定义", RequestedAnswerType.DEFINITION),
-        ("OPC是什么", "OPC", "定义", RequestedAnswerType.DEFINITION),
-        ("啥是OPC", "OPC", "定义", RequestedAnswerType.DEFINITION),
-        ("OPC是啥", "OPC", "定义", RequestedAnswerType.DEFINITION),
+        ("什么是QVK", "QVK", "定义", RequestedAnswerType.DEFINITION),
+        ("QVK是什么", "QVK", "定义", RequestedAnswerType.DEFINITION),
+        ("啥是QVK", "QVK", "定义", RequestedAnswerType.DEFINITION),
+        ("QVK是啥", "QVK", "定义", RequestedAnswerType.DEFINITION),
         (
             "蓝熊工作规范的目的是什么",
             "蓝熊工作规范",

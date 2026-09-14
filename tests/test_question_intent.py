@@ -18,7 +18,7 @@ from rag_app.generation.question_intent import (
             QuestionIntent.DECISION,
         ),
         (
-            "我是 OPC owner，项目开始了我要干啥",
+            "我是 QVK owner，项目开始了我要干啥",
             QuestionIntent.PROCEDURE,
         ),
         ("三种模式区别", QuestionIntent.COMPARE),

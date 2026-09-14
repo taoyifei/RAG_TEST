@@ -30,7 +30,7 @@ def test_unknown_corpus_blocker_does_not_recurse() -> None:
 
 def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     """表格单元格去尾空白后同步缩短来源范围，不误报索引损坏。"""
-    ranked = make_ranked_chunk(1, "OPC（One ")
+    ranked = make_ranked_chunk(1, "QVK（Qua ")
     chunk = ranked.hydrated.chunk
     original = chunk.source_spans[0]
     span = original.model_copy(
@@ -44,7 +44,7 @@ def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     item = EvidenceItem(
         evidence_id="S1",
         chunk_id=chunk.chunk_id,
-        citation_text="OPC（One",
+        citation_text="QVK（Qua",
         source_label="公开回归.docx",
         source_spans=(span,),
     )
