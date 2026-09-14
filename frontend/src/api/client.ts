@@ -929,6 +929,12 @@ export const api = {
       token,
       jsonInit("POST", { name }, key),
     ),
+  deleteProject: (token: string, projectId: string) =>
+    request<Project>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}`,
+      token,
+      { method: "DELETE" },
+    ),
   listKnowledgeBases: (token: string, projectId: string, offset = 0) =>
     request<Page<KnowledgeBase>>(
       `/api/v1/projects/${projectId}/knowledge-bases?offset=${offset}`,
@@ -944,6 +950,12 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases`,
       token,
       jsonInit("POST", { name, description: "" }, key),
+    ),
+  deleteKnowledgeBase: (token: string, projectId: string, kbId: string) =>
+    request<KnowledgeBase>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/knowledge-bases/${encodeURIComponent(kbId)}`,
+      token,
+      { method: "DELETE" },
     ),
   listDocuments: (token: string, projectId: string, kbId: string, offset = 0) =>
     request<Page<Document>>(

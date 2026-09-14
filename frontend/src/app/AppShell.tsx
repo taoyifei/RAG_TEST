@@ -83,14 +83,20 @@ export default function AppShell() {
     if (tokens.admin)
       void api
         .listProjects(tokens.admin)
-        .then((page) => setProjects(page.items))
+        .then((page) =>
+          setProjects(page.items.filter((item) => item.status === "active")),
+        )
         .catch(setShellError);
   }, [tokens.admin, scope.projectId, path]);
   useEffect(() => {
     if (tokens.admin && scope.projectId)
       void api
         .listKnowledgeBases(tokens.admin, scope.projectId)
-        .then((page) => setKnowledgeBases(page.items))
+        .then((page) =>
+          setKnowledgeBases(
+            page.items.filter((item) => item.status === "active"),
+          ),
+        )
         .catch(setShellError);
   }, [tokens.admin, scope.projectId, scope.kbId, path]);
   const [shellStatus, setShellStatus] = useState<SystemStatus>();

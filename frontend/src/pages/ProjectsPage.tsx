@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, createIdempotencyKey, type Project } from "../api/client";
-import { EmptyState, ErrorPanel, StatusBadge } from "../components/ui";
+import { EmptyState, ErrorPanel, Modal, StatusBadge } from "../components/ui";
 import { useConsole } from "../state/console-context";
 
 export function ProjectsPage({ go }: { go: (path: string) => void }) {
@@ -10,12 +10,14 @@ export function ProjectsPage({ go }: { go: (path: string) => void }) {
   const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [error, setError] = useState<unknown>();
+  const [confirmDelete, setConfirmDelete] = useState<Project | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const load = useCallback(
     () =>
       api
         .listProjects(tokens.admin, offset)
         .then((p) => {
-          setItems(p.items);
+          setItems(p.items.filter((item) => item.status === "active"));
           setNextOffset(p.next_offset ?? null);
         })
         .catch(setError),
@@ -37,6 +39,25 @@ export function ProjectsPage({ go }: { go: (path: string) => void }) {
       setName("");
     } catch (reason) {
       setError(reason);
+    }
+  }
+  async function remove() {
+    if (!confirmDelete || deletingId !== null) return;
+    const projectId = confirmDelete.project_id;
+    setDeletingId(projectId);
+    setError(undefined);
+    try {
+      await api.deleteProject(tokens.admin, projectId);
+      setItems((old) => old.filter((item) => item.project_id !== projectId));
+      setConfirmDelete(null);
+      if (scope.projectId === projectId) {
+        setProject("");
+        go("/projects");
+      }
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setDeletingId(null);
     }
   }
   return (
@@ -84,20 +105,59 @@ export function ProjectsPage({ go }: { go: (path: string) => void }) {
               <code>{item.project_id}</code>
             </div>
             <StatusBadge value={item.status} />
-            <button
-              className="secondary"
-              onClick={() => {
-                setProject(item.project_id);
-                go("/knowledge-bases");
-              }}
-            >
-              进入
-            </button>
+            <div className="row-actions">
+              <button
+                className="secondary"
+                onClick={() => {
+                  setProject(item.project_id);
+                  go("/knowledge-bases");
+                }}
+              >
+                进入
+              </button>
+              <button
+                className="danger"
+                disabled={deletingId !== null}
+                onClick={() => setConfirmDelete(item)}
+              >
+                删除
+              </button>
+            </div>
           </article>
         ))}
       </div>
       {!items.length && (
         <EmptyState title="暂无项目">创建第一个项目后继续。</EmptyState>
+      )}
+      {confirmDelete && (
+        <Modal
+          title={`删除项目“${confirmDelete.name}”`}
+          onClose={() => {
+            if (deletingId === null) setConfirmDelete(null);
+          }}
+        >
+          <p>将从当前 Demo 列表移除此项目。</p>
+          <p>本轮采用逻辑归档，不执行物理数据清理。</p>
+          <div className="row-actions">
+            <button
+              type="button"
+              disabled={deletingId !== null}
+              onClick={() => setConfirmDelete(null)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className="danger"
+              disabled={deletingId !== null}
+              onClick={() => void remove()}
+            >
+              {deletingId === confirmDelete.project_id
+                ? "归档中…"
+                : "确认归档项目"}
+            </button>
+          </div>
+        </Modal>
       )}
     </section>
   );
