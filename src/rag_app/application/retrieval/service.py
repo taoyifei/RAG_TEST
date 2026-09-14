@@ -526,7 +526,7 @@ class RetrievalService:
                     identity=canonical_sha256(
                         {
                             "query": interpreted.standalone_query,
-                            "policy": "bounded-interpret-v1",
+                            "policy": "bounded-interpret-v2",
                         }
                     ),
                 )

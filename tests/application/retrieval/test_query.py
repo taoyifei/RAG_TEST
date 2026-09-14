@@ -483,6 +483,36 @@ def test_analyzer_supports_general_typed_question_semantics(
     assert semantics.source == "RULE"
 
 
+@pytest.mark.parametrize(
+    "question",
+    (
+        "zpx是干啥的",
+        "ZPX是干啥的",
+        "Zpx 是干嘛的",
+        "某系统是干啥的",
+    ),
+)
+def test_ambiguous_action_question_does_not_invent_role_semantics(
+    question: str,
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.answer_type is RequestedAnswerType.UNKNOWN
+    assert semantics.relation is None
+    assert semantics.source == "ORIGINAL_FALLBACK"
+    assert semantics.reason_codes == ("AMBIGUOUS_ACTION_QUESTION_SYNTAX",)
+
+
+@pytest.mark.parametrize("question", ("测试负责人是干啥的", "蓝熊团队干嘛的"))
+def test_role_shaped_action_question_stays_duties(question: str) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.answer_type is RequestedAnswerType.DUTIES
+    assert semantics.relation == "职责"
+    assert semantics.source == "RULE"
+    assert semantics.reason_codes == ("DUTY_ROLE_ACTION_QUESTION_SYNTAX",)
+
+
 def test_typed_semantics_preserve_internal_question_characters() -> None:
     semantics = _analyze("谁的咖啡由谁负责").semantics
 

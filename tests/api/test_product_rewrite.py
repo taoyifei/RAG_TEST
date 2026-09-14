@@ -409,10 +409,60 @@ def test_invalid_interpret_json_records_the_one_dispatched_call(
     result = model.interpret(request, QueryAnalyzer().analyze(request))
 
     assert result.semantics is None
-    assert result.reason_code == "INTERPRET_INVALID"
+    assert result.reason_code == "INTERPRET_JSON_INVALID"
     assert result.attempted is True
     assert len(sent) == 1
     assert sum(call.call_count for call in result.calls) == 1
+
+
+def test_interpret_accepts_omitted_optional_fields(
+    rewrite_model: RewriteFixture,
+) -> None:
+    model, request, sent, output = rewrite_model
+    question = "zpx是干啥的"
+    request = request.model_copy(update={"text": question})
+    output["content"] = json.dumps(
+        {
+            "standalone_query": "zpx是什么",
+            "target": "zpx",
+            "relation": "定义",
+            "answer_type": "DEFINITION",
+        },
+        ensure_ascii=False,
+    )
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.reason_code == "INTERPRET_APPLIED"
+    assert result.semantics is not None
+    assert result.semantics.answer_type is RequestedAnswerType.DEFINITION
+    assert result.semantics.expected_count is None
+    assert result.semantics.ordinal is None
+    assert result.semantics.source_qualifier is None
+    assert len(sent) == 1
+
+
+def test_interpret_reports_schema_error_separately(
+    rewrite_model: RewriteFixture,
+) -> None:
+    model, request, sent, output = rewrite_model
+    request = request.model_copy(update={"text": "zpx是干啥的"})
+    output["content"] = json.dumps(
+        {
+            "standalone_query": "zpx是什么",
+            "target": "zpx",
+            "relation": "定义",
+            "answer_type": "DEFINITION",
+            "unexpected": "forbidden",
+        },
+        ensure_ascii=False,
+    )
+
+    result = model.interpret(request, QueryAnalyzer().analyze(request))
+
+    assert result.reason_code == "INTERPRET_SCHEMA_INVALID"
+    assert result.semantics is None
+    assert len(sent) == 1
 
 
 @pytest.mark.parametrize(

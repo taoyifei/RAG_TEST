@@ -22,6 +22,23 @@ _STRUCTURAL_NUMBER_PREFIX = re.compile(
 _DUTY_LABEL_SUFFIX = re.compile(
     r"(?:的)?(?:(?:岗位|安全|主要|核心|工作)?)职责$"
 )
+_ASCII_CASEFOLD = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
+)
+
+
+def normalize_semantic_text(value: str) -> str:
+    """统一 Unicode 宽度并仅折叠 ASCII 大小写。
+
+    Args:
+        value: 查询目标、结构标签或来源原文。
+
+    Returns:
+        保留非 ASCII 文字形态的稳定比较文本。
+
+    """
+    return unicodedata.normalize("NFKC", value).translate(_ASCII_CASEFOLD)
 
 
 def normalize_identifier(identifier: str) -> str:
@@ -210,6 +227,7 @@ __all__ = [
     "normalize_duty_heading_label",
     "normalize_identifier",
     "normalize_section_heading_label",
+    "normalize_semantic_text",
     "section_heading_path_owns_target",
     "select_unique_label_owner",
 ]

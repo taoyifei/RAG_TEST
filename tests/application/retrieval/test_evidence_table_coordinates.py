@@ -486,3 +486,35 @@ def test_definition_preserves_source_mapping_after_cell_whitespace_trim() -> (
         assert span.source_end_char - span.source_start_char == len(
             item.citation_text
         )
+
+
+@pytest.mark.parametrize(
+    "question",
+    ("zpx 是什么", "ZPX 是什么", "Zpx 是什么", "zPx 是什么", "ＺＰＸ 是什么"),
+)
+def test_term_table_row_lookup_uses_ascii_case_insensitive_identity(
+    question: str,
+) -> None:
+    candidate = _table(
+        rows=(
+            ("术语", "解释"),
+            ("ZPX", "ZPX（Zero Process Exchange）是合成流程交换约定。"),
+            ("ZPY", "ZPY 是另一条独立记录。"),
+        )
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(
+            max_evidence_items=8,
+            max_evidence_items_per_chunk=8,
+            per_document_cap=8,
+            per_section_cap=8,
+        ),
+        context=_context(question),
+    )
+
+    assert [item.citation_text for item in evidence] == [
+        "ZPX（Zero Process Exchange）是合成流程交换约定。"
+    ]
+    assert "ZPY" not in evidence[0].citation_text

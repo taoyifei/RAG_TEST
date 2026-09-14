@@ -27,6 +27,7 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
     normalize_section_heading_label,
+    normalize_semantic_text,
     section_heading_path_owns_target,
     select_unique_label_owner,
 )
@@ -44,7 +45,9 @@ _LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
 _TABLE_HEADER_SEMANTICS = {
-    "DEFINITION": re.compile(r"定义|释义|说明|含义|描述|交付件说明|内容说明"),
+    "DEFINITION": re.compile(
+        r"定义|释义|解释|说明|含义|描述|交付件说明|内容说明"
+    ),
     "PURPOSE": re.compile(r"目的|目标|作用|用途|宗旨"),
     "DUTIES": re.compile(
         r"职责|工作内容|岗位任务|负责事项|主要工作|任务说明|"
@@ -504,7 +507,7 @@ def _table_intersections(  # noqa: PLR0912
             ].strip()
             if quote:
                 tables[table_key][row, column][_span_key(chunk, span)] = quote
-    query = context.analysis.normalized_query.casefold()
+    query = normalize_semantic_text(context.analysis.normalized_query)
     selected: dict[str, set[_SpanKey]] = {}
     for table_key, cells in tables.items():
         context_qualifier = context.analysis.semantics.context_qualifier
@@ -967,7 +970,7 @@ def _list_pieces_fit(
 def _requested_columns(
     cells: _TableCells, rows: set[int], context: EvidenceSelectionContext
 ) -> set[int]:
-    query = context.analysis.normalized_query.casefold()
+    query = normalize_semantic_text(context.analysis.normalized_query)
     columns = {
         column
         for (row, column), values in cells.items()
@@ -1558,7 +1561,11 @@ def _complete_supports(
 
 def _label_matches(values: dict[_SpanKey, str], query: str) -> bool:
     labels = {
-        re.sub(r"[（(][^()（）]*[）)]", "", value.casefold())
+        re.sub(
+            r"[（(][^()（）]*[）)]",
+            "",
+            normalize_semantic_text(value),
+        )
         for value in values.values()
     }
     return len(labels) == 1 and any(
