@@ -27,6 +27,7 @@ from rag_app.api.p09 import create_p09_app
 from rag_app.api.product_token_policy import resolve_token_route
 from rag_app.api.provider_budget import register_provider_budget_routes
 from rag_app.api.query_history import register_query_history_routes
+from rag_app.api.scope_lifecycle import require_active_knowledge_base
 from rag_app.composition.product_runtime import (
     ProductRuntime,
     ProductRuntimeSettings,
@@ -733,6 +734,7 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         tags=["retrieval-profiles"],
     )
     def _profiles(knowledge_base_id: str) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         return {
             "items": [
                 {
@@ -759,6 +761,7 @@ def _register_profile_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         knowledge_base_id: str,
         body: RetrievalProfileRequest,
     ) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         try:
             profile = runtime.control.create_profile(
                 RetrievalProfileDraft(

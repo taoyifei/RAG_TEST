@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import Field
 
+from rag_app.api.scope_lifecycle import require_active_knowledge_base
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import RagError
 from rag_app.core.models import (
@@ -92,6 +93,7 @@ def register_model_settings_routes(  # noqa: PLR0915
 
     @app.get(path, tags=["models"])
     def _get(knowledge_base_id: str) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         settings = runtime.models.get(knowledge_base_id)
         local_ocr_selected = (
             settings.ocr_connection_id == LOCAL_OCR_CONNECTION_ID
@@ -118,6 +120,7 @@ def register_model_settings_routes(  # noqa: PLR0915
     def _save(
         knowledge_base_id: str, settings: KnowledgeBaseModelSettings
     ) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         if "ocr_media_hashes" not in settings.model_fields_set:
             settings = settings.model_copy(
                 update={
@@ -139,6 +142,7 @@ def register_model_settings_routes(  # noqa: PLR0915
         knowledge_base_id: str,
     ) -> CorpusAuthorizationStatus:
         """读取当前活动语料、模型用途和累计预算的动态对账状态。"""
+        require_active_knowledge_base(runtime, knowledge_base_id)
         return runtime.corpus_authorizations.status(knowledge_base_id)
 
     @app.post(
@@ -152,6 +156,7 @@ def register_model_settings_routes(  # noqa: PLR0915
         request: Request,
     ) -> CorpusAuthorizationStatus:
         """仅接受管理员会话对服务端冻结的活动语料作明确批准。"""
+        require_active_knowledge_base(runtime, knowledge_base_id)
         if getattr(request.state, "product_principal", None) != "admin_session":
             raise HTTPException(403, "资料授权只能由控制台管理员会话批准。")
         session_id = getattr(request.state, "product_session_id", None)
@@ -176,12 +181,14 @@ def register_model_settings_routes(  # noqa: PLR0915
 
     @app.get(ocr_path, tags=["ocr"])
     def _scan(knowledge_base_id: str, document_id: str) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         return runtime.ocr.scan(knowledge_base_id, document_id)
 
     @app.post(ocr_path, tags=["ocr"], status_code=202)
     def _recognize(
         knowledge_base_id: str, document_id: str, confirmation: OcrConfirmation
     ) -> dict[str, object]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         # 仅串行化设置冻结和入队；实际 OCR 仍由持久队列执行。
         with ocr_submission_lock:
             return _recognize_locked(
@@ -277,6 +284,7 @@ def register_model_settings_routes(  # noqa: PLR0915
     def _image(
         project_id: str, kb_id: str, document_id: str, artifact_id: str
     ) -> Response:
+        runtime.sdk.require_active_knowledge_base(project_id, kb_id)
         document = runtime.sdk.get_document(project_id, kb_id, document_id)
         if document.current_version_id is None:
             raise HTTPException(404, "文档没有可用图片版本。")
@@ -316,6 +324,7 @@ def register_model_settings_routes(  # noqa: PLR0915
     def _relations(
         knowledge_base_id: str, document_id: str
     ) -> list[DiagramRelationCandidate]:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         project_id = _document_project(runtime, knowledge_base_id, document_id)
         runtime.sdk.get_document(project_id, knowledge_base_id, document_id)
         return list(
@@ -335,6 +344,7 @@ def register_model_settings_routes(  # noqa: PLR0915
         body: DiagramRelationReview,
         request: Request,
     ) -> DiagramRelationReviewResponse:
+        require_active_knowledge_base(runtime, knowledge_base_id)
         candidates = runtime.relations.list_candidates(
             knowledge_base_id, document_id
         )

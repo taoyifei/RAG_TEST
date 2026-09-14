@@ -54,9 +54,15 @@ const operationsNav = [
   [routes.access, zhCN.navigation.access, KeyRound],
 ] as const;
 
-function ScopeGuard({ children }: { children: React.ReactNode }) {
+function ScopeGuard({
+  active,
+  children,
+}: {
+  active: boolean;
+  children: React.ReactNode;
+}) {
   const { scope } = useConsole();
-  if (!scope.projectId || !scope.kbId) {
+  if (!scope.projectId || !scope.kbId || !active) {
     return (
       <EmptyState title="请先选择知识库">
         从“项目”和“知识库”页面建立当前工作范围。
@@ -68,8 +74,15 @@ function ScopeGuard({ children }: { children: React.ReactNode }) {
 
 export default function AppShell() {
   const { path, go } = useRouter();
-  const { scope, tokens, session, logout, rotateSession, setProject } =
-    useConsole();
+  const {
+    scope,
+    tokens,
+    session,
+    logout,
+    rotateSession,
+    setProject,
+    setKnowledgeBase,
+  } = useConsole();
   const [menuOpen, setMenuOpen] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
   const [shellError, setShellError] = useState<unknown>();
@@ -80,25 +93,75 @@ export default function AppShell() {
     { knowledge_base_id: string; name: string }[]
   >([]);
   useEffect(() => {
-    if (tokens.admin)
-      void api
-        .listProjects(tokens.admin)
-        .then((page) =>
-          setProjects(page.items.filter((item) => item.status === "active")),
-        )
-        .catch(setShellError);
-  }, [tokens.admin, scope.projectId, path]);
+    if (!tokens.admin) {
+      return;
+    }
+    let cancelled = false;
+    void api
+      .listProjects(tokens.admin)
+      .then((page) => {
+        if (cancelled) return;
+        const activeProjects = page.items.filter(
+          (item) => item.status === "active",
+        );
+        setProjects(activeProjects);
+        if (
+          scope.projectId &&
+          !activeProjects.some((item) => item.project_id === scope.projectId)
+        ) {
+          setProject("");
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setShellError(reason);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tokens.admin, scope.projectId, path, setProject]);
+  const activeProjectSelected = projects.some(
+    (item) => item.project_id === scope.projectId,
+  );
   useEffect(() => {
-    if (tokens.admin && scope.projectId)
-      void api
-        .listKnowledgeBases(tokens.admin, scope.projectId)
-        .then((page) =>
-          setKnowledgeBases(
-            page.items.filter((item) => item.status === "active"),
-          ),
-        )
-        .catch(setShellError);
-  }, [tokens.admin, scope.projectId, scope.kbId, path]);
+    if (!tokens.admin || !scope.projectId || !activeProjectSelected) {
+      return;
+    }
+    let cancelled = false;
+    void api
+      .listKnowledgeBases(tokens.admin, scope.projectId)
+      .then((page) => {
+        if (cancelled) return;
+        const activeKnowledgeBases = page.items.filter(
+          (item) => item.status === "active",
+        );
+        setKnowledgeBases(activeKnowledgeBases);
+        if (
+          scope.kbId &&
+          !activeKnowledgeBases.some(
+            (item) => item.knowledge_base_id === scope.kbId,
+          )
+        ) {
+          setKnowledgeBase("");
+        }
+      })
+      .catch((reason) => {
+        if (!cancelled) setShellError(reason);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    tokens.admin,
+    scope.projectId,
+    scope.kbId,
+    path,
+    activeProjectSelected,
+    setKnowledgeBase,
+  ]);
+  const activeKnowledgeBaseSelected = knowledgeBases.some(
+    (item) => item.knowledge_base_id === scope.kbId,
+  );
+  const activeScope = activeProjectSelected && activeKnowledgeBaseSelected;
   const [shellStatus, setShellStatus] = useState<SystemStatus>();
   useEffect(() => {
     if (!tokens.admin) return;
@@ -250,7 +313,7 @@ export default function AppShell() {
                 <KnowledgeBasesPage key={scope.projectId} go={go} />
               )}
               {path === "/documents" && (
-                <ScopeGuard>
+                <ScopeGuard active={activeScope}>
                   <DocumentsPage key={scope.kbId} go={go} />
                 </ScopeGuard>
               )}
@@ -258,17 +321,17 @@ export default function AppShell() {
                 <JobsPage key={`${scope.projectId}:${scope.kbId}`} go={go} />
               )}
               {path === "/revision" && (
-                <ScopeGuard>
+                <ScopeGuard active={activeScope}>
                   <RevisionPage key={scope.kbId} go={go} />
                 </ScopeGuard>
               )}
               {path === "/retrieval" && (
-                <ScopeGuard>
+                <ScopeGuard active={activeScope}>
                   <QueryPage key={scope.kbId} mode="search" go={go} />
                 </ScopeGuard>
               )}
               {path === "/chat" && (
-                <ScopeGuard>
+                <ScopeGuard active={activeScope}>
                   <QueryPage key={scope.kbId} mode="answer" go={go} />
                 </ScopeGuard>
               )}

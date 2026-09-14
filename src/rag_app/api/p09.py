@@ -375,6 +375,7 @@ def _register_document_routes(
     ) -> dict[str, object]:
         """受控接收 DOC 或 DOCX 并创建新逻辑文档。"""
         require_admin(authorization)
+        runtime.sdk.require_active_knowledge_base(project_id, kb_id)
         content = await _spool_upload(
             request, runtime.data_dir, max_upload_bytes=max_upload_bytes
         )
@@ -673,7 +674,7 @@ def _register_query_routes(
         _prepare_query_trace(runtime, request, trace_id, body.trace_mode)
         if body.stream:
             # 在发送响应头前完成知识库范围与固定查询容量准入。
-            runtime.sdk.get_knowledge_base(project_id, kb_id)
+            runtime.sdk.require_active_knowledge_base(project_id, kb_id)
             stream = P09AnswerStream(
                 executor=runtime.query_executor,
                 sdk=runtime.sdk,
