@@ -247,9 +247,7 @@ def test_equivalent_quantity_ranges_share_unit_across_endpoints(
     claim: str,
 ) -> None:
     """区间分隔符和左端省略单位不应制造数值支持误报。"""
-    evidence, draft = _supported_draft(
-        "处罚幅度为 100 元～ 500 元。", claim
-    )
+    evidence, draft = _supported_draft("处罚幅度为 100 元～ 500 元。", claim)
 
     validate_grounded_draft(draft, evidence)
 
@@ -459,9 +457,7 @@ def test_exact_section_heading_can_supply_only_its_verified_context(
             per_section_cap=8,
             max_evidence_items_per_chunk=8,
         ),
-        context=_context(
-            "外部采购生产通知单审核后的特殊处理具体有哪些要求？"
-        ),
+        context=_context("外部采购生产通知单审核后的特殊处理具体有哪些要求？"),
     )
     claim = AnswerClaim(
         text=claim_text,
@@ -1215,8 +1211,7 @@ def test_verified_table_accepts_one_character_value_with_header_unit() -> None:
 def test_verified_table_keeps_numeric_continuation_in_the_same_column() -> None:
     """同一单元格逗号后的数值续项沿用本列属性，不变成无主数字。"""
     definition = (
-        "员工轻伤（损失工作日低于 15 天）或直接损失 500 元以上，"
-        "20000 元以下"
+        "员工轻伤（损失工作日低于 15 天）或直接损失 500 元以上，20000 元以下"
     )
     evidence, draft, analysis = _whole_row_table_draft(
         f"蔚蓝泵：事故定义为{definition}。",

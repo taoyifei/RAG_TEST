@@ -1043,9 +1043,9 @@ def _context_supports(
     table_row_nodes: dict[
         tuple[_TableKey, int], list[tuple[int, int, int, str]]
     ] = defaultdict(list)
-    table_relation_nodes: dict[
-        _TableKey, list[tuple[int, int, int, str]]
-    ] = defaultdict(list)
+    table_relation_nodes: dict[_TableKey, list[tuple[int, int, int, str]]] = (
+        defaultdict(list)
+    )
     for chunk in chunks.values():
         for span in chunk.source_spans:
             location = _table_location(chunk, span)
@@ -1103,11 +1103,7 @@ def _context_supports(
                     if whole_row_relation
                     else grouped_row_nodes.get((location[0], location[1]), ())
                 )
-                if (
-                    whole_row_relation
-                    and row_nodes
-                    and target
-                ):
+                if whole_row_relation and row_nodes and target:
                     supports[key] = AnswerSupport(
                         status=SupportStatus.SUPPORTED,
                         query_target=target,

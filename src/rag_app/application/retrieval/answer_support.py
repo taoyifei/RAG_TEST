@@ -493,9 +493,7 @@ def _quoted_restriction_supports(
         answer_type == RequestedAnswerType.SECTION_SUMMARY.value
         and relation == "限制要求"
         and bool(analysis.quoted_phrases)
-        and all(
-            _normalized(item) in clause for item in analysis.quoted_phrases
-        )
+        and all(_normalized(item) in clause for item in analysis.quoted_phrases)
         and bool(
             re.search(
                 r"禁止|不得|严禁|不允许|不可|不能|不准|仅限|只允许",
