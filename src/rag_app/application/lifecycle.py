@@ -162,6 +162,54 @@ class LifecycleService:
         """
         return self._store.list_projects(limit=limit, offset=offset)
 
+    def require_active_project(self, project_id: str) -> Project:
+        """确认项目仍可作为活动业务作用域使用。
+
+        Args:
+            project_id: 目标项目 ID。
+
+        Returns:
+            已确认处于 active 状态的项目。
+
+        Raises:
+            RevisionStateError: 项目已经归档。
+
+        """
+        project = self._store.get_project(project_id)
+        if project.status is not ProjectStatus.ACTIVE:
+            raise RevisionStateError(
+                "归档项目不能继续作为活动作用域使用。",
+                stage="scope.project",
+            )
+        return project
+
+    def require_active_knowledge_base(
+        self, project_id: str, knowledge_base_id: str
+    ) -> KnowledgeBase:
+        """确认项目和知识库组成有效的活动作用域。
+
+        Args:
+            project_id: 所属项目 ID。
+            knowledge_base_id: 目标知识库 ID。
+
+        Returns:
+            已确认处于 active 状态的知识库。
+
+        Raises:
+            RevisionStateError: 项目已归档或知识库正在删除。
+
+        """
+        self.require_active_project(project_id)
+        knowledge_base = self._store.get_knowledge_base(
+            project_id, knowledge_base_id
+        )
+        if knowledge_base.status is not KnowledgeBaseStatus.ACTIVE:
+            raise RevisionStateError(
+                "删除中的知识库不能继续作为活动作用域使用。",
+                stage="scope.knowledge_base",
+            )
+        return knowledge_base
+
     def update_project(
         self,
         project_id: str,
@@ -204,12 +252,7 @@ class LifecycleService:
             新知识库。
 
         """
-        project = self._store.get_project(project_id)
-        if project.status is not ProjectStatus.ACTIVE:
-            raise RevisionStateError(
-                "只有 active 项目可以创建知识库。",
-                stage="knowledge_base.create",
-            )
+        self.require_active_project(project_id)
         _require_text(name, "知识库名称")
         knowledge_base_id = new_id("kb")
         if idempotency_key is not None:
@@ -282,6 +325,7 @@ class LifecycleService:
             当前页知识库。
 
         """
+        self.require_active_project(project_id)
         return self._store.list_knowledge_bases(
             project_id, limit=limit, offset=offset
         )
@@ -310,6 +354,7 @@ class LifecycleService:
         """
         if name is not None:
             _require_text(name, "知识库名称")
+        self.require_active_project(project_id)
         current = self._store.get_knowledge_base(project_id, knowledge_base_id)
         if current.status is KnowledgeBaseStatus.DELETING:
             raise RevisionStateError(
@@ -353,14 +398,7 @@ class LifecycleService:
             已完成或恢复的持久化 Job。
 
         """
-        knowledge_base = self._store.get_knowledge_base(
-            project_id, knowledge_base_id
-        )
-        if knowledge_base.status is not KnowledgeBaseStatus.ACTIVE:
-            raise RevisionStateError(
-                "只有 active 知识库可以创建文档。",
-                stage="document.create",
-            )
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         _validate_document_input(
             display_name, content, media_type, idempotency_key
         )
@@ -409,6 +447,7 @@ class LifecycleService:
             已完成或恢复的持久化 Job。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         current = self._store.get_document(
             project_id, knowledge_base_id, document_id
         )
@@ -461,6 +500,7 @@ class LifecycleService:
             文档视图。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.get_document(
             project_id, knowledge_base_id, document_id
         )
@@ -485,6 +525,7 @@ class LifecycleService:
             当前页文档。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.list_documents(
             project_id, knowledge_base_id, limit=limit, offset=offset
         )
@@ -509,6 +550,7 @@ class LifecycleService:
             更新后的文档。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         _require_text(display_name, "文档显示名")
         current = self._store.get_document(
             project_id, knowledge_base_id, document_id
@@ -535,6 +577,7 @@ class LifecycleService:
             已持久化删除标记的文档。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.mark_document_deleting(
             project_id, knowledge_base_id, document_id
         )
@@ -553,6 +596,7 @@ class LifecycleService:
             不可变版本序列。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.list_document_versions(
             project_id, knowledge_base_id, document_id
         )
@@ -576,6 +620,7 @@ class LifecycleService:
             不可变版本视图。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.get_document_version(
             project_id,
             knowledge_base_id,
@@ -602,6 +647,7 @@ class LifecycleService:
             授权范围内的 Artifact 摘要。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._store.list_artifacts(
             project_id,
             knowledge_base_id,
@@ -630,6 +676,7 @@ class LifecycleService:
             带摘要与媒体类型的 Artifact。
 
         """
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         self._store.authorize_artifact(
             project_id,
             knowledge_base_id,
@@ -751,6 +798,10 @@ class LifecycleService:
             raise RevisionStateError(
                 "没有可构建的文档快照。", stage="profile.queue"
             )
+        first = documents[0]
+        self.require_active_knowledge_base(
+            first.document.project_id, knowledge_base_id
+        )
         versions = tuple(
             sorted(
                 document_version_id(
@@ -768,7 +819,6 @@ class LifecycleService:
             # 相同索引语义的新草稿必须能从旧终态失败中恢复；同一草稿仍幂等。
             self._retrieval_profile_revision_id,
         )
-        first = documents[0]
         request = QueuedIngestion(
             job_id=deterministic_id("job", knowledge_base_id, revision_id),
             revision_id=revision_id,
@@ -808,7 +858,11 @@ class LifecycleService:
                     "持久请求与领取 Job 身份不一致。",
                     stage="document.worker.job_identity",
                 )
-            knowledge_base_id = request.documents[0].document.knowledge_base_id
+            first_document = request.documents[0].document
+            knowledge_base_id = first_document.knowledge_base_id
+            self.require_active_knowledge_base(
+                first_document.project_id, knowledge_base_id
+            )
             if (
                 self._current_content_identity(knowledge_base_id)
                 != request.content_identity
@@ -898,6 +952,7 @@ class LifecycleService:
             if item.document.document_id == request.target_document_id
         )
         kb_id = target.document.knowledge_base_id
+        self.require_active_knowledge_base(target.document.project_id, kb_id)
         expected_revision_id = self._control.active_revision_id(kb_id)
         documents = [
             _queued_active_document(self._blob_store, item, artifact, media)

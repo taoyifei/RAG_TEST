@@ -147,6 +147,19 @@ class RagSdk:
         self._require_open()
         return self._lifecycle.get_project(project_id)
 
+    def require_active_project(self, project_id: str) -> Project:
+        """确认项目仍可作为业务作用域使用。
+
+        Args:
+            project_id: 目标项目 ID。
+
+        Returns:
+            已确认处于 active 状态的项目。
+
+        """
+        self._require_open()
+        return self._lifecycle.require_active_project(project_id)
+
     def list_projects(
         self, *, limit: int = 50, offset: int = 0
     ) -> tuple[Project, ...]:
@@ -229,6 +242,24 @@ class RagSdk:
         """
         self._require_open()
         return self._lifecycle.get_knowledge_base(project_id, knowledge_base_id)
+
+    def require_active_knowledge_base(
+        self, project_id: str, knowledge_base_id: str
+    ) -> KnowledgeBase:
+        """确认项目和知识库组成有效的活动作用域。
+
+        Args:
+            project_id: 所属项目 ID。
+            knowledge_base_id: 目标知识库 ID。
+
+        Returns:
+            已确认处于 active 状态的知识库。
+
+        """
+        self._require_open()
+        return self._lifecycle.require_active_knowledge_base(
+            project_id, knowledge_base_id
+        )
 
     def delete_knowledge_base(
         self, project_id: str, knowledge_base_id: str
@@ -634,6 +665,13 @@ class RagSdk:
 
         """
         self._require_open()
+        if project_id is not None:
+            if knowledge_base_id is None:
+                self.require_active_project(project_id)
+            else:
+                self.require_active_knowledge_base(
+                    project_id, knowledge_base_id
+                )
         return self._console_service().list_jobs(
             project_id=project_id,
             knowledge_base_id=knowledge_base_id,
@@ -657,6 +695,7 @@ class RagSdk:
 
         """
         self._require_open()
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._console_service().inspect_revision(
             project_id, knowledge_base_id, revision_id
         )
@@ -694,6 +733,7 @@ class RagSdk:
 
         """
         self._require_open()
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._console_service().list_chunks(
             project_id,
             knowledge_base_id,
@@ -722,6 +762,7 @@ class RagSdk:
 
         """
         self._require_open()
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         return self._console_service().document_reports(
             project_id, knowledge_base_id, revision_id
         )
@@ -759,6 +800,7 @@ class RagSdk:
 
         """
         self._require_open()
+        self.require_active_knowledge_base(project_id, knowledge_base_id)
         request = SearchRequest(
             scope=KnowledgeBaseScope(
                 project_id=project_id, knowledge_base_id=knowledge_base_id
