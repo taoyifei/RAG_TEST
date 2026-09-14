@@ -22,6 +22,9 @@ from typing import Any, cast
 import httpx
 from PIL import Image
 
+from rag_app.adapters.providers.aliyun_models import (
+    ALIYUN_GROUNDED_CHAT_MODELS,
+)
 from rag_app.adapters.providers.budget_authorization import (
     provider_request_lease,
 )
@@ -900,10 +903,10 @@ def _chat_request_valid(  # noqa: PLR0911, PLR0912
             return False
     elif "stream_options" in payload:
         return False
-    expected_model = (
-        "qwen3.5-ocr" if operation == "image.ocr" else "qwen3.7-flash"
-    )
-    if payload.get("model") != expected_model:
+    model = payload.get("model")
+    if operation == "image.ocr" and model != "qwen3.5-ocr":
+        return False
+    if operation != "image.ocr" and model not in ALIYUN_GROUNDED_CHAT_MODELS:
         return False
     if operation != "image.ocr" and payload.get("enable_thinking") is not False:
         return False

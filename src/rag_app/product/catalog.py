@@ -6,6 +6,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
+from rag_app.adapters.providers.aliyun_models import (
+    ALIYUN_GROUNDED_CHAT_MODELS,
+)
+
 
 class CatalogProvider(BaseModel):
     """Provider 的只读产品配置边界。"""
@@ -21,9 +25,9 @@ class CatalogProvider(BaseModel):
     endpoint_profiles: tuple[str, ...] = ("default",)
 
 
-CATALOG_VERSION: Final = "2026-09-10.1"
+CATALOG_VERSION: Final = "2026-09-14.1"
 # 新增生成能力不改变已落盘的 Embedding 数学合同和向量缓存身份。
-CAPABILITY_CATALOG_VERSION: Final = "2026-09-10.1"
+CAPABILITY_CATALOG_VERSION: Final = "2026-09-14.1"
 _PROVIDERS: Final = (
     CatalogProvider(
         provider_type="jina",
@@ -51,13 +55,17 @@ _PROVIDERS: Final = (
             "query.rewrite",
             "image.ocr",
         ),
-        models=("qwen3.7-text-embedding", "qwen3.7-flash", "qwen3.5-ocr"),
+        models=(
+            "qwen3.7-text-embedding",
+            *ALIYUN_GROUNDED_CHAT_MODELS,
+            "qwen3.5-ocr",
+        ),
         operation_models={
             "embedding.document": ("qwen3.7-text-embedding",),
             "embedding.query": ("qwen3.7-text-embedding",),
-            "generation": ("qwen3.7-flash",),
-            "query.interpret": ("qwen3.7-flash",),
-            "query.rewrite": ("qwen3.7-flash",),
+            "generation": ALIYUN_GROUNDED_CHAT_MODELS,
+            "query.interpret": ALIYUN_GROUNDED_CHAT_MODELS,
+            "query.rewrite": ALIYUN_GROUNDED_CHAT_MODELS,
             "image.ocr": ("qwen3.5-ocr",),
         },
         regions=("cn-beijing",),

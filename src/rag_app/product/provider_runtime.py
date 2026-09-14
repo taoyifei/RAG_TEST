@@ -101,6 +101,7 @@ _ALIYUN_SAFE_ERROR_CODES = {
     "access_denied": "PROVIDER_AUTHORIZATION_DENIED",
     "accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
     "accessdenied.unpurchased": "PROVIDER_AUTHORIZATION_DENIED",
+    "allocationquota.freetieronly": "MODEL_FREE_TIER_EXHAUSTED",
     "endpoint.accessdenied": "PROVIDER_AUTHORIZATION_DENIED",
     "invalid_api_key": "PROVIDER_AUTHENTICATION_FAILED",
     "invalidapikey": "PROVIDER_AUTHENTICATION_FAILED",
@@ -581,7 +582,11 @@ class ProviderRuntimeRegistry:
             raise ValueError("回答策略与模型引用不一致。")
         return AliyunChatAdapter(
             resolved,
-            http_client=self._adapter_http_client(connection, max_attempts=1),
+            http_client=self._adapter_http_client(
+                connection,
+                max_attempts=1,
+                parse_response_error_code=True,
+            ),
             api_key_resolver=self._secret_resolver(connection),
         )
 
@@ -804,6 +809,7 @@ class ProviderRuntimeRegistry:
         selected_slot: str | None = None,
         reranker_mode: str | None = None,
         max_attempts: int = 3,
+        parse_response_error_code: bool = False,
     ) -> ProviderHttpClient:
         if not connection.enabled:
             raise ConfigurationError("连接已停用。", stage="provider.config")
@@ -847,6 +853,12 @@ class ProviderRuntimeRegistry:
                 reranker_mode=reranker_mode,
             ),
             defer_success_observation=True,
+            response_error_code=(
+                _aliyun_safe_error_code
+                if parse_response_error_code
+                and connection.provider_type == "aliyun-model-studio"
+                else None
+            ),
         )
 
 

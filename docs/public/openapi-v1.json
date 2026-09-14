@@ -2467,6 +2467,15 @@
             ],
             "title": "Generation Connection Id"
           },
+          "generation_fallback_models": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Generation Fallback Models",
+            "type": "array"
+          },
           "generation_model": {
             "anyOf": [
               {

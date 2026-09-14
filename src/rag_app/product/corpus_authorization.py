@@ -146,7 +146,8 @@ def _operation_binding_identity(
                     "request_identity": request_identity,
                 }
                 for operation, connection_id, model, request_identity in sorted(
-                    bindings, key=lambda item: item[0]
+                    bindings,
+                    key=lambda item: (item[0], item[1], item[2], item[3]),
                 )
             ]
         }
@@ -557,12 +558,21 @@ class CorpusAuthorizationStore:
                 "query.rewrite",
             }:
                 connection_id = settings.generation_connection_id
-                model = settings.generation_model
                 if (
                     operation in {"query.interpret", "query.rewrite"}
                     and not settings.rewrite_enabled
                 ):
                     raise ValueError("问题语义解释与改写尚未启用。")
+                if not connection_id or not settings.generation_models:
+                    raise ValueError(f"{operation} 尚未配置模型。")
+                connection = self._control.get_connection(connection_id)
+                if not connection.enabled:
+                    raise ValueError("资料授权引用的模型连接已停用。")
+                bindings.extend(
+                    (operation, connection_id, model)
+                    for model in settings.generation_models
+                )
+                continue
             else:
                 connection_id = settings.ocr_connection_id
                 model = settings.ocr_model

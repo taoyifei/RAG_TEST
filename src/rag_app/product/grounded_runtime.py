@@ -7,10 +7,16 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from threading import RLock
+from typing import TypeVar
 
 from pydantic import Field, StrictInt, model_validator
 
-from rag_app.adapters.providers.aliyun_chat import AliyunChatConfig, ChatMessage
+from rag_app.adapters.providers.aliyun_chat import (
+    AliyunChatAdapter,
+    AliyunChatConfig,
+    ChatMessage,
+)
 from rag_app.adapters.providers.budget_ledger import ProviderBudgetLedger
 from rag_app.adapters.providers.budget_transport import (
     provider_budget_scope,
@@ -22,7 +28,12 @@ from rag_app.application.retrieval.rewrite_constraints import (
     rewrite_constraint_reason,
 )
 from rag_app.core.capabilities import ComponentCapabilities, ComponentDescriptor
-from rag_app.core.errors import PolicyDenied, RagError
+from rag_app.core.errors import (
+    PolicyDenied,
+    ProviderQuotaExhausted,
+    QueryCancelled,
+    RagError,
+)
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import (
     AnswerClaim,
@@ -52,6 +63,7 @@ _MAX_REWRITE_CHARS = 512
 _MAX_INTERPRET_FIELD_CHARS = 512
 _MAX_GROUNDED_INPUT_TOKENS = 16_384
 _MAX_GROUNDED_OUTPUT_TOKENS = 4096
+_RotationResult = TypeVar("_RotationResult")
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
         "AMBIGUOUS_ACTION_QUESTION_SYNTAX",
@@ -151,17 +163,23 @@ class ProductGroundedModel:
             or not settings.generation_model
         ):
             raise ValueError("回答模型尚未配置。")
-        self.adapter = providers.chat_adapter(
-            settings.generation_connection_id,
-            model=settings.generation_model,
-            config=AliyunChatConfig(
-                model=settings.generation_model,
-                egress_allowed=True,
-                max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
-                max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
-                json_mode="json_object",
-            ),
+        self.adapters = tuple(
+            providers.chat_adapter(
+                settings.generation_connection_id,
+                model=model,
+                config=AliyunChatConfig(
+                    model=model,
+                    egress_allowed=True,
+                    max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
+                    max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+                    json_mode="json_object",
+                ),
+            )
+            for model in settings.generation_models
         )
+        self.adapter = self.adapters[0]
+        self._quota_exhausted_models: set[str] = set()
+        self._rotation_lock = RLock()
 
     @property
     def descriptor(self) -> ComponentDescriptor:
@@ -199,7 +217,7 @@ class ProductGroundedModel:
             不含凭据的健康状态。
 
         """
-        return self.adapter.health(network=network)
+        return self._rotation_candidates()[0].health(network=network)
 
     @contextmanager
     def _scope(
@@ -232,6 +250,51 @@ class ProductGroundedModel:
         ):
             yield
 
+    def _rotation_candidates(self) -> tuple[AliyunChatAdapter, ...]:
+        """优先跳过本进程已经确认额度耗尽的模型。"""
+        with self._rotation_lock:
+            available = tuple(
+                adapter
+                for adapter in self.adapters
+                if adapter.config.model not in self._quota_exhausted_models
+            )
+        # 全部曾失败时重新探测完整链，允许额度变化后自行恢复。
+        return available or self.adapters
+
+    def _call_with_rotation(
+        self,
+        action: Callable[[AliyunChatAdapter], _RotationResult],
+        *,
+        can_rotate: Callable[[], bool] | None = None,
+    ) -> tuple[_RotationResult, tuple[ProviderCall, ...]]:
+        """只在单模型免费额度耗尽且尚可安全切换时尝试下一模型。"""
+        failed_calls: list[ProviderCall] = []
+        candidates = self._rotation_candidates()
+        for index, adapter in enumerate(candidates):
+            try:
+                return action(adapter), tuple(failed_calls)
+            except ProviderQuotaExhausted as error:
+                current_calls = _error_provider_calls(error)
+                with self._rotation_lock:
+                    self._quota_exhausted_models.add(adapter.config.model)
+                if index + 1 < len(candidates) and (
+                    can_rotate is None or can_rotate()
+                ):
+                    failed_calls.extend(current_calls)
+                    continue
+                error.provider_calls = (*failed_calls, *current_calls)
+                raise
+            except RagError as error:
+                error.provider_calls = (
+                    *failed_calls,
+                    *_error_provider_calls(error),
+                )
+                raise
+            except QueryCancelled as error:
+                error.provider_calls = (*failed_calls, *error.provider_calls)
+                raise
+        raise AssertionError("回答模型轮换链不能为空。")
+
     def generate(self, request: GenerationRequest) -> AnswerDraft:
         """只授权本次有限证据所对应的现存文档，不读取整份正文。
 
@@ -244,7 +307,14 @@ class ProductGroundedModel:
         """
         hashes = self._source_hashes(request)
         with self._scope("generation", hashes):
-            return self.adapter.generate(request)
+            draft, failed_calls = self._call_with_rotation(
+                lambda adapter: adapter.generate(request)
+            )
+        return draft.model_copy(
+            update={
+                "provider_calls": (*failed_calls, *draft.provider_calls),
+            }
+        )
 
     def generate_stream(
         self,
@@ -265,12 +335,27 @@ class ProductGroundedModel:
 
         """
         hashes = self._source_hashes(request)
+        emitted_count = 0
+
+        def _on_claim(claim: AnswerClaim) -> None:
+            nonlocal emitted_count
+            emitted_count += 1
+            on_claim(claim)
+
         with self._scope("generation", hashes):
-            return self.adapter.generate_stream(
-                request,
-                on_claim=on_claim,
-                cancellation=cancellation,
+            draft, failed_calls = self._call_with_rotation(
+                lambda adapter: adapter.generate_stream(
+                    request,
+                    on_claim=_on_claim,
+                    cancellation=cancellation,
+                ),
+                can_rotate=lambda: emitted_count == 0,
             )
+        return draft.model_copy(
+            update={
+                "provider_calls": (*failed_calls, *draft.provider_calls),
+            }
+        )
 
     def _source_hashes(self, request: GenerationRequest) -> tuple[str, ...]:
         """重新核对本次证据仍属于当前活动知识库版本。"""
@@ -359,15 +444,17 @@ class ProductGroundedModel:
                 ),
             ),
         )
-        call: ProviderCall | None = None
+        calls: tuple[ProviderCall, ...] = ()
         try:
             with self._scope("query.interpret"):
-                result = self.adapter.complete(
-                    messages,
-                    operation="query.interpret",
-                    max_output_tokens=384,
+                result, failed_calls = self._call_with_rotation(
+                    lambda adapter: adapter.complete(
+                        messages,
+                        operation="query.interpret",
+                        max_output_tokens=384,
+                    )
                 )
-            call = result.call
+            calls = (*failed_calls, result.call)
             payload = _InterpretPayload.model_validate(
                 json.loads(result.content)
             )
@@ -386,7 +473,7 @@ class ProductGroundedModel:
             ) or _interpretation_semantics_reason(request, analysis, payload)
             if reason is not None:
                 return InterpretOutcome(
-                    calls=(result.call,),
+                    calls=calls,
                     reason_code=reason,
                     attempted=True,
                 )
@@ -394,7 +481,7 @@ class ProductGroundedModel:
             return InterpretOutcome(
                 standalone_query=payload.standalone_query,
                 semantics=semantics,
-                calls=(result.call,),
+                calls=calls,
                 reason_code="INTERPRET_APPLIED",
                 attempted=True,
             )
@@ -407,7 +494,7 @@ class ProductGroundedModel:
             )
         except (TypeError, ValueError, KeyError):
             return InterpretOutcome(
-                calls=() if call is None else (call,),
+                calls=calls,
                 reason_code="INTERPRET_INVALID",
                 attempted=True,
             )
@@ -457,13 +544,17 @@ class ProductGroundedModel:
                 ),
             ),
         )
-        call: ProviderCall | None = None
+        calls: tuple[ProviderCall, ...] = ()
         try:
             with self._scope("query.rewrite"):
-                result = self.adapter.complete(
-                    messages, operation="query.rewrite", max_output_tokens=256
+                result, failed_calls = self._call_with_rotation(
+                    lambda adapter: adapter.complete(
+                        messages,
+                        operation="query.rewrite",
+                        max_output_tokens=256,
+                    )
                 )
-            call = result.call
+            calls = (*failed_calls, result.call)
             payload = json.loads(result.content)
             text = payload.get("query") if isinstance(payload, dict) else None
             if (
@@ -471,14 +562,14 @@ class ProductGroundedModel:
                 or not 1 <= len(text) <= _MAX_REWRITE_CHARS
             ):
                 return RewriteOutcome(
-                    calls=(result.call,),
+                    calls=calls,
                     reason_code="REWRITE_INVALID",
                     attempted=True,
                 )
             constraint_reason = rewrite_constraint_reason(request, text)
             if constraint_reason is not None:
                 return RewriteOutcome(
-                    calls=(result.call,),
+                    calls=calls,
                     reason_code=constraint_reason,
                     attempted=True,
                 )
@@ -495,7 +586,7 @@ class ProductGroundedModel:
             )
             return RewriteOutcome(
                 variant,
-                (result.call,),
+                calls,
                 "REWRITE_APPLIED" if variant else "REWRITE_UNCHANGED",
                 True,
             )
@@ -508,7 +599,7 @@ class ProductGroundedModel:
             )
         except (ValueError, KeyError):
             return RewriteOutcome(
-                calls=() if call is None else (call,),
+                calls=calls,
                 reason_code="REWRITE_INVALID",
                 attempted=True,
             )
@@ -523,7 +614,15 @@ class ProductGroundedModel:
             关闭成功时无返回值。
 
         """
-        self.adapter.close()
+        for adapter in self.adapters:
+            adapter.close()
+
+
+def _error_provider_calls(error: RagError) -> tuple[ProviderCall, ...]:
+    """提取当前异常实际携带的脱敏调用，避免轮换后丢失审计。"""
+    if error.provider_calls:
+        return error.provider_calls
+    return () if error.provider_call is None else (error.provider_call,)
 
 
 def _interpretation_semantics_reason(  # noqa: PLR0911

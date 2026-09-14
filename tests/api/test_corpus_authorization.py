@@ -82,6 +82,205 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
     )
 
 
+def _grounded_stream_response(request: httpx.Request) -> httpx.Response:
+    """用请求证据构造完整的百炼兼容 SSE 合成响应。"""
+    payload = json.loads(request.content)
+    data = json.loads(payload["messages"][1]["content"])
+    evidence = data["evidence"][0]
+    content = json.dumps(
+        {
+            "claims": [
+                {
+                    "text": evidence["text"],
+                    "supports": [
+                        {
+                            "support_id": evidence["support_id"],
+                            "quote": evidence["text"],
+                        }
+                    ],
+                }
+            ]
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    events = (
+        {
+            "model": payload["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": content},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "model": payload["model"],
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": "stop"}
+            ],
+            "usage": {
+                "prompt_tokens": 40,
+                "completion_tokens": 10,
+                "total_tokens": 50,
+            },
+        },
+    )
+    body = b"".join(
+        (
+            *(
+                (
+                    "data: "
+                    + json.dumps(
+                        event, ensure_ascii=False, separators=(",", ":")
+                    )
+                    + "\n\n"
+                ).encode()
+                for event in events
+            ),
+            b"data: [DONE]\n\n",
+        )
+    )
+    return httpx.Response(
+        200,
+        content=body,
+        headers={"Content-Type": "text/event-stream; charset=utf-8"},
+    )
+
+
+def test_generation_rotates_after_free_tier_exhaustion_for_stream_and_sync(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """额度 403 只切换已授权模型，并在后续请求跳过已耗尽模型。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "public-synthetic-key")
+    requests: list[httpx.Request] = []
+    qwen38_exhausted = False
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        payload = json.loads(request.content)
+        if payload["model"] == "qwen3.7-flash" or (
+            payload["model"] == "qwen3.8-flash" and qwen38_exhausted
+        ):
+            return httpx.Response(
+                403,
+                json={
+                    "code": "AllocationQuota.FreeTierOnly",
+                    "message": "synthetic-private-provider-detail",
+                },
+            )
+        if payload["stream"] is True:
+            return _grounded_stream_response(request)
+        return _grounded_response(request)
+
+    harness = build_product_harness(
+        tmp_path,
+        transport_factory=lambda _: httpx.MockTransport(respond),
+    )
+    try:
+        project_id, knowledge_base_id = create_project_and_knowledge_base(
+            harness
+        )
+        _upload(harness, project_id, knowledge_base_id)
+        _, _, _, connection_id = create_provider_connections(harness)
+        settings = harness.client.put(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+            headers=harness.write_headers,
+            json={
+                "generation_connection_id": connection_id,
+                "generation_model": "qwen3.7-flash",
+                "generation_fallback_models": [
+                    "qwen3.8-flash",
+                    "qwen3.7-flash-2026-07-15",
+                ],
+            },
+        )
+        assert settings.status_code == 200, settings.text
+        assert settings.json()["generation_fallback_models"] == [
+            "qwen3.8-flash",
+            "qwen3.7-flash-2026-07-15",
+        ]
+        approval = harness.client.post(
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+            "corpus-authorization:approve",
+            headers=harness.write_headers,
+            json={
+                "operations": ["generation"],
+                "expires_at": (
+                    datetime.now(UTC) + timedelta(hours=1)
+                ).isoformat(),
+                "request_limit": 8,
+                "estimated_token_limit": 80_000,
+                "operation_request_limits": {"generation": 8},
+            },
+        )
+        assert approval.status_code == 200, approval.text
+        campaign = ProviderBudgetLedger(
+            harness.runtime.data_dir / "provider-budget.sqlite3",
+            read_only=True,
+        ).campaign(approval.json()["manifest"]["budget_campaign_id"])
+        assert campaign.allowed_models == (
+            "qwen3.7-flash",
+            "qwen3.7-flash-2026-07-15",
+            "qwen3.8-flash",
+        )
+        assert len(campaign.approved_request_identities) == 3
+
+        answer_path = (
+            f"/api/v1/projects/{project_id}/knowledge-bases/"
+            f"{knowledge_base_id}:answer"
+        )
+        streamed = harness.client.post(
+            answer_path,
+            headers=harness.write_headers,
+            json={
+                "query": "设备 MX-41 的维护周期是多少？",
+                "stream": True,
+                "stream_protocol": "rag-answer-sse-v1",
+            },
+        )
+        assert streamed.status_code == 200, streamed.text
+        assert "event: final\n" in streamed.text
+        assert "STREAM_PARTIAL_FAILED" not in streamed.text
+        assert [json.loads(item.content)["model"] for item in requests] == [
+            "qwen3.7-flash",
+            "qwen3.8-flash",
+        ]
+
+        qwen38_exhausted = True
+        generated = harness.client.post(
+            answer_path,
+            headers=harness.write_headers,
+            json={"query": "MX-41 的维护周期是几天？"},
+        )
+        assert generated.status_code == 200, generated.text
+        assert generated.json()["generation_mode"] == "llm"
+        assert [json.loads(item.content)["model"] for item in requests] == [
+            "qwen3.7-flash",
+            "qwen3.8-flash",
+            "qwen3.8-flash",
+            "qwen3.7-flash-2026-07-15",
+        ]
+
+        reused = harness.client.post(
+            answer_path,
+            headers=harness.write_headers,
+            json={"query": "请说明 MX-41 的维护周期。"},
+        )
+        assert reused.status_code == 200, reused.text
+        assert reused.json()["generation_mode"] == "llm"
+        assert [json.loads(item.content)["model"] for item in requests] == [
+            "qwen3.7-flash",
+            "qwen3.8-flash",
+            "qwen3.8-flash",
+            "qwen3.7-flash-2026-07-15",
+            "qwen3.7-flash-2026-07-15",
+        ]
+    finally:
+        harness.close()
+
+
 def test_manifest_approval_enables_generation_and_revision_change_blocks_it(  # noqa: PLR0915
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

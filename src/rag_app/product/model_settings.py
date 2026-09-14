@@ -23,6 +23,9 @@ class KnowledgeBaseModelSettings(FrozenModel):
 
     generation_connection_id: str | None = None
     generation_model: str | None = None
+    generation_fallback_models: tuple[str, ...] = Field(
+        default=(), max_length=4
+    )
     rewrite_enabled: bool = False
     ocr_connection_id: str | None = None
     ocr_model: str | None = None
@@ -47,11 +50,30 @@ class KnowledgeBaseModelSettings(FrozenModel):
         ):
             if bool(connection) != bool(model):
                 raise ValueError("模型与连接必须一起选择或清空。")
+        if self.generation_fallback_models and not self.generation_model:
+            raise ValueError("备用回答模型需要已选择的首选回答模型。")
+        if len(set(self.generation_models)) != len(self.generation_models):
+            raise ValueError("回答模型轮换链不允许重复模型。")
         if self.rewrite_enabled and not self.generation_connection_id:
             raise ValueError("改写需要已选择的回答模型。")
         if self.ocr_enabled and not self.ocr_connection_id:
             raise ValueError("图片识别需要已选择的 OCR 模型。")
         return self
+
+    @property
+    def generation_models(self) -> tuple[str, ...]:
+        """返回按优先级排列且不包含空值的回答模型链。
+
+        Args:
+            无参数；读取当前冻结设置。
+
+        Returns:
+            首选模型与备用模型组成的有序元组。
+
+        """
+        if self.generation_model is None:
+            return ()
+        return (self.generation_model, *self.generation_fallback_models)
 
 
 class ProductModelSettings:
@@ -108,26 +130,35 @@ class ProductModelSettings:
 
         """
         self.get(knowledge_base_id)
-        for connection_id, model, operation in (
-            (
-                settings.generation_connection_id,
-                settings.generation_model,
-                "generation",
-            ),
-            (settings.ocr_connection_id, settings.ocr_model, "image.ocr"),
-        ):
-            if connection_id and model:
-                if connection_id == LOCAL_OCR_CONNECTION_ID:
-                    if operation != "image.ocr" or model != _LOCAL_OCR_MODEL:
-                        raise ValueError(
-                            "本地 OCR 只允许固定 PP-OCRv5 模型身份。"
-                        )
-                    continue
-                provider_connection = self.control.get_connection(connection_id)
+        generation_connection_id = settings.generation_connection_id
+        if generation_connection_id:
+            provider_connection = self.control.get_connection(
+                generation_connection_id
+            )
+            if not provider_connection.enabled:
+                raise ValueError("模型连接已停用。")
+            operations = ["generation"]
+            if settings.rewrite_enabled:
+                operations.extend(("query.interpret", "query.rewrite"))
+            for model in settings.generation_models:
+                for operation in operations:
+                    validate_model(
+                        provider_connection.provider_type, model, operation
+                    )
+        if settings.ocr_connection_id and settings.ocr_model:
+            if settings.ocr_connection_id == LOCAL_OCR_CONNECTION_ID:
+                if settings.ocr_model != _LOCAL_OCR_MODEL:
+                    raise ValueError("本地 OCR 只允许固定 PP-OCRv5 模型身份。")
+            else:
+                provider_connection = self.control.get_connection(
+                    settings.ocr_connection_id
+                )
                 if not provider_connection.enabled:
                     raise ValueError("模型连接已停用。")
                 validate_model(
-                    provider_connection.provider_type, model, operation
+                    provider_connection.provider_type,
+                    settings.ocr_model,
+                    "image.ocr",
                 )
         with self.connections.transaction(write=True) as connection:
             connection.execute(

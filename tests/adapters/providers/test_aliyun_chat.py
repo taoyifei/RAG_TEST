@@ -227,13 +227,22 @@ def test_unknown_compatible_model_does_not_receive_qwen_fields():
     assert "response_format" not in payload
 
 
-def test_qwen_json_object_mode_sets_response_contract() -> None:
+@pytest.mark.parametrize(
+    "model",
+    (
+        "qwen3.8-flash",
+        "qwen3.7-flash-2026-07-15",
+        "qwen3.7-flash",
+    ),
+)
+def test_qwen_json_object_mode_sets_response_contract(model: str) -> None:
     payload = chat_payload(
         (ChatMessage(role="user", content="合成问题"),),
-        AliyunChatConfig(model="qwen3.7-flash", json_mode="json_object"),
+        AliyunChatConfig(model=model, json_mode="json_object"),
     )
 
     assert payload["response_format"] == {"type": "json_object"}
+    assert payload["enable_thinking"] is False
 
 
 def _generation_request() -> GenerationRequest:

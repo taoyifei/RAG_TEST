@@ -22,6 +22,7 @@ from rag_app.core.errors import (
     ProviderAuthenticationError,
     ProviderInputTooLarge,
     ProviderInvalidResponse,
+    ProviderQuotaExhausted,
     ProviderRateLimited,
     ProviderUnavailable,
     QueryCancelled,
@@ -39,6 +40,7 @@ _HTTP_SUCCESS_MIN = 200
 _HTTP_SUCCESS_MAX = 300
 _HTTP_SERVER_ERROR_MIN = 500
 _HTTP_SERVER_ERROR_MAX = 600
+_MAX_ERROR_RESPONSE_BYTES = 64 * 1024
 _StreamValue = TypeVar("_StreamValue")
 
 
@@ -118,6 +120,9 @@ class ProviderHttpClient:
         random_value: Callable[[], float] = random.random,
         observer: Callable[[ProviderCall], None] | None = None,
         defer_success_observation: bool = False,
+        response_error_code: (
+            Callable[[httpx.Response], str | None] | None
+        ) = None,
     ) -> None:
         """冻结 endpoint、连接池和有界重试策略。
 
@@ -133,6 +138,7 @@ class ProviderHttpClient:
             random_value: 返回 ``[0, 1]`` 的 full-jitter 随机源。
             observer: 可选脱敏调用观察器；失败不得覆盖业务结果。
             defer_success_observation: 是否等待响应语义校验后再观察成功。
+            response_error_code: 可选的 Provider 安全错误码解析器。
 
         Returns:
             无返回值。
@@ -175,9 +181,10 @@ class ProviderHttpClient:
         self._random_value = random_value
         self._observer = observer
         self._defer_success_observation = defer_success_observation
+        self._response_error_code = response_error_code
         self._closed = False
 
-    def request_json(  # noqa: PLR0913
+    def request_json(  # noqa: PLR0913, PLR0915
         self,
         method: str,
         path: str,
@@ -314,6 +321,9 @@ class ProviderHttpClient:
                 continue
             category = _status_category(status)
             if category is not None:
+                reason_code = self._safe_response_error_code(response) or (
+                    f"HTTP_{status}"
+                )
                 call = self._call(
                     provider_id,
                     operation,
@@ -322,14 +332,14 @@ class ProviderHttpClient:
                     attempt,
                     started,
                     category.name,
-                    f"HTTP_{status}",
+                    reason_code,
                     input_count,
                     estimated_tokens,
                     None,
                     encountered_rate_limit,
                 )
                 self._observe(call)
-                raise ProviderHttpError(category, f"HTTP_{status}", call)
+                raise ProviderHttpError(category, reason_code, call)
             content = response.content
             if len(content) > self._max_response_bytes:
                 raise self._contract_failure(
@@ -481,6 +491,9 @@ class ProviderHttpClient:
                                 continue
                         category = _status_category(status)
                         if category is not None:
+                            reason_code = self._safe_response_error_code(
+                                response
+                            ) or f"HTTP_{status}"
                             call = self._call(
                                 provider_id,
                                 operation,
@@ -489,7 +502,7 @@ class ProviderHttpClient:
                                 attempt,
                                 started,
                                 category.name,
-                                f"HTTP_{status}",
+                                reason_code,
                                 input_count,
                                 estimated_tokens,
                                 last_retry_after_ms,
@@ -497,7 +510,7 @@ class ProviderHttpClient:
                             )
                             self._observe(call)
                             raise ProviderHttpError(
-                                category, f"HTTP_{status}", call
+                                category, reason_code, call
                             )
                         content_type = response.headers.get("content-type", "")
                         if "text/event-stream" not in content_type.casefold():
@@ -721,6 +734,34 @@ class ProviderHttpClient:
         )
         return diagnostics, category
 
+    def _safe_response_error_code(
+        self, response: httpx.Response
+    ) -> str | None:
+        """只把有限错误外壳交给受信解析器，不保存响应正文。"""
+        resolver = self._response_error_code
+        if resolver is None:
+            return None
+        try:
+            if response.is_stream_consumed:
+                content = response.content
+            else:
+                buffered = bytearray()
+                for chunk in response.iter_bytes():
+                    buffered.extend(chunk)
+                    if len(buffered) > _MAX_ERROR_RESPONSE_BYTES:
+                        return None
+                content = bytes(buffered)
+            if len(content) > _MAX_ERROR_RESPONSE_BYTES:
+                return None
+            bounded = httpx.Response(
+                response.status_code,
+                headers=response.headers,
+                content=content,
+            )
+            return resolver(bounded)
+        except (httpx.HTTPError, TypeError, ValueError):
+            return None
+
     def complete_call(
         self,
         call: ProviderCall,
@@ -874,8 +915,14 @@ def provider_error(failure: ProviderHttpError, *, stage: str) -> RagError:
         带 ``provider_call`` 审计属性的 Core 错误。
 
     """
-    if failure.category is ProviderFailureCategory.AUTH_OR_MODEL:
-        error: RagError = ProviderAuthenticationError(
+    if failure.reason_code == "MODEL_FREE_TIER_EXHAUSTED":
+        error: RagError = ProviderQuotaExhausted(
+            "当前模型的免费调用额度已耗尽。",
+            stage=stage,
+            details={"reason_code": failure.reason_code},
+        )
+    elif failure.category is ProviderFailureCategory.AUTH_OR_MODEL:
+        error = ProviderAuthenticationError(
             "Provider 鉴权或模型身份无效。",
             stage=stage,
             details={"reason_code": failure.reason_code},

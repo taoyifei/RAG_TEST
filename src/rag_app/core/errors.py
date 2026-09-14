@@ -182,6 +182,12 @@ class ProviderAuthenticationError(RagError):
     default_code = "PROVIDER_AUTHENTICATION_ERROR"
 
 
+class ProviderQuotaExhausted(RagError):
+    """单个 Provider 模型的调用额度已耗尽。"""
+
+    default_code = "PROVIDER_QUOTA_EXHAUSTED"
+
+
 class ProviderRateLimited(RagError):
     """Provider 拒绝当前速率。"""
 
@@ -317,6 +323,7 @@ __all__ = [
     "ProviderAuthenticationError",
     "ProviderInputTooLarge",
     "ProviderInvalidResponse",
+    "ProviderQuotaExhausted",
     "ProviderRateLimited",
     "ProviderUnavailable",
     "QueueLimitExceeded",
