@@ -180,16 +180,21 @@ export function ModelServicesPage() {
                     : embedding
                       ? "1024"
                       : "";
-                  const expectedDimension = embedding
-                    ? Number(dimensionText)
-                    : null;
+                  const expectedDimension =
+                    embedding && dimensionText.trim()
+                      ? Number(dimensionText)
+                      : null;
                   const run = runs.find(
                     (item) =>
                       item.operation === operation &&
                       item.provider_model === model &&
                       (!custom ||
                         !embedding ||
-                        item.dimension === expectedDimension),
+                        item.dimension === expectedDimension ||
+                        (expectedDimension === null &&
+                          item.validation_id ===
+                            latestForOperation?.validation_id &&
+                          item.status === "failed")),
                   );
                   const stale =
                     run &&
