@@ -99,6 +99,7 @@ from rag_app.product.verification import operation_policy_identity
 
 TransportFactory = Callable[[ProviderConnection], httpx.BaseTransport]
 _SYNTHETIC_TEXT = "验收示例：审批完成后归档。"
+_SYNTHETIC_CHAT_PROMPT = "只输出“连接正常”四个字，不要解释。"
 _SYNTHETIC_RERANK_DOCUMENTS = (
     "公开合成候选：青岛啤酒创建于 1903 年。",
     "公开合成候选：这段测试文本不包含私有信息。",
@@ -1021,13 +1022,13 @@ def _payload(  # noqa: PLR0911
     if operation in {"generation", "query.interpret", "query.rewrite"}:
         if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
             return openai_compatible_chat_payload(
-                (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
+                (ChatMessage(role="user", content=_SYNTHETIC_CHAT_PROMPT),),
                 OpenAICompatibleChatConfig(
                     model=model, egress_allowed=True, max_output_tokens=256
                 ),
             )
         return chat_payload(
-            (ChatMessage(role="user", content=_SYNTHETIC_TEXT),),
+            (ChatMessage(role="user", content=_SYNTHETIC_CHAT_PROMPT),),
             AliyunChatConfig(model=model, max_output_tokens=256),
         )
     if operation == "image.ocr":
@@ -1257,7 +1258,7 @@ def _estimated_tokens(
 ) -> int:
     if operation in {"generation", "query.interpret", "query.rewrite"}:
         return message_token_estimate(
-            (ChatMessage(role="user", content=_SYNTHETIC_TEXT),)
+            (ChatMessage(role="user", content=_SYNTHETIC_CHAT_PROMPT),)
         )
     if operation == "image.ocr":
         return ocr_input_token_estimate()

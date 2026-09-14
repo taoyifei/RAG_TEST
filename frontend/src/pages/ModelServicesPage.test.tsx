@@ -188,3 +188,85 @@ it("自定义连接按能力接受自由模型 ID，并把向量维度带入真�
     expected_dimension: 3072,
   });
 });
+
+it("自定义向量连接超时后刷新仍显示最近失败", async () => {
+  const connection: ProviderConnection = {
+    connection_id: "conn_timeout",
+    credential_id: "cred_timeout",
+    configuration_version: 1,
+    display_name: "内部向量服务",
+    provider_type: "openai-compatible",
+    status: "configured",
+    endpoint_mode: "custom",
+    api_base_url: "http://10.0.0.21:8001/v1",
+    rerank_protocol: "tei",
+    rerank_path: "/rerank",
+  };
+  vi.spyOn(api, "providerCatalog").mockResolvedValue({
+    catalog_version: "synthetic",
+    providers: [
+      {
+        provider_type: "openai-compatible",
+        display_name: "OpenAI-compatible",
+        models: [],
+        operations: ["embedding.document"],
+        operation_models: {},
+        regions: [],
+        endpoint_profiles: ["default"],
+      },
+    ],
+  });
+  vi.spyOn(api, "listCredentials").mockResolvedValue({
+    items: [
+      {
+        credential_id: "cred_timeout",
+        provider_type: "openai-compatible",
+        configured: true,
+        source: "database_encrypted",
+        masked_hint: "未配置（无鉴权）",
+        key_version: 1,
+        status: "active",
+      },
+    ],
+  });
+  vi.spyOn(api, "listConnections").mockResolvedValue({ items: [connection] });
+  vi.spyOn(api, "listDailyProviderUsage").mockResolvedValue({ items: [] });
+  vi.spyOn(api, "listValidations").mockResolvedValue({
+    items: [
+      {
+        validation_id: "val_timeout",
+        connection_id: "conn_timeout",
+        operation: "embedding.document",
+        provider_model: "vendor/embed-v2",
+        status: "failed",
+        http_category: "timeout",
+        dimension: null,
+        finished_at: "2026-09-14T00:00:00Z",
+        configuration_version: 1,
+        credential_key_version: 1,
+        catalog_version: "synthetic",
+        validation_mode: "live",
+        request_policy_identity: "custom-policy",
+        request_dispatched: true,
+        is_current: true,
+      },
+    ],
+  });
+
+  render(<ModelServicesPage />);
+
+  const card = (await screen.findByText("内部向量服务")).closest("article")!;
+  expect(within(card).getByText("失败")).toBeVisible();
+  expect(
+    within(card).getByText("测试未通过，请查看技术详情或编辑连接后重试。"),
+  ).toBeVisible();
+  expect(within(card).getByLabelText("文档向量模型 ID")).toHaveValue(
+    "vendor/embed-v2",
+  );
+  expect(within(card).getByLabelText("期望 Embedding 维度")).toHaveValue(
+    null,
+  );
+  expect(
+    within(card).getByRole("button", { name: "测试文档向量" }),
+  ).toBeDisabled();
+});

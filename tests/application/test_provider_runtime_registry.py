@@ -224,6 +224,80 @@ def test_jina_validation_uses_strict_embedding_contract(
         harness.close()
 
 
+def test_openai_compatible_chat_validation_uses_bounded_prompt(
+    tmp_path: Path,
+) -> None:
+    """连接探针要求短回答，避免把正常的长度终止误判为服务故障。"""
+    requests: list[httpx.Request] = []
+
+    def _transport(_connection: object) -> httpx.MockTransport:
+        def _handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "model": "internal/Qwen3-8B",
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {"content": "连接正常"},
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 23,
+                        "completion_tokens": 3,
+                        "total_tokens": 26,
+                    },
+                },
+            )
+
+        return httpx.MockTransport(_handler)
+
+    harness = build_product_harness(tmp_path, transport_factory=_transport)
+    try:
+        credential = harness.runtime.credentials.create_encrypted(
+            "openai-compatible", ""
+        )
+        connection = harness.runtime.control.create_connection(
+            ProviderConnectionDraft(
+                display_name="内部 LLM 合同校验",
+                provider_type="openai-compatible",
+                credential_id=credential.credential_id,
+                endpoint_mode="custom",
+                api_base_url="http://internal-llm.example/v1",
+            )
+        )
+
+        result = harness.runtime.providers.validate(
+            connection.connection_id,
+            operation="generation",
+            model="internal/Qwen3-8B",
+        )
+
+        assert result.status == "succeeded"
+        assert result.observed_tokens == 26
+        assert len(requests) == 1
+        body = json.loads(requests[0].content)
+        assert str(requests[0].url) == (
+            "http://internal-llm.example/v1/chat/completions"
+        )
+        assert body == {
+            "model": "internal/Qwen3-8B",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "只输出“连接正常”四个字，不要解释。",
+                }
+            ],
+            "temperature": 0,
+            "max_tokens": 256,
+            "stream": False,
+        }
+        assert result.estimated_tokens > len("连接正常")
+    finally:
+        harness.close()
+
+
 @pytest.mark.parametrize(
     ("response", "error_code"),
     [
