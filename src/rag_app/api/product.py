@@ -275,8 +275,7 @@ def create_product_app(
     _register_product_routes(app, runtime)
     configure_wanshitong_app(
         app,
-        sdk=runtime.sdk,
-        connections=runtime.connections,
+        runtime=runtime,
     )
     _mount_frontend(app, runtime.settings.frontend_dir)
     return app
@@ -394,7 +393,10 @@ def _request_security_error(
 def _rate_limit_bucket(path: str, method: str) -> str | None:
     if method == "POST" and path.endswith(":validate"):
         return "provider-test"
-    if method == "POST" and path.endswith((":search", ":answer")):
+    if method == "POST" and (
+        path.endswith((":search", ":answer"))
+        or path == "/api/public/chat"
+    ):
         return "query"
     if method == "POST" and "/documents" in path:
         return "upload"
@@ -423,7 +425,12 @@ def _apply_security_headers(
         "camera=(), microphone=(), geolocation=()"
     )
     if request.url.path.startswith("/api/"):
-        response.headers["Cache-Control"] = "no-store"
+        cache_control = response.headers.get("Cache-Control", "")
+        directives = {
+            item.strip().casefold() for item in cache_control.split(",")
+        }
+        if "no-store" not in directives:
+            response.headers["Cache-Control"] = "no-store"
     if _effective_scheme(request, runtime) == "https":
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"

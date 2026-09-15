@@ -80,13 +80,7 @@ class FixedScopeService:
             ScopeBindingError: 绑定不存在或已不再有效。
 
         """
-        binding = self._store.read()
-        if binding is None:
-            raise ScopeBindingError(
-                "湾事通固定 Scope 尚未绑定。",
-                stage="wanshitong.scope.status",
-                details={"system_key": WANSHITONG_SCOPE_KEY},
-            )
+        binding = self._require_binding()
         project, knowledge_base = self._validate(binding)
         return ScopeStatus(
             project_id=project.project_id,
@@ -95,6 +89,30 @@ class FixedScopeService:
             knowledge_base_name=knowledge_base.name,
             created_at=binding.created_at,
         )
+
+    def binding(self) -> ScopeBinding:
+        """读取并重新校验供湾事通壳层注入的唯一 Scope。
+
+        Returns:
+            不向公共请求开放的固定 Project/KB 绑定。
+
+        Raises:
+            ScopeBindingError: 绑定不存在或已不再有效。
+
+        """
+        binding = self._require_binding()
+        self._validate(binding)
+        return binding
+
+    def _require_binding(self) -> ScopeBinding:
+        binding = self._store.read()
+        if binding is None:
+            raise ScopeBindingError(
+                "湾事通固定 Scope 尚未绑定。",
+                stage="wanshitong.scope.status",
+                details={"system_key": WANSHITONG_SCOPE_KEY},
+            )
+        return binding
 
     def _validate(
         self, binding: ScopeBinding

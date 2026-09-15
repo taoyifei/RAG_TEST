@@ -14,6 +14,7 @@ from rag_app.composition.product_runtime import (
     ProductRuntimeSettings,
     build_product_runtime,
 )
+from rag_app.product.crypto import initialize_master_key
 from rag_app.product.provider_runtime import build_offline_mock_transport
 from rag_app.wanshitong.api import SCOPE_STATUS_PATH
 from rag_app.wanshitong.errors import ScopeBindingError
@@ -38,10 +39,13 @@ def _runtime_settings(tmp_path: Path) -> ProductRuntimeSettings:
         "synthetic-wanshitong-bootstrap-token", encoding="utf-8"
     )
     bootstrap_token.chmod(0o600)
+    master_key = tmp_path / "master-key"
+    initialize_master_key(master_key)
     return ProductRuntimeSettings(
         data_dir=tmp_path / "data",
         frontend_dir=frontend,
         bootstrap_token_file=bootstrap_token,
+        master_key_file=master_key,
         qdrant_mode="memory",
     )
 
