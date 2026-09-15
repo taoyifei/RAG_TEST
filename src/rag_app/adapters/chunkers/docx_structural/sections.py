@@ -220,9 +220,12 @@ def _body_runs(
     section_id = section_context.section_id
     heading_path = section_context.heading_path
     context_dependencies = section_context.context_dependencies
+    nodes = {node.node_id: node for node in document_ir.nodes}
     runs: list[RunPlan] = []
     pending: list[AtomicUnit] = []
-    pending_key: tuple[ChunkRole, object, object] | None = None
+    pending_key: (
+        tuple[ChunkRole, object, object, tuple[str, str, str]] | None
+    ) = None
 
     def flush() -> None:
         """把当前连续原子冻结为一个 run，并清空暂存状态。
@@ -314,6 +317,7 @@ def _body_runs(
             role,
             dict(node.metadata).get("num_id") if attributes else None,
             attributes.restart_group if attributes else None,
+            _source_group(node, nodes),
         )
         if pending_key is not None and key != pending_key:
             flush()
@@ -343,6 +347,28 @@ def _body_runs(
         )
     flush()
     return tuple(runs)
+
+
+def _source_group(
+    node: DocumentNode,
+    nodes: dict[str, DocumentNode],
+) -> tuple[str, str, str]:
+    """返回与 Chunk 来源不变量一致的物理来源分组。"""
+    current = node
+    while current.parent_node_id is not None:
+        parent = nodes[current.parent_node_id]
+        if parent.kind in {NodeKind.TABLE, NodeKind.NOTE, NodeKind.COMMENT}:
+            return (
+                node.anchor.part_uri,
+                node.anchor.story_kind.value,
+                parent.node_id,
+            )
+        current = parent
+    return (
+        node.anchor.part_uri,
+        node.anchor.story_kind.value,
+        "root",
+    )
 
 
 def _note_sections(
@@ -637,8 +663,15 @@ def _ordered_section_keys(
     return tuple(keys)
 
 
-def _node_order(node: DocumentNode) -> tuple[int, int, str]:
-    return (node.anchor.ordinal, node.order, node.node_id)
+def _node_order(node: DocumentNode) -> tuple[int, int, int, int, str]:
+    page_index = node.anchor.page_index
+    return (
+        int(page_index is not None),
+        page_index if page_index is not None else -1,
+        node.anchor.ordinal,
+        node.order,
+        node.node_id,
+    )
 
 
 def _looks_like_filename_only(text: str) -> bool:

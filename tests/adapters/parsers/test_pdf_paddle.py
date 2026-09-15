@@ -399,6 +399,136 @@ def test_pdf_tables_remain_isolated_by_page_through_existing_chunker() -> None:
         assert pages_in_chunk == {expected_page}
 
 
+def test_pdf_paragraph_chunks_never_cross_physical_page_boundaries() -> None:
+    content = _pdf_bytes(2)
+    pages = [
+        _raw_page("第一页短段落", block_id="paragraph-1"),
+        _raw_page("第二页短段落", block_id="paragraph-2"),
+    ]
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "errorCode": 0,
+                "result": {"layoutParsingResults": pages},
+            },
+        )
+
+    parser = PdfIrParser(
+        _self_hosted_parser(httpx.MockTransport(handle)),
+    )
+    parsed = parser.parse(_source(content), ParsingPolicy(), _context())
+    chunker = DocxStructuralChunker()
+
+    chunked = chunker.chunk(
+        parsed.document_ir,
+        ChunkingContext(
+            chunker_fingerprint=chunker.fingerprint,
+            index_revision_id=deterministic_id(
+                "irev",
+                parsed.document_ir.version.document_version_id,
+                chunker.fingerprint,
+            ),
+        ),
+    )
+
+    assert len(chunked.chunks) == 2
+    assert [
+        {
+            span.source_anchor.page_index
+            for span in chunk.source_spans
+            if span.span_type is SourceSpanKind.PDF_PARSED_TEXT
+            and span.source_anchor is not None
+        }
+        for chunk in chunked.chunks
+    ] == [{0}, {1}]
+
+
+def test_pdf_heading_context_follows_physical_page_order() -> None:
+    content = _pdf_bytes(2)
+    pages = [
+        {
+            "prunedResult": {
+                "width": 100,
+                "height": 200,
+                "parsing_res_list": [
+                    {
+                        "block_id": "acid-heading",
+                        "block_label": "paragraph_title",
+                        "block_order": 0,
+                        "block_content": "5.4 耐酸性能",
+                        "block_bbox": [5, 10, 95, 30],
+                    },
+                    {
+                        "block_id": "acid-method",
+                        "block_label": "text",
+                        "block_order": 1,
+                        "block_content": "耐酸试验方法甲。",
+                        "block_bbox": [5, 35, 95, 55],
+                    },
+                ],
+            }
+        },
+        {
+            "prunedResult": {
+                "width": 100,
+                "height": 200,
+                "parsing_res_list": [
+                    {
+                        "block_id": "alkali-heading",
+                        "block_label": "paragraph_title",
+                        "block_order": 0,
+                        "block_content": "5.5 耐碱性能",
+                        "block_bbox": [5, 10, 95, 30],
+                    },
+                    {
+                        "block_id": "alkali-method",
+                        "block_label": "text",
+                        "block_order": 1,
+                        "block_content": "耐碱试验方法乙。",
+                        "block_bbox": [5, 35, 95, 55],
+                    },
+                ],
+            }
+        },
+    ]
+
+    def handle(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "errorCode": 0,
+                "result": {"layoutParsingResults": pages},
+            },
+        )
+
+    parser = PdfIrParser(
+        _self_hosted_parser(httpx.MockTransport(handle)),
+    )
+    parsed = parser.parse(_source(content), ParsingPolicy(), _context())
+    chunker = DocxStructuralChunker()
+    chunks = chunker.chunk(
+        parsed.document_ir,
+        ChunkingContext(
+            chunker_fingerprint=chunker.fingerprint,
+            index_revision_id=deterministic_id(
+                "irev",
+                parsed.document_ir.version.document_version_id,
+                chunker.fingerprint,
+            ),
+        ),
+    ).chunks
+
+    by_text = {
+        chunk.citation_text: chunk
+        for chunk in chunks
+        if "试验方法" in chunk.citation_text
+    }
+    assert by_text["耐酸试验方法甲。"].heading_path[-1] == "5.4 耐酸性能"
+    assert by_text["耐碱试验方法乙。"].heading_path[-1] == "5.5 耐碱性能"
+
+
 def test_table_without_provider_identity_is_rejected() -> None:
     content = _pdf_bytes(1)
 
