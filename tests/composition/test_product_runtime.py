@@ -15,6 +15,7 @@ from rag_app.adapters.parsers.doc_conversion import (
     SandboxedLibreOfficeConverter,
 )
 from rag_app.application.provider_health import ProviderCircuitBreaker
+from rag_app.composition.product_runtime import ProductRuntimeSettings
 from rag_app.core.models import Job
 from rag_app.core.policies import CircuitBreakerPolicy
 from rag_app.product.models import ProviderConnection
@@ -66,20 +67,59 @@ def test_product_runtime_migrates_and_keeps_offline_base_mode(
         )
         status = harness.runtime.sdk.health()
         with harness.runtime.connections.transaction() as connection:
-            migration_count = int(
-                connection.execute(
-                    "SELECT count(*) FROM schema_migrations"
-                ).fetchone()[0]
+            migration_versions = tuple(
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
             )
-
         assert project_id.startswith("prj_")
         assert knowledge_base_id.startswith("kb_")
         assert status.runtime_identity == "product-runtime-p10.5"
         assert status.primary_live_evaluation_status == "not_verified"
         assert status.remote_production_profile_ready is False
-        assert migration_count == 29
+        assert migration_versions == tuple(range(1, 31))
     finally:
         harness.close()
+
+
+def test_product_runtime_only_enables_http_for_explicit_wanshitong_demo(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bootstrap = tmp_path / "bootstrap-token"
+    bootstrap.write_text("synthetic-bootstrap-token", encoding="utf-8")
+    monkeypatch.setenv("RAG_ADMIN_BOOTSTRAP_TOKEN_FILE", str(bootstrap))
+    monkeypatch.setenv("RAG_WANSHITONG_DEMO_ALLOW_HTTP", "true")
+    expected_urls = frozenset(
+        {
+            "http://127.0.0.1:8091",
+            "http://127.0.0.1:8092",
+            "http://127.0.0.1:8000",
+        }
+    )
+    monkeypatch.setenv(
+        "RAG_WANSHITONG_EMBEDDING_BASE_URL", "http://127.0.0.1:8091/"
+    )
+    monkeypatch.setenv(
+        "RAG_WANSHITONG_RERANKER_BASE_URL", "http://127.0.0.1:8092"
+    )
+    monkeypatch.setenv("RAG_WANSHITONG_LLM_BASE_URL", "http://127.0.0.1:8000")
+
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "universal")
+    universal = ProductRuntimeSettings.from_environment()
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    wanshitong = ProductRuntimeSettings.from_environment()
+    monkeypatch.setenv("RAG_WANSHITONG_DEMO_ALLOW_HTTP", "false")
+    disabled = ProductRuntimeSettings.from_environment()
+
+    assert universal.allowed_http_openai_compatible_base_urls == frozenset()
+    assert wanshitong.allowed_http_openai_compatible_base_urls == expected_urls
+    assert disabled.allowed_http_openai_compatible_base_urls == frozenset()
+
+    monkeypatch.setenv("RAG_WANSHITONG_DEMO_ALLOW_HTTP", "1")
+    with pytest.raises(ValueError, match="仅支持 true 或 false"):
+        ProductRuntimeSettings.from_environment()
 
 
 def test_product_runtime_without_provider_keeps_fts_exact_flow(

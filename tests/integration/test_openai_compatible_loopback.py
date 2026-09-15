@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from rag_app.adapters.providers.aliyun_chat import ChatMessage
 from rag_app.adapters.providers.http_common import ProviderHttpClient
@@ -25,7 +26,13 @@ from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleRerankerAdapter,
     OpenAICompatibleRerankerConfig,
 )
+from rag_app.api.product import create_product_app
+from rag_app.cli import main as cli_main
 from rag_app.clients.resilience import StreamCancellation
+from rag_app.composition.product_runtime import (
+    ProductRuntimeSettings,
+    build_product_runtime,
+)
 from rag_app.core.errors import (
     ProviderAuthenticationError,
     ProviderInvalidResponse,
@@ -38,8 +45,14 @@ from rag_app.core.models import (
     RerankRequest,
 )
 from rag_app.core.ports import GenerationRequest
+from rag_app.product.crypto import initialize_master_key
+from rag_app.wanshitong.errors import InternalModelConfigurationError
+from rag_app.wanshitong.internal_model_settings import InternalModelSettings
+from rag_app.wanshitong.models import ScopeBinding
+from rag_app.wanshitong.scope_store import ScopeBindingStore
 from tests.adapters.parsers.docx.fixtures import build_package
 from tests.product_support import (
+    ProductHarness,
     build_product_harness,
     create_project_and_knowledge_base,
 )
@@ -345,6 +358,46 @@ def _generation_request() -> GenerationRequest:
             ),
         ),
     )
+
+
+def test_wanshitong_internal_model_settings_require_explicit_primary_http() -> (
+    None
+):
+    environment = {
+        "RAG_PRODUCT_MODE": "wanshitong",
+        "RAG_WANSHITONG_DEMO_ALLOW_HTTP": "true",
+        "RAG_WANSHITONG_EMBEDDING_BASE_URL": "http://127.0.0.1:8091/",
+        "RAG_WANSHITONG_RERANKER_BASE_URL": "http://127.0.0.1:8092",
+        "RAG_WANSHITONG_LLM_BASE_URL": "http://127.0.0.1:8000",
+    }
+
+    settings = InternalModelSettings.from_environment(environment)
+
+    assert settings.embedding_base_url == "http://127.0.0.1:8091"
+    assert settings.embedding_dimension == 1024
+    assert settings.reranker_protocol == "tei"
+    assert settings.reranker_path == "/rerank"
+
+    with pytest.raises(ValueError, match="显式选择一个 Primary"):
+        InternalModelSettings.from_environment(
+            {
+                **environment,
+                "RAG_WANSHITONG_EMBEDDING_BASE_URL": (
+                    '["http://127.0.0.1:8091"]'
+                ),
+            }
+        )
+    with pytest.raises(ValueError, match="显式设置"):
+        InternalModelSettings.from_environment(
+            {
+                **environment,
+                "RAG_WANSHITONG_DEMO_ALLOW_HTTP": "false",
+            }
+        )
+    with pytest.raises(ValueError, match="仅允许"):
+        InternalModelSettings.from_environment(
+            {**environment, "RAG_PRODUCT_MODE": "universal"}
+        )
 
 
 def test_real_loopback_embedding_rerank_and_chat_protocols() -> None:
@@ -667,7 +720,11 @@ def test_product_api_real_loopback_grounded_qa_and_trace(  # noqa: PLR0915
 ) -> None:
     """默认 Product 经真实 TCP 回环完成配置、入库、检索和引用回答。"""
     with _loopback_server() as (base_url, state):
-        harness = build_product_harness(tmp_path, transport_factory=None)
+        harness = build_product_harness(
+            tmp_path,
+            transport_factory=None,
+            allowed_http_openai_compatible_base_urls=frozenset({base_url}),
+        )
         try:
             catalog = harness.client.get("/api/v1/provider-catalog")
             catalog.raise_for_status()
@@ -974,5 +1031,274 @@ def test_product_api_real_loopback_grounded_qa_and_trace(  # noqa: PLR0915
             assert endpoint_impact.json()["impact"] == (
                 "NEW_INDEX_REVISION_REQUIRED"
             )
+        finally:
+            harness.close()
+
+
+def _set_wanshitong_environment(
+    tmp_path: Path,
+    base_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> str:
+    """为 CLI 与随后重启的 Product Runtime 配置同一隔离数据目录。"""
+    frontend = tmp_path / "frontend"
+    (frontend / "assets").mkdir(parents=True)
+    (frontend / "index.html").write_text(
+        "<!doctype html><title>湾事通核心闭环</title>", encoding="utf-8"
+    )
+    bootstrap_token = "-".join(("synthetic", "wanshitong", "bootstrap"))
+    bootstrap = tmp_path / "bootstrap-token"
+    bootstrap.write_text(bootstrap_token, encoding="utf-8")
+    bootstrap.chmod(0o600)
+    master_key = tmp_path / "master-key"
+    initialize_master_key(master_key)
+
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("RAG_FRONTEND_DIR", str(frontend))
+    monkeypatch.setenv("RAG_ADMIN_BOOTSTRAP_TOKEN_FILE", str(bootstrap))
+    monkeypatch.setenv("RAG_MASTER_KEY_FILE", str(master_key))
+    monkeypatch.setenv("RAG_QDRANT_MODE", "memory")
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    monkeypatch.setenv("RAG_WANSHITONG_DEMO_ALLOW_HTTP", "true")
+    monkeypatch.setenv("RAG_WANSHITONG_EMBEDDING_BASE_URL", base_url)
+    monkeypatch.setenv("RAG_WANSHITONG_RERANKER_BASE_URL", base_url)
+    monkeypatch.setenv("RAG_WANSHITONG_LLM_BASE_URL", base_url)
+    monkeypatch.setenv("RAG_WANSHITONG_EMBEDDING_DIMENSION", "3")
+    monkeypatch.delenv("RAG_QDRANT_URL", raising=False)
+    monkeypatch.delenv("RAG_QDRANT_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("RAG_TEST_NETWORK", raising=False)
+    return bootstrap_token
+
+
+def _parse_sse_events(text: str) -> list[tuple[str, dict[str, object]]]:
+    """解析测试客户端缓冲后的版本化 SSE 事件。"""
+    lines = text.splitlines()
+    return [
+        (
+            lines[index].removeprefix("event: "),
+            json.loads(lines[index + 1].removeprefix("data: ")),
+        )
+        for index in range(len(lines) - 1)
+        if lines[index].startswith("event: ")
+        and lines[index + 1].startswith("data: ")
+    ]
+
+
+def _configure_and_verify_wanshitong_cli(
+    state: _State,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> tuple[dict[str, object], int]:
+    assert cli_main(["wanshitong", "configure-internal-models"]) == 0
+    first_report = json.loads(capsys.readouterr().out)
+    assert isinstance(first_report, dict)
+    request_count = len(state.requests)
+    assert cli_main(["wanshitong", "configure-internal-models"]) == 0
+    second_report = json.loads(capsys.readouterr().out)
+
+    assert second_report == first_report
+    assert len(state.requests) == request_count
+    assert first_report["status"] == "configured"
+    assert first_report["ocr_api_path"] == "/v1/ocr"
+    assert first_report["ocr_configured"] is False
+    assert first_report["pdf_layout_parsing_configured"] is False
+
+    monkeypatch.setenv("RAG_WANSHITONG_LLM_MODEL", "different-internal-model")
+    with pytest.raises(InternalModelConfigurationError, match="模型锁"):
+        cli_main(["wanshitong", "configure-internal-models"])
+    assert len(state.requests) == request_count
+    monkeypatch.setenv("RAG_WANSHITONG_LLM_MODEL", "Qwen/Qwen3-8B-AWQ")
+    return first_report, request_count
+
+
+def _build_authenticated_wanshitong_harness(
+    bootstrap_token: str,
+) -> tuple[ProductHarness, int]:
+    settings = ProductRuntimeSettings.from_environment()
+    assert settings.allowed_http_openai_compatible_base_urls
+    runtime = build_product_runtime(settings)
+    app = create_product_app(runtime)
+    client = TestClient(app)
+    try:
+        unauthenticated = client.post("/api/v1/provider-connections", json={})
+        login = client.post(
+            "/api/v1/console/session",
+            json={"bootstrap_token": bootstrap_token},
+        )
+        login.raise_for_status()
+        return ProductHarness(
+            runtime=runtime,
+            client=client,
+            csrf=str(login.json()["csrf_token"]),
+            bootstrap_token=bootstrap_token,
+        ), unauthenticated.status_code
+    except Exception:
+        client.close()
+        runtime.close()
+        raise
+
+
+def _assert_control_plane_and_lock(
+    harness: ProductHarness,
+    report: dict[str, object],
+    unauthenticated_status: int,
+) -> ScopeBinding:
+    runtime = harness.runtime
+    binding = ScopeBindingStore(runtime.connections).read()
+    assert binding is not None
+    assert binding.knowledge_base_id == report["knowledge_base_id"]
+    assert len(runtime.control.list_connections()) == 3
+    active_profile = runtime.control.active_profile(binding.knowledge_base_id)
+    assert active_profile is not None
+    assert (
+        active_profile.profile_revision_id
+        == (report["retrieval_profile_revision_id"])
+    )
+    model_settings = runtime.models.get(binding.knowledge_base_id)
+    assert (
+        model_settings.generation_connection_id == report["llm_connection_id"]
+    )
+    assert model_settings.generation_model == "Qwen/Qwen3-8B-AWQ"
+
+    assert unauthenticated_status == 401
+    locked = harness.client.post(
+        "/api/v1/provider-connections",
+        headers=harness.write_headers,
+        json={},
+    )
+    assert locked.status_code == 409
+    assert locked.json()["error"]["code"] == "MODEL_CONFIGURATION_LOCKED"
+    locked_model_settings = harness.client.put(
+        f"/api/v1/knowledge-bases/{binding.knowledge_base_id}/model-settings",
+        headers=harness.write_headers,
+        json={},
+    )
+    assert locked_model_settings.status_code == 409
+    assert (
+        locked_model_settings.json()["error"]["code"]
+        == "MODEL_CONFIGURATION_LOCKED"
+    )
+    readable = harness.client.get("/api/v1/provider-connections")
+    assert readable.status_code == 200
+    assert len(readable.json()["items"]) == 3
+    return binding
+
+
+def _upload_wanshitong_document(
+    harness: ProductHarness, binding: ScopeBinding
+) -> None:
+    job = harness.runtime.sdk.create_document(
+        binding.project_id,
+        binding.knowledge_base_id,
+        display_name="湾事通公开合成手册.docx",
+        content=build_package(
+            "<w:p><w:r><w:t>设备 MX-41 的维护周期为 14 天。</w:t></w:r></w:p>"
+        ),
+        media_type=_DOCX_MEDIA_TYPE,
+        idempotency_key="wanshitong-openai-compatible-loopback",
+    )
+    current = job
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        current = harness.runtime.sdk.get_job(job.job_id)
+        if current.state.value not in {"queued", "running"}:
+            break
+        sleep(0.01)
+    assert current.state.value == "succeeded", current
+    assert current.revision_id is not None
+
+
+def _stream_wanshitong_answer(
+    harness: ProductHarness, binding: ScopeBinding
+) -> dict[str, object]:
+    streamed = harness.client.post(
+        f"/api/v1/projects/{binding.project_id}/knowledge-bases/"
+        f"{binding.knowledge_base_id}:answer",
+        headers=harness.write_headers,
+        json={
+            "query": "设备 MX-41 的维护周期是多少？",
+            "stream": True,
+            "stream_protocol": "rag-answer-sse-v1",
+        },
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _parse_sse_events(streamed.text)
+    claims = [payload for event, payload in events if event == "claim"]
+    finals = [payload for event, payload in events if event == "final"]
+    assert claims
+    assert len(finals) == 1
+    assert not [event for event, _ in events if event == "error"]
+    claim = claims[0]["claim"]
+    assert isinstance(claim, dict)
+    assert "设备 MX-41 的维护周期为 14 天。" in str(claim["text"])
+    final = finals[0]
+    assert final["status"] == "ANSWERABLE"
+    assert final["generation_mode"] == "llm"
+    assert "设备 MX-41 的维护周期为 14 天。" in str(final["answer"])
+    assert final["evidence"]
+    return final
+
+
+def _assert_history_trace_and_paths(
+    harness: ProductHarness,
+    state: _State,
+    final: dict[str, object],
+) -> None:
+    trace_id = str(final["trace_id"])
+    history = harness.client.get(f"/api/v1/history/{trace_id}")
+    assert history.status_code == 200, history.text
+    usage = {
+        item["operation"]: item for item in history.json()["provider_usage"]
+    }
+    assert usage["embedding.query"]["call_count"] == 1
+    assert usage["reranking"]["call_count"] == 1
+    assert usage["generation"]["call_count"] == 1
+
+    trace = harness.client.get(f"/api/v1/admin/operational-traces/{trace_id}")
+    assert trace.status_code == 200, trace.text
+    provider_spans = [
+        item
+        for item in trace.json()["spans"]
+        if item["name"].startswith("provider.")
+    ]
+    assert provider_spans
+    assert {item["attributes"]["provider_id"] for item in provider_spans} == {
+        "openai-compatible"
+    }
+
+    paths = [path for path, _, _ in state.requests]
+    assert paths.count("/embeddings") == 4
+    assert paths.count("/rerank") == 2
+    assert paths.count("/chat/completions") == 2
+    assert set(paths) == {"/embeddings", "/rerank", "/chat/completions"}
+    assert all(
+        "authorization" not in headers for _, _, headers in state.requests
+    )
+
+
+def test_wanshitong_cli_real_tcp_product_vertical_slice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """湾事通引导经唯一 Product Runtime 完成索引、SSE、历史与 Trace。"""
+    with _loopback_server() as (base_url, state):
+        bootstrap_token = _set_wanshitong_environment(
+            tmp_path, base_url, monkeypatch
+        )
+        report, request_count = _configure_and_verify_wanshitong_cli(
+            state, monkeypatch, capsys
+        )
+        assert len(state.requests) == request_count
+        harness, unauthenticated_status = (
+            _build_authenticated_wanshitong_harness(bootstrap_token)
+        )
+        try:
+            binding = _assert_control_plane_and_lock(
+                harness, report, unauthenticated_status
+            )
+            _upload_wanshitong_document(harness, binding)
+            final = _stream_wanshitong_answer(harness, binding)
+            _assert_history_trace_and_paths(harness, state, final)
         finally:
             harness.close()

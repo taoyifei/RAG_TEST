@@ -33,4 +33,57 @@ class ScopeStatus(FrozenModel):
     created_at: str = Field(min_length=1)
 
 
-__all__ = ["ScopeBinding", "ScopeStatus"]
+class InternalModelConnectionBinding(FrozenModel):
+    """把一个湾事通模型角色固定到既有 Provider Connection。"""
+
+    schema_version: Literal[1] = 1
+    role: Literal["embedding", "reranker", "llm"]
+    connection_id: str = Field(pattern=r"^conn_[0-9a-f]{32}$")
+    configuration_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    created_at: str = Field(min_length=1)
+
+
+class InternalModelProfileBinding(FrozenModel):
+    """把固定知识库绑定到一个 Universal Retrieval Profile。"""
+
+    schema_version: Literal[1] = 1
+    profile_revision_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    configuration_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    created_at: str = Field(min_length=1)
+
+
+class InternalModelReadyBinding(FrozenModel):
+    """标记内网模型、检索方案与生成设置已完整冻结。"""
+
+    schema_version: Literal[1] = 1
+    configuration_fingerprint: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    configured_at: str = Field(min_length=1)
+
+
+class InternalModelConfigurationReport(FrozenModel):
+    """CLI 可输出且不包含端点和 Secret 的配置摘要。"""
+
+    mode: Literal["wanshitong"] = "wanshitong"
+    status: Literal["configured"] = "configured"
+    knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")
+    embedding_connection_id: str = Field(pattern=r"^conn_[0-9a-f]{32}$")
+    reranker_connection_id: str = Field(pattern=r"^conn_[0-9a-f]{32}$")
+    llm_connection_id: str = Field(pattern=r"^conn_[0-9a-f]{32}$")
+    retrieval_profile_revision_id: str = Field(pattern=r"^pfr_[0-9a-f]{32}$")
+    embedding_model: str = Field(min_length=1, max_length=200)
+    embedding_dimension: int = Field(gt=0, le=65536)
+    reranker_model: str = Field(min_length=1, max_length=200)
+    llm_model: str = Field(min_length=1, max_length=200)
+    ocr_api_path: Literal["/v1/ocr"] = "/v1/ocr"
+    ocr_configured: bool
+    pdf_layout_parsing_configured: bool
+
+
+__all__ = [
+    "InternalModelConfigurationReport",
+    "InternalModelConnectionBinding",
+    "InternalModelProfileBinding",
+    "InternalModelReadyBinding",
+    "ScopeBinding",
+    "ScopeStatus",
+]

@@ -6,7 +6,11 @@ from fastapi import FastAPI
 
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.sdk import RagSdk
-from rag_app.wanshitong.api import register_scope_status_routes
+from rag_app.wanshitong.api import (
+    register_model_configuration_lock,
+    register_scope_status_routes,
+)
+from rag_app.wanshitong.model_store import InternalModelBindingStore
 from rag_app.wanshitong.scope_service import FixedScopeService
 from rag_app.wanshitong.scope_store import ScopeBindingStore
 from rag_app.wanshitong.settings import WanshitongSettings
@@ -38,6 +42,9 @@ def configure_wanshitong_app(
     binding = service.ensure()
     app.state.wanshitong_scope_binding = binding
     app.state.wanshitong_scope_service = service
+    register_model_configuration_lock(
+        app, InternalModelBindingStore(connections)
+    )
     register_scope_status_routes(app, service)
     return service
 

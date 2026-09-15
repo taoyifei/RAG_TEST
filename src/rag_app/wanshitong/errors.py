@@ -11,4 +11,10 @@ class ScopeBindingError(ConfigurationError):
     default_code = "WANSHITONG_SCOPE_INVALID"
 
 
-__all__ = ["ScopeBindingError"]
+class InternalModelConfigurationError(ConfigurationError):
+    """内网模型引导状态损坏或与冻结配置不一致。"""
+
+    default_code = "WANSHITONG_MODEL_CONFIGURATION_INVALID"
+
+
+__all__ = ["InternalModelConfigurationError", "ScopeBindingError"]

@@ -114,8 +114,10 @@ from rag_app.product.ocr_adapters import (
     LocalProductOcrAdapter,
 )
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
+from rag_app.product.openai_compatible import normalize_base_url
 from rag_app.product.pdf_parsing import ProductPdfParsing
 from rag_app.product.provider_runtime import (
+    ProviderRuntimeOptions,
     ProviderRuntimeRegistry,
     TransportFactory,
     build_offline_mock_transport,
@@ -140,7 +142,41 @@ from rag_app.tracing import TraceRecorder, TraceStore
 
 _MIN_LOCAL_OCR_TOKEN_LENGTH = 32
 _MAX_LOCAL_OCR_TOKEN_LENGTH = 4096
+_WANSHITONG_MODEL_BASE_URL_KEYS = (
+    "RAG_WANSHITONG_EMBEDDING_BASE_URL",
+    "RAG_WANSHITONG_RERANKER_BASE_URL",
+    "RAG_WANSHITONG_LLM_BASE_URL",
+)
 _ResourceT = TypeVar("_ResourceT")
+
+
+def _strict_environment_boolean(key: str, *, default: bool) -> bool:
+    """读取只接受 true/false 的环境开关。"""
+    fallback = "true" if default else "false"
+    raw = os.environ.get(key, fallback).strip().casefold()
+    if raw not in {"true", "false"}:
+        raise ValueError(f"{key} 仅支持 true 或 false。")
+    return raw == "true"
+
+
+def _wanshitong_http_base_url_allowlist() -> frozenset[str]:
+    """仅在显式 Demo 模式下返回三类固定配置中的 HTTP 端点。"""
+    if os.environ.get(
+        "RAG_PRODUCT_MODE", "universal"
+    ).strip().casefold() != "wanshitong" or not _strict_environment_boolean(
+        "RAG_WANSHITONG_DEMO_ALLOW_HTTP", default=False
+    ):
+        return frozenset()
+    normalized = (
+        normalize_base_url(raw)
+        for key in _WANSHITONG_MODEL_BASE_URL_KEYS
+        if (raw := os.environ.get(key, "").strip())
+    )
+    return frozenset(
+        base_url
+        for base_url in normalized
+        if urlparse(base_url).scheme == "http"
+    )
 
 
 def _can_reuse_generation_cache(
@@ -195,6 +231,7 @@ class ProductRuntimeSettings:
     )
     local_ocr_model: str = "pp-ocrv5-server"
     local_ocr_timeout_seconds: float = 35.0
+    allowed_http_openai_compatible_base_urls: frozenset[str] = frozenset()
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -280,6 +317,9 @@ class ProductRuntimeSettings:
             local_ocr_model=os.environ.get("RAG_OCR_MODEL", "pp-ocrv5-server"),
             local_ocr_timeout_seconds=float(
                 os.environ.get("RAG_OCR_TIMEOUT_SECONDS", "35")
+            ),
+            allowed_http_openai_compatible_base_urls=(
+                _wanshitong_http_base_url_allowlist()
             ),
         )
 
@@ -2117,11 +2157,16 @@ def build_product_runtime(  # noqa: PLR0915
         and os.environ.get("RAG_TEST_NETWORK") == "offline"
     ):
         transport_factory = build_offline_mock_transport
-    providers = ProviderRuntimeRegistry(
+    providers = ProviderRuntimeRegistry.with_options(
         credentials,
         control,
+        options=ProviderRuntimeOptions(
+            budget_ledger_path=data_dir / "provider-budget.sqlite3",
+            allowed_http_openai_compatible_base_urls=(
+                settings.allowed_http_openai_compatible_base_urls
+            ),
+        ),
         transport_factory=transport_factory,
-        budget_ledger_path=data_dir / "provider-budget.sqlite3",
         local_ocr_adapter=local_ocr_adapter,
     )
     corpus_authorizations = CorpusAuthorizationStore(

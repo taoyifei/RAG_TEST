@@ -52,6 +52,7 @@ def build_product_harness(  # noqa: PLR0913
     qdrant_api_key_file: Path | None = None,
     local_ocr_endpoints: tuple[str, ...] = (),
     local_ocr_token_file: Path | None = None,
+    allowed_http_openai_compatible_base_urls: frozenset[str] = frozenset(),
 ) -> ProductHarness:
     """构建不访问网络的完整产品测试环境。
 
@@ -64,6 +65,7 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_api_key_file: Qdrant URL 模式的 0600 Key 文件。
         local_ocr_endpoints: 可选内部 OCR 服务端点。
         local_ocr_token_file: 可选内部 OCR Bearer 的 0600 文件。
+        allowed_http_openai_compatible_base_urls: 真实回环测试允许的精确端点。
 
     Returns:
         已登录的 Product Harness。
@@ -91,6 +93,9 @@ def build_product_harness(  # noqa: PLR0913
         qdrant_api_key_file=qdrant_api_key_file,
         local_ocr_endpoints=local_ocr_endpoints,
         local_ocr_token_file=local_ocr_token_file,
+        allowed_http_openai_compatible_base_urls=(
+            allowed_http_openai_compatible_base_urls
+        ),
     )
     runtime = build_product_runtime(
         settings,

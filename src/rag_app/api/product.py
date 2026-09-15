@@ -262,6 +262,11 @@ def create_product_app(
         admin_token=internal_admin,
         debug_enabled=runtime.settings.debug_enabled,
     )
+    configure_wanshitong_app(
+        app,
+        sdk=runtime.sdk,
+        connections=runtime.connections,
+    )
     _register_auth_middleware(
         app,
         runtime,
@@ -273,11 +278,6 @@ def create_product_app(
         ),
     )
     _register_product_routes(app, runtime)
-    configure_wanshitong_app(
-        app,
-        sdk=runtime.sdk,
-        connections=runtime.connections,
-    )
     _mount_frontend(app, runtime.settings.frontend_dir)
     return app
 

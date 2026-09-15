@@ -299,6 +299,47 @@ def test_openai_compatible_chat_validation_uses_bounded_prompt(
 
 
 @pytest.mark.parametrize(
+    "allowed_urls",
+    [frozenset(), frozenset({"http://127.0.0.1:8"})],
+)
+def test_real_openai_compatible_http_requires_exact_allowlist(
+    tmp_path: Path,
+    allowed_urls: frozenset[str],
+) -> None:
+    harness = build_product_harness(
+        tmp_path,
+        transport_factory=None,
+        allowed_http_openai_compatible_base_urls=allowed_urls,
+    )
+    try:
+        credential = harness.runtime.credentials.create_encrypted(
+            "openai-compatible", ""
+        )
+        connection = harness.runtime.control.create_connection(
+            ProviderConnectionDraft(
+                display_name="不允许的明文兼容端点",
+                provider_type="openai-compatible",
+                credential_id=credential.credential_id,
+                api_base_url="http://127.0.0.1:9",
+            )
+        )
+
+        result = harness.runtime.providers.validate(
+            connection.connection_id,
+            operation="embedding.query",
+            model="synthetic-embedding",
+            expected_dimension=3,
+        )
+
+        assert result.status == "failed"
+        assert result.request_dispatched is False
+        assert result.http_category == "invalid_configuration"
+        assert result.safe_error_code == "PROVIDER_CONFIGURATION_INVALID"
+    finally:
+        harness.close()
+
+
+@pytest.mark.parametrize(
     ("response", "error_code"),
     [
         (httpx.Response(302), "PROVIDER_UPSTREAM_ERROR"),

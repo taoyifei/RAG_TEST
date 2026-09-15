@@ -137,6 +137,14 @@ class _ProbeDiagnostics:
     stage: str = "local_configuration"
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderRuntimeOptions:
+    """Provider Registry 的组合根级资源与网络策略。"""
+
+    budget_ledger_path: Path | None = None
+    allowed_http_openai_compatible_base_urls: frozenset[str] = frozenset()
+
+
 class ProviderRuntimeRegistry:
     """复用 httpx Client，并在 Credential Rotation 后关闭旧实例。"""
 
@@ -167,11 +175,37 @@ class ProviderRuntimeRegistry:
         self._transport_factory = transport_factory
         self._budget_ledger_path = budget_ledger_path
         self._local_ocr_adapter = local_ocr_adapter
+        self._allowed_http_openai_compatible_base_urls: frozenset[str] = (
+            frozenset()
+        )
         self._clients: dict[tuple[str, int, int, str], httpx.Client] = {}
         self._client_validation_modes: dict[
             tuple[str, int, int, str], Literal["mock", "live"]
         ] = {}
         self._lock = RLock()
+
+    @classmethod
+    def with_options(
+        cls,
+        credentials: CredentialStore,
+        control: ProductControlStore,
+        *,
+        options: ProviderRuntimeOptions,
+        transport_factory: TransportFactory | None = None,
+        local_ocr_adapter: LocalProductOcrAdapter | None = None,
+    ) -> ProviderRuntimeRegistry:
+        """保留既有构造契约，并由组合根显式注入新增网络策略。"""
+        registry = cls(
+            credentials,
+            control,
+            transport_factory=transport_factory,
+            budget_ledger_path=options.budget_ledger_path,
+            local_ocr_adapter=local_ocr_adapter,
+        )
+        registry._allowed_http_openai_compatible_base_urls = (
+            options.allowed_http_openai_compatible_base_urls
+        )
+        return registry
 
     @property
     def client_count(self) -> int:
@@ -865,6 +899,7 @@ class ProviderRuntimeRegistry:
             if self._transport_factory is None
             else self._transport_factory(connection)
         )
+        self._require_endpoint_transport_policy(connection, transport)
         validation_mode: Literal["mock", "live"] = (
             "mock" if isinstance(transport, httpx.MockTransport) else "live"
         )
@@ -918,6 +953,7 @@ class ProviderRuntimeRegistry:
             if self._transport_factory is None
             else self._transport_factory(connection)
         )
+        self._require_endpoint_transport_policy(connection, transport)
         resolved_transport: httpx.BaseTransport | None
         if connection.provider_type == OPENAI_COMPATIBLE_PROVIDER:
             resolved_transport = transport
@@ -964,10 +1000,41 @@ class ProviderRuntimeRegistry:
                 and connection.provider_type == "aliyun-model-studio"
                 else None
             ),
-            allow_http=connection.provider_type == OPENAI_COMPATIBLE_PROVIDER,
+            allow_http=(
+                connection.provider_type == OPENAI_COMPATIBLE_PROVIDER
+                and self._http_allowed(connection, transport)
+            ),
             use_budget_transport=(
                 connection.provider_type != OPENAI_COMPATIBLE_PROVIDER
             ),
+        )
+
+    def _require_endpoint_transport_policy(
+        self,
+        connection: ProviderConnection,
+        transport: httpx.BaseTransport | None,
+    ) -> None:
+        """拒绝未由组合根显式开启的真实明文兼容端点。"""
+        if (
+            connection.provider_type == OPENAI_COMPATIBLE_PROVIDER
+            and urlsplit(_base_url(connection)).scheme == "http"
+            and not self._http_allowed(connection, transport)
+        ):
+            raise _ProviderConfigurationError(
+                "OpenAI-compatible HTTP 端点仅允许湾事通显式 Demo 模式。",
+                stage="provider.openai_compatible.config",
+                code="PROVIDER_HTTP_NOT_ALLOWED",
+            )
+
+    def _http_allowed(
+        self,
+        connection: ProviderConnection,
+        transport: httpx.BaseTransport | None,
+    ) -> bool:
+        """测试 Mock 不产生网络；真实 HTTP 仅放行配置中的精确端点。"""
+        return isinstance(transport, httpx.MockTransport) or (
+            _base_url(connection)
+            in self._allowed_http_openai_compatible_base_urls
         )
 
 
@@ -1417,6 +1484,7 @@ def _safe_response_details(
 
 
 __all__ = [
+    "ProviderRuntimeOptions",
     "ProviderRuntimeRegistry",
     "TransportFactory",
     "build_offline_mock_transport",

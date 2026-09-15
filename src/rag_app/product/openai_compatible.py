@@ -12,7 +12,7 @@ _MAX_RERANK_PATH_LENGTH = 300
 
 
 def normalize_base_url(value: str | None) -> str:
-    """规范化允许内网 HTTP 的兼容服务基础 URL。
+    """规范化兼容服务基础 URL，传输层另行决定是否允许 HTTP。
 
     Args:
         value: 页面输入的基础 URL，不得包含凭据、查询参数或片段。
