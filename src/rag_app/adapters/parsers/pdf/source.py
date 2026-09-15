@@ -1,11 +1,11 @@
-"""PDF 本地签名、可读性、页数和文本层检查。"""
+"""PDF 本地签名、可读性、页数和文本层结构检查。"""
 
 from __future__ import annotations
 
 import hashlib
 import io
 
-from pypdf import PdfReader
+from pypdf import PageObject, PdfReader
 
 from rag_app.core.errors import InvalidDocument
 from rag_app.core.models import ParseContext, ParseSource, PdfSourceInspection
@@ -91,12 +91,7 @@ def inspect_pdf_source(
     for page in reader.pages:
         if context.cancel_check is not None:
             context.cancel_check()
-        try:
-            # 只保留布尔判断；这些字符绝不进入 IR、Chunk 或缓存。
-            has_text = bool((page.extract_text() or "").strip())
-        except Exception:
-            has_text = False
-        native_text_layer.append(has_text)
+        native_text_layer.append(_has_native_text_operators(page))
     return PdfSourceInspection(
         source_sha256=hashlib.sha256(source.content).hexdigest(),
         page_count=page_count,
@@ -114,6 +109,28 @@ def _pdf_reader(content: bytes) -> PdfReader:
             code="PDF_DAMAGED",
             details={"error_type": type(error).__name__},
         ) from None
+
+
+def _has_native_text_operators(page: PageObject) -> bool:
+    """只检查文本绘制操作，不解码或提取 PDF 正文。
+
+    Args:
+        page: pypdf 物理页面对象。
+
+    Returns:
+        页面内容流包含文本绘制操作时为 True。
+
+    """
+    try:
+        contents = page.get_contents()
+        if contents is None:
+            return False
+        return any(
+            operator in {b"Tj", b"TJ", b"'", b'"'}
+            for _operands, operator in contents.operations
+        )
+    except Exception:
+        return False
 
 
 __all__ = ["inspect_pdf_source"]
