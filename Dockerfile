@@ -65,8 +65,6 @@ COPY requirements.runtime.lock ./
 RUN python -m pip install \
     --disable-pip-version-check \
     --no-cache-dir \
-    --retries=5 \
-    --timeout=120 \
     --requirement=/app/requirements.runtime.lock
 
 ARG VCS_REF=development-unset
