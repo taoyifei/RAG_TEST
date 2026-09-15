@@ -247,6 +247,7 @@ export default function AppShell() {
           <div>
             <span className="eyebrow">安全管理控制台</span>
             <h1>{active}</h1>
+            <span className="demo-format-notice">当前 Demo 仅支持 DOCX</span>
           </div>
           <label className="space-selector">
             当前空间
@@ -307,35 +308,35 @@ export default function AppShell() {
           )}
           {session.authenticated && (
             <>
-              {path === "/" && <Dashboard go={go} />}
-              {path === "/projects" && <ProjectsPage go={go} />}
-              {path === "/knowledge-bases" && (
+              {path === routes.workspace && <Dashboard go={go} />}
+              {path === routes.projects && <ProjectsPage go={go} />}
+              {path === routes.knowledgeBases && (
                 <KnowledgeBasesPage key={scope.projectId} go={go} />
               )}
-              {path === "/documents" && (
+              {path === routes.documents && (
                 <ScopeGuard active={activeScope}>
                   <DocumentsPage key={scope.kbId} go={go} />
                 </ScopeGuard>
               )}
-              {path === "/jobs" && (
+              {path === routes.jobs && (
                 <JobsPage key={`${scope.projectId}:${scope.kbId}`} go={go} />
               )}
-              {path === "/revision" && (
+              {path === routes.revision && (
                 <ScopeGuard active={activeScope}>
                   <RevisionPage key={scope.kbId} go={go} />
                 </ScopeGuard>
               )}
-              {path === "/retrieval" && (
+              {path === routes.retrieval && (
                 <ScopeGuard active={activeScope}>
                   <QueryPage key={scope.kbId} mode="search" go={go} />
                 </ScopeGuard>
               )}
-              {path === "/chat" && (
+              {path === routes.chat && (
                 <ScopeGuard active={activeScope}>
                   <QueryPage key={scope.kbId} mode="answer" go={go} />
                 </ScopeGuard>
               )}
-              {path === "/system" && <SystemPage />}
+              {path === routes.system && <SystemPage />}
               {path === routes.history && (
                 <HistoryPage key={`${scope.projectId}:${scope.kbId}`} go={go} />
               )}

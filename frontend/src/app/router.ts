@@ -1,23 +1,40 @@
 import { useEffect, useState } from "react";
 
 export const routes = {
-  workspace: "/",
-  projects: "/projects",
-  knowledgeBases: "/knowledge-bases",
-  documents: "/documents",
-  jobs: "/jobs",
-  revision: "/revision",
-  retrieval: "/retrieval",
-  chat: "/chat",
-  history: "/history",
-  traces: "/operational-traces",
-  modelServices: "/model-services",
-  retrievalProfiles: "/retrieval-profiles",
-  system: "/system",
-  access: "/access",
+  workspace: "/admin",
+  projects: "/admin/projects",
+  knowledgeBases: "/admin/knowledge-bases",
+  documents: "/admin/documents",
+  jobs: "/admin/jobs",
+  revision: "/admin/revision",
+  retrieval: "/admin/retrieval",
+  chat: "/admin/chat",
+  history: "/admin/history",
+  traces: "/admin/operational-traces",
+  modelServices: "/admin/model-services",
+  retrievalProfiles: "/admin/retrieval-profiles",
+  system: "/admin/system",
+  access: "/admin/access",
 } as const;
 
 export type AppRoute = (typeof routes)[keyof typeof routes];
+
+const legacyAdminRoutes: Readonly<Record<string, AppRoute>> = {
+  "/": routes.workspace,
+  "/projects": routes.projects,
+  "/knowledge-bases": routes.knowledgeBases,
+  "/documents": routes.documents,
+  "/jobs": routes.jobs,
+  "/revision": routes.revision,
+  "/retrieval": routes.retrieval,
+  "/chat": routes.chat,
+  "/history": routes.history,
+  "/operational-traces": routes.traces,
+  "/model-services": routes.modelServices,
+  "/retrieval-profiles": routes.retrievalProfiles,
+  "/system": routes.system,
+  "/access": routes.access,
+};
 
 function isAppRoute(value: string): value is AppRoute {
   return Object.values(routes).includes(value as AppRoute);
@@ -40,11 +57,12 @@ export function useRouter() {
     return () => window.removeEventListener("popstate", listener);
   }, []);
   const go = (next: string) => {
-    if (!isAppRoute(next)) throw new Error(`未知页面路径：${next}`);
+    const resolved = isAppRoute(next) ? next : legacyAdminRoutes[next];
+    if (!resolved) throw new Error(`未知页面路径：${next}`);
     const url = new URL(window.location.href);
-    url.pathname = next;
+    url.pathname = resolved;
     window.history.pushState({}, "", `${url.pathname}${url.search}`);
-    setPath(next);
+    setPath(resolved);
   };
   return { path, go };
 }
