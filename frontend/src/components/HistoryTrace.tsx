@@ -13,6 +13,14 @@ import { OcrEvidenceSource } from "./DocumentImages";
 import { PdfEvidenceSource } from "./PdfEvidenceSource";
 import { QueryFeedback } from "./QueryFeedback";
 
+function maskedOwner(entry: HistoryEntry): string {
+  const value = entry as HistoryEntry & {
+    owner_masked_id?: string | null;
+    owner_sha256?: string | null;
+  };
+  return value.owner_masked_id || value.owner_sha256 || "";
+}
+
 export function historyTime(value: string): string {
   const parsed = new Date(value);
   return Number.isNaN(parsed.valueOf())
@@ -23,9 +31,16 @@ export function historyTime(value: string): string {
 export function HistoryTrace({
   traceId,
   onClose,
+  loadEntry = api.historyDetail,
+  restricted = false,
 }: {
   traceId: string;
   onClose: () => void;
+  loadEntry?: (
+    traceId: string,
+    signal?: AbortSignal,
+  ) => Promise<HistoryEntry>;
+  restricted?: boolean;
 }) {
   const { tokens } = useConsole();
   const [entry, setEntry] = useState<HistoryEntry>();
@@ -39,8 +54,7 @@ export function HistoryTrace({
   useEffect(() => {
     const controller = new AbortController();
     activeRequest.current = controller;
-    void api
-      .historyDetail(traceId, controller.signal)
+    void loadEntry(traceId, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) setEntry(value);
       })
@@ -48,7 +62,7 @@ export function HistoryTrace({
         if (!controller.signal.aborted) setError(reason);
       });
     return () => controller.abort();
-  }, [traceId]);
+  }, [loadEntry, traceId]);
   async function openSource(evidence: Evidence) {
     const controller = activeRequest.current;
     if (!entry?.active_index_revision_id || !controller) return;
@@ -70,8 +84,7 @@ export function HistoryTrace({
         setSourceError(reason);
         // 来源权限变化后清除旧正文，重新读取受保护的历史详情。
         setEntry(undefined);
-        void api
-          .historyDetail(traceId, controller.signal)
+        void loadEntry(traceId, controller.signal)
           .then((value) => {
             if (!controller.signal.aborted) setEntry(value);
           })
@@ -125,6 +138,7 @@ export function HistoryTrace({
               {historyTime(entry.created_at)}
             </time>
           </div>
+          {!restricted && (
           <div className="row-actions" aria-label="历史导出">
             <button
               type="button"
@@ -148,6 +162,7 @@ export function HistoryTrace({
               仅下载技术 Trace JSON
             </button>
           </div>
+          )}
           {exportError !== undefined && <ErrorPanel error={exportError} />}
           {entry.body_available ? (
             <>
@@ -164,6 +179,12 @@ export function HistoryTrace({
           <dl className="detail-grid">
             <dt>结果原因</dt>
             <dd>{entry.reason_code ?? "请求尚未结束"}</dd>
+            {restricted && maskedOwner(entry) && (
+              <>
+                <dt>匿名用户</dt>
+                <dd>{maskedOwner(entry)}</dd>
+              </>
+            )}
             <dt>模型</dt>
             <dd>{entry.models?.join("、") || "未调用远程模型"}</dd>
             <dt>总耗时</dt>
@@ -251,30 +272,36 @@ export function HistoryTrace({
                 <article className="panel" key={evidence.evidence_id}>
                   <strong>{evidence.source_label}</strong>
                   <blockquote>{evidence.citation_text}</blockquote>
-                  <OcrEvidenceSource
-                    evidence={evidence}
-                    projectId={entry.project_id}
-                    kbId={entry.knowledge_base_id}
-                  />
-                  <PdfEvidenceSource
-                    evidence={evidence}
-                    projectId={entry.project_id}
-                    kbId={entry.knowledge_base_id}
-                    token={tokens.admin}
-                  />
+                  {!restricted && (
+                    <>
+                      <OcrEvidenceSource
+                        evidence={evidence}
+                        projectId={entry.project_id}
+                        kbId={entry.knowledge_base_id}
+                      />
+                      <PdfEvidenceSource
+                        evidence={evidence}
+                        projectId={entry.project_id}
+                        kbId={entry.knowledge_base_id}
+                        token={tokens.admin}
+                      />
+                    </>
+                  )}
                   <small>{evidence.selection_reason}</small>
-                  <button
-                    disabled={sourceBusy || !entry.active_index_revision_id}
-                    onClick={() => void openSource(evidence)}
-                  >
-                    核对当前原文
-                  </button>
+                  {!restricted && (
+                    <button
+                      disabled={sourceBusy || !entry.active_index_revision_id}
+                      onClick={() => void openSource(evidence)}
+                    >
+                      核对当前原文
+                    </button>
+                  )}
                 </article>
               ))}
             </section>
           )}
           {entry.diagnostics && <DiagnosticsView value={entry.diagnostics} />}
-          {new Set(["ANSWERED", "REFUSED"]).has(entry.status) && (
+          {!restricted && new Set(["ANSWERED", "REFUSED"]).has(entry.status) && (
             <QueryFeedback
               key={entry.trace_id}
               projectId={entry.project_id}

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import FastAPI, Request
 
 from rag_app.core.errors import PolicyDenied
+from rag_app.wanshitong.errors import ScopeBindingError
 from rag_app.wanshitong.models import ScopeStatus
 from rag_app.wanshitong.scope_service import FixedScopeService
 
@@ -38,7 +39,14 @@ def register_scope_status_routes(
                 "湾事通固定 Scope 状态仅允许管理员读取。",
                 stage="wanshitong.scope.status",
             )
-        return service.status()
+        try:
+            return service.status()
+        except ScopeBindingError as error:
+            return ScopeStatus(
+                ready=False,
+                blocker_code=error.code,
+                blocker_message=error.safe_message,
+            )
 
 
 __all__ = ["SCOPE_STATUS_PATH", "register_scope_status_routes"]

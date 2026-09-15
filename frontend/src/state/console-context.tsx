@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -9,6 +10,8 @@ import {
 } from "react";
 
 import { ApiError, api, type Tokens } from "../api/client";
+import type { ProductMode } from "../app/product-mode";
+import { wanshitongAdminApi } from "../wanshitong/admin/adminApi";
 
 export interface Scope {
   projectId: string;
@@ -21,7 +24,15 @@ interface SessionState {
   ready: boolean;
 }
 
+export interface FixedScopeState {
+  state: "not_applicable" | "idle" | "loading" | "ready" | "blocked";
+  projectName: string;
+  knowledgeBaseName: string;
+  reason: string;
+}
+
 interface ConsoleState {
+  productMode: ProductMode;
   tokens: Tokens;
   session: SessionState;
   login: (bootstrapToken: string) => Promise<void>;
@@ -31,10 +42,18 @@ interface ConsoleState {
   setProject: (projectId: string) => void;
   setKnowledgeBase: (kbId: string, revisionId?: string | null) => void;
   setRevision: (revisionId: string) => void;
+  fixedScope: FixedScopeState;
+  recheckFixedScope: () => void;
 }
 
 const Context = createContext<ConsoleState | null>(null);
 const EMPTY_SCOPE: Scope = { projectId: "", kbId: "", revisionId: "" };
+const EMPTY_FIXED_SCOPE: FixedScopeState = {
+  state: "idle",
+  projectName: "",
+  knowledgeBaseName: "",
+  reason: "",
+};
 
 function readScope(): Scope {
   const parameters = new URLSearchParams(window.location.search);
@@ -75,12 +94,26 @@ function persistScope(scope: Scope): void {
   window.history.replaceState({}, "", `${url.pathname}${url.search}`);
 }
 
-export function ConsoleProvider({ children }: { children: ReactNode }) {
+export function ConsoleProvider({
+  children,
+  productMode = "universal",
+}: {
+  children: ReactNode;
+  productMode?: ProductMode;
+}) {
   const [session, setSession] = useState<SessionState>({
     authenticated: false,
     ready: false,
   });
-  const [scope, setScopeState] = useState<Scope>(readScope);
+  const [scope, setScopeState] = useState<Scope>(() =>
+    productMode === "wanshitong" ? EMPTY_SCOPE : readScope(),
+  );
+  const [fixedScope, setFixedScope] = useState<FixedScopeState>(() =>
+    productMode === "wanshitong"
+      ? EMPTY_FIXED_SCOPE
+      : { ...EMPTY_FIXED_SCOPE, state: "not_applicable" },
+  );
+  const [scopeRefresh, setScopeRefresh] = useState(0);
   const resumed = useRef(false);
   const sessionGeneration = useRef(0);
   useEffect(() => {
@@ -102,12 +135,64 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
         setSession({ authenticated: false, ready: true });
       });
   }, []);
-  const updateScope = (next: Scope) => {
-    persistScope(next);
-    setScopeState(next);
-  };
+  const updateScope = useCallback(
+    (next: Scope) => {
+      if (productMode === "universal") persistScope(next);
+      setScopeState(next);
+    },
+    [productMode],
+  );
+  useEffect(() => {
+    if (productMode !== "wanshitong") return;
+    if (!session.authenticated) return;
+    const controller = new AbortController();
+    void wanshitongAdminApi
+      .scope(controller.signal)
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        if (
+          !value.ready ||
+          !value.project_id ||
+          !value.knowledge_base_id
+        ) {
+          setFixedScope({
+            ...EMPTY_FIXED_SCOPE,
+            state: "blocked",
+            reason:
+              value.blocker_message ||
+              value.blocker_code ||
+              "固定 Project 或 Knowledge Base 尚未就绪。",
+          });
+          return;
+        }
+        setScopeState({
+          projectId: value.project_id,
+          kbId: value.knowledge_base_id,
+          revisionId: "",
+        });
+        setFixedScope({
+          state: "ready",
+          projectName: value.project_name || "湾事通",
+          knowledgeBaseName: value.knowledge_base_name || "湾事通知识库",
+          reason: "",
+        });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setFixedScope({
+          ...EMPTY_FIXED_SCOPE,
+          state: "blocked",
+          reason:
+            error instanceof Error
+              ? error.message
+              : "固定 Scope 检查失败，请稍后重试。",
+        });
+      });
+    return () => controller.abort();
+  }, [productMode, scopeRefresh, session.authenticated]);
   const value = useMemo<ConsoleState>(
     () => ({
+      productMode,
       tokens: session.authenticated
         ? { admin: "cookie-session", query: "cookie-session" }
         : { admin: "", query: "" },
@@ -115,11 +200,19 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       login: async (bootstrapToken) => {
         sessionGeneration.current += 1;
         await api.login(bootstrapToken);
+        if (productMode === "wanshitong") {
+          setScopeState(EMPTY_SCOPE);
+          setFixedScope({ ...EMPTY_FIXED_SCOPE, state: "loading" });
+        }
         setSession({ authenticated: true, ready: true });
       },
       logout: async () => {
         sessionGeneration.current += 1;
         await api.logout();
+        if (productMode === "wanshitong") {
+          setScopeState(EMPTY_SCOPE);
+          setFixedScope(EMPTY_FIXED_SCOPE);
+        }
         setSession({ authenticated: false, ready: true });
       },
       rotateSession: async () => {
@@ -127,16 +220,25 @@ export function ConsoleProvider({ children }: { children: ReactNode }) {
       },
       scope,
       setProject: (projectId) =>
+        productMode === "universal" &&
         updateScope({ projectId, kbId: "", revisionId: "" }),
       setKnowledgeBase: (kbId, revisionId) =>
+        productMode === "universal" &&
         updateScope({
           ...scope,
           kbId,
           revisionId: revisionId ?? "",
         }),
-      setRevision: (revisionId) => updateScope({ ...scope, revisionId }),
+      setRevision: (revisionId) =>
+        productMode === "universal" && updateScope({ ...scope, revisionId }),
+      fixedScope,
+      recheckFixedScope: () => {
+        setScopeState(EMPTY_SCOPE);
+        setFixedScope({ ...EMPTY_FIXED_SCOPE, state: "loading" });
+        setScopeRefresh((value) => value + 1);
+      },
     }),
-    [scope, session],
+    [fixedScope, productMode, scope, session, updateScope],
   );
   return <Context.Provider value={value}>{children}</Context.Provider>;
 }

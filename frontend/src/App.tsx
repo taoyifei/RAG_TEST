@@ -1,29 +1,70 @@
 import { useEffect, useState } from "react";
 
 import AppShell from "./app/AppShell";
+import { detectProductMode, type ProductMode } from "./app/product-mode";
+import { isWanshitongAdminPath } from "./app/router";
+import { ErrorPanel } from "./components/ui";
 import { WanshitongApp } from "./public/WanshitongApp";
 import { ConsoleProvider } from "./state/console-context";
+import { WanshitongAdminShell } from "./wanshitong/admin/WanshitongAdminShell";
 
-function isAdminPath(pathname: string): boolean {
-  return pathname === "/admin" || pathname.startsWith("/admin/");
-}
+type ModeState =
+  | { state: "loading" }
+  | { state: "ready"; mode: ProductMode }
+  | { state: "error"; error: unknown };
 
 export default function App() {
-  const [admin, setAdmin] = useState(() =>
-    isAdminPath(window.location.pathname),
-  );
+  const [location, setLocation] = useState(window.location.pathname);
+  const [modeState, setModeState] = useState<ModeState>({ state: "loading" });
+  const [modeRefresh, setModeRefresh] = useState(0);
   useEffect(() => {
-    const handleLocation = () =>
-      setAdmin(isAdminPath(window.location.pathname));
+    const handleLocation = () => setLocation(window.location.pathname);
     window.addEventListener("popstate", handleLocation);
     return () => window.removeEventListener("popstate", handleLocation);
   }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void detectProductMode(controller.signal)
+      .then((mode) => setModeState({ state: "ready", mode }))
+      .catch((error: unknown) => setModeState({ state: "error", error }));
+    return () => controller.abort();
+  }, [modeRefresh]);
 
-  if (!admin) {
+  if (modeState.state === "loading") {
+    return (
+      <main className="mode-screen" id="main-content">
+        <p role="status">正在确认产品模式…</p>
+      </main>
+    );
+  }
+  if (modeState.state === "error") {
+    return (
+      <main className="mode-screen" id="main-content">
+        <ErrorPanel error={modeState.error} />
+        <button
+          className="primary"
+          onClick={() => {
+            setModeState({ state: "loading" });
+            setModeRefresh((value) => value + 1);
+          }}
+        >
+          重新连接
+        </button>
+      </main>
+    );
+  }
+  if (modeState.mode === "wanshitong" && !isWanshitongAdminPath(location)) {
     return <WanshitongApp />;
   }
+  if (modeState.mode === "wanshitong") {
+    return (
+      <ConsoleProvider productMode="wanshitong">
+        <WanshitongAdminShell />
+      </ConsoleProvider>
+    );
+  }
   return (
-    <ConsoleProvider>
+    <ConsoleProvider productMode="universal">
       <AppShell />
     </ConsoleProvider>
   );

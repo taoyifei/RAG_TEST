@@ -50,6 +50,9 @@ from rag_app.product.retrieval_authorization import (
     RetrievalIngestionAuthorizationStatus,
 )
 from rag_app.product.verification import validation_is_current
+from rag_app.wanshitong.admin_policy import (
+    model_configuration_lock_response,
+)
 from rag_app.wanshitong.bootstrap import configure_wanshitong_app
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -347,6 +350,9 @@ def _register_auth_middleware(
         auth_error = _authenticate_request(request, runtime, config)
         if auth_error is not None:
             return _apply_security_headers(request, auth_error, runtime)
+        lock_response = model_configuration_lock_response(request)
+        if lock_response is not None:
+            return _apply_security_headers(request, lock_response, runtime)
         response = await call_next(request)
         if response.headers.get("X-Trace-Id"):
             _LOGGER.info(

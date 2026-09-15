@@ -30,7 +30,7 @@ export function FirstRunWizard({
   open: boolean;
   onClose: () => void;
 }) {
-  const { login, session } = useConsole();
+  const { login, productMode, session } = useConsole();
   const [bootstrapToken, setBootstrapToken] = useState("");
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
@@ -84,11 +84,19 @@ export function FirstRunWizard({
             </button>
           )}
         </header>
-        <ol className="onboarding-steps">
-          <li>输入部署人员提供的一次性管理口令。</li>
-          <li>在“模型服务”中保存或引用服务凭据。</li>
-          <li>创建知识库并应用检索方案。</li>
-        </ol>
+        {productMode === "wanshitong" ? (
+          <ol className="onboarding-steps">
+            <li>输入部署人员提供的一次性管理口令。</li>
+            <li>登录后自动检查并绑定湾事通固定知识范围。</li>
+            <li>模型和检索配置在页面中只读展示。</li>
+          </ol>
+        ) : (
+          <ol className="onboarding-steps">
+            <li>输入部署人员提供的一次性管理口令。</li>
+            <li>在“模型服务”中保存或引用服务凭据。</li>
+            <li>创建知识库并应用检索方案。</li>
+          </ol>
+        )}
         <form className="stack" onSubmit={submit}>
           <label>
             管理口令
