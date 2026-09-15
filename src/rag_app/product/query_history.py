@@ -1105,6 +1105,65 @@ class ProductQueryHistory:
                 cursor = connection.execute("DELETE FROM query_history")
         return cursor.rowcount
 
+    def clear_scope(self, project_id: str, knowledge_base_id: str) -> int:
+        """只清理一个 Project/KB 的历史和旧平面事件。
+
+        该方法复用全局清理的写锁与导出 lease 保护，但不触碰其他
+        Scope，也不删除独立 Operational Trace。
+
+        Args:
+            project_id: 目标项目 ID。
+            knowledge_base_id: 目标知识库 ID。
+
+        Returns:
+            实际清理的历史记录数。
+
+        Raises:
+            Conflict: 任一 History 支持包仍持有活动导出 lease。
+
+        """
+        with (
+            self._write_lock,
+            self._connections.transaction(write=True) as connection,
+        ):
+            now = datetime.now(UTC)
+            _purge_export_journal(connection, now)
+            if _export_conflicts_with_clear(
+                connection,
+                now=now,
+                expired_only=False,
+            ):
+                raise Conflict(
+                    "问答历史支持包正在导出，请稍后重试清理。",
+                    stage="history.clear",
+                    retryable=True,
+                )
+            rows = connection.execute(
+                "SELECT trace_id FROM query_history "
+                "WHERE project_id=? AND knowledge_base_id=?",
+                (project_id, knowledge_base_id),
+            ).fetchall()
+            aliases = {
+                alias
+                for row in rows
+                for alias in (
+                    normalize_trace_id(str(row["trace_id"])),
+                    normalize_trace_id(str(row["trace_id"])).removeprefix(
+                        "trace_"
+                    ),
+                )
+            }
+            connection.executemany(
+                "DELETE FROM query_trace_events WHERE trace_id=?",
+                ((alias,) for alias in aliases),
+            )
+            cursor = connection.execute(
+                "DELETE FROM query_history "
+                "WHERE project_id=? AND knowledge_base_id=?",
+                (project_id, knowledge_base_id),
+            )
+        return cursor.rowcount
+
     def _export_snapshot(  # noqa: PLR0913
         self,
         connection: sqlite3.Connection,

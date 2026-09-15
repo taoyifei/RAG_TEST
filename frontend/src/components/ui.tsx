@@ -35,6 +35,8 @@ export function StatusBadge({ value }: { value: string | boolean }) {
     "healthy",
     "mock_validated",
     "live_validated",
+    "live",
+    "ready",
     "就绪",
   ].includes(raw);
   const bad = [

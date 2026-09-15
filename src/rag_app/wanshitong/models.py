@@ -24,13 +24,23 @@ class ScopeStatus(FrozenModel):
     """管理员可读取的固定 Scope 当前状态。"""
 
     mode: Literal["wanshitong"] = "wanshitong"
-    ready: Literal[True] = True
+    ready: bool = True
     system_key: Literal["wanshitong-default-scope"] = WANSHITONG_SCOPE_KEY
-    project_id: str = Field(pattern=r"^prj_[0-9a-f]{32}$")
-    project_name: str = Field(min_length=1, max_length=200)
-    knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")
-    knowledge_base_name: str = Field(min_length=1, max_length=200)
-    created_at: str = Field(min_length=1)
+    project_id: str | None = Field(
+        default=None, pattern=r"^prj_[0-9a-f]{32}$"
+    )
+    project_name: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+    knowledge_base_id: str | None = Field(
+        default=None, pattern=r"^kb_[0-9a-f]{32}$"
+    )
+    knowledge_base_name: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+    created_at: str | None = Field(default=None, min_length=1)
+    blocker_code: str | None = None
+    blocker_message: str | None = None
 
 
 __all__ = ["ScopeBinding", "ScopeStatus"]

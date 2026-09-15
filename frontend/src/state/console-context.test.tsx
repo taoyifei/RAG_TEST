@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ConsoleProvider, useConsole } from "./console-context";
 
+function requestPath(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.href : input.url;
+}
+
 function Probe() {
   const { scope, setProject, setKnowledgeBase } = useConsole();
   return (
@@ -26,6 +31,18 @@ function AuthProbe() {
       <button onClick={() => void login("synthetic-bootstrap-value")}>
         登录
       </button>
+    </>
+  );
+}
+
+function FixedScopeProbe() {
+  const { fixedScope, recheckFixedScope, scope } = useConsole();
+  return (
+    <>
+      <output>
+        {`${fixedScope.state}|${scope.projectId}|${scope.kbId}|${fixedScope.reason}`}
+      </output>
+      <button onClick={recheckFixedScope}>重新检查 Scope</button>
     </>
   );
 }
@@ -101,5 +118,90 @@ describe("内存范围", () => {
     });
 
     expect(screen.getByRole("status")).toHaveTextContent("已登录");
+  });
+});
+
+describe("湾事通固定范围", () => {
+  it("忽略 URL 与 sessionStorage，并可从阻断状态重新检查", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/admin?project=prj_wrong&knowledgeBase=kb_wrong",
+    );
+    sessionStorage.setItem(
+      "rag.console.scope",
+      JSON.stringify({ projectId: "prj_stale", kbId: "kb_stale" }),
+    );
+    let scopeCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const path = requestPath(input);
+      if (path === "/api/v1/console/session") {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              authenticated: true,
+              session_id: "sess_wst",
+              csrf_token: "csrf_wst",
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      if (path === "/api/v1/admin/wanshitong/scope") {
+        scopeCalls += 1;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(
+              scopeCalls === 1
+                ? {
+                    mode: "wanshitong",
+                    ready: false,
+                    project_id: null,
+                    project_name: null,
+                    knowledge_base_id: null,
+                    knowledge_base_name: null,
+                    blocker_code: "WANSHITONG_SCOPE_INVALID",
+                    blocker_message: "固定知识范围已损坏。",
+                  }
+                : {
+                    mode: "wanshitong",
+                    ready: true,
+                    project_id: "prj_fixed",
+                    project_name: "湾事通",
+                    knowledge_base_id: "kb_fixed",
+                    knowledge_base_name: "湾事通知识库",
+                    blocker_code: null,
+                    blocker_message: null,
+                  },
+            ),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    });
+    const user = userEvent.setup();
+    render(
+      <ConsoleProvider productMode="wanshitong">
+        <FixedScopeProbe />
+      </ConsoleProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "blocked|||固定知识范围已损坏。",
+      ),
+    );
+    expect(screen.getByRole("status")).not.toHaveTextContent("wrong");
+    expect(screen.getByRole("status")).not.toHaveTextContent("stale");
+
+    await user.click(screen.getByRole("button", { name: "重新检查 Scope" }));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "ready|prj_fixed|kb_fixed|",
+      ),
+    );
+    expect(scopeCalls).toBe(2);
   });
 });

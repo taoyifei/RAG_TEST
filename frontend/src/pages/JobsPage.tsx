@@ -509,7 +509,7 @@ function operationLabel(operation: string): string {
   );
 }
 
-function stageLabel(stage: string): string {
+export function stageLabel(stage: string): string {
   return (
     (
       {

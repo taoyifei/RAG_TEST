@@ -19,6 +19,19 @@ export const routes = {
 
 export type AppRoute = (typeof routes)[keyof typeof routes];
 
+export const wanshitongRoutes = {
+  workspace: "/admin",
+  documents: "/admin/documents",
+  jobs: "/admin/jobs",
+  history: "/admin/history",
+  traces: "/admin/operational-traces",
+  models: "/admin/models",
+  system: "/admin/system",
+} as const;
+
+export type WanshitongRoute =
+  (typeof wanshitongRoutes)[keyof typeof wanshitongRoutes];
+
 const legacyAdminRoutes: Readonly<Record<string, AppRoute>> = {
   "/": routes.workspace,
   "/projects": routes.projects,
@@ -36,22 +49,63 @@ const legacyAdminRoutes: Readonly<Record<string, AppRoute>> = {
   "/access": routes.access,
 };
 
+const wanshitongAliases: Readonly<Record<string, WanshitongRoute>> = {
+  "/documents": wanshitongRoutes.documents,
+  "/jobs": wanshitongRoutes.jobs,
+  "/history": wanshitongRoutes.history,
+  "/operational-traces": wanshitongRoutes.traces,
+  "/models": wanshitongRoutes.models,
+  "/model-services": wanshitongRoutes.models,
+  "/admin/model-services": wanshitongRoutes.models,
+  "/system": wanshitongRoutes.system,
+  "/projects": wanshitongRoutes.workspace,
+  "/knowledge-bases": wanshitongRoutes.workspace,
+  "/revision": wanshitongRoutes.workspace,
+  "/retrieval": wanshitongRoutes.workspace,
+  "/chat": wanshitongRoutes.workspace,
+  "/retrieval-profiles": wanshitongRoutes.workspace,
+  "/access": wanshitongRoutes.workspace,
+  "/admin/projects": wanshitongRoutes.workspace,
+  "/admin/knowledge-bases": wanshitongRoutes.workspace,
+  "/admin/revision": wanshitongRoutes.workspace,
+  "/admin/retrieval": wanshitongRoutes.workspace,
+  "/admin/chat": wanshitongRoutes.workspace,
+  "/admin/retrieval-profiles": wanshitongRoutes.workspace,
+  "/admin/access": wanshitongRoutes.workspace,
+};
+
 function isAppRoute(value: string): value is AppRoute {
   return Object.values(routes).includes(value as AppRoute);
 }
 
+function resolveAppRoute(pathname: string): AppRoute {
+  if (isAppRoute(pathname)) return pathname;
+  return legacyAdminRoutes[pathname] ?? routes.workspace;
+}
+
+function isWanshitongRoute(value: string): value is WanshitongRoute {
+  return Object.values(wanshitongRoutes).includes(value as WanshitongRoute);
+}
+
+export function isLegacyConsolePath(pathname: string): boolean {
+  return pathname !== "/" && pathname in legacyAdminRoutes;
+}
+
+export function isWanshitongAdminPath(pathname: string): boolean {
+  return (
+    pathname === "/admin" ||
+    pathname.startsWith("/admin/") ||
+    pathname in wanshitongAliases
+  );
+}
+
 export function useRouter() {
-  const initial = isAppRoute(window.location.pathname)
-    ? window.location.pathname
-    : routes.workspace;
-  const [path, setPath] = useState<AppRoute>(initial);
+  const [path, setPath] = useState<AppRoute>(() =>
+    resolveAppRoute(window.location.pathname),
+  );
   useEffect(() => {
     const listener = () => {
-      setPath(
-        isAppRoute(window.location.pathname)
-          ? window.location.pathname
-          : routes.workspace,
-      );
+      setPath(resolveAppRoute(window.location.pathname));
     };
     window.addEventListener("popstate", listener);
     return () => window.removeEventListener("popstate", listener);
@@ -59,6 +113,39 @@ export function useRouter() {
   const go = (next: string) => {
     const resolved = isAppRoute(next) ? next : legacyAdminRoutes[next];
     if (!resolved) throw new Error(`未知页面路径：${next}`);
+    const url = new URL(window.location.href);
+    url.pathname = resolved;
+    window.history.pushState({}, "", `${url.pathname}${url.search}`);
+    setPath(resolved);
+  };
+  return { path, go };
+}
+
+function resolveWanshitongRoute(pathname: string): WanshitongRoute {
+  if (isWanshitongRoute(pathname)) return pathname;
+  return wanshitongAliases[pathname] ?? wanshitongRoutes.workspace;
+}
+
+export function useWanshitongRouter() {
+  const [path, setPath] = useState<WanshitongRoute>(() =>
+    resolveWanshitongRoute(window.location.pathname),
+  );
+  useEffect(() => {
+    const synchronize = () => {
+      const resolved = resolveWanshitongRoute(window.location.pathname);
+      if (window.location.pathname !== resolved) {
+        const url = new URL(window.location.href);
+        url.pathname = resolved;
+        window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+      }
+      setPath(resolved);
+    };
+    synchronize();
+    window.addEventListener("popstate", synchronize);
+    return () => window.removeEventListener("popstate", synchronize);
+  }, []);
+  const go = (next: string) => {
+    const resolved = resolveWanshitongRoute(next);
     const url = new URL(window.location.href);
     url.pathname = resolved;
     window.history.pushState({}, "", `${url.pathname}${url.search}`);

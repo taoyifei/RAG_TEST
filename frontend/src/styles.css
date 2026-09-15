@@ -776,6 +776,138 @@ summary {
     padding: 21px 17px;
   }
 }
+
+.mode-screen {
+  display: grid;
+  width: min(560px, calc(100% - 32px));
+  min-height: 100vh;
+  margin: 0 auto;
+  align-content: center;
+  gap: 14px;
+}
+
+.wst-admin-shell .brand-mark {
+  color: white;
+  background: linear-gradient(145deg, #0f766e, #165dff);
+}
+
+.docx-upload-panel {
+  display: grid;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  gap: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.docx-drop-zone {
+  display: grid;
+  min-height: 170px;
+  padding: 28px;
+  border: 2px dashed #9db4ca;
+  border-radius: 9px;
+  place-items: center;
+  gap: 8px;
+  color: #31506f;
+  background: #f8fbff;
+  text-align: center;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease;
+}
+
+.docx-drop-zone:focus-visible,
+.docx-drop-zone.dragging {
+  border-color: var(--blue);
+  outline: 3px solid #bfdbfe;
+  outline-offset: 2px;
+  background: #eef5ff;
+}
+
+.docx-upload-panel > .row-actions {
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.upload-queue {
+  display: grid;
+  gap: 10px;
+}
+
+.upload-queue article,
+.summary-row {
+  display: flex;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  gap: 14px;
+}
+
+.upload-queue article:last-child,
+.summary-row:last-child {
+  border-bottom: 0;
+}
+
+.upload-queue code,
+.upload-queue small,
+.summary-row small {
+  display: block;
+  margin-top: 4px;
+}
+
+.admin-summary-grid,
+.system-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 15px;
+}
+
+.system-status-grid article {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+}
+
+.format-status-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.format-status-grid > span {
+  display: flex;
+  min-width: 132px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.readonly-notice,
+.scope-blocker {
+  border-left: 4px solid var(--teal);
+}
+
+.compact-file-button {
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+@media (max-width: 720px) {
+  .admin-summary-grid,
+  .system-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .upload-queue article,
+  .summary-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

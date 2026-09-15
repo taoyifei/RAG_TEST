@@ -560,6 +560,19 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * 复用现有 Console Session 与 CSRF 保护调用产品壳层接口。
+ *
+ * 湾事通管理员 Facade 不维护第二套鉴权状态；独立导出这个窄入口，避免
+ * 新页面复制 Cookie、CSRF 和安全错误解析逻辑。
+ */
+export function consoleRequest<T>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  return request<T>(path, "", init);
+}
+
 async function rawRequest(
   path: string,
   init: RequestInit = {},
@@ -579,6 +592,14 @@ async function rawRequest(
     throw new ApiError(response.status, payload);
   }
   return response;
+}
+
+/** 复用 Console Session/CSRF，并保留非 JSON 响应的状态与响应头。 */
+export function consoleRawRequest(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  return rawRequest(path, init);
 }
 
 async function downloadResponse(

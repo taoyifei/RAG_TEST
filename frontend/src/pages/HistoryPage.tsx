@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import {
   api,
+  type HistoryEntry,
   type HistoryFilters,
   type HistoryPageResult,
   type KnowledgeBase,
@@ -21,7 +22,41 @@ const STATUSES = [
   ["CANCELLED", "取消"],
 ];
 
-export function HistoryPage({ go }: { go?: (path: string) => void }) {
+export interface HistoryPageServices {
+  listHistory: (
+    filters: HistoryFilters,
+    signal?: AbortSignal,
+  ) => Promise<HistoryPageResult>;
+  historyDetail: (
+    traceId: string,
+    signal?: AbortSignal,
+  ) => Promise<HistoryEntry>;
+  clearHistory?: () => Promise<void>;
+}
+
+const defaultHistoryServices: HistoryPageServices = {
+  listHistory: (filters, signal) => api.listHistory(filters, signal),
+  historyDetail: (traceId, signal) => api.historyDetail(traceId, signal),
+  clearHistory: () => api.clearHistory(),
+};
+
+function maskedOwner(entry: HistoryEntry): string {
+  const value = entry as HistoryEntry & {
+    owner_masked_id?: string | null;
+    owner_sha256?: string | null;
+  };
+  return value.owner_masked_id || value.owner_sha256 || "";
+}
+
+export function HistoryPage({
+  go,
+  fixedScope = false,
+  services = defaultHistoryServices,
+}: {
+  go?: (path: string) => void;
+  fixedScope?: boolean;
+  services?: HistoryPageServices;
+}) {
   const { scope, tokens } = useConsole();
   const [kbId, setKbId] = useState(scope.kbId);
   const [kbs, setKbs] = useState<KnowledgeBase[]>([]);
@@ -30,8 +65,8 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [filters, setFilters] = useState<HistoryFilters>({
-    project_id: scope.projectId,
-    knowledge_base_id: scope.kbId,
+    project_id: fixedScope ? undefined : scope.projectId,
+    knowledge_base_id: fixedScope ? undefined : scope.kbId,
     page_size: PAGE_SIZE,
     offset: 0,
   });
@@ -48,7 +83,7 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
   const [reload, setReload] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    void api
+    void services
       .listHistory(filters, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) {
@@ -63,9 +98,9 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
         }
       });
     return () => controller.abort();
-  }, [filters, reload]);
+  }, [filters, reload, services]);
   useEffect(() => {
-    if (!scope.projectId) return;
+    if (fixedScope || !scope.projectId) return;
     let active = true;
     void api
       .listKnowledgeBases(tokens.admin, scope.projectId)
@@ -78,7 +113,7 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
     return () => {
       active = false;
     };
-  }, [scope.projectId, tokens.admin]);
+  }, [fixedScope, scope.projectId, tokens.admin]);
   function search(event: FormEvent) {
     event.preventDefault();
     if (from && to && from > to) {
@@ -91,8 +126,8 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
     setTraceId(undefined);
     setChecked(new Set());
     setFilters({
-      project_id: scope.projectId,
-      knowledge_base_id: kbId,
+      project_id: fixedScope ? undefined : scope.projectId,
+      knowledge_base_id: fixedScope ? undefined : kbId,
       status,
       keyword,
       created_from: from ? new Date(from).toISOString() : undefined,
@@ -108,10 +143,11 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
     setFilters({ ...filters, offset });
   }
   async function clear() {
+    if (!services.clearHistory) return;
     setClearing(true);
     setError(undefined);
     try {
-      await api.clearHistory();
+      await services.clearHistory();
       setClearOpen(false);
       setTraceId(undefined);
       setChecked(new Set());
@@ -138,29 +174,33 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
             </p>
           )}
         </div>
-        <button className="secondary" onClick={() => setClearOpen(true)}>
-          清理全部历史
-        </button>
+        {services.clearHistory && (
+          <button className="secondary" onClick={() => setClearOpen(true)}>
+            {fixedScope ? "清理湾事通知识库历史" : "清理全部历史"}
+          </button>
+        )}
       </div>
       <form className="panel history-filters" onSubmit={search}>
-        <label>
-          知识库
-          <select
-            value={kbId}
-            onChange={(event) => setKbId(event.target.value)}
-          >
-            <option value="">全部知识库</option>
-            {scope.kbId &&
-              !kbs.some((kb) => kb.knowledge_base_id === scope.kbId) && (
-                <option value={scope.kbId}>当前知识库</option>
-              )}
-            {kbs.map((kb) => (
-              <option key={kb.knowledge_base_id} value={kb.knowledge_base_id}>
-                {kb.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {!fixedScope && (
+          <label>
+            知识库
+            <select
+              value={kbId}
+              onChange={(event) => setKbId(event.target.value)}
+            >
+              <option value="">全部知识库</option>
+              {scope.kbId &&
+                !kbs.some((kb) => kb.knowledge_base_id === scope.kbId) && (
+                  <option value={scope.kbId}>当前知识库</option>
+                )}
+              {kbs.map((kb) => (
+                <option key={kb.knowledge_base_id} value={kb.knowledge_base_id}>
+                  {kb.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           结果
           <select
@@ -233,34 +273,38 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
             >
               刷新历史
             </button>
-            <button
-              type="button"
-              disabled={!page.items.length}
-              onClick={() =>
-                setChecked(
-                  new Set([
-                    ...checked,
-                    ...page.items.map((item) => item.trace_id),
-                  ]),
-                )
-              }
-            >
-              选择本页
-            </button>
-            <button
-              type="button"
-              disabled={!checked.size}
-              onClick={() => setChecked(new Set())}
-            >
-              清空选择
-            </button>
-            <span role="status">已选择 {checked.size} 条</span>
-            <HistorySupportDownload
-              traceIds={[...checked].sort()}
-              disabled={!checked.size}
-            >
-              下载已选支持包
-            </HistorySupportDownload>
+            {!fixedScope && (
+              <>
+                <button
+                  type="button"
+                  disabled={!page.items.length}
+                  onClick={() =>
+                    setChecked(
+                      new Set([
+                        ...checked,
+                        ...page.items.map((item) => item.trace_id),
+                      ]),
+                    )
+                  }
+                >
+                  选择本页
+                </button>
+                <button
+                  type="button"
+                  disabled={!checked.size}
+                  onClick={() => setChecked(new Set())}
+                >
+                  清空选择
+                </button>
+                <span role="status">已选择 {checked.size} 条</span>
+                <HistorySupportDownload
+                  traceIds={[...checked].sort()}
+                  disabled={!checked.size}
+                >
+                  下载已选支持包
+                </HistorySupportDownload>
+              </>
+            )}
           </div>
           {page.search_complete === false && (
             <p role="status">
@@ -305,6 +349,11 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
                       ? "尚未结束"
                       : `${item.duration_ms.toFixed(1)} ms`}
                   </small>
+                  {fixedScope && maskedOwner(item) && (
+                    <small>
+                      匿名用户：{maskedOwner(item)}
+                    </small>
+                  )}
                   <code>{item.trace_id}</code>
                 </div>
                 <div>
@@ -314,9 +363,11 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
                 <button onClick={() => setTraceId(item.trace_id)}>
                   查看详情与过程
                 </button>
-                <HistorySupportDownload traceIds={[item.trace_id]}>
-                  下载本条支持包
-                </HistorySupportDownload>
+                {!fixedScope && (
+                  <HistorySupportDownload traceIds={[item.trace_id]}>
+                    下载本条支持包
+                  </HistorySupportDownload>
+                )}
                 {go && (
                   <button
                     className="secondary"
@@ -349,24 +400,37 @@ export function HistoryPage({ go }: { go?: (path: string) => void }) {
           key={traceId}
           traceId={traceId}
           onClose={() => setTraceId(undefined)}
+          loadEntry={services.historyDetail}
+          restricted={fixedScope}
         />
       )}
-      {clearOpen && (
+      {clearOpen && services.clearHistory && (
         <Modal
-          title="清理全部问答历史"
+          title={fixedScope ? "清理湾事通知识库历史" : "清理全部问答历史"}
           onClose={() => !clearing && setClearOpen(false)}
         >
-          <p>
-            将删除本机所有项目和知识库的问答历史及旧平面事件，无法撤销。
-            独立 Operational Trace、源文档与索引均保留；技术 Trace
-            只按其到期策略在管理员页面清理。
-          </p>
+          {fixedScope ? (
+            <p>
+              只会删除固定湾事通知识库内的问答历史，无法撤销。其他知识库、
+              Operational Trace、源文档与索引均保留。
+            </p>
+          ) : (
+            <p>
+              将删除本机所有项目和知识库的问答历史及旧平面事件，无法撤销。
+              独立 Operational Trace、源文档与索引均保留；技术 Trace
+              只按其到期策略在管理员页面清理。
+            </p>
+          )}
           <button
             className="danger"
             disabled={clearing}
             onClick={() => void clear()}
           >
-            {clearing ? "清理中…" : "确认清理全部历史"}
+            {clearing
+              ? "清理中…"
+              : fixedScope
+                ? "确认清理湾事通知识库历史"
+                : "确认清理全部历史"}
           </button>
           <button disabled={clearing} onClick={() => setClearOpen(false)}>
             取消

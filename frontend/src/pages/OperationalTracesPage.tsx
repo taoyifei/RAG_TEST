@@ -20,6 +20,37 @@ const INITIAL_DECISION_LIMIT = 160;
 
 type TraceTab = "waterfall" | "funnel" | "providers" | "artifacts";
 
+export interface OperationalTraceServices {
+  list: (
+    filters: OperationalTraceFilters,
+    signal?: AbortSignal,
+  ) => Promise<OperationalTracePage>;
+  detail: (
+    traceId: string,
+    signal?: AbortSignal,
+  ) => Promise<OperationalTraceDetail>;
+  artifact?: (
+    traceId: string,
+    artifactId: string,
+    signal?: AbortSignal,
+  ) => Promise<OperationalTraceArtifactContent>;
+  exportOne?: (traceId: string) => ReturnType<typeof api.exportOperationalTrace>;
+  exportMany?: (
+    traceIds: string[],
+  ) => ReturnType<typeof api.exportOperationalTraces>;
+  prune?: () => Promise<{ pruned: number }>;
+}
+
+const defaultTraceServices: OperationalTraceServices = {
+  list: (filters, signal) => api.listOperationalTraces(filters, signal),
+  detail: (traceId, signal) => api.operationalTraceDetail(traceId, signal),
+  artifact: (traceId, artifactId) =>
+    api.operationalTraceArtifact(traceId, artifactId),
+  exportOne: (traceId) => api.exportOperationalTrace(traceId),
+  exportMany: (traceIds) => api.exportOperationalTraces(traceIds),
+  prune: () => api.pruneOperationalTraces(),
+};
+
 function initialDeepLink(): Pick<
   OperationalTraceFilters,
   "trace_id" | "job_id" | "document_id" | "revision_id"
@@ -33,7 +64,15 @@ function initialDeepLink(): Pick<
   };
 }
 
-export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
+export function OperationalTracesPage({
+  go,
+  fixedScope = false,
+  services = defaultTraceServices,
+}: {
+  go?: (path: string) => void;
+  fixedScope?: boolean;
+  services?: OperationalTraceServices;
+}) {
   const { scope, setRevision } = useConsole();
   const deepLink = useMemo(() => initialDeepLink(), []);
   const [kind, setKind] = useState("");
@@ -51,8 +90,8 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
   const [filters, setFilters] = useState<OperationalTraceFilters>({
     page: 1,
     page_size: PAGE_SIZE,
-    project_id: scope.projectId || undefined,
-    knowledge_base_id: scope.kbId || undefined,
+    project_id: fixedScope ? undefined : scope.projectId || undefined,
+    knowledge_base_id: fixedScope ? undefined : scope.kbId || undefined,
     ...deepLink,
   });
   const [page, setPage] = useState<OperationalTracePage>();
@@ -68,8 +107,8 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    void api
-      .listOperationalTraces(filters, controller.signal)
+    void services
+      .list(filters, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) {
           setPage(value);
@@ -83,13 +122,13 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
         }
       });
     return () => controller.abort();
-  }, [filters, reload]);
+  }, [filters, reload, services]);
 
   useEffect(() => {
     if (!selectedId) return;
     const controller = new AbortController();
-    void api
-      .operationalTraceDetail(selectedId, controller.signal)
+    void services
+      .detail(selectedId, controller.signal)
       .then((value) => {
         if (!controller.signal.aborted) setSelected(value);
       })
@@ -97,7 +136,7 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
         if (!controller.signal.aborted) setError(reason);
       });
     return () => controller.abort();
-  }, [selectedId, reload]);
+  }, [reload, selectedId, services]);
 
   function search(event: FormEvent) {
     event.preventDefault();
@@ -117,8 +156,8 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
     setFilters({
       page: 1,
       page_size: PAGE_SIZE,
-      project_id: scope.projectId || undefined,
-      knowledge_base_id: scope.kbId || undefined,
+      project_id: fixedScope ? undefined : scope.projectId || undefined,
+      knowledge_base_id: fixedScope ? undefined : scope.kbId || undefined,
       kind: kind || undefined,
       status: status || undefined,
       capture_mode: captureMode,
@@ -159,12 +198,12 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
   }
 
   async function exportSelected() {
-    if (!checked.size) return;
+    if (!checked.size || !services.exportMany) return;
     setExportBusy(true);
     setError(undefined);
     try {
       downloadFile(
-        await api.exportOperationalTraces([...checked].sort()),
+        await services.exportMany([...checked].sort()),
       );
     } catch (reason) {
       setError(reason);
@@ -174,6 +213,7 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
   }
 
   async function pruneExpired() {
+    if (!services.prune) return;
     if (
       !window.confirm(
         "只会清理已到期且不在导出中的 Operational Trace。确认继续吗？",
@@ -185,7 +225,7 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
     setError(undefined);
     setPruneStatus(undefined);
     try {
-      const value = await api.pruneOperationalTraces();
+      const value = await services.prune();
       setPruneStatus(`已清理 ${value.pruned} 条到期 Operational Trace。`);
       setChecked(new Set());
       setReload((current) => current + 1);
@@ -204,13 +244,15 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
           <p>技术诊断只显示安全身份、时序、候选决定与显式调试制品。</p>
         </div>
         <div className="row-actions">
-          <button
-            className="secondary"
-            disabled={pruneBusy}
-            onClick={() => void pruneExpired()}
-          >
-            {pruneBusy ? "清理中…" : "清理已到期 Trace"}
-          </button>
+          {services.prune && (
+            <button
+              className="secondary"
+              disabled={pruneBusy}
+              onClick={() => void pruneExpired()}
+            >
+              {pruneBusy ? "清理中…" : "清理已到期 Trace"}
+            </button>
+          )}
           <button
             className="secondary"
             onClick={() => {
@@ -328,35 +370,39 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
             >
               下一页
             </button>
-            <button
-              type="button"
-              disabled={!page.items.length}
-              onClick={() =>
-                setChecked(
-                  new Set([
-                    ...checked,
-                    ...page.items.map((item) => item.trace_id),
-                  ]),
-                )
-              }
-            >
-              选择本页
-            </button>
-            <button
-              type="button"
-              disabled={!checked.size}
-              onClick={() => setChecked(new Set())}
-            >
-              清空选择
-            </button>
-            <span role="status">已选择 {checked.size} 条</span>
-            <button
-              disabled={!checked.size || exportBusy}
-              onClick={() => void exportSelected()}
-            >
-              <Download aria-hidden="true" size={16} />
-              {exportBusy ? "正在导出…" : "导出已选技术 Trace"}
-            </button>
+            {services.exportMany && (
+              <>
+                <button
+                  type="button"
+                  disabled={!page.items.length}
+                  onClick={() =>
+                    setChecked(
+                      new Set([
+                        ...checked,
+                        ...page.items.map((item) => item.trace_id),
+                      ]),
+                    )
+                  }
+                >
+                  选择本页
+                </button>
+                <button
+                  type="button"
+                  disabled={!checked.size}
+                  onClick={() => setChecked(new Set())}
+                >
+                  清空选择
+                </button>
+                <span role="status">已选择 {checked.size} 条</span>
+                <button
+                  disabled={!checked.size || exportBusy}
+                  onClick={() => void exportSelected()}
+                >
+                  <Download aria-hidden="true" size={16} />
+                  {exportBusy ? "正在导出…" : "导出已选技术 Trace"}
+                </button>
+              </>
+            )}
           </div>
           <div className="table-wrap">
             <table className="trace-table">
@@ -445,25 +491,28 @@ export function OperationalTracesPage({ go }: { go?: (path: string) => void }) {
           onClose={closeDetail}
           onError={setError}
           go={go}
-          setRevision={setRevision}
+          setRevision={fixedScope ? undefined : setRevision}
+          services={services}
         />
       )}
     </section>
   );
 }
 
-function TraceDetailPanel({
+export function TraceDetailPanel({
   detail,
   onClose,
   onError,
   go,
   setRevision,
+  services = defaultTraceServices,
 }: {
   detail: OperationalTraceDetail;
   onClose: () => void;
   onError: (error: unknown) => void;
   go?: (path: string) => void;
-  setRevision: (revisionId: string) => void;
+  setRevision?: (revisionId: string) => void;
+  services?: OperationalTraceServices;
 }) {
   const [tab, setTab] = useState<TraceTab>("waterfall");
   const [spanLimit, setSpanLimit] = useState(INITIAL_SPAN_LIMIT);
@@ -486,9 +535,8 @@ function TraceDetailPanel({
     setArtifactBusy(artifactId);
     setArtifact(undefined);
     try {
-      setArtifact(
-        await api.operationalTraceArtifact(detail.trace.trace_id, artifactId),
-      );
+      if (!services.artifact) return;
+      setArtifact(await services.artifact(detail.trace.trace_id, artifactId));
     } catch (reason) {
       onError(reason);
     } finally {
@@ -497,9 +545,10 @@ function TraceDetailPanel({
   }
 
   async function exportOne() {
+    if (!services.exportOne) return;
     setExportBusy(true);
     try {
-      downloadFile(await api.exportOperationalTrace(detail.trace.trace_id));
+      downloadFile(await services.exportOne(detail.trace.trace_id));
     } catch (reason) {
       onError(reason);
     } finally {
@@ -519,10 +568,12 @@ function TraceDetailPanel({
           </p>
         </div>
         <div className="row-actions">
-          <button disabled={exportBusy} onClick={() => void exportOne()}>
-            <Download aria-hidden="true" size={16} />
-            {exportBusy ? "导出中…" : "导出 JSON"}
-          </button>
+          {services.exportOne && (
+            <button disabled={exportBusy} onClick={() => void exportOne()}>
+              <Download aria-hidden="true" size={16} />
+              {exportBusy ? "导出中…" : "导出 JSON"}
+            </button>
+          )}
           <button onClick={onClose}>关闭详情</button>
         </div>
       </div>
@@ -588,7 +639,7 @@ function TraceDetailPanel({
               打开文档
             </button>
           )}
-          {detail.trace.revision_id && (
+          {detail.trace.revision_id && setRevision && (
             <button
               onClick={() => {
                 setRevision(detail.trace.revision_id!);
@@ -730,12 +781,14 @@ function TraceDetailPanel({
                   {item.media_type} · {item.original_bytes} bytes
                 </small>
               </div>
-              <button
-                disabled={artifactBusy === item.artifact_id}
-                onClick={() => void readArtifact(item.artifact_id)}
-              >
-                {artifactBusy === item.artifact_id ? "读取中…" : "按需读取"}
-              </button>
+              {services.artifact && (
+                <button
+                  disabled={artifactBusy === item.artifact_id}
+                  onClick={() => void readArtifact(item.artifact_id)}
+                >
+                  {artifactBusy === item.artifact_id ? "读取中…" : "按需读取"}
+                </button>
+              )}
             </article>
           ))}
           {artifact && (
