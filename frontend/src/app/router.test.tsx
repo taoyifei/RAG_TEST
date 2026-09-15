@@ -8,7 +8,7 @@ describe("类型化页面路由", () => {
     window.history.replaceState(
       {},
       "",
-      "/?project=prj_1&knowledgeBase=kb_1",
+      "/admin?project=prj_1&knowledgeBase=kb_1",
     );
     const { result } = renderHook(() => useRouter());
 
@@ -17,5 +17,15 @@ describe("类型化页面路由", () => {
     expect(result.current.path).toBe(routes.modelServices);
     expect(window.location.search).toContain("project=prj_1");
     expect(window.location.search).toContain("knowledgeBase=kb_1");
+  });
+
+  it("把现有页面的内部导航收敛到 admin 前缀", () => {
+    window.history.replaceState({}, "", "/admin");
+    const { result } = renderHook(() => useRouter());
+
+    act(() => result.current.go("/jobs"));
+
+    expect(result.current.path).toBe(routes.jobs);
+    expect(window.location.pathname).toBe("/admin/jobs");
   });
 });

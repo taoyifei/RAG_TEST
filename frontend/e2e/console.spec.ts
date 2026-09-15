@@ -47,7 +47,7 @@ test("项目和知识库逻辑删除清理活动列表与当前 scope", async ({
   await expect(knowledgeBaseCard).toHaveCount(0);
   await expect(page).toHaveURL((url) => {
     return (
-      url.pathname === "/knowledge-bases" &&
+      url.pathname === "/admin/knowledge-bases" &&
       url.searchParams.get("project") === projectId &&
       !url.searchParams.has("knowledgeBase") &&
       !url.searchParams.has("revision")
@@ -78,7 +78,7 @@ test("项目和知识库逻辑删除清理活动列表与当前 scope", async ({
   await projectDialog.getByRole("button", { name: "确认归档项目" }).click();
   await expect(projectCard).toHaveCount(0);
   await expect(page).toHaveURL((url) => {
-    return url.pathname === "/projects" && url.searchParams.size === 0;
+    return url.pathname === "/admin/projects" && url.searchParams.size === 0;
   });
   const projectStateResponse = await page.request.get(
     `/api/v1/projects/${projectId}`,
@@ -297,7 +297,7 @@ function docxBlocks(blocks: string): Buffer {
 }
 
 async function authenticate(page: Page) {
-  await page.goto("/");
+  await page.goto("/admin");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();

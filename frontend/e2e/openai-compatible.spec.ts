@@ -8,7 +8,7 @@ type ObservedRequest = {
 };
 
 async function authenticate(page: Page) {
-  await page.goto("/");
+  await page.goto("/admin");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();

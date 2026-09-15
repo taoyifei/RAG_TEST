@@ -57,7 +57,7 @@ test("默认 Product Trace 支持诊断、惰性 Artifact、导出与关联导�
   expect(result.generation_mode).toBe("none");
   expect(result.data_plane.retrieval_data_plane).toBe("default_local_fallback");
   const traceUrl = new URL(scopeUrl);
-  traceUrl.pathname = "/operational-traces";
+  traceUrl.pathname = "/admin/operational-traces";
   traceUrl.searchParams.set("trace_id", result.trace_id);
   let artifactRequests = 0;
   page.on("request", (request) => {
@@ -146,7 +146,7 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
   await waitForJob(page, ((await upload.json()) as { job_id: string }).job_id);
 
   const chatUrl = new URL(scopeUrl);
-  chatUrl.pathname = "/chat";
+  chatUrl.pathname = "/admin/chat";
   await page.goto(chatUrl.toString());
   const conversation = page.getByRole("region", { name: "当前会话" });
   await expect(conversation).toBeVisible();
@@ -195,7 +195,7 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
   expect(secondaryTraceId).not.toBe(primaryTraceId);
 
   const historyUrl = new URL(scopeUrl);
-  historyUrl.pathname = "/history";
+  historyUrl.pathname = "/admin/history";
   await page.goto(historyUrl.toString());
   const primaryRow = page.getByRole("article").filter({
     has: page.getByText(primaryTraceId, { exact: true }),
@@ -291,7 +291,7 @@ test("桌面与移动端实际下载支持包并验证会话、反馈与清理�
   expect(batchManifest.items.every((item) => !item.body_included)).toBe(true);
 
   const tracesUrl = new URL(scopeUrl);
-  tracesUrl.pathname = "/operational-traces";
+  tracesUrl.pathname = "/admin/operational-traces";
   await page.goto(tracesUrl.toString());
   await page.getByLabel("用户反馈").selectOption("useful");
   await page.getByRole("button", { name: "筛选 Trace" }).click();
@@ -366,7 +366,7 @@ function sha256(payload: Uint8Array): string {
 }
 
 async function authenticate(page: Page) {
-  await page.goto("/");
+  await page.goto("/admin");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();

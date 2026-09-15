@@ -5,7 +5,7 @@ test("R3 连接编辑保留密钥、并发保护和键盘导航", async ({
   page,
   request,
 }, testInfo) => {
-  await page.goto("/");
+  await page.goto("/admin");
   await page.getByLabel("管理口令").fill("offline-bootstrap-credential");
   await page.getByRole("button", { name: "进入工作台" }).click();
   await expect(page.getByRole("dialog")).toBeHidden();
@@ -45,7 +45,7 @@ test("R3 连接编辑保留密钥、并发保护和键盘导航", async ({
   };
   const first = await seed(`合成连接甲 ${suffix}`);
   const second = await seed(`合成连接乙 ${suffix}`);
-  await page.goto("/model-services");
+  await page.goto("/admin/model-services");
   const row = page.getByRole("article").filter({
     has: page.getByRole("heading", { name: first.display_name, exact: true }),
   });
@@ -135,7 +135,7 @@ test("R3 连接编辑保留密钥、并发保护和键盘导航", async ({
   if (page.viewportSize()!.width === 375) {
     await page.getByRole("button", { name: "打开导航" }).click();
     await page.getByRole("button", { name: "知识库", exact: true }).click();
-    expect(new URL(page.url()).pathname).toBe("/knowledge-bases");
+    expect(new URL(page.url()).pathname).toBe("/admin/knowledge-bases");
     await expect(
       page.getByRole("heading", { name: "请先选择项目" }),
     ).toBeVisible();
