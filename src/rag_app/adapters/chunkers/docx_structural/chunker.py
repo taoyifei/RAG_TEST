@@ -280,7 +280,7 @@ class DocxStructuralChunker:
                 token_count_is_estimate=not embedding_count.exact,
                 tokenizer_id=embedding_count.tokenizer_id,
                 content_sha256=content_sha256,
-                metadata=_pack_metadata(atoms),
+                metadata=_pack_metadata(atoms, document_ir.metadata),
             )
         except ValidationError as error:
             raise _ChunkConstructionError(
@@ -289,7 +289,9 @@ class DocxStructuralChunker:
             ) from error
 
 
-def _pack_metadata(atoms: tuple[AtomicUnit, ...]) -> JsonObject:
+def _pack_metadata(
+    atoms: tuple[AtomicUnit, ...], document_metadata: JsonObject
+) -> JsonObject:
     atom_metadata: list[dict[str, JsonValue]] = [
         {
             "unit_id": atom.unit_id,
@@ -299,13 +301,16 @@ def _pack_metadata(atoms: tuple[AtomicUnit, ...]) -> JsonObject:
         for atom in atoms
     ]
     orphan = any(dict(atom.metadata).get("orphan") is True for atom in atoms)
-    return freeze_json_object(
-        {
-            "atom_count": len(atoms),
-            "atoms": atom_metadata,
-            "orphan": orphan,
-        }
-    )
+    metadata: dict[str, JsonValue] = {
+        "atom_count": len(atoms),
+        "atoms": atom_metadata,
+        "orphan": orphan,
+    }
+    for key, value in document_metadata:
+        if key in metadata:
+            raise ValueError(f"文档 metadata 使用 Chunk 保留字段：{key}")
+        metadata[key] = value
+    return freeze_json_object(metadata)
 
 
 def _json_metadata(metadata: JsonObject) -> dict[str, JsonValue]:

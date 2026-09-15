@@ -62,6 +62,7 @@ def test_capabilities_publish_only_fixed_public_policy(
         "document_visibility": "all_internal",
         "conversation_delete": True,
         "feedback": True,
+        "shortcuts": [],
     }
 
 
@@ -238,11 +239,14 @@ def test_chat_delegates_fixed_scope_owner_and_policies_to_p09_stream(
     assert final["answer"] == "办理材料应在五个工作日内完成核验。"
     assert final["citations"] == [
         {
-            "document_name": "湾事通办事指南.docx",
+            "document_name": "湾事通办事指南",
             "department": "政务服务部",
+            "department_name": "政务服务部",
             "category_path": ["办事服务", "材料办理"],
+            "document_title": "湾事通办事指南",
             "locator": "申请指南 > 材料核验",
             "quote": "办理材料应在五个工作日内完成核验。",
+            "source_relative_path": ("政务服务部/办事服务/湾事通办事指南.docx"),
         }
     ]
     assert all(

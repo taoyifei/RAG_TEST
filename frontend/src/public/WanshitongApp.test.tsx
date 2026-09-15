@@ -60,6 +60,7 @@ const capabilitiesBody = {
   stream_protocol: "wanshitong-public-sse-v1",
   document_visibility: "all_internal",
   feedback: true,
+  shortcuts: [],
 };
 
 function pathOf(input: RequestInfo | URL): string {

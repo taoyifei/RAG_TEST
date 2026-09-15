@@ -22,7 +22,7 @@ from rag_app.core.identifiers import (
     document_version_id,
     new_id,
 )
-from rag_app.core.models import DocumentEmbeddingBudget, DocumentRef
+from rag_app.core.models import DocumentEmbeddingBudget, DocumentRef, JsonObject
 from rag_app.core.models.management import (
     ArtifactDescriptor,
     Document,
@@ -385,6 +385,7 @@ class LifecycleService:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """创建全新逻辑文档并构建完整 Revision。
 
@@ -395,6 +396,7 @@ class LifecycleService:
             content: 受大小上限保护的 DOC、DOCX 或 PDF 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
+            metadata: 不参与文档身份的外部结构化元数据。
 
         Returns:
             已完成或恢复的持久化 Job。
@@ -404,7 +406,9 @@ class LifecycleService:
         _validate_document_input(
             display_name, content, media_type, idempotency_key
         )
-        request_hash = _document_request_hash(display_name, content, media_type)
+        request_hash = _document_request_hash(
+            display_name, content, media_type, metadata
+        )
         proposed_id = deterministic_id(
             "doc", project_id, knowledge_base_id, idempotency_key
         )
@@ -423,6 +427,7 @@ class LifecycleService:
             content=content,
             media_type=media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata,
         )
 
     def create_document_version(  # noqa: PLR0913
@@ -434,6 +439,7 @@ class LifecycleService:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """为既有逻辑文档提交不可变新版本。
 
@@ -444,6 +450,7 @@ class LifecycleService:
             content: 新版本 DOC、DOCX 或 PDF 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
+            metadata: 当前版本提交时冻结的外部结构化元数据。
 
         Returns:
             已完成或恢复的持久化 Job。
@@ -499,7 +506,7 @@ class LifecycleService:
             operation="document.version.create",
             idempotency_key=idempotency_key,
             request_hash=_document_request_hash(
-                current.display_name, content, media_type
+                current.display_name, content, media_type, metadata
             ),
             result_id=version_id,
         )
@@ -513,6 +520,7 @@ class LifecycleService:
             content=content,
             media_type=media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata,
         )
 
     def get_document(
@@ -728,12 +736,14 @@ class LifecycleService:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject,
     ) -> Job:
         document = DocumentRef(
             project_id=project_id,
             knowledge_base_id=knowledge_base_id,
             document_id=document_id,
             display_name=display_name,
+            metadata=metadata,
         )
         digest = hashlib.sha256(content).hexdigest()
         artifact_id = f"sha256:{digest}"
@@ -1121,13 +1131,17 @@ def _ingestion_document(
 
 
 def _document_request_hash(
-    display_name: str, content: bytes, media_type: str
+    display_name: str,
+    content: bytes,
+    media_type: str,
+    metadata: JsonObject,
 ) -> str:
     return canonical_sha256(
         {
             "display_name": display_name,
             "content_sha256": hashlib.sha256(content).hexdigest(),
             "media_type": media_type,
+            "metadata": dict(metadata),
         }
     )
 

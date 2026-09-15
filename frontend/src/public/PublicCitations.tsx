@@ -21,15 +21,21 @@ export function PublicCitations({
       <div className="wst-citation-list">
         {visible.map((citation, index) => {
           const category = categoryLabel(citation.category_path);
+          const department = citation.department_name || citation.department;
           return (
             <article key={`${citation.document_name}-${index}`}>
               <div className="wst-citation-heading">
                 <strong>{citation.document_name}</strong>
                 <span>已核验来源</span>
               </div>
-              {(citation.department || category) && (
+              {(department || category) && (
                 <p className="wst-citation-meta">
-                  {[citation.department, category].filter(Boolean).join(" · ")}
+                  {[department, category].filter(Boolean).join(" · ")}
+                </p>
+              )}
+              {citation.source_relative_path && (
+                <p className="wst-citation-locator">
+                  {citation.source_relative_path}
                 </p>
               )}
               {citation.locator && (

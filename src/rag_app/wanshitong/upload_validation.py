@@ -2,30 +2,23 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass
-from pathlib import PurePosixPath
 
 from fastapi import Request
 
 from rag_app.core.models import DocumentRef, ParseContext, ParseSource
 from rag_app.core.policies import ParsingPolicy
 from rag_app.core.ports import ParserPort
+from rag_app.wanshitong.document_metadata import (
+    DOCX_ONLY_MESSAGE,
+    normalize_source_relative_path,
+)
 from rag_app.wanshitong.errors import AdminFacadeError
 
 DOCX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument."
-    "wordprocessingml.document"
-)
-DOCX_ONLY_MESSAGE = (
-    "当前湾事通 Demo 仅开放 DOCX 文档。PDF、旧 DOC、Excel 和 ZIP "
-    "将在后续版本接入。"
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
 _MAX_HTTP_UPLOAD_BYTES = 32 * 1024 * 1024
-_MAX_RELATIVE_PATH_CHARS = 4096
-_MAX_PATH_SEGMENT_CHARS = 255
-_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:")
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,45 +32,19 @@ class ValidatedDocxUpload:
 
 
 def validate_relative_path(value: str) -> tuple[str, str]:
-    """验证并原样保留浏览器提供的 POSIX 相对路径。
+    """规范化并验证浏览器提供的 DOCX 相对路径。
 
     Args:
         value: `webkitRelativePath` 或单文件 basename。
 
     Returns:
-        原始安全相对路径及 basename。
+        规范化安全相对路径及 basename。
 
     Raises:
         AdminFacadeError: 路径包含绝对位置、穿越或控制字符。
 
     """
-    if not value or len(value) > _MAX_RELATIVE_PATH_CHARS:
-        raise _relative_path_error()
-    if "\\" in value or value.startswith("/") or _WINDOWS_DRIVE.match(value):
-        raise _relative_path_error()
-    if unicodedata.normalize("NFC", value) != value:
-        raise _relative_path_error()
-    segments = value.split("/")
-    if any(
-        not segment
-        or segment in {".", ".."}
-        or len(segment) > _MAX_PATH_SEGMENT_CHARS
-        or any(unicodedata.category(char).startswith("C") for char in segment)
-        for segment in segments
-    ):
-        raise _relative_path_error()
-    path = PurePosixPath(value)
-    if path.is_absolute() or path.as_posix() != value:
-        raise _relative_path_error()
-    display_name = segments[-1]
-    if not display_name.casefold().endswith(".docx"):
-        raise AdminFacadeError(
-            "DOCX_ONLY",
-            DOCX_ONLY_MESSAGE,
-            status_code=415,
-            stage="wanshitong.document.type",
-        )
-    return value, display_name
+    return normalize_source_relative_path(value)
 
 
 async def read_and_validate_docx(
@@ -134,14 +101,6 @@ async def read_and_validate_docx(
         content=content,
         display_name=display_name,
         relative_path=safe_path,
-    )
-
-
-def _relative_path_error() -> AdminFacadeError:
-    return AdminFacadeError(
-        "INVALID_RELATIVE_PATH",
-        "文档相对路径无效，仅允许安全的目录相对路径。",
-        stage="wanshitong.document.path",
     )
 
 

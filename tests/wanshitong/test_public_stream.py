@@ -38,9 +38,7 @@ def _payload(frame: bytes) -> dict[str, object]:
             "stage",
             {
                 "stage": "snapshot",
-                "attributes": {
-                    "active_index_revision_id": "irev_" + "4" * 32
-                },
+                "attributes": {"active_index_revision_id": "irev_" + "4" * 32},
             },
         ),
         (
@@ -123,9 +121,12 @@ def test_public_final_contains_only_answer_and_citation_dto() -> None:
     assert set(final["citations"][0]) == {
         "document_name",
         "department",
+        "department_name",
         "category_path",
+        "document_title",
         "locator",
         "quote",
+        "source_relative_path",
     }
 
 

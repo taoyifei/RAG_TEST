@@ -60,9 +60,13 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
               answer: "办理材料应在五个工作日内完成核验。",
               citations: [
                 {
-                  document_name: "湾事通办事指南.docx",
+                  document_name: "湾事通办事指南",
                   department: "政务服务部",
+                  department_name: "政务服务部",
                   category_path: ["办事服务", "材料办理"],
+                  document_title: "湾事通办事指南",
+                  source_relative_path:
+                    "政务服务部/办事服务/湾事通办事指南.docx",
                   locator: "申请指南 > 材料核验",
                   quote: "五个工作日内完成核验。",
                 },
@@ -119,6 +123,7 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
         document_visibility: "all_internal",
         conversation_delete: true,
         feedback: true,
+        shortcuts: [],
       },
     });
   });
@@ -156,9 +161,12 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
   await expect(page.getByText("材料应在五个工作日内核验。")).toHaveCount(0);
 
   await page.getByText("已核验来源（1）").click();
-  await expect(page.getByText("湾事通办事指南.docx")).toBeVisible();
+  await expect(page.getByText("湾事通办事指南", { exact: true })).toBeVisible();
   await expect(
     page.getByText("政务服务部 · 办事服务 / 材料办理"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("政务服务部/办事服务/湾事通办事指南.docx"),
   ).toBeVisible();
   await page.getByRole("button", { name: "有帮助" }).click();
   await expect(page.getByText("感谢你的反馈")).toBeVisible();

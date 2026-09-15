@@ -52,8 +52,8 @@ class KnowledgeBaseScope(FrozenModel):
     knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")
 
 
-class DocumentRef(FrozenModel):
-    """稳定逻辑文档引用，显示名不参与身份。"""
+class DocumentRef(MetadataModel):
+    """稳定逻辑文档引用，显示名和外部元数据不参与身份。"""
 
     project_id: str = Field(pattern=r"^prj_[0-9a-f]{32}$")
     knowledge_base_id: str = Field(pattern=r"^kb_[0-9a-f]{32}$")

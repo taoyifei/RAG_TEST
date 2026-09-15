@@ -31,6 +31,11 @@ from rag_app.wanshitong.admin_models import (
 from rag_app.wanshitong.document_metadata import (
     WanshitongDocumentMetadata,
     WanshitongDocumentMetadataStore,
+    WanshitongUploadMetadata,
+    build_document_metadata,
+    normalize_source_relative_path,
+    parse_upload_metadata,
+    resolve_document_metadata,
 )
 from rag_app.wanshitong.errors import AdminFacadeError, ScopeBindingError
 from rag_app.wanshitong.models import ScopeBinding
@@ -119,24 +124,42 @@ def _register_document_routes(
     )
     async def _upload_document(
         request: Request,
-        relative_path: Annotated[str, Query(min_length=1, max_length=4096)],
         idempotency_key: Annotated[
             str, Header(alias="Idempotency-Key", min_length=1, max_length=256)
         ],
+        relative_path: Annotated[
+            str | None, Query(min_length=1, max_length=4096)
+        ] = None,
+        source_relative_path: Annotated[
+            str | None, Query(min_length=1, max_length=4096)
+        ] = None,
+        metadata_json: Annotated[
+            str | None, Query(alias="metadata", max_length=16384)
+        ] = None,
     ) -> WanshitongUploadReceipt:
         binding = _admin_scope(request, scope_service)
+        _reject_client_security_metadata(request)
         proposed_id = deterministic_id(
             "doc",
             binding.project_id,
             binding.knowledge_base_id,
             idempotency_key,
         )
+        metadata = _prepare_document_metadata(
+            metadata_store,
+            document_id=proposed_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            relative_path=relative_path,
+            source_relative_path=source_relative_path,
+            metadata_json=metadata_json,
+        )
         upload = await _validated_upload(
             request,
             runtime,
             binding,
             document_id=proposed_id,
-            relative_path=relative_path,
+            relative_path=metadata.source_relative_path,
         )
         job = runtime.sdk.create_document(
             binding.project_id,
@@ -145,17 +168,16 @@ def _register_document_routes(
             content=upload.content,
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata.index_metadata(),
         )
         document = _job_document(runtime, binding, job)
-        department, category_path = _path_metadata(upload.relative_path)
-        metadata = metadata_store.bind(
+        stored_metadata = metadata_store.bind(
             document=document,
-            relative_path=upload.relative_path,
-            department=department,
-            category_path=category_path,
+            metadata=metadata,
+            job=job,
         )
         return WanshitongUploadReceipt(
-            document=_document_view(runtime, document, metadata, job),
+            document=_document_view(runtime, document, stored_metadata, job),
             job=job,
         )
 
@@ -184,24 +206,50 @@ def _register_document_routes(
         response_model=WanshitongUploadReceipt,
         status_code=202,
     )
-    async def _upload_version(
+    async def _upload_version(  # noqa: PLR0913, PLR0917
         document_id: str,
         request: Request,
-        relative_path: Annotated[str, Query(min_length=1, max_length=4096)],
         idempotency_key: Annotated[
             str, Header(alias="Idempotency-Key", min_length=1, max_length=256)
         ],
+        relative_path: Annotated[
+            str | None, Query(min_length=1, max_length=4096)
+        ] = None,
+        source_relative_path: Annotated[
+            str | None, Query(min_length=1, max_length=4096)
+        ] = None,
+        metadata_json: Annotated[
+            str | None, Query(alias="metadata", max_length=16384)
+        ] = None,
     ) -> WanshitongUploadReceipt:
         binding = _admin_scope(request, scope_service)
-        document = runtime.sdk.get_document(
+        _reject_client_security_metadata(request)
+        runtime.sdk.get_document(
             binding.project_id, binding.knowledge_base_id, document_id
+        )
+        existing_metadata = metadata_store.get(document_id)
+        if (
+            relative_path is None
+            and source_relative_path is None
+            and metadata_json is None
+            and existing_metadata is not None
+        ):
+            source_relative_path = existing_metadata.source_relative_path
+        metadata = _prepare_document_metadata(
+            metadata_store,
+            document_id=document_id,
+            project_id=binding.project_id,
+            knowledge_base_id=binding.knowledge_base_id,
+            relative_path=relative_path,
+            source_relative_path=source_relative_path,
+            metadata_json=metadata_json,
         )
         upload = await _validated_upload(
             request,
             runtime,
             binding,
             document_id=document_id,
-            relative_path=relative_path,
+            relative_path=metadata.source_relative_path,
         )
         job = runtime.sdk.create_document_version(
             binding.project_id,
@@ -210,19 +258,19 @@ def _register_document_routes(
             content=upload.content,
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata.index_metadata(),
         )
         updated = runtime.sdk.get_document(
             binding.project_id, binding.knowledge_base_id, document_id
         )
-        department, category_path = _path_metadata(upload.relative_path)
-        metadata = metadata_store.bind(
-            document=document,
-            relative_path=upload.relative_path,
-            department=department,
-            category_path=category_path,
+        stored_metadata = metadata_store.bind(
+            document=updated,
+            metadata=metadata,
+            job=job,
         )
         return WanshitongUploadReceipt(
-            document=_document_view(runtime, updated, metadata, job), job=job
+            document=_document_view(runtime, updated, stored_metadata, job),
+            job=job,
         )
 
     @app.delete(
@@ -424,6 +472,77 @@ def _register_status_routes(
         return _system_status(runtime, binding)
 
 
+def _prepare_document_metadata(  # noqa: PLR0913
+    store: WanshitongDocumentMetadataStore,
+    *,
+    document_id: str,
+    project_id: str,
+    knowledge_base_id: str,
+    relative_path: str | None,
+    source_relative_path: str | None,
+    metadata_json: str | None,
+) -> WanshitongDocumentMetadata:
+    """解析逐文件合同，并让同路径新版本继承管理员修正。"""
+    upload = parse_upload_metadata(
+        relative_path=relative_path,
+        source_relative_path=source_relative_path,
+        metadata_json=metadata_json,
+    )
+    existing = store.get(document_id)
+    if existing is not None and (
+        normalize_source_relative_path(upload.source_relative_path)[0]
+        == existing.source_relative_path
+    ):
+        upload = _inherit_existing_metadata(upload, existing)
+    return build_document_metadata(
+        document_id=document_id,
+        project_id=project_id,
+        knowledge_base_id=knowledge_base_id,
+        values=resolve_document_metadata(upload),
+        existing=existing,
+    )
+
+
+def _inherit_existing_metadata(
+    upload: WanshitongUploadMetadata,
+    existing: WanshitongDocumentMetadata,
+) -> WanshitongUploadMetadata:
+    """把逻辑文档既有显式分类作为同路径版本的默认值。"""
+    return upload.model_copy(
+        update={
+            "department_name": upload.department_name
+            or existing.department_name,
+            "category_path": (
+                existing.category_path
+                if upload.category_path is None
+                else upload.category_path
+            ),
+            "document_title": upload.document_title or existing.document_title,
+            "topic_keys": (
+                upload.topic_keys
+                if "topic_keys" in upload.model_fields_set
+                else existing.topic_keys
+            ),
+        }
+    )
+
+
+def _reject_client_security_metadata(request: Request) -> None:
+    """拒绝客户端越权提交服务端固定可见性、ACL 或表达式。"""
+    forbidden = {
+        "allowed_groups",
+        "allowed_roles",
+        "filter_expression",
+        "visibility_scope",
+    }
+    if forbidden.intersection(request.query_params):
+        raise AdminFacadeError(
+            "FORBIDDEN_DOCUMENT_METADATA",
+            "可见性、ACL 与筛选表达式只能由服务端设置。",
+            stage="wanshitong.document.metadata",
+        )
+
+
 async def _validated_upload(
     request: Request,
     runtime: ProductRuntime,
@@ -515,7 +634,24 @@ def _document_view(
         display_name=document.display_name,
         relative_path=None if metadata is None else metadata.relative_path,
         department=None if metadata is None else metadata.department,
+        department_key=(None if metadata is None else metadata.department_key),
+        department_name=(
+            None if metadata is None else metadata.department_name
+        ),
         category_path=() if metadata is None else metadata.category_path,
+        document_title=None if metadata is None else metadata.document_title,
+        source_relative_path=(
+            None if metadata is None else metadata.source_relative_path
+        ),
+        topic_keys=() if metadata is None else metadata.topic_keys,
+        visibility_scope=(
+            "all_internal" if metadata is None else metadata.visibility_scope
+        ),
+        allowed_roles=() if metadata is None else metadata.allowed_roles,
+        allowed_groups=() if metadata is None else metadata.allowed_groups,
+        metadata_revision=(
+            None if metadata is None else metadata.metadata_revision
+        ),
         status=document.status,
         current_version_id=document.current_version_id,
         current_version_status=version_status,
@@ -892,15 +1028,6 @@ def _system_status(
         "public_session": {"ready": True},
         "frontend_build_id": runtime.compatibility.frontend_build_id,
     }
-
-
-def _path_metadata(
-    relative_path: str,
-) -> tuple[str | None, tuple[str, ...]]:
-    parts = relative_path.split("/")
-    if len(parts) == 1:
-        return None, ()
-    return parts[0], tuple(parts[1:-1])
 
 
 def _resolved_offset(cursor: str | None, offset: int) -> int:

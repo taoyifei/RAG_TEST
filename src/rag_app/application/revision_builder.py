@@ -878,6 +878,7 @@ class RevisionBuilder:
                         ),
                     ),
                 )
+                result = _attach_document_metadata(result)
             with self._document_stage(context, "ir_validation"):
                 validate_document_ir(result.document_ir)
             if self._document_enricher is not None:
@@ -1482,6 +1483,7 @@ def complete_vector_points(
     """
     points = []
     for index, chunk in enumerate(chunks):
+        metadata = dict(chunk.metadata)
         named = {
             slot.vector_name: vectors[slot.slot_id][index] for slot in slots
         }
@@ -1501,11 +1503,69 @@ def complete_vector_points(
                     section_id=chunk.section_id,
                     neighbor_group_id=chunk.neighbor_group_id,
                     content_sha256=chunk.content_sha256,
+                    department_key=_metadata_string(metadata, "department_key"),
+                    department_name=_metadata_string(
+                        metadata, "department_name"
+                    ),
+                    category_path=_metadata_strings(metadata, "category_path"),
+                    document_title=_metadata_string(metadata, "document_title"),
+                    source_relative_path=_metadata_string(
+                        metadata, "source_relative_path"
+                    ),
+                    topic_keys=_metadata_strings(metadata, "topic_keys"),
+                    visibility_scope=_metadata_string(
+                        metadata, "visibility_scope"
+                    ),
+                    allowed_roles=_metadata_strings(metadata, "allowed_roles"),
+                    allowed_groups=_metadata_strings(
+                        metadata, "allowed_groups"
+                    ),
+                    metadata_revision=_metadata_string(
+                        metadata, "metadata_revision"
+                    ),
                 ),
                 vectors=tuple(sorted(named.items())),
             )
         )
     return tuple(points)
+
+
+def _attach_document_metadata(result: ParseResult) -> ParseResult:
+    """把运行时外部元数据附着到文档级 IR，不改变解析正文。"""
+    document_metadata = dict(result.document_ir.document.metadata)
+    if not document_metadata:
+        return result
+    merged = {
+        **dict(result.document_ir.metadata),
+        **document_metadata,
+    }
+    return result.model_copy(
+        update={
+            "document_ir": result.document_ir.model_copy(
+                update={"metadata": freeze_json_object(merged)}
+            )
+        }
+    )
+
+
+def _metadata_string(metadata: Mapping[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Chunk metadata 字段不是非空字符串：{key}")
+    return value
+
+
+def _metadata_strings(
+    metadata: Mapping[str, object], key: str
+) -> tuple[str, ...]:
+    value = metadata.get(key, ())
+    if not isinstance(value, (list, tuple)) or any(
+        not isinstance(item, str) or not item for item in value
+    ):
+        raise ValueError(f"Chunk metadata 字段不是字符串数组：{key}")
+    return tuple(value)
 
 
 __all__ = [

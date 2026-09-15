@@ -18,7 +18,16 @@ class WanshitongDocumentView(FrozenModel):
     display_name: str = Field(min_length=1, max_length=512)
     relative_path: str | None = Field(default=None, max_length=4096)
     department: str | None = Field(default=None, max_length=200)
+    department_key: str | None = Field(default=None, max_length=240)
+    department_name: str | None = Field(default=None, max_length=200)
     category_path: tuple[str, ...] = ()
+    document_title: str | None = Field(default=None, max_length=512)
+    source_relative_path: str | None = Field(default=None, max_length=4096)
+    topic_keys: tuple[str, ...] = ()
+    visibility_scope: str = "all_internal"
+    allowed_roles: tuple[str, ...] = ()
+    allowed_groups: tuple[str, ...] = ()
+    metadata_revision: str | None = None
     status: DocumentStatus
     current_version_id: str | None = None
     current_version_status: str | None = None

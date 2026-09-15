@@ -37,6 +37,17 @@ class PublicSessionResponse(BaseModel):
     expires_in: int = Field(gt=0)
 
 
+class PublicShortcut(BaseModel):
+    """只暴露可见快捷入口的展示字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shortcut_id: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")
+    label: str = Field(min_length=1, max_length=80)
+    description: str = Field(min_length=1, max_length=300)
+    revision: int = Field(ge=1)
+
+
 class PublicCapabilities(BaseModel):
     """公共前端可依赖的固定服务端能力。"""
 
@@ -52,6 +63,7 @@ class PublicCapabilities(BaseModel):
     document_visibility: Literal["all_internal"] = "all_internal"
     conversation_delete: Literal[True] = True
     feedback: Literal[True] = True
+    shortcuts: tuple[PublicShortcut, ...] = ()
 
 
 class PublicChatRequest(PublicRequest):
@@ -126,4 +138,5 @@ __all__ = [
     "PublicFeedbackResponse",
     "PublicSessionRequest",
     "PublicSessionResponse",
+    "PublicShortcut",
 ]

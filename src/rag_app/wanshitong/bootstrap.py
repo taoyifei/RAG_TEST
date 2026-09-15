@@ -59,6 +59,7 @@ def configure_wanshitong_app(
     app.state.wanshitong_scope_service = service
     app.state.wanshitong_public_session_service = public_sessions
     document_metadata = WanshitongDocumentMetadataStore(runtime.connections)
+    document_metadata.synchronize_legacy_rows()
     app.state.wanshitong_document_metadata = document_metadata
     register_scope_status_routes(app, service)
     register_admin_routes(

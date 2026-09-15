@@ -23,7 +23,7 @@ from rag_app.core.models import (
     RetrievalPolicy,
 )
 from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
-from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
     normalize_section_heading_label,
@@ -44,6 +44,22 @@ _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
 _LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$")
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
+_DOCUMENT_METADATA_KEYS = frozenset(
+    {
+        "allowed_groups",
+        "allowed_roles",
+        "category_path",
+        "created_at",
+        "department_key",
+        "department_name",
+        "document_title",
+        "metadata_revision",
+        "source_relative_path",
+        "topic_keys",
+        "updated_at",
+        "visibility_scope",
+    }
+)
 _TABLE_HEADER_SEMANTICS = {
     "DEFINITION": re.compile(
         r"定义|释义|解释|说明|含义|描述|交付件说明|内容说明"
@@ -1817,12 +1833,19 @@ def _evidence_item(
 ) -> EvidenceItem:
     chunk = candidate.hydrated.chunk
     anchor = span.source_anchor
+    metadata = _evidence_metadata(chunk, span)
+    document_title = dict(metadata).get("document_title")
+    display_label = (
+        document_title
+        if isinstance(document_title, str) and document_title
+        else candidate.hydrated.display_name
+    )
     return EvidenceItem(
         evidence_id=support_id,
         chunk_id=chunk.chunk_id,
         citation_text=quote,
         source_label=_source_label(
-            candidate.hydrated.display_name,
+            display_label,
             chunk.heading_path,
             page_index=None if anchor is None else anchor.page_index,
             source_kind=span.span_type,
@@ -1843,9 +1866,7 @@ def _evidence_item(
         pdf_table_id=None if anchor is None else anchor.pdf_table_id,
         selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
-        metadata=(
-            span.metadata if dict(span.metadata).get("origin") == "ocr" else ()
-        ),
+        metadata=metadata,
         retrieval_origins=tuple(
             contribution.channel for contribution in candidate.contributions
         )
@@ -1858,6 +1879,18 @@ def _evidence_item(
             else ()
         ),
     )
+
+
+def _evidence_metadata(chunk: Chunk, span: SourceSpan) -> JsonObject:
+    """只传播受控文档字段，并保留既有 OCR 来源标记。"""
+    metadata = {
+        key: value
+        for key, value in chunk.metadata
+        if key in _DOCUMENT_METADATA_KEYS
+    }
+    if dict(span.metadata).get("origin") == "ocr":
+        metadata.update(dict(span.metadata))
+    return freeze_json_object(metadata)
 
 
 def _relative_span(span: SourceSpan, quote: str, chunk_text: str) -> SourceSpan:
