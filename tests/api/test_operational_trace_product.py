@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from time import monotonic, sleep
 from typing import NoReturn
 from zipfile import ZipFile
 
+import httpx
 import pytest
 
 from rag_app.core.events import TraceEvent
@@ -23,11 +24,95 @@ from tests.product_support import (
     ProductHarness,
     build_product_harness,
     create_project_and_knowledge_base,
+    create_provider_connections,
 )
 
 _MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def _grounded_response(request: httpx.Request) -> httpx.Response:
+    """把首条候选原样返回为通过引用校验的离线回答。"""
+    request_payload = json.loads(request.content)
+    grounded = json.loads(request_payload["messages"][1]["content"])
+    candidates = grounded["evidence"]
+    claims = []
+    if candidates and "月球库存编号" not in grounded["question"]:
+        evidence = candidates[0]
+        claims = [
+            {
+                "text": evidence["text"],
+                "supports": [
+                    {
+                        "support_id": evidence["support_id"],
+                        "quote": evidence["text"],
+                    }
+                ],
+            }
+        ]
+    return httpx.Response(
+        200,
+        json={
+            "model": request_payload["model"],
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {"claims": claims}, ensure_ascii=False
+                        ),
+                    },
+                }
+            ],
+            "usage": {"total_tokens": 20},
+        },
+    )
+
+
+def _build_grounded_harness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ProductHarness:
+    """构造不会出网、但具备真实 Grounded Answer 路径的测试环境。"""
+    monkeypatch.setenv("RAG_TEST_ALIYUN_CREDENTIAL", "synthetic-grounded-key")
+    return build_product_harness(
+        tmp_path,
+        transport_factory=lambda _connection: httpx.MockTransport(
+            _grounded_response
+        ),
+    )
+
+
+def _enable_grounded_generation(
+    harness: ProductHarness,
+    knowledge_base_id: str,
+) -> None:
+    """为 Trace 与缓存合同配置有限预算的离线生成模型。"""
+    *_, connection_id = create_provider_connections(harness)
+    settings = harness.client.put(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/model-settings",
+        headers=harness.write_headers,
+        json={
+            "generation_connection_id": connection_id,
+            "generation_model": "qwen3.7-flash",
+        },
+    )
+    assert settings.status_code == 200, settings.text
+    approval = harness.client.post(
+        f"/api/v1/knowledge-bases/{knowledge_base_id}/"
+        "corpus-authorization:approve",
+        headers=harness.write_headers,
+        json={
+            "operations": ["generation"],
+            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            "request_limit": 8,
+            "estimated_token_limit": 80_000,
+            "operation_request_limits": {"generation": 8},
+        },
+    )
+    assert approval.status_code == 200, approval.text
 
 
 def _upload(
@@ -234,14 +319,16 @@ def test_non_admin_query_cannot_request_full_trace(tmp_path: Path) -> None:
 
 def test_diagnostic_and_full_trace_keep_content_boundaries(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """候选漏斗、耗时和 Artifact 可见，但问题正文不进入技术库。"""
-    harness = build_product_harness(tmp_path)
+    harness = _build_grounded_harness(tmp_path, monkeypatch)
     try:
         project_id, knowledge_base_id = create_project_and_knowledge_base(
             harness
         )
         _upload(harness, project_id, knowledge_base_id)
+        _enable_grounded_generation(harness, knowledge_base_id)
         endpoint = (
             f"/api/v1/projects/{project_id}/knowledge-bases/"
             f"{knowledge_base_id}:answer"
@@ -324,14 +411,16 @@ def test_diagnostic_and_full_trace_keep_content_boundaries(
 
 def test_product_trace_records_cache_hit_and_refusal_terminal_state(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """默认 Product 的缓存命中不重复检索，无答案查询结算为 REFUSED。"""
-    harness = build_product_harness(tmp_path)
+    """Grounded Product 的缓存命中不重复检索，无答案查询结算为 REFUSED。"""
+    harness = _build_grounded_harness(tmp_path, monkeypatch)
     try:
         project_id, knowledge_base_id = create_project_and_knowledge_base(
             harness
         )
         _upload(harness, project_id, knowledge_base_id)
+        _enable_grounded_generation(harness, knowledge_base_id)
         endpoint = (
             f"/api/v1/projects/{project_id}/knowledge-bases/"
             f"{knowledge_base_id}:answer"
