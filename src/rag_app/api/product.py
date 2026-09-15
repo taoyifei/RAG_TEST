@@ -50,6 +50,7 @@ from rag_app.product.retrieval_authorization import (
     RetrievalIngestionAuthorizationStatus,
 )
 from rag_app.product.verification import validation_is_current
+from rag_app.wanshitong.bootstrap import configure_wanshitong_app
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _LOGGER = logging.getLogger(__name__)
@@ -272,6 +273,11 @@ def create_product_app(
         ),
     )
     _register_product_routes(app, runtime)
+    configure_wanshitong_app(
+        app,
+        sdk=runtime.sdk,
+        connections=runtime.connections,
+    )
     _mount_frontend(app, runtime.settings.frontend_dir)
     return app
 
@@ -302,14 +308,14 @@ def create_product_lifespan_app(
             settings,
             transport_factory=transport_factory,
         )
-        inner = create_product_app(
-            runtime,
-            query_token=query_token,
-            admin_token=admin_token,
-        )
-        outer.state.product_runtime = runtime
-        outer.mount("/", inner)
         try:
+            inner = create_product_app(
+                runtime,
+                query_token=query_token,
+                admin_token=admin_token,
+            )
+            outer.state.product_runtime = runtime
+            outer.mount("/", inner)
             yield
         finally:
             runtime.close()
