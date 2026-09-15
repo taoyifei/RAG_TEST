@@ -69,7 +69,9 @@ it("保存配对模型引用，不触发验证或实际问答；清空回答会�
   const answer = vi.spyOn(api, "answer");
   render(<KnowledgeBaseModels kbId="kb_test" />);
   expect(await screen.findByText(/未配置，使用证据摘录回答/)).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "设置回答与图片识别" }));
+  await user.click(
+    screen.getByRole("button", { name: "设置回答、PDF 解析与图片识别" }),
+  );
   expect(await screen.findByText(/已选择模型不等于连接已验证/)).toBeVisible();
   const generation = await screen.findByRole("combobox", { name: "回答模型" });
   await waitFor(() => expect(generation).toBeEnabled());
@@ -110,7 +112,9 @@ it("设置保存失败保留输入并显示错误", async () => {
   vi.spyOn(api, "saveModelSettings").mockRejectedValue(new Error("连接已停用"));
   render(<KnowledgeBaseModels kbId="kb_test" />);
   await user.click(
-    await screen.findByRole("button", { name: "设置回答与图片识别" }),
+    await screen.findByRole("button", {
+      name: "设置回答、PDF 解析与图片识别",
+    }),
   );
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled(),
@@ -358,7 +362,9 @@ it("兼容回答连接保留自由模型链且不会要求 Campaign 批准", asy
   expect(
     screen.queryByRole("button", { name: "批准当前活动资料" }),
   ).not.toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "设置回答与图片识别" }));
+  await user.click(
+    screen.getByRole("button", { name: "设置回答、PDF 解析与图片识别" }),
+  );
   const model = await screen.findByLabelText("自定义回答模型 ID");
   expect(model).toHaveValue("vendor/chat-primary");
   expect(screen.getByLabelText("备用回答模型 ID（可选）")).toHaveValue(

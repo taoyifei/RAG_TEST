@@ -185,7 +185,7 @@ it("PDF 任务列表展示页数完整性、解析路径和模型", async () => 
   render(<JobsPage go={vi.fn()} />);
 
   expect(await screen.findByText(/PDF：10\/12 页/)).toBeVisible();
-  expect(screen.getByText(/本地 PaddleOCR/)).toBeVisible();
+  expect(screen.getByText(/本地\/自托管 PaddleOCR/)).toBeVisible();
   expect(screen.getByText(/PaddleOCR-VL-1.6/)).toBeVisible();
   expect(screen.getByText(/页数截断/)).toBeVisible();
 });
