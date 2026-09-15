@@ -23,10 +23,6 @@ dependencies = [
   "uvicorn==0.51.0",
 ]
 
-[project.optional-dependencies]
-# 官方托管 API 客户端随 PaddleOCR 核心包发布；默认安装不引入其较重依赖。
-paddleocr-official-api = ["paddleocr==3.7.0"]
-
 [project.scripts]
 rag-app = "rag_app.cli:main"
 rag-ocr = "rag_app.ocr.main:main"

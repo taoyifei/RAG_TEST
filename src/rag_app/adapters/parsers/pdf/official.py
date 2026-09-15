@@ -1,9 +1,8 @@
-"""PaddleOCR 官方 API Python SDK 的 PDF Adapter。"""
+"""PaddleOCR 官方托管 API 的 PDF Adapter。"""
 
 from __future__ import annotations
 
 import contextlib
-import importlib
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -14,6 +13,9 @@ from rag_app.adapters.parsers.pdf.contracts import (
     normalize_paddle_pages,
     official_pages,
     provider_job_id,
+)
+from rag_app.adapters.parsers.pdf.official_api_client import (
+    OfficialPaddleOcrApiClient,
 )
 from rag_app.core.capabilities import (
     ComponentCapabilities,
@@ -43,7 +45,7 @@ from rag_app.core.policies import ParsingPolicy
 
 OfficialClientFactory = Callable[[str, float, float], object]
 _PDF_MEDIA_TYPE = "application/pdf"
-_RETRYABLE_SDK_ERRORS = frozenset(
+_RETRYABLE_CLIENT_ERRORS = frozenset(
     {
         "NetworkError",
         "RequestTimeoutError",
@@ -53,12 +55,12 @@ _RETRYABLE_SDK_ERRORS = frozenset(
 
 
 class PaddleOfficialApiPdfConfig(FrozenModel):
-    """官方 SDK 的最小配置；Token 永不进入身份或 repr。"""
+    """官方托管 API 的最小配置；Token 永不进入身份或 repr。"""
 
     access_token: str = Field(min_length=1, max_length=4096, repr=False)
     model: str = Field(default="PaddleOCR-VL-1.6", min_length=1, max_length=160)
     parser_revision: str = Field(
-        default="paddleocr-sdk-3.7.0",
+        default="paddleocr-official-api-3.7.0-http-v1",
         min_length=1,
         max_length=80,
     )
@@ -67,7 +69,7 @@ class PaddleOfficialApiPdfConfig(FrozenModel):
 
 
 class PaddleOfficialApiPdfParser:
-    """由官方 SDK 提交、轮询和解析，不复制其异步协议。"""
+    """按官方 3.7.0 API 合同提交、轮询和解析 PDF。"""
 
     parser_capabilities = ParserCapabilities(
         supported_extensions=(".pdf",),
@@ -98,7 +100,7 @@ class PaddleOfficialApiPdfParser:
 
     @property
     def descriptor(self) -> ComponentDescriptor:
-        """返回不含 Token 的官方 SDK 描述。"""
+        """返回不含 Token 的官方 API 描述。"""
         return ComponentDescriptor(
             kind=ComponentKind.PARSER,
             name="paddle-official-pdf",
@@ -122,7 +124,7 @@ class PaddleOfficialApiPdfParser:
 
     @property
     def parser_revision(self) -> str:
-        """返回官方 SDK 修订。"""
+        """返回官方 API 合同修订。"""
         return self._config.parser_revision
 
     @property
@@ -131,7 +133,10 @@ class PaddleOfficialApiPdfParser:
         return canonical_sha256(
             {
                 "model": self.parser_model,
+                "use_doc_orientation_classify": False,
+                "use_doc_unwarping": False,
                 "use_layout_detection": True,
+                "use_chart_recognition": False,
                 "prettify_markdown": False,
                 "restructure_pages": False,
                 "return_markdown_images": False,
@@ -286,9 +291,9 @@ class PaddleOfficialApiPdfParser:
         parser = getattr(client, "parse_document", None)
         if not callable(parser):
             raise ConfigurationError(
-                "PaddleOCR 官方 SDK Client 缺少 parse_document。",
+                "PaddleOCR 官方 API Client 缺少 parse_document。",
                 stage="pdf.paddle.official.configuration",
-                code="PADDLE_OFFICIAL_SDK_INVALID",
+                code="PADDLE_OFFICIAL_CLIENT_INVALID",
             )
         kwargs = {
             "file_path": str(path),
@@ -300,78 +305,56 @@ class PaddleOfficialApiPdfParser:
         try:
             return parser(**kwargs)
         except Exception as error:
-            raise _map_sdk_error(error) from error
+            raise _map_client_error(error) from error
 
 
 def _official_client(
     token: str, request_timeout: float, poll_timeout: float
 ) -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError as error:
-        raise ConfigurationError(
-            "PaddleOCR 官方 API SDK 未安装。",
-            stage="pdf.paddle.official.configuration",
-            code="PADDLE_OFFICIAL_SDK_UNAVAILABLE",
-        ) from error
-    return module.PaddleOCRClient(
+    return OfficialPaddleOcrApiClient(
         token=token,
         request_timeout=request_timeout,
         poll_timeout=poll_timeout,
     )
 
 
-def _official_model(model: str) -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError:
-        return model
-    if model == "PaddleOCR-VL-1.6":
-        return module.Model.PADDLE_OCR_VL_16
-    if model == "PP-StructureV3":
-        return module.Model.PP_STRUCTURE_V3
+def _official_model(model: str) -> str:
     return model
 
 
-def _official_options(model: str) -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError:
-        # 注入的合同测试客户端只需要可检查的等价字典。
+def _official_options(model: str) -> dict[str, object]:
+    if model == "PP-StructureV3":
         return {
-            "use_layout_detection": True,
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
             "prettify_markdown": False,
-            "restructure_pages": False,
             "return_markdown_images": False,
             "visualize": False,
         }
-    if model == "PP-StructureV3":
-        return module.PPStructureV3Options(
-            prettify_markdown=False,
-            return_markdown_images=False,
-            visualize=False,
-        )
-    return module.PaddleOCRVLOptions(
-        use_layout_detection=True,
-        prettify_markdown=False,
-        restructure_pages=False,
-        return_markdown_images=False,
-        visualize=False,
-    )
+    return {
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_layout_detection": True,
+        "use_chart_recognition": False,
+        "prettify_markdown": False,
+        "restructure_pages": False,
+        "return_markdown_images": False,
+        "visualize": False,
+    }
 
 
-def _map_sdk_error(error: Exception) -> Exception:
+def _map_client_error(error: Exception) -> Exception:
     name = type(error).__name__
     if name == "AuthError":
         return ProviderAuthenticationError(
             "PaddleOCR 官方 API 鉴权失败。",
-            stage="pdf.paddle.official.sdk",
+            stage="pdf.paddle.official.api",
             code="PADDLE_AUTHENTICATION_FAILED",
         )
     if name == "RateLimitError":
         return ProviderRateLimited(
             "PaddleOCR 官方 API 触发限流。",
-            stage="pdf.paddle.official.sdk",
+            stage="pdf.paddle.official.api",
             code="PADDLE_RATE_LIMITED",
         )
     code = {
@@ -384,20 +367,20 @@ def _map_sdk_error(error: Exception) -> Exception:
     if code is not None:
         return ProviderInvalidResponse(
             "PaddleOCR 官方 API 任务或结果无效。",
-            stage="pdf.paddle.official.sdk",
+            stage="pdf.paddle.official.api",
             code=code,
             details={"error_type": name},
         )
-    if name in _RETRYABLE_SDK_ERRORS:
+    if name in _RETRYABLE_CLIENT_ERRORS:
         return ProviderUnavailable(
             "PaddleOCR 官方 API 暂时不可用。",
-            stage="pdf.paddle.official.sdk",
+            stage="pdf.paddle.official.api",
             code="PADDLE_DOCUMENT_PARSE_UNAVAILABLE",
             details={"error_type": name},
         )
     return ProviderUnavailable(
         "PaddleOCR 官方 API 调用失败。",
-        stage="pdf.paddle.official.sdk",
+        stage="pdf.paddle.official.api",
         code="PADDLE_DOCUMENT_PARSE_FAILED",
         details={"error_type": name},
         retryable=False,

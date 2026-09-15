@@ -323,7 +323,7 @@ export function ConnectionCreator({
             <p className="span-two">
               {paddleSelfHosted
                 ? "文档解析地址调用 /layout-parsing；可另填 PP-OCRv6 服务地址供高风险原子调用 /ocr，未填时保持未复核。API Key 可留空。"
-                : "官方模式使用当前凭据中的 Access Token，通过 PaddleOCR 3.7.0 官方 SDK 提交与轮询。"}
+                : "官方模式使用当前凭据中的 Access Token，按 PaddleOCR 3.7.0 官方 API 合同提交与轮询。"}
               保存连接不会立即发送文件，测试连接需另行发起。
             </p>
           </>

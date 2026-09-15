@@ -88,7 +88,7 @@ class ProductPdfParsing:
             control: Provider Connection 控制面。
             credentials: 只在实际解析边界解密的凭据存储。
             self_hosted_client_factory: 合同测试可注入的 HTTP Client 工厂。
-            official_client_factory: 合同测试可注入的官方 SDK Client 工厂。
+            official_client_factory: 合同测试可注入的官方 API Client 工厂。
 
         Returns:
             无返回值。
@@ -352,7 +352,7 @@ class ProductPdfParsing:
                 PaddleOfficialApiPdfConfig(
                     access_token=token,
                     model=model,
-                    parser_revision="paddleocr-sdk-3.7.0",
+                    parser_revision=("paddleocr-official-api-3.7.0-http-v1"),
                     request_timeout_seconds=request_timeout,
                     poll_timeout_seconds=poll_timeout,
                 ),

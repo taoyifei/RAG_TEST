@@ -247,7 +247,7 @@ class _OfficialClient:
         """合同替身没有真实资源。"""
 
 
-def test_official_sdk_recovers_missing_pages_with_one_based_ranges() -> None:
+def test_official_client_recovers_missing_pages_with_one_based_ranges() -> None:
     content = _pdf_bytes(2)
     client = _OfficialClient()
     parser = PaddleOfficialApiPdfParser(
@@ -268,6 +268,16 @@ def test_official_sdk_recovers_missing_pages_with_one_based_ranges() -> None:
         "2",
     ]
     assert all("model" in call and "options" in call for call in client.calls)
+    assert client.calls[0]["options"] == {
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_layout_detection": True,
+        "use_chart_recognition": False,
+        "prettify_markdown": False,
+        "restructure_pages": False,
+        "return_markdown_images": False,
+        "visualize": False,
+    }
     assert [page.page_index for page in result.pages] == [0, 1]
     assert result.provider_job_ids == (
         "job-whole",
@@ -294,18 +304,18 @@ def test_official_sdk_recovers_missing_pages_with_one_based_ranges() -> None:
         ),
     ],
 )
-def test_official_sdk_errors_have_stable_codes(
+def test_official_client_errors_have_stable_codes(
     error_name: str,
     expected_type: type[RagError],
     expected_code: str,
 ) -> None:
-    sdk_error = type(error_name, (Exception,), {})
+    client_error = type(error_name, (Exception,), {})
 
     class FailingClient:
-        """抛出一种命名与官方 SDK 一致的错误。"""
+        """抛出一种命名与官方 API Client 一致的错误。"""
 
         def parse_document(self, **_kwargs: object) -> object:
-            raise sdk_error("synthetic")
+            raise client_error("synthetic")
 
         def close(self) -> None:
             """合同替身没有真实资源。"""

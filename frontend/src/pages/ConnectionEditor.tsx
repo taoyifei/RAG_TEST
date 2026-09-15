@@ -294,7 +294,7 @@ export function ConnectionEditor({
             <p className="span-two">
               {paddleSelfHosted
                 ? "文档解析使用 /layout-parsing；仅在另配 PP-OCRv6 地址时对最终高风险原子调用 /ocr，未配置则标为未复核。"
-                : "官方模式由 PaddleOCR SDK 使用当前 Access Token 调用文档解析与 PP-OCRv6。"}
+                : "官方模式按 PaddleOCR 3.7.0 官方 API 合同，使用当前 Access Token 调用文档解析与 PP-OCRv6。"}
               模式或地址变化后需要重新执行连接测试。
             </p>
           </>

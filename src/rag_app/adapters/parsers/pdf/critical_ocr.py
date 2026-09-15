@@ -19,6 +19,9 @@ from urllib.parse import urlsplit
 import httpx
 from PIL import Image
 
+from rag_app.adapters.parsers.pdf.official_api_client import (
+    OfficialPaddleOcrApiClient,
+)
 from rag_app.core.models import ProviderCall
 
 OfficialClientFactory = Callable[[str, float, float], object]
@@ -251,7 +254,7 @@ class PaddleSelfHostedCriticalOcr:
 
 
 class PaddleOfficialCriticalOcr:
-    """通过 PaddleOCR 3.7.0 官方 SDK 调用 PP-OCRv6。"""
+    """通过 PaddleOCR 3.7.0 官方托管 API 调用 PP-OCRv6。"""
 
     def __init__(
         self,
@@ -269,7 +272,7 @@ class PaddleOfficialCriticalOcr:
         self._client_factory = client_factory or _official_client
 
     def recognize(self, image: bytes) -> CriticalOcrRead:
-        """使用官方 SDK 对一个 PNG 区域执行一次同步 OCR。"""
+        """使用官方 API 对一个 PNG 区域执行一次同步 OCR。"""
         started = time.monotonic()
         try:
             with tempfile.NamedTemporaryFile(suffix=".png") as temporary:
@@ -281,7 +284,7 @@ class PaddleOfficialCriticalOcr:
                         return self._result(
                             started,
                             None,
-                            "OCR_VERIFICATION_SDK_INVALID",
+                            "OCR_VERIFICATION_CLIENT_INVALID",
                             "invalid_contract",
                         )
                     result = method(
@@ -318,7 +321,7 @@ class PaddleOfficialCriticalOcr:
         )
 
     def close(self) -> None:
-        """官方 SDK Client 已按单次调用关闭。"""
+        """官方 HTTP Client 已按单次调用关闭。"""
 
     @contextlib.contextmanager
     def _client(self) -> Iterator[object]:
@@ -465,44 +468,27 @@ def _safe_error_name(value: str) -> str:
     return cleaned[:60] or "FAILED"
 
 
-def _official_ocr_model() -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError:
-        return "PP-OCRv6"
-    return module.Model.PP_OCRV6
+def _official_ocr_model() -> str:
+    return "PP-OCRv6"
 
 
 def _official_client(
     token: str, request_timeout: float, poll_timeout: float
 ) -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError as error:
-        raise RuntimeError("PaddleOCR 官方 API SDK 未安装。") from error
-    return module.PaddleOCRClient(
+    return OfficialPaddleOcrApiClient(
         token=token,
         request_timeout=request_timeout,
         poll_timeout=poll_timeout,
     )
 
 
-def _official_ocr_options() -> object:
-    try:
-        module = importlib.import_module("paddleocr")
-    except ImportError:
-        return {
-            "use_doc_orientation_classify": False,
-            "use_doc_unwarping": False,
-            "use_textline_orientation": True,
-            "visualize": False,
-        }
-    return module.OCROptions(
-        use_doc_orientation_classify=False,
-        use_doc_unwarping=False,
-        use_textline_orientation=True,
-        visualize=False,
-    )
+def _official_ocr_options() -> dict[str, object]:
+    return {
+        "use_doc_orientation_classify": False,
+        "use_doc_unwarping": False,
+        "use_textline_orientation": False,
+        "visualize": False,
+    }
 
 
 __all__ = [

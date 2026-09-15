@@ -609,7 +609,7 @@ function ModelEditor({
         </div>
         <p>
           本地连接调用完整产线的 <code>/layout-parsing</code>
-          ；官方连接由 PaddleOCR SDK
+          ；官方连接按 PaddleOCR 3.7.0 API 合同
           提交和轮询。解析选项、模型或连接版本变化会要求新索引
           Revision；只修改回答模型不会重跑 PDF。
         </p>

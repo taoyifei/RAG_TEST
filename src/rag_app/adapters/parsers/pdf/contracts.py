@@ -94,22 +94,22 @@ def self_hosted_pages(payload: object) -> tuple[object, ...]:
 
 
 def official_pages(result: object) -> tuple[object, ...]:
-    """读取官方 SDK `DocParsingResult.pages`。
+    """读取官方 API `DocParsingResult.pages`。
 
     Args:
-        result: 官方 SDK 返回对象或合同测试替身。
+        result: 官方 API Client 返回对象或合同测试替身。
 
     Returns:
-        SDK 返回的页面对象。
+        官方 API 返回的页面对象。
 
     Raises:
-        ProviderInvalidResponse: SDK 返回值不含页面数组。
+        ProviderInvalidResponse: Client 返回值不含页面数组。
 
     """
     pages = _value(result, "pages")
     if not _is_sequence(pages):
         raise ProviderInvalidResponse(
-            "PaddleOCR 官方 SDK 响应缺少页面结果。",
+            "PaddleOCR 官方 API 响应缺少页面结果。",
             stage="pdf.paddle.official.response",
             code="PDF_PAGE_RESULTS_MISSING",
         )
@@ -133,7 +133,7 @@ def normalize_paddle_pages(
     """按已核验的原 PDF 物理顺序绑定页面并标准化块。
 
     Args:
-        raw_pages: 自托管数组或官方 SDK pages。
+        raw_pages: 自托管数组或官方 API pages。
         inspection: 本地证明的总页数和文本层状态。
         page_indices: 分页调用时对应的零基物理页；默认按数组顺序。
 
