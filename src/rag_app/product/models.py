@@ -42,6 +42,7 @@ class ProviderConnectionDraft(FrozenModel):
     endpoint_mode: str = "workspace_host"
     api_host: str | None = None
     api_base_url: str | None = None
+    ocr_api_base_url: str | None = None
     rerank_protocol: str | None = None
     rerank_path: str | None = None
     workspace_id: str | None = None
@@ -65,6 +66,7 @@ class ProviderConnection(FrozenModel):
     endpoint_mode: str = "workspace_host"
     api_host: str | None = None
     api_base_url: str | None = None
+    ocr_api_base_url: str | None = None
     rerank_protocol: str | None = None
     rerank_path: str | None = None
     workspace_id: str | None = None

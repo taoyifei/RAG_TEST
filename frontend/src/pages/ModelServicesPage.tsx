@@ -89,7 +89,7 @@ export function ModelServicesPage() {
       <div className="section-heading">
         <div>
           <h2>模型服务</h2>
-          <p>一处配置，供知识库检索、回答和图片识别使用。</p>
+          <p>一处配置，供知识库检索、回答、PDF 解析和图片识别使用。</p>
         </div>
         <div className="row-actions">
           <button
@@ -124,9 +124,13 @@ export function ModelServicesPage() {
                     {provider?.display_name ?? connection.provider_type} ·{" "}
                     {connection.provider_type === "openai-compatible"
                       ? `Base URL：${connection.api_base_url ?? "未配置"}`
-                      : connection.region === "cn-beijing"
-                        ? "北京"
-                        : "默认地域"}{" "}
+                      : connection.provider_type === "paddleocr"
+                        ? connection.endpoint_mode === "official_api"
+                          ? "PaddleOCR 官方 API"
+                          : `自托管：${connection.api_base_url ?? "未配置"}`
+                        : connection.region === "cn-beijing"
+                          ? "北京"
+                          : "默认地域"}{" "}
                     · {connection.enabled === false ? "已停用" : "已保存"}
                   </p>
                   {connection.provider_type === "openai-compatible" && (
@@ -206,7 +210,10 @@ export function ModelServicesPage() {
                     (connection.provider_type === "aliyun-model-studio" &&
                       connection.endpoint_mode !== "beijing_dashscope" &&
                       !connection.api_host) ||
-                    (custom && !connection.api_base_url);
+                    (custom && !connection.api_base_url) ||
+                    (connection.provider_type === "paddleocr" &&
+                      connection.endpoint_mode === "self_hosted" &&
+                      !connection.api_base_url);
                   const status = incomplete
                     ? "configuration_incomplete"
                     : stale
@@ -400,7 +407,10 @@ export function ModelServicesPage() {
       {confirmation && (
         <Modal title="确认连接测试" onClose={() => setConfirmation(undefined)}>
           <p>
-            只发送公开短文本，不会发送知识库文档。本次预计操作数：1，可能消耗服务额度。
+            {confirmation.operation === "document.parse"
+              ? "只发送程序生成的单页空白 PDF，不会发送知识库文档。"
+              : "只发送公开短文本，不会发送知识库文档。"}
+            本次预计操作数：1，可能消耗服务额度。
           </p>
           <p>累计预算以服务端为准，保存配置不会重置验收预算。</p>
           <button

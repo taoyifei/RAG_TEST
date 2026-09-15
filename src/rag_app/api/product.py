@@ -91,7 +91,9 @@ class SessionRequest(_RequestModel):
 class CredentialRequest(_RequestModel):
     """创建环境或数据库托管 Credential。"""
 
-    provider_type: Literal["jina", "aliyun-model-studio", "openai-compatible"]
+    provider_type: Literal[
+        "jina", "aliyun-model-studio", "openai-compatible", "paddleocr"
+    ]
     source: Literal["environment_managed", "database_encrypted"]
     environment_name: str | None = None
     secret_value: str | None = Field(
@@ -109,15 +111,22 @@ class ConnectionRequest(_RequestModel):
     """Provider Connection 非 Secret 配置。"""
 
     display_name: str = Field(min_length=1, max_length=200)
-    provider_type: Literal["jina", "aliyun-model-studio", "openai-compatible"]
+    provider_type: Literal[
+        "jina", "aliyun-model-studio", "openai-compatible", "paddleocr"
+    ]
     credential_id: str | None = None
     credential: CredentialRequest | None = None
     endpoint_profile: Literal["default"] = "default"
-    endpoint_mode: Literal["workspace_host", "beijing_dashscope", "custom"] = (
-        "workspace_host"
-    )
+    endpoint_mode: Literal[
+        "workspace_host",
+        "beijing_dashscope",
+        "custom",
+        "self_hosted",
+        "official_api",
+    ] = "workspace_host"
     api_host: str | None = Field(default=None, max_length=300)
     api_base_url: str | None = Field(default=None, max_length=2048)
+    ocr_api_base_url: str | None = Field(default=None, max_length=2048)
     rerank_protocol: Literal["tei", "jina-compatible"] | None = None
     rerank_path: str | None = Field(default=None, max_length=300)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -133,10 +142,18 @@ class ConnectionPatchRequest(_RequestModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=200)
     workspace_id: str | None = Field(default=None, min_length=1, max_length=200)
     endpoint_mode: (
-        Literal["workspace_host", "beijing_dashscope", "custom"] | None
+        Literal[
+            "workspace_host",
+            "beijing_dashscope",
+            "custom",
+            "self_hosted",
+            "official_api",
+        ]
+        | None
     ) = None
     api_host: str | None = Field(default=None, max_length=300)
     api_base_url: str | None = Field(default=None, max_length=2048)
+    ocr_api_base_url: str | None = Field(default=None, max_length=2048)
     rerank_protocol: Literal["tei", "jina-compatible"] | None = None
     rerank_path: str | None = Field(default=None, max_length=300)
     region: Literal["cn-beijing"] | None = None
@@ -156,6 +173,7 @@ class ValidationRequest(_RequestModel):
         "query.interpret",
         "query.rewrite",
         "image.ocr",
+        "document.parse",
     ]
     model: str = Field(min_length=1, max_length=200)
     expected_dimension: int | None = Field(default=None, gt=0)
@@ -696,7 +714,17 @@ def _register_provider_routes(app: FastAPI, runtime: ProductRuntime) -> None:
         connection_id: str,
         body: ValidationRequest,
     ) -> dict[str, object]:
-        result = runtime.providers.validate(connection_id, **body.model_dump())
+        connection = runtime.control.get_connection(connection_id)
+        if connection.provider_type == "paddleocr":
+            if body.operation != "document.parse":
+                raise ValueError("PaddleOCR 连接只支持 PDF 文档解析测试。")
+            if body.expected_dimension is not None or body.request_policy:
+                raise ValueError("PDF 文档解析测试不接受向量参数。")
+            result = runtime.pdf.validate_connection(connection_id, body.model)
+        else:
+            result = runtime.providers.validate(
+                connection_id, **body.model_dump()
+            )
         return result.model_dump(mode="json")
 
     @app.get(

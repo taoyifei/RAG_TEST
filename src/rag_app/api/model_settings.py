@@ -107,6 +107,11 @@ def register_model_settings_routes(  # noqa: PLR0915
             and (
                 not local_ocr_selected or runtime.providers.local_ocr_available
             ),
+            "pdf_parser_configured": bool(
+                settings.pdf_parser_connection_id
+                and settings.pdf_parser_model
+                and settings.pdf_parser_enabled
+            ),
             "local_ocr_available": runtime.providers.local_ocr_available,
             "corpus_authorization": runtime.corpus_authorizations.status(
                 knowledge_base_id
@@ -121,12 +126,26 @@ def register_model_settings_routes(  # noqa: PLR0915
         knowledge_base_id: str, settings: KnowledgeBaseModelSettings
     ) -> dict[str, object]:
         require_active_knowledge_base(runtime, knowledge_base_id)
+        previous = runtime.models.get(knowledge_base_id)
         if "ocr_media_hashes" not in settings.model_fields_set:
             settings = settings.model_copy(
                 update={
-                    "ocr_media_hashes": runtime.models.get(
-                        knowledge_base_id
-                    ).ocr_media_hashes,
+                    "ocr_media_hashes": previous.ocr_media_hashes,
+                }
+            )
+        pdf_fields = {
+            "pdf_parser_connection_id",
+            "pdf_parser_model",
+            "pdf_parser_enabled",
+            "pdf_request_timeout_seconds",
+            "pdf_poll_timeout_seconds",
+        }
+        missing_pdf_fields = pdf_fields - settings.model_fields_set
+        if missing_pdf_fields:
+            settings = settings.model_copy(
+                update={
+                    field: getattr(previous, field)
+                    for field in missing_pdf_fields
                 }
             )
         runtime.models.save(knowledge_base_id, settings)

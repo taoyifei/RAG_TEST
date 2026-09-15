@@ -1,0 +1,84 @@
+# PaddleOCR 3.7.0 PaddleOCR-VL-1.6 完整产线：版面检测 + VLM 识别。
+pipeline_name: PaddleOCR-VL-1.6
+batch_size: 64
+use_queues: true
+use_doc_preprocessor: false
+use_layout_detection: true
+use_chart_recognition: false
+use_seal_recognition: false
+format_block_content: false
+merge_layout_blocks: true
+markdown_ignore_labels:
+  - number
+  - footnote
+  - header
+  - header_image
+  - footer
+  - footer_image
+  - aside_text
+
+SubModules:
+  LayoutDetection:
+    module_name: layout_detection
+    model_name: PP-DocLayoutV3
+    model_dir: null
+    batch_size: 8
+    threshold: 0.3
+    layout_nms: true
+    layout_unclip_ratio: [1.0, 1.0]
+    layout_merge_bboxes_mode:
+      0: union
+      1: union
+      2: union
+      3: large
+      4: union
+      5: large
+      6: large
+      7: union
+      8: union
+      9: union
+      10: union
+      11: union
+      12: union
+      13: union
+      14: union
+      15: large
+      16: union
+      17: large
+      18: union
+      19: union
+      20: union
+      21: union
+      22: union
+      23: union
+      24: union
+  VLRecognition:
+    module_name: vl_recognition
+    model_name: PaddleOCR-VL-1.6-0.9B
+    model_dir: null
+    batch_size: 4096
+    genai_config:
+      backend: vllm-server
+      server_url: http://paddleocr-vlm-server:8080/v1
+
+SubPipelines:
+  DocPreprocessor:
+    pipeline_name: doc_preprocessor
+    batch_size: 8
+    use_doc_orientation_classify: true
+    use_doc_unwarping: true
+    SubModules:
+      DocOrientationClassify:
+        module_name: doc_text_orientation
+        model_name: PP-LCNet_x1_0_doc_ori
+        model_dir: null
+        batch_size: 8
+      DocUnwarping:
+        module_name: image_unwarping
+        model_name: UVDoc
+        model_dir: null
+
+Serving:
+  extra:
+    # 禁止服务端默认只处理前十页；RAG 仍会独立核对真实物理页数。
+    max_num_input_imgs: null

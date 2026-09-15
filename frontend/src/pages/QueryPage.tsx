@@ -20,6 +20,7 @@ import { DiagnosticsView, HistoryTrace } from "../components/HistoryTrace";
 import { useConsole } from "../state/console-context";
 import { isOcrEvidence, OcrEvidenceSource } from "../components/DocumentImages";
 import { QueryFeedback } from "../components/QueryFeedback";
+import { PdfEvidenceSource } from "../components/PdfEvidenceSource";
 
 function newConversationId(): string {
   if (typeof crypto.randomUUID === "function") {
@@ -88,6 +89,12 @@ function answerDeliveryMessage(result: QueryResponse): string {
   }
   if (result.status === "PROVIDER_UNAVAILABLE") {
     return "已找到可供模型核验的相关来源，但模型服务暂不可用，当前本地证据不足以发布答案。";
+  }
+  if (reason === "OCR_CRITICAL_ATOM_CONFLICT") {
+    return "页面识别结果存在冲突，请查看原页；本次没有发布确定事实。";
+  }
+  if (reason === "OCR_CRITICAL_ATOM_UNVERIFIED") {
+    return "页面中的高风险精确文字未能完成二次复核，请查看原页；本次没有发布确定事实。";
   }
   if (reason.includes("BUDGET")) {
     return "回答模型预算不可用，且当前证据不足以提供原文摘录答案。";
@@ -629,11 +636,19 @@ function ScopedQueryPage({
         evidence={evidence}
         imageSource={
           evidence && (
-            <OcrEvidenceSource
-              evidence={evidence}
-              projectId={scope.projectId}
-              kbId={scope.kbId}
-            />
+            <>
+              <PdfEvidenceSource
+                evidence={evidence}
+                projectId={scope.projectId}
+                kbId={scope.kbId}
+                token={tokens.admin}
+              />
+              <OcrEvidenceSource
+                evidence={evidence}
+                projectId={scope.projectId}
+                kbId={scope.kbId}
+              />
+            </>
           )
         }
         purpose={mode === "search" ? "diagnostic" : "citation"}

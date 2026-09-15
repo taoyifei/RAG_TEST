@@ -29,6 +29,7 @@ export function StatusBadge({ value }: { value: string | boolean }) {
   const good = [
     "active",
     "succeeded",
+    "SUCCEEDED",
     "ANSWERABLE",
     "ANSWERED",
     "healthy",
@@ -216,6 +217,22 @@ export function EvidenceDrawer({
           <dd>{evidence.document_version_id ?? "—"}</dd>
           <dt>章节</dt>
           <dd>{evidence.section_id ?? "—"}</dd>
+          <dt>物理页</dt>
+          <dd>
+            {evidence.page_index === null || evidence.page_index === undefined
+              ? "—"
+              : `PDF第${evidence.page_index + 1}页`}
+          </dd>
+          <dt>文字来源</dt>
+          <dd>
+            {evidence.source_kind === "pdf_parsed_text"
+              ? "PDF解析文字"
+              : evidence.source_kind === "ocr_text"
+                ? "OCR识别文字"
+                : "原文"}
+          </dd>
+          <dt>关键原子复核</dt>
+          <dd>{evidence.ocr_verification_state ?? "不适用"}</dd>
           <dt>融合 / 重排排名</dt>
           <dd>
             {evidence.fusion_rank ?? "—"} / {evidence.rerank_rank ?? "—"}

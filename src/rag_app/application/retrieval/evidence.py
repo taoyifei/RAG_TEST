@@ -1816,12 +1816,16 @@ def _evidence_item(
     support_id: str,
 ) -> EvidenceItem:
     chunk = candidate.hydrated.chunk
+    anchor = span.source_anchor
     return EvidenceItem(
         evidence_id=support_id,
         chunk_id=chunk.chunk_id,
         citation_text=quote,
         source_label=_source_label(
-            candidate.hydrated.display_name, chunk.heading_path
+            candidate.hydrated.display_name,
+            chunk.heading_path,
+            page_index=None if anchor is None else anchor.page_index,
+            source_kind=span.span_type,
         ),
         source_spans=(_relative_span(span, quote, chunk.citation_text),),
         document_id=chunk.version.document_id,
@@ -1833,6 +1837,10 @@ def _evidence_item(
             chunk.neighbor_group_id if chunk.role.value == "table" else None
         ),
         table_context=chunk.role.value == "table",
+        page_index=None if anchor is None else anchor.page_index,
+        source_kind=span.span_type,
+        pdf_block_id=None if anchor is None else anchor.pdf_block_id,
+        pdf_table_id=None if anchor is None else anchor.pdf_table_id,
         selection_reason=(candidate.expansion_reason or "retrieval_candidate"),
         publishable=True,
         metadata=(
@@ -1893,7 +1901,20 @@ def _relative_span(span: SourceSpan, quote: str, chunk_text: str) -> SourceSpan:
     return span.model_copy(update=updates)
 
 
-def _source_label(display_name: str, headings: tuple[str, ...]) -> str:
+def _source_label(
+    display_name: str,
+    headings: tuple[str, ...],
+    *,
+    page_index: int | None = None,
+    source_kind: SourceSpanKind | None = None,
+) -> str:
+    if page_index is not None:
+        kind = (
+            "OCR识别文字"
+            if source_kind is SourceSpanKind.OCR_TEXT
+            else "PDF解析文字"
+        )
+        return f"{display_name} · PDF第{page_index + 1}页 · {kind}"
     return (
         f"{display_name} · {' / '.join(headings)}" if headings else display_name
     )

@@ -7,6 +7,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from rag_app.application.answering.ocr_guard import (
+    claim_pdf_visual_evidence,
+    critical_ocr_atoms,
+)
 from rag_app.core.errors import (
     ProviderInvalidResponse,
     QueryCancelled,
@@ -20,12 +24,14 @@ from rag_app.core.models import (
     ConfidenceDecision,
     ConfidenceStatus,
     EvidenceItem,
+    OcrVerificationState,
     ProviderCall,
     QueryAnalysis,
     RequestedAnswerType,
 )
 from rag_app.core.ports import (
     CancellationPort,
+    CriticalOcrVerifierPort,
     GenerationRequest,
     GeneratorPort,
 )
@@ -43,9 +49,7 @@ _QUANTITY_UNIT_ATOM = (
 _QUANTITY_UNIT = (
     rf"(?:{_QUANTITY_UNIT_ATOM})(?:\s*/\s*(?:{_QUANTITY_UNIT_ATOM}))*"
 )
-_NUMBER = re.compile(
-    rf"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*{_QUANTITY_UNIT})?"
-)
+_NUMBER = re.compile(rf"[+-]?\d+(?:[.,:/-]\d+)*(?:\s*{_QUANTITY_UNIT})?")
 _QUANTITY_RANGE = re.compile(
     rf"(?P<left>[+-]?\d+(?:[.,:/]\d+)*)\s*"
     rf"(?P<left_unit>{_QUANTITY_UNIT})?\s*"
@@ -201,6 +205,7 @@ class GroundedOutcome:
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str | None = None
     published_support_ids: tuple[str, ...] = ()
+    ocr_verification_states: tuple[tuple[str, OcrVerificationState], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,17 +275,17 @@ def _number_tokens(text: str) -> set[str]:
     def close_range(match: re.Match[str]) -> str:
         """把等价区间写法投影成带单位的两个端点。"""
         right_unit = re.sub(r"\s+", "", match["right_unit"])
-        left_unit = re.sub(
-            r"\s+", "", match["left_unit"] or right_unit
-        )
+        left_unit = re.sub(r"\s+", "", match["left_unit"] or right_unit)
         range_tokens.add(match["left"] + left_unit)
         range_tokens.add(match["right"] + right_unit)
         return " "
 
     text = _QUANTITY_RANGE.sub(close_range, text)
-    return identifiers | range_tokens | {
-        re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)
-    }
+    return (
+        identifiers
+        | range_tokens
+        | {re.sub(r"\s+", "", value) for value in _NUMBER.findall(text)}
+    )
 
 
 def _table_number_tokens(text: str) -> set[str]:
@@ -306,9 +311,7 @@ def _table_number_tokens(text: str) -> set[str]:
         for unit in unit_candidates
         if re.fullmatch(_QUANTITY_UNIT, unit)
     }
-    return tokens | {
-        number + unit for number in bare_numbers for unit in units
-    }
+    return tokens | {number + unit for number in bare_numbers for unit in units}
 
 
 def _frequency_tokens(text: str) -> set[str]:
@@ -429,9 +432,7 @@ def _source_has_explicit_subject(subject: str, text: str) -> bool:
         )
         prefix = text[clause_start : match.start()]
         prefix = _LEADING_AGENT_PREFIX.sub("", prefix)
-        if (
-            _SUBJECT_CLAUSE_PREFIX.fullmatch(prefix) is None
-        ):
+        if _SUBJECT_CLAUSE_PREFIX.fullmatch(prefix) is None:
             continue
         if _DUTY_ACTION_PREFIX.match(text[match.end() :]) is not None:
             return True
@@ -850,11 +851,7 @@ def _joined_table_columns(
         if len(rows) < _MIN_TABLE_COLUMN_ROWS:
             continue
         quotes = tuple(
-            dict.fromkeys(
-                quote
-                for row in sorted(rows)
-                for quote in rows[row]
-            )
+            dict.fromkeys(quote for row in sorted(rows) for quote in rows[row])
         )
         joined.append("\n".join(quotes))
     return tuple(joined)
@@ -899,8 +896,14 @@ def _closed_table_contexts(
             candidate_table == table
             and candidate_column == column
             and row < target_row
-            for candidate_table, row, candidate_column, _quote, _target, _path
-            in cells
+            for (
+                candidate_table,
+                row,
+                candidate_column,
+                _quote,
+                _target,
+                _path,
+            ) in cells
         )
     }
     if not closed_columns:
@@ -1136,8 +1139,10 @@ def _validate_clause_support(
     supported_terms = terms & _terms(
         "\n".join((*relevant_sources, *trusted_term_contexts))
     )
-    if not terms or not source_terms or len(supported_terms) / len(terms) < (
-        _MIN_SUPPORTED_BIGRAM_RATIO
+    if (
+        not terms
+        or not source_terms
+        or len(supported_terms) / len(terms) < (_MIN_SUPPORTED_BIGRAM_RATIO)
     ):
         raise ValidationFailed(
             "事实与所引原文缺少支持关系。",
@@ -1207,13 +1212,9 @@ def validate_grounded_draft(
             for group in source_groups
             for context in group.trusted_contexts
         )
-        factual_text = _strip_trusted_context_prefix(
-            claim.text, claim_contexts
-        )
+        factual_text = _strip_trusted_context_prefix(claim.text, claim_contexts)
         claim_table_columns = tuple(
-            column
-            for group in source_groups
-            for column in group.table_columns
+            column for group in source_groups for column in group.table_columns
         )
         clauses = _merge_table_numeric_continuations(
             _clauses_with_subject(factual_text),
@@ -1263,20 +1264,86 @@ def validate_grounded_draft(
                 )
 
 
+def _verify_critical_ocr_claims(
+    claims: tuple[AnswerClaim, ...],
+    evidence: tuple[EvidenceItem, ...],
+    verifier: CriticalOcrVerifierPort | None,
+    cancellation: CancellationPort | None,
+) -> tuple[
+    tuple[ProviderCall, ...],
+    tuple[tuple[str, OcrVerificationState], ...],
+]:
+    """在最终草稿上执行有限视觉关键原子复核。"""
+    calls: list[ProviderCall] = []
+    states: dict[str, OcrVerificationState] = {}
+    for claim in claims:
+        atoms = critical_ocr_atoms(claim.text)
+        visual_evidence = claim_pdf_visual_evidence(claim, evidence)
+        visual_support_ids = {item.evidence_id for item in visual_evidence}
+        atoms = tuple(
+            atom
+            for atom in atoms
+            if any(
+                support.support_id in visual_support_ids
+                and atom in support.quote
+                for support in claim.supports
+            )
+        )
+        if not atoms or not visual_evidence:
+            continue
+        _raise_if_cancelled(cancellation)
+        if verifier is None:
+            error = ValidationFailed(
+                "高风险 PDF 视觉文字缺少 PP-OCRv6 复核能力。",
+                stage="answer.ocr_verify",
+                code="OCR_CRITICAL_ATOM_UNVERIFIED",
+            )
+            error.provider_calls = tuple(calls)
+            raise error
+        result = verifier.verify(claim, visual_evidence, atoms)
+        if result.state is not OcrVerificationState.VERIFIED:
+            error = ValidationFailed(
+                (
+                    "页面识别结果存在冲突，请查看原页。"
+                    if result.state is OcrVerificationState.CONFLICT
+                    else "高风险 PDF 视觉文字未能完成二次复核。"
+                ),
+                stage="answer.ocr_verify",
+                code=(
+                    "OCR_CRITICAL_ATOM_CONFLICT"
+                    if result.state is OcrVerificationState.CONFLICT
+                    else "OCR_CRITICAL_ATOM_UNVERIFIED"
+                ),
+                details={"verification_reason": result.reason_code},
+            )
+            error.provider_calls = (*calls, *result.provider_calls)
+            raise error
+        calls.extend(result.provider_calls)
+        states.update(result.support_states)
+    return tuple(calls), tuple(states.items())
+
+
 class GroundedAnsweringService:
     """生成不确定性只在合法证据内解决；失败时保留原因并拒答。"""
 
-    def __init__(self, generator: GeneratorPort) -> None:
+    def __init__(
+        self,
+        generator: GeneratorPort,
+        *,
+        critical_ocr_verifier: CriticalOcrVerifierPort | None = None,
+    ) -> None:
         """绑定最多执行初次生成与一次修复的生成器。
 
         Args:
             generator: 最多接收初次生成与一次修复请求的生成端口。
+            critical_ocr_verifier: 最终 PDF 高风险事实的有界复核端口。
 
         Returns:
             无返回值。
 
         """
         self.generator = generator
+        self._critical_ocr_verifier = critical_ocr_verifier
 
     def answer(  # noqa: PLR0912, PLR0913, PLR0915
         self,
@@ -1391,6 +1458,15 @@ class GroundedAnsweringService:
                     reason = draft.reason_code
                     break
                 validate_grounded_draft(draft, evidence, analysis=analysis)
+                verification_calls, verification_states = (
+                    _verify_critical_ocr_claims(
+                        draft.claims,
+                        evidence,
+                        self._critical_ocr_verifier,
+                        cancellation,
+                    )
+                )
+                calls.extend(verification_calls)
                 rendered_claims = tuple(
                     _render_claim_target(claim, analysis)
                     for claim in draft.claims
@@ -1429,6 +1505,7 @@ class GroundedAnsweringService:
                             for support in claim.supports
                         )
                     ),
+                    verification_states,
                 )
             except QueryCancelled as error:
                 error.provider_calls = (*calls, *error.provider_calls)

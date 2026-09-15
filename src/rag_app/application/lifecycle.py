@@ -44,7 +44,7 @@ from rag_app.core.ports import (
     LifecycleStorePort,
 )
 
-_DOC_MEDIA_TYPES_BY_EXTENSION = {
+_DOCUMENT_MEDIA_TYPES_BY_EXTENSION = {
     ".doc": frozenset({"application/msword", "application/octet-stream"}),
     ".docx": frozenset(
         {
@@ -53,9 +53,11 @@ _DOC_MEDIA_TYPES_BY_EXTENSION = {
             "wordprocessingml.document",
         }
     ),
+    ".pdf": frozenset({"application/pdf", "application/octet-stream"}),
 }
 _OLE_COMPOUND_FILE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 _DOCX_ZIP_MAGIC = b"PK\x03\x04"
+_PDF_MAGIC = b"%PDF-"
 
 
 class LifecycleService:
@@ -390,7 +392,7 @@ class LifecycleService:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             display_name: 仅作显示的文件名。
-            content: 受大小上限保护的 DOC 或 DOCX 字节。
+            content: 受大小上限保护的 DOC、DOCX 或 PDF 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
 
@@ -439,7 +441,7 @@ class LifecycleService:
             project_id: 所属项目 ID。
             knowledge_base_id: 所属知识库 ID。
             document_id: 保持不变的逻辑文档 ID。
-            content: 新版本 DOC 或 DOCX 字节。
+            content: 新版本 DOC、DOCX 或 PDF 字节。
             media_type: 已允许的媒体类型。
             idempotency_key: 调用方写请求幂等键。
 
@@ -463,6 +465,33 @@ class LifecycleService:
             idempotency_key,
             require_display_extension=False,
         )
+        if current.current_version_id is not None:
+            current_version = self._store.get_document_version(
+                project_id,
+                knowledge_base_id,
+                document_id,
+                current.current_version_id,
+            )
+            current_blob = self._blob_store.read(
+                current_version.source_artifact_id
+            )
+            if current_blob is None:
+                raise InvalidDocument(
+                    "当前文档版本的来源 Artifact 不存在。",
+                    stage="document_version.create",
+                )
+            current_extension = _detect_document_extension(
+                current_blob.content, current_version.media_type
+            )
+            requested_extension = _detect_document_extension(
+                content, media_type
+            )
+            if requested_extension != current_extension:
+                raise InvalidDocument(
+                    "同一逻辑文档的新版本必须保持 DOC、DOCX 或 PDF 格式。",
+                    stage="document_version.create",
+                    code="DOCUMENT_VERSION_FORMAT_MISMATCH",
+                )
         digest = hashlib.sha256(content).hexdigest()
         version_id = document_version_id(document_id, digest)
         result_id = self._store.claim_idempotency(
@@ -1021,7 +1050,7 @@ def _validate_document_input(
         extension
     ):
         raise InvalidDocument(
-            "显示名扩展名必须与 DOC 或 DOCX 文件签名一致。",
+            "显示名扩展名必须与 DOC、DOCX 或 PDF 文件签名一致。",
             stage="document.upload",
         )
 
@@ -1033,12 +1062,17 @@ def _detect_document_extension(content: bytes, media_type: str) -> str:
         extension = ".doc"
     elif content.startswith(_DOCX_ZIP_MAGIC):
         extension = ".docx"
+    elif content.startswith(_PDF_MAGIC):
+        extension = ".pdf"
     else:
         raise InvalidDocument(
-            "上传内容不是有效的 DOC 或 DOCX 文件签名。",
+            "上传内容不是有效的 DOC、DOCX 或 PDF 文件签名。",
             stage="document.upload",
         )
-    if media_type.casefold() not in _DOC_MEDIA_TYPES_BY_EXTENSION[extension]:
+    if (
+        media_type.casefold()
+        not in _DOCUMENT_MEDIA_TYPES_BY_EXTENSION[extension]
+    ):
         raise InvalidDocument(
             "上传 Content-Type 与文件格式不匹配。",
             stage="document.upload",

@@ -9,6 +9,7 @@ from pydantic import Field, StrictInt
 
 from rag_app.core.models.common import FrozenModel, JsonObject
 from rag_app.core.models.document import DocumentRef
+from rag_app.core.models.pdf import PdfPageProgress
 
 
 class ProjectStatus(StrEnum):
@@ -162,6 +163,7 @@ class Job(FrozenModel):
     revision_available: bool
     required_action: Literal["approve_retrieval"] | None
     slot_progress: tuple[SlotProgress, ...] = ()
+    pdf_progress: PdfPageProgress | None = None
 
 
 class SystemStatus(FrozenModel):

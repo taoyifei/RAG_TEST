@@ -1,0 +1,60 @@
+name: rag-paddleocr-vl
+
+services:
+  paddleocr-vl-api:
+    image: >-
+      ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-vl:${PADDLEOCR_API_IMAGE_TAG:-paddleocr3.7-nvidia-gpu-offline}
+    container_name: rag-paddleocr-vl-api
+    restart: unless-stopped
+    depends_on:
+      paddleocr-vlm-server:
+        condition: service_healthy
+    environment:
+      VLM_BACKEND: ${PADDLEOCR_VLM_BACKEND:-vllm}
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        paddlex --serve --pipeline
+        /home/paddleocr/pipeline_config_${PADDLEOCR_VLM_BACKEND:-vllm}.yaml
+    volumes:
+      - ./pipeline_config_vllm.yaml:/home/paddleocr/pipeline_config_vllm.yaml:ro
+    ports:
+      - >-
+        ${PADDLEOCR_BIND_ADDRESS:-127.0.0.1}:${PADDLEOCR_PORT:-8080}:8080
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PADDLEOCR_GPU_DEVICE_ID:-0}"]
+              capabilities: [gpu]
+    shm_size: 64g
+    user: root
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+
+  paddleocr-vlm-server:
+    image: >-
+      ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-${PADDLEOCR_VLM_BACKEND:-vllm}-server:${PADDLEOCR_VLM_IMAGE_TAG:-paddleocr3.7-nvidia-gpu-offline}
+    container_name: rag-paddleocr-vlm-server
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${PADDLEOCR_GPU_DEVICE_ID:-0}"]
+              capabilities: [gpu]
+    shm_size: 64g
+    user: root
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s

@@ -114,6 +114,7 @@ from rag_app.product.ocr_adapters import (
     LocalProductOcrAdapter,
 )
 from rag_app.product.ocr_enrichment import ProductOcrEnrichment
+from rag_app.product.pdf_parsing import ProductPdfParsing
 from rag_app.product.provider_runtime import (
     ProviderRuntimeRegistry,
     TransportFactory,
@@ -597,6 +598,8 @@ class ProductProfileResolver:
         corpus_authorizations: CorpusAuthorizationStore | None = None,
         retrieval_authorizations: RetrievalAuthorizationStore | None = None,
         ocr: ProductOcrEnrichment | None = None,
+        pdf: ProductPdfParsing | None = None,
+        content_identity: Callable[[str], str | None] | None = None,
         circuit_factory: Callable[[], ProviderCircuitBreaker] | None = None,
         acceptance_egress_resolver: Callable[
             [RetrievalProfileRevision, EgressPolicy], EgressPolicy
@@ -612,6 +615,8 @@ class ProductProfileResolver:
             corpus_authorizations: 可选的活动语料批准与预算状态存储。
             retrieval_authorizations: 可选的真实检索资料与预算批准存储。
             ocr: 可选的同库图片增补服务。
+            pdf: 可选的知识库级 PaddleOCR PDF 解析服务。
+            content_identity: PDF、图片 OCR 与图关系的统一内容身份。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
 
@@ -625,6 +630,8 @@ class ProductProfileResolver:
         self._corpus_authorizations = corpus_authorizations
         self._retrieval_authorizations = retrieval_authorizations
         self._ocr = ocr
+        self._pdf = pdf
+        self._content_identity = content_identity
         self._grounded_models: dict[
             str, _ResourceGeneration[ProductGroundedModel]
         ] = {}
@@ -676,6 +683,10 @@ class ProductProfileResolver:
         contracts = resolved_contracts(
             runtime.retrieval_runtime.persistence.components
         )
+        if self._pdf is not None:
+            contracts["parser_identity"] = self._pdf.wrap(
+                runtime.retrieval_runtime.persistence.components.parser
+            ).descriptor.model_dump(mode="json")
         self._control.index_contract = {
             key: contracts[key]
             for key in (
@@ -811,7 +822,16 @@ class ProductProfileResolver:
         ):
             return None, None, False, False
         try:
-            generation_identity = self._models.serving_identity(settings)
+            generation_identity = canonical_sha256(
+                {
+                    "generation": self._models.serving_identity(settings),
+                    "critical_ocr": (
+                        None
+                        if self._pdf is None
+                        else self._pdf.verification_identity(knowledge_base_id)
+                    ),
+                }
+            )
             model_generation = (
                 self._model_generation_locked(
                     knowledge_base_id,
@@ -926,6 +946,11 @@ class ProductProfileResolver:
                     serving_identity=generation_identity,
                     interpreter=model if rewrite_enabled else None,
                     rewriter=model if rewrite_enabled else None,
+                    critical_ocr_verifier=(
+                        None
+                        if self._pdf is None
+                        else self._pdf.critical_verifier(knowledge_base_id)
+                    ),
                 )
             elif cache_identity_only and generation_identity is not None:
                 service = service.with_generation_cache_identity(
@@ -1766,6 +1791,12 @@ class ProductProfileResolver:
             embedding_providers,
         )
         contracts = resolved_contracts(components)
+        parser = (
+            components.parser
+            if self._pdf is None
+            else self._pdf.wrap(components.parser)
+        )
+        contracts["parser_identity"] = parser.descriptor.model_dump(mode="json")
         contracts["embedding_topology"] = topology.model_dump(mode="json")
         vector_schema = dict(
             cast(dict[str, object], contracts["vector_schema"])
@@ -1780,7 +1811,7 @@ class ProductProfileResolver:
             else self._ocr.enrich_result,
             trace=components.trace_sink,
             control=persistence.control,
-            parser=components.parser,
+            parser=parser,
             parsing_policy=components.parsing_policy,
             chunker=components.chunker,
             chunking_policy=components.chunking_policy,
@@ -1808,9 +1839,7 @@ class ProductProfileResolver:
             budgets=budgets,
             egress_allowed_slots=frozenset(embedding_providers),
             retrieval_profile_revision_id=profile.profile_revision_id,
-            content_identity=None
-            if self._ocr is None
-            else self._ocr.content_identity,
+            content_identity=self._content_identity,
             ingestion_scope=lambda request: self._ingestion_retrieval_scope(
                 profile, request
             ),
@@ -1898,6 +1927,7 @@ class ProductRuntime:
     retrieval_authorizations: RetrievalAuthorizationStore
     ocr: ProductOcrEnrichment
     relations: ProductDiagramRelations
+    pdf: ProductPdfParsing
     traces: ProductTraceCoordinator
     content_identity: Callable[[str], str | None]
     local_ocr_http_client: httpx.Client | None = None
@@ -2033,6 +2063,7 @@ def build_product_runtime(  # noqa: PLR0915
     credentials = CredentialStore(connections, credential_cipher)
     control = ProductControlStore(connections, credentials)
     models = ProductModelSettings(connections, control)
+    pdf = ProductPdfParsing(connections, models, control, credentials)
     auth_cipher = SecretCipher(_authentication_key(bootstrap_token))
     auth = AuthStore(connections, auth_cipher)
     sessions = ConsoleSessionService(auth, bootstrap_token)
@@ -2114,6 +2145,7 @@ def build_product_runtime(  # noqa: PLR0915
     def _content_identity(knowledge_base_id: str) -> str | None:
         identities = {
             "ocr": ocr.content_identity(knowledge_base_id),
+            "pdf": pdf.content_identity(knowledge_base_id),
             "diagram_relations": relations.content_identity(knowledge_base_id),
         }
         if all(value is None for value in identities.values()):
@@ -2130,6 +2162,8 @@ def build_product_runtime(  # noqa: PLR0915
         corpus_authorizations=corpus_authorizations,
         retrieval_authorizations=retrieval_authorizations,
         ocr=ocr,
+        pdf=pdf,
+        content_identity=_content_identity,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
     )
@@ -2154,6 +2188,7 @@ def build_product_runtime(  # noqa: PLR0915
                 query_history=traces,
                 conversation=conversations,
                 document_enricher=_enrich_media,
+                parser_resolver=pdf.wrap,
                 content_identity=_content_identity,
                 retrieval_policy=RetrievalPolicy.model_validate(
                     resolve_retrieval_policy({}, {}),
@@ -2173,6 +2208,7 @@ def build_product_runtime(  # noqa: PLR0915
         raise
     profiles.bind_runtime(p09)
     ocr.bind_blob_store(p09.retrieval_runtime.persistence.components.blob_store)
+    pdf.bind_blob_store(p09.retrieval_runtime.persistence.components.blob_store)
     runtime = ProductRuntime(
         p09=p09,
         connections=connections,
@@ -2192,6 +2228,7 @@ def build_product_runtime(  # noqa: PLR0915
         retrieval_authorizations=retrieval_authorizations,
         ocr=ocr,
         relations=relations,
+        pdf=pdf,
         traces=traces,
         content_identity=_content_identity,
         local_ocr_http_client=local_ocr_http_client,

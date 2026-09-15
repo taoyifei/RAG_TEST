@@ -160,6 +160,7 @@ class ProductControlStore:
                 "endpoint_mode": draft.endpoint_mode,
                 "api_host": draft.api_host,
                 "api_base_url": draft.api_base_url,
+                "ocr_api_base_url": draft.ocr_api_base_url,
                 "region": region,
                 "rerank_path": draft.rerank_path,
                 "rerank_protocol": draft.rerank_protocol,
@@ -215,6 +216,7 @@ class ProductControlStore:
             "endpoint_mode",
             "api_host",
             "api_base_url",
+            "ocr_api_base_url",
             "rerank_protocol",
             "rerank_path",
             "region",
@@ -1365,6 +1367,7 @@ def _connection(row: Row) -> ProviderConnection:
         or ("workspace_host" if row["provider_type"] == "jina" else ""),
         api_host=config.get("api_host"),
         api_base_url=config.get("api_base_url"),
+        ocr_api_base_url=config.get("ocr_api_base_url"),
         rerank_protocol=config.get("rerank_protocol"),
         rerank_path=config.get("rerank_path"),
         workspace_id=config.get("workspace_id"),
@@ -1517,6 +1520,7 @@ def validate_connection_metadata(
             value is not None
             for value in (
                 draft.api_base_url,
+                draft.ocr_api_base_url,
                 draft.rerank_protocol,
                 draft.rerank_path,
             )
@@ -1539,7 +1543,12 @@ def validate_connection_metadata(
     if draft.provider_type == OPENAI_COMPATIBLE_PROVIDER:
         if any(
             value is not None
-            for value in (draft.workspace_id, draft.region, draft.api_host)
+            for value in (
+                draft.workspace_id,
+                draft.region,
+                draft.api_host,
+                draft.ocr_api_base_url,
+            )
         ):
             raise ValueError("兼容服务不能保存百炼端点配置。")
         protocol = normalize_rerank_protocol(draft.rerank_protocol)
@@ -1553,11 +1562,45 @@ def validate_connection_metadata(
                 ),
             }
         )
+    if draft.provider_type == "paddleocr":
+        if any(
+            value is not None
+            for value in (
+                draft.workspace_id,
+                draft.region,
+                draft.api_host,
+                draft.rerank_protocol,
+                draft.rerank_path,
+            )
+        ):
+            raise ValueError("PaddleOCR 连接不能保存其它 Provider 配置。")
+        if draft.endpoint_mode == "self_hosted":
+            return draft.model_copy(
+                update={
+                    "api_base_url": normalize_base_url(draft.api_base_url),
+                    "ocr_api_base_url": (
+                        None
+                        if draft.ocr_api_base_url is None
+                        else normalize_base_url(draft.ocr_api_base_url)
+                    ),
+                }
+            )
+        if draft.endpoint_mode == "official_api":
+            if (
+                draft.api_base_url is not None
+                or draft.ocr_api_base_url is not None
+            ):
+                raise ValueError("PaddleOCR 官方 API 不接受自定义 Base URL。")
+            return draft
+        raise ValueError(
+            "PaddleOCR 端点模式只支持 self_hosted 或 official_api。"
+        )
     if (
         draft.workspace_id is not None
         or draft.region is not None
         or draft.api_host is not None
         or draft.api_base_url is not None
+        or draft.ocr_api_base_url is not None
         or draft.rerank_protocol is not None
         or draft.rerank_path is not None
         or draft.endpoint_mode != "workspace_host"

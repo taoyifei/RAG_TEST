@@ -32,6 +32,11 @@ class KnowledgeBaseModelSettings(FrozenModel):
     ocr_enabled: bool = False
     ocr_media_hashes: tuple[str, ...] = Field(default=(), max_length=200)
     ocr_revision: StrictInt = Field(default=0, ge=0)
+    pdf_parser_connection_id: str | None = None
+    pdf_parser_model: str | None = None
+    pdf_parser_enabled: bool = False
+    pdf_request_timeout_seconds: float = Field(default=300.0, gt=0.0, le=3600.0)
+    pdf_poll_timeout_seconds: float = Field(default=600.0, gt=0.0, le=7200.0)
     budget_campaign_id: str | None = Field(
         default=None, pattern=r"^[A-Za-z0-9_.:-]{1,128}$"
     )
@@ -47,6 +52,7 @@ class KnowledgeBaseModelSettings(FrozenModel):
         for connection, model in (
             (self.generation_connection_id, self.generation_model),
             (self.ocr_connection_id, self.ocr_model),
+            (self.pdf_parser_connection_id, self.pdf_parser_model),
         ):
             if bool(connection) != bool(model):
                 raise ValueError("模型与连接必须一起选择或清空。")
@@ -58,6 +64,8 @@ class KnowledgeBaseModelSettings(FrozenModel):
             raise ValueError("改写需要已选择的回答模型。")
         if self.ocr_enabled and not self.ocr_connection_id:
             raise ValueError("图片识别需要已选择的 OCR 模型。")
+        if self.pdf_parser_enabled and not self.pdf_parser_connection_id:
+            raise ValueError("PDF 解析需要已选择的 PaddleOCR 模型。")
         return self
 
     @property
@@ -160,6 +168,17 @@ class ProductModelSettings:
                     settings.ocr_model,
                     "image.ocr",
                 )
+        if settings.pdf_parser_connection_id and settings.pdf_parser_model:
+            provider_connection = self.control.get_connection(
+                settings.pdf_parser_connection_id
+            )
+            if not provider_connection.enabled:
+                raise ValueError("PDF 解析连接已停用。")
+            validate_model(
+                provider_connection.provider_type,
+                settings.pdf_parser_model,
+                "document.parse",
+            )
         with self.connections.transaction(write=True) as connection:
             connection.execute(
                 "INSERT INTO knowledge_base_model_settings VALUES (?, ?, ?) "
@@ -185,7 +204,15 @@ class ProductModelSettings:
 
         """
         identity: dict[str, object] = {
-            "settings": settings.model_dump(),
+            "settings": settings.model_dump(
+                exclude={
+                    "pdf_parser_connection_id",
+                    "pdf_parser_model",
+                    "pdf_parser_enabled",
+                    "pdf_request_timeout_seconds",
+                    "pdf_poll_timeout_seconds",
+                }
+            ),
             "prompt": "grounded-chat-v7",
             "interpret": "bounded-interpret-v2",
             "rewrite": "bounded-rewrite-v3",

@@ -871,6 +871,8 @@ class RevisionBuilder:
                     self._parsing_policy,
                     ParseContext(
                         document=item.document,
+                        job_id=job_id,
+                        revision_id=revision_id,
                         cancel_check=lambda: self._control.assert_job_active(
                             job_id
                         ),

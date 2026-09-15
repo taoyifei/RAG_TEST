@@ -690,7 +690,7 @@ export interface paths {
         put?: never;
         /**
          * Create Document
-         * @description 受控接收 DOC 或 DOCX 并创建新逻辑文档。
+         * @description 受控接收 DOC、DOCX 或 PDF 并创建新逻辑文档。
          */
         post: operations["_create_document_api_v1_projects__project_id__knowledge_bases__kb_id__documents_post"];
         delete?: never;
@@ -1317,6 +1317,22 @@ export interface components {
             confirmed_impact: components["schemas"]["ImpactKind"];
         };
         /**
+         * ArtifactDescriptor
+         * @description 经逻辑引用授权后的 Artifact 摘要。
+         */
+        ArtifactDescriptor: {
+            /** Artifact Id */
+            artifact_id: string;
+            /** Document Version Id */
+            document_version_id: string;
+            /** Media Type */
+            media_type: string;
+            /** Role */
+            role: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /**
          * Chunk
          * @description 不依赖向量存储实现的 canonical Chunk V3。
          */
@@ -1503,9 +1519,11 @@ export interface components {
             /** Enabled */
             enabled?: boolean | null;
             /** Endpoint Mode */
-            endpoint_mode?: ("workspace_host" | "beijing_dashscope" | "custom") | null;
+            endpoint_mode?: ("workspace_host" | "beijing_dashscope" | "custom" | "self_hosted" | "official_api") | null;
             /** Expected Version */
             expected_version: number;
+            /** Ocr Api Base Url */
+            ocr_api_base_url?: string | null;
             /** Region */
             region?: "cn-beijing" | null;
             /** Request Budget */
@@ -1538,18 +1556,20 @@ export interface components {
              * @default workspace_host
              * @enum {string}
              */
-            endpoint_mode: "workspace_host" | "beijing_dashscope" | "custom";
+            endpoint_mode: "workspace_host" | "beijing_dashscope" | "custom" | "self_hosted" | "official_api";
             /**
              * Endpoint Profile
              * @default default
              * @constant
              */
             endpoint_profile: "default";
+            /** Ocr Api Base Url */
+            ocr_api_base_url?: string | null;
             /**
              * Provider Type
              * @enum {string}
              */
-            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible";
+            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible" | "paddleocr";
             /** Region */
             region?: "cn-beijing" | null;
             /**
@@ -1720,7 +1740,7 @@ export interface components {
              * Provider Type
              * @enum {string}
              */
-            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible";
+            provider_type: "jina" | "aliyun-model-studio" | "openai-compatible" | "paddleocr";
             /** Secret Value */
             secret_value?: string | null;
             /**
@@ -2015,6 +2035,13 @@ export interface components {
                 string,
                 components["schemas"]["JsonValue"]
             ][];
+            ocr_verification_state?: components["schemas"]["OcrVerificationState"] | null;
+            /** Page Index */
+            page_index?: number | null;
+            /** Pdf Block Id */
+            pdf_block_id?: string | null;
+            /** Pdf Table Id */
+            pdf_table_id?: string | null;
             /**
              * Publishable
              * @default true
@@ -2039,6 +2066,7 @@ export interface components {
              * @default retrieval_candidate
              */
             selection_reason: string;
+            source_kind?: components["schemas"]["SourceSpanKind"] | null;
             /** Source Label */
             source_label: string;
             /**
@@ -2134,6 +2162,7 @@ export interface components {
             knowledge_base_id: string;
             /** Lease Owner */
             lease_owner: boolean;
+            pdf_progress?: components["schemas"]["PdfPageProgress"] | null;
             /** Project Id */
             project_id: string;
             /** Required Action */
@@ -2241,6 +2270,25 @@ export interface components {
              * @default 0
              */
             ocr_revision: number;
+            /** Pdf Parser Connection Id */
+            pdf_parser_connection_id?: string | null;
+            /**
+             * Pdf Parser Enabled
+             * @default false
+             */
+            pdf_parser_enabled: boolean;
+            /** Pdf Parser Model */
+            pdf_parser_model?: string | null;
+            /**
+             * Pdf Poll Timeout Seconds
+             * @default 600
+             */
+            pdf_poll_timeout_seconds: number;
+            /**
+             * Pdf Request Timeout Seconds
+             * @default 300
+             */
+            pdf_request_timeout_seconds: number;
             /**
              * Rewrite Enabled
              * @default false
@@ -2333,6 +2381,41 @@ export interface components {
             /** Confirmed Media Hashes */
             confirmed_media_hashes: string[];
         };
+        /**
+         * OcrVerificationState
+         * @description 最终答案中高风险视觉文字的复核状态。
+         * @enum {string}
+         */
+        OcrVerificationState: "VERIFIED" | "CONFLICT" | "UNVERIFIED";
+        /**
+         * PdfPageProgress
+         * @description 供持久 Job 页面展示的非敏感 PDF 解析进度。
+         */
+        PdfPageProgress: {
+            /**
+             * Failed Page Indices
+             * @default []
+             */
+            failed_page_indices: number[];
+            /** Parsed Pages */
+            parsed_pages: number;
+            parser_mode: components["schemas"]["PdfParserMode"];
+            /** Parser Model */
+            parser_model: string;
+            /** Total Pages */
+            total_pages: number;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
+        /**
+         * PdfParserMode
+         * @description PDF 文档解析的两个受支持执行位置。
+         * @enum {string}
+         */
+        PdfParserMode: "paddle_self_hosted" | "paddle_official_api";
         /**
          * Project
          * @description 项目公共视图。
@@ -3241,14 +3324,31 @@ export interface components {
          * @description 由稳定逻辑段组成的格式内来源位置。
          */
         SourceAnchor: {
+            /** Bbox */
+            bbox?: [
+                number,
+                number,
+                number,
+                number
+            ] | null;
             /** Cell Index */
             cell_index?: number | null;
             /** Ordinal */
             ordinal: number;
+            /** Page Height */
+            page_height?: number | null;
+            /** Page Index */
+            page_index?: number | null;
+            /** Page Width */
+            page_width?: number | null;
             /** Paragraph Index */
             paragraph_index?: number | null;
             /** Part Uri */
             part_uri: string;
+            /** Pdf Block Id */
+            pdf_block_id?: string | null;
+            /** Pdf Table Id */
+            pdf_table_id?: string | null;
             /** Relationship Id */
             relationship_id?: string | null;
             /** Row Index */
@@ -3317,7 +3417,7 @@ export interface components {
          * @description citation 字符的来源语义。
          * @enum {string}
          */
-        SourceSpanKind: "original_text" | "ocr_text" | "diagram_relation" | "derived_caption_or_association" | "derived_numbering" | "repeated_context" | "separator";
+        SourceSpanKind: "original_text" | "pdf_parsed_text" | "ocr_text" | "diagram_relation" | "derived_caption_or_association" | "derived_numbering" | "repeated_context" | "separator";
         /**
          * SpanKind
          * @description 可映射到 OpenTelemetry 的 span 类别。
@@ -3685,7 +3785,7 @@ export interface components {
              * Operation
              * @enum {string}
              */
-            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.interpret" | "query.rewrite" | "image.ocr";
+            operation: "embedding.document" | "embedding.query" | "reranking" | "generation" | "query.interpret" | "query.rewrite" | "image.ocr" | "document.parse";
             /** Request Policy */
             request_policy?: {
                 [key: string]: unknown;
@@ -10316,7 +10416,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": {
-                        [key: string]: unknown;
+                        [key: string]: components["schemas"]["ArtifactDescriptor"][];
                     };
                 };
             };

@@ -71,6 +71,7 @@ from rag_app.core.models import (
     EvidenceItem,
     EvidenceSelectionContext,
     FusedCandidate,
+    OcrVerificationState,
     ProviderCall,
     ProviderCallCount,
     ProviderFailureCategory,
@@ -92,6 +93,7 @@ from rag_app.core.models.common import freeze_json_object
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
+    CriticalOcrVerifierPort,
     EvidenceSourcePort,
     ExactStorePort,
     GeneratorPort,
@@ -247,6 +249,7 @@ class RetrievalService:
         serving_identity: str,
         interpreter: QueryInterpretPort | None = None,
         rewriter: QueryRewritePort | None = None,
+        critical_ocr_verifier: CriticalOcrVerifierPort | None = None,
     ) -> RetrievalService:
         """为单次知识库解析创建轻量配置副本，共用原索引与检索通道。
 
@@ -255,6 +258,7 @@ class RetrievalService:
             serving_identity: 模型及查询策略缓存身份。
             interpreter: 可选的一次结构化问题解释端口。
             rewriter: 可选的一次问题改写端口。
+            critical_ocr_verifier: PDF 高风险事实的有界 PP-OCRv6 复核端口。
 
         Returns:
             与原文档向量配置共存的查询服务。
@@ -263,7 +267,10 @@ class RetrievalService:
         configured = self.with_generation_cache_identity(
             serving_identity=serving_identity
         )
-        configured._grounded = GroundedAnsweringService(generator)
+        configured._grounded = GroundedAnsweringService(
+            generator,
+            critical_ocr_verifier=critical_ocr_verifier,
+        )
         configured._interpreter = interpreter
         configured._rewriter = rewriter
         descriptor = getattr(
@@ -980,6 +987,7 @@ class RetrievalService:
                     published = _published_evidence(
                         generation_evidence,
                         generated.published_support_ids,
+                        generated.ocr_verification_states,
                     )
                     if published:
                         evidence = published
@@ -1101,7 +1109,12 @@ class RetrievalService:
                     call.model_dump(mode="json")
                     for call in provider_calls
                     if call.operation
-                    in {"generation", "query.interpret", "query.rewrite"}
+                    in {
+                        "generation",
+                        "image.ocr.verify",
+                        "query.interpret",
+                        "query.rewrite",
+                    }
                 ],
             },
         )
@@ -2049,6 +2062,7 @@ def _emit_final(
 def _published_evidence(
     candidates: tuple[EvidenceItem, ...],
     support_ids: tuple[str, ...],
+    ocr_verification_states: tuple[tuple[str, OcrVerificationState], ...] = (),
 ) -> tuple[EvidenceItem, ...]:
     """按已验证 claim 的 Support ID 投影实际发布引用。"""
     if not support_ids:
@@ -2059,7 +2073,13 @@ def _published_evidence(
             "已验证回答引用了不存在的模型证据。",
             stage="answer.publish",
         )
-    return tuple(by_id[support_id] for support_id in support_ids)
+    states = dict(ocr_verification_states)
+    return tuple(
+        by_id[support_id].model_copy(
+            update={"ocr_verification_state": states.get(support_id)}
+        )
+        for support_id in support_ids
+    )
 
 
 def _configured_generation_blocker(

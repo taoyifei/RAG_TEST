@@ -32,7 +32,13 @@ from rag_app.core.ports.lifecycle_store import (
     LifecycleStorePort,
 )
 from rag_app.core.ports.metadata_store import MetadataRecord, MetadataStorePort
+from rag_app.core.ports.ocr_verification import CriticalOcrVerifierPort
 from rag_app.core.ports.parser import ParserPort
+from rag_app.core.ports.pdf_parser import (
+    PdfDocumentParserPort,
+    PdfParseCachePort,
+    PdfProgressPort,
+)
 from rag_app.core.ports.query_embedding import QueryEmbeddingPort
 from rag_app.core.ports.query_interpret import (
     InterpretOutcome,
@@ -58,6 +64,7 @@ __all__ = [
     "ConsoleJobStorePort",
     "ConsoleRevisionStorePort",
     "ConversationPort",
+    "CriticalOcrVerifierPort",
     "EmbeddingCachePort",
     "EmbeddingPort",
     "EmbeddingRouteRequest",
@@ -73,6 +80,9 @@ __all__ = [
     "MetadataRecord",
     "MetadataStorePort",
     "ParserPort",
+    "PdfDocumentParserPort",
+    "PdfParseCachePort",
+    "PdfProgressPort",
     "QueryEmbeddingPort",
     "QueryInterpretPort",
     "RerankerPort",

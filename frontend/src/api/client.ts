@@ -4,6 +4,7 @@ export type Project = components["schemas"]["Project"];
 export type KnowledgeBase = components["schemas"]["KnowledgeBase"];
 export type Document = components["schemas"]["Document"];
 export type DocumentVersion = components["schemas"]["DocumentVersion"];
+export type PdfPageProgress = components["schemas"]["PdfPageProgress"];
 export type Job = components["schemas"]["Job"];
 export type JobPage = components["schemas"]["JobPage"];
 export type RevisionInspection = components["schemas"]["RevisionInspection"];
@@ -17,6 +18,7 @@ export type SystemStatus = components["schemas"]["SystemStatus"];
 export type Evidence = components["schemas"]["EvidenceItem"];
 export type RelatedContent = components["schemas"]["RelatedContent"];
 export type SourceChunk = components["schemas"]["Chunk"];
+export type ArtifactDescriptor = components["schemas"]["ArtifactDescriptor"];
 
 export interface Page<T> {
   items: T[];
@@ -239,14 +241,24 @@ export interface KnowledgeBaseModelSettings {
   ocr_connection_id: string | null;
   ocr_model: string | null;
   ocr_enabled: boolean;
+  pdf_parser_connection_id: string | null;
+  pdf_parser_model: string | null;
+  pdf_parser_enabled: boolean;
+  pdf_request_timeout_seconds: number;
+  pdf_poll_timeout_seconds: number;
   budget_campaign_id: string | null;
   generation_configured?: boolean;
   ocr_configured?: boolean;
+  pdf_parser_configured?: boolean;
   corpus_authorization?: CorpusAuthorizationStatus;
   retrieval_data_plane?: RetrievalDataPlaneStatus;
 }
 
-export type ProviderType = "jina" | "aliyun-model-studio" | "openai-compatible";
+export type ProviderType =
+  | "jina"
+  | "aliyun-model-studio"
+  | "openai-compatible"
+  | "paddleocr";
 
 export type CorpusAuthorizationStatus =
   components["schemas"]["CorpusAuthorizationStatus"];
@@ -321,9 +333,16 @@ export interface ProviderConnection {
   workspace_id?: string | null;
   region?: string | null;
   configuration_version: number;
-  endpoint_mode?: "workspace_host" | "beijing_dashscope" | "custom" | "";
+  endpoint_mode?:
+    | "workspace_host"
+    | "beijing_dashscope"
+    | "custom"
+    | "self_hosted"
+    | "official_api"
+    | "";
   api_host?: string | null;
   api_base_url?: string | null;
+  ocr_api_base_url?: string | null;
   rerank_protocol?: "tei" | "jina-compatible" | null;
   rerank_path?: string | null;
   request_budget?: number;
@@ -912,6 +931,11 @@ export const api = {
       ocr_connection_id,
       ocr_model,
       ocr_enabled,
+      pdf_parser_connection_id,
+      pdf_parser_model,
+      pdf_parser_enabled,
+      pdf_request_timeout_seconds,
+      pdf_poll_timeout_seconds,
       budget_campaign_id,
     } = settings;
     return request<KnowledgeBaseModelSettings>(
@@ -925,6 +949,11 @@ export const api = {
         ocr_connection_id,
         ocr_model,
         ocr_enabled,
+        pdf_parser_connection_id,
+        pdf_parser_model,
+        pdf_parser_enabled,
+        pdf_request_timeout_seconds,
+        pdf_poll_timeout_seconds,
         budget_campaign_id,
       }),
     );
@@ -990,6 +1019,35 @@ export const api = {
       `/api/v1/projects/${projectId}/knowledge-bases/${kbId}/documents/${documentId}/versions`,
       token,
     ),
+  listArtifacts: (
+    token: string,
+    projectId: string,
+    kbId: string,
+    documentId: string,
+    documentVersionId: string,
+  ) =>
+    request<{ items: ArtifactDescriptor[] }>(
+      `/api/v1/projects/${encodeURIComponent(projectId)}/knowledge-bases/${encodeURIComponent(kbId)}/documents/${encodeURIComponent(documentId)}/versions/${encodeURIComponent(documentVersionId)}/artifacts`,
+      token,
+    ),
+  documentArtifactUrl: (
+    projectId: string,
+    kbId: string,
+    documentId: string,
+    documentVersionId: string,
+    artifactId: string,
+    pageNumber?: number,
+  ) => {
+    const params = new URLSearchParams({
+      document_id: documentId,
+      document_version_id: documentVersionId,
+    });
+    const path =
+      `/api/v1/projects/${encodeURIComponent(projectId)}` +
+      `/knowledge-bases/${encodeURIComponent(kbId)}` +
+      `/artifacts/${encodeURIComponent(artifactId)}?${params}`;
+    return pageNumber === undefined ? path : `${path}#page=${pageNumber}`;
+  },
   renameDocument: (
     token: string,
     projectId: string,

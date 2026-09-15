@@ -38,6 +38,7 @@ from rag_app.core.errors import (
 )
 from rag_app.core.identifiers import deterministic_id, new_id
 from rag_app.core.models import (
+    ArtifactDescriptor,
     Document,
     DocumentVersion,
     Job,
@@ -373,7 +374,7 @@ def _register_document_routes(
         display_name: Annotated[str, Query(min_length=1, max_length=512)],
         authorization: Annotated[str | None, Header()] = None,
     ) -> dict[str, object]:
-        """受控接收 DOC 或 DOCX 并创建新逻辑文档。"""
+        """受控接收 DOC、DOCX 或 PDF 并创建新逻辑文档。"""
         require_admin(authorization)
         runtime.sdk.require_active_knowledge_base(project_id, kb_id)
         content = await _spool_upload(
@@ -530,6 +531,7 @@ def _register_document_routes(
     @app.get(
         base + "/documents/{document_id}/versions/{dver}/artifacts",
         tags=["artifacts"],
+        response_model=dict[str, list[ArtifactDescriptor]],
     )
     def _list_artifacts(
         project_id: str,

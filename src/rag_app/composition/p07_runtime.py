@@ -13,7 +13,7 @@ from rag_app.composition.p06_runtime import P06Runtime, build_p06_runtime
 from rag_app.composition.profiles import RagProfile
 from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models import ParseResult, RetrievalPolicy
-from rag_app.core.ports import ExactStorePort, TracePort
+from rag_app.core.ports import ExactStorePort, ParserPort, TracePort
 
 
 @dataclass(slots=True)
@@ -47,13 +47,14 @@ class P07Runtime:
         self.close()
 
 
-def build_p07_runtime(
+def build_p07_runtime(  # noqa: PLR0913
     profile: str | Path | RagProfile,
     *,
     data_dir: str | Path | None = None,
     policy: RetrievalPolicy | None = None,
     trace_sink: TracePort | None = None,
     document_enricher: Callable[[ParseResult], ParseResult] | None = None,
+    parser_resolver: Callable[[ParserPort], ParserPort] | None = None,
 ) -> P07Runtime:
     """构造默认离线、同步且 legacy HTTP 未切换的 P07 runtime。
 
@@ -63,6 +64,7 @@ def build_p07_runtime(
         policy: 可选 P07 provisional 策略覆盖。
         trace_sink: 可选宿主持久化 Trace 适配器。
         document_enricher: 可选原生解析后增补钩子。
+        parser_resolver: 可选格式路由包装器。
 
     Returns:
         持有 unified retrieval service 的 runtime。
@@ -73,6 +75,7 @@ def build_p07_runtime(
         data_dir=data_dir,
         trace_sink=trace_sink,
         document_enricher=document_enricher,
+        parser_resolver=parser_resolver,
     )
     components = persistence.components
     if not isinstance(components.lexical_store, SqliteFtsStore):

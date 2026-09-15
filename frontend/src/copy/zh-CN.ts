@@ -51,6 +51,8 @@ export const zhCN = {
     deleted: "已删除",
     deleting: "正在清理",
     archived: "已归档",
+    SUCCEEDED: "已完成",
+    RUNNING: "处理中",
     ANSWERED: "已回答",
     REFUSED: "拒答",
     FAILED: "请求失败",
@@ -86,6 +88,7 @@ export function operationLabel(operation: string): string {
         "query.interpret": "问题意图解释",
         "query.rewrite": "问题改写",
         "image.ocr": "图片文字识别",
+        "document.parse": "PDF 文档解析",
       } as Record<string, string>
     )[operation] ?? "未知能力"
   );
