@@ -51,6 +51,8 @@ export const zhCN = {
     deleted: "已删除",
     deleting: "正在清理",
     archived: "已归档",
+    SUCCEEDED: "已完成",
+    RUNNING: "处理中",
     ANSWERED: "已回答",
     REFUSED: "拒答",
     FAILED: "请求失败",

@@ -29,6 +29,7 @@ export function StatusBadge({ value }: { value: string | boolean }) {
   const good = [
     "active",
     "succeeded",
+    "SUCCEEDED",
     "ANSWERABLE",
     "ANSWERED",
     "healthy",

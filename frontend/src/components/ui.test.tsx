@@ -38,16 +38,20 @@ describe("控制台基础组件", () => {
     expect(screen.getByText("尚未验证")).toHaveClass("neutral");
   });
 
-  it("未知状态保持中性，已知健康状态显示中文", () => {
+  it("未知状态保持中性，已知健康与 Trace 状态显示中文", () => {
     render(
       <>
         <StatusBadge value="future_status" />
         <StatusBadge value="healthy" />
+        <StatusBadge value="SUCCEEDED" />
+        <StatusBadge value="RUNNING" />
       </>,
     );
     expect(screen.getByText("未知状态（技术详情可查看原值）")).toHaveClass(
       "neutral",
     );
     expect(screen.getByText("运行正常")).toHaveClass("good");
+    expect(screen.getByText("已完成")).toHaveClass("good");
+    expect(screen.getByText("处理中")).toHaveClass("neutral");
   });
 });
