@@ -127,7 +127,7 @@ def test_long_question_recalls_evidence_when_strict_cjk_phrase_misses(
         )
         spec = runtime.control.revision_vector_spec(result.revision_id)
         request = LexicalSearchRequest(
-            revision=spec,
+            revision=spec.revision,
             query="哪些合成材料属于耐热类别？",
             limit=10,
         )

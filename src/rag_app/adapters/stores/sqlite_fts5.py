@@ -50,6 +50,7 @@ _QUERY_TOKEN = re.compile(r"[\w.-]+", flags=re.UNICODE)
 _PARAMETERS = ParamSpec("_PARAMETERS")
 _RESULT = TypeVar("_RESULT")
 _CJK_BIGRAM_LENGTH = 2
+_RELAXED_CJK_BIGRAM_MINIMUM = 3
 _RELAXED_CJK_BIGRAM_CAP = 64
 _FTS_SCHEMA_VERSION = 2
 _STRUCTURAL_SCAN_MULTIPLIER = 4
@@ -243,8 +244,9 @@ class SqliteFtsStore:
             if not expression:
                 return ()
             statement = (
-                "SELECT c.chunk_id, c.document_id, c.document_version_id, "
-                "c.role, c.section_id, c.content_sha256, "
+                "SELECT c.chunk_id, c.document_id, "  # noqa: S608
+                "c.document_version_id, c.role, c.section_id, "
+                "c.content_sha256, "
                 f"bm25({table}, 0.0, 0.0, 0.0, "
                 "4.0, 3.0, 6.0, 1.0) AS raw_score "
                 f"FROM {table} JOIN chunks c ON c.row_id={table}.rowid "
@@ -990,7 +992,9 @@ def build_fts_v2_relaxed_query(analysis: AnalyzedLexicalQuery) -> str:
             if len(token) == _CJK_BIGRAM_LENGTH
         )
     )
-    if not 3 <= len(bigrams) <= _RELAXED_CJK_BIGRAM_CAP:
+    if not _RELAXED_CJK_BIGRAM_MINIMUM <= len(bigrams) <= (
+        _RELAXED_CJK_BIGRAM_CAP
+    ):
         return ""
     return " OR ".join(_fts_quote(token) for token in bigrams)
 
