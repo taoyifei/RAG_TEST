@@ -17,6 +17,13 @@ function requestPath(input: RequestInfo | URL): string {
   return input instanceof URL ? input.href : input.url;
 }
 
+function requestMetadata(path: string): Record<string, unknown> {
+  const serialized = new URL(path, "http://localhost").searchParams.get(
+    "metadata",
+  );
+  return serialized ? (JSON.parse(serialized) as Record<string, unknown>) : {};
+}
+
 function job(id: string, state: string, stage: string) {
   return {
     job_id: id,
@@ -73,13 +80,15 @@ describe("湾事通 DOCX-only 文档管理", () => {
         method,
         key: new Headers(init?.headers).get("Idempotency-Key"),
       });
-      const relativePath = new URL(path, "http://localhost").searchParams.get(
-        "relative_path",
-      );
+      const relativePath = requestMetadata(path).source_relative_path;
       if (method === "GET" && path.includes("/documents")) {
         return Promise.resolve(response({ items: [], next_cursor: null }));
       }
-      if (method === "POST" && relativePath?.endsWith("失败制度.docx")) {
+      if (
+        method === "POST" &&
+        typeof relativePath === "string" &&
+        relativePath.endsWith("失败制度.docx")
+      ) {
         return Promise.resolve(
           response(
             { error: { code: "INVALID_DOCX", message: "文件签名不合法。" } },
@@ -87,7 +96,11 @@ describe("湾事通 DOCX-only 文档管理", () => {
           ),
         );
       }
-      if (method === "POST" && relativePath?.endsWith("成功制度.docx")) {
+      if (
+        method === "POST" &&
+        typeof relativePath === "string" &&
+        relativePath.endsWith("成功制度.docx")
+      ) {
         const queued = job("job_success", "queued", "queued");
         return Promise.resolve(
           response(
@@ -127,9 +140,8 @@ describe("湾事通 DOCX-only 文档管理", () => {
     expect(
       uploads.some(
         (item) =>
-          new URL(item.path, "http://localhost").searchParams.get(
-            "relative_path",
-          ) === "01 科管/成功制度.docx",
+          requestMetadata(item.path).source_relative_path ===
+          "01 科管/成功制度.docx",
       ),
     ).toBe(true);
     expect(uploads.every((item) => !!item.key)).toBe(true);
@@ -218,8 +230,9 @@ describe("湾事通 DOCX-only 文档管理", () => {
       if ((init?.method || "GET") === "GET") {
         return Promise.resolve(response({ items: [document], next_cursor: null }));
       }
+      const sourceRelativePath = requestMetadata(path).source_relative_path;
       uploadedPath =
-        new URL(path, "http://localhost").searchParams.get("relative_path") || "";
+        typeof sourceRelativePath === "string" ? sourceRelativePath : "";
       const completed = job("job_version", "succeeded", "activated");
       return Promise.resolve(response({ document, job: completed }, 202));
     });

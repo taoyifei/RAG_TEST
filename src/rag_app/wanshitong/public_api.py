@@ -26,6 +26,7 @@ from rag_app.wanshitong.public_models import (
     PublicFeedbackResponse,
     PublicSessionRequest,
     PublicSessionResponse,
+    PublicShortcut,
 )
 from rag_app.wanshitong.public_session import (
     PUBLIC_SESSION_COOKIE,
@@ -37,6 +38,10 @@ from rag_app.wanshitong.public_stream import (
     render_public_final,
 )
 from rag_app.wanshitong.scope_service import FixedScopeService
+from rag_app.wanshitong.shortcuts import (
+    SHORTCUT_CATALOG,
+    current_public_filter,
+)
 
 PUBLIC_SESSION_PATH = "/api/public/session"
 PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
@@ -128,7 +133,17 @@ def register_public_routes(
     def _capabilities(request: Request) -> PublicCapabilities:
         _reject_query_parameters(request)
         scope_service.binding()
-        return PublicCapabilities()
+        return PublicCapabilities(
+            shortcuts=tuple(
+                PublicShortcut(
+                    shortcut_id=item.shortcut_id,
+                    label=item.label,
+                    description=item.description,
+                    revision=item.revision,
+                )
+                for item in SHORTCUT_CATALOG.public_definitions()
+            )
+        )
 
     @app.post(
         PUBLIC_CHAT_PATH,
@@ -144,6 +159,9 @@ def register_public_routes(
             request, sessions
         )
         binding = scope_service.binding()
+        metadata_filter = current_public_filter()
+        if not metadata_filter.is_empty:
+            raise AssertionError("WB-06 公共查询必须覆盖为空 metadata filter。")
         query = QueryRequest(
             query=body.query,
             conversation_id=body.conversation_id,

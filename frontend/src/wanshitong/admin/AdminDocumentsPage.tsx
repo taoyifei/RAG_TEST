@@ -187,12 +187,12 @@ export function AdminDocumentsPage() {
         ? await wanshitongAdminApi.uploadVersion(
             item.documentId,
             item.file,
-            item.relativePath,
+            { source_relative_path: item.relativePath },
             item.idempotencyKey,
           )
         : await wanshitongAdminApi.uploadDocument(
             item.file,
-            item.relativePath,
+            { source_relative_path: item.relativePath },
             item.idempotencyKey,
           );
       updateUpload(item.id, {
@@ -407,6 +407,7 @@ export function AdminDocumentsPage() {
           <thead>
             <tr>
               <th>文档名称</th>
+              <th>部门 / 分类</th>
               <th>相对路径</th>
               <th>登记状态</th>
               <th>当前版本</th>
@@ -420,7 +421,19 @@ export function AdminDocumentsPage() {
             {documents.map((document) => (
               <tr key={document.document_id}>
                 <td>{document.display_name}</td>
-                <td><code>{document.relative_path || document.display_name}</code></td>
+                <td>
+                  <strong>{document.department_name || "未分类"}</strong>
+                  <small>
+                    {(document.category_path ?? []).join(" / ") || "—"}
+                  </small>
+                </td>
+                <td>
+                  <code>
+                    {document.source_relative_path ||
+                      document.relative_path ||
+                      document.display_name}
+                  </code>
+                </td>
                 <td><StatusBadge value={document.status} /></td>
                 <td>
                   <code>{document.current_version_id || "—"}</code>

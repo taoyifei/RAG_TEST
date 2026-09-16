@@ -108,6 +108,28 @@ class VectorPointPayload(FrozenModel):
     section_id: str = Field(min_length=1)
     neighbor_group_id: str = Field(min_length=1)
     content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    department_key: str | None = Field(
+        default=None, min_length=1, max_length=240
+    )
+    department_name: str | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+    category_path: tuple[str, ...] = Field(default=(), max_length=16)
+    document_title: str | None = Field(
+        default=None, min_length=1, max_length=512
+    )
+    source_relative_path: str | None = Field(
+        default=None, min_length=1, max_length=4096
+    )
+    topic_keys: tuple[str, ...] = Field(default=(), max_length=32)
+    visibility_scope: str | None = Field(
+        default=None, pattern=r"^all_internal$"
+    )
+    allowed_roles: tuple[str, ...] = ()
+    allowed_groups: tuple[str, ...] = ()
+    metadata_revision: str | None = Field(
+        default=None, min_length=1, max_length=120
+    )
 
 
 class NamedVectorPoint(FrozenModel):

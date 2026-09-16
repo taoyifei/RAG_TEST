@@ -779,13 +779,15 @@ class SqliteLifecycleStore:
             if existing_document is None:
                 connection.execute(
                     "INSERT INTO documents(document_id, project_id, "
-                    "knowledge_base_id, display_name, status, created_at, "
-                    "updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+                    "knowledge_base_id, display_name, metadata_json, status, "
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
                     (
                         document.document_id,
                         document.project_id,
                         document.knowledge_base_id,
                         document.display_name,
+                        canonical_json(dict(document.metadata)),
                         now,
                         now,
                     ),
@@ -796,6 +798,17 @@ class SqliteLifecycleStore:
             ) != (document.project_id, document.knowledge_base_id):
                 raise Conflict(
                     "文档 ID 已绑定其他 scope。", stage="document.queue"
+                )
+            else:
+                connection.execute(
+                    "UPDATE documents SET display_name=?, metadata_json=?, "
+                    "updated_at=? WHERE document_id=?",
+                    (
+                        document.display_name,
+                        canonical_json(dict(document.metadata)),
+                        now,
+                        document.document_id,
+                    ),
                 )
             _require_live_document(
                 connection, document.document_id, "document.queue"

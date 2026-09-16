@@ -1,7 +1,10 @@
 export interface PublicCitation {
   document_name: string;
   department?: string;
+  department_name?: string;
   category_path?: string | string[];
+  document_title?: string;
+  source_relative_path?: string;
   locator?: string;
   quote?: string;
 }
@@ -134,6 +137,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isCitation(value: unknown): value is PublicCitation {
   if (!isRecord(value) || typeof value.document_name !== "string") return false;
   if (value.department !== undefined && typeof value.department !== "string") {
+    return false;
+  }
+  if (
+    value.department_name !== undefined &&
+    typeof value.department_name !== "string"
+  ) {
+    return false;
+  }
+  if (
+    value.document_title !== undefined &&
+    typeof value.document_title !== "string"
+  ) {
+    return false;
+  }
+  if (
+    value.source_relative_path !== undefined &&
+    typeof value.source_relative_path !== "string"
+  ) {
     return false;
   }
   if (value.locator !== undefined && typeof value.locator !== "string") {

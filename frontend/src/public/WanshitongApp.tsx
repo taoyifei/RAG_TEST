@@ -42,7 +42,6 @@ export function WanshitongApp() {
           busy={chat.busy}
           onStop={chat.stop}
           onSubmit={chat.submit}
-          shortcuts={chat.shortcuts}
         />
       ) : (
         <WanshitongChat

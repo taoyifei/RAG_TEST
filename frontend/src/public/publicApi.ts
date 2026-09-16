@@ -7,10 +7,10 @@ export interface PublicSession {
 }
 
 export interface PublicShortcut {
-  id: string;
+  shortcut_id: string;
   label: string;
-  prompt: string;
-  visible: boolean;
+  description: string;
+  revision: number;
 }
 
 export interface PublicCapabilities {
@@ -19,7 +19,7 @@ export interface PublicCapabilities {
   stream_protocol: "wanshitong-public-sse-v1";
   document_visibility: "all_internal";
   feedback: boolean;
-  shortcuts?: PublicShortcut[];
+  shortcuts: PublicShortcut[];
 }
 
 interface PublicErrorBody {

@@ -31,7 +31,18 @@ export interface WanshitongScopeStatus {
 export interface WanshitongDocument {
   document_id: string;
   display_name: string;
-  relative_path: string;
+  relative_path: string | null;
+  department_key?: string | null;
+  department_name?: string | null;
+  department?: string | null;
+  category_path: string[];
+  document_title?: string | null;
+  source_relative_path?: string | null;
+  topic_keys: string[];
+  visibility_scope: "all_internal";
+  allowed_roles: string[];
+  allowed_groups: string[];
+  metadata_revision?: string | null;
   status: string;
   current_version_id?: string | null;
   current_version_status?: string | null;
@@ -40,6 +51,14 @@ export interface WanshitongDocument {
   retrievable: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface WanshitongUploadMetadata {
+  source_relative_path: string;
+  department_name?: string | null;
+  category_path?: string[] | null;
+  document_title?: string | null;
+  topic_keys?: string[];
 }
 
 export interface CursorPage<T> {
@@ -205,11 +224,13 @@ export const wanshitongAdminApi = {
     ),
   uploadDocument: (
     file: File,
-    relativePath: string,
+    metadata: WanshitongUploadMetadata,
     idempotencyKey: string,
   ) =>
     consoleRequest<WanshitongUploadResult>(
-      queryPath(`${BASE_PATH}/documents`, { relative_path: relativePath }),
+      queryPath(`${BASE_PATH}/documents`, {
+        metadata: JSON.stringify(metadata),
+      }),
       {
         method: "POST",
         headers: {
@@ -222,13 +243,13 @@ export const wanshitongAdminApi = {
   uploadVersion: (
     documentId: string,
     file: File,
-    relativePath: string,
+    metadata: WanshitongUploadMetadata,
     idempotencyKey: string,
   ) =>
     consoleRequest<WanshitongUploadResult>(
       queryPath(
         `${BASE_PATH}/documents/${encodeURIComponent(documentId)}/versions`,
-        { relative_path: relativePath },
+        { metadata: JSON.stringify(metadata) },
       ),
       {
         method: "POST",

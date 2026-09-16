@@ -648,21 +648,28 @@ class SqliteControlStore:
                         stage="control.document",
                     )
                 connection.execute(
-                    "UPDATE documents SET display_name=?, updated_at=? "
+                    "UPDATE documents SET display_name=?, metadata_json=?, "
+                    "updated_at=? "
                     "WHERE document_id=?",
-                    (document.display_name, now, document.document_id),
+                    (
+                        document.display_name,
+                        canonical_json(dict(document.metadata)),
+                        now,
+                        document.document_id,
+                    ),
                 )
                 return
             connection.execute(
                 "INSERT INTO documents("
                 "document_id, project_id, knowledge_base_id, display_name, "
-                "status, "
-                "created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+                "metadata_json, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'active', ?, ?)",
                 (
                     document.document_id,
                     document.project_id,
                     document.knowledge_base_id,
                     document.display_name,
+                    canonical_json(dict(document.metadata)),
                     now,
                     now,
                 ),
@@ -1922,7 +1929,8 @@ class SqliteControlStore:
         with self._connections.transaction() as connection:
             rows = connection.execute(
                 "SELECT d.project_id, d.knowledge_base_id, d.document_id, "
-                "d.display_name, dv.source_artifact_id, dv.media_type "
+                "d.display_name, d.metadata_json, dv.source_artifact_id, "
+                "dv.media_type "
                 "FROM knowledge_bases kb JOIN revision_documents rd "
                 "ON rd.revision_id=kb.active_revision_id "
                 "JOIN documents d ON d.document_id=rd.document_id "
@@ -1939,6 +1947,7 @@ class SqliteControlStore:
                     knowledge_base_id=str(row["knowledge_base_id"]),
                     document_id=str(row["document_id"]),
                     display_name=str(row["display_name"]),
+                    metadata=json.loads(str(row["metadata_json"])),
                 ),
                 str(row["source_artifact_id"]),
                 str(row["media_type"]),

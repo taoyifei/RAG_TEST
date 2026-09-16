@@ -7,7 +7,6 @@ import {
   PublicApiError,
   publicErrorMessage,
   sendPublicFeedback,
-  type PublicShortcut,
 } from "./publicApi";
 import {
   consumePublicSse,
@@ -124,7 +123,6 @@ export function usePublicChat() {
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
-  const [shortcuts, setShortcuts] = useState<PublicShortcut[]>([]);
   const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
   const conversationRef = useRef(conversationId);
@@ -146,11 +144,8 @@ export function usePublicChat() {
 
   const initializeSession = useCallback(async (signal: AbortSignal) => {
     const session = await createPublicSession(signal);
-    const capabilities = await getPublicCapabilities(signal);
+    await getPublicCapabilities(signal);
     csrfRef.current = session.csrfToken;
-    setShortcuts(
-      (capabilities.shortcuts ?? []).filter((shortcut) => shortcut.visible),
-    );
     setSessionReady(true);
     setSessionError(undefined);
     return session.csrfToken;
@@ -471,7 +466,6 @@ export function usePublicChat() {
     retrySession: startSession,
     sessionError,
     sessionReady,
-    shortcuts,
     stop,
     submit,
     submitFeedback,

@@ -7,6 +7,10 @@ from collections.abc import Iterator, Mapping
 from typing import cast
 
 from rag_app.core.models import EvidenceItem, SearchAnswerResult
+from rag_app.wanshitong.document_metadata import (
+    normalize_source_relative_path,
+)
+from rag_app.wanshitong.errors import AdminFacadeError
 
 PUBLIC_STREAM_PROTOCOL = "wanshitong-public-sse-v1"
 _SSE_FRAME_LINE_COUNT = 3
@@ -94,14 +98,22 @@ def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:
 
 def _public_citation(evidence: EvidenceItem) -> dict[str, object]:
     metadata = dict(evidence.metadata)
+    document_title = metadata.get("document_title")
     citation: dict[str, object] = {
-        "document_name": evidence.display_name or evidence.source_label,
+        "document_name": (
+            document_title
+            if isinstance(document_title, str) and document_title
+            else evidence.display_name or evidence.source_label
+        ),
         "locator": evidence.source_label,
         "quote": evidence.citation_text,
     }
-    department = metadata.get("department")
+    if isinstance(document_title, str) and document_title:
+        citation["document_title"] = document_title
+    department = metadata.get("department_name") or metadata.get("department")
     if isinstance(department, str) and department:
         citation["department"] = department
+        citation["department_name"] = department
     category_path = metadata.get("category_path")
     if isinstance(category_path, str) and category_path:
         citation["category_path"] = category_path
@@ -109,6 +121,14 @@ def _public_citation(evidence: EvidenceItem) -> dict[str, object]:
         isinstance(item, str) and item for item in category_path
     ):
         citation["category_path"] = tuple(category_path)
+    source_relative_path = metadata.get("source_relative_path")
+    if isinstance(source_relative_path, str):
+        try:
+            safe_path, _ = normalize_source_relative_path(source_relative_path)
+        except AdminFacadeError:
+            pass
+        else:
+            citation["source_relative_path"] = safe_path
     return citation
 
 

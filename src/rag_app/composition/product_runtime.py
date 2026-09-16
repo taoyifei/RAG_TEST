@@ -68,6 +68,7 @@ from rag_app.core.models import (
     EmbeddingSlotRole,
     EmbeddingTopology,
     Job,
+    JsonObject,
     KnowledgeBaseScope,
     ParseResult,
     QueuedIngestion,
@@ -447,6 +448,7 @@ class _LifecycleLeaseProxy:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """在冻结并入队新文档期间持有当前 generation。
 
@@ -457,6 +459,7 @@ class _LifecycleLeaseProxy:
             content: 待上传文档字节。
             media_type: 已验证媒体类型。
             idempotency_key: 调用方幂等键。
+            metadata: 不参与文档身份的可选外部元数据。
 
         Returns:
             已持久化并绑定 Profile 的入库 Job。
@@ -470,6 +473,7 @@ class _LifecycleLeaseProxy:
                 content=content,
                 media_type=media_type,
                 idempotency_key=idempotency_key,
+                metadata=metadata,
             )
 
     def create_document_version(  # noqa: PLR0913
@@ -481,6 +485,7 @@ class _LifecycleLeaseProxy:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """在冻结并入队文档新版本期间持有当前 generation。
 
@@ -491,6 +496,7 @@ class _LifecycleLeaseProxy:
             content: 待上传的新版本字节。
             media_type: 已验证媒体类型。
             idempotency_key: 调用方幂等键。
+            metadata: 当前版本提交时冻结的可选外部元数据。
 
         Returns:
             已持久化并绑定 Profile 的新版本入库 Job。
@@ -504,6 +510,7 @@ class _LifecycleLeaseProxy:
                 content=content,
                 media_type=media_type,
                 idempotency_key=idempotency_key,
+                metadata=metadata,
             )
 
     def run_ingestion(self, job_id: str) -> None:

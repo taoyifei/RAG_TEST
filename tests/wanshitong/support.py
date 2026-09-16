@@ -61,9 +61,7 @@ class PublicHarness:
     @property
     def scope_service(self) -> FixedScopeService:
         """返回 WB-01 固定 Scope 服务。"""
-        return cast(
-            FixedScopeService, self.app.state.wanshitong_scope_service
-        )
+        return cast(FixedScopeService, self.app.state.wanshitong_scope_service)
 
     def close(self) -> None:
         """关闭唯一测试客户端与 Product Runtime。"""
@@ -114,8 +112,18 @@ def synthetic_answer(
                 source_label="申请指南 > 材料核验",
                 display_name="湾事通办事指南.docx",
                 metadata={
-                    "department": "政务服务部",
+                    "department_key": "政务服务部-8aab76b373",
+                    "department_name": "政务服务部",
                     "category_path": ["办事服务", "材料办理"],
+                    "document_title": "湾事通办事指南",
+                    "source_relative_path": (
+                        "政务服务部/办事服务/湾事通办事指南.docx"
+                    ),
+                    "topic_keys": ["public-service"],
+                    "visibility_scope": "all_internal",
+                    "allowed_roles": [],
+                    "allowed_groups": [],
+                    "metadata_revision": "wanshitong-document-metadata-v1",
                 },
             ),
         )

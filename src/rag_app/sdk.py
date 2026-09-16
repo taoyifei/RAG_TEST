@@ -26,6 +26,7 @@ from rag_app.core.models import (
     ArtifactDescriptor,
     ChunkPage,
     JobPage,
+    JsonObject,
     KnowledgeBaseScope,
     KnowledgeBaseStatus,
     ProjectStatus,
@@ -342,6 +343,7 @@ class RagSdk:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """创建新逻辑文档。
 
@@ -352,6 +354,7 @@ class RagSdk:
             content: DOC 或 DOCX 字节。
             media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
+            metadata: 可选外部文档元数据；默认保持 Universal 空值。
 
         Returns:
             持久化构建 Job。
@@ -366,6 +369,7 @@ class RagSdk:
             content=content,
             media_type=media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata,
         )
         self._submit_job(job.job_id)
         return job
@@ -379,6 +383,7 @@ class RagSdk:
         content: bytes,
         media_type: str,
         idempotency_key: str,
+        metadata: JsonObject = (),
     ) -> Job:
         """为既有文档创建版本。
 
@@ -389,6 +394,7 @@ class RagSdk:
             content: DOC 或 DOCX 字节。
             media_type: Word 文档媒体类型。
             idempotency_key: 写请求幂等键。
+            metadata: 当前版本提交时冻结的可选外部元数据。
 
         Returns:
             持久化构建 Job。
@@ -403,6 +409,7 @@ class RagSdk:
             content=content,
             media_type=media_type,
             idempotency_key=idempotency_key,
+            metadata=metadata,
         )
         self._submit_job(job.job_id)
         return job
