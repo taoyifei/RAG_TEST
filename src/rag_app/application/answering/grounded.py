@@ -96,6 +96,8 @@ _MIN_QUOTE_CHARS = 2
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.20
+_MIN_LIST_ITEM_OVERLAP = 0.20
+_MIN_STRUCTURED_LIST_ITEMS = 2
 _MIN_NEGATION_SHARED_TERMS = 2
 _MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
@@ -1237,6 +1239,7 @@ def validate_grounded_draft(
     evidence: tuple[EvidenceItem, ...],
     *,
     analysis: QueryAnalysis | None = None,
+    complete: bool = True,
 ) -> None:
     """校验逐字支持、来源关系与关键事实，允许有词汇依据的自然概括。
 
@@ -1244,6 +1247,7 @@ def validate_grounded_draft(
         draft: 模型的结构化事实草稿。
         evidence: 本次已通过范围筛选的有限证据。
         analysis: 可选的服务端查询语义，用于约束职责主体。
+        complete: 增量 claim 校验时为 False；最终草稿必须检查完整列表。
 
     Returns:
         无返回值；校验通过后调用方才可发布。
@@ -1341,6 +1345,71 @@ def validate_grounded_draft(
                     "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",
                     code="CLAIM_SOURCE_MISMATCH",
+                )
+    if complete:
+        _validate_structured_list_coverage(draft, evidence, analysis)
+
+
+def _validate_structured_list_coverage(
+    draft: AnswerDraft,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> None:
+    """列表导语不算条目；每个来源条目都须进入回答并由原文支持。"""
+    if analysis is None or analysis.semantics.answer_type not in {
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.PROCEDURE,
+    }:
+        return
+    groups: dict[tuple[str, ...], list[EvidenceItem]] = {}
+    for item in evidence:
+        support = dict(item.metadata).get("answer_support")
+        if (
+            not isinstance(support, dict)
+            or support.get("support_reason") != "STRUCTURED_LIST_RELATION"
+        ):
+            continue
+        span_ids = support.get("supporting_span_ids")
+        if isinstance(span_ids, list):
+            key = tuple(value for value in span_ids if isinstance(value, str))
+            groups.setdefault(key, []).append(item)
+    for group in groups.values():
+        if len(group) < _MIN_STRUCTURED_LIST_ITEMS:
+            continue
+        intro = min(
+            group,
+            key=lambda item: min(
+                (
+                    span.source_anchor.ordinal
+                    for span in item.source_spans
+                    if span.source_anchor is not None
+                ),
+                default=2**31 - 1,
+            ),
+        )
+        for item in group:
+            if item is intro:
+                continue
+            terms = _terms(_LEADING_LIST_MARKER.sub("", item.citation_text))
+            represented = (
+                any(
+                    any(
+                        support.support_id == item.support_id
+                        for support in claim.supports
+                    )
+                    and bool(terms & _terms(claim.text))
+                    and len(terms & _terms(claim.text)) / len(terms)
+                    >= _MIN_LIST_ITEM_OVERLAP
+                    for claim in draft.claims
+                )
+                if terms
+                else False
+            )
+            if not represented:
+                raise ValidationFailed(
+                    "列举答案遗漏了来源列表条目。",
+                    stage="answer.validate",
+                    code="ANSWER_LIST_INCOMPLETE",
                 )
 
 
@@ -1519,6 +1588,7 @@ class GroundedAnsweringService:
                             ),
                             evidence,
                             analysis=analysis,
+                            complete=False,
                         )
                         if claim in buffered_claims:
                             raise ValidationFailed(

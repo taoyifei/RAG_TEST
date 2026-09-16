@@ -137,8 +137,13 @@ _CONDITIONAL_TARGET_CARRIER = re.compile(
     r"(?:工作模式|协作方式|运行方式|工作方式|模式)$"
 )
 _SECTION_SUMMARY = re.compile(
-    rf"^(?P<target>.+?(?:第{_NUMERAL}(?:章|节)|章节|章|节|管理要求|"
+    rf"^(?P<target>.+?(?:第{_NUMERAL}(?:章|节)|章节|管理要求|"
     r"工作要求|要求))(?:(?:是|指)?(?:什么|啥)|如何规定)?$"
+)
+_CONDITION_ENUMERATION = re.compile(
+    r"^(?:哪些|哪几种|什么)(?:情况|情形|条件)(?:下|时)?"
+    r"(?:可以|可|需要|应当|应该|应|要|会|能够|能)?"
+    r"(?P<target>.+)$"
 )
 _QUOTED_TABLE_CONTENT = re.compile(
     r"^(?:[“\"](?P<context>[^”\"]{1,120})[”\"][，,]\s*)?"
@@ -318,6 +323,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.RESPONSIBLE_PARTY,
                 source="RULE",
                 reason_codes=("RESPONSIBLE_PARTY_QUESTION_SYNTAX",),
+            )
+
+    conditions = _CONDITION_ENUMERATION.fullmatch(core)
+    if conditions is not None:
+        target, source = _target_and_source(conditions["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation="情形",
+                answer_type=RequestedAnswerType.ENUMERATION,
+                source="RULE",
+                reason_codes=("CONDITION_ENUMERATION_QUESTION_SYNTAX",),
             )
 
     prohibition = _PROHIBITION_QUESTION.fullmatch(core)
@@ -825,12 +843,8 @@ def source_qualifier_matches(
     ).casefold()
     structural_qualifier = normalize_document_label(qualifier)
     structural_label = normalize_document_label(label)
-    if (
-        qualifier in label
-        or (
-            structural_qualifier
-            and structural_qualifier in structural_label
-        )
+    if qualifier in label or (
+        structural_qualifier and structural_qualifier in structural_label
     ):
         return True
     core = re.sub(r"(?:规范|文档|制度|手册)$", "", qualifier).strip()
