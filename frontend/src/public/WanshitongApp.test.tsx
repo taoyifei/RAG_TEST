@@ -191,6 +191,36 @@ describe("湾事通公共应用", () => {
     }
   });
 
+  it("已验证问题可横向浏览，点击后只提交原问题", async () => {
+    const fetchMock = installFetch(
+      streamResponse([
+        event("final", 0, { answer: "实时生成的回答", citations: [] }),
+      ]),
+    );
+    await openHome();
+    const suggestions = screen.getByRole("region", { name: "你可能想问" });
+    expect(within(suggestions).getAllByRole("button")).toHaveLength(7);
+    await userEvent.setup().click(
+      within(suggestions).getByRole("button", {
+        name: "固定资产折旧应从什么时候开始计提？",
+      }),
+    );
+
+    expect(await screen.findByText("实时生成的回答")).toBeInTheDocument();
+    const chatCall = fetchMock.mock.calls.find(
+      ([input]) => pathOf(input) === "/api/public/chat",
+    );
+    const chatBody = chatCall?.[1]?.body;
+    expect(typeof chatBody).toBe("string");
+    const body = JSON.parse(
+      typeof chatBody === "string" ? chatBody : "{}",
+    ) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["conversation_id", "query"]);
+    expect(typeof body.conversation_id).toBe("string");
+    expect(body.query).toBe("固定资产折旧应从什么时候开始计提？");
+    expect(body).not.toHaveProperty("shortcut_id");
+  });
+
   it("首问后切换聊天模式，且请求只含 WB-03 允许字段", async () => {
     const fetchMock = installFetch(
       streamResponse([
@@ -227,7 +257,9 @@ describe("湾事通公共应用", () => {
 
   it("将内部 stage 映射为简洁中文状态", async () => {
     const pending = pendingStream(
-      event("meta", 0) + event("stage", 1, { stage: "retrieval" }),
+      event("meta", 0) +
+        event("stage", 1, { stage: "accepted" }) +
+        event("stage", 2, { stage: "retrieval" }),
     );
     installFetch(pending.response);
     await openHome();
@@ -238,6 +270,12 @@ describe("湾事通公共应用", () => {
         "正在检索内部资料",
       ),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("list", { name: "处理进度" })).getByText(
+        "已接收",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/^\d+ 秒$/)).toBeInTheDocument();
     expect(screen.queryByText("retrieval")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "停止" }));
   });
