@@ -6,6 +6,7 @@ import re
 import unicodedata
 
 from rag_app.core.models import QuerySemantics, RequestedAnswerType
+from rag_app.core.query_text import normalize_document_label
 
 _NUMERAL = r"[零一二三四五六七八九十百两\d]+"
 _RELATION = re.compile(
@@ -81,8 +82,11 @@ _TRAILING_RESPONSE_DIRECTIVE = re.compile(
     r"(?:(?:完整|准确|如实|客观|详细|简要|逐项|分点|直接|清楚|明确)\s*)*"
     r"(?:作答|回答|回复|说明|列出|列举)(?:即可|就行)?[。.!！\s]*$"
 )
+_DOCUMENT_SOURCE_CARRIER = (
+    r"(?:规范|文档|制度|手册|办法|方案|指引|说明书|会议纪要|模板|清单|报告)"
+)
 _SOURCE_QUALIFIED_DUTY = re.compile(
-    r"^(?P<source>.+?(?:规范|文档|制度|手册))(?:里|中)"
+    rf"^(?P<source>.+?{_DOCUMENT_SOURCE_CARRIER})(?:里|中|内)"
     r"[，,：:\s]*(?P<target>.+)$"
 )
 _EXPLICIT_SOURCE_SCOPE = re.compile(
@@ -91,6 +95,11 @@ _EXPLICIT_SOURCE_SCOPE = re.compile(
     r"的(?:规定|内容|说明)?|规定|内容|说明)?|"
     r"(?:在|从)\s*《(?P<within>[^》\r\n]+)》"
     r"(?:中|里|内))\s*[，,：:\s]*(?P<body>.+)$"
+)
+_UNQUOTED_SOURCE_SCOPE = re.compile(
+    r"^(?:在|从)?\s*(?P<source>.{2,160}?"
+    + _DOCUMENT_SOURCE_CARRIER
+    + r")(?:中|里|内)\s*[，,：:\s]*(?P<body>.+)$"
 )
 _PURPOSE_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?(?P<relation>目的|目标|作用)"
@@ -117,6 +126,15 @@ _PROHIBITION_QUESTION = re.compile(
     r"(?:禁止|不得|不能|不允许|不可|不准|严禁|不应当|不应该|不应)"
     r"(?:(?:做|进行|执行|开展|实施|从事|采取)?"
     r"(?:什么|啥|哪些|哪类)(?:事|事情|事项|行为|操作|活动|措施)?)$"
+)
+_CONDITIONAL_PERMISSION_QUESTION = re.compile(
+    r"^(?P<target>.+?)(?:是否|能否|可否)"
+    r"(?:(?:被)?允许|可以|能够|能|可)?"
+    r"(?:在(?P<condition>.+?)(?:的)?情况下)?"
+    r"(?P<action>启动|开展|执行|实施|提交|发布|上线|进行|办理|生效|使用)$"
+)
+_CONDITIONAL_TARGET_CARRIER = re.compile(
+    r"(?:工作模式|协作方式|运行方式|工作方式|模式)$"
 )
 _SECTION_SUMMARY = re.compile(
     rf"^(?P<target>.+?(?:第{_NUMERAL}(?:章|节)|章节|章|节|管理要求|"
@@ -313,6 +331,26 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.SECTION_SUMMARY,
                 source="RULE",
                 reason_codes=("PROHIBITION_QUESTION_SYNTAX",),
+            )
+
+    conditional_permission = _CONDITIONAL_PERMISSION_QUESTION.fullmatch(core)
+    if conditional_permission is not None:
+        raw_target = _CONDITIONAL_TARGET_CARRIER.sub(
+            "", conditional_permission["target"]
+        )
+        target, source = _target_and_source(
+            raw_target or conditional_permission["target"]
+        )
+        if target:
+            # 条件式是非问句通常对应规则表中的一行；保留原问题供模型判断
+            # 肯否，只把对象收窄到可验证的完整表格行。
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation="对应内容",
+                answer_type=RequestedAnswerType.SECTION_SUMMARY,
+                source="RULE",
+                reason_codes=("CONDITIONAL_PERMISSION_QUESTION_SYNTAX",),
             )
 
     duty = _DUTY.search(normalized)
@@ -668,8 +706,16 @@ def split_explicit_source_scope(value: str) -> tuple[str | None, str, int]:
     candidate = _LEADING_REQUEST.sub("", value.strip()).strip()
     match = _EXPLICIT_SOURCE_SCOPE.fullmatch(candidate)
     if match is None:
+        match = _UNQUOTED_SOURCE_SCOPE.fullmatch(candidate)
+    if match is None:
         return None, value, 0
-    source = (match["based_on"] or match["within"]).strip(" 的")
+    groups = match.groupdict()
+    source = (
+        groups.get("based_on")
+        or groups.get("within")
+        or groups.get("source")
+        or ""
+    ).strip(" 的")
     body = match["body"].strip()
     candidate_start = value.find(candidate)
     body_start = candidate_start + match.start("body")
@@ -777,7 +823,15 @@ def source_qualifier_matches(
     label = unicodedata.normalize(
         "NFKC", " ".join((display_name, *heading_path))
     ).casefold()
-    if qualifier in label:
+    structural_qualifier = normalize_document_label(qualifier)
+    structural_label = normalize_document_label(label)
+    if (
+        qualifier in label
+        or (
+            structural_qualifier
+            and structural_qualifier in structural_label
+        )
+    ):
         return True
     core = re.sub(r"(?:规范|文档|制度|手册)$", "", qualifier).strip()
     terms = re.findall(r"[a-z0-9]+|[\u3400-\u9fff]+", core)

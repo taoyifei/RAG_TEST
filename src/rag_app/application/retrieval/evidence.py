@@ -26,6 +26,7 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_document_label,
     normalize_section_heading_label,
     normalize_semantic_text,
     section_heading_path_owns_target,
@@ -208,21 +209,7 @@ class EvidenceAssembler:
         unique_chunks = tuple(
             {item.hydrated.chunk.chunk_id: item for item in candidates}.values()
         )
-        source_qualifier = (
-            context.analysis.semantics.source_qualifier
-            if context is not None
-            else None
-        )
-        if source_qualifier is not None:
-            unique_chunks = tuple(
-                item
-                for item in unique_chunks
-                if source_qualifier_matches(
-                    item.hydrated.display_name,
-                    item.hydrated.chunk.heading_path,
-                    source_qualifier,
-                )
-            )
+        unique_chunks = _scope_evidence_candidates(unique_chunks, context)
         stage_hierarchy = _stage_hierarchy_evidence(
             unique_chunks, policy, context
         )
@@ -321,6 +308,57 @@ class EvidenceAssembler:
             evidence.append(item)
         # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
         return _complete_supports(tuple(evidence))
+
+
+def _strict_document_label_owner(
+    target: str, candidates: tuple[RankedChunk, ...]
+) -> str | None:
+    """仅在对象严格落入唯一文件名时返回文档归属。"""
+    normalized_target = normalize_document_label(target)
+    if not normalized_target:
+        return None
+    owners = {
+        candidate.hydrated.chunk.version.document_id
+        for candidate in candidates
+        if normalized_target
+        in normalize_document_label(candidate.hydrated.display_name)
+    }
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
+def _scope_evidence_candidates(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext | None,
+) -> tuple[RankedChunk, ...]:
+    """按显式来源或唯一文档目的对象裁剪跨文档候选。"""
+    if context is None:
+        return candidates
+    semantics = context.analysis.semantics
+    if semantics.source_qualifier is not None:
+        return tuple(
+            item
+            for item in candidates
+            if source_qualifier_matches(
+                item.hydrated.display_name,
+                item.hydrated.chunk.heading_path,
+                semantics.source_qualifier,
+            )
+        )
+    if (
+        semantics.answer_type is not RequestedAnswerType.PURPOSE
+        or not semantics.target
+    ):
+        return candidates
+    document_owner = _strict_document_label_owner(
+        semantics.target, candidates
+    )
+    if document_owner is None:
+        return candidates
+    return tuple(
+        item
+        for item in candidates
+        if item.hydrated.chunk.version.document_id == document_owner
+    )
 
 
 def _evidence_packing_order(
@@ -579,7 +617,7 @@ def _table_intersections(  # noqa: PLR0912
                 and all(cells.get((cell_row, column)) for column in columns)
             }
             if header_rows:
-                header_row = max(header_rows)
+                header_row = min(header_rows)
                 for column in columns:
                     selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
