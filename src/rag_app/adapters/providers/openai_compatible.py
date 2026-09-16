@@ -91,7 +91,7 @@ class OpenAICompatibleEmbeddingConfig(FrozenModel):
     query_egress_allowed: bool = False
     max_batch_items: StrictInt = Field(default=8, gt=0, le=1024)
     max_input_tokens: StrictInt = Field(default=32768, gt=0, le=1_000_000)
-    adapter_revision: str = "1"
+    adapter_revision: str = "2"
     normalization: Literal["l2-v1"] = "l2-v1"
 
 

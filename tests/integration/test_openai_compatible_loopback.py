@@ -478,6 +478,7 @@ def test_embedding_default_batch_never_exceeds_eight_items() -> None:
             embedding.close()
 
         assert len(result.vectors) == 17
+        assert embedding.config.adapter_revision == "2"
         embedding_requests = [
             payload
             for path, payload, _headers in state.requests

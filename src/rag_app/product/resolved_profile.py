@@ -155,7 +155,7 @@ def resolve_embedding(
             model=model,
             dimension=dimension,
             normalization="l2-v1",
-            adapter_revision="1",
+            adapter_revision="2",
             max_input_tokens=32768,
             document_policy=freeze_json_object(document),
             query_policy=freeze_json_object(query),
