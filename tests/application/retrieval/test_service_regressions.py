@@ -5,7 +5,7 @@ from rag_app.application.retrieval.service import (
     _formal_span_is_current,
     _model_capability_status,
 )
-from rag_app.core.models import ConfidenceStatus, EvidenceItem
+from rag_app.core.models import ConfidenceStatus, EvidenceItem, SourceSpanKind
 from tests.application.retrieval.helpers import make_ranked_chunk
 
 
@@ -46,6 +46,32 @@ def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
         chunk_id=chunk.chunk_id,
         citation_text="QVK（Qua",
         source_label="公开回归.docx",
+        source_spans=(span,),
+    )
+
+    assert _formal_span_is_current(chunk, original, span, item)
+
+
+def test_formal_span_recheck_accepts_exact_derived_numbering() -> None:
+    """无正文坐标的派生编号保留制表符时仍与入选证据合同一致。"""
+    ranked = make_ranked_chunk(4, "\uf0fc\t")
+    chunk = ranked.hydrated.chunk
+    original = chunk.source_spans[0].model_copy(
+        update={
+            "span_type": SourceSpanKind.DERIVED_NUMBERING,
+            "source_start_char": None,
+            "source_end_char": None,
+        }
+    )
+    chunk = chunk.model_copy(update={"source_spans": (original,)})
+    span = original.model_copy(
+        update={"chunk_start_char": 0, "chunk_end_char": 2}
+    )
+    item = EvidenceItem(
+        evidence_id="S1",
+        chunk_id=chunk.chunk_id,
+        citation_text="\uf0fc\t",
+        source_label="派生编号回归.docx",
         source_spans=(span,),
     )
 

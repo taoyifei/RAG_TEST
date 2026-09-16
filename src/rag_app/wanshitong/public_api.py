@@ -48,6 +48,9 @@ PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
 PUBLIC_CONVERSATION_PATH = "/api/public/conversations/{conversation_id}"
+_PUBLIC_STREAM_FIRST_CONTENT_SECONDS = 90.0
+_PUBLIC_STREAM_IDLE_SECONDS = 60.0
+_PUBLIC_STREAM_TOTAL_SECONDS = 120.0
 
 
 class _PublicStreamingResponse(StreamingResponse):
@@ -197,6 +200,11 @@ def register_public_routes(
             ),
             render_final=render_public_final,
             versioned_protocol=True,
+            # 内网演示模型需要在首个事实前完成整份结构化回答及一次修复。
+            # 只放宽湾事通公共壳层的首内容窗口，不改变 Universal 默认门禁。
+            first_content_seconds=_PUBLIC_STREAM_FIRST_CONTENT_SECONDS,
+            idle_seconds=_PUBLIC_STREAM_IDLE_SECONDS,
+            total_seconds=_PUBLIC_STREAM_TOTAL_SECONDS,
             authorization_guard=lambda: _validate_stream_session(
                 sessions, cookie_value, principal
             ),

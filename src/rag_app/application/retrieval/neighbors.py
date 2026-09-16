@@ -63,6 +63,16 @@ class NeighborExpander:
         try:
             if mode == "none":
                 expanded = candidates
+            elif mode == "section" and _has_table_coordinates(candidates[:1]):
+                # 复杂问句通常选择 section 模式；若首名本身是表格片段，
+                # 仍需先闭合它所在的 canonical 行，避免章节兄弟占满预算后
+                # 只留下职责正文而丢失行名、列名等必要上下文。
+                expanded = self._expand_table_context(
+                    snapshot,
+                    candidates,
+                    policy,
+                    source_qualifier=source_qualifier,
+                )
             elif mode == "section":
                 expanded = self._expand_sections(snapshot, candidates, policy)
             elif (

@@ -153,6 +153,65 @@ def test_section_expansion_is_bounded() -> None:
     assert outcome.candidates[1].expansion_reason == "SECTION_SIBLING"
 
 
+def test_section_mode_closes_top_table_row_before_section_siblings() -> None:
+    """复杂问题首名命中表格时优先闭合当前行，而非退化为章节截断。"""
+    chain = _table_chain(
+        30,
+        document_number=3,
+        display_name="合成职责表.docx",
+        length=5,
+    )
+    table_node_id = f"node_{'a' * 32}"
+    with_rows: list[RankedChunk] = []
+    for candidate in chain:
+        chunk = candidate.hydrated.chunk.model_copy(
+            update={
+                "metadata": (
+                    (
+                        "atoms",
+                        [
+                            {
+                                "role": "table",
+                                "metadata": {
+                                    "row_index": 1,
+                                    "table_node_id": table_node_id,
+                                },
+                            }
+                        ],
+                    ),
+                )
+            }
+        )
+        with_rows.append(
+            candidate.model_copy(
+                update={
+                    "hydrated": candidate.hydrated.model_copy(
+                        update={"chunk": chunk}
+                    )
+                }
+            )
+        )
+    source = cast(
+        EvidenceSourcePort,
+        _NeighborSource(tuple(item.hydrated for item in with_rows)),
+    )
+
+    outcome = NeighborExpander(source).expand(
+        _snapshot(),
+        (with_rows[-1],),
+        "section",
+        RetrievalPolicy(max_evidence_items=8, section_chunk_limit=1),
+    )
+
+    assert {item.hydrated.chunk.chunk_id for item in outcome.candidates} == {
+        item.hydrated.chunk.chunk_id for item in with_rows
+    }
+    assert all(
+        item.expansion_reason == "TABLE_CONTINUITY"
+        for item in outcome.candidates[1:]
+    )
+
+
 def test_neighbor_link_damage_degrades_without_crossing_boundary() -> None:
     previous = make_ranked_chunk(1, "previous")
     origin = make_ranked_chunk(
