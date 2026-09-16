@@ -1,0 +1,67 @@
+# 湾事通内网 Demo 运维
+
+以下命令均从 `/data/tyf/wanshitong/deployment` 执行，并显式指定目标主机的
+私有 `.env`。这些操作不清理镜像、卷或其他项目容器。
+
+## 状态与日志
+
+```bash
+sudo docker compose --env-file .env -f compose.yaml ps
+sudo docker compose --env-file .env -f compose.yaml logs --tail=200 wanshitong-app
+sudo docker compose --env-file .env -f compose.yaml logs --tail=200 wanshitong-qdrant
+curl -fsS http://127.0.0.1:8288/live
+curl -fsS http://127.0.0.1:8288/ready
+```
+
+实际端口以 `.env` 中 `WANSHITONG_PORT` 为准。部署脚本会把一次有限的 app
+日志快照写入 `/data/tyf/wanshitong/logs`，模型配置的两次非敏感 JSON 报告
+写入 `/data/tyf/wanshitong/ops`。
+
+## 配置与更新
+
+修改 `.env` 前先保存变更原因，不能在不清楚绑定状态时更换模型 URL、模型名、
+Embedding 维度或 Credential。内网模型绑定检测到漂移会明确失败，不会静默
+改绑。
+
+更新应用时先加载新镜像、修改 `RAG_APP_IMAGE`，再执行 `preflight.sh` 与
+`deploy.sh`。不要使用以下命令：
+
+```text
+docker compose down
+docker rm
+docker volume rm
+docker image rm
+docker system prune
+```
+
+## 导入恢复
+
+导入器按“规范相对路径 + 文件 SHA256”生成稳定 Idempotency-Key。中断后使用
+同一 Manifest、同一语料根和 `--resume --wait` 重跑：
+
+- 已可检索文档会跳过；
+- `queued` / `running` Job 会继续轮询；
+- `failed_retryable` 只重试一次；
+- terminal failure 会保留已成功文档，并在报告中列出安全错误；
+- 不会直接写数据库或 Qdrant，也不会删除文档。
+
+上传入口每个来源地址每分钟最多十次。导入器遇到 429 会遵守有界
+`Retry-After` 后重试一次，因此全量导入可能持续数分钟。
+
+## Secret
+
+Secret 目录必须是 0700，文件必须是 0600。只查看 Bootstrap Token 时使用：
+
+```bash
+sudo sh -c 'umask 077; exec cat /data/tyf/wanshitong/secrets/admin-bootstrap-token'
+```
+
+不要把命令输出粘贴到日志、工单、Git 或最终部署报告。若 Secret bundle 只剩
+部分文件，不要补写或覆盖；先停止依赖步骤并调查文件来源。
+
+## 诊断顺序
+
+真实问答失败时依次核对：Public Session/Cookie/HTTP 边界、固定 Scope、活动
+Index Revision、Embedding 维度、Reranker 协议、Generation Connection、
+Provider validation、实际 Provider Trace、检索候选、Evidence/Claim Validation
+和前端 SSE。不得通过关闭引用校验、跳过 Reranker 或加入固定答案来制造通过。

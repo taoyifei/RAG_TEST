@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from rag_app.wanshitong.mode import ProductMode
 
 _PRODUCT_MODE_ENVIRONMENT_KEY = "RAG_PRODUCT_MODE"
+_DEMO_ALLOW_HTTP_ENVIRONMENT_KEY = "RAG_WANSHITONG_DEMO_ALLOW_HTTP"
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +17,7 @@ class WanshitongSettings:
     """控制湾事通壳层是否随 Product API 启动。"""
 
     product_mode: ProductMode = ProductMode.UNIVERSAL
+    demo_allow_http: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -48,7 +50,22 @@ class WanshitongSettings:
             raise ValueError(
                 "RAG_PRODUCT_MODE 仅支持 universal 或 wanshitong。"
             ) from None
-        return cls(product_mode=product_mode)
+        raw_allow_http = (
+            source.get(_DEMO_ALLOW_HTTP_ENVIRONMENT_KEY, "false")
+            .strip()
+            .casefold()
+        )
+        if raw_allow_http not in {"true", "false"}:
+            raise ValueError(
+                "RAG_WANSHITONG_DEMO_ALLOW_HTTP 仅支持 true 或 false。"
+            )
+        return cls(
+            product_mode=product_mode,
+            demo_allow_http=(
+                product_mode is ProductMode.WANSHITONG
+                and raw_allow_http == "true"
+            ),
+        )
 
 
 __all__ = ["WanshitongSettings"]

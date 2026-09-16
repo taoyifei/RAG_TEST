@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Callable, Iterator
 from typing import Annotated
 
@@ -16,6 +15,7 @@ from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied, RagError
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
+from rag_app.product.http_security import secure_cookie_for_request
 from rag_app.query_executor import QueryAdmissionError
 from rag_app.tracing import TraceMode
 from rag_app.wanshitong.public_models import (
@@ -114,7 +114,10 @@ def register_public_routes(
             PUBLIC_SESSION_COOKIE,
             issue.cookie_value,
             httponly=True,
-            secure=not _is_loopback(request.url.hostname),
+            secure=secure_cookie_for_request(
+                request,
+                trusted_proxies=runtime.settings.trusted_proxies,
+            ),
             samesite="strict",
             max_age=issue.expires_in,
             path="/api/public",
@@ -319,17 +322,6 @@ def _validate_stream_session(
         raise PolicyDenied(
             "公共会话已变化。", stage="wanshitong.public.session"
         )
-
-
-def _is_loopback(hostname: str | None) -> bool:
-    if hostname is None:
-        return False
-    if hostname.casefold() in {"localhost", "testclient", "testserver"}:
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
 
 
 __all__ = [

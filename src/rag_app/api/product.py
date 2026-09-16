@@ -37,7 +37,13 @@ from rag_app.core.errors import PolicyDenied
 from rag_app.product.auth import SESSION_COOKIE
 from rag_app.product.catalog import provider_catalog
 from rag_app.product.control_store import validate_connection_metadata
-from rag_app.product.http_security import RequestRateLimiter
+from rag_app.product.http_security import (
+    RequestRateLimiter,
+    demo_http_request_allowed,
+    effective_request_scheme,
+    is_loopback,
+    secure_cookie_for_request,
+)
 from rag_app.product.models import (
     ImpactKind,
     ProviderConnectionDraft,
@@ -370,10 +376,25 @@ def _request_security_error(
 ) -> StarletteResponse | None:
     hostname = request.url.hostname
     peer = request.client.host if request.client else ""
-    loopback_request = _is_loopback(hostname) and (
-        _is_loopback(peer) or runtime.settings.trust_loopback_host_proxy
+    loopback_request = is_loopback(hostname) and (
+        is_loopback(peer) or runtime.settings.trust_loopback_host_proxy
     )
-    if not loopback_request and _effective_scheme(request, runtime) != "https":
+    demo_http_request = demo_http_request_allowed(
+        request,
+        enabled=bool(
+            getattr(request.app.state, "wanshitong_demo_allow_http", False)
+        ),
+        trusted_origins=runtime.settings.trusted_origins,
+        trusted_proxies=runtime.settings.trusted_proxies,
+    )
+    if (
+        not loopback_request
+        and effective_request_scheme(
+            request, trusted_proxies=runtime.settings.trusted_proxies
+        )
+        != "https"
+        and not demo_http_request
+    ):
         return _policy_error(400, "TLS_REQUIRED", "非本机访问必须使用 HTTPS。")
     if request.method not in _SAFE_METHODS:
         origin = request.headers.get("Origin")
@@ -409,15 +430,6 @@ def _rate_limit_bucket(path: str, method: str) -> str | None:
     return None
 
 
-def _effective_scheme(request: Request, runtime: ProductRuntime) -> str:
-    peer = request.client.host if request.client else ""
-    if peer in runtime.settings.trusted_proxies:
-        forwarded = request.headers.get("X-Forwarded-Proto", "")
-        if forwarded in {"http", "https"}:
-            return forwarded
-    return request.url.scheme
-
-
 def _apply_security_headers(
     request: Request,
     response: StarletteResponse,
@@ -437,7 +449,12 @@ def _apply_security_headers(
         }
         if "no-store" not in directives:
             response.headers["Cache-Control"] = "no-store"
-    if _effective_scheme(request, runtime) == "https":
+    if (
+        effective_request_scheme(
+            request, trusted_proxies=runtime.settings.trusted_proxies
+        )
+        == "https"
+    ):
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
@@ -547,7 +564,10 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             SESSION_COOKIE,
             token,
             httponly=True,
-            secure=not _is_loopback(request.url.hostname),
+            secure=secure_cookie_for_request(
+                request,
+                trusted_proxies=runtime.settings.trusted_proxies,
+            ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
             path="/",
@@ -568,7 +588,10 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             SESSION_COOKIE,
             replacement,
             httponly=True,
-            secure=not _is_loopback(request.url.hostname),
+            secure=secure_cookie_for_request(
+                request,
+                trusted_proxies=runtime.settings.trusted_proxies,
+            ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
             path="/",
@@ -595,7 +618,10 @@ def _register_session_routes(app: FastAPI, runtime: ProductRuntime) -> None:
             SESSION_COOKIE,
             replacement,
             httponly=True,
-            secure=not _is_loopback(request.url.hostname),
+            secure=secure_cookie_for_request(
+                request,
+                trusted_proxies=runtime.settings.trusted_proxies,
+            ),
             samesite="lax",
             max_age=runtime.sessions.ttl_seconds,
             path="/",
@@ -1025,16 +1051,6 @@ def _policy_error(status_code: int, code: str, message: str) -> JSONResponse:
             }
         },
     )
-
-
-def _is_loopback(hostname: str | None) -> bool:
-    return hostname in {
-        "127.0.0.1",
-        "localhost",
-        "::1",
-        "testclient",
-        "testserver",
-    }
 
 
 __all__ = [

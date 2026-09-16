@@ -11,6 +11,12 @@ class ScopeBindingError(ConfigurationError):
     default_code = "WANSHITONG_SCOPE_INVALID"
 
 
+class InternalModelConfigurationError(ConfigurationError):
+    """内网模型引导状态损坏或与冻结配置不一致。"""
+
+    default_code = "WANSHITONG_MODEL_CONFIGURATION_INVALID"
+
+
 class AdminFacadeError(Exception):
     """湾事通管理员 Facade 的稳定、安全 HTTP 错误。"""
 
@@ -38,4 +44,8 @@ class AdminFacadeError(Exception):
         super().__init__(f"{code}: {message}")
 
 
-__all__ = ["AdminFacadeError", "ScopeBindingError"]
+__all__ = [
+    "AdminFacadeError",
+    "InternalModelConfigurationError",
+    "ScopeBindingError",
+]
