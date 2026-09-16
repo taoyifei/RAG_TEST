@@ -59,6 +59,14 @@ sudo sh -c 'umask 077; exec cat /data/tyf/wanshitong/secrets/admin-bootstrap-tok
 不要把命令输出粘贴到日志、工单、Git 或最终部署报告。若 Secret bundle 只剩
 部分文件，不要补写或覆盖；先停止依赖步骤并调查文件来源。
 
+## 受控 TCP 转发
+
+如果跳板机没有 `socat`，可把 `tcp_forward.py` 复制到跳板机专用的
+`/data/tyf/wanshitong-access`，以前台进程或现有进程管理器运行。脚本只接受
+精确私网/回环 IP，拒绝 `0.0.0.0`、主机名和公网地址；日志仅记录监听与目标，
+不记录转发内容。PID、日志和现场启动脚本均应留在该专用目录。启动前必须先
+用 `ss -lnt` 确认监听端口空闲，并从实际来源主机完成合同探测。
+
 ## 诊断顺序
 
 真实问答失败时依次核对：Public Session/Cookie/HTTP 边界、固定 Scope、活动
