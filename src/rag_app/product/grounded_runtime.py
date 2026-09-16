@@ -65,10 +65,11 @@ _CONTEXT_REFERENCE = re.compile(
 )
 _MAX_REWRITE_CHARS = 512
 _MAX_INTERPRET_FIELD_CHARS = 512
-_MAX_GROUNDED_INPUT_TOKENS = 16_384
+_MAX_GROUNDED_INPUT_TOKENS = 6_144
 # 内网演示模型的上下文窗口同时容纳输入与输出。回答采用结构化、逐条的
-# claim，不需要为输出预留 4K token；收紧输出预算可避免证据充分时被上游
-# 以 context length exceeded 拒绝，同时不改变检索候选或引用校验语义。
+# claim，固定为输出保留 1536 token；输入预算限制在 6144 token，为 8K
+# 上下文窗口留出固定余量。证据候选由 Provider adapter 按重排顺序裁剪，
+# 不改变引用校验所能看到的完整有界证据包。
 _MAX_GROUNDED_OUTPUT_TOKENS = 1536
 _RotationResult = TypeVar("_RotationResult")
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(

@@ -17,6 +17,7 @@ from rag_app.adapters.providers.aliyun_chat import (
     _grounded_claim,
     _grounded_claims,
     _grounded_evidence_payload,
+    _grounded_messages,
     chat_payload,
     message_token_estimate,
 )
@@ -258,6 +259,34 @@ def _generation_request() -> GenerationRequest:
             ),
         ),
     )
+
+
+def test_grounded_messages_trim_tail_to_provider_input_budget() -> None:
+    """生成 Prompt 按既有候选顺序裁剪，并始终保留排名第一的证据。"""
+    first = _generation_request().evidence[0]
+    candidates = tuple(
+        first.model_copy(
+            update={
+                "evidence_id": f"support-{index}",
+                "chunk_id": f"chunk_{index:032x}",
+                "citation_text": f"候选 {index}：" + "合成证据正文" * 120,
+            }
+        )
+        for index in range(1, 13)
+    )
+    request = _generation_request().model_copy(
+        update={
+            "evidence": candidates,
+            "model_evidence_candidates": candidates,
+        }
+    )
+
+    messages = _grounded_messages(request, max_input_tokens=3_000)
+    prompt = json.loads(messages[1].content)
+
+    assert message_token_estimate(messages) <= 3_000
+    assert 0 < len(prompt["evidence"]) < len(candidates)
+    assert prompt["evidence"][0]["support_id"] == "support-1"
 
 
 def _certified_table_request() -> GenerationRequest:

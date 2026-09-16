@@ -1834,3 +1834,34 @@ def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
     assert request.evidence == broad_candidates
     assert request.answer_support_set == support
     assert request.model_evidence_candidates == support
+
+
+def test_multi_part_question_keeps_direct_support_then_broad_candidates() -> (
+    None
+):
+    """复合问题不能因一个子问已闭合就隐藏其他重排候选。"""
+    support, draft = _supported_draft(
+        "合成设备的保管期限为 14 天。",
+        "合成设备的保管期限为 14 天。",
+    )
+    related, _ = _supported_draft(
+        "合成设备的复核方式为两人交叉复核。",
+        "合成设备的复核方式为两人交叉复核。",
+    )
+    related_item = related[0].model_copy(update={"evidence_id": "S2"})
+    candidates = (*support, related_item)
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多久？复核方式是什么？",
+        candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
+    request = generator.generate.call_args.args[0]
+    assert request.answer_support_set == support
+    assert request.model_evidence_candidates == candidates

@@ -197,6 +197,14 @@ _NEGATION_CLASSES = {
     "不": "negative",
 }
 
+_MULTI_PART_QUERY = re.compile(
+    r"分别|各自|同时|以及|并且|"
+    r"(?:如何|什么|哪些|多少|多久|哪个|哪种|"
+    r"是什么|怎么).*(?:如何|什么|哪些|多少|多久|"
+    r"哪个|哪种|是什么|怎么)"
+)
+_MIN_MULTI_PART_CLAUSES = 2
+
 
 @dataclass(frozen=True)
 class GroundedOutcome:
@@ -219,6 +227,40 @@ class _ClaimSourceGroup:
     trusted_contexts: frozenset[str]
     trusted_term_contexts: frozenset[str] = frozenset()
     table_columns: tuple[str, ...] = ()
+
+
+def _model_candidates_for_query(
+    query: str,
+    direct_support: tuple[EvidenceItem, ...],
+    evidence: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """为生成保留直接支持优先级，复合问题再补充宽候选。
+
+    Args:
+        query: 用户当前问题。
+        direct_support: 已被本地证据闭合器确认的最小支持集。
+        evidence: 检索、融合和重排后的有界模型候选。
+
+    Returns:
+        单一事实仅使用直接支持；多问或并列问题先放直接支持，
+        再按已有重排顺序补齐其他候选。
+
+    """
+    if not direct_support:
+        return evidence
+    question_parts = tuple(
+        part.strip() for part in re.split(r"[?？]+", query) if part.strip()
+    )
+    if (
+        len(question_parts) < _MIN_MULTI_PART_CLAUSES
+        and _MULTI_PART_QUERY.search(query) is None
+    ):
+        return direct_support
+    direct_ids = {item.support_id for item in direct_support}
+    return (
+        *direct_support,
+        *(item for item in evidence if item.support_id not in direct_ids),
+    )
 
 
 def _terms(text: str) -> set[str]:
@@ -1417,7 +1459,11 @@ class GroundedAnsweringService:
                         None if analysis is None else analysis.semantics
                     ),
                     answer_support_set=direct_support,
-                    model_evidence_candidates=direct_support or evidence,
+                    model_evidence_candidates=_model_candidates_for_query(
+                        query,
+                        direct_support,
+                        evidence,
+                    ),
                 )
                 stream_generate = getattr(
                     self.generator, "generate_stream", None

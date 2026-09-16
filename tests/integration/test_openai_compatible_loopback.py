@@ -748,7 +748,7 @@ def test_stream_unsupported_falls_back_once_without_fake_claim_deltas() -> None:
 
 
 def test_fenced_stream_falls_back_to_complete_json_parser() -> None:
-    """增量解析未发布 claim 时，完整 JSON 代码围栏由同步解析兼容。"""
+    """增量解析未发布 claim 时，完整 JSON 围栏在同一条流中收束。"""
     with _loopback_server() as (base_url, state):
         adapter = OpenAICompatibleChatAdapter(
             OpenAICompatibleChatConfig(
@@ -769,11 +769,9 @@ def test_fenced_stream_falls_back_to_complete_json_parser() -> None:
 
         assert emitted == []
         assert draft.claims[0].text == "设备 MX-41 的维护周期为 14 天。"
-        assert len(draft.provider_calls) == 2
-        assert draft.provider_calls[0].reason_code == "INVALID_STREAM_SCHEMA"
-        assert draft.provider_calls[1].reason_code == "OK"
+        assert len(draft.provider_calls) == 1
+        assert draft.provider_calls[0].reason_code == "OK"
         assert [path for path, _, _ in state.requests] == [
-            "/fenced-stream/chat/completions",
             "/fenced-stream/chat/completions",
         ]
 
