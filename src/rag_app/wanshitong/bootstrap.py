@@ -38,6 +38,7 @@ def configure_wanshitong_app(
     """
     resolved = settings or WanshitongSettings.from_environment()
     app.state.wanshitong_enabled = resolved.enabled
+    app.state.wanshitong_demo_allow_http = resolved.demo_allow_http
     if not resolved.enabled:
         return None
     master_key_file = runtime.settings.master_key_file

@@ -11,6 +11,9 @@ from rag_app.adapters.chunkers.docx_structural.atoms import (
     RunPlan,
     SourceFragment,
 )
+from rag_app.adapters.chunkers.docx_structural.chunker import (
+    _disambiguate_colliding_chunk_ids,
+)
 from rag_app.adapters.chunkers.docx_structural.packing import pack_run
 from rag_app.adapters.chunkers.docx_structural.rendering import (
     render_atoms,
@@ -584,6 +587,25 @@ def test_heading_context_is_not_counted_as_missing_citable_text() -> None:
 
     assert result.report.source_span_coverage == 1.0
     assert result.report.missing_source_chars == 0
+
+
+def test_colliding_source_ids_preserve_distinct_structural_contexts() -> None:
+    """合并单元格复用来源时，不得丢弃不同业务行的检索上下文。"""
+    original = _chunk(_parse("07-table-gridspan-vmerge.docx")).chunks[0]
+    first = original.model_copy(
+        update={"embedding_text": original.embedding_text + "\n结构：重大事件"}
+    )
+    second = original.model_copy(
+        update={"embedding_text": original.embedding_text + "\n结构：较大事件"}
+    )
+
+    resolved = _disambiguate_colliding_chunk_ids((first, second))
+
+    assert len({chunk.chunk_id for chunk in resolved}) == 2
+    assert {chunk.embedding_text for chunk in resolved} == {
+        first.embedding_text,
+        second.embedding_text,
+    }
 
 
 def test_note_relationship_targets_are_represented_by_child_chunks() -> None:

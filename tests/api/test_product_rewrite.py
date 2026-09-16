@@ -152,13 +152,13 @@ def test_invalid_json_records_the_one_dispatched_call(
     assert result.calls[0].observed_tokens == 70
 
 
-def test_product_grounded_answers_have_bounded_long_output_capacity(
+def test_product_grounded_answers_reserve_bounded_context_capacity(
     rewrite_model: RewriteFixture,
 ) -> None:
-    """长篇多条款回答使用 4k 上限，解释和改写仍各自降低预算。"""
+    """回答保留足够结构化输出，并为 8K 内网模型的输入留出空间。"""
     model, _, _, _ = rewrite_model
 
-    assert model.adapter.config.max_output_tokens == 4096
+    assert model.adapter.config.max_output_tokens == 1536
 
 
 @pytest.mark.parametrize(
@@ -397,6 +397,7 @@ def test_product_grounded_model_accepts_full_bounded_evidence_prompt(
     model, _request, _sent, _output = rewrite_model
 
     assert model.adapter.config.max_input_tokens == 16_384
+    assert model.adapter.config.max_output_tokens == 1536
 
 
 def test_invalid_interpret_json_records_the_one_dispatched_call(

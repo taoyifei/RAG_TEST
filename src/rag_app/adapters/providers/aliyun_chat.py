@@ -85,6 +85,19 @@ _GROUNDED_SYSTEM = (
     "不得把一个来源组的对象与另一个来源组的动作拼成事实。"
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
+    "source_structure中的document_label和heading_path只用于判断候选是否属于"
+    "问题所问对象，不能作为事实quote。问题明确指向某类文档或对象时，优先选择"
+    "标签匹配的候选；若标签和quote都不支持该对象，不得把问题中的对象补进text。"
+    "模板目录项只证明相应模板存在；模板正文没有入库。若问题询问该模板的"
+    "具体填写项、示例或要求，只能提示参考该模板，不得借用其他文档补写其内容。"
+    "仅询问某模板是否存在或应参考哪份模板时，引用精确匹配的目录项，"
+    "claim.text尽量写目录项原文或仅用该标题说明存在/可供参考；"
+    "不追加目录项未记载的模板用途、版本含义或正文要求。"
+    "问题含未、不、不得、例外等边界时，claim必须直接回答同一条件，不能改答"
+    "相邻流程、其他角色或其他审批条件。"
+    "若问何时可免除、可以不执行某动作，来源仅把‘未执行’列为结果或成功指标"
+    "并不能证明免除条件；须有明确陈述该动作可不执行及其条件的证据，否则"
+    '输出{"claims":[]}。'
     "职责原文已写出主体时保留完整主体；正文省略主体但证据带有"
     "verified_duty_owner时，text只写正文原子事实，不要自行补写主体，"
     "主体由服务端核验后展示。没有逐字主体或verified_duty_owner时"
@@ -148,7 +161,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v7", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
@@ -502,47 +515,98 @@ class _ChatStreamAccumulator:
         )
 
 
-def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
-    """让同步与流式生成共享完全相同的有限证据 Prompt。"""
-    model_candidates = request.model_evidence_candidates or request.evidence
-    content: dict[str, object] = {
-        "question": request.query,
-        "typed_semantics": (
-            None
-            if request.typed_semantics is None
-            else request.typed_semantics.model_dump(
-                mode="json",
-                exclude={"constraints"},
-            )
-        ),
-        "evidence": [
-            _grounded_evidence_payload(item) for item in model_candidates
-        ],
-    }
-    messages: tuple[ChatMessage, ...] = (
-        ChatMessage(role="system", content=_GROUNDED_SYSTEM),
-        ChatMessage(
-            role="user",
-            content=json.dumps(content, ensure_ascii=False),
-        ),
+def _grounded_messages(
+    request: GenerationRequest,
+    *,
+    max_input_tokens: int | None = None,
+) -> tuple[ChatMessage, ...]:
+    """让同步与流式生成共享同一个按重排顺序裁剪的证据 Prompt。
+
+    Args:
+        request: 包含完整有界证据与模型候选的生成请求。
+        max_input_tokens: Provider 的本地输入预算上限；不提供时不裁剪。
+
+    Returns:
+        至少含排名第一条证据的消息。完整 ``request.evidence`` 仍供
+        后续引用与事实校验，裁剪仅影响发给模型的候选。
+
+    """
+    model_candidates = list(
+        request.model_evidence_candidates or request.evidence
     )
-    if request.repair_reason:
-        messages += (
+    if not model_candidates:
+        raise ValueError("生成不能接受空证据候选。")
+
+    def build_messages() -> tuple[ChatMessage, ...]:
+        """根据当前候选快照构建一次不可变消息。"""
+        content: dict[str, object] = {
+            "question": request.query,
+            "typed_semantics": (
+                None
+                if request.typed_semantics is None
+                else request.typed_semantics.model_dump(
+                    mode="json",
+                    exclude={"constraints"},
+                )
+            ),
+            "evidence": [
+                _grounded_evidence_payload(item)
+                for item in model_candidates
+            ],
+        }
+        messages: tuple[ChatMessage, ...] = (
+            ChatMessage(role="system", content=_GROUNDED_SYSTEM),
             ChatMessage(
                 role="user",
-                content=(
-                    "上次草稿未通过校验。仅根据同一证据重新输出一次，"
-                    "无法支持的事实请删除。把不同来源组支持的事实拆开，"
-                    "每条claim只保留可由一个来源组完整证明的分句。安全原因："
-                    + request.repair_reason
-                ),
+                content=json.dumps(content, ensure_ascii=False),
             ),
         )
+        if request.repair_reason:
+            shape_reminder = (
+                '只输出完整JSON对象{"claims":[{"text":"证据支持的事实",'
+                '"supports":[{"support_id":"证据ID","quote":"对应证据的逐字子串"}]}]}；'
+                '无可支持事实时输出{"claims":[]}。不要加入其他字段或说明。'
+                if request.repair_reason == "GENERATION_CLAIMS_INVALID"
+                else ""
+            )
+            messages += (
+                ChatMessage(
+                    role="user",
+                    content=(
+                        "上次草稿未通过校验。仅根据同一证据重新输出一次，"
+                        "无法支持的事实请删除。把不同来源组支持的事实拆开，"
+                        "每条claim只保留可由一个来源组完整证明的分句。"
+                        "若安全原因为CLAIM_TEXT_UNSUPPORTED，只有quote直接包含答案时"
+                        "才保留该事实，并将text直接复制为quote中可独立成句的连续原文，"
+                        "不要同义改写；否则删除该事实。安全原因："
+                        + request.repair_reason
+                        + "。"
+                        + shape_reminder
+                    ),
+                ),
+            )
+        return messages
+
+    messages = build_messages()
+    while (
+        max_input_tokens is not None
+        and message_token_estimate(messages) > max_input_tokens
+        and len(model_candidates) > 1
+    ):
+        model_candidates.pop()
+        messages = build_messages()
     return messages
 
 
 def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
     """投影一个有界证据，不复制检索分数或内部元数据。"""
+    metadata = dict(item.metadata)
+    document_title = metadata.get("document_title")
+    document_label = (
+        document_title
+        if isinstance(document_title, str) and document_title.strip()
+        else item.display_name
+    )
     source_structure: dict[str, object] = {
         "document_version_id": item.document_version_id,
         "section_id": item.section_id,
@@ -560,6 +624,8 @@ def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
             if span.source_anchor is not None
         ],
     }
+    if document_label:
+        source_structure["document_label"] = document_label
     verified_owner = _verified_duty_owner(item)
     if verified_owner is not None:
         source_structure["verified_duty_owner"] = verified_owner
@@ -1078,7 +1144,12 @@ class AliyunChatAdapter:
         """
         if not request.evidence:
             raise ValueError("生成不能接受空证据包。")
-        completion = self.complete(_grounded_messages(request))
+        completion = self.complete(
+            _grounded_messages(
+                request,
+                max_input_tokens=self.config.max_input_tokens,
+            )
+        )
         try:
             claims = _grounded_claims(completion.content, request)
         except (TypeError, ValueError, KeyError):
@@ -1140,6 +1211,7 @@ class AliyunChatAdapter:
             max_buffer_chars=_MAX_CONTENT_CHARS,
         )
         emitted: list[AnswerClaim] = []
+        parser_failed_before_claim = False
 
         def consume_delta(fragment: str) -> None:
             """把一个模型正文增量交给 claim 解析器。
@@ -1151,20 +1223,34 @@ class AliyunChatAdapter:
                 无返回值；完整合法 claim 会同步交给应用回调。
 
             """
+            nonlocal parser_failed_before_claim
             if cancellation.is_cancelled():
                 raise QueryCancelled("PROVIDER_STREAM_CANCELLED")
-            for raw_claim in parser.feed(fragment):
-                claim = _grounded_claim(raw_claim, request)
-                emitted.append(claim)
-                on_claim(claim)
+            if parser_failed_before_claim:
+                return
+            try:
+                for raw_claim in parser.feed(fragment):
+                    claim = _grounded_claim(raw_claim, request)
+                    emitted.append(claim)
+                    on_claim(claim)
+            except (TypeError, ValueError, KeyError):
+                if emitted:
+                    raise
+                # 如 ```json 前缀无法增量发布，完整响应解析器仍可
+                # 在流结束后安全去除围栏并校验唯一 JSON 对象。
+                parser_failed_before_claim = True
 
         completion = self.complete_stream(
-            _grounded_messages(request),
+            _grounded_messages(
+                request,
+                max_input_tokens=self.config.max_input_tokens,
+            ),
             on_delta=consume_delta,
             cancellation=cancellation,
         )
         try:
-            parser.finish()
+            if not parser_failed_before_claim:
+                parser.finish()
             claims = _grounded_claims(completion.content, request)
         except (ChatResponseError, TypeError, ValueError, KeyError):
             failed = completion.call.model_copy(
@@ -1178,7 +1264,7 @@ class AliyunChatAdapter:
                 failed,
                 stage=self._generation_stage(),
             ) from None
-        if claims != tuple(emitted):
+        if not parser_failed_before_claim and claims != tuple(emitted):
             failed = completion.call.model_copy(
                 update={
                     "status_category": "RESPONSE_CONTRACT",

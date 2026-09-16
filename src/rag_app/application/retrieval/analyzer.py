@@ -21,6 +21,7 @@ from rag_app.core.models import (
 )
 
 _QUOTED = re.compile(r'["“](.+?)["”]')
+_BOOK_TITLE = re.compile(r"《([^》\r\n]{3,200})》")
 _IDENTIFIER = re.compile(
     r"(?<!\w)(?=[A-Za-z0-9\u3400-\u9fff_.\-/]{3,80}(?!\w))"
     r"(?=[A-Za-z0-9\u3400-\u9fff_.\-/]*[A-Za-z])"
@@ -57,6 +58,9 @@ _NEGATIONS = (
     "严禁",
     "不",
     "未",
+    "无需",
+    "不必",
+    "免于",
     "禁止",
     "不得",
     "没有",
@@ -112,9 +116,10 @@ class QueryAnalyzer:
         )
         quoted = tuple(
             dict.fromkeys(
-                match.group(1).strip()
-                for match in _QUOTED.finditer(signal_text)
-                if match.group(1).strip()
+                value.strip()
+                for pattern in (_QUOTED, _BOOK_TITLE)
+                for match in pattern.finditer(signal_text)
+                if (value := match.group(1)).strip()
             )
         )
         numbers = tuple(dict.fromkeys(_NUMBER.findall(signal_text)))
@@ -309,6 +314,7 @@ def _query_constraints(text: str) -> tuple[QueryConstraint, ...]:
         (ConstraintKind.UNIT, _UNITS, 0),
         (ConstraintKind.DATE_VERSION, _DATE_VERSION, 0),
         (ConstraintKind.QUOTED_TEXT, _QUOTED, 1),
+        (ConstraintKind.QUOTED_TEXT, _BOOK_TITLE, 1),
         (ConstraintKind.QUALIFIER, _QUALIFIER, 0),
     )
     for kind, pattern, group in patterns:

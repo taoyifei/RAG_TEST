@@ -74,6 +74,9 @@ _STREAM_UNSUPPORTED = frozenset(
         "HTTP_415",
         "HTTP_422",
         "INVALID_STREAM_CONTENT_TYPE",
+        # 完整 JSON 解析器兼容 JSON 代码围栏；增量解析无法在看到前缀时
+        # 安全发布 claim，因此在尚未发布任何 claim 时改走一次同步解析。
+        "INVALID_STREAM_SCHEMA",
     }
 )
 
@@ -89,8 +92,9 @@ class OpenAICompatibleEmbeddingConfig(FrozenModel):
     query_request_policy_identity: str
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
+    max_batch_items: StrictInt = Field(default=8, gt=0, le=1024)
     max_input_tokens: StrictInt = Field(default=32768, gt=0, le=1_000_000)
-    adapter_revision: str = "1"
+    adapter_revision: str = "2"
     normalization: Literal["l2-v1"] = "l2-v1"
 
 
@@ -113,7 +117,7 @@ class OpenAICompatibleChatConfig(FrozenModel):
     max_input_tokens: StrictInt = Field(default=6144, gt=0, le=131072)
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=16384)
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
-    prompt_version: str = Field(default="grounded-chat-v7", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
 
 
 class OpenAICompatibleEmbeddingAdapter:
@@ -168,7 +172,10 @@ class OpenAICompatibleEmbeddingAdapter:
             )
         batches = batch_texts(
             request.texts,
-            BatchLimits(max_input_tokens=self._config.max_input_tokens),
+            BatchLimits(
+                max_items=self._config.max_batch_items,
+                max_input_tokens=self._config.max_input_tokens,
+            ),
         )
         vectors: list[tuple[float, ...]] = []
         calls: list[ProviderCall] = []

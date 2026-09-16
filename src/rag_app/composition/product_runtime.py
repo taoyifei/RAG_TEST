@@ -2645,6 +2645,7 @@ def _parse_trusted_origins(value: str) -> tuple[str, ...]:
         if (
             parsed.scheme not in {"http", "https"}
             or not parsed.hostname
+            or parsed.hostname == "*"
             or parsed.username
             or parsed.password
             or parsed.path not in {"", "/"}

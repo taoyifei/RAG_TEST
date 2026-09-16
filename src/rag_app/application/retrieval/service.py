@@ -1910,7 +1910,7 @@ def _formal_span_is_current(
         return (
             original.source_end_char is None
             and span == original.model_copy(update=relative_updates)
-            and quote == raw_quote.strip()
+            and quote in {raw_quote, raw_quote.strip()}
         )
     if (
         original.source_end_char is None

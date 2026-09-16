@@ -6,8 +6,12 @@ import re
 import unicodedata
 from collections.abc import Iterable
 from difflib import SequenceMatcher
+from html import unescape
 
 _DOCUMENT_EXTENSION = re.compile(r"\.(?:docx?|pdf|txt|md)$")
+_CATALOG_ORIGINAL_SUFFIX = re.compile(
+    r"\(原件\s*\.(?:docx?|pdf|xls|xlsx)\)$", re.IGNORECASE
+)
 _STRUCTURAL_SEPARATOR = re.compile(r"[\s_.\-—–/\\·:：()（）\[\]【】]+")
 _PRIVATE_USE_CHARACTER = re.compile(r"[\ue000-\uf8ff]")
 _APPROXIMATE_LABEL_MINIMUM_LENGTH = 6
@@ -68,6 +72,23 @@ def normalize_document_label(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value).casefold().strip()
     normalized = _DOCUMENT_EXTENSION.sub("", normalized)
     return _STRUCTURAL_SEPARATOR.sub("", normalized)
+
+
+def normalize_catalog_label(value: str) -> str:
+    """目录标题同一性忽略实体编码和系统添加的原件格式说明。
+
+    Args:
+        value: 问题标题、目录项标题或显示名。
+
+    Returns:
+        不模糊匹配业务名称的规范标签。
+
+    """
+    normalized = unescape(unicodedata.normalize("NFKC", value).strip())
+    normalized = _DOCUMENT_EXTENSION.sub("", normalized)
+    return normalize_document_label(
+        _CATALOG_ORIGINAL_SUFFIX.sub("", normalized)
+    )
 
 
 def normalize_duty_heading_label(value: str) -> str:

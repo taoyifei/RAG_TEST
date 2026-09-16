@@ -55,3 +55,6 @@ logs/
 *.safetensors
 *.engine
 *.plan
+
+# WB-07R 本地验收题库、脚本与 Trace 证据保留在工作区，不入库。
+/.wb07r-*

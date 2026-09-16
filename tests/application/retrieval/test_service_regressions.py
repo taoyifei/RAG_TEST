@@ -5,7 +5,7 @@ from rag_app.application.retrieval.service import (
     _formal_span_is_current,
     _model_capability_status,
 )
-from rag_app.core.models import ConfidenceStatus, EvidenceItem
+from rag_app.core.models import ConfidenceStatus, EvidenceItem, SourceSpanKind
 from tests.application.retrieval.helpers import make_ranked_chunk
 
 
@@ -28,6 +28,21 @@ def test_unknown_corpus_blocker_does_not_recurse() -> None:
     )
 
 
+def test_invalid_generated_claims_are_not_projected_as_provider_outage() -> (
+    None
+):
+    """模型返回但 claim 结构失败应继续按证据不足安全拒答。"""
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert (
+        _model_capability_status(context, "GENERATION_CLAIMS_INVALID") is None
+    )
+
+
 def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     """表格单元格去尾空白后同步缩短来源范围，不误报索引损坏。"""
     ranked = make_ranked_chunk(1, "QVK（Qua ")
@@ -46,6 +61,32 @@ def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
         chunk_id=chunk.chunk_id,
         citation_text="QVK（Qua",
         source_label="公开回归.docx",
+        source_spans=(span,),
+    )
+
+    assert _formal_span_is_current(chunk, original, span, item)
+
+
+def test_formal_span_recheck_accepts_exact_derived_numbering() -> None:
+    """无正文坐标的派生编号保留制表符时仍与入选证据合同一致。"""
+    ranked = make_ranked_chunk(4, "\uf0fc\t")
+    chunk = ranked.hydrated.chunk
+    original = chunk.source_spans[0].model_copy(
+        update={
+            "span_type": SourceSpanKind.DERIVED_NUMBERING,
+            "source_start_char": None,
+            "source_end_char": None,
+        }
+    )
+    chunk = chunk.model_copy(update={"source_spans": (original,)})
+    span = original.model_copy(
+        update={"chunk_start_char": 0, "chunk_end_char": 2}
+    )
+    item = EvidenceItem(
+        evidence_id="S1",
+        chunk_id=chunk.chunk_id,
+        citation_text="\uf0fc\t",
+        source_label="派生编号回归.docx",
         source_spans=(span,),
     )
 

@@ -40,6 +40,7 @@ from rag_app.wanshitong.document_metadata import (
 from rag_app.wanshitong.errors import AdminFacadeError, ScopeBindingError
 from rag_app.wanshitong.models import ScopeBinding
 from rag_app.wanshitong.scope_service import FixedScopeService
+from rag_app.wanshitong.template_catalog import searchable_upload_content
 from rag_app.wanshitong.upload_validation import (
     ValidatedDocxUpload,
     read_and_validate_docx,
@@ -165,7 +166,11 @@ def _register_document_routes(
             binding.project_id,
             binding.knowledge_base_id,
             display_name=upload.display_name,
-            content=upload.content,
+            content=searchable_upload_content(
+                upload.content,
+                source_relative_path=metadata.source_relative_path,
+                document_title=metadata.document_title,
+            ),
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
             metadata=metadata.index_metadata(),
@@ -255,7 +260,11 @@ def _register_document_routes(
             binding.project_id,
             binding.knowledge_base_id,
             document_id,
-            content=upload.content,
+            content=searchable_upload_content(
+                upload.content,
+                source_relative_path=metadata.source_relative_path,
+                document_title=metadata.document_title,
+            ),
             media_type=upload.media_type,
             idempotency_key=idempotency_key,
             metadata=metadata.index_metadata(),

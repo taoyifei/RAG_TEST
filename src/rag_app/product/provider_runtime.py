@@ -660,6 +660,7 @@ class ProviderRuntimeRegistry:
                 http_client=self._adapter_http_client(
                     connection,
                     max_attempts=1,
+                    read_timeout_seconds=90.0,
                 ),
                 api_key_resolver=self._secret_resolver(connection),
             )
@@ -902,13 +903,14 @@ class ProviderRuntimeRegistry:
 
         return _resolve
 
-    def _adapter_http_client(
+    def _adapter_http_client(  # noqa: PLR0913
         self,
         connection: ProviderConnection,
         *,
         selected_slot: str | None = None,
         reranker_mode: str | None = None,
         max_attempts: int = 3,
+        read_timeout_seconds: float = 30.0,
         parse_response_error_code: bool = False,
     ) -> ProviderHttpClient:
         if not connection.enabled:
@@ -935,7 +937,12 @@ class ProviderRuntimeRegistry:
             )
         client = httpx.Client(
             transport=resolved_transport,
-            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+            timeout=httpx.Timeout(
+                connect=5.0,
+                read=read_timeout_seconds,
+                write=30.0,
+                pool=5.0,
+            ),
             follow_redirects=False,
             trust_env=False,
         )

@@ -63,7 +63,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def do_POST(self) -> None:  # noqa: PLR0911, PLR0912
+        def do_POST(self) -> None:  # noqa: PLR0911, PLR0912, PLR0915
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
             state.requests.append(
@@ -155,6 +155,49 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                             {
                                 "finish_reason": "stop",
                                 "message": {"content": _chat_answer(payload)},
+                            }
+                        ]
+                    }
+                )
+                return
+            if (
+                self.path == "/fenced-stream/chat/completions"
+                and payload["stream"]
+            ):
+                answer = "```json\n" + _chat_answer(payload) + "\n```"
+                content = (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": answer},
+                                    "finish_reason": "stop",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\ndata: [DONE]\n\n"
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            if self.path == "/fenced-stream/chat/completions":
+                self._json(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "content": "```json\n"
+                                    + _chat_answer(payload)
+                                    + "\n```"
+                                },
                             }
                         ]
                     }
@@ -449,6 +492,48 @@ def test_real_loopback_embedding_rerank_and_chat_protocols() -> None:
         assert state.requests[3][1]["temperature"] == 0
 
 
+def test_embedding_default_batch_never_exceeds_eight_items() -> None:
+    """兼容端点的保守默认值必须适配单批最多八条的 TEI 服务。"""
+    with _loopback_server() as (base_url, state):
+        embedding = OpenAICompatibleEmbeddingAdapter(
+            OpenAICompatibleEmbeddingConfig(
+                slot_id="primary",
+                model="team/free-form-embedding-v2",
+                dimension=3,
+                request_policy_identity="both",
+                document_request_policy_identity="document-role",
+                query_request_policy_identity="query-role",
+                document_egress_allowed=True,
+                query_egress_allowed=True,
+            ),
+            http_client=_http(base_url),
+            api_key_resolver=lambda: "",
+        )
+        try:
+            result = embedding.embed(
+                EmbeddingRequest(
+                    slot_id="primary",
+                    role=EmbeddingRequestRole.DOCUMENT,
+                    texts=tuple(f"短文本-{index}" for index in range(17)),
+                )
+            )
+        finally:
+            embedding.close()
+
+        assert len(result.vectors) == 17
+        assert embedding.config.adapter_revision == "2"
+        embedding_requests = [
+            payload
+            for path, payload, _headers in state.requests
+            if path == "/embeddings"
+        ]
+        assert [len(payload["input"]) for payload in embedding_requests] == [
+            8,
+            8,
+            1,
+        ]
+
+
 def test_embedding_base_url_path_prefix_is_preserved() -> None:
     """常见 ``/v1`` 部署前缀不能被以斜杠开头的操作路径覆盖。"""
     with _loopback_server() as (base_url, state):
@@ -659,6 +744,35 @@ def test_stream_unsupported_falls_back_once_without_fake_claim_deltas() -> None:
         assert [path for path, _, _ in state.requests] == [
             "/no-stream/chat/completions",
             "/no-stream/chat/completions",
+        ]
+
+
+def test_fenced_stream_falls_back_to_complete_json_parser() -> None:
+    """增量解析未发布 claim 时，完整 JSON 围栏在同一条流中收束。"""
+    with _loopback_server() as (base_url, state):
+        adapter = OpenAICompatibleChatAdapter(
+            OpenAICompatibleChatConfig(
+                model="free-chat-model", egress_allowed=True
+            ),
+            http_client=_http(base_url + "/fenced-stream"),
+            api_key_resolver=lambda: "",
+        )
+        emitted = []
+        try:
+            draft = adapter.generate_stream(
+                _generation_request(),
+                on_claim=emitted.append,
+                cancellation=StreamCancellation(),
+            )
+        finally:
+            adapter.close()
+
+        assert emitted == []
+        assert draft.claims[0].text == "设备 MX-41 的维护周期为 14 天。"
+        assert len(draft.provider_calls) == 1
+        assert draft.provider_calls[0].reason_code == "OK"
+        assert [path for path, _, _ in state.requests] == [
+            "/fenced-stream/chat/completions",
         ]
 
 

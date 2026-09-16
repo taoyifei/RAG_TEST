@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ipaddress
 from collections.abc import Callable, Iterator
 from typing import Annotated
 
@@ -16,6 +15,7 @@ from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied, RagError
 from rag_app.core.identifiers import new_id
 from rag_app.core.models import KnowledgeBaseScope
+from rag_app.product.http_security import secure_cookie_for_request
 from rag_app.query_executor import QueryAdmissionError
 from rag_app.tracing import TraceMode
 from rag_app.wanshitong.public_models import (
@@ -48,6 +48,9 @@ PUBLIC_CAPABILITIES_PATH = "/api/public/capabilities"
 PUBLIC_CHAT_PATH = "/api/public/chat"
 PUBLIC_FEEDBACK_PATH = "/api/public/feedback"
 PUBLIC_CONVERSATION_PATH = "/api/public/conversations/{conversation_id}"
+_PUBLIC_STREAM_FIRST_CONTENT_SECONDS = 120.0
+_PUBLIC_STREAM_IDLE_SECONDS = 120.0
+_PUBLIC_STREAM_TOTAL_SECONDS = 180.0
 
 
 class _PublicStreamingResponse(StreamingResponse):
@@ -114,7 +117,10 @@ def register_public_routes(
             PUBLIC_SESSION_COOKIE,
             issue.cookie_value,
             httponly=True,
-            secure=not _is_loopback(request.url.hostname),
+            secure=secure_cookie_for_request(
+                request,
+                trusted_proxies=runtime.settings.trusted_proxies,
+            ),
             samesite="strict",
             max_age=issue.expires_in,
             path="/api/public",
@@ -194,6 +200,12 @@ def register_public_routes(
             ),
             render_final=render_public_final,
             versioned_protocol=True,
+            # 内网演示模型需要在首个事实前完成整份结构化回答及一次修复；
+            # 四并发实测一次修复可能超过 60 秒。只放宽湾事通公共壳层，
+            # 不改变 Universal 默认门禁。
+            first_content_seconds=_PUBLIC_STREAM_FIRST_CONTENT_SECONDS,
+            idle_seconds=_PUBLIC_STREAM_IDLE_SECONDS,
+            total_seconds=_PUBLIC_STREAM_TOTAL_SECONDS,
             authorization_guard=lambda: _validate_stream_session(
                 sessions, cookie_value, principal
             ),
@@ -319,17 +331,6 @@ def _validate_stream_session(
         raise PolicyDenied(
             "公共会话已变化。", stage="wanshitong.public.session"
         )
-
-
-def _is_loopback(hostname: str | None) -> bool:
-    if hostname is None:
-        return False
-    if hostname.casefold() in {"localhost", "testclient", "testserver"}:
-        return True
-    try:
-        return ipaddress.ip_address(hostname).is_loopback
-    except ValueError:
-        return False
 
 
 __all__ = [

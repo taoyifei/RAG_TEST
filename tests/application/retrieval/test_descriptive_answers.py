@@ -760,6 +760,46 @@ def test_enumeration_lead_in_does_not_publish_without_its_list() -> None:
     )
 
 
+def test_condition_question_closes_numbered_spans_in_same_text_chunk() -> None:
+    """条件列举必须拿到导语后完整的原文条目，不能只引用导语。"""
+    intro = "备注：对于以下情形，无需复核，提交后直接归档。"
+    cases = (
+        "1.已核验的设备记录",
+        "2.主管已签字的交接单",
+        "3.经过验收流程的证明",
+    )
+    candidates = _candidates(
+        _paragraph(intro)
+        + "".join(_paragraph(case) for case in cases)
+        + _paragraph("其他情形仍需复核。")
+    )
+    question = "哪些情况下可以无需复核直接归档？"
+    context = _context(question)
+    assert context.analysis.semantics.answer_type.value == "ENUMERATION"
+
+    evidence = EvidenceAssembler().assemble(
+        candidates, _POLICY, context=context
+    )
+
+    assert [item.citation_text for item in evidence] == [intro, *cases]
+    assert not EvidenceAssembler().assemble(
+        _candidates(_paragraph(intro)), _POLICY, context=context
+    )
+
+
+def test_condition_question_does_not_borrow_different_negation() -> None:
+    intro = "对于以下情形，仍需复核，提交后直接归档："
+    candidates = _candidates(
+        _paragraph(intro) + _paragraph("1.已核验的设备记录")
+    )
+
+    assert not EvidenceAssembler().assemble(
+        candidates,
+        _POLICY,
+        context=_context("哪些情况下可以无需复核直接归档？"),
+    )
+
+
 def test_ordinal_request_selects_only_the_requested_list_item() -> None:
     intro = "设备入库流程包括以下步骤："
     steps = ("核对交接清单。", "完成双人复核。", "按顺序登记入库。")
@@ -911,16 +951,13 @@ def test_quoted_restriction_is_not_mistaken_for_unknown_information() -> None:
     target = "口头确认、无记录调整、未审批修改"
     statement = f"变更控制要求规定，严禁{target}。"
     candidates = _candidates(
-        _paragraph("其他流程不得跳过双人复核。")
-        + _paragraph(statement)
+        _paragraph("其他流程不得跳过双人复核。") + _paragraph(statement)
     )
 
     evidence = EvidenceAssembler().assemble(
         candidates,
         _POLICY,
-        context=_context(
-            f"文档对“{target}”有什么禁止或限制性要求？"
-        ),
+        context=_context(f"文档对“{target}”有什么禁止或限制性要求？"),
     )
 
     assert [item.citation_text for item in evidence] == [statement]
@@ -970,6 +1007,103 @@ def test_document_purpose_uses_heading_and_first_body_source() -> None:
         dict(evidence[0].metadata)["answer_support"]["support_reason"]
         == "SECTION_HEADING_BODY"
     )
+
+
+def test_document_purpose_does_not_borrow_another_document_purpose() -> None:
+    candidates = _remote_candidates(
+        (
+            *_candidates(
+                _paragraph("用户操作手册模板封面与修订记录。"),
+                display_name="蓝熊用户操作手册模板.docx",
+                document_id="doc_" + "a" * 32,
+            ),
+            *_candidates(
+                _heading("编写目的")
+                + _paragraph("统一系统设计文档并降低实现风险。"),
+                display_name="白鹭系统设计说明书.docx",
+                document_id="doc_" + "b" * 32,
+            ),
+        )
+    )
+
+    selection = EvidenceAssembler().assemble_sets(
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context("用户操作手册的编写目的是什么？"),
+        include_model_candidates=True,
+    )
+
+    assert selection.model_evidence_candidates
+    assert all(
+        item.display_name == "蓝熊用户操作手册模板.docx"
+        for item in selection.model_evidence_candidates
+    )
+    assert selection.answer_support_set == ()
+
+
+def test_unquoted_document_scope_excludes_adjacent_meeting_template() -> None:
+    candidates = _remote_candidates(
+        (
+            *_candidates(
+                _paragraph("会议时间、地点、议题与参会人员。"),
+                display_name="2-需求阶段-会议纪要模板20260612.docx",
+                document_id="doc_" + "c" * 32,
+            ),
+            *_candidates(
+                _paragraph("没有影响的变更项可以不填写。"),
+                display_name="2-需求阶段-需求变更评审会议纪要模板.docx",
+                document_id="doc_" + "d" * 32,
+            ),
+        )
+    )
+
+    selection = EvidenceAssembler().assemble_sets(
+        candidates,
+        _REMOTE_POLICY,
+        context=_remote_context(
+            "需求阶段会议纪要中，哪些信息可以省略或不填写？"
+        ),
+        include_model_candidates=True,
+    )
+
+    assert selection.model_evidence_candidates
+    assert all(
+        item.display_name == "2-需求阶段-会议纪要模板20260612.docx"
+        for item in selection.model_evidence_candidates
+    )
+    assert selection.answer_support_set == ()
+
+
+def test_conditional_permission_question_selects_complete_table_row() -> None:
+    table = (
+        "<w:tbl><w:tblGrid><w:gridCol/><w:gridCol/></w:tblGrid>"
+        "<w:tr><w:tc>"
+        + _paragraph("工作模式")
+        + "</w:tc><w:tc>"
+        + _paragraph("启动标志")
+        + "</w:tc></w:tr><w:tr><w:tc>"
+        + _paragraph("需求快验")
+        + "</w:tc><w:tc>"
+        + _paragraph("经周例会评审通过后启动。")
+        + "</w:tc></w:tr><w:tr><w:tc>"
+        + _paragraph("产品开发")
+        + "</w:tc><w:tc>"
+        + _paragraph("经产品委员会评审通过后启动。")
+        + "</w:tc></w:tr></w:tbl>"
+    )
+
+    evidence = EvidenceAssembler().assemble(
+        _candidates(table),
+        _POLICY,
+        context=_context(
+            "产品开发模式是否允许在没有产品委员会评审的情况下启动？"
+        ),
+    )
+
+    quotes = {item.citation_text for item in evidence}
+    assert "产品开发" in quotes
+    assert "经产品委员会评审通过后启动。" in quotes
+    assert "经周例会评审通过后启动。" not in quotes
 
 
 def test_source_scoped_exact_section_keeps_its_complete_body_only() -> None:

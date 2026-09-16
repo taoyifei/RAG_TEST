@@ -7,6 +7,7 @@ from typing import NoReturn
 import httpx
 import pytest
 
+from rag_app.adapters.providers.aliyun_chat import ChatResponseError
 from rag_app.adapters.providers.http_common import (
     ProviderHttpClient,
     ProviderHttpError,
@@ -219,6 +220,47 @@ def test_stream_total_byte_limit_cannot_be_bypassed_by_small_events() -> None:
 
     assert captured.value.code == "RESPONSE_TOO_LARGE"
     assert events[0].reason_code == "RESPONSE_TOO_LARGE"
+
+
+def test_stream_contract_keeps_only_safe_failure_code() -> None:
+    """协议失败保留可诊断原因，不记录模型正文或请求密钥。"""
+    client = ProviderHttpClient(
+        "https://provider.example/v1",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=b"data: {}\n\n",
+                    headers={"Content-Type": "text/event-stream"},
+                )
+            )
+        ),
+    )
+
+    def consume(_: object) -> NoReturn:
+        raise ChatResponseError("CHAT_OUTPUT_TRUNCATED")
+
+    with pytest.raises(ProviderHttpError) as captured:
+        client.request_stream(
+            "POST",
+            "/chat/completions",
+            payload={"private": "text"},
+            headers={"Authorization": "Bearer secret-value"},
+            provider_id="test-provider",
+            operation="generation",
+            model="test-model",
+            input_count=1,
+            estimated_tokens=4,
+            consumer=consume,
+            cancellation=StreamCancellation(),
+        )
+    client.close()
+    assert captured.value.reason_code == "INVALID_STREAM_SCHEMA"
+    assert dict(captured.value.call.transport_diagnostics) == {
+        "contract_detail": "CHAT_OUTPUT_TRUNCATED",
+        "contract_exception_type": "ChatResponseError",
+    }
+    assert "secret-value" not in str(captured.value.call)
 
 
 def test_invalid_json_and_content_type_are_contract_failures() -> None:

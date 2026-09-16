@@ -26,6 +26,8 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_catalog_label,
+    normalize_document_label,
     normalize_section_heading_label,
     normalize_semantic_text,
     section_heading_path_owns_target,
@@ -33,11 +35,24 @@ from rag_app.core.query_text import (
 )
 
 _MIN_TABLE_LABEL_LENGTH = 2
+_QUOTED_DOCUMENT_LABEL = re.compile(r"《([^》]{3,200})》")
+_CATALOG_REFERENCE = re.compile(
+    r"是否有|有没有|有无|可供参考|参考哪份|哪份模板"
+)
+_CATALOG_CONTENT_REQUEST = re.compile(
+    r"(?:内容|正文|填写|填什么|字段|示例|要求|格式|怎么|如何|步骤|流程)"
+)
+_CATALOG_ENTRY = re.compile(
+    r"^模板目录项：(?P<title>.+?)（模板）。模板正文未入库；"
+)
 _MAX_SEMANTIC_RANK = 10
 _LIST_LEAD_IN = re.compile(
     r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
-    r"[^。；;\n]{0,16}[:：。]?$"
+    r"[^。；;\n]{0,16}[:：。]?$|"
+    r"(?:以下|下列)(?:情形|情况|条件)[^。；;\n]{0,100}[。:：]?$"
 )
+_NUMBERED_LIST_ITEM = re.compile(r"^\s*(?P<number>\d{1,2})[.、．)）]\s*\S")
+_MIN_CONDITION_ANCHOR_OVERLAP = 0.5
 _NUMBERED_STAGE_HEADING = re.compile(r"^\d+\.\d+(?:\.\d+)?\s+\S")
 _FLOW_ARCHITECTURE_HEADING = re.compile(r"^(?:\d+(?:\.\d+)*)?\s*流程架构$")
 _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
@@ -208,21 +223,7 @@ class EvidenceAssembler:
         unique_chunks = tuple(
             {item.hydrated.chunk.chunk_id: item for item in candidates}.values()
         )
-        source_qualifier = (
-            context.analysis.semantics.source_qualifier
-            if context is not None
-            else None
-        )
-        if source_qualifier is not None:
-            unique_chunks = tuple(
-                item
-                for item in unique_chunks
-                if source_qualifier_matches(
-                    item.hydrated.display_name,
-                    item.hydrated.chunk.heading_path,
-                    source_qualifier,
-                )
-            )
+        unique_chunks = _scope_evidence_candidates(unique_chunks, context)
         stage_hierarchy = _stage_hierarchy_evidence(
             unique_chunks, policy, context
         )
@@ -321,6 +322,82 @@ class EvidenceAssembler:
             evidence.append(item)
         # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
         return _complete_supports(tuple(evidence))
+
+
+def _strict_document_label_owner(
+    target: str, candidates: tuple[RankedChunk, ...]
+) -> str | None:
+    """仅在对象严格落入唯一文件名时返回文档归属。"""
+    normalized_target = normalize_document_label(target)
+    if not normalized_target:
+        return None
+    owners = {
+        candidate.hydrated.chunk.version.document_id
+        for candidate in candidates
+        if normalized_target
+        in normalize_document_label(candidate.hydrated.display_name)
+    }
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
+def _quoted_document_owner(
+    question: str, candidates: tuple[RankedChunk, ...]
+) -> str | None:
+    """书名号内恰好是唯一文件名时确定动态来源，不解释章节引用。"""
+    owners: set[str] = set()
+    for label in _QUOTED_DOCUMENT_LABEL.findall(question):
+        normalized = normalize_document_label(label)
+        matches = {
+            candidate.hydrated.chunk.version.document_id
+            for candidate in candidates
+            if normalized
+            == normalize_document_label(candidate.hydrated.display_name)
+        }
+        owners.update(matches)
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
+def _scope_evidence_candidates(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext | None,
+) -> tuple[RankedChunk, ...]:
+    """按显式来源或唯一文档目的对象裁剪跨文档候选。"""
+    if context is None:
+        return candidates
+    semantics = context.analysis.semantics
+    if semantics.source_qualifier is not None:
+        return tuple(
+            item
+            for item in candidates
+            if source_qualifier_matches(
+                item.hydrated.display_name,
+                item.hydrated.chunk.heading_path,
+                semantics.source_qualifier,
+            )
+        )
+    quoted_owner = _quoted_document_owner(
+        context.analysis.resolved_query or context.analysis.normalized_query,
+        candidates,
+    )
+    if quoted_owner is not None:
+        return tuple(
+            item
+            for item in candidates
+            if item.hydrated.chunk.version.document_id == quoted_owner
+        )
+    if (
+        semantics.answer_type is not RequestedAnswerType.PURPOSE
+        or not semantics.target
+    ):
+        return candidates
+    document_owner = _strict_document_label_owner(semantics.target, candidates)
+    if document_owner is None:
+        return candidates
+    return tuple(
+        item
+        for item in candidates
+        if item.hydrated.chunk.version.document_id == document_owner
+    )
 
 
 def _evidence_packing_order(
@@ -579,7 +656,7 @@ def _table_intersections(  # noqa: PLR0912
                 and all(cells.get((cell_row, column)) for column in columns)
             }
             if header_rows:
-                header_row = max(header_rows)
+                header_row = min(header_rows)
                 for column in columns:
                     selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
@@ -781,7 +858,7 @@ def _normalized_structure_text(value: str) -> str:
     )
 
 
-def _descriptive_list_evidence(  # noqa: PLR0911
+def _descriptive_list_evidence(  # noqa: PLR0911, PLR0912
     candidates: tuple[RankedChunk, ...],
     policy: RetrievalPolicy,
     context: EvidenceSelectionContext | None,
@@ -803,9 +880,8 @@ def _descriptive_list_evidence(  # noqa: PLR0911
     ):
         return None
     by_id = {item.hydrated.chunk.chunk_id: item for item in candidates}
-    matches: list[
-        tuple[RankedChunk, SourceSpan, str, tuple[RankedChunk, ...]]
-    ] = []
+    matches: list[tuple[_EvidencePiece, tuple[_EvidencePiece, ...]]] = []
+    incomplete_lead_in = False
     target = semantics.target.casefold()
     relation = semantics.relation.casefold()
     for candidate in candidates:
@@ -820,9 +896,6 @@ def _descriptive_list_evidence(  # noqa: PLR0911
             and intro_ordinal is not None
             and _first_source_ordinal(item.hydrated.chunk) == intro_ordinal + 1
         )
-        if len(list_candidates) != 1:
-            continue
-        next_candidate = list_candidates[0]
         for span in chunk.source_spans:
             if (
                 not span.is_citable
@@ -834,62 +907,66 @@ def _descriptive_list_evidence(  # noqa: PLR0911
             ].strip()
             folded = quote.casefold()
             if (
-                target in folded
-                and relation in folded
-                and _LIST_LEAD_IN.search(folded)
-            ):
-                matches.append(
-                    (
-                        candidate,
-                        span,
-                        quote,
-                        _contiguous_list_chunks(next_candidate, by_id),
+                (
+                    target in folded
+                    or (
+                        relation == "情形"
+                        and _condition_anchor_matches(
+                            target,
+                            folded,
+                            context.analysis.negation_signals,
+                        )
                     )
                 )
+                and relation in folded
+                and all(
+                    normalize_semantic_text(signal)
+                    in normalize_semantic_text(folded)
+                    for signal in context.analysis.negation_signals
+                )
+                and _LIST_LEAD_IN.search(folded)
+            ):
+                in_chunk = _numbered_spans_after(candidate, span)
+                list_chunks = (
+                    _contiguous_list_chunks(list_candidates[0], by_id)
+                    if len(list_candidates) == 1 and not in_chunk
+                    else ()
+                )
+                items = in_chunk or tuple(
+                    (
+                        item,
+                        child_span,
+                        _span_quote(item.hydrated.chunk, child_span),
+                    )
+                    for item in list_chunks
+                    for child_span in item.hydrated.chunk.source_spans
+                    if child_span.is_citable
+                    and child_span.span_type
+                    not in {
+                        SourceSpanKind.DERIVED_NUMBERING,
+                        SourceSpanKind.SEPARATOR,
+                    }
+                )
+                if items:
+                    matches.append(((candidate, span, quote), items))
+                elif re.search(
+                    r"[:：]$|(?:以下|下列)(?:情形|情况|条件)", folded
+                ):
+                    incomplete_lead_in = True
     if not matches:
-        return None
+        return () if incomplete_lead_in else None
     if len(matches) != 1:
         return ()
-    intro_candidate, intro_span, intro_quote, list_chunks = matches[0]
-    items = tuple(
-        (
-            candidate,
-            span,
-            candidate.hydrated.chunk.citation_text[
-                span.chunk_start_char : span.chunk_end_char
-            ].strip(),
-        )
-        for candidate in list_chunks
-        for span in candidate.hydrated.chunk.source_spans
-        if span.is_citable
-        and span.span_type
-        not in {
-            SourceSpanKind.DERIVED_NUMBERING,
-            SourceSpanKind.SEPARATOR,
-        }
-        and candidate.hydrated.chunk.citation_text[
-            span.chunk_start_char : span.chunk_end_char
-        ].strip()
-    )
+    intro, items = matches[0]
+    actual_count = len(items)
     ordinal = semantics.ordinal
     if ordinal is not None:
         if ordinal > len(items):
             return ()
         items = (items[ordinal - 1],)
-    pieces = ((intro_candidate, intro_span, intro_quote), *items)
+    pieces = (intro, *items)
     if not items or not _list_pieces_fit(pieces, policy):
         return ()
-    actual_count = sum(
-        1
-        for candidate in list_chunks
-        for span in candidate.hydrated.chunk.source_spans
-        if span.is_citable
-        and span.span_type
-        not in {
-            SourceSpanKind.DERIVED_NUMBERING,
-            SourceSpanKind.SEPARATOR,
-        }
-    )
     support_reason = (
         "SOURCE_CORRECTS_COUNT_PREMISE"
         if semantics.expected_count is not None
@@ -921,6 +998,67 @@ def _descriptive_list_evidence(  # noqa: PLR0911
         )
         for index, (candidate, span, quote) in enumerate(pieces, 1)
     )
+
+
+def _condition_anchor_matches(
+    target: str, text: str, negations: tuple[str, ...]
+) -> bool:
+    """条件问句允许副词隔开的谓语，但须覆盖大部分相邻词。"""
+    normalized = normalize_semantic_text(target)
+    source = normalize_semantic_text(text)
+    pairs = {
+        normalized[index : index + 2] for index in range(len(normalized) - 1)
+    }
+    return (
+        bool(pairs)
+        and all(normalize_semantic_text(value) in source for value in negations)
+        and sum(pair in source for pair in pairs) / len(pairs)
+        >= _MIN_CONDITION_ANCHOR_OVERLAP
+    )
+
+
+def _numbered_spans_after(
+    candidate: RankedChunk, intro: SourceSpan
+) -> tuple[_EvidencePiece, ...]:
+    """闭合同一正文 chunk 内连续、从一开始编号的原文列表。"""
+    chunk = candidate.hydrated.chunk
+    spans = tuple(
+        span
+        for span in chunk.source_spans
+        if span.is_citable
+        and span.span_type is not SourceSpanKind.DERIVED_NUMBERING
+    )
+    try:
+        index = spans.index(intro)
+    except ValueError:
+        return ()
+    pieces: list[_EvidencePiece] = []
+    previous_ordinal = _first_source_ordinal(chunk)
+    if intro.source_anchor is not None:
+        previous_ordinal = intro.source_anchor.ordinal
+    for span in spans[index + 1 :]:
+        quote = chunk.citation_text[
+            span.chunk_start_char : span.chunk_end_char
+        ].strip()
+        marker = _NUMBERED_LIST_ITEM.match(quote)
+        if (
+            marker is None
+            or int(marker["number"]) != len(pieces) + 1
+            or span.source_anchor is None
+            or previous_ordinal is None
+            or span.source_anchor.ordinal != previous_ordinal + 1
+        ):
+            break
+        pieces.append((candidate, span, quote))
+        previous_ordinal = span.source_anchor.ordinal
+    return tuple(pieces)
+
+
+def _span_quote(chunk: Chunk, span: SourceSpan) -> str:
+    """从一个可引用来源片段还原原文字面。"""
+    return chunk.citation_text[
+        span.chunk_start_char : span.chunk_end_char
+    ].strip()
 
 
 def _contiguous_list_chunks(
@@ -1045,6 +1183,8 @@ def _context_supports(
     if context is None:
         return {}
     supports = _section_heading_supports(candidates, context)
+    supports.update(_catalog_reference_supports(candidates, context))
+    supports.update(_catalog_content_guards(candidates, context))
     semantics = context.analysis.semantics
     target = semantics.target
     headers: dict[tuple[_TableKey, int], set[str]] = defaultdict(set)
@@ -1144,6 +1284,84 @@ def _context_supports(
         if neighbor is not None:
             supports.update(_linked_span_supports(context, chunk, neighbor))
     return supports
+
+
+def _catalog_reference_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """只有精确标题与目录项正文一致，才证明可参考的模板存在。"""
+    question = (
+        context.analysis.resolved_query or context.analysis.normalized_query
+    )
+    titles = _QUOTED_DOCUMENT_LABEL.findall(question)
+    if len(titles) != 1:
+        return {}
+    outside_title = _QUOTED_DOCUMENT_LABEL.sub("", question)
+    if not _CATALOG_REFERENCE.search(outside_title) or (
+        _CATALOG_CONTENT_REQUEST.search(outside_title)
+    ):
+        return {}
+    target = normalize_catalog_label(titles[0])
+    if not target:
+        return {}
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    for candidate in candidates:
+        if normalize_catalog_label(candidate.hydrated.display_name) != target:
+            continue
+        chunk = candidate.hydrated.chunk
+        for span in chunk.source_spans:
+            if not span.is_citable or not span.node_id:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            entry = _CATALOG_ENTRY.match(quote)
+            if (
+                entry is None
+                or normalize_catalog_label(entry["title"]) != target
+            ):
+                continue
+            supports[_span_key(chunk, span)] = AnswerSupport(
+                status=SupportStatus.SUPPORTED,
+                query_target=titles[0],
+                requested_relation_or_attribute="目录项存在",
+                answer_type="FACT",
+                support_reason="CATALOG_TITLE_EXISTS",
+                supporting_span_ids=(span.node_id,),
+            )
+    return supports
+
+
+def _catalog_content_guards(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """目录存在不能推出未入库的模板正文、字段或填写要求。"""
+    question = (
+        context.analysis.resolved_query or context.analysis.normalized_query
+    )
+    if not _CATALOG_CONTENT_REQUEST.search(
+        _QUOTED_DOCUMENT_LABEL.sub("", question)
+    ):
+        return {}
+    guards: dict[_SpanKey, AnswerSupport] = {}
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        for span in chunk.source_spans:
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if _CATALOG_ENTRY.match(quote) is None:
+                continue
+            guards[_span_key(chunk, span)] = AnswerSupport(
+                status=SupportStatus.UNSUPPORTED,
+                query_target="",
+                requested_relation_or_attribute="模板正文未入库",
+                answer_type="FACT",
+                support_reason="CATALOG_HAS_NO_BODY",
+            )
+    return guards
 
 
 def _section_heading_supports(  # noqa: PLR0912

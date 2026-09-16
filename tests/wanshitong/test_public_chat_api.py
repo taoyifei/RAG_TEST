@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
+from rag_app.api.p09_stream import P09AnswerStream
 from rag_app.core.models import (
     AnswerClaim,
     AnswerStreamClaimEvent,
@@ -107,6 +108,15 @@ def test_chat_delegates_fixed_scope_owner_and_policies_to_p09_stream(
     captured: dict[str, object] = {}
     prepared: list[tuple[str, TraceMode]] = []
     original_prepare = public_harness.product.runtime.p09.prepare_trace
+    original_stream_post_init = P09AnswerStream.__post_init__
+
+    def _capture_stream_limits(stream: P09AnswerStream) -> None:
+        captured.update(
+            first_content_seconds=stream.first_content_seconds,
+            idle_seconds=stream.idle_seconds,
+            total_seconds=stream.total_seconds,
+        )
+        original_stream_post_init(stream)
 
     def _prepare(trace_id: str, mode: TraceMode) -> None:
         prepared.append((trace_id, mode))
@@ -191,6 +201,9 @@ def test_chat_delegates_fixed_scope_owner_and_policies_to_p09_stream(
         public_harness.product.runtime.p09, "prepare_trace", _prepare
     )
     monkeypatch.setattr(
+        P09AnswerStream, "__post_init__", _capture_stream_limits
+    )
+    monkeypatch.setattr(
         public_harness.product.runtime.sdk, "answer_stream", _answer_stream
     )
 
@@ -207,6 +220,9 @@ def test_chat_delegates_fixed_scope_owner_and_policies_to_p09_stream(
     assert captured["include_related_content"] is False
     assert captured["limit"] == 10
     assert captured["conversation_id"] == "case-1"
+    assert captured["first_content_seconds"] == 120.0
+    assert captured["idle_seconds"] == 120.0
+    assert captured["total_seconds"] == 180.0
     assert str(captured["owner_id"]).startswith("wanshitong-public:")
     assert captured["owner_id"] != "local-admin"
     assert prepared == [(captured["trace_id"], TraceMode.SAFE)]

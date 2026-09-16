@@ -21,7 +21,10 @@ from rag_app.assets import (
     verify_offline_assets,
     verify_product_asset_manifest,
 )
-from rag_app.composition.product_runtime import ProductRuntimeSettings
+from rag_app.composition.product_runtime import (
+    ProductRuntimeSettings,
+    build_product_runtime,
+)
 from rag_app.index.gc import GarbageCollectorConfig, IndexGarbageCollector
 from rag_app.manifest import ReadOnlyManifestRepository
 from rag_app.product.backup import (
@@ -42,6 +45,8 @@ from rag_app.runtime import (
 from rag_app.settings import RuntimeSettings
 from rag_app.state import JobKind, JobState
 from rag_app.state.jobs import ReadOnlyJobStore
+from rag_app.wanshitong.internal_model_settings import InternalModelSettings
+from rag_app.wanshitong.internal_models import InternalModelConfigurator
 from rag_app.worker_runtime import build_worker_runtime
 
 __all__ = ["BuildInfo", "build_info", "main"]
@@ -218,6 +223,23 @@ def _run_product_command(arguments: argparse.Namespace) -> int | None:
         已处理命令的退出码；其他命令返回 None。
 
     """
+    if (
+        arguments.command == "wanshitong"
+        and arguments.wanshitong_command == "configure-internal-models"
+    ):
+        internal_settings = InternalModelSettings.from_environment()
+        runtime = build_product_runtime(
+            ProductRuntimeSettings.from_environment(),
+            recover_jobs=False,
+        )
+        try:
+            report = InternalModelConfigurator(runtime).configure(
+                internal_settings
+            )
+            _print_json(report.model_dump(mode="json"))
+        finally:
+            runtime.close()
+        return 0
     if arguments.command == "serve":
         product_settings = ProductRuntimeSettings.from_environment()
         print("PRODUCT_RUNTIME product-runtime-p10.5", flush=True)
@@ -512,6 +534,17 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "legacy-serve",
         help="已弃用：启动旧 Runtime，仅用于历史兼容。",
+    )
+    wanshitong = subparsers.add_parser(
+        "wanshitong",
+        help="执行湾事通产品壳层的初始化命令。",
+    )
+    wanshitong_commands = wanshitong.add_subparsers(
+        dest="wanshitong_command", required=True
+    )
+    wanshitong_commands.add_parser(
+        "configure-internal-models",
+        help="幂等配置固定 Scope 的内网模型数据面。",
     )
     secrets_parser = subparsers.add_parser(
         "init-secrets",

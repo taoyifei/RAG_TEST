@@ -17,6 +17,7 @@ from rag_app.adapters.providers.aliyun_chat import (
     _grounded_claim,
     _grounded_claims,
     _grounded_evidence_payload,
+    _grounded_messages,
     chat_payload,
     message_token_estimate,
 )
@@ -260,6 +261,49 @@ def _generation_request() -> GenerationRequest:
     )
 
 
+def test_grounded_messages_trim_tail_to_provider_input_budget() -> None:
+    """生成 Prompt 按既有候选顺序裁剪，并始终保留排名第一的证据。"""
+    first = _generation_request().evidence[0]
+    candidates = tuple(
+        first.model_copy(
+            update={
+                "evidence_id": f"support-{index}",
+                "chunk_id": f"chunk_{index:032x}",
+                "citation_text": f"候选 {index}：" + "合成证据正文" * 120,
+            }
+        )
+        for index in range(1, 13)
+    )
+    request = _generation_request().model_copy(
+        update={
+            "evidence": candidates,
+            "model_evidence_candidates": candidates,
+        }
+    )
+
+    messages = _grounded_messages(request, max_input_tokens=3_000)
+    prompt = json.loads(messages[1].content)
+
+    assert message_token_estimate(messages) <= 3_000
+    assert 0 < len(prompt["evidence"]) < len(candidates)
+    assert prompt["evidence"][0]["support_id"] == "support-1"
+
+
+def test_claim_shape_repair_uses_generic_schema_not_business_facts() -> None:
+    """模型输出形状错误时只重申同一证据的 claim 合同。"""
+    request = _generation_request().model_copy(
+        update={"repair_reason": "GENERATION_CLAIMS_INVALID"}
+    )
+
+    messages = _grounded_messages(request)
+
+    assert len(messages) == 3
+    assert '"claims"' in messages[2].content
+    assert '"support_id"' in messages[2].content
+    assert '"quote"' in messages[2].content
+    assert "不要加入其他字段" in messages[2].content
+
+
 def _certified_table_request() -> GenerationRequest:
     """构造包含行名、分段表头和值的通用认证表格请求。"""
     specs = (
@@ -442,6 +486,9 @@ def test_generate_binds_server_quotes_and_explicit_repair(tmp_path: Path):
         )
         assert len(result.provider_calls) == len(requests) == 1
         assert "CLAIM_NEGATION_UNSUPPORTED" in requests[0].content.decode()
+        assert "将text直接复制为quote中可独立成句的连续原文" in (
+            requests[0].content.decode()
+        )
         assert "repair_reason" not in result.text
     finally:
         adapter.close()
@@ -537,6 +584,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
                 update={
                     "evidence_id": f"S{index + 1}",
                     "citation_text": text,
+                    "display_name": "合成指南.docx",
                     "source_spans": (span,),
                     "table_locator": "public-table",
                     "document_version_id": "dver_" + "1" * 32,
@@ -569,6 +617,9 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "候选证据" in prompt
         assert "不同来源组回答不同事实，拆成多条claim" in prompt
         assert "verified_duty_owner" in prompt
+        assert "document_label" in prompt
+        assert "不能作为事实quote" in prompt
+        assert "相邻流程" in prompt
         assert "一条原子分句对应一条claim" in prompt
         assert "text只写正文原子事实" in prompt
         assert "同一support_id在一条claim内最多使用一次" in prompt
@@ -583,6 +634,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         ]
         locations = [item["source_structure"] for item in content["evidence"]]
         assert locations[0]["document_version_id"] == "dver_" + "1" * 32
+        assert locations[0]["document_label"] == "合成指南.docx"
         assert locations[0]["table_locator"] == "public-table"
         assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
         assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"

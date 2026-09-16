@@ -39,6 +39,7 @@ from rag_app.product.model_settings import (
     ProductModelSettings,
 )
 from tests.application.retrieval.test_descriptive_answers import (
+    _POLICY,
     _candidates,
     _paragraph,
 )
@@ -107,6 +108,215 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
         generation_mode="llm",
     )
     validate_grounded_draft(draft, evidence)
+
+
+def test_structured_list_answer_cannot_publish_only_its_lead_in() -> None:
+    """事实逐字成立仍不足以回答条件列举；必须覆盖来源条目。"""
+    question = "哪些情况下可以无需审批直接归档？"
+    intro = "对于以下情形，无需审批，提交后直接归档。"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(
+            _paragraph(intro)
+            + _paragraph("1.已核验的设备记录")
+            + _paragraph("2.主管已签字的交接单")
+            + _paragraph("3.已完成复验的材料清单")
+            + _paragraph("其他情形仍需审批。")
+        ),
+        _POLICY,
+        context=_context(question),
+    )
+    assert len(evidence) == 4
+    claim = AnswerClaim(
+        text=intro,
+        supports=(ClaimSupport(support_id="S1", quote=intro),),
+    )
+    draft = AnswerDraft(
+        text=intro,
+        cited_evidence_ids=("S1",),
+        claims=(claim,),
+        generation_mode="llm",
+    )
+
+    validate_grounded_draft(
+        draft, evidence, analysis=_context(question).analysis, complete=False
+    )
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(
+            draft, evidence, analysis=_context(question).analysis
+        )
+    assert error.value.code == "ANSWER_LIST_INCOMPLETE"
+
+    claims = tuple(
+        AnswerClaim(
+            text=item.citation_text[2:],
+            supports=(
+                ClaimSupport(
+                    support_id=item.support_id, quote=item.citation_text
+                ),
+            ),
+        )
+        for item in evidence[1:]
+    )
+    complete = AnswerDraft(
+        text="\n".join(claim.text for claim in claims),
+        cited_evidence_ids=tuple(item.support_id for item in evidence[1:]),
+        claims=claims,
+        generation_mode="llm",
+    )
+    validate_grounded_draft(
+        complete, evidence, analysis=_context(question).analysis
+    )
+
+
+def test_certified_catalog_supports_existence_not_body_claims() -> None:
+    """标题版本号属于精确目录身份，不能推导正文内容或其他模板。"""
+    title = "阶段甲-交接记录模板20260701"
+    source = (
+        f"模板目录项：{title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    question = f"是否有《{title}》这份模板可供参考？"
+    analysis = _context(question).analysis
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(source), display_name=f"{title}.docx"),
+        _POLICY,
+        context=_context(question),
+    )
+    assert len(evidence) == 1
+    for claim_text in (
+        f"有《{title}》这份模板可供参考。",
+        f"模板目录项：{title}（模板）。",
+        f"准备与《{title}》相关的材料时，应参考《{title}》模板。",
+    ):
+        draft = AnswerDraft(
+            text=claim_text,
+            cited_evidence_ids=(evidence[0].support_id,),
+            claims=(
+                AnswerClaim(
+                    text=claim_text,
+                    supports=(
+                        ClaimSupport(
+                            support_id=evidence[0].support_id, quote=source
+                        ),
+                    ),
+                ),
+            ),
+            generation_mode="llm",
+        )
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+    for unsupported in (
+        f"《{title}》包含三个必填字段。",
+        f"没有《{title}》这份模板。",
+        "有《阶段甲-交接记录模板20260702》这份模板。",
+    ):
+        draft = AnswerDraft(
+            text=unsupported,
+            cited_evidence_ids=(evidence[0].support_id,),
+            claims=(
+                AnswerClaim(
+                    text=unsupported,
+                    supports=(
+                        ClaimSupport(
+                            support_id=evidence[0].support_id, quote=source
+                        ),
+                    ),
+                ),
+            ),
+            generation_mode="llm",
+        )
+        try:
+            validate_grounded_draft(draft, evidence, analysis=analysis)
+        except ValidationFailed:
+            continue
+        pytest.fail(f"目录项不得支持：{unsupported}")
+
+
+@pytest.mark.parametrize(
+    ("query_title", "source_title", "display_name"),
+    [
+        (
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&amp;记录模板20260701.docx",
+        ),
+        (
+            "阶段甲-交接记录模板20260701",
+            "阶段甲-交接记录模板20260701(原件 .doc)",
+            "阶段甲-交接记录模板20260701(原件 .doc).docx",
+        ),
+        (
+            "阶段甲-交接记录模板（模板）",
+            "阶段甲-交接记录模板(模板)",
+            "阶段甲-交接记录模板(模板).docx",
+        ),
+    ],
+)
+def test_catalog_claim_accepts_same_title_format_variants(
+    query_title: str, source_title: str, display_name: str
+) -> None:
+    """标题格式或系统附注不应阻断目录存在的原子事实。"""
+    source = (
+        f"模板目录项：{source_title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    question = f"是否有《{query_title}》可供参考？"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(source), display_name=display_name),
+        _POLICY,
+        context=_context(question),
+    )
+    assert len(evidence) == 1
+    claim_text = f"有《{query_title}》这份模板可供参考。"
+    draft = AnswerDraft(
+        text=claim_text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text=claim_text,
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id, quote=source
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+    validate_grounded_draft(
+        draft, evidence, analysis=_context(question).analysis
+    )
+
+
+def test_grounded_paraphrase_keeps_basic_predicate_overlap() -> None:
+    """自然改写只需基本词面联系，逐字引用和其他事实门仍独立生效。"""
+    source = "用印申请从统一信息平台的 OA 系统入口提交。"
+    evidence, draft = _supported_draft(
+        source,
+        "用印请求从统一平台的 OA 入口提交。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
+def test_outcome_does_not_prove_when_an_action_can_be_omitted() -> None:
+    """成功指标中的“未执行”不能变成免除动作的条件。"""
+    source = "成功标准为验证通过、未进行回滚、未引发故障。"
+    evidence, draft = _supported_draft(source, source)
+    analysis = _context("在何种情况下可以不执行回滚操作？").analysis
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
+
+
+def test_explicit_omission_permission_preserves_supported_claim() -> None:
+    """明确允许不执行动作的来源仍可回答。"""
+    source = "如果验证通过且无需回滚，可以不执行回滚操作。"
+    evidence, draft = _supported_draft(source, source)
+    analysis = _context("在何种情况下可以不执行回滚操作？").analysis
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
 
 
 def test_compound_identifier_subject_is_supported_by_exact_source() -> None:
@@ -310,6 +520,29 @@ def test_role_mentioned_as_object_cannot_be_promoted_to_subject(
         validate_grounded_draft(draft, evidence)
 
     assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_role_label_before_colon_cannot_be_added_to_unowned_duty() -> None:
+    """只有职责动作的来源不能凭回答前缀变成另一个岗位的职责。"""
+    source = "负责核对设备清单。"
+    evidence, draft = _supported_draft(source, "甲部门经理：负责核对设备清单。")
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_role_label_before_colon_is_allowed_when_same_quote_names_owner() -> (
+    None
+):
+    """来源同组明确写出岗位时仍可采用岗位加冒号的展示方式。"""
+    evidence, draft = _supported_draft(
+        "甲部门经理\n负责核对设备清单。",
+        "甲部门经理：负责核对设备清单。",
+    )
+
+    validate_grounded_draft(draft, evidence)
 
 
 @pytest.mark.parametrize(
@@ -1469,7 +1702,7 @@ def test_interpret_contract_upgrade_invalidates_cache() -> None:
     previous_identity = canonical_sha256(
         {
             "settings": settings.model_dump(),
-            "prompt": "grounded-chat-v7",
+            "prompt": "grounded-chat-v8",
             "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v17",
@@ -1793,6 +2026,32 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
     assert generator.generate.call_count == 1
 
 
+def test_invalid_generated_claim_shape_is_not_provider_outage() -> None:
+    """两轮无效 claim 不会冒充断线；修复轮收到具体结构原因。"""
+    evidence = _verified_fact_evidence()
+    generator = Mock()
+    generator.generate.side_effect = ProviderInvalidResponse(
+        "模型 claim 结构无效。",
+        stage="provider.aliyun.generation",
+        details={"reason_code": "GENERATION_CLAIMS_INVALID"},
+    )
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多少？",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer is None
+    assert result.reason_code == "GENERATION_CLAIMS_INVALID"
+    assert generator.generate.call_count == 2
+    assert generator.generate.call_args_list[1].args[0].repair_reason == (
+        "GENERATION_CLAIMS_INVALID"
+    )
+
+
 def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
     None
 ):
@@ -1822,4 +2081,66 @@ def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
     request = generator.generate.call_args.args[0]
     assert request.evidence == broad_candidates
     assert request.answer_support_set == support
+    assert request.model_evidence_candidates == support
+
+
+def test_multi_part_question_keeps_direct_support_then_broad_candidates() -> (
+    None
+):
+    """复合问题不能因一个子问已闭合就隐藏其他重排候选。"""
+    support, draft = _supported_draft(
+        "合成设备的保管期限为 14 天。",
+        "合成设备的保管期限为 14 天。",
+    )
+    related, _ = _supported_draft(
+        "合成设备的复核方式为两人交叉复核。",
+        "合成设备的复核方式为两人交叉复核。",
+    )
+    related_item = related[0].model_copy(update={"evidence_id": "S2"})
+    candidates = (*support, related_item)
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多久？复核方式是什么？",
+        candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer == "合成设备的保管期限为 14 天。 [S1]"
+    request = generator.generate.call_args.args[0]
+    assert request.answer_support_set == support
+    assert request.model_evidence_candidates == candidates
+
+
+def test_single_clause_respectively_question_keeps_direct_support_only() -> (
+    None
+):
+    """单句列举问题已闭合时，不因“分别”引入旁支候选。"""
+    support, draft = _supported_draft(
+        "产品经理更新需求基线；测试负责人调整测试用例。",
+        "产品经理更新需求基线；测试负责人调整测试用例。",
+    )
+    distractor, _ = _supported_draft(
+        "测试主管审核产品的长期质量计划。",
+        "测试主管审核产品的长期质量计划。",
+    )
+    candidates = (
+        *support,
+        distractor[0].model_copy(update={"evidence_id": "S2"}),
+    )
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    GroundedAnsweringService(generator).answer(
+        "需求变更后，产品经理和测试负责人分别做什么？",
+        candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    request = generator.generate.call_args.args[0]
     assert request.model_evidence_candidates == support

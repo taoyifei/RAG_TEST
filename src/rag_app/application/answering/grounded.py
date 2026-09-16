@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import unescape
 from typing import Literal
 
 from rag_app.application.answering.ocr_guard import (
@@ -37,6 +39,7 @@ from rag_app.core.ports import (
 )
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_catalog_label,
     section_heading_path_owns_target,
 )
 
@@ -81,11 +84,35 @@ _NEGATION = re.compile(
     r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
     r"不(?!同(?!意|步)|断(?!开|电|网|水|气)|仅|但)"
 )
+_EXEMPTION_CONDITION_QUESTION = re.compile(
+    r"(?:何种|哪些|什么)情况(?:下)?[^?？]{0,20}"
+    r"(?:可以不|可不|允许不|无需|不必|不用|免于)"
+    r"(?:执行|实施|进行|开展|办理|提交|采取|使用|审批|审核|填写|回滚)"
+)
+_EXPLICIT_EXEMPTION = re.compile(
+    r"可以不|可不|允许不|无需|不必|不用|免于|豁免|可免除|不需要"
+)
 _SAME_RELATION = re.compile(r"相同|一样|一致")
 _DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
 _MIN_QUOTE_CHARS = 2
-_MIN_SUPPORTED_BIGRAM_RATIO = 0.35
+# 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
+# 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
+_MIN_SUPPORTED_BIGRAM_RATIO = 0.20
+_MIN_LIST_ITEM_OVERLAP = 0.20
+_MIN_STRUCTURED_LIST_ITEMS = 2
+_QUOTED_DOCUMENT_TITLE = re.compile(r"《([^》]{3,200})》")
+_CATALOG_ENTRY = re.compile(
+    r"^模板目录项：(?P<title>.+?)（模板）。模板正文未入库；"
+)
+_CATALOG_RELATION = re.compile(r"有|存在|参考|目录项|收录|列出")
+_CATALOG_ALLOWED_CLAIM = re.compile(
+    r"(?:模板目录项|模板正文未入库|可供参考|应参考|请参考|可以参考|"
+    r"可参考|原始模板|目录中|目录项|已收录|已列出|存在|是的|"
+    r"这份|一份|该份|具体|填写项|示例|要求|未入库|参考|"
+    r"准备|相关|材料|模板|可以|可用|使用|根据|原始|"
+    r"时|与|的|该|此|请|应|可|供|为|是|在|中|有|及)*"
+)
 _MIN_NEGATION_SHARED_TERMS = 2
 _MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
@@ -195,6 +222,8 @@ _NEGATION_CLASSES = {
     "不": "negative",
 }
 
+_MIN_MULTI_PART_CLAUSES = 2
+
 
 @dataclass(frozen=True)
 class GroundedOutcome:
@@ -217,6 +246,37 @@ class _ClaimSourceGroup:
     trusted_contexts: frozenset[str]
     trusted_term_contexts: frozenset[str] = frozenset()
     table_columns: tuple[str, ...] = ()
+
+
+def _model_candidates_for_query(
+    query: str,
+    direct_support: tuple[EvidenceItem, ...],
+    evidence: tuple[EvidenceItem, ...],
+) -> tuple[EvidenceItem, ...]:
+    """为生成保留直接支持优先级，复合问题再补充宽候选。
+
+    Args:
+        query: 用户当前问题。
+        direct_support: 已被本地证据闭合器确认的最小支持集。
+        evidence: 检索、融合和重排后的有界模型候选。
+
+    Returns:
+        单一事实仅使用直接支持；多问或并列问题先放直接支持，
+        再按已有重排顺序补齐其他候选。
+
+    """
+    if not direct_support:
+        return evidence
+    question_parts = tuple(
+        part.strip() for part in re.split(r"[?？]+", query) if part.strip()
+    )
+    if len(question_parts) < _MIN_MULTI_PART_CLAUSES:
+        return direct_support
+    direct_ids = {item.support_id for item in direct_support}
+    return (
+        *direct_support,
+        *(item for item in evidence if item.support_id not in direct_ids),
+    )
 
 
 def _terms(text: str) -> set[str]:
@@ -262,6 +322,17 @@ def _subject(text: str) -> str | None:
 def _predicate(text: str) -> str:
     subject = _subject(text)
     return text[text.index(subject) + len(subject) :] if subject else text
+
+
+def _lexical_predicate(text: str) -> str:
+    """移除仅有对象名的来源，防止对象词被误当作动作支持。"""
+    stripped = text.strip(" \t\r\n，,。；;：:")
+    if (
+        _STANDALONE_SUBJECT.fullmatch(stripped) is not None
+        and re.search(_DUTY_ACTION_VERB, stripped) is None
+    ):
+        return ""
+    return _predicate(text)
 
 
 def _number_tokens(text: str) -> set[str]:
@@ -399,6 +470,14 @@ def _leading_explicit_subject(text: str) -> str | None:
     subject_text = _LEADING_AGENT_PREFIX.sub("", subject_text)
     if _DUTY_ACTION_PREFIX.match(subject_text) is not None:
         return None
+    # “岗位：职责”同样断言了职责归属，不能因冒号隔开而绕过对象门。
+    label_match = re.match(r"^\s*([^:：]{1,32})[:：]\s*(.*)$", subject_text)
+    if (
+        label_match is not None
+        and _STANDALONE_SUBJECT.fullmatch(label_match[1].strip())
+        and _DUTY_ACTION_PREFIX.match(label_match[2]) is not None
+    ):
+        return label_match[1].strip()
     match = _ENTITY_SUBJECT.match(subject_text)
     if match is None:
         return None
@@ -444,8 +523,26 @@ def _validate_claim_target(
     analysis: QueryAnalysis | None,
     *,
     source_groups: tuple[_ClaimSourceGroup, ...] = (),
+    cited_items: tuple[EvidenceItem, ...] = (),
+    evidence: tuple[EvidenceItem, ...] = (),
 ) -> None:
     """职责或表格回答必须绑定本次查询目标。"""
+    if (
+        analysis is not None
+        and _EXEMPTION_CONDITION_QUESTION.search(
+            analysis.resolved_query or analysis.normalized_query
+        )
+        and not any(
+            _EXPLICIT_EXEMPTION.search(group.support_text)
+            for group in source_groups
+        )
+        and not _certified_list_exemption(cited_items, evidence)
+    ):
+        raise ValidationFailed(
+            "结果中未执行某动作不等于有条件免除该动作。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+        )
     if (
         analysis is not None
         and analysis.semantics.answer_type
@@ -492,6 +589,104 @@ def _validate_claim_target(
             stage="answer.validate",
             code="CLAIM_QUERY_TARGET_MISMATCH",
         )
+
+
+def _certified_list_exemption(
+    cited_items: tuple[EvidenceItem, ...], evidence: tuple[EvidenceItem, ...]
+) -> bool:
+    """只有同组导语明确允许免除时，编号条目才继承该关系。"""
+    for cited in cited_items:
+        certificate = dict(cited.metadata).get("answer_support")
+        if not isinstance(certificate, dict) or certificate.get(
+            "support_reason"
+        ) != "STRUCTURED_LIST_RELATION":
+            continue
+        required = certificate.get("supporting_span_ids")
+        if not isinstance(required, list) or not required:
+            continue
+        group = tuple(
+            item
+            for item in evidence
+            if item.document_version_id == cited.document_version_id
+            and dict(item.metadata).get("answer_support") == certificate
+            and any(
+                span.node_id in required for span in item.source_spans
+            )
+        )
+        present = {
+            span.node_id for item in group for span in item.source_spans
+        }
+        if (
+            len(group) < _MIN_STRUCTURED_LIST_ITEMS
+            or not set(required).issubset(present)
+        ):
+            continue
+        intro = min(
+            group,
+            key=lambda item: min(
+                (
+                    span.source_anchor.ordinal
+                    for span in item.source_spans
+                    if span.source_anchor is not None
+                ),
+                default=2**31 - 1,
+            ),
+        )
+        if cited is not intro and _EXPLICIT_EXEMPTION.search(
+            intro.citation_text
+        ):
+            return True
+    return False
+
+
+def _certified_catalog_reference_claim(  # noqa: PLR0911
+    claim: AnswerClaim,
+    cited_items: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> bool:
+    """对精确目录存在关系单独核验，不将标题里的版本号当作新事实。"""
+    if analysis is None or len(cited_items) != 1:
+        return False
+    question = analysis.resolved_query or analysis.normalized_query
+    titles = _QUOTED_DOCUMENT_TITLE.findall(question)
+    if len(titles) != 1:
+        return False
+    item = cited_items[0]
+    certificate = dict(item.metadata).get("answer_support")
+    if not isinstance(certificate, dict) or (
+        certificate.get("status") != "SUPPORTED"
+        or certificate.get("support_reason") != "CATALOG_TITLE_EXISTS"
+    ):
+        return False
+    entry = _CATALOG_ENTRY.match(item.citation_text)
+    target = normalize_catalog_label(titles[0])
+    if (
+        entry is None
+        or not item.display_name
+        or normalize_catalog_label(entry["title"]) != target
+        or normalize_catalog_label(item.display_name) != target
+    ):
+        return False
+    claim_text = unicodedata.normalize("NFKC", unescape(claim.text))
+    source_title = unicodedata.normalize("NFKC", unescape(entry["title"]))
+    query_title = unicodedata.normalize("NFKC", unescape(titles[0]))
+    mentioned = next(
+        (
+            title
+            for title in sorted(
+                {source_title, query_title}, key=len, reverse=True
+            )
+            if title in claim_text
+        ),
+        None,
+    )
+    if mentioned is None:
+        return False
+    remainder = claim_text.replace(mentioned, "")
+    if not _CATALOG_RELATION.search(remainder):
+        return False
+    remainder = re.sub(r"[\s\W_]+", "", remainder)
+    return _CATALOG_ALLOWED_CLAIM.fullmatch(remainder) is not None
 
 
 def _render_claim_target(
@@ -1135,9 +1330,12 @@ def _validate_clause_support(
     # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
     predicate = _predicate(clause)
     terms = _terms(predicate)
-    source_terms = terms & _terms("\n".join(relevant_sources))
+    factual_sources = tuple(
+        _lexical_predicate(text) for text in relevant_sources
+    )
+    source_terms = terms & _terms("\n".join(factual_sources))
     supported_terms = terms & _terms(
-        "\n".join((*relevant_sources, *trusted_term_contexts))
+        "\n".join((*factual_sources, *trusted_term_contexts))
     )
     if (
         not terms
@@ -1157,6 +1355,7 @@ def validate_grounded_draft(
     evidence: tuple[EvidenceItem, ...],
     *,
     analysis: QueryAnalysis | None = None,
+    complete: bool = True,
 ) -> None:
     """校验逐字支持、来源关系与关键事实，允许有词汇依据的自然概括。
 
@@ -1164,6 +1363,7 @@ def validate_grounded_draft(
         draft: 模型的结构化事实草稿。
         evidence: 本次已通过范围筛选的有限证据。
         analysis: 可选的服务端查询语义，用于约束职责主体。
+        complete: 增量 claim 校验时为 False；最终草稿必须检查完整列表。
 
     Returns:
         无返回值；校验通过后调用方才可发布。
@@ -1205,7 +1405,19 @@ def validate_grounded_draft(
             claim,
             analysis,
             source_groups=source_groups,
+            cited_items=tuple(units),
+            evidence=evidence,
         )
+        if any(_CATALOG_ENTRY.match(item.citation_text) for item in units):
+            if _certified_catalog_reference_claim(
+                claim, tuple(units), analysis
+            ):
+                continue
+            raise ValidationFailed(
+                "模板目录项只证明精确标题存在，不能证明正文或其他事实。",
+                stage="answer.validate",
+                code="CATALOG_CLAIM_UNSUPPORTED",
+            )
         support_text = "\n".join(support.quote for support in claim.supports)
         claim_contexts = frozenset(
             context
@@ -1261,6 +1473,71 @@ def validate_grounded_draft(
                     "单个分句只能通过拼接不同来源结构才成立。",
                     stage="answer.validate",
                     code="CLAIM_SOURCE_MISMATCH",
+                )
+    if complete:
+        _validate_structured_list_coverage(draft, evidence, analysis)
+
+
+def _validate_structured_list_coverage(
+    draft: AnswerDraft,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> None:
+    """列表导语不算条目；每个来源条目都须进入回答并由原文支持。"""
+    if analysis is None or analysis.semantics.answer_type not in {
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.PROCEDURE,
+    }:
+        return
+    groups: dict[tuple[str, ...], list[EvidenceItem]] = {}
+    for item in evidence:
+        support = dict(item.metadata).get("answer_support")
+        if (
+            not isinstance(support, dict)
+            or support.get("support_reason") != "STRUCTURED_LIST_RELATION"
+        ):
+            continue
+        span_ids = support.get("supporting_span_ids")
+        if isinstance(span_ids, list):
+            key = tuple(value for value in span_ids if isinstance(value, str))
+            groups.setdefault(key, []).append(item)
+    for group in groups.values():
+        if len(group) < _MIN_STRUCTURED_LIST_ITEMS:
+            continue
+        intro = min(
+            group,
+            key=lambda item: min(
+                (
+                    span.source_anchor.ordinal
+                    for span in item.source_spans
+                    if span.source_anchor is not None
+                ),
+                default=2**31 - 1,
+            ),
+        )
+        for item in group:
+            if item is intro:
+                continue
+            terms = _terms(_LEADING_LIST_MARKER.sub("", item.citation_text))
+            represented = (
+                any(
+                    any(
+                        support.support_id == item.support_id
+                        for support in claim.supports
+                    )
+                    and bool(terms & _terms(claim.text))
+                    and len(terms & _terms(claim.text)) / len(terms)
+                    >= _MIN_LIST_ITEM_OVERLAP
+                    for claim in draft.claims
+                )
+                if terms
+                else False
+            )
+            if not represented:
+                raise ValidationFailed(
+                    "列举答案遗漏了来源列表条目。",
+                    stage="answer.validate",
+                    code="ANSWER_LIST_INCOMPLETE",
                 )
 
 
@@ -1401,7 +1678,11 @@ class GroundedAnsweringService:
                         None if analysis is None else analysis.semantics
                     ),
                     answer_support_set=direct_support,
-                    model_evidence_candidates=direct_support or evidence,
+                    model_evidence_candidates=_model_candidates_for_query(
+                        query,
+                        direct_support,
+                        evidence,
+                    ),
                 )
                 stream_generate = getattr(
                     self.generator, "generate_stream", None
@@ -1435,6 +1716,7 @@ class GroundedAnsweringService:
                             ),
                             evidence,
                             analysis=analysis,
+                            complete=False,
                         )
                         if claim in buffered_claims:
                             raise ValidationFailed(
@@ -1537,6 +1819,12 @@ class GroundedAnsweringService:
                 if delivered:
                     raise _partial_stream_error(calls) from error
                 if isinstance(error, ProviderInvalidResponse):
+                    # 模型已经返回但 claims 形状无效，是本次回答未通过校验，
+                    # 不是 HTTP Provider 不可用；同时把具体原因传给修复轮。
+                    if dict(error.details).get("reason_code") == (
+                        "GENERATION_CLAIMS_INVALID"
+                    ):
+                        reason = "GENERATION_CLAIMS_INVALID"
                     continue
                 break
             except ValueError as error:

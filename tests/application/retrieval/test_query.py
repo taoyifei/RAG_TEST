@@ -406,6 +406,12 @@ def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
             RequestedAnswerType.PURPOSE,
         ),
         (
+            "用户操作手册的编写目的是什么",
+            "用户操作手册",
+            "目的",
+            RequestedAnswerType.PURPOSE,
+        ),
+        (
             "流程控制的作用是什么",
             "流程控制",
             "作用",
@@ -569,6 +575,28 @@ def test_document_target_does_not_invent_an_explicit_source_qualifier() -> None:
     semantics = _analyze("蓝熊工作规范的目的是什么").semantics
 
     assert semantics.source_qualifier is None
+
+
+def test_unquoted_document_scope_keeps_meeting_minutes_as_source() -> None:
+    semantics = _analyze(
+        "需求阶段会议纪要中，哪些信息可以省略或不填写？"
+    ).semantics
+
+    assert semantics.source_qualifier == "需求阶段会议纪要"
+    assert semantics.answer_type is RequestedAnswerType.FACT
+
+
+def test_conditional_permission_question_targets_complete_rule_row() -> None:
+    semantics = _analyze(
+        "产品开发模式是否允许在没有产品委员会评审的情况下启动？"
+    ).semantics
+
+    assert semantics.target == "产品开发"
+    assert semantics.relation == "对应内容"
+    assert semantics.answer_type is RequestedAnswerType.SECTION_SUMMARY
+    assert semantics.reason_codes == (
+        "CONDITIONAL_PERMISSION_QUESTION_SYNTAX",
+    )
 
 
 @pytest.mark.parametrize(

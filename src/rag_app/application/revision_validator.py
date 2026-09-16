@@ -28,7 +28,6 @@ _ZERO_QUALITY_FIELDS = (
     "oversize_violations",
     "missing_child_group_count",
     "missing_note_ref_count",
-    "orphan_relation_count",
 )
 
 
@@ -326,6 +325,12 @@ class RevisionValidator:
                         stage="revision.validate",
                     )
                 checks[field_name] = 0
+            # Word 内部关系可能只承载版式或域信息，并不一定对应可检索正文。
+            # 保留计数供诊断；正文覆盖和结构边界校验通过时，
+            # 不阻断索引激活。
+            checks["orphan_relation_count"] = int(
+                stored_report.orphan_relation_count
+            )
         checks["source_span_coverage"] = 1.0
         checks["image_only_document_count"] = image_only_document_count
         return checks

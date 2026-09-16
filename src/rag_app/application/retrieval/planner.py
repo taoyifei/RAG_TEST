@@ -53,9 +53,9 @@ class QueryPlanner:
         channels: tuple[str, ...] = ("lexical", "dense")
         must_keep = False
         neighbor = "same_group"
-        if kind is QueryKind.EXACT_IDENTIFIER:
+        if kind is QueryKind.EXACT_IDENTIFIER or analysis.quoted_phrases:
             channels = ("exact", "lexical", "dense")
-            must_keep = True
+            must_keep = kind is QueryKind.EXACT_IDENTIFIER
         elif kind is QueryKind.TABLE_NUMERIC:
             channels = ("exact", "lexical", "dense")
             neighbor = "table"
