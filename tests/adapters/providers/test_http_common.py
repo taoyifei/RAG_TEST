@@ -257,7 +257,8 @@ def test_stream_contract_keeps_only_safe_failure_code() -> None:
     client.close()
     assert captured.value.reason_code == "INVALID_STREAM_SCHEMA"
     assert dict(captured.value.call.transport_diagnostics) == {
-        "contract_detail": "CHAT_OUTPUT_TRUNCATED"
+        "contract_detail": "CHAT_OUTPUT_TRUNCATED",
+        "contract_exception_type": "ChatResponseError",
     }
     assert "secret-value" not in str(captured.value.call)
 

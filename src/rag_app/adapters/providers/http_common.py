@@ -628,14 +628,13 @@ class ProviderHttpClient:
                             ) from error
                         except (OverflowError, TypeError, ValueError) as error:
                             detail = getattr(error, "reason_code", None)
-                            diagnostics = (
-                                {"contract_detail": detail}
-                                if isinstance(detail, str)
-                                and re.fullmatch(
-                                    r"CHAT_[A-Z0-9_]{4,64}", detail
-                                )
-                                else {}
-                            )
+                            diagnostics = {
+                                "contract_exception_type": type(error).__name__
+                            }
+                            if isinstance(detail, str) and re.fullmatch(
+                                r"CHAT_[A-Z0-9_]{4,64}", detail
+                            ):
+                                diagnostics["contract_detail"] = detail
                             call = self._call(
                                 provider_id,
                                 operation,
