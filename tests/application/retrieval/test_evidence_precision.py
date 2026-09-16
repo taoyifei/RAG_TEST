@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from rag_app.application.retrieval import QueryAnalyzer
-from rag_app.application.retrieval.evidence import EvidenceAssembler
+from rag_app.application.retrieval.evidence import (
+    EvidenceAssembler,
+    _scope_evidence_candidates,
+)
 from rag_app.core.models import (
     ChunkRole,
     EvidenceSelectionContext,
@@ -42,6 +45,40 @@ def test_query_aware_selection_rejects_higher_ranked_noise() -> None:
         relevant.hydrated.chunk.chunk_id
     ]
     assert evidence[0].citation_text == "液压系统额定压力为 16 MPa"
+
+
+def test_unique_quoted_document_label_scopes_similar_templates() -> None:
+    analysis = QueryAnalyzer().analyze(
+        SearchRequest(
+            scope=_SCOPE, text="是否有《需求阶段-会议纪要模板》可参考？"
+        )
+    )
+    wanted = make_ranked_chunk(1, "模板目录项：需求阶段-会议纪要模板。")
+    noise = make_ranked_chunk(
+        2, "模板目录项：需求变更评审会议纪要模板。", document_number=3
+    )
+    wanted = wanted.model_copy(
+        update={
+            "hydrated": wanted.hydrated.model_copy(
+                update={"display_name": "需求阶段-会议纪要模板.docx"}
+            )
+        }
+    )
+    noise = noise.model_copy(
+        update={
+            "hydrated": noise.hydrated.model_copy(
+                update={"display_name": "需求变更评审会议纪要模板.docx"}
+            )
+        }
+    )
+    context = EvidenceSelectionContext(
+        analysis=analysis,
+        query_kind=QueryKind.SIMPLE_FACT,
+        rerank_mode="provider",
+        selected_slot=None,
+    )
+
+    assert _scope_evidence_candidates((noise, wanted), context) == (wanted,)
 
 
 def test_literal_lookup_tolerates_bounded_noise_without_selecting_it() -> None:

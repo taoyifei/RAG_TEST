@@ -34,6 +34,7 @@ from rag_app.core.query_text import (
 )
 
 _MIN_TABLE_LABEL_LENGTH = 2
+_QUOTED_DOCUMENT_LABEL = re.compile(r"《([^》]{3,200})》")
 _MAX_SEMANTIC_RANK = 10
 _LIST_LEAD_IN = re.compile(
     r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
@@ -326,6 +327,23 @@ def _strict_document_label_owner(
     return next(iter(owners)) if len(owners) == 1 else None
 
 
+def _quoted_document_owner(
+    question: str, candidates: tuple[RankedChunk, ...]
+) -> str | None:
+    """书名号内恰好是唯一文件名时确定动态来源，不解释章节引用。"""
+    owners: set[str] = set()
+    for label in _QUOTED_DOCUMENT_LABEL.findall(question):
+        normalized = normalize_document_label(label)
+        matches = {
+            candidate.hydrated.chunk.version.document_id
+            for candidate in candidates
+            if normalized
+            == normalize_document_label(candidate.hydrated.display_name)
+        }
+        owners.update(matches)
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
 def _scope_evidence_candidates(
     candidates: tuple[RankedChunk, ...],
     context: EvidenceSelectionContext | None,
@@ -343,6 +361,16 @@ def _scope_evidence_candidates(
                 item.hydrated.chunk.heading_path,
                 semantics.source_qualifier,
             )
+        )
+    quoted_owner = _quoted_document_owner(
+        context.analysis.resolved_query or context.analysis.normalized_query,
+        candidates,
+    )
+    if quoted_owner is not None:
+        return tuple(
+            item
+            for item in candidates
+            if item.hydrated.chunk.version.document_id == quoted_owner
         )
     if (
         semantics.answer_type is not RequestedAnswerType.PURPOSE
