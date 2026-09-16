@@ -1469,26 +1469,64 @@ label:has(input[type="checkbox"]) {
 }
 .wst-suggestions-controls {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
 }
-.wst-suggestions-controls button {
+.wst-suggestions-refresh {
+  display: inline-flex;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  align-items: center;
+  gap: 5px;
+  color: #aeb8b4;
+  background: transparent;
+  font-size: 12px;
+  transition: color 180ms ease;
+}
+.wst-suggestions-refresh:hover {
+  color: #f2f8f5;
+}
+.wst-suggestions-arrow {
   display: grid;
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  flex: 0 0 44px;
   padding: 0;
-  border: 1px solid rgb(255 255 255 / 10%);
+  border: 0;
   border-radius: 50%;
   place-items: center;
   color: #aeb8b4;
-  background: rgb(255 255 255 / 3%);
+  background: transparent;
   cursor: pointer;
+  position: relative;
+}
+.wst-suggestions-arrow::before {
+  position: absolute;
+  inset: 4px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 3%);
+  content: "";
   transition:
-    color 180ms ease,
+    border-color 180ms ease,
     background-color 180ms ease;
 }
-.wst-suggestions-controls button:hover {
+.wst-suggestions-arrow svg {
+  position: relative;
+}
+.wst-suggestions-arrow:hover:not(:disabled) {
   color: #f2f8f5;
-  background: rgb(255 255 255 / 10%);
+}
+.wst-suggestions-arrow:hover:not(:disabled)::before {
+  border-color: rgb(49 215 179 / 30%);
+  background: rgb(255 255 255 / 9%);
+}
+.wst-suggestions-arrow:disabled {
+  cursor: default;
+  opacity: 0.38;
 }
 .wst-suggestions-track {
   display: flex;
@@ -1975,6 +2013,10 @@ label:has(input[type="checkbox"]) {
   margin-top: 56px;
   padding: 26px 0 24px;
   background: linear-gradient(to bottom, transparent, #17191b 24%);
+}
+.wst-chat-composer .wst-suggestions {
+  margin: 0 0 14px;
+  animation: wst-fade 220ms ease-out both;
 }
 
 @keyframes wst-rise {

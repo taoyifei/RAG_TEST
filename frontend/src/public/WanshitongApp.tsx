@@ -3,9 +3,11 @@ import { RotateCcw } from "lucide-react";
 import { WanshitongChat } from "./WanshitongChat";
 import { WanshitongHome } from "./WanshitongHome";
 import { usePublicChat } from "./usePublicChat";
+import { useSuggestedQuestions } from "./useSuggestedQuestions";
 
 export function WanshitongApp() {
   const chat = usePublicChat();
+  const suggestions = useSuggestedQuestions(chat.turns);
 
   if (!chat.sessionReady) {
     return (
@@ -40,16 +42,20 @@ export function WanshitongApp() {
       {chat.turns.length === 0 ? (
         <WanshitongHome
           busy={chat.busy}
+          onRefresh={suggestions.refresh}
           onStop={chat.stop}
           onSubmit={chat.submit}
+          questions={suggestions.questions}
         />
       ) : (
         <WanshitongChat
           busy={chat.busy}
           onFeedback={chat.submitFeedback}
+          onRefresh={suggestions.refresh}
           onRetry={chat.retry}
           onStop={chat.stop}
           onSubmit={chat.submit}
+          questions={suggestions.questions}
           turns={chat.turns}
         />
       )}

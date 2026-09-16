@@ -199,12 +199,12 @@ describe("湾事通公共应用", () => {
     );
     await openHome();
     const suggestions = screen.getByRole("region", { name: "你可能想问" });
-    expect(within(suggestions).getAllByRole("button")).toHaveLength(7);
-    await userEvent.setup().click(
-      within(suggestions).getByRole("button", {
-        name: "固定资产折旧应从什么时候开始计提？",
-      }),
-    );
+    const cards = within(suggestions)
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("wst-suggestion"));
+    expect(cards).toHaveLength(5);
+    const question = cards[0].textContent ?? "";
+    await userEvent.setup().click(cards[0]);
 
     expect(await screen.findByText("实时生成的回答")).toBeInTheDocument();
     const chatCall = fetchMock.mock.calls.find(
@@ -217,8 +217,86 @@ describe("湾事通公共应用", () => {
     ) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(["conversation_id", "query"]);
     expect(typeof body.conversation_id).toBe("string");
-    expect(body.query).toBe("固定资产折旧应从什么时候开始计提？");
+    expect(body.query).toBe(question);
     expect(body).not.toHaveProperty("shortcut_id");
+    await waitFor(() => {
+      const next = screen.getByRole("region", { name: "你可能想问" });
+      expect(within(next).queryByRole("button", { name: question })).toBeNull();
+    });
+  });
+
+  it("每轮结束及手动换一换都换新组，且不推荐任何已问问题", async () => {
+    let chatCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      (input: RequestInfo | URL) => {
+        const path = pathOf(input);
+        if (path === "/api/public/session") {
+          return Promise.resolve(Response.json(sessionBody));
+        }
+        if (path === "/api/public/capabilities") {
+          return Promise.resolve(Response.json(capabilitiesBody));
+        }
+        if (path === "/api/public/chat") {
+          chatCalls += 1;
+          return Promise.resolve(
+            streamResponse([
+              event("final", 0, {
+                answer: `第 ${chatCalls} 轮回答`,
+                citations: [],
+              }),
+            ]),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 404 }));
+      },
+    );
+    const user = userEvent.setup();
+    await openHome();
+    const visibleQuestions = () =>
+      within(screen.getByRole("region", { name: "你可能想问" }))
+        .getAllByRole("button")
+        .filter((button) => button.classList.contains("wst-suggestion"))
+        .map((button) => button.textContent ?? "");
+    const initial = visibleQuestions();
+    await user.click(screen.getByRole("button", { name: "换一换推荐问题" }));
+    const refreshed = visibleQuestions();
+    expect(refreshed).toHaveLength(5);
+    expect(refreshed.every((question) => !initial.includes(question))).toBe(
+      true,
+    );
+
+    await user.click(
+      within(screen.getByRole("region", { name: "你可能想问" })).getByRole(
+        "button",
+        { name: refreshed[0] },
+      ),
+    );
+    await screen.findByText("第 1 轮回答");
+    await waitFor(() => {
+      const next = visibleQuestions();
+      expect(next).toHaveLength(5);
+      expect(next.every((question) => !refreshed.includes(question))).toBe(
+        true,
+      );
+    });
+    const afterFirst = visibleQuestions();
+    await user.click(
+      within(screen.getByRole("region", { name: "你可能想问" })).getByRole(
+        "button",
+        { name: afterFirst[0] },
+      ),
+    );
+    await screen.findByText("第 2 轮回答");
+    await waitFor(() => {
+      const next = visibleQuestions();
+      expect(next).toHaveLength(5);
+      expect(next).not.toContain(refreshed[0]);
+      expect(next).not.toContain(afterFirst[0]);
+      expect(next.every((question) => !afterFirst.includes(question))).toBe(
+        true,
+      );
+    });
+    expect(chatCalls).toBe(2);
   });
 
   it("首问后切换聊天模式，且请求只含 WB-03 允许字段", async () => {

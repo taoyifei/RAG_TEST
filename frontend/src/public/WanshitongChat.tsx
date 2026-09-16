@@ -1,20 +1,26 @@
 import { PublicAnswer } from "./PublicAnswer";
 import { PublicChatComposer } from "./PublicChatComposer";
+import { SuggestedQuestionCarousel } from "./SuggestedQuestionCarousel";
+import type { SuggestedQuestion } from "./suggestedQuestions";
 import type { PublicTurn } from "./usePublicChat";
 
 export function WanshitongChat({
   busy,
   onFeedback,
+  onRefresh,
   onRetry,
   onStop,
   onSubmit,
+  questions,
   turns,
 }: {
   busy: boolean;
   onFeedback: (turnId: string, traceId: string, useful: boolean) => void;
+  onRefresh: () => void;
   onRetry: (turnId: string, question: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
+  questions: readonly SuggestedQuestion[];
   turns: PublicTurn[];
 }) {
   return (
@@ -41,6 +47,16 @@ export function WanshitongChat({
           ))}
         </div>
         <div className="wst-chat-composer">
+          {!busy &&
+            turns.at(-1)?.status !== "submitting" &&
+            turns.at(-1)?.status !== "streaming" && (
+              <SuggestedQuestionCarousel
+                busy={busy}
+                onRefresh={onRefresh}
+                onSubmit={onSubmit}
+                questions={questions}
+              />
+            )}
           <PublicChatComposer
             busy={busy}
             compact
