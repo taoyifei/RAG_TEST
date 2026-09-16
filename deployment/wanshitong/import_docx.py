@@ -145,7 +145,7 @@ class WanshitongAdminClient:
             payload = self._request_json(
                 "GET",
                 "/api/v1/admin/wanshitong/documents",
-                query={"page_size": "200", "offset": str(offset)},
+                query={"page_size": "20", "offset": str(offset)},
             )
             items = payload.get("items")
             if not isinstance(items, list) or any(

@@ -292,6 +292,38 @@ def test_refresh_templates_only_creates_versions_for_existing_catalog(
     assert fake.upload_count == 0
 
 
+def test_document_listing_uses_bounded_pages() -> None:
+    importer = _load_importer()
+    client = importer.WanshitongAdminClient("http://127.0.0.1:8288")
+    requests: list[dict[str, str]] = []
+
+    def request(
+        _method: str,
+        _path: str,
+        *,
+        query: dict[str, str],
+    ) -> dict[str, object]:
+        requests.append(query)
+        offset = int(query["offset"])
+        return {
+            "items": [
+                {"document_id": str(index)}
+                for index in range(offset, min(offset + 20, 46))
+            ],
+            "next_offset": offset + 20 if offset < 40 else None,
+        }
+
+    client._request_json = request
+    documents = client.list_documents()
+
+    assert len(documents) == 46
+    assert requests == [
+        {"page_size": "20", "offset": "0"},
+        {"page_size": "20", "offset": "20"},
+        {"page_size": "20", "offset": "40"},
+    ]
+
+
 def test_explicit_terminal_recovery_creates_versions_without_deleting_documents(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
