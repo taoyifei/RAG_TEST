@@ -35,6 +35,15 @@ from rag_app.core.query_text import (
 
 _MIN_TABLE_LABEL_LENGTH = 2
 _QUOTED_DOCUMENT_LABEL = re.compile(r"《([^》]{3,200})》")
+_CATALOG_REFERENCE = re.compile(
+    r"是否有|有没有|有无|可供参考|参考哪份|哪份模板"
+)
+_CATALOG_CONTENT_REQUEST = re.compile(
+    r"(?:内容|正文|填写|填什么|字段|示例|要求|格式|怎么|如何|步骤|流程)"
+)
+_CATALOG_ENTRY = re.compile(
+    r"^模板目录项：(?P<title>.+?)（模板）。模板正文未入库；"
+)
 _MAX_SEMANTIC_RANK = 10
 _LIST_LEAD_IN = re.compile(
     r"(?:包括|包含|分为|分成|具体如下|步骤如下|流程如下|如下)"
@@ -1173,6 +1182,8 @@ def _context_supports(
     if context is None:
         return {}
     supports = _section_heading_supports(candidates, context)
+    supports.update(_catalog_reference_supports(candidates, context))
+    supports.update(_catalog_content_guards(candidates, context))
     semantics = context.analysis.semantics
     target = semantics.target
     headers: dict[tuple[_TableKey, int], set[str]] = defaultdict(set)
@@ -1272,6 +1283,84 @@ def _context_supports(
         if neighbor is not None:
             supports.update(_linked_span_supports(context, chunk, neighbor))
     return supports
+
+
+def _catalog_reference_supports(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """只有精确标题与目录项正文一致，才证明可参考的模板存在。"""
+    question = (
+        context.analysis.resolved_query or context.analysis.normalized_query
+    )
+    titles = _QUOTED_DOCUMENT_LABEL.findall(question)
+    if len(titles) != 1:
+        return {}
+    outside_title = _QUOTED_DOCUMENT_LABEL.sub("", question)
+    if not _CATALOG_REFERENCE.search(outside_title) or (
+        _CATALOG_CONTENT_REQUEST.search(outside_title)
+    ):
+        return {}
+    target = normalize_document_label(titles[0])
+    if not target:
+        return {}
+    supports: dict[_SpanKey, AnswerSupport] = {}
+    for candidate in candidates:
+        if normalize_document_label(candidate.hydrated.display_name) != target:
+            continue
+        chunk = candidate.hydrated.chunk
+        for span in chunk.source_spans:
+            if not span.is_citable or not span.node_id:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            entry = _CATALOG_ENTRY.match(quote)
+            if (
+                entry is None
+                or normalize_document_label(entry["title"]) != target
+            ):
+                continue
+            supports[_span_key(chunk, span)] = AnswerSupport(
+                status=SupportStatus.SUPPORTED,
+                query_target=titles[0],
+                requested_relation_or_attribute="目录项存在",
+                answer_type="FACT",
+                support_reason="CATALOG_TITLE_EXISTS",
+                supporting_span_ids=(span.node_id,),
+            )
+    return supports
+
+
+def _catalog_content_guards(
+    candidates: tuple[RankedChunk, ...],
+    context: EvidenceSelectionContext,
+) -> dict[_SpanKey, AnswerSupport]:
+    """目录存在不能推出未入库的模板正文、字段或填写要求。"""
+    question = (
+        context.analysis.resolved_query or context.analysis.normalized_query
+    )
+    if not _CATALOG_CONTENT_REQUEST.search(
+        _QUOTED_DOCUMENT_LABEL.sub("", question)
+    ):
+        return {}
+    guards: dict[_SpanKey, AnswerSupport] = {}
+    for candidate in candidates:
+        chunk = candidate.hydrated.chunk
+        for span in chunk.source_spans:
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if _CATALOG_ENTRY.match(quote) is None:
+                continue
+            guards[_span_key(chunk, span)] = AnswerSupport(
+                status=SupportStatus.UNSUPPORTED,
+                query_target="",
+                requested_relation_or_attribute="模板正文未入库",
+                answer_type="FACT",
+                support_reason="CATALOG_HAS_NO_BODY",
+            )
+    return guards
 
 
 def _section_heading_supports(  # noqa: PLR0912

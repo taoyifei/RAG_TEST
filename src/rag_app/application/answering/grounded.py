@@ -508,6 +508,8 @@ def _validate_claim_target(
     analysis: QueryAnalysis | None,
     *,
     source_groups: tuple[_ClaimSourceGroup, ...] = (),
+    cited_items: tuple[EvidenceItem, ...] = (),
+    evidence: tuple[EvidenceItem, ...] = (),
 ) -> None:
     """职责或表格回答必须绑定本次查询目标。"""
     if (
@@ -519,6 +521,7 @@ def _validate_claim_target(
             _EXPLICIT_EXEMPTION.search(group.support_text)
             for group in source_groups
         )
+        and not _certified_list_exemption(cited_items, evidence)
     ):
         raise ValidationFailed(
             "结果中未执行某动作不等于有条件免除该动作。",
@@ -571,6 +574,54 @@ def _validate_claim_target(
             stage="answer.validate",
             code="CLAIM_QUERY_TARGET_MISMATCH",
         )
+
+
+def _certified_list_exemption(
+    cited_items: tuple[EvidenceItem, ...], evidence: tuple[EvidenceItem, ...]
+) -> bool:
+    """只有同组导语明确允许免除时，编号条目才继承该关系。"""
+    for cited in cited_items:
+        certificate = dict(cited.metadata).get("answer_support")
+        if not isinstance(certificate, dict) or certificate.get(
+            "support_reason"
+        ) != "STRUCTURED_LIST_RELATION":
+            continue
+        required = certificate.get("supporting_span_ids")
+        if not isinstance(required, list) or not required:
+            continue
+        group = tuple(
+            item
+            for item in evidence
+            if item.document_version_id == cited.document_version_id
+            and dict(item.metadata).get("answer_support") == certificate
+            and any(
+                span.node_id in required for span in item.source_spans
+            )
+        )
+        present = {
+            span.node_id for item in group for span in item.source_spans
+        }
+        if (
+            len(group) < _MIN_STRUCTURED_LIST_ITEMS
+            or not set(required).issubset(present)
+        ):
+            continue
+        intro = min(
+            group,
+            key=lambda item: min(
+                (
+                    span.source_anchor.ordinal
+                    for span in item.source_spans
+                    if span.source_anchor is not None
+                ),
+                default=2**31 - 1,
+            ),
+        )
+        if cited is not intro and _EXPLICIT_EXEMPTION.search(
+            intro.citation_text
+        ):
+            return True
+    return False
 
 
 def _render_claim_target(
@@ -1289,6 +1340,8 @@ def validate_grounded_draft(
             claim,
             analysis,
             source_groups=source_groups,
+            cited_items=tuple(units),
+            evidence=evidence,
         )
         support_text = "\n".join(support.quote for support in claim.supports)
         claim_contexts = frozenset(

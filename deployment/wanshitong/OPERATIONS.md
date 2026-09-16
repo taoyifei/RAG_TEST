@@ -86,4 +86,7 @@ sudo sh -c 'umask 077; exec cat /data/tyf/wanshitong/secrets/admin-bootstrap-tok
 真实问答失败时依次核对：Public Session/Cookie/HTTP 边界、固定 Scope、活动
 Index Revision、Embedding 维度、Reranker 协议、Generation Connection、
 Provider validation、实际 Provider Trace、检索候选、Evidence/Claim Validation
-和前端 SSE。不得通过关闭引用校验、跳过 Reranker 或加入固定答案来制造通过。
+与答案完整性、前端 SSE。列举题若只引用“以下情形”等导语，没有逐项
+来源与回答，即使逐字引用合法，也属于不完整答案。按全量问答的 Trace
+先区分召回、证据、生成、完整性四类原因，再修复共享路径并重跑原问题；
+不得通过关闭引用校验、跳过 Reranker 或加入固定答案来制造通过。

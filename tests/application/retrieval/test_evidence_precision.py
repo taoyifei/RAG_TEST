@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+
 from rag_app.application.retrieval import QueryAnalyzer
 from rag_app.application.retrieval.evidence import (
     EvidenceAssembler,
     _scope_evidence_candidates,
 )
+from rag_app.application.retrieval.planner import QueryPlanner
 from rag_app.core.models import (
     ChunkRole,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
     QueryKind,
+    QueryVariant,
     RetrievalPolicy,
     SearchRequest,
 )
@@ -79,6 +83,80 @@ def test_unique_quoted_document_label_scopes_similar_templates() -> None:
     )
 
     assert _scope_evidence_candidates((noise, wanted), context) == (wanted,)
+
+
+def test_exact_catalog_reference_proves_only_matching_title_exists() -> None:
+    """目录项只支持精确标题的存在和引用，不证明正文与近似标题。"""
+    title = "阶段甲-交接记录模板20260701"
+    catalog = (
+        f"模板目录项：{title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    wanted = make_ranked_chunk(1, catalog)
+    wanted = wanted.model_copy(
+        update={
+            "hydrated": wanted.hydrated.model_copy(
+                update={"display_name": f"{title}.docx"}
+            )
+        }
+    )
+    similar = make_ranked_chunk(
+        2,
+        "模板目录项：阶段甲-交接记录模板20260702（模板）。"
+        "模板正文未入库；具体填写项、示例及要求请参考原始模板。",
+        document_number=2,
+    )
+    similar = similar.model_copy(
+        update={
+            "hydrated": similar.hydrated.model_copy(
+                update={"display_name": "阶段甲-交接记录模板20260702.docx"}
+            )
+        }
+    )
+
+    def evidence(question: str) -> tuple:
+        analysis = QueryAnalyzer().analyze(
+            SearchRequest(scope=_SCOPE, text=question)
+        )
+        context = EvidenceSelectionContext(
+            analysis=analysis,
+            query_kind=QueryKind.SIMPLE_FACT,
+            rerank_mode="provider",
+            selected_slot=None,
+        )
+        return EvidenceAssembler().assemble(
+            (similar, wanted), RetrievalPolicy(), context=context
+        )
+
+    for question in (
+        f"是否有《{title}》可供参考？",
+        f"准备相关材料时，应参考哪份模板《{title}》？",
+    ):
+        selected = evidence(question)
+        assert len(selected) == 1
+        assert selected[0].citation_text == catalog
+        assert (
+            dict(selected[0].metadata)["answer_support"]["support_reason"]
+            == "CATALOG_TITLE_EXISTS"
+        )
+    assert not evidence(f"《{title}》有哪些填写字段？")
+    assert not evidence("是否有《阶段甲-交接记录模板20260703》可供参考？")
+
+
+def test_book_title_uses_exact_retrieval_without_forcing_answer() -> None:
+    analysis = QueryAnalyzer().analyze(
+        SearchRequest(scope=_SCOPE, text="是否有《阶段甲-交接记录模板》？")
+    )
+    assert analysis.quoted_phrases == ("阶段甲-交接记录模板",)
+    variant = QueryVariant(
+        text=analysis.normalized_query,
+        kind="original",
+        identity="sha256:"
+        + hashlib.sha256(analysis.normalized_query.encode()).hexdigest(),
+    )
+    plan = QueryPlanner().plan(analysis, (variant,), RetrievalPolicy())
+    assert "exact" in plan.channels
+    assert not plan.must_keep_exact
 
 
 def test_literal_lookup_tolerates_bounded_noise_without_selecting_it() -> None:

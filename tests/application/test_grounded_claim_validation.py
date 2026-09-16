@@ -112,15 +112,15 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
 
 def test_structured_list_answer_cannot_publish_only_its_lead_in() -> None:
     """事实逐字成立仍不足以回答条件列举；必须覆盖来源条目。"""
-    question = "哪些情况下可以无需复核直接归档？"
-    intro = "对于以下情形，无需复核，提交后直接归档。"
+    question = "哪些情况下可以无需审批直接归档？"
+    intro = "对于以下情形，无需审批，提交后直接归档。"
     evidence = EvidenceAssembler().assemble(
         _candidates(
             _paragraph(intro)
             + _paragraph("1.已核验的设备记录")
             + _paragraph("2.主管已签字的交接单")
             + _paragraph("3.已完成复验的材料清单")
-            + _paragraph("其他情形仍需复核。")
+            + _paragraph("其他情形仍需审批。")
         ),
         _POLICY,
         context=_context(question),
