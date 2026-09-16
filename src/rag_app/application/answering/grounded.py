@@ -453,6 +453,14 @@ def _leading_explicit_subject(text: str) -> str | None:
     subject_text = _LEADING_AGENT_PREFIX.sub("", subject_text)
     if _DUTY_ACTION_PREFIX.match(subject_text) is not None:
         return None
+    # “岗位：职责”同样断言了职责归属，不能因冒号隔开而绕过对象门。
+    label_match = re.match(r"^\s*([^:：]{1,32})[:：]\s*(.*)$", subject_text)
+    if (
+        label_match is not None
+        and _STANDALONE_SUBJECT.fullmatch(label_match[1].strip())
+        and _DUTY_ACTION_PREFIX.match(label_match[2]) is not None
+    ):
+        return label_match[1].strip()
     match = _ENTITY_SUBJECT.match(subject_text)
     if match is None:
         return None
@@ -1613,6 +1621,12 @@ class GroundedAnsweringService:
                 if delivered:
                     raise _partial_stream_error(calls) from error
                 if isinstance(error, ProviderInvalidResponse):
+                    # 模型已经返回但 claims 形状无效，是本次回答未通过校验，
+                    # 不是 HTTP Provider 不可用；同时把具体原因传给修复轮。
+                    if dict(error.details).get("reason_code") == (
+                        "GENERATION_CLAIMS_INVALID"
+                    ):
+                        reason = "GENERATION_CLAIMS_INVALID"
                     continue
                 break
             except ValueError as error:

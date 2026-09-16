@@ -289,6 +289,21 @@ def test_grounded_messages_trim_tail_to_provider_input_budget() -> None:
     assert prompt["evidence"][0]["support_id"] == "support-1"
 
 
+def test_claim_shape_repair_uses_generic_schema_not_business_facts() -> None:
+    """模型输出形状错误时只重申同一证据的 claim 合同。"""
+    request = _generation_request().model_copy(
+        update={"repair_reason": "GENERATION_CLAIMS_INVALID"}
+    )
+
+    messages = _grounded_messages(request)
+
+    assert len(messages) == 3
+    assert '"claims"' in messages[2].content
+    assert '"support_id"' in messages[2].content
+    assert '"quote"' in messages[2].content
+    assert "不要加入其他字段" in messages[2].content
+
+
 def _certified_table_request() -> GenerationRequest:
     """构造包含行名、分段表头和值的通用认证表格请求。"""
     specs = (

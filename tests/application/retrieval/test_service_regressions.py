@@ -28,6 +28,21 @@ def test_unknown_corpus_blocker_does_not_recurse() -> None:
     )
 
 
+def test_invalid_generated_claims_are_not_projected_as_provider_outage() -> (
+    None
+):
+    """模型返回但 claim 结构失败应继续按证据不足安全拒答。"""
+    context = QueryDataPlaneContext(
+        generation_provider_id="openai-compatible",
+        generation_model="synthetic-model",
+        model_configuration_state="CONFIGURED",
+    )
+
+    assert (
+        _model_capability_status(context, "GENERATION_CLAIMS_INVALID") is None
+    )
+
+
 def test_formal_span_recheck_accepts_trimmed_source_coordinates() -> None:
     """表格单元格去尾空白后同步缩短来源范围，不误报索引损坏。"""
     ranked = make_ranked_chunk(1, "QVK（Qua ")

@@ -559,6 +559,13 @@ def _grounded_messages(
             ),
         )
         if request.repair_reason:
+            shape_reminder = (
+                '只输出完整JSON对象{"claims":[{"text":"证据支持的事实",'
+                '"supports":[{"support_id":"证据ID","quote":"对应证据的逐字子串"}]}]}；'
+                '无可支持事实时输出{"claims":[]}。不要加入其他字段或说明。'
+                if request.repair_reason == "GENERATION_CLAIMS_INVALID"
+                else ""
+            )
             messages += (
                 ChatMessage(
                     role="user",
@@ -570,6 +577,8 @@ def _grounded_messages(
                         "才保留该事实，并将text直接复制为quote中可独立成句的连续原文，"
                         "不要同义改写；否则删除该事实。安全原因："
                         + request.repair_reason
+                        + "。"
+                        + shape_reminder
                     ),
                 ),
             )

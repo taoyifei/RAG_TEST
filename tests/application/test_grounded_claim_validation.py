@@ -344,6 +344,31 @@ def test_role_mentioned_as_object_cannot_be_promoted_to_subject(
     assert error.value.code == "CLAIM_OBJECT_CHANGED"
 
 
+def test_role_label_before_colon_cannot_be_added_to_unowned_duty() -> None:
+    """只有职责动作的来源不能凭回答前缀变成另一个岗位的职责。"""
+    source = "负责核对设备清单。"
+    evidence, draft = _supported_draft(
+        source, "甲部门经理：负责核对设备清单。"
+    )
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence)
+
+    assert error.value.code == "CLAIM_OBJECT_CHANGED"
+
+
+def test_role_label_before_colon_is_allowed_when_same_quote_names_owner() -> (
+    None
+):
+    """来源同组明确写出岗位时仍可采用岗位加冒号的展示方式。"""
+    evidence, draft = _supported_draft(
+        "甲部门经理\n负责核对设备清单。",
+        "甲部门经理：负责核对设备清单。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
 @pytest.mark.parametrize(
     ("source", "claim"),
     (
@@ -1823,6 +1848,32 @@ def test_model_failure_refuses_when_support_set_is_incomplete() -> None:
     assert result.reason_code == "PROVIDER_TIMEOUT"
     assert result.published_support_ids == ()
     assert generator.generate.call_count == 1
+
+
+def test_invalid_generated_claim_shape_is_not_provider_outage() -> None:
+    """两轮无效 claim 不会冒充断线；修复轮收到具体结构原因。"""
+    evidence = _verified_fact_evidence()
+    generator = Mock()
+    generator.generate.side_effect = ProviderInvalidResponse(
+        "模型 claim 结构无效。",
+        stage="provider.aliyun.generation",
+        details={"reason_code": "GENERATION_CLAIMS_INVALID"},
+    )
+
+    result = GroundedAnsweringService(generator).answer(
+        "合成设备的保管期限是多少？",
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=evidence,
+        analysis=_fact_analysis(),
+    )
+
+    assert result.answer is None
+    assert result.reason_code == "GENERATION_CLAIMS_INVALID"
+    assert generator.generate.call_count == 2
+    assert generator.generate.call_args_list[1].args[0].repair_reason == (
+        "GENERATION_CLAIMS_INVALID"
+    )
 
 
 def test_verified_support_set_excludes_broad_distractors_from_model_input() -> (
