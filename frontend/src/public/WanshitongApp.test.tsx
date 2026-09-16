@@ -119,6 +119,9 @@ describe("湾事通公共应用", () => {
 
     expect(screen.getByText("湾事通")).toBeInTheDocument();
     expect(
+      screen.queryByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
+    ).not.toBeInTheDocument();
+    expect(
       screen.getByPlaceholderText(
         "今天想了解什么？我会从内部资料中查找并核对来源",
       ),

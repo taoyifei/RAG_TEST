@@ -1452,12 +1452,6 @@ label:has(input[type="checkbox"]) {
   letter-spacing: -0.035em;
   line-height: 1.14;
 }
-.wst-hero-copy p {
-  margin: 15px 0 0;
-  color: var(--wst-muted);
-  font-size: 15px;
-  line-height: 1.7;
-}
 .wst-shortcuts {
   display: flex;
   flex-wrap: wrap;
@@ -1858,9 +1852,6 @@ label:has(input[type="checkbox"]) {
 @media (max-width: 680px) {
   .wst-home {
     padding: clamp(130px, 25vh, 210px) 16px 36px;
-  }
-  .wst-hero-copy p {
-    font-size: 14px;
   }
   .wst-composer {
     min-height: 158px;

@@ -148,6 +148,9 @@ test("无登录公共问答完成流式回答、来源与反馈", async ({
   await expect(
     page.getByRole("heading", { name: "你的内部知识助手" }),
   ).toBeVisible();
+  await expect(
+    page.getByText("从已核验的内部资料中寻找答案，并把来源交代清楚。"),
+  ).toHaveCount(0);
   await expect(page.getByText("管理员登录")).toHaveCount(0);
   await expect(page.getByText("制度政策")).toHaveCount(0);
   await expect(page.getByText("部门筛选")).toHaveCount(0);
