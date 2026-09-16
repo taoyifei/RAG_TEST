@@ -85,6 +85,11 @@ _GROUNDED_SYSTEM = (
     "不得把一个来源组的对象与另一个来源组的动作拼成事实。"
     "typed_semantics只是服务端校验后的检索提示；原始question决定回答任务，"
     "但不是事实证据。"
+    "source_structure中的document_label和heading_path只用于判断候选是否属于"
+    "问题所问对象，不能作为事实quote。问题明确指向某类文档或对象时，优先选择"
+    "标签匹配的候选；若标签和quote都不支持该对象，不得把问题中的对象补进text。"
+    "问题含未、不、不得、例外等边界时，claim必须直接回答同一条件，不能改答"
+    "相邻流程、其他角色或其他审批条件。"
     "职责原文已写出主体时保留完整主体；正文省略主体但证据带有"
     "verified_duty_owner时，text只写正文原子事实，不要自行补写主体，"
     "主体由服务端核验后展示。没有逐字主体或verified_duty_owner时"
@@ -148,7 +153,7 @@ class AliyunChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=4096)
     max_messages: StrictInt = Field(default=6, gt=0, le=12)
     json_mode: Literal["prompt", "json_object"] = "prompt"
-    prompt_version: str = Field(default="grounded-chat-v7", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
 
     @model_validator(mode="after")
     def _validate_capabilities(self) -> AliyunChatConfig:
@@ -578,6 +583,13 @@ def _grounded_messages(
 
 def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
     """投影一个有界证据，不复制检索分数或内部元数据。"""
+    metadata = dict(item.metadata)
+    document_title = metadata.get("document_title")
+    document_label = (
+        document_title
+        if isinstance(document_title, str) and document_title.strip()
+        else item.display_name
+    )
     source_structure: dict[str, object] = {
         "document_version_id": item.document_version_id,
         "section_id": item.section_id,
@@ -595,6 +607,8 @@ def _grounded_evidence_payload(item: EvidenceItem) -> dict[str, object]:
             if span.source_anchor is not None
         ],
     }
+    if document_label:
+        source_structure["document_label"] = document_label
     verified_owner = _verified_duty_owner(item)
     if verified_owner is not None:
         source_structure["verified_duty_owner"] = verified_owner

@@ -1480,7 +1480,7 @@ def test_interpret_contract_upgrade_invalidates_cache() -> None:
     previous_identity = canonical_sha256(
         {
             "settings": settings.model_dump(),
-            "prompt": "grounded-chat-v7",
+            "prompt": "grounded-chat-v8",
             "interpret": "bounded-interpret-v1",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v17",

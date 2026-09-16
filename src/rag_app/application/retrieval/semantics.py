@@ -96,6 +96,7 @@ _PURPOSE_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?(?P<relation>目的|目标|作用)"
     r"(?:(?:是|为)?(?:什么|啥)|如何)?$"
 )
+_PURPOSE_WRITING_SUFFIX = re.compile(r"(?:的)?编写$")
 _NATURAL_PURPOSE_QUESTION = re.compile(
     r"^(?P<target>.+?)(?:的)?(?:主要|核心)?(?:是)?"
     r"(?:为了|为的是|旨在|用于|用来)(?:解决)?"
@@ -274,7 +275,8 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
     if purpose is None:
         purpose = _NATURAL_PURPOSE_QUESTION.fullmatch(core)
     if purpose is not None:
-        target, source = _target_and_source(purpose["target"])
+        raw_target = _PURPOSE_WRITING_SUFFIX.sub("", purpose["target"])
+        target, source = _target_and_source(raw_target or purpose["target"])
         if target:
             return QuerySemantics(
                 target=target,

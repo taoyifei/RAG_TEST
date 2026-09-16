@@ -220,9 +220,9 @@ def test_chat_delegates_fixed_scope_owner_and_policies_to_p09_stream(
     assert captured["include_related_content"] is False
     assert captured["limit"] == 10
     assert captured["conversation_id"] == "case-1"
-    assert captured["first_content_seconds"] == 90.0
-    assert captured["idle_seconds"] == 60.0
-    assert captured["total_seconds"] == 120.0
+    assert captured["first_content_seconds"] == 120.0
+    assert captured["idle_seconds"] == 120.0
+    assert captured["total_seconds"] == 180.0
     assert str(captured["owner_id"]).startswith("wanshitong-public:")
     assert captured["owner_id"] != "local-admin"
     assert prepared == [(captured["trace_id"], TraceMode.SAFE)]

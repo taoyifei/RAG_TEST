@@ -213,7 +213,7 @@ class ProductModelSettings:
                     "pdf_poll_timeout_seconds",
                 }
             ),
-            "prompt": "grounded-chat-v7",
+            "prompt": "grounded-chat-v8",
             "interpret": "bounded-interpret-v2",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v17",

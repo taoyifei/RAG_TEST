@@ -406,6 +406,12 @@ def test_analyzer_does_not_treat_each_mode_as_a_fixed_count() -> None:
             RequestedAnswerType.PURPOSE,
         ),
         (
+            "用户操作手册的编写目的是什么",
+            "用户操作手册",
+            "目的",
+            RequestedAnswerType.PURPOSE,
+        ),
+        (
             "流程控制的作用是什么",
             "流程控制",
             "作用",

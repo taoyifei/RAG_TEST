@@ -117,7 +117,7 @@ class OpenAICompatibleChatConfig(FrozenModel):
     max_input_tokens: StrictInt = Field(default=6144, gt=0, le=131072)
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=16384)
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
-    prompt_version: str = Field(default="grounded-chat-v7", max_length=64)
+    prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
 
 
 class OpenAICompatibleEmbeddingAdapter:

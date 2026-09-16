@@ -569,6 +569,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
                 update={
                     "evidence_id": f"S{index + 1}",
                     "citation_text": text,
+                    "display_name": "合成指南.docx",
                     "source_spans": (span,),
                     "table_locator": "public-table",
                     "document_version_id": "dver_" + "1" * 32,
@@ -601,6 +602,9 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         assert "候选证据" in prompt
         assert "不同来源组回答不同事实，拆成多条claim" in prompt
         assert "verified_duty_owner" in prompt
+        assert "document_label" in prompt
+        assert "不能作为事实quote" in prompt
+        assert "相邻流程" in prompt
         assert "一条原子分句对应一条claim" in prompt
         assert "text只写正文原子事实" in prompt
         assert "同一support_id在一条claim内最多使用一次" in prompt
@@ -615,6 +619,7 @@ def test_generation_exposes_source_rows_and_requires_joint_role_quotes(
         ]
         locations = [item["source_structure"] for item in content["evidence"]]
         assert locations[0]["document_version_id"] == "dver_" + "1" * 32
+        assert locations[0]["document_label"] == "合成指南.docx"
         assert locations[0]["table_locator"] == "public-table"
         assert locations[0]["anchors"][0]["structural_path"][2] == "tr:0"
         assert locations[1]["anchors"][0]["structural_path"][2] == "tr:0"
