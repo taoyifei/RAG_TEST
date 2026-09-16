@@ -37,6 +37,7 @@ from rag_app.core.ports import (
 )
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_document_label,
     section_heading_path_owns_target,
 )
 
@@ -98,6 +99,18 @@ _MIN_QUOTE_CHARS = 2
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.20
 _MIN_LIST_ITEM_OVERLAP = 0.20
 _MIN_STRUCTURED_LIST_ITEMS = 2
+_QUOTED_DOCUMENT_TITLE = re.compile(r"《([^》]{3,200})》")
+_CATALOG_ENTRY = re.compile(
+    r"^模板目录项：(?P<title>.+?)（模板）。模板正文未入库；"
+)
+_CATALOG_RELATION = re.compile(r"有|存在|参考|目录项|收录|列出")
+_CATALOG_ALLOWED_CLAIM = re.compile(
+    r"(?:模板目录项|模板正文未入库|可供参考|应参考|请参考|可以参考|"
+    r"可参考|原始模板|目录中|目录项|已收录|已列出|存在|是的|"
+    r"这份|一份|该份|具体|填写项|示例|要求|未入库|参考|"
+    r"准备|相关|材料|模板|可以|可用|使用|根据|原始|"
+    r"时|与|的|该|此|请|应|可|供|为|是|在|中|有|及)*"
+)
 _MIN_NEGATION_SHARED_TERMS = 2
 _MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
@@ -622,6 +635,43 @@ def _certified_list_exemption(
         ):
             return True
     return False
+
+
+def _certified_catalog_reference_claim(
+    claim: AnswerClaim,
+    cited_items: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> bool:
+    """对精确目录存在关系单独核验，不将标题里的版本号当作新事实。"""
+    if analysis is None or len(cited_items) != 1:
+        return False
+    question = analysis.resolved_query or analysis.normalized_query
+    titles = _QUOTED_DOCUMENT_TITLE.findall(question)
+    if len(titles) != 1:
+        return False
+    item = cited_items[0]
+    certificate = dict(item.metadata).get("answer_support")
+    if not isinstance(certificate, dict) or (
+        certificate.get("status") != "SUPPORTED"
+        or certificate.get("support_reason") != "CATALOG_TITLE_EXISTS"
+    ):
+        return False
+    entry = _CATALOG_ENTRY.match(item.citation_text)
+    target = normalize_document_label(titles[0])
+    if (
+        entry is None
+        or not item.display_name
+        or normalize_document_label(entry["title"]) != target
+        or normalize_document_label(item.display_name) != target
+    ):
+        return False
+    if entry["title"] not in claim.text or not _CATALOG_RELATION.search(
+        claim.text.replace(entry["title"], "")
+    ):
+        return False
+    remainder = claim.text.replace(entry["title"], "")
+    remainder = re.sub(r"[\s\W_]+", "", remainder)
+    return _CATALOG_ALLOWED_CLAIM.fullmatch(remainder) is not None
 
 
 def _render_claim_target(
@@ -1343,6 +1393,16 @@ def validate_grounded_draft(
             cited_items=tuple(units),
             evidence=evidence,
         )
+        if any(_CATALOG_ENTRY.match(item.citation_text) for item in units):
+            if _certified_catalog_reference_claim(
+                claim, tuple(units), analysis
+            ):
+                continue
+            raise ValidationFailed(
+                "模板目录项只证明精确标题存在，不能证明正文或其他事实。",
+                stage="answer.validate",
+                code="CATALOG_CLAIM_UNSUPPORTED",
+            )
         support_text = "\n".join(support.quote for support in claim.supports)
         claim_contexts = frozenset(
             context

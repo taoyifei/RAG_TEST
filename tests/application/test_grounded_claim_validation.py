@@ -168,6 +168,69 @@ def test_structured_list_answer_cannot_publish_only_its_lead_in() -> None:
     )
 
 
+def test_certified_catalog_supports_existence_not_body_claims() -> None:
+    """标题版本号属于精确目录身份，不能推导正文内容或其他模板。"""
+    title = "阶段甲-交接记录模板20260701"
+    source = (
+        f"模板目录项：{title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    question = f"是否有《{title}》这份模板可供参考？"
+    analysis = _context(question).analysis
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(source), display_name=f"{title}.docx"),
+        _POLICY,
+        context=_context(question),
+    )
+    assert len(evidence) == 1
+    for claim_text in (
+        f"有《{title}》这份模板可供参考。",
+        f"模板目录项：{title}（模板）。",
+        f"准备与《{title}》相关的材料时，应参考《{title}》模板。",
+    ):
+        draft = AnswerDraft(
+            text=claim_text,
+            cited_evidence_ids=(evidence[0].support_id,),
+            claims=(
+                AnswerClaim(
+                    text=claim_text,
+                    supports=(
+                        ClaimSupport(
+                            support_id=evidence[0].support_id, quote=source
+                        ),
+                    ),
+                ),
+            ),
+            generation_mode="llm",
+        )
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+    for unsupported in (
+        f"《{title}》包含三个必填字段。",
+        f"没有《{title}》这份模板。",
+        "有《阶段甲-交接记录模板20260702》这份模板。",
+    ):
+        draft = AnswerDraft(
+            text=unsupported,
+            cited_evidence_ids=(evidence[0].support_id,),
+            claims=(
+                AnswerClaim(
+                    text=unsupported,
+                    supports=(
+                        ClaimSupport(
+                            support_id=evidence[0].support_id, quote=source
+                        ),
+                    ),
+                ),
+            ),
+            generation_mode="llm",
+        )
+        try:
+            validate_grounded_draft(draft, evidence, analysis=analysis)
+        except ValidationFailed:
+            continue
+        pytest.fail(f"目录项不得支持：{unsupported}")
+
+
 def test_grounded_paraphrase_keeps_basic_predicate_overlap() -> None:
     """自然改写只需基本词面联系，逐字引用和其他事实门仍独立生效。"""
     source = "用印申请从统一信息平台的 OA 系统入口提交。"
