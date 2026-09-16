@@ -50,6 +50,7 @@ _QUERY_TOKEN = re.compile(r"[\w.-]+", flags=re.UNICODE)
 _PARAMETERS = ParamSpec("_PARAMETERS")
 _RESULT = TypeVar("_RESULT")
 _CJK_BIGRAM_LENGTH = 2
+_RELAXED_CJK_BIGRAM_CAP = 64
 _FTS_SCHEMA_VERSION = 2
 _STRUCTURAL_SCAN_MULTIPLIER = 4
 _STRUCTURAL_SCAN_CAP = 200
@@ -183,24 +184,32 @@ class SqliteFtsStore:
             expression = self._query_expression(request.query, table)
             if not expression:
                 return ()
-            rows = connection.execute(
-                f"SELECT c.chunk_json, bm25({table}, 0.0, 0.0, 0.0, "  # noqa: S608
-                "4.0, 3.0, 6.0, 1.0) AS raw_score "
+            statement = (
+                f"SELECT c.chunk_json, bm25({table}, "  # noqa: S608
+                "0.0, 0.0, 0.0, 4.0, 3.0, 6.0, 1.0) AS raw_score "
                 f"FROM {table} JOIN chunks c ON c.row_id={table}.rowid "
                 "JOIN index_revisions r ON r.index_revision_id=c.revision_id "
                 "JOIN documents d ON d.document_id=c.document_id "
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
                 "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
-                "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?",
-                (
-                    expression,
-                    revision.index_revision_id,
-                    revision.project_id,
-                    revision.knowledge_base_id,
-                    request.limit,
-                ),
+                "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?"
+            )
+            scope = (
+                revision.index_revision_id,
+                revision.project_id,
+                revision.knowledge_base_id,
+                request.limit,
+            )
+            rows = connection.execute(
+                statement, (expression, *scope)
             ).fetchall()
+            if not rows:
+                relaxed = self._relaxed_query_expression(request.query, table)
+                if relaxed and relaxed != expression:
+                    rows = connection.execute(
+                        statement, (relaxed, *scope)
+                    ).fetchall()
         return tuple(
             SearchHit(
                 chunk=Chunk.model_validate_json(str(row["chunk_json"])),
@@ -233,8 +242,8 @@ class SqliteFtsStore:
             expression = self._query_expression(request.query, table)
             if not expression:
                 return ()
-            rows = connection.execute(
-                "SELECT c.chunk_id, c.document_id, c.document_version_id, "  # noqa: S608
+            statement = (
+                "SELECT c.chunk_id, c.document_id, c.document_version_id, "
                 "c.role, c.section_id, c.content_sha256, "
                 f"bm25({table}, 0.0, 0.0, 0.0, "
                 "4.0, 3.0, 6.0, 1.0) AS raw_score "
@@ -244,15 +253,23 @@ class SqliteFtsStore:
                 f"WHERE {table} MATCH ? AND c.revision_id=? "
                 "AND r.project_id=? AND r.knowledge_base_id=? "
                 "AND d.deleted_at IS NULL AND d.lifecycle_status='active' "
-                "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?",
-                (
-                    expression,
-                    revision.index_revision_id,
-                    revision.project_id,
-                    revision.knowledge_base_id,
-                    request.limit,
-                ),
+                "ORDER BY raw_score ASC, c.chunk_id ASC LIMIT ?"
+            )
+            scope = (
+                revision.index_revision_id,
+                revision.project_id,
+                revision.knowledge_base_id,
+                request.limit,
+            )
+            rows = connection.execute(
+                statement, (expression, *scope)
             ).fetchall()
+            if not rows:
+                relaxed = self._relaxed_query_expression(request.query, table)
+                if relaxed and relaxed != expression:
+                    rows = connection.execute(
+                        statement, (relaxed, *scope)
+                    ).fetchall()
         return tuple(
             ChannelHit(
                 revision_id=revision.index_revision_id,
@@ -746,6 +763,11 @@ class SqliteFtsStore:
             return build_fts_v2_query(self._analyzer.analyze_query(query))
         return build_fts_query(query)
 
+    def _relaxed_query_expression(self, query: str, table: str) -> str:
+        if table != "chunks_fts_v2":
+            return ""
+        return build_fts_v2_relaxed_query(self._analyzer.analyze_query(query))
+
     def close(self) -> None:
         """幂等关闭 Store。
 
@@ -956,6 +978,21 @@ def build_fts_v2_query(analysis: AnalyzedLexicalQuery) -> str:
             groups.append(full_phrase)
     groups.extend(_fts_quote(token) for token in analysis.identifier_tokens)
     return " OR ".join(groups)
+
+
+def build_fts_v2_relaxed_query(analysis: AnalyzedLexicalQuery) -> str:
+    """严格匹配为空时，用有界二元词组提高自然问句的召回。"""
+    bigrams = tuple(
+        dict.fromkeys(
+            token
+            for group in analysis.cjk_groups
+            for token in group[1:]
+            if len(token) == _CJK_BIGRAM_LENGTH
+        )
+    )
+    if not 3 <= len(bigrams) <= _RELAXED_CJK_BIGRAM_CAP:
+        return ""
+    return " OR ".join(_fts_quote(token) for token in bigrams)
 
 
 def fts_table_for_revision(

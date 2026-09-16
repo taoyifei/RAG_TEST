@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from rag_app.adapters.lexical import DeterministicCjkBigramAnalyzer
-from rag_app.adapters.stores.sqlite_fts5 import build_fts_v2_query
+from rag_app.adapters.stores.sqlite_fts5 import (
+    build_fts_v2_query,
+    build_fts_v2_relaxed_query,
+)
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
@@ -84,6 +87,63 @@ def test_cjk_document_and_query_analysis_are_symmetric_and_bounded() -> None:
     assert build_fts_v2_query(analyzer.analyze_query('" OR *'))
     with pytest.raises(ValueError, match="字符数超过上限"):
         analyzer.analyze_query("过" * 33)
+
+
+def test_relaxed_cjk_query_is_bounded_and_keeps_match_syntax_quoted() -> None:
+    analyzer = DeterministicCjkBigramAnalyzer()
+    question = analyzer.analyze_query("哪些合成材料属于耐热类别？")
+    expression = build_fts_v2_relaxed_query(question)
+
+    assert '"耐热"' in expression
+    assert '"类别"' in expression
+    assert " OR " in expression
+    assert build_fts_v2_relaxed_query(analyzer.analyze_query("一二")) == ""
+    assert build_fts_v2_relaxed_query(analyzer.analyze_query("甲" * 67)) == ""
+
+
+def test_long_question_recalls_evidence_when_strict_cjk_phrase_misses(
+    tmp_path: Path,
+) -> None:
+    runtime, project_id, knowledge_base_id = runtime_with_kb(tmp_path)
+    target = _document(
+        project_id,
+        knowledge_base_id,
+        "耐热类别说明",
+        "耐热类别包含甲型合成材料和乙型合成材料。",
+    )
+    noise = _document(
+        project_id,
+        knowledge_base_id,
+        "年度培训",
+        "年度培训按照计划开展，记录考勤和签到。",
+    )
+    try:
+        result = runtime.builder.build_and_activate(
+            project_id=project_id,
+            knowledge_base_id=knowledge_base_id,
+            documents=(target, noise),
+            idempotency_key="fts-long-question-fallback",
+            budgets=runtime.default_budgets(),
+        )
+        spec = runtime.control.revision_vector_spec(result.revision_id)
+        request = LexicalSearchRequest(
+            revision=spec,
+            query="哪些合成材料属于耐热类别？",
+            limit=10,
+        )
+
+        direct = runtime.components.lexical_store.search(request)
+        candidates = runtime.components.lexical_store.search_candidates(request)
+
+        assert (
+            direct[0].chunk.version.document_id == target.document.document_id
+        )
+        assert candidates[0].document_id == target.document.document_id
+        assert all(
+            hit.document_id != noise.document.document_id for hit in candidates
+        )
+    finally:
+        runtime.close()
 
 
 @pytest.mark.parametrize(
