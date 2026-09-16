@@ -8,6 +8,9 @@ from pathlib import Path
 import httpx
 import pytest
 
+from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatConfig,
+)
 from rag_app.product.models import ProviderConnection
 from rag_app.wanshitong.errors import InternalModelConfigurationError
 from rag_app.wanshitong.internal_model_settings import InternalModelSettings
@@ -136,6 +139,18 @@ def test_internal_model_configurator_is_idempotent_and_sets_universal_state(
         )
         assert model_settings.generation_model == "Qwen/Qwen3-8B-AWQ"
         assert model_settings.rewrite_enabled is False
+        chat = harness.runtime.providers.chat_adapter(
+            first.llm_connection_id,
+            model="Qwen/Qwen3-8B-AWQ",
+            config=OpenAICompatibleChatConfig(
+                model="Qwen/Qwen3-8B-AWQ", egress_allowed=True
+            ),
+        )
+        try:
+            # 四并发共享单个内网模型时，生成读取窗口必须长于默认 30 秒。
+            assert chat._http._client.timeout.read == 90.0
+        finally:
+            chat.close()
     finally:
         harness.close()
 
