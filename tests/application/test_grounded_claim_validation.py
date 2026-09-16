@@ -1865,3 +1865,34 @@ def test_multi_part_question_keeps_direct_support_then_broad_candidates() -> (
     request = generator.generate.call_args.args[0]
     assert request.answer_support_set == support
     assert request.model_evidence_candidates == candidates
+
+
+def test_single_clause_respectively_question_keeps_direct_support_only() -> (
+    None
+):
+    """单句列举问题已闭合时，不因“分别”引入旁支候选。"""
+    support, draft = _supported_draft(
+        "产品经理更新需求基线；测试负责人调整测试用例。",
+        "产品经理更新需求基线；测试负责人调整测试用例。",
+    )
+    distractor, _ = _supported_draft(
+        "测试主管审核产品的长期质量计划。",
+        "测试主管审核产品的长期质量计划。",
+    )
+    candidates = (
+        *support,
+        distractor[0].model_copy(update={"evidence_id": "S2"}),
+    )
+    generator = Mock()
+    generator.generate.return_value = draft
+
+    GroundedAnsweringService(generator).answer(
+        "需求变更后，产品经理和测试负责人分别做什么？",
+        candidates,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        answer_support_set=support,
+        analysis=_fact_analysis(),
+    )
+
+    request = generator.generate.call_args.args[0]
+    assert request.model_evidence_candidates == support

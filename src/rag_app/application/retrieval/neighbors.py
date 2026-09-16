@@ -66,7 +66,7 @@ class NeighborExpander:
             elif mode == "section":
                 expanded = self._expand_sections(snapshot, candidates, policy)
             elif (
-                mode == "table"
+                mode in {"same_group", "table"}
                 and policy.neighbor_count
                 and _has_table_coordinates(candidates)
             ):

@@ -197,12 +197,6 @@ _NEGATION_CLASSES = {
     "不": "negative",
 }
 
-_MULTI_PART_QUERY = re.compile(
-    r"分别|各自|同时|以及|并且|"
-    r"(?:如何|什么|哪些|多少|多久|哪个|哪种|"
-    r"是什么|怎么).*(?:如何|什么|哪些|多少|多久|"
-    r"哪个|哪种|是什么|怎么)"
-)
 _MIN_MULTI_PART_CLAUSES = 2
 
 
@@ -251,10 +245,7 @@ def _model_candidates_for_query(
     question_parts = tuple(
         part.strip() for part in re.split(r"[?？]+", query) if part.strip()
     )
-    if (
-        len(question_parts) < _MIN_MULTI_PART_CLAUSES
-        and _MULTI_PART_QUERY.search(query) is None
-    ):
+    if len(question_parts) < _MIN_MULTI_PART_CLAUSES:
         return direct_support
     direct_ids = {item.support_id for item in direct_support}
     return (

@@ -169,6 +169,35 @@ def test_neighbor_link_damage_degrades_without_crossing_boundary() -> None:
     assert outcome.degraded_reason_codes == ("NEIGHBOR_INDEX_CORRUPT",)
 
 
+def test_simple_fact_closes_detected_table_chain() -> None:
+    """普通事实检索命中分段表格时，也闭合同组结构链。"""
+    chain = _table_chain(
+        50,
+        document_number=5,
+        display_name="合成分级时限表.docx",
+        length=5,
+    )
+    source = cast(
+        EvidenceSourcePort,
+        _NeighborSource(tuple(item.hydrated for item in chain)),
+    )
+
+    outcome = NeighborExpander(source).expand(
+        _snapshot(),
+        (chain[2],),
+        "same_group",
+        RetrievalPolicy(max_evidence_items=8),
+    )
+
+    assert {item.hydrated.chunk.chunk_id for item in outcome.candidates} == {
+        item.hydrated.chunk.chunk_id for item in chain
+    }
+    assert all(
+        item.expansion_reason == "TABLE_CONTINUITY"
+        for item in outcome.candidates[1:]
+    )
+
+
 def test_table_expansion_prioritizes_a_uniquely_qualified_source() -> None:
     noise_chains = tuple(
         _table_chain(
