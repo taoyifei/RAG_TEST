@@ -81,6 +81,14 @@ _NEGATION = re.compile(
     r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
     r"不(?!同(?!意|步)|断(?!开|电|网|水|气)|仅|但)"
 )
+_EXEMPTION_CONDITION_QUESTION = re.compile(
+    r"(?:何种|哪些|什么)情况(?:下)?[^?？]{0,20}"
+    r"(?:可以不|可不|允许不|无需|不必|不用|免于)"
+    r"(?:执行|实施|进行|开展|办理|提交|采取|使用|审批|审核|填写|回滚)"
+)
+_EXPLICIT_EXEMPTION = re.compile(
+    r"可以不|可不|允许不|无需|不必|不用|免于|豁免|可免除|不需要"
+)
 _SAME_RELATION = re.compile(r"相同|一样|一致")
 _DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
@@ -492,6 +500,21 @@ def _validate_claim_target(
     source_groups: tuple[_ClaimSourceGroup, ...] = (),
 ) -> None:
     """职责或表格回答必须绑定本次查询目标。"""
+    if (
+        analysis is not None
+        and _EXEMPTION_CONDITION_QUESTION.search(
+            analysis.resolved_query or analysis.normalized_query
+        )
+        and not any(
+            _EXPLICIT_EXEMPTION.search(group.support_text)
+            for group in source_groups
+        )
+    ):
+        raise ValidationFailed(
+            "结果中未执行某动作不等于有条件免除该动作。",
+            stage="answer.validate",
+            code="CLAIM_QUERY_RELATION_UNSUPPORTED",
+        )
     if (
         analysis is not None
         and analysis.semantics.answer_type

@@ -120,6 +120,27 @@ def test_grounded_paraphrase_keeps_basic_predicate_overlap() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_outcome_does_not_prove_when_an_action_can_be_omitted() -> None:
+    """成功指标中的“未执行”不能变成免除动作的条件。"""
+    source = "成功标准为验证通过、未进行回滚、未引发故障。"
+    evidence, draft = _supported_draft(source, source)
+    analysis = _context("在何种情况下可以不执行回滚操作？").analysis
+
+    with pytest.raises(ValidationFailed) as error:
+        validate_grounded_draft(draft, evidence, analysis=analysis)
+
+    assert error.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
+
+
+def test_explicit_omission_permission_preserves_supported_claim() -> None:
+    """明确允许不执行动作的来源仍可回答。"""
+    source = "如果验证通过且无需回滚，可以不执行回滚操作。"
+    evidence, draft = _supported_draft(source, source)
+    analysis = _context("在何种情况下可以不执行回滚操作？").analysis
+
+    validate_grounded_draft(draft, evidence, analysis=analysis)
+
+
 def test_compound_identifier_subject_is_supported_by_exact_source() -> None:
     """类型加型号的复合对象不能因只抽取型号而误拒逐字事实。"""
     source = "设备 MX-41 的维护周期为 14 天。"
