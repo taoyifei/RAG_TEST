@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections import Counter, defaultdict
 from collections.abc import Sequence
 
 from pydantic import JsonValue, ValidationError
@@ -142,7 +143,8 @@ class DocxStructuralChunker:
                     )
                     for pack in packs
                 )
-        linked = _link_neighbors(chunks)
+        collision_safe = _disambiguate_colliding_chunk_ids(chunks)
+        linked = _link_neighbors(collision_safe)
         validate_chunks(
             linked,
             document_ir,
@@ -292,7 +294,7 @@ class DocxStructuralChunker:
 def _pack_metadata(
     atoms: tuple[AtomicUnit, ...], document_metadata: JsonObject
 ) -> JsonObject:
-    atom_metadata: list[dict[str, JsonValue]] = [
+    atom_metadata: list[JsonValue] = [
         {
             "unit_id": atom.unit_id,
             "role": atom.role.value,
@@ -315,6 +317,36 @@ def _pack_metadata(
 
 def _json_metadata(metadata: JsonObject) -> dict[str, JsonValue]:
     return dict(metadata)
+
+
+def _disambiguate_colliding_chunk_ids(
+    chunks: Sequence[Chunk],
+) -> list[Chunk]:
+    """保留来源相同但结构上下文不同的 Chunk，并生成稳定唯一 ID。"""
+    counts = Counter(chunk.chunk_id for chunk in chunks)
+    if all(count == 1 for count in counts.values()):
+        return list(chunks)
+    ordinals: defaultdict[str, int] = defaultdict(int)
+    resolved: list[Chunk] = []
+    for chunk in chunks:
+        if counts[chunk.chunk_id] == 1:
+            resolved.append(chunk)
+            continue
+        ordinal = ordinals[chunk.chunk_id]
+        ordinals[chunk.chunk_id] += 1
+        resolved.append(
+            chunk.model_copy(
+                update={
+                    "chunk_id": deterministic_id(
+                        "chunk",
+                        chunk.chunk_id,
+                        chunk.embedding_text,
+                        ordinal,
+                    )
+                }
+            )
+        )
+    return resolved
 
 
 def _link_neighbors(chunks: Sequence[Chunk]) -> list[Chunk]:
