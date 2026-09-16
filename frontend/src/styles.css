@@ -1479,12 +1479,16 @@ label:has(input[type="checkbox"]) {
     0 18px 48px rgb(0 0 0 / 16%);
   transition:
     border-color 180ms ease,
-    background-color 180ms ease;
+    background-color 180ms ease,
+    box-shadow 180ms ease;
   animation: wst-rise 300ms 40ms ease-out both;
 }
 .wst-composer:focus-within {
-  border-color: rgb(49 215 179 / 38%);
+  border-color: rgb(255 255 255 / 40%);
   background: #202323;
+  box-shadow:
+    0 0 0 3px rgb(255 255 255 / 7%),
+    0 18px 48px rgb(0 0 0 / 16%);
 }
 .wst-composer textarea {
   display: block;
@@ -1493,12 +1497,15 @@ label:has(input[type="checkbox"]) {
   min-height: 108px;
   max-height: 220px;
   padding: 10px 8px;
-  resize: vertical;
+  resize: none;
   border: 0;
   outline: 0;
   color: #f4f7f6;
   background: transparent;
   line-height: 1.65;
+}
+.wst-composer textarea:focus-visible {
+  outline: none;
 }
 .wst-composer textarea::placeholder {
   color: #858b89;
@@ -1547,6 +1554,11 @@ label:has(input[type="checkbox"]) {
   border-radius: 20px;
   box-shadow: 0 14px 42px rgb(0 0 0 / 24%);
   animation: none;
+}
+.wst-composer.is-compact:focus-within {
+  box-shadow:
+    0 0 0 3px rgb(255 255 255 / 7%),
+    0 14px 42px rgb(0 0 0 / 24%);
 }
 .wst-composer.is-compact textarea {
   min-height: 52px;
