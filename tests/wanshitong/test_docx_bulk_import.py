@@ -71,7 +71,12 @@ class _FakeClient:
     ) -> None:
         self.existing = [] if existing is None else existing
         self.upload_count = 0
+        self.version_count = 0
         self.documents: dict[str, dict[str, object]] = {}
+        for item in self.existing:
+            document_id = item.get("document_id")
+            if isinstance(document_id, str):
+                self.documents[document_id] = dict(item)
 
     def login(self, bootstrap_token: str) -> None:
         assert bootstrap_token.startswith("fixture-")
@@ -99,6 +104,29 @@ class _FakeClient:
     def get_job(self, job_id: str) -> dict[str, object]:
         return {"job_id": job_id, "state": "succeeded"}
 
+    def upload_version(
+        self,
+        document_id: str,
+        document: _PreparedLike,
+        *,
+        failed_job_id: str,
+    ) -> dict[str, object]:
+        assert failed_job_id.startswith("job_")
+        self.version_count += 1
+        job_id = f"job_{100 + self.version_count:032x}"
+        self.documents[document_id] = {
+            "document_id": document_id,
+            "source_relative_path": document.api_path,
+            "retrievable": True,
+        }
+        return {
+            "document": {
+                "document_id": document_id,
+                "retrievable": False,
+            },
+            "job": {"job_id": job_id, "state": "queued"},
+        }
+
     def retry_job(self, job_id: str) -> dict[str, object]:
         raise AssertionError(f"不应重试成功 Job：{job_id}")
 
@@ -112,6 +140,7 @@ def _arguments(
     manifest: Path,
     *,
     resume: bool = False,
+    recover_terminal: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         base_url="http://127.0.0.1:8288",
@@ -120,6 +149,7 @@ def _arguments(
         manifest=manifest,
         pilot_only=True,
         resume=resume,
+        recover_terminal=recover_terminal,
         wait=True,
         report=tmp_path / "import-report.json",
         timeout_seconds=2,
@@ -215,3 +245,46 @@ def test_resume_skips_already_retrievable_pilot_documents(
     assert report["retrievable"] == 4
     assert report["failed"] == 0
     assert fake.upload_count == 0
+
+
+def test_explicit_terminal_recovery_creates_versions_without_deleting_documents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    importer = _load_importer()
+    corpus, manifest = _build_corpus(tmp_path)
+    prepared = importer.load_and_validate_manifest(manifest, corpus)
+    existing = [
+        {
+            "document_id": f"doc_{index:032x}",
+            "source_relative_path": item.api_path,
+            "retrievable": False,
+            "latest_job": {
+                "job_id": f"job_{index:032x}",
+                "state": "failed_terminal",
+            },
+        }
+        for index, item in enumerate(
+            (item for item in prepared if item.pilot), start=1
+        )
+    ]
+    fake = _FakeClient(existing)
+    monkeypatch.setattr(
+        importer, "WanshitongAdminClient", lambda _base_url: fake
+    )
+
+    report = importer.run_import(
+        _arguments(
+            tmp_path,
+            corpus,
+            manifest,
+            resume=True,
+            recover_terminal=True,
+        )
+    )
+
+    assert report["recovered_terminal"] == 4
+    assert report["ingestion_succeeded"] == 4
+    assert report["retrievable"] == 4
+    assert report["failed"] == 0
+    assert fake.upload_count == 0
+    assert fake.version_count == 4

@@ -89,6 +89,7 @@ class OpenAICompatibleEmbeddingConfig(FrozenModel):
     query_request_policy_identity: str
     document_egress_allowed: bool = False
     query_egress_allowed: bool = False
+    max_batch_items: StrictInt = Field(default=8, gt=0, le=1024)
     max_input_tokens: StrictInt = Field(default=32768, gt=0, le=1_000_000)
     adapter_revision: str = "1"
     normalization: Literal["l2-v1"] = "l2-v1"
@@ -168,7 +169,10 @@ class OpenAICompatibleEmbeddingAdapter:
             )
         batches = batch_texts(
             request.texts,
-            BatchLimits(max_input_tokens=self._config.max_input_tokens),
+            BatchLimits(
+                max_items=self._config.max_batch_items,
+                max_input_tokens=self._config.max_input_tokens,
+            ),
         )
         vectors: list[tuple[float, ...]] = []
         calls: list[ProviderCall] = []

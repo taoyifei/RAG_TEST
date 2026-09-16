@@ -181,6 +181,43 @@ class WanshitongAdminClient:
             },
         )
 
+    def upload_version(
+        self,
+        document_id: str,
+        document: PreparedDocument,
+        *,
+        failed_job_id: str,
+    ) -> dict[str, object]:
+        """在人工修复终态故障后，以稳定幂等键创建恢复版本。"""
+        recovery_digest = hashlib.sha256(
+            (
+                document.idempotency_key
+                + "\0"
+                + document_id
+                + "\0"
+                + failed_job_id
+                + "\0terminal-recovery-v1"
+            ).encode("utf-8")
+        ).hexdigest()
+        return self._request_json(
+            "POST",
+            f"/api/v1/admin/wanshitong/documents/{document_id}/versions",
+            query={
+                "source_relative_path": document.api_path,
+                "metadata": json.dumps(
+                    document.metadata,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            },
+            data=document.file_path.read_bytes(),
+            headers={
+                "Content-Type": document.media_type,
+                "Idempotency-Key": "wb07r-recovery-" + recovery_digest,
+            },
+        )
+
     def get_job(self, job_id: str) -> dict[str, object]:
         """读取单个固定 Scope Job。"""
         return self._request_json(
@@ -578,9 +615,11 @@ def _wait_for_document(  # noqa: PLR0913
 def _resume_existing(  # noqa: PLR0913
     client: WanshitongAdminClient,
     existing: dict[str, object],
+    document: PreparedDocument,
     result: ImportResult,
     *,
     wait: bool,
+    recover_terminal: bool,
     timeout_seconds: int,
     poll_seconds: float,
 ) -> None:
@@ -603,15 +642,40 @@ def _resume_existing(  # noqa: PLR0913
     state = latest_job.get("state")
     if not isinstance(job_id, str) or not isinstance(state, str):
         raise ImportContractError("既有文档 latest_job 结构无效。")
-    result.action = "resumed"
-    result.job_id = job_id
-    result.final_job_state = state
+    if state == "failed_terminal" and recover_terminal:
+        receipt = client.upload_version(
+            document_id,
+            document,
+            failed_job_id=job_id,
+        )
+        server_document = receipt.get("document")
+        recovered_job = receipt.get("job")
+        if not isinstance(server_document, dict) or not isinstance(
+            recovered_job, dict
+        ):
+            raise ImportContractError("恢复版本回执缺少 document 或 job。")
+        recovered_document_id = server_document.get("document_id")
+        recovered_job_id = recovered_job.get("job_id")
+        recovered_state = recovered_job.get("state")
+        if (
+            recovered_document_id != document_id
+            or not isinstance(recovered_job_id, str)
+            or not isinstance(recovered_state, str)
+        ):
+            raise ImportContractError("恢复版本回执身份字段无效。")
+        result.action = "recovered_terminal"
+        result.job_id = recovered_job_id
+        result.final_job_state = recovered_state
+    else:
+        result.action = "resumed"
+        result.job_id = job_id
+        result.final_job_state = state
     if not wait:
         return
     job, document, retried = _wait_for_document(
         client,
         document_id=document_id,
-        job_id=job_id,
+        job_id=str(result.job_id),
         timeout_seconds=timeout_seconds,
         poll_seconds=poll_seconds,
         allow_retry=True,
@@ -689,8 +753,10 @@ def run_import(arguments: argparse.Namespace) -> dict[str, object]:
                 _resume_existing(
                     client,
                     current,
+                    document,
                     result,
                     wait=arguments.wait,
+                    recover_terminal=arguments.recover_terminal,
                     timeout_seconds=arguments.timeout_seconds,
                     poll_seconds=arguments.poll_seconds,
                 )
@@ -753,6 +819,9 @@ def _build_report(
         "registered": sum(item.document_id is not None for item in results),
         "uploaded": sum(item.action == "uploaded" for item in results),
         "resumed": sum(item.action == "resumed" for item in results),
+        "recovered_terminal": sum(
+            item.action == "recovered_terminal" for item in results
+        ),
         "skipped_retrievable": sum(
             item.action == "skipped_retrievable" for item in results
         ),
@@ -796,6 +865,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--pilot-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--recover-terminal",
+        action="store_true",
+        help="仅在故障已修复后，为 failed_terminal 文档创建新版本。",
+    )
     parser.add_argument("--wait", action="store_true")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument(
@@ -810,7 +884,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     """解析命令行、写出报告并返回自动化友好的退出码。"""
     arguments = _parser().parse_args(argv)
-    if arguments.timeout_seconds <= 0 or arguments.poll_seconds <= 0:
+    if (
+        arguments.timeout_seconds <= 0
+        or arguments.poll_seconds <= 0
+        or (arguments.recover_terminal and not arguments.resume)
+    ):
         print("import=failed reason=invalid-wait-settings", file=sys.stderr)
         return 2
     try:

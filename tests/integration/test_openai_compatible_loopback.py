@@ -449,6 +449,47 @@ def test_real_loopback_embedding_rerank_and_chat_protocols() -> None:
         assert state.requests[3][1]["temperature"] == 0
 
 
+def test_embedding_default_batch_never_exceeds_eight_items() -> None:
+    """兼容端点的保守默认值必须适配单批最多八条的 TEI 服务。"""
+    with _loopback_server() as (base_url, state):
+        embedding = OpenAICompatibleEmbeddingAdapter(
+            OpenAICompatibleEmbeddingConfig(
+                slot_id="primary",
+                model="team/free-form-embedding-v2",
+                dimension=3,
+                request_policy_identity="both",
+                document_request_policy_identity="document-role",
+                query_request_policy_identity="query-role",
+                document_egress_allowed=True,
+                query_egress_allowed=True,
+            ),
+            http_client=_http(base_url),
+            api_key_resolver=lambda: "",
+        )
+        try:
+            result = embedding.embed(
+                EmbeddingRequest(
+                    slot_id="primary",
+                    role=EmbeddingRequestRole.DOCUMENT,
+                    texts=tuple(f"短文本-{index}" for index in range(17)),
+                )
+            )
+        finally:
+            embedding.close()
+
+        assert len(result.vectors) == 17
+        embedding_requests = [
+            payload
+            for path, payload, _headers in state.requests
+            if path == "/embeddings"
+        ]
+        assert [len(payload["input"]) for payload in embedding_requests] == [
+            8,
+            8,
+            1,
+        ]
+
+
 def test_embedding_base_url_path_prefix_is_preserved() -> None:
     """常见 ``/v1`` 部署前缀不能被以斜杠开头的操作路径覆盖。"""
     with _loopback_server() as (base_url, state):
