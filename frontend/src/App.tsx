@@ -29,6 +29,11 @@ export default function App() {
       .catch((error: unknown) => setModeState({ state: "error", error }));
     return () => controller.abort();
   }, [modeRefresh]);
+  useEffect(() => {
+    if (modeState.state !== "ready") return;
+    document.title =
+      modeState.mode === "wanshitong" ? "湾事通" : "Universal RAG 控制台";
+  }, [modeState]);
 
   if (modeState.state === "loading") {
     return (

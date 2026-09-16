@@ -123,9 +123,8 @@ export function usePublicChat() {
   const [sessionReady, setSessionReady] = useState(false);
   const [sessionError, setSessionError] = useState<string>();
   const [turns, setTurns] = useState<PublicTurn[]>([]);
-  const [conversationId, setConversationId] = useState(() => randomId("wst"));
   const csrfRef = useRef<string | undefined>(undefined);
-  const conversationRef = useRef(conversationId);
+  const conversationRef = useRef(randomId("wst"));
   const sessionControllerRef = useRef<AbortController | undefined>(undefined);
   const streamControllerRef = useRef<AbortController | undefined>(undefined);
   const activeTurnRef = useRef<string | undefined>(undefined);
@@ -412,20 +411,6 @@ export function usePublicChat() {
     setPhase("cancelled");
   }, [updateTurn]);
 
-  const newConversation = useCallback(() => {
-    requestIdRef.current += 1;
-    streamControllerRef.current?.abort();
-    streamControllerRef.current = undefined;
-    busyRef.current = false;
-    activeTurnRef.current = undefined;
-    const next = randomId("wst");
-    conversationRef.current = next;
-    setConversationId(next);
-    setTurns([]);
-    feedbackAttemptsRef.current.clear();
-    setPhase(sessionReady ? "ready" : "creating_session");
-  }, [sessionReady]);
-
   const submitFeedback = useCallback(
     (turnId: string, traceId: string, useful: boolean) => {
       const csrfToken = csrfRef.current;
@@ -459,8 +444,6 @@ export function usePublicChat() {
   return {
     announcement,
     busy,
-    conversationId,
-    newConversation,
     phase,
     retry,
     retrySession: startSession,

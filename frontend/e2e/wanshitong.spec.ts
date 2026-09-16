@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const traceId = "trace_11111111111111111111111111111111";
 
-test("无登录公共问答完成流式回答、来源、反馈与新会话", async ({
+test("无登录公共问答完成流式回答、来源与反馈", async ({
   page,
 }, testInfo) => {
   let feedbackCalls = 0;
@@ -136,14 +136,22 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
     expect(body).toEqual({ trace_id: traceId, useful: true });
     await route.fulfill({ json: { useful: true } });
   });
+  await page.route("**/api/v1/console/session", async (route) => {
+    await route.fulfill({
+      status: 401,
+      json: { error: { code: "AUTHENTICATION_REQUIRED" } },
+    });
+  });
 
   await page.goto("/");
+  await expect(page).toHaveTitle("湾事通");
   await expect(
     page.getByRole("heading", { name: "你的内部知识助手" }),
   ).toBeVisible();
   await expect(page.getByText("管理员登录")).toHaveCount(0);
   await expect(page.getByText("制度政策")).toHaveCount(0);
   await expect(page.getByText("部门筛选")).toHaveCount(0);
+  await expect(page.getByText("当前 Demo 仅支持 DOCX")).toHaveCount(0);
 
   const composer = page.getByRole("textbox", { name: "向湾事通提问" });
   await composer.fill("材料多久完成核验？");
@@ -177,11 +185,8 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
   );
   expect(noHorizontalScroll).toBe(true);
 
-  await page.getByRole("button", { name: "新建会话" }).click();
-  await expect(
-    page.getByRole("heading", { name: "你的内部知识助手" }),
-  ).toBeVisible();
-  await expect(page.getByText("材料多久完成核验？")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "新建会话" })).toHaveCount(0);
+  await expect(page.getByText("材料多久完成核验？")).toBeVisible();
   if (testInfo.project.name === "chromium-desktop") {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await expect(
@@ -195,5 +200,7 @@ test("无登录公共问答完成流式回答、来源、反馈与新会话", as
   }
 
   await page.goto("/admin");
+  await expect(page).toHaveTitle("湾事通");
   await expect(page.getByLabel("管理口令")).toBeVisible();
+  await expect(page.getByText("当前 Demo 仅支持 DOCX")).toHaveCount(0);
 });

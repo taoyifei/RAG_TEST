@@ -1,5 +1,3 @@
-import { Plus } from "lucide-react";
-
 import { PublicAnswer } from "./PublicAnswer";
 import { PublicChatComposer } from "./PublicChatComposer";
 import type { PublicTurn } from "./usePublicChat";
@@ -7,7 +5,6 @@ import type { PublicTurn } from "./usePublicChat";
 export function WanshitongChat({
   busy,
   onFeedback,
-  onNewConversation,
   onRetry,
   onStop,
   onSubmit,
@@ -15,7 +12,6 @@ export function WanshitongChat({
 }: {
   busy: boolean;
   onFeedback: (turnId: string, traceId: string, useful: boolean) => void;
-  onNewConversation: () => void;
   onRetry: (turnId: string, question: string) => void;
   onStop: () => void;
   onSubmit: (question: string) => void;
@@ -25,10 +21,6 @@ export function WanshitongChat({
     <div className="wst-chat-shell">
       <header className="wst-chat-header">
         <strong>湾事通</strong>
-        <button onClick={onNewConversation} type="button">
-          <Plus aria-hidden="true" size={17} />
-          新建会话
-        </button>
       </header>
       <main className="wst-chat" id="main-content">
         <div className="wst-turns">

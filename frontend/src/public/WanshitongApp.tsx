@@ -47,7 +47,6 @@ export function WanshitongApp() {
         <WanshitongChat
           busy={chat.busy}
           onFeedback={chat.submitFeedback}
-          onNewConversation={chat.newConversation}
           onRetry={chat.retry}
           onStop={chat.stop}
           onSubmit={chat.submit}

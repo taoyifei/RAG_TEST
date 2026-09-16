@@ -52,7 +52,6 @@ export function PublicChatComposer({
         value={question}
       />
       <div className="wst-composer-footer">
-        <span>当前 Demo 仅支持 DOCX</span>
         {busy ? (
           <button className="wst-stop-button" onClick={onStop} type="button">
             <Square aria-hidden="true" size={15} />
