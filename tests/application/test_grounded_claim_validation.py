@@ -109,6 +109,17 @@ def test_grounded_paraphrase_can_combine_same_source_role_and_action() -> None:
     validate_grounded_draft(draft, evidence)
 
 
+def test_grounded_paraphrase_keeps_basic_predicate_overlap() -> None:
+    """自然改写只需基本词面联系，逐字引用和其他事实门仍独立生效。"""
+    source = "用印申请从统一信息平台的 OA 系统入口提交。"
+    evidence, draft = _supported_draft(
+        source,
+        "用印请求从统一平台的 OA 入口提交。",
+    )
+
+    validate_grounded_draft(draft, evidence)
+
+
 def test_compound_identifier_subject_is_supported_by_exact_source() -> None:
     """类型加型号的复合对象不能因只抽取型号而误拒逐字事实。"""
     source = "设备 MX-41 的维护周期为 14 天。"

@@ -74,6 +74,9 @@ _STREAM_UNSUPPORTED = frozenset(
         "HTTP_415",
         "HTTP_422",
         "INVALID_STREAM_CONTENT_TYPE",
+        # 完整 JSON 解析器兼容 JSON 代码围栏；增量解析无法在看到前缀时
+        # 安全发布 claim，因此在尚未发布任何 claim 时改走一次同步解析。
+        "INVALID_STREAM_SCHEMA",
     }
 )
 

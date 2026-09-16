@@ -63,7 +63,7 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
-        def do_POST(self) -> None:  # noqa: PLR0911, PLR0912
+        def do_POST(self) -> None:  # noqa: PLR0911, PLR0912, PLR0915
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length))
             state.requests.append(
@@ -155,6 +155,49 @@ def _loopback_server() -> Iterator[tuple[str, _State]]:
                             {
                                 "finish_reason": "stop",
                                 "message": {"content": _chat_answer(payload)},
+                            }
+                        ]
+                    }
+                )
+                return
+            if (
+                self.path == "/fenced-stream/chat/completions"
+                and payload["stream"]
+            ):
+                answer = "```json\n" + _chat_answer(payload) + "\n```"
+                content = (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": answer},
+                                    "finish_reason": "stop",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n\ndata: [DONE]\n\n"
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(content)))
+                self.end_headers()
+                self.wfile.write(content)
+                return
+            if self.path == "/fenced-stream/chat/completions":
+                self._json(
+                    {
+                        "choices": [
+                            {
+                                "finish_reason": "stop",
+                                "message": {
+                                    "content": "```json\n"
+                                    + _chat_answer(payload)
+                                    + "\n```"
+                                },
                             }
                         ]
                     }
@@ -701,6 +744,37 @@ def test_stream_unsupported_falls_back_once_without_fake_claim_deltas() -> None:
         assert [path for path, _, _ in state.requests] == [
             "/no-stream/chat/completions",
             "/no-stream/chat/completions",
+        ]
+
+
+def test_fenced_stream_falls_back_to_complete_json_parser() -> None:
+    """增量解析未发布 claim 时，完整 JSON 代码围栏由同步解析兼容。"""
+    with _loopback_server() as (base_url, state):
+        adapter = OpenAICompatibleChatAdapter(
+            OpenAICompatibleChatConfig(
+                model="free-chat-model", egress_allowed=True
+            ),
+            http_client=_http(base_url + "/fenced-stream"),
+            api_key_resolver=lambda: "",
+        )
+        emitted = []
+        try:
+            draft = adapter.generate_stream(
+                _generation_request(),
+                on_claim=emitted.append,
+                cancellation=StreamCancellation(),
+            )
+        finally:
+            adapter.close()
+
+        assert emitted == []
+        assert draft.claims[0].text == "设备 MX-41 的维护周期为 14 天。"
+        assert len(draft.provider_calls) == 2
+        assert draft.provider_calls[0].reason_code == "INVALID_STREAM_SCHEMA"
+        assert draft.provider_calls[1].reason_code == "OK"
+        assert [path for path, _, _ in state.requests] == [
+            "/fenced-stream/chat/completions",
+            "/fenced-stream/chat/completions",
         ]
 
 

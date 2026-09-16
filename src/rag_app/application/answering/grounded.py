@@ -85,7 +85,9 @@ _SAME_RELATION = re.compile(r"相同|一样|一致")
 _DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
 _MIN_QUOTE_CHARS = 2
-_MIN_SUPPORTED_BIGRAM_RATIO = 0.35
+# 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
+# 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
+_MIN_SUPPORTED_BIGRAM_RATIO = 0.20
 _MIN_NEGATION_SHARED_TERMS = 2
 _MIN_TABLE_COLUMN_ROWS = 2
 _NAMED_SUBJECT = re.compile(
@@ -262,6 +264,17 @@ def _subject(text: str) -> str | None:
 def _predicate(text: str) -> str:
     subject = _subject(text)
     return text[text.index(subject) + len(subject) :] if subject else text
+
+
+def _lexical_predicate(text: str) -> str:
+    """移除仅有对象名的来源，防止对象词被误当作动作支持。"""
+    stripped = text.strip(" \t\r\n，,。；;：:")
+    if (
+        _STANDALONE_SUBJECT.fullmatch(stripped) is not None
+        and re.search(_DUTY_ACTION_VERB, stripped) is None
+    ):
+        return ""
+    return _predicate(text)
 
 
 def _number_tokens(text: str) -> set[str]:
@@ -1135,9 +1148,12 @@ def _validate_clause_support(
     # 对象名本身不能为新编职责提供词汇支持，独立检查谓语事实。
     predicate = _predicate(clause)
     terms = _terms(predicate)
-    source_terms = terms & _terms("\n".join(relevant_sources))
+    factual_sources = tuple(
+        _lexical_predicate(text) for text in relevant_sources
+    )
+    source_terms = terms & _terms("\n".join(factual_sources))
     supported_terms = terms & _terms(
-        "\n".join((*relevant_sources, *trusted_term_contexts))
+        "\n".join((*factual_sources, *trusted_term_contexts))
     )
     if (
         not terms
