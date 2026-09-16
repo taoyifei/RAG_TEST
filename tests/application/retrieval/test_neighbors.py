@@ -198,6 +198,78 @@ def test_simple_fact_closes_detected_table_chain() -> None:
     )
 
 
+def test_table_expansion_closes_same_row_before_adjacent_rows() -> None:
+    """融合窗口较小时，长逻辑行的行名仍应先于相邻行进入候选。"""
+    chain = _table_chain(
+        200,
+        document_number=6,
+        display_name="合成长表格.docx",
+        length=22,
+    )
+    row_indices = (
+        0,
+        *(1 for _ in range(7)),
+        *(2 for _ in range(7)),
+        *(3 for _ in range(7)),
+    )
+    table_node_id = f"node_{'f' * 32}"
+    with_rows: list[RankedChunk] = []
+    for candidate, row_index in zip(chain, row_indices, strict=True):
+        chunk = candidate.hydrated.chunk.model_copy(
+            update={
+                "metadata": (
+                    (
+                        "atoms",
+                        [
+                            {
+                                "role": "table",
+                                "metadata": {
+                                    "row_index": row_index,
+                                    "table_node_id": table_node_id,
+                                },
+                            }
+                        ],
+                    ),
+                )
+            }
+        )
+        with_rows.append(
+            candidate.model_copy(
+                update={
+                    "hydrated": candidate.hydrated.model_copy(
+                        update={"chunk": chunk}
+                    )
+                }
+            )
+        )
+    stored = tuple(item.hydrated for item in with_rows)
+    source = cast(EvidenceSourcePort, _NeighborSource(stored))
+    # 目标行是索引 8..14；模拟 reranker 命中行尾和部分正文，但丢掉行首。
+    seeds = tuple(
+        with_rows[index]
+        for index in (14, 10, 13, 0, 3, 5, 16, 18, 20, 21)
+    )
+
+    outcome = NeighborExpander(source).expand(
+        _snapshot(),
+        seeds,
+        "same_group",
+        RetrievalPolicy(
+            fusion_candidate_limit=12,
+            max_evidence_items=16,
+        ),
+    )
+
+    candidate_ids = {
+        item.hydrated.chunk.chunk_id for item in outcome.candidates
+    }
+    target_row_ids = {
+        item.hydrated.chunk.chunk_id for item in with_rows[8:15]
+    }
+    assert target_row_ids <= candidate_ids
+    assert len(outcome.candidates) <= 16
+
+
 def test_table_expansion_prioritizes_a_uniquely_qualified_source() -> None:
     noise_chains = tuple(
         _table_chain(

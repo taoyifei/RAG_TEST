@@ -95,7 +95,13 @@ class NeighborExpander:
         """取实际章节开头表头，并在候选上限内闭合被切开的逻辑行。"""
         originals = _original_candidates(candidates)
         context: dict[str, RankedChunk] = {}
-        limit = max(len(candidates), policy.fusion_candidate_limit)
+        # 表格逻辑行可能比普通融合窗口更长；闭合预算至少要容纳最终证据上限，
+        # 否则重排候选刚好占满 fusion limit 时会永久丢失行首标签。
+        limit = max(
+            len(candidates),
+            policy.fusion_candidate_limit,
+            policy.max_evidence_items,
+        )
         # 每个种子先闭合同组来源链，防止无关章节铺满窗口后留下半个职责行。
         seeds = _prioritize_uniquely_qualified_source(
             candidates, source_qualifier
@@ -120,7 +126,11 @@ class NeighborExpander:
                     }
                 ),
             )
-            for candidate in expanded:
+            # 先补同一个 canonical table row，再用剩余预算补相邻行和表头。
+            # 分段长行常被 reranker 命中尾部；若按链距离直接填充，相邻行会先
+            # 占满预算，使当前行的行名无法进入 Evidence。
+            prioritized = _prioritize_same_table_row(seed, expanded)
+            for candidate in prioritized:
                 _add_context(
                     originals,
                     context,
@@ -243,6 +253,51 @@ def _has_table_coordinates(candidates: tuple[RankedChunk, ...]) -> bool:
         if candidate.hydrated.chunk.role.value == "table"
         for span in candidate.hydrated.chunk.source_spans
     )
+
+
+def _prioritize_same_table_row(
+    seed: RankedChunk,
+    candidates: tuple[RankedChunk, ...],
+) -> tuple[RankedChunk, ...]:
+    """把与种子共享 canonical table row 的分段稳定移到最前。"""
+    target_rows = _table_row_keys(seed.hydrated.chunk)
+    if not target_rows:
+        return candidates
+    same_row: list[RankedChunk] = []
+    remaining: list[RankedChunk] = []
+    for candidate in candidates:
+        bucket = (
+            same_row
+            if target_rows & _table_row_keys(candidate.hydrated.chunk)
+            else remaining
+        )
+        bucket.append(candidate)
+    return (*same_row, *remaining)
+
+
+def _table_row_keys(chunk: Chunk) -> frozenset[tuple[str, int]]:
+    """读取 chunk atom 中不会被 repeated context 污染的表格行身份。"""
+    atoms = dict(chunk.metadata).get("atoms", [])
+    if not isinstance(atoms, list):
+        return frozenset()
+    rows: set[tuple[str, int]] = set()
+    for atom in atoms:
+        if not isinstance(atom, dict):
+            continue
+        metadata = atom.get("metadata", {})
+        if not isinstance(metadata, dict):
+            continue
+        table_node_id = metadata.get("table_node_id")
+        row_index = metadata.get("row_index")
+        if (
+            isinstance(table_node_id, str)
+            and table_node_id
+            and isinstance(row_index, int)
+            and not isinstance(row_index, bool)
+            and row_index >= 0
+        ):
+            rows.add((table_node_id, row_index))
+    return frozenset(rows)
 
 
 def _prioritize_uniquely_qualified_source(
