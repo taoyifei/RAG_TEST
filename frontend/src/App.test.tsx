@@ -40,6 +40,7 @@ describe("产品壳隔离", () => {
     ).toBeVisible();
     expect(screen.queryByText("你的内部知识助手")).not.toBeInTheDocument();
     expect(window.location.pathname).toBe("/");
+    expect(document.title).toBe("Universal RAG 控制台");
   });
 
   it("湾事通管理员路径使用独立收敛壳和同一登录页", async () => {
@@ -71,5 +72,6 @@ describe("产品壳隔离", () => {
       await screen.findByRole("dialog", { name: "连接管理控制台" }),
     ).toBeVisible();
     expect(screen.queryByText("企业知识助手")).not.toBeInTheDocument();
+    expect(document.title).toBe("湾事通");
   });
 });

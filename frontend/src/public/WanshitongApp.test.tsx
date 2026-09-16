@@ -200,8 +200,8 @@ describe("湾事通公共应用", () => {
 
     expect(await screen.findByText("五个工作日内完成。")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "新建会话" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "新建会话" }),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "你的内部知识助手" }),
     ).not.toBeInTheDocument();
@@ -346,21 +346,19 @@ describe("湾事通公共应用", () => {
     await waitFor(() => expect(pending.wasCancelled()).toBe(true));
   });
 
-  it("新建会话清空当前聊天并返回首屏", async () => {
+  it("已显示的对话保留且没有新建会话入口", async () => {
     installFetch(
       streamResponse([
         event("final", 0, { answer: "本轮答案", citations: [] }),
       ]),
     );
     await openHome();
-    const user = await ask("第一轮问题");
+    await ask("第一轮问题");
     await screen.findByText("本轮答案");
 
-    await user.click(screen.getByRole("button", { name: "新建会话" }));
-    expect(
-      screen.getByRole("heading", { name: "你的内部知识助手" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("第一轮问题")).not.toBeInTheDocument();
+    expect(screen.getByText("第一轮问题")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新建会话" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "向湾事通提问" })).toBeEnabled();
   });
 
   it("来源卡片只展示允许的公共字段", async () => {

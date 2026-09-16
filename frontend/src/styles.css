@@ -1381,14 +1381,6 @@ label:has(input[type="checkbox"]) {
 .scope-card {
   color: #344054;
 }
-.demo-format-notice {
-  display: inline-block;
-  margin-top: 5px;
-  color: #58697f;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 /* 湾事通公共问答：独立于管理员控制台的深色产品壳。 */
 .wst-root {
   min-width: 0;
@@ -1526,13 +1518,8 @@ label:has(input[type="checkbox"]) {
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 12px;
-}
-.wst-composer-footer > span {
-  padding-left: 8px;
-  color: #858d8a;
-  font-size: 12px;
 }
 .wst-send-button,
 .wst-stop-button {
@@ -1623,25 +1610,12 @@ label:has(input[type="checkbox"]) {
   padding: 10px max(20px, calc((100% - 920px) / 2));
   border-bottom: 1px solid var(--wst-border);
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
   background: rgb(23 25 27 / 90%);
   backdrop-filter: blur(14px);
 }
 .wst-chat-header strong {
   font-size: 18px;
   letter-spacing: -0.02em;
-}
-.wst-chat-header button {
-  display: inline-flex;
-  min-height: 42px;
-  padding: 0 13px;
-  border: 1px solid var(--wst-border);
-  border-radius: 12px;
-  align-items: center;
-  gap: 7px;
-  color: #d7dcda;
-  background: rgb(255 255 255 / 4%);
 }
 .wst-chat {
   width: min(920px, 100%);

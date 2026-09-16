@@ -122,7 +122,6 @@ export function WanshitongAdminShell() {
           <div>
             <span className="eyebrow">固定 Scope 管理控制台</span>
             <h1>{active}</h1>
-            <span className="demo-format-notice">当前 Demo 仅支持 DOCX</span>
           </div>
           <div className="topbar-actions">
             {session.authenticated ? (

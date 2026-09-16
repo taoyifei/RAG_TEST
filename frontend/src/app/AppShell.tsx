@@ -247,7 +247,6 @@ export default function AppShell() {
           <div>
             <span className="eyebrow">安全管理控制台</span>
             <h1>{active}</h1>
-            <span className="demo-format-notice">当前 Demo 仅支持 DOCX</span>
           </div>
           <label className="space-selector">
             当前空间
