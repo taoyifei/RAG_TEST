@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
+from html import unescape
 from typing import Literal
 
 from rag_app.application.answering.ocr_guard import (
@@ -37,7 +39,7 @@ from rag_app.core.ports import (
 )
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
-    normalize_document_label,
+    normalize_catalog_label,
     section_heading_path_owns_target,
 )
 
@@ -637,7 +639,7 @@ def _certified_list_exemption(
     return False
 
 
-def _certified_catalog_reference_claim(
+def _certified_catalog_reference_claim(  # noqa: PLR0911
     claim: AnswerClaim,
     cited_items: tuple[EvidenceItem, ...],
     analysis: QueryAnalysis | None,
@@ -657,19 +659,32 @@ def _certified_catalog_reference_claim(
     ):
         return False
     entry = _CATALOG_ENTRY.match(item.citation_text)
-    target = normalize_document_label(titles[0])
+    target = normalize_catalog_label(titles[0])
     if (
         entry is None
         or not item.display_name
-        or normalize_document_label(entry["title"]) != target
-        or normalize_document_label(item.display_name) != target
+        or normalize_catalog_label(entry["title"]) != target
+        or normalize_catalog_label(item.display_name) != target
     ):
         return False
-    if entry["title"] not in claim.text or not _CATALOG_RELATION.search(
-        claim.text.replace(entry["title"], "")
-    ):
+    claim_text = unicodedata.normalize("NFKC", unescape(claim.text))
+    source_title = unicodedata.normalize("NFKC", unescape(entry["title"]))
+    query_title = unicodedata.normalize("NFKC", unescape(titles[0]))
+    mentioned = next(
+        (
+            title
+            for title in sorted(
+                {source_title, query_title}, key=len, reverse=True
+            )
+            if title in claim_text
+        ),
+        None,
+    )
+    if mentioned is None:
         return False
-    remainder = claim.text.replace(entry["title"], "")
+    remainder = claim_text.replace(mentioned, "")
+    if not _CATALOG_RELATION.search(remainder):
+        return False
     remainder = re.sub(r"[\s\W_]+", "", remainder)
     return _CATALOG_ALLOWED_CLAIM.fullmatch(remainder) is not None
 

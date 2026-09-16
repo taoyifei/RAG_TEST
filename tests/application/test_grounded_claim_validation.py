@@ -231,6 +231,62 @@ def test_certified_catalog_supports_existence_not_body_claims() -> None:
         pytest.fail(f"目录项不得支持：{unsupported}")
 
 
+@pytest.mark.parametrize(
+    ("query_title", "source_title", "display_name"),
+    [
+        (
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&amp;记录模板20260701.docx",
+        ),
+        (
+            "阶段甲-交接记录模板20260701",
+            "阶段甲-交接记录模板20260701(原件 .doc)",
+            "阶段甲-交接记录模板20260701(原件 .doc).docx",
+        ),
+        (
+            "阶段甲-交接记录模板（模板）",
+            "阶段甲-交接记录模板(模板)",
+            "阶段甲-交接记录模板(模板).docx",
+        ),
+    ],
+)
+def test_catalog_claim_accepts_same_title_format_variants(
+    query_title: str, source_title: str, display_name: str
+) -> None:
+    """标题格式或系统附注不应阻断目录存在的原子事实。"""
+    source = (
+        f"模板目录项：{source_title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    question = f"是否有《{query_title}》可供参考？"
+    evidence = EvidenceAssembler().assemble(
+        _candidates(_paragraph(source), display_name=display_name),
+        _POLICY,
+        context=_context(question),
+    )
+    assert len(evidence) == 1
+    claim_text = f"有《{query_title}》这份模板可供参考。"
+    draft = AnswerDraft(
+        text=claim_text,
+        cited_evidence_ids=(evidence[0].support_id,),
+        claims=(
+            AnswerClaim(
+                text=claim_text,
+                supports=(
+                    ClaimSupport(
+                        support_id=evidence[0].support_id, quote=source
+                    ),
+                ),
+            ),
+        ),
+        generation_mode="llm",
+    )
+    validate_grounded_draft(
+        draft, evidence, analysis=_context(question).analysis
+    )
+
+
 def test_grounded_paraphrase_keeps_basic_predicate_overlap() -> None:
     """自然改写只需基本词面联系，逐字引用和其他事实门仍独立生效。"""
     source = "用印申请从统一信息平台的 OA 系统入口提交。"

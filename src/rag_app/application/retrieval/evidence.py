@@ -26,6 +26,7 @@ from rag_app.core.models.chunk import SourceSpan, SourceSpanKind
 from rag_app.core.models.common import JsonObject, freeze_json_object
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    normalize_catalog_label,
     normalize_document_label,
     normalize_section_heading_label,
     normalize_semantic_text,
@@ -1301,12 +1302,12 @@ def _catalog_reference_supports(
         _CATALOG_CONTENT_REQUEST.search(outside_title)
     ):
         return {}
-    target = normalize_document_label(titles[0])
+    target = normalize_catalog_label(titles[0])
     if not target:
         return {}
     supports: dict[_SpanKey, AnswerSupport] = {}
     for candidate in candidates:
-        if normalize_document_label(candidate.hydrated.display_name) != target:
+        if normalize_catalog_label(candidate.hydrated.display_name) != target:
             continue
         chunk = candidate.hydrated.chunk
         for span in chunk.source_spans:
@@ -1318,7 +1319,7 @@ def _catalog_reference_supports(
             entry = _CATALOG_ENTRY.match(quote)
             if (
                 entry is None
-                or normalize_document_label(entry["title"]) != target
+                or normalize_catalog_label(entry["title"]) != target
             ):
                 continue
             supports[_span_key(chunk, span)] = AnswerSupport(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 
+import pytest
+
 from rag_app.application.retrieval import QueryAnalyzer
 from rag_app.application.retrieval.evidence import (
     EvidenceAssembler,
@@ -157,6 +159,63 @@ def test_book_title_uses_exact_retrieval_without_forcing_answer() -> None:
     plan = QueryPlanner().plan(analysis, (variant,), RetrievalPolicy())
     assert "exact" in plan.channels
     assert not plan.must_keep_exact
+
+
+@pytest.mark.parametrize(
+    ("query_title", "entry_title", "display_name"),
+    [
+        (
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&记录模板20260701",
+            "阶段甲-复盘&amp;记录模板20260701.docx",
+        ),
+        (
+            "阶段甲-交接记录模板20260701",
+            "阶段甲-交接记录模板20260701(原件 .doc)",
+            "阶段甲-交接记录模板20260701(原件 .doc).docx",
+        ),
+        (
+            "阶段甲-交接记录模板（模板）",
+            "阶段甲-交接记录模板(模板)",
+            "阶段甲-交接记录模板(模板).docx",
+        ),
+    ],
+)
+def test_catalog_title_identity_ignores_only_format_annotations(
+    query_title: str, entry_title: str, display_name: str
+) -> None:
+    quote = (
+        f"模板目录项：{entry_title}（模板）。模板正文未入库；"
+        "具体填写项、示例及要求请参考原始模板。"
+    )
+    candidate = make_ranked_chunk(1, quote)
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(
+                update={"display_name": display_name}
+            )
+        }
+    )
+    analysis = QueryAnalyzer().analyze(
+        SearchRequest(
+            scope=_SCOPE, text=f"是否有《{query_title}》可供参考？"
+        )
+    )
+    selected = EvidenceAssembler().assemble(
+        (candidate,),
+        RetrievalPolicy(),
+        context=EvidenceSelectionContext(
+            analysis=analysis,
+            query_kind=QueryKind.SIMPLE_FACT,
+            rerank_mode="provider",
+            selected_slot=None,
+        ),
+    )
+    assert len(selected) == 1
+    assert (
+        dict(selected[0].metadata)["answer_support"]["support_reason"]
+        == "CATALOG_TITLE_EXISTS"
+    )
 
 
 def test_literal_lookup_tolerates_bounded_noise_without_selecting_it() -> None:
