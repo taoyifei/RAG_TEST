@@ -37,6 +37,8 @@ export interface PublicTurn {
   question: string;
   status: "submitting" | "streaming" | "completed" | "failed" | "cancelled";
   stageMessage?: string;
+  stageHistory: string[];
+  startedAt: number;
   claims: PublicClaim[];
   answer?: string;
   citations: PublicCitation[];
@@ -107,6 +109,8 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     ...turn,
     status: "submitting",
     stageMessage: "正在提交问题",
+    stageHistory: [],
+    startedAt: Date.now(),
     claims: [],
     answer: undefined,
     citations: [],
@@ -218,6 +222,8 @@ export function usePublicChat() {
             question,
             status: "submitting",
             stageMessage: "正在提交问题",
+            stageHistory: [],
+            startedAt: Date.now(),
             claims: [],
             citations: [],
             partial: false,
@@ -277,10 +283,14 @@ export function usePublicChat() {
             return true;
           }
           if (event.type === "stage") {
+            const stageLabel = publicStageLabel(event.stage);
             updateTurn(turnId, (turn) => ({
               ...turn,
               traceId: traceId ?? turn.traceId,
-              stageMessage: publicStageLabel(event.stage),
+              stageMessage: stageLabel,
+              stageHistory: turn.stageHistory.includes(stageLabel)
+                ? turn.stageHistory
+                : [...turn.stageHistory, stageLabel],
             }));
             return true;
           }
@@ -299,7 +309,6 @@ export function usePublicChat() {
                   text: event.claim.text,
                 },
               ].sort((left, right) => left.sequence - right.sequence),
-              stageMessage: "正在组织回答",
             }));
             return true;
           }
