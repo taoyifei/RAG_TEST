@@ -533,7 +533,10 @@ def _grounded_messages(request: GenerationRequest) -> tuple[ChatMessage, ...]:
                 content=(
                     "上次草稿未通过校验。仅根据同一证据重新输出一次，"
                     "无法支持的事实请删除。把不同来源组支持的事实拆开，"
-                    "每条claim只保留可由一个来源组完整证明的分句。安全原因："
+                    "每条claim只保留可由一个来源组完整证明的分句。"
+                    "若安全原因为CLAIM_TEXT_UNSUPPORTED，只有quote直接包含答案时"
+                    "才保留该事实，并将text直接复制为quote中可独立成句的连续原文，"
+                    "不要同义改写；否则删除该事实。安全原因："
                     + request.repair_reason
                 ),
             ),

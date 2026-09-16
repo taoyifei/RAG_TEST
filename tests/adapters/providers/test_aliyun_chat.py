@@ -442,6 +442,9 @@ def test_generate_binds_server_quotes_and_explicit_repair(tmp_path: Path):
         )
         assert len(result.provider_calls) == len(requests) == 1
         assert "CLAIM_NEGATION_UNSUPPORTED" in requests[0].content.decode()
+        assert "将text直接复制为quote中可独立成句的连续原文" in (
+            requests[0].content.decode()
+        )
         assert "repair_reason" not in result.text
     finally:
         adapter.close()
