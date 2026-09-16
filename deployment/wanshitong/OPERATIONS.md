@@ -54,6 +54,14 @@ docker system prune
 创建目录项版本，不删除逻辑文档或非模板版本；完成后核对活动索引中模板
 Chunk 仅含目录项，再做公共问答回归。原始源文件仍保留在受控语料目录。
 
+OPC 模板目录另有一份旧 `.doc`，不属于 46 项 DOCX 正文控制清单。使用
+`catalog_legacy_template.py prepare` 在本地语料根确认它存在，只根据路径和
+文件名生成全新 `.docx` 目录项（不读取旧 DOC 正文）；产物经 54 转到 60 的
+`/data/tyf/wanshitong/artifacts`。在 60 使用同脚本的 `upload` 子命令、管理员
+Bootstrap Token 文件和本机 API 注册；脚本等待 Lifecycle Job 完成并写安全
+报告。其可检索路径是原路径加 `x` 的目录项别名，标题标注“原件 .doc”；
+不得把原 DOC 当作正文上传，也不得改变 `DOCX_ONLY_MANIFEST_46.json`。
+
 ## Secret
 
 Secret 目录必须是 0700，文件必须是 0600。只查看 Bootstrap Token 时使用：
