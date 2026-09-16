@@ -72,6 +72,7 @@ class _FakeClient:
         self.existing = [] if existing is None else existing
         self.upload_count = 0
         self.version_count = 0
+        self.template_refresh_count = 0
         self.documents: dict[str, dict[str, object]] = {}
         for item in self.existing:
             document_id = item.get("document_id")
@@ -103,6 +104,19 @@ class _FakeClient:
 
     def get_job(self, job_id: str) -> dict[str, object]:
         return {"job_id": job_id, "state": "succeeded"}
+
+    def refresh_template_catalog(
+        self, document_id: str, document: _PreparedLike
+    ) -> dict[str, object]:
+        assert "模板" in document.api_path
+        self.template_refresh_count += 1
+        return {
+            "document": {"document_id": document_id},
+            "job": {
+                "job_id": f"job_{200 + self.template_refresh_count:032x}",
+                "state": "queued",
+            },
+        }
 
     def upload_version(
         self,
@@ -150,6 +164,7 @@ def _arguments(
         pilot_only=True,
         resume=resume,
         recover_terminal=recover_terminal,
+        refresh_templates=False,
         wait=True,
         report=tmp_path / "import-report.json",
         timeout_seconds=2,
@@ -244,6 +259,36 @@ def test_resume_skips_already_retrievable_pilot_documents(
     assert report["skipped_retrievable"] == 4
     assert report["retrievable"] == 4
     assert report["failed"] == 0
+    assert fake.upload_count == 0
+
+
+def test_refresh_templates_only_creates_versions_for_existing_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    importer = _load_importer()
+    corpus, manifest = _build_corpus(tmp_path)
+    prepared = importer.load_and_validate_manifest(manifest, corpus)
+    existing = [
+        {
+            "document_id": f"doc_{index:032x}",
+            "source_relative_path": item.api_path,
+            "retrievable": True,
+        }
+        for index, item in enumerate(prepared, start=1)
+    ]
+    fake = _FakeClient(existing)
+    monkeypatch.setattr(importer, "WanshitongAdminClient", lambda _url: fake)
+    arguments = _arguments(tmp_path, corpus, manifest)
+    arguments.pilot_only = False
+    arguments.refresh_templates = True
+
+    report = importer.run_import(arguments)
+
+    assert report["selected_count"] == 13
+    assert report["refreshed_template_catalog"] == 13
+    assert report["ingestion_succeeded"] == 13
+    assert report["failed"] == 0
+    assert fake.template_refresh_count == 13
     assert fake.upload_count == 0
 
 

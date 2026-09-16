@@ -218,6 +218,36 @@ class WanshitongAdminClient:
             },
         )
 
+    def refresh_template_catalog(
+        self, document_id: str, document: PreparedDocument
+    ) -> dict[str, object]:
+        """为既有模板提交新版本，由服务端只索引目录项。"""
+        return self._request_json(
+            "POST",
+            f"/api/v1/admin/wanshitong/documents/{document_id}/versions",
+            query={
+                "source_relative_path": document.api_path,
+                "metadata": json.dumps(
+                    document.metadata,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ),
+            },
+            data=document.file_path.read_bytes(),
+            headers={
+                "Content-Type": document.media_type,
+                "Idempotency-Key": (
+                    "wb07r-template-catalog-v1-"
+                    + hashlib.sha256(
+                        (document.api_path + "\0" + document.sha256).encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()
+                ),
+            },
+        )
+
     def get_job(self, job_id: str) -> dict[str, object]:
         """读取单个固定 Scope Job。"""
         return self._request_json(
@@ -672,7 +702,7 @@ def _resume_existing(  # noqa: PLR0913
         result.final_job_state = state
     if not wait:
         return
-    job, document, retried = _wait_for_document(
+    job, final_document, retried = _wait_for_document(
         client,
         document_id=document_id,
         job_id=str(result.job_id),
@@ -681,7 +711,7 @@ def _resume_existing(  # noqa: PLR0913
         allow_retry=True,
     )
     result.final_job_state = str(job.get("state"))
-    result.retrievable = document.get("retrievable") is True
+    result.retrievable = final_document.get("retrievable") is True
     result.retried = retried
 
 
@@ -726,11 +756,63 @@ def _upload_one(  # noqa: PLR0913
     result.retried = retried
 
 
+def _refresh_template(  # noqa: PLR0913
+    client: WanshitongAdminClient,
+    existing: dict[str, object],
+    document: PreparedDocument,
+    result: ImportResult,
+    *,
+    wait: bool,
+    timeout_seconds: int,
+    poll_seconds: float,
+) -> None:
+    """不删除逻辑文档，将既有模板切到目录项版本。"""
+    document_id = existing.get("document_id")
+    if not isinstance(document_id, str):
+        raise ImportContractError("既有模板缺少 document_id。")
+    receipt = client.refresh_template_catalog(document_id, document)
+    job = receipt.get("job")
+    if not isinstance(job, dict):
+        raise ImportContractError("模板目录项版本回执缺少 Job。")
+    job_id = job.get("job_id")
+    state = job.get("state")
+    if not isinstance(job_id, str) or not isinstance(state, str):
+        raise ImportContractError("模板目录项版本 Job 身份无效。")
+    result.document_id = document_id
+    result.job_id = job_id
+    result.final_job_state = state
+    result.action = "refreshed_template_catalog"
+    if wait:
+        final_job, final_document, retried = _wait_for_document(
+            client,
+            document_id=document_id,
+            job_id=job_id,
+            timeout_seconds=timeout_seconds,
+            poll_seconds=poll_seconds,
+            allow_retry=True,
+        )
+        result.final_job_state = str(final_job.get("state"))
+        result.retrievable = final_document.get("retrievable") is True
+        result.retried = retried
+
+
+def _is_template_path(path: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", path)
+    return any("模板" in segment for segment in normalized.split("/"))
+
+
 def run_import(arguments: argparse.Namespace) -> dict[str, object]:
     """执行一次 Pilot 或全量可恢复导入并返回安全报告。"""
     prepared = load_and_validate_manifest(arguments.manifest, arguments.root)
+    refresh_templates = bool(getattr(arguments, "refresh_templates", False))
     selected = tuple(
-        item for item in prepared if not arguments.pilot_only or item.pilot
+        item
+        for item in prepared
+        if (
+            _is_template_path(item.api_path)
+            if refresh_templates
+            else not arguments.pilot_only or item.pilot
+        )
     )
     token = _read_bootstrap_token(arguments.bootstrap_token_file)
     client = WanshitongAdminClient(arguments.base_url)
@@ -745,7 +827,21 @@ def run_import(arguments: argparse.Namespace) -> dict[str, object]:
         )
         try:
             current = existing.get(document.api_path)
-            if current is not None:
+            if refresh_templates:
+                if current is None:
+                    raise ImportContractError(
+                        "模板目录项刷新要求既有文档；先完成全量导入。"
+                    )
+                _refresh_template(
+                    client,
+                    current,
+                    document,
+                    result,
+                    wait=arguments.wait,
+                    timeout_seconds=arguments.timeout_seconds,
+                    poll_seconds=arguments.poll_seconds,
+                )
+            elif current is not None:
                 if not arguments.resume:
                     raise ImportContractError(
                         "文档已存在；请显式使用 --resume。"
@@ -814,6 +910,9 @@ def _build_report(
         "manifest_count": len(prepared),
         "selected_count": len(selected),
         "pilot_only": bool(arguments.pilot_only),
+        "refresh_templates": bool(
+            getattr(arguments, "refresh_templates", False)
+        ),
         "resume": bool(arguments.resume),
         "wait": bool(arguments.wait),
         "registered": sum(item.document_id is not None for item in results),
@@ -821,6 +920,9 @@ def _build_report(
         "resumed": sum(item.action == "resumed" for item in results),
         "recovered_terminal": sum(
             item.action == "recovered_terminal" for item in results
+        ),
+        "refreshed_template_catalog": sum(
+            item.action == "refreshed_template_catalog" for item in results
         ),
         "skipped_retrievable": sum(
             item.action == "skipped_retrievable" for item in results
@@ -864,6 +966,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--pilot-only", action="store_true")
+    parser.add_argument(
+        "--refresh-templates",
+        action="store_true",
+        help="只给既有模板创建目录项版本；不删除文档。",
+    )
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--recover-terminal",
@@ -888,6 +995,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments.timeout_seconds <= 0
         or arguments.poll_seconds <= 0
         or (arguments.recover_terminal and not arguments.resume)
+        or (arguments.refresh_templates and arguments.pilot_only)
     ):
         print("import=failed reason=invalid-wait-settings", file=sys.stderr)
         return 2

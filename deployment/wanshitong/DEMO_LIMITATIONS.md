@@ -8,6 +8,9 @@
   `visibility_scope=all_internal`、空部门与空快捷入口。
 - 当前语料只允许控制清单中的 46 个原生 DOCX；PDF、旧 DOC、Excel、ZIP、
   OCR、SSO 和完整 ACL 不在本期范围。
+- 其中路径标识为模板的 13 项只索引动态标题目录项，不索引模板的原始正文、
+  占位符或示例。相关问题最多提示存在该模板并请用户参考原始模板，不能
+  把模板内容当作制度事实回答。
 - 当前每类模型只有一个经过真实验证的 Primary Endpoint。发现的其他 Endpoint
   只记录为候选，本 Demo 不实现 Provider Fleet 或自动故障转移。
 - app 与 Qdrant 不使用 GPU；模型服务由现有内网设施提供，其可用性与容量不由
