@@ -77,6 +77,18 @@ describe("湾事通 SSE parser", () => {
     expect(seen).toEqual(["final"]);
   });
 
+  it("收到真实流数据或心跳时通知界面连接仍有活动", async () => {
+    const onActivity = vi.fn();
+    const controller = new AbortController();
+    await consumePublicSse(
+      body(": heartbeat 2000\n\n", 'event: stage\ndata: {"type":"stage","sequence":0,"stage":"generation"}\n\n'),
+      vi.fn(),
+      controller.signal,
+      onActivity,
+    );
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
   it("只向用户展示中文阶段文案", () => {
     expect(publicStageLabel("accepted")).toBe("已收到问题");
     expect(publicStageLabel("snapshot")).toBe("正在确认资料版本");

@@ -219,6 +219,7 @@ export async function consumePublicSse(
   body: ReadableStream<Uint8Array>,
   onEvent: (event: PublicStreamEvent) => boolean | void,
   signal: AbortSignal,
+  onActivity?: () => void,
 ): Promise<void> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -239,6 +240,7 @@ export async function consumePublicSse(
       const { done, value } = await reader.read();
       if (done) break;
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      if (value.byteLength > 0) onActivity?.();
       if (!deliver(parser.push(decoder.decode(value, { stream: true })))) {
         await reader.cancel().catch(() => undefined);
         return;

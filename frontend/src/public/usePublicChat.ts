@@ -39,6 +39,8 @@ export interface PublicTurn {
   stageMessage?: string;
   stageHistory: string[];
   startedAt: number;
+  stageStartedAt: number;
+  lastSignalAt: number;
   claims: PublicClaim[];
   answer?: string;
   citations: PublicCitation[];
@@ -111,6 +113,8 @@ function resetTurn(turn: PublicTurn): PublicTurn {
     stageMessage: "正在提交问题",
     stageHistory: [],
     startedAt: Date.now(),
+    stageStartedAt: Date.now(),
+    lastSignalAt: Date.now(),
     claims: [],
     answer: undefined,
     citations: [],
@@ -224,6 +228,8 @@ export function usePublicChat() {
             stageMessage: "正在提交问题",
             stageHistory: [],
             startedAt: Date.now(),
+            stageStartedAt: Date.now(),
+            lastSignalAt: Date.now(),
             claims: [],
             citations: [],
             partial: false,
@@ -263,6 +269,7 @@ export function usePublicChat() {
           ...turn,
           status: "streaming",
           stageMessage: "已收到问题",
+          lastSignalAt: Date.now(),
         }));
 
         const handleEvent = (event: PublicStreamEvent): boolean => {
@@ -288,6 +295,8 @@ export function usePublicChat() {
               ...turn,
               traceId: traceId ?? turn.traceId,
               stageMessage: stageLabel,
+              stageStartedAt: Date.now(),
+              lastSignalAt: Date.now(),
               stageHistory: turn.stageHistory.includes(stageLabel)
                 ? turn.stageHistory
                 : [...turn.stageHistory, stageLabel],
@@ -357,7 +366,19 @@ export function usePublicChat() {
           return false;
         };
 
-        await consumePublicSse(response.body, handleEvent, controller.signal);
+        await consumePublicSse(
+          response.body,
+          handleEvent,
+          controller.signal,
+          () => {
+            if (isCurrent() && !tracker.terminal) {
+              updateTurn(turnId, (turn) => ({
+                ...turn,
+                lastSignalAt: Date.now(),
+              }));
+            }
+          },
+        );
         if (!tracker.terminal && isCurrent()) {
           throw new TypeError("public stream disconnected before terminal");
         }

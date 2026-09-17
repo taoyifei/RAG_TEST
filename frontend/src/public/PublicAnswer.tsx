@@ -14,6 +14,32 @@ const PROGRESS_STAGES = [
   { label: PUBLIC_STAGE_LABELS.validation, short: "核对来源" },
 ] as const;
 
+function progressHint(
+  stageMessage: string | undefined,
+  claimCount: number,
+  stageSeconds: number,
+  signalAgeSeconds: number,
+): string | undefined {
+  if (stageMessage === PUBLIC_STAGE_LABELS.validation) {
+    return "正在核对回答与来源，完成后会显示最终答复。";
+  }
+  if (stageMessage !== PUBLIC_STAGE_LABELS.generation) return undefined;
+  if (claimCount > 0) {
+    return `已先显示 ${claimCount} 条已核验内容，完整答案仍在生成。`;
+  }
+  if (stageSeconds >= 20) {
+    return signalAgeSeconds <= 5
+      ? "连接正常，仍在等待回答服务返回结果；如需可停止后重试。"
+      : "暂未收到新数据，仍在等待回答服务；如需可停止后重试。";
+  }
+  if (stageSeconds >= 6) {
+    return signalAgeSeconds <= 5
+      ? "连接正常，正在等待回答服务返回可核对的内容。"
+      : "正在等待回答服务返回可核对的内容。";
+  }
+  return "正在生成答复；有可核对的内容会先显示。";
+}
+
 export function PublicAnswer({
   onFeedback,
   onRetry,
@@ -25,6 +51,21 @@ export function PublicAnswer({
 }) {
   const active = turn.status === "submitting" || turn.status === "streaming";
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const stageSeconds = Math.max(
+    0,
+    elapsedSeconds - Math.floor((turn.stageStartedAt - turn.startedAt) / 1000),
+  );
+  const signalAgeSeconds = Math.max(
+    0,
+    elapsedSeconds - Math.floor((turn.lastSignalAt - turn.startedAt) / 1000),
+  );
+  const waitingForGeneration = turn.stageMessage === PUBLIC_STAGE_LABELS.generation;
+  const hint = progressHint(
+    turn.stageMessage,
+    turn.claims.length,
+    stageSeconds,
+    signalAgeSeconds,
+  );
 
   useEffect(() => {
     if (!active) return;
@@ -53,6 +94,9 @@ export function PublicAnswer({
                 {elapsedSeconds} 秒
               </span>
             </p>
+            {waitingForGeneration && (
+              <div aria-hidden="true" className="wst-progress-motion" />
+            )}
             {turn.stageHistory.length > 0 && (
               <ol className="wst-stage-history" aria-label="处理进度">
                 {PROGRESS_STAGES.map((stage) => (
@@ -75,9 +119,9 @@ export function PublicAnswer({
                 ))}
               </ol>
             )}
-            {elapsedSeconds >= 8 && turn.claims.length === 0 && (
-              <p className="wst-progress-hint">
-                有可核对的内容时会先显示，最终回答会附上来源。
+            {hint && (
+              <p aria-live="polite" className="wst-progress-hint">
+                {hint}
               </p>
             )}
           </div>
