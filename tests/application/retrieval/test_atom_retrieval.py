@@ -7,7 +7,10 @@ from types import MethodType
 
 from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.retrieval.adaptive import AdaptivePlanOutcome
-from rag_app.application.retrieval.service import _numeric_conflict
+from rag_app.application.retrieval.service import (
+    _numeric_conflict,
+    _scope_enum_candidates_to_target_group,
+)
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import deterministic_id
@@ -25,6 +28,51 @@ _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _DOCX = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def test_enumeration_target_anchor_excludes_sibling_structure_groups() -> None:
+    """动态目标只闭合当前行，不能借同章节相邻类别作成员。"""
+
+    def item(
+        number: int,
+        text: str,
+        group_id: str,
+        *,
+        document_number: int = 1,
+    ) -> EvidenceItem:
+        chunk = make_ranked_chunk(
+            number, text, document_number=document_number
+        ).hydrated.chunk
+        return EvidenceItem(
+            evidence_id=f"S{number}",
+            chunk_id=chunk.chunk_id,
+            citation_text=text,
+            source_label="合成清单",
+            source_spans=chunk.source_spans,
+            document_id=chunk.version.document_id,
+            document_version_id=chunk.version.document_version_id,
+            metadata={"evidence_group_id": group_id},
+        )
+
+    evidence = (
+        item(1, "甲类研究包含条目一。", "G1"),
+        item(2, "条目二。", "G1"),
+        item(3, "乙类研究包含条目三。", "G2"),
+        item(4, "其他文档的条目。", "G1", document_number=2),
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="甲类研究项目",
+        relation="类型",
+        answer_shape=AtomAnswerShape.ENUMERATION,
+    )
+    anchored = atom.model_copy(update={"target": "甲类研究"})
+
+    assert _scope_enum_candidates_to_target_group(anchored, evidence) == (
+        evidence[0],
+        evidence[1],
+    )
+    assert _scope_enum_candidates_to_target_group(atom, evidence) == evidence
 
 
 def test_conflicting_source_values_require_same_target_relation_and_unit() -> (

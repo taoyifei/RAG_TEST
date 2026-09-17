@@ -180,6 +180,53 @@ _CONFLICT_QUANTITY = re.compile(
     r"(?P<unit>％|%|毫秒|分钟|小时|秒|天|日|周|个月|月|年|"
     r"万元|亿元|元|人|次|个|件|项)"
 )
+_MIN_TARGET_ANCHOR_CHARS = 4
+
+
+def _scope_enum_candidates_to_target_group(
+    atom: QueryAtom, items: tuple[EvidenceItem, ...]
+) -> tuple[EvidenceItem, ...]:
+    """有精确目标锚点时，只保留同一结构组的列举候选。"""
+    if atom.answer_shape is not AtomAnswerShape.ENUMERATION:
+        return items
+
+    def normalized(value: str) -> str:
+        return "".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+    target = normalized(atom.target)
+    if len(target) < _MIN_TARGET_ANCHOR_CHARS:
+        return items
+    anchors = tuple(
+        item for item in items if target in normalized(item.citation_text)
+    )
+    if not anchors:
+        return items
+    anchor_keys = {
+        (item.document_version_id, item.chunk_id, item.citation_text)
+        for item in anchors
+    }
+    anchor_groups = {
+        (item.document_version_id, group_id)
+        for item in anchors
+        if isinstance(
+            group_id := dict(item.metadata).get("evidence_group_id"), str
+        )
+    }
+    return tuple(
+        item
+        for item in items
+        if (
+            item.document_version_id,
+            item.chunk_id,
+            item.citation_text,
+        )
+        in anchor_keys
+        or (
+            item.document_version_id,
+            dict(item.metadata).get("evidence_group_id"),
+        )
+        in anchor_groups
+    )
 
 
 def _numeric_conflict(
@@ -2470,11 +2517,23 @@ class RetrievalService:
                     selected_vector_space=vector_space,
                 ),
             )
+            scoped_items = _scope_enum_candidates_to_target_group(
+                atom,
+                (
+                    *selection.answer_support_set,
+                    *selection.model_evidence_candidates,
+                ),
+            )
+            allowed_keys = {identity(item) for item in scoped_items}
             direct_keys = tuple(
-                identity(item) for item in selection.answer_support_set
+                identity(item)
+                for item in selection.answer_support_set
+                if identity(item) in allowed_keys
             )
             candidate_keys = tuple(
-                identity(item) for item in selection.model_evidence_candidates
+                identity(item)
+                for item in selection.model_evidence_candidates
+                if identity(item) in allowed_keys
             )
             if atom.answer_shape not in {
                 AtomAnswerShape.ENUMERATION,
@@ -2490,7 +2549,7 @@ class RetrievalService:
                 # 制造接近整份文档的 Generation 输入。
                 candidate_keys = candidate_keys[:6]
             per_atom.append((atom, direct_keys, candidate_keys))
-            for item in selection.model_evidence_candidates:
+            for item in scoped_items:
                 selected_by_key.setdefault(identity(item), item)
         # 先轮流保障各原子的直接支持，再公平补入有限相关上下文。
         ordered_keys: list[tuple[object, ...]] = []
