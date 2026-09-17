@@ -215,3 +215,38 @@ it("选择本页后批量下载确定性排序的支持包并可清空选择", a
   await user.click(screen.getByRole("button", { name: "清空选择" }));
   expect(screen.getByText("已选择 0 条")).toBeVisible();
 });
+
+it("湾事通问答历史可一键批量下载本页原文与 Trace", async () => {
+  const user = userEvent.setup();
+  const second = { ...item, trace_id: "trace_alpha", question: "第二条" };
+  const exportSupport = vi.fn().mockResolvedValue({
+    blob: new Blob(["synthetic"], { type: "application/zip" }),
+    filename: "wanshitong-history-traces.zip",
+  });
+  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:synthetic");
+  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
+    () => undefined,
+  );
+
+  render(
+    <HistoryPage
+      fixedScope
+      services={{
+        listHistory: vi.fn().mockResolvedValue(page([item, second])),
+        historyDetail: vi.fn().mockResolvedValue(item),
+        exportSupport,
+      }}
+    />,
+  );
+  await screen.findByText("第二条");
+  await user.click(
+    screen.getByRole("button", { name: "下载本页问答原文与 Trace（2 条）" }),
+  );
+  expect(exportSupport).toHaveBeenCalledWith(["trace_alpha", "trace_test"]);
+  await user.click(screen.getByRole("button", { name: "选择本页" }));
+  await user.click(
+    screen.getByRole("button", { name: "下载已选问答原文与 Trace" }),
+  );
+  expect(exportSupport).toHaveBeenCalledTimes(2);
+});

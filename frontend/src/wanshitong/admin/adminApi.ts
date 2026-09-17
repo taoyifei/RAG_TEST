@@ -298,6 +298,13 @@ export const wanshitongAdminApi = {
       `${BASE_PATH}/history/${encodeURIComponent(traceId)}`,
       { signal },
     ),
+  exportHistoryTraces: async (traceIds: string[]) => {
+    const response = await consoleRawRequest(
+      `${BASE_PATH}/history-traces:export`,
+      jsonInit("POST", { trace_ids: traceIds }),
+    );
+    return downloadResponse(response, "wanshitong-history-traces.zip");
+  },
   clearHistory: () =>
     consoleRequest<void>(`${BASE_PATH}/history`, { method: "DELETE" }),
   listOperationalTraces: (

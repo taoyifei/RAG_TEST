@@ -10,6 +10,7 @@ import { EmptyState, ErrorPanel, Modal, StatusBadge } from "../components/ui";
 import { HistoryTrace, historyTime } from "../components/HistoryTrace";
 import { HistorySupportDownload } from "../components/HistorySupportDownload";
 import { useConsole } from "../state/console-context";
+import { downloadFile } from "../utils/download";
 
 const PAGE_SIZE = 20;
 const STATUSES = [
@@ -32,6 +33,9 @@ export interface HistoryPageServices {
     signal?: AbortSignal,
   ) => Promise<HistoryEntry>;
   clearHistory?: () => Promise<void>;
+  exportSupport?: (
+    traceIds: string[],
+  ) => ReturnType<typeof api.exportHistoryTraces>;
 }
 
 const defaultHistoryServices: HistoryPageServices = {
@@ -80,6 +84,7 @@ export function HistoryPage({
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [exportBusy, setExportBusy] = useState(false);
   const [reload, setReload] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
@@ -157,6 +162,18 @@ export function HistoryPage({
       setError(reason);
     } finally {
       setClearing(false);
+    }
+  }
+  async function exportSupport(traceIds: string[]) {
+    if (!traceIds.length || !services.exportSupport) return;
+    setExportBusy(true);
+    setError(undefined);
+    try {
+      downloadFile(await services.exportSupport([...traceIds].sort()));
+    } catch (reason) {
+      setError(reason);
+    } finally {
+      setExportBusy(false);
     }
   }
   return (
@@ -273,7 +290,20 @@ export function HistoryPage({
             >
               刷新历史
             </button>
-            {!fixedScope && (
+            {fixedScope && services.exportSupport && (
+              <button
+                type="button"
+                disabled={!page.items.length || exportBusy}
+                onClick={() =>
+                  void exportSupport(page.items.map((item) => item.trace_id))
+                }
+              >
+                {exportBusy
+                  ? "正在打包…"
+                  : `下载本页问答原文与 Trace（${page.items.length} 条）`}
+              </button>
+            )}
+            {(!fixedScope || services.exportSupport) && (
               <>
                 <button
                   type="button"
@@ -297,15 +327,31 @@ export function HistoryPage({
                   清空选择
                 </button>
                 <span role="status">已选择 {checked.size} 条</span>
-                <HistorySupportDownload
-                  traceIds={[...checked].sort()}
-                  disabled={!checked.size}
-                >
-                  下载已选支持包
-                </HistorySupportDownload>
+                {fixedScope && services.exportSupport ? (
+                  <button
+                    type="button"
+                    disabled={!checked.size || checked.size > 100 || exportBusy}
+                    onClick={() => void exportSupport([...checked])}
+                  >
+                    下载已选问答原文与 Trace
+                  </button>
+                ) : (
+                  <HistorySupportDownload
+                    traceIds={[...checked].sort()}
+                    disabled={!checked.size}
+                  >
+                    下载已选支持包
+                  </HistorySupportDownload>
+                )}
               </>
             )}
           </div>
+          {fixedScope && services.exportSupport && (
+            <p className="muted">
+              下载包包含当前仍可读取的原问题、完整答案、引用与技术 Trace；
+              任一原文不可用时整包会报错，不会悄悄省略。一次最多选 100 条。
+            </p>
+          )}
           {page.search_complete === false && (
             <p role="status">
               关键词搜索已达到有界扫描上限，本次扫描{" "}
@@ -363,6 +409,15 @@ export function HistoryPage({
                 <button onClick={() => setTraceId(item.trace_id)}>
                   查看详情与过程
                 </button>
+                {fixedScope && services.exportSupport && (
+                  <button
+                    type="button"
+                    disabled={exportBusy}
+                    onClick={() => void exportSupport([item.trace_id])}
+                  >
+                    下载本条原文与 Trace
+                  </button>
+                )}
                 {!fixedScope && (
                   <HistorySupportDownload traceIds={[item.trace_id]}>
                     下载本条支持包

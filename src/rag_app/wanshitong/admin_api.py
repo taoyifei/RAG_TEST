@@ -16,10 +16,15 @@ from rag_app.api.operational_trace import (
     TraceExportRequest,
     build_trace_export_zip,
 )
+from rag_app.api.query_history import _archive_response
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import Document, DocumentRef, Job
+from rag_app.product.history_trace_export import (
+    HistoryTraceBodyUnavailableError,
+    HistoryTraceExportService,
+)
 from rag_app.product.models import ProviderConnection
 from rag_app.product.trace_coordinator import (
     OperationalTracePayloadLimitError,
@@ -367,6 +372,12 @@ def _register_history_routes(
     runtime: ProductRuntime,
     scope_service: FixedScopeService,
 ) -> None:
+    export_service = HistoryTraceExportService(
+        runtime.history,
+        runtime.traces,
+        source_revision=runtime.traces.release_revision,
+    )
+
     @app.get(ADMIN_BASE_PATH + "/history", tags=["wanshitong-admin"])
     def _history(
         request: Request,
@@ -397,6 +408,38 @@ def _register_history_routes(
         )
         _add_owner_mask(runtime, payload)
         return payload
+
+    @app.post(
+        ADMIN_BASE_PATH + "/history-traces:export",
+        tags=["wanshitong-admin"],
+    )
+    def _export_history_traces(
+        body: TraceExportRequest, request: Request
+    ) -> Response:
+        binding = _admin_scope(request, scope_service)
+        try:
+            archive = export_service.export(
+                body.trace_ids,
+                include_history_body=True,
+                body_authorized=True,
+                required_scope=(
+                    binding.project_id,
+                    binding.knowledge_base_id,
+                ),
+                require_history_body=True,
+                authorize_trace=lambda snapshot: _authorize_export_snapshot(
+                    runtime, binding, snapshot
+                ),
+            )
+        except HistoryTraceBodyUnavailableError as error:
+            raise AdminFacadeError(
+                "HISTORY_BODY_UNAVAILABLE",
+                f"{error.trace_id} 的问答原文不可用"
+                f"（{error.reason_code}），未生成不完整下载包。",
+                status_code=409,
+                stage="wanshitong.history.export",
+            ) from error
+        return _archive_response(archive)
 
     @app.delete(ADMIN_BASE_PATH + "/history", tags=["wanshitong-admin"])
     def _clear_history(request: Request) -> dict[str, int]:
