@@ -8,7 +8,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import urlsplit
 
 from rag_app.product.catalog import validate_model
@@ -33,6 +33,7 @@ _LLM_MODEL = "RAG_WANSHITONG_LLM_MODEL"
 _LLM_DISABLE_THINKING_SUPPORTED = (
     "RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"
 )
+_LLM_STRUCTURED_OUTPUT_MODE = "RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"
 _CREDENTIAL_ENV_SUFFIX = "_CREDENTIAL_ENV"
 _API_KEY_FILE_SUFFIX = "_API_KEY_FILE"
 _ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
@@ -98,6 +99,9 @@ class InternalModelSettings:
     reranker_path: str = "/rerank"
     llm_model: str = "Qwen/Qwen3-8B-AWQ"
     llm_disable_thinking_supported: bool = False
+    llm_structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
     embedding_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
@@ -144,6 +148,9 @@ class InternalModelSettings:
             llm_disable_thinking_supported=_boolean(
                 source.get(_LLM_DISABLE_THINKING_SUPPORTED, "false"),
                 _LLM_DISABLE_THINKING_SUPPORTED,
+            ),
+            llm_structured_output_mode=_structured_output_mode(
+                source.get(_LLM_STRUCTURED_OUTPUT_MODE, "none")
             ),
             embedding_credential=_credential(source, "EMBEDDING"),
             reranker_credential=_credential(source, "RERANKER"),
@@ -218,6 +225,23 @@ def _boolean(value: str, key: str) -> bool:
     if normalized not in {"true", "false"}:
         raise ValueError(f"{key} 必须为 true 或 false。")
     return normalized == "true"
+
+
+def _structured_output_mode(
+    value: str,
+) -> Literal["none", "response_format", "structured_outputs", "guided_json"]:
+    normalized = value.strip().casefold()
+    if normalized not in {
+        "none",
+        "response_format",
+        "structured_outputs",
+        "guided_json",
+    }:
+        raise ValueError(f"{_LLM_STRUCTURED_OUTPUT_MODE} 配置无效。")
+    return cast(
+        Literal["none", "response_format", "structured_outputs", "guided_json"],
+        normalized,
+    )
 
 
 def _credential(

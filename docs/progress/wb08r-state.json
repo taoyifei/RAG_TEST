@@ -5,7 +5,7 @@
   "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
   "current_phase": "WB08R-03",
   "phase_status": "PAUSED",
-  "implementation_status": "wb08r03r_r0_terminal_gate_passed_r1_pending",
+  "implementation_status": "wb08r03r_r1_capabilities_ready_r2_pending",
   "merge_allowed": false,
   "dataset_revision": "wanshitong-v2-20260917",
   "wb08r01_verification": {
@@ -59,6 +59,12 @@
     "terminal12_unique_final": 12,
     "terminal12_first_event_timeout": 0,
     "r0_gate": "passed",
+    "r1_probe": {
+      "thinking_disable_supported": true,
+      "supported_modes": ["response_format", "structured_outputs"],
+      "selected_mode": "response_format",
+      "guided_json": "INVALID_RESPONSE"
+    },
     "remaining_gates": ["R1", "R2", "R3", "R4", "R5", "R6", "Planner-24", "Ownership-16", "Claims-16", "Full-96"]
   }
 }

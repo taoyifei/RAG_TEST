@@ -110,7 +110,7 @@ class OpenAICompatibleRerankerConfig(FrozenModel):
 
 
 class OpenAICompatibleChatConfig(FrozenModel):
-    """只发送标准 Chat Completions 字段的兼容模型策略。"""
+    """显式选择 Chat Completions 的结构化输出协议。"""
 
     model: str = Field(min_length=1, max_length=200)
     egress_allowed: bool = False
@@ -119,6 +119,9 @@ class OpenAICompatibleChatConfig(FrozenModel):
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
     prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
     disable_thinking_supported: bool = False
+    structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
 
 
 class OpenAICompatibleEmbeddingAdapter:
@@ -419,7 +422,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         """把共享事实闭合失败归入兼容 Provider 阶段。"""
         return "provider.openai_compatible.generation"
 
-    def complete(
+    def complete(  # noqa: PLR0913
         self,
         messages: tuple[ChatMessage, ...],
         *,
@@ -428,6 +431,8 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         ] = "generation",
         max_output_tokens: int | None = None,
         timeout_seconds: float | None = None,
+        json_schema: Mapping[str, object] | None = None,
+        schema_revision: str | None = None,
     ) -> ChatCompletion:
         """执行一次标准同步 Chat Completions 请求。"""
         if not self._compatible_config.egress_allowed:
@@ -443,6 +448,8 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 self._compatible_config,
                 max_output_tokens=max_output_tokens,
                 disable_thinking=operation == "query.interpret",
+                json_schema=json_schema,
+                schema_revision=schema_revision,
             ),
             operation=operation,
             input_count=len(messages),
@@ -592,15 +599,17 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             )
 
 
-def openai_compatible_chat_payload(
+def openai_compatible_chat_payload(  # noqa: PLR0913
     messages: tuple[ChatMessage, ...],
     config: OpenAICompatibleChatConfig,
     *,
     max_output_tokens: int | None = None,
     stream: bool = False,
     disable_thinking: bool = False,
+    json_schema: Mapping[str, object] | None = None,
+    schema_revision: str | None = None,
 ) -> dict[str, object]:
-    """构造只含标准字段的有界 Chat Completions 请求。"""
+    """按固定配置构造单次 Chat 请求，不在失败时轮询协议。"""
     limit = (
         config.max_output_tokens
         if max_output_tokens is None
@@ -627,6 +636,23 @@ def openai_compatible_chat_payload(
     }
     if disable_thinking and config.disable_thinking_supported:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+    if json_schema is not None:
+        if not schema_revision:
+            raise ValueError("结构化 Schema 必须具有明确 revision。")
+        mode = config.structured_output_mode
+        if mode == "response_format":
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_revision,
+                    "schema": dict(json_schema),
+                    "strict": True,
+                },
+            }
+        elif mode == "structured_outputs":
+            payload["structured_outputs"] = {"json": dict(json_schema)}
+        elif mode == "guided_json":
+            payload["guided_json"] = dict(json_schema)
     return payload
 
 

@@ -451,3 +451,36 @@ def test_disable_thinking_requires_declared_compatibility() -> None:
     assert unsupported["temperature"] == 0
     assert "chat_template_kwargs" not in unsupported
     assert supported["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+@pytest.mark.parametrize(
+    ("mode", "field"),
+    [
+        ("response_format", "response_format"),
+        ("structured_outputs", "structured_outputs"),
+        ("guided_json", "guided_json"),
+        ("none", None),
+    ],
+)
+def test_structured_output_payload_uses_one_explicit_mode(
+    mode: str, field: str | None
+) -> None:
+    payload = openai_compatible_chat_payload(
+        (ChatMessage(role="user", content="虚构检查"),),
+        OpenAICompatibleChatConfig(
+            model="Qwen/Qwen3-8B-AWQ",
+            structured_output_mode=mode,
+        ),
+        json_schema={
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+        },
+        schema_revision="fictional-probe-v1",
+    )
+    structured_fields = {
+        "response_format", "structured_outputs", "guided_json"
+    }
+    assert structured_fields.intersection(payload) == (
+        {field} if field else set()
+    )

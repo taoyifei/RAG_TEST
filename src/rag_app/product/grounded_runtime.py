@@ -350,6 +350,7 @@ class ProductGroundedModel:
                 disable_thinking_supported=(
                     self.settings.disable_thinking_supported
                 ),
+                structured_output_mode=self.settings.structured_output_mode,
             )
         return AliyunChatConfig(
             model=model,

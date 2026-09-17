@@ -142,7 +142,10 @@ class InternalModelConfigurator:
             update={
                 "disable_thinking_supported": (
                     desired_models.disable_thinking_supported
-                )
+                ),
+                "structured_output_mode": (
+                    desired_models.structured_output_mode
+                ),
             }
         ) == desired_models
         if (
@@ -582,6 +585,9 @@ class InternalModelConfigurator:
                 "rewrite_enabled": False,
                 "disable_thinking_supported": (
                     settings.llm_disable_thinking_supported
+                ),
+                "structured_output_mode": (
+                    settings.llm_structured_output_mode
                 ),
             }
         )

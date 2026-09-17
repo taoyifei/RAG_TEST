@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import Field, StrictInt, model_validator
 
@@ -28,6 +29,9 @@ class KnowledgeBaseModelSettings(FrozenModel):
     )
     rewrite_enabled: bool = False
     disable_thinking_supported: bool = False
+    structured_output_mode: Literal[
+        "none", "response_format", "structured_outputs", "guided_json"
+    ] = "none"
     ocr_connection_id: str | None = None
     ocr_model: str | None = None
     ocr_enabled: bool = False

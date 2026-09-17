@@ -51,3 +51,5 @@
 - 仅候选 8289 app 已替换为 `rag-test-wanshitong:wb08r03r-4390fab`，镜像 ID `sha256:ae0a4a15723bb532e93ae44d21343312156902772245001194d27c5961b0b05b`；容器健康且容器内 `SOURCE_REVISION` 与提交一致。
 - Terminal-12 结果保存在本机 `evaluation/wanshitong/v2/results/wb08r03r-4390fab-terminal12.ndjson`：12/12 恰好一个终态，12/12 Final，首事件超时 0，静默结束 0，Transport Retry 0。正文审阅文件仅留本机。
 - Terminal-12 中 3 条预期可回答样本返回 `INSUFFICIENT_EVIDENCE`；复合样本最大总时延为 19.23 秒。R0 只证明终态合同，未证明回答准确率、逐原子归属或 R6 时延达标。R1～R6 和完整 96 仍待完成。
+- R1 使用当前 8289 容器环境和虚构最小 Schema 探测同一 vLLM：`enable_thinking=false` 可用；`response_format=json_schema` 与 `structured_outputs.json` 返回有效对象；`guided_json` 响应无效。四次探测分别约 556、353、353、494 毫秒，未打印 URL、凭据、Prompt 或响应正文。显式配置将选 `response_format`，候选环境更新与 Planner/Claim 实际接入留给后续候选镜像。
+- R1 在模型配置、兼容 Adapter 与通用 JSON 提取器中建立单一协议选择；无生产查询时轮询协议，也无格式错误后二次完整模型调用。配置升级路径已允许已锁定候选只更新已探测的 no-thinking/结构化模式。相关定向测试 `45 passed`，`ruff check` 与 `git diff --check` 通过。

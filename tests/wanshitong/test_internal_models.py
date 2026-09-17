@@ -199,6 +199,7 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
             reranker_base_url="https://reranker.internal.example",
             llm_base_url="https://llm.internal.example/v1",
             llm_disable_thinking_supported=True,
+            llm_structured_output_mode="response_format",
         )
 
         second = configurator.configure(supported)
@@ -209,6 +210,12 @@ def test_internal_model_configurator_updates_verified_thinking_capability(
         assert harness.runtime.models.get(
             first.knowledge_base_id
         ).disable_thinking_supported
+        assert (
+            harness.runtime.models.get(
+                first.knowledge_base_id
+            ).structured_output_mode
+            == "response_format"
+        )
     finally:
         harness.close()
 

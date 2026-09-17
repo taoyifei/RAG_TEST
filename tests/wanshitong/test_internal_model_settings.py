@@ -43,6 +43,24 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
     assert settings.reranker_path == "/rerank"
     assert settings.embedding_credential.source == "none"
     assert not settings.llm_disable_thinking_supported
+    assert settings.llm_structured_output_mode == "none"
+
+
+def test_internal_settings_require_explicit_structured_output_mode() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = (
+        "response_format"
+    )
+    assert (
+        InternalModelSettings.from_environment(
+            environment
+        ).llm_structured_output_mode
+        == "response_format"
+    )
+
+    environment["RAG_WANSHITONG_LLM_STRUCTURED_OUTPUT_MODE"] = "auto"
+    with pytest.raises(ValueError, match="STRUCTURED_OUTPUT_MODE"):
+        InternalModelSettings.from_environment(environment)
 
 
 def test_internal_settings_require_explicit_thinking_capability() -> None:
