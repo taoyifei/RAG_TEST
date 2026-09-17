@@ -7,7 +7,9 @@ from types import MethodType
 
 from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.retrieval.adaptive import AdaptivePlanOutcome
+from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.service import (
+    _atom_scoped_candidates,
     _numeric_conflict,
     _scope_enum_candidates_to_target_group,
 )
@@ -16,11 +18,19 @@ from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     DocumentRef,
+    EvidenceGroup,
+    EvidenceGroupKind,
     EvidenceItem,
+    GroupSourceMap,
     KnowledgeBaseScope,
+    RankedChunk,
     SearchRequest,
 )
-from rag_app.core.models.query_plan import AtomAnswerShape, QueryAtom
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomCandidateLink,
+    QueryAtom,
+)
 from tests.adapters.parsers.docx_fixtures import build_docx
 from tests.application.retrieval.helpers import make_ranked_chunk
 
@@ -28,6 +38,87 @@ _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _DOCX = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def test_atom_grounding_uses_own_hits_and_closed_group_members() -> None:
+    """共享重排之后，原子不能借用另一原子的来源或结构成员。"""
+    first = make_ranked_chunk(1, "甲提交材料。")
+    first_member = make_ranked_chunk(2, "甲还需附上清单。")
+    second = make_ranked_chunk(3, "乙审核材料。", document_number=3)
+    corrected = make_ranked_chunk(4, "甲提交后确认。")
+    corrected = corrected.model_copy(
+        update={"expansion_seed_ids": (first.hydrated.chunk.chunk_id,)}
+    )
+
+    def group(
+        number: int, members: tuple[RankedChunk, ...]
+    ) -> GroupCandidate:
+        chunk = members[0].hydrated.chunk
+        return GroupCandidate(
+            group=EvidenceGroup(
+                group_id=f"egrp_{number:032x}",
+                kind=EvidenceGroupKind.SECTION_GROUP,
+                document_id=chunk.version.document_id,
+                document_version_id=chunk.version.document_version_id,
+                index_revision_id=chunk.index_revision_id,
+                section_id=chunk.section_id,
+                display_name="合成资料",
+                member_chunk_ids=tuple(
+                    member.hydrated.chunk.chunk_id for member in members
+                ),
+                member_source_maps=tuple(
+                    GroupSourceMap(
+                        chunk_id=member.hydrated.chunk.chunk_id,
+                        citation_text=member.hydrated.chunk.citation_text,
+                        source_spans=member.hydrated.chunk.source_spans,
+                    )
+                    for member in members
+                ),
+                member_ranks=tuple(member.fusion_rank for member in members),
+                complete=True,
+                token_cost=sum(
+                    member.hydrated.chunk.token_count for member in members
+                ),
+            ),
+            members=members,
+            rerank_text=" ".join(
+                member.hydrated.chunk.citation_text for member in members
+            ),
+        )
+
+    first_group = group(1, (first, first_member))
+    second_group = group(2, (second,))
+    links = tuple(
+        AtomCandidateLink(
+            atom_id=atom_id,
+            chunk_id=member.hydrated.chunk.chunk_id,
+            channels=("lexical",),
+            best_rank=1,
+            score=1.0,
+        )
+        for atom_id, member in (("A1", first), ("A2", second))
+    )
+    candidates = (first, second, corrected)
+    groups = (first_group, second_group)
+
+    scoped_first, groups_first = _atom_scoped_candidates(
+        "A1", candidates, groups, links, multi_atom=True
+    )
+    scoped_second, groups_second = _atom_scoped_candidates(
+        "A2", candidates, groups, links, multi_atom=True
+    )
+
+    assert {item.hydrated.chunk.chunk_id for item in scoped_first} == {
+        first.hydrated.chunk.chunk_id,
+        first_member.hydrated.chunk.chunk_id,
+        corrected.hydrated.chunk.chunk_id,
+    }
+    assert groups_first == (first_group,)
+    assert scoped_second == (second,)
+    assert groups_second == (second_group,)
+    assert _atom_scoped_candidates(
+        "A3", candidates, groups, links, multi_atom=True
+    ) == ((), ())
 
 
 def test_enumeration_target_anchor_excludes_sibling_structure_groups() -> None:

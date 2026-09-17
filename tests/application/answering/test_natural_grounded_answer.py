@@ -40,7 +40,7 @@ from rag_app.core.models.retrieval import (
     GeneratedAtomCoverage,
     NaturalClaim,
 )
-from rag_app.core.ports import CancellationPort, GenerationRequest
+from rag_app.core.ports import GenerationRequest
 from tests.application.retrieval.test_descriptive_answers import (
     _POLICY,
     _candidates,
@@ -399,7 +399,7 @@ def test_renderer_deduplicates_same_fact_and_support() -> None:
 
     assert outcome.answer is not None
     assert outcome.answer.count("甲部门负责审核材料。") == 1
-    assert len(emitted) == 1
+    assert emitted == []
 
 
 def test_partial_candidate_can_be_upgraded_only_after_local_validation() -> (
@@ -565,25 +565,16 @@ def test_multi_atom_stream_keeps_claims_private_until_final() -> None:
         plan,
     )
 
-    def generate_stream(
-        request: GenerationRequest,
-        *,
-        on_claim: Callable[..., None],
-        cancellation: CancellationPort,
-    ) -> AnswerDraft:
-        del request, on_claim, cancellation
-        assert emitted == []
-        return draft
-
     generator = Mock()
-    generator.generate_stream.side_effect = generate_stream
+    generator.generate.return_value = draft
 
     outcome = _answer(
         generator, evidence, plan, matrix, on_claim=emitted.append
     )
 
     assert outcome.answer is not None
-    assert len(emitted) == 2
+    assert emitted == []
+    generator.generate_stream.assert_not_called()
     assert outcome.repair_calls == 0
 
 

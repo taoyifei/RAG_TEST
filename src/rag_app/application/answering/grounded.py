@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from html import unescape
@@ -257,6 +258,7 @@ class GroundedOutcome:
     ocr_verification_states: tuple[tuple[str, OcrVerificationState], ...] = ()
     atom_coverage: tuple[tuple[str, str], ...] = ()
     repair_calls: int = 0
+    claim_rejection_codes: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1906,6 +1908,16 @@ class GroundedAnsweringService:
         }:
             raise ValueError("逐原子支持矩阵与 QueryPlan 不一致。")
         by_id = {item.support_id: item for item in evidence}
+        stream_claims = (
+            query_plan.effort == "DIRECT"
+            and len(query_plan.atoms) == 1
+            and query_plan.atoms[0].answer_shape
+            not in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.PROCEDURE,
+                AtomAnswerShape.DUTIES,
+            }
+        )
         eligible = {
             atom.atom_id
             for atom in atom_support_matrix.atoms
@@ -1914,6 +1926,7 @@ class GroundedAnsweringService:
         }
         calls: list[ProviderCall] = []
         accepted: list[ValidatedNaturalClaim] = []
+        claim_rejections: Counter[str] = Counter()
         reason: str | None = None
         raw_covered: set[str] = set()
         repair_calls = 0
@@ -1948,7 +1961,8 @@ class GroundedAnsweringService:
             )
             stream_generate = getattr(self.generator, "generate_stream", None)
             if (
-                on_claim is not None
+                stream_claims
+                and on_claim is not None
                 and cancellation is not None
                 and callable(stream_generate)
             ):
@@ -1984,7 +1998,12 @@ class GroundedAnsweringService:
                         evidence,
                         analysis,
                     )
-                except (ValidationFailed, ValueError):
+                except (ValidationFailed, ValueError) as error:
+                    claim_rejections[
+                        error.code
+                        if isinstance(error, ValidationFailed)
+                        else "NATURAL_CLAIM_INVALID"
+                    ] += 1
                     reason = "CLAIM_NOT_SUPPORTED"
                     continue
                 if natural.claim_id in {item.claim_id for item in accepted}:
@@ -2105,6 +2124,7 @@ class GroundedAnsweringService:
                 reason or "GENERATION_ABSTAINED",
                 atom_coverage=coverage,
                 repair_calls=repair_calls,
+                claim_rejection_codes=tuple(sorted(claim_rejections.items())),
             )
         published = [
             support.support_id
@@ -2124,7 +2144,7 @@ class GroundedAnsweringService:
                 ):
                     published.append(support_id)
         published_ids = tuple(dict.fromkeys(published))
-        if on_claim is not None:
+        if stream_claims and on_claim is not None:
             streamed_facts: set[tuple[str, tuple[str, ...]]] = set()
             for accepted_item in accepted:
                 fact_key = (
@@ -2156,6 +2176,7 @@ class GroundedAnsweringService:
             verification_states,
             coverage,
             repair_calls,
+            tuple(sorted(claim_rejections.items())),
         )
 
 

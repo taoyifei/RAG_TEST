@@ -72,6 +72,7 @@ class AdaptivePlanOutcome:
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str = "ADAPTIVE_PLAN_NOT_NEEDED"
     attempted: bool = False
+    schema_fallback_detail: str | None = None
 
 
 class AdaptivePlannerPort(Protocol):

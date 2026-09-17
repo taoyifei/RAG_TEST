@@ -229,6 +229,40 @@ def _scope_enum_candidates_to_target_group(
     )
 
 
+def _atom_scoped_candidates(
+    atom_id: str,
+    candidates: tuple[RankedChunk, ...],
+    groups: tuple[GroupCandidate, ...],
+    links: tuple[AtomCandidateLink, ...],
+    *,
+    multi_atom: bool,
+) -> tuple[tuple[RankedChunk, ...], tuple[GroupCandidate, ...]]:
+    """按初召回来源隔离原子，同时保留其已闭合的结构成员。"""
+    if not multi_atom:
+        return candidates, groups
+    seeds = {link.chunk_id for link in links if link.atom_id == atom_id}
+    if not seeds:
+        return (), ()
+    scoped: dict[str, RankedChunk] = {
+        item.hydrated.chunk.chunk_id: item
+        for item in candidates
+        if item.hydrated.chunk.chunk_id in seeds
+        or seeds.intersection(item.expansion_seed_ids)
+    }
+    selected_groups = tuple(
+        group
+        for group in groups
+        if any(
+            member.hydrated.chunk.chunk_id in scoped
+            for member in group.members
+        )
+    )
+    for group in selected_groups:
+        for member in group.members:
+            scoped.setdefault(member.hydrated.chunk.chunk_id, member)
+    return tuple(scoped.values()), selected_groups
+
+
 def _numeric_conflict(
     atom: QueryAtom, evidence: tuple[EvidenceItem, ...]
 ) -> tuple[EvidenceItem, EvidenceItem] | tuple[()]:
@@ -784,6 +818,9 @@ class RetrievalService:
                 "interpret",
                 {
                     "reason_code": adaptive_reason,
+                    "schema_fallback_detail": (
+                        adaptive.schema_fallback_detail
+                    ),
                     "attempted": adaptive_attempted,
                     "accepted": adaptive.standalone_query is not None,
                     "reasoning_effort": effort.value,
@@ -1441,6 +1478,9 @@ class RetrievalService:
                         "atom_count": len(query_plan.atoms),
                         "atom_coverage": generated.atom_coverage,
                         "repair_calls": generated.repair_calls,
+                        "claim_rejection_codes": (
+                            generated.claim_rejection_codes
+                        ),
                         "generation_calls": sum(
                             call.call_count
                             for call in generated.calls
@@ -2495,6 +2535,13 @@ class RetrievalService:
             ]
         ] = []
         for atom in query_plan.atoms:
+            atom_candidates, atom_groups = _atom_scoped_candidates(
+                atom.atom_id,
+                candidates,
+                groups,
+                links,
+                multi_atom=len(query_plan.atoms) > 1,
+            )
             atom_analysis = self._analysis_for_atom(request, atom)
             atom_plan = self._planner.plan(
                 atom_analysis,
@@ -2503,10 +2550,10 @@ class RetrievalService:
                 dense_required=request.dense_required,
             )
             selection = self._evidence.assemble_sets(
-                candidates,
+                atom_candidates,
                 self._policy,
                 include_model_candidates=True,
-                groups=groups
+                groups=atom_groups
                 if self._policy.evidence_group_mode == "active"
                 else None,
                 context=EvidenceSelectionContext(

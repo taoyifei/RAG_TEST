@@ -555,9 +555,24 @@ class ProductGroundedModel:
                     timeout_seconds=12.0,
                 )
             calls = (completion.call,)
-            payload = _AdaptivePlanPayload.model_validate(
-                json.loads(completion.content)
-            )
+            try:
+                payload_data = json.loads(completion.content)
+            except json.JSONDecodeError:
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    attempted=True,
+                    schema_fallback_detail="INVALID_JSON",
+                )
+            try:
+                payload = _AdaptivePlanPayload.model_validate(payload_data)
+            except ValidationError:
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    attempted=True,
+                    schema_fallback_detail="INVALID_SCHEMA",
+                )
             reason = rewrite_constraint_reason(
                 request, payload.standalone_query
             )
@@ -583,6 +598,7 @@ class ProductGroundedModel:
                     calls=calls,
                     reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
                     attempted=True,
+                    schema_fallback_detail="CONSTRAINT_NOT_IN_QUERY",
                 )
             if any(
                 (
@@ -600,6 +616,7 @@ class ProductGroundedModel:
                     calls=calls,
                     reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
                     attempted=True,
+                    schema_fallback_detail="QUALIFIER_NOT_IN_QUERY",
                 )
             return AdaptivePlanOutcome(
                 standalone_query=payload.standalone_query,
@@ -624,11 +641,12 @@ class ProductGroundedModel:
                 reason_code=error.code,
                 attempted=True,
             )
-        except (ValidationError, ValueError, TypeError):
+        except (ValueError, TypeError):
             return AdaptivePlanOutcome(
                 calls=calls,
                 reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
                 attempted=True,
+                schema_fallback_detail="ATOM_CONSTRUCTION_INVALID",
             )
 
     def interpret(  # noqa: PLR0911

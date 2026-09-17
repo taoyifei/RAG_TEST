@@ -47,10 +47,15 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
             if not events:
                 raise ValueError(f"未找到候选 Trace：{record['run_id']}")
             plan = events.get("retrieval.query_plan", [])
+            analysis = events.get("retrieval.analyze", [])
+            retrieval_plan = events.get("retrieval.plan", [])
             route = events.get("retrieval.query_embedding_route", [])
             reranks = events.get("retrieval.rerank", [])
             generation = events.get("retrieval.generate", [])
             grounding = events.get("retrieval.atom_grounding", [])
+            interpretation = events.get("retrieval.interpret", [])
+            assembly = events.get("retrieval.assemble_evidence", [])
+            confidence = events.get("retrieval.confidence", [])
             coverage = events.get("retrieval.atom_coverage", [])
             correction = events.get("retrieval.corrective_retrieval", [])
             cache = events.get("retrieval.cache", [])
@@ -58,6 +63,11 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                 call
                 for event in generation
                 for call in event.get("provider_calls", ())
+            )
+            planner_provider_calls = tuple(
+                call
+                for call in provider_calls
+                if call.get("operation") == "query.interpret"
             )
             call_counts = Counter(
                 {
@@ -95,15 +105,44 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                     "request_total_ms": record["request_total_ms"],
                     "cache_hit": cache_hit,
                     "atom_count": plan[-1].get("atom_count") if plan else None,
+                    "answer_type": (
+                        analysis[-1].get("answer_type") if analysis else None
+                    ),
+                    "effort": (
+                        analysis[-1].get("reasoning_effort")
+                        if analysis
+                        else None
+                    ),
+                    "planned_channels": (
+                        retrieval_plan[-1].get("channels")
+                        if retrieval_plan
+                        else None
+                    ),
                     "planner_reason": (
                         plan[-1].get("reason_code") if plan else None
                     ),
+                    "planner_schema_detail": (
+                        interpretation[-1].get("schema_fallback_detail")
+                        if interpretation
+                        else None
+                    ),
                     "planner_calls": call_counts["query.interpret"],
+                    "planner_provider_reasons": tuple(
+                        call.get("reason_code")
+                        for call in planner_provider_calls
+                    ),
+                    "planner_ms": sum(
+                        float(call.get("elapsed_ms", 0))
+                        for call in planner_provider_calls
+                    ),
                     "embedding_calls": (
                         sum(route_call_counts) if route_call_counts else None
                     ),
                     "embedding_batch_size": (
                         route[-1].get("batch_size") if route else None
+                    ),
+                    "embedding_route_reason": (
+                        route[-1].get("reason_code") if route else None
                     ),
                     "reranker_calls": sum(
                         event.get("mode") == "provider" for event in reranks
@@ -112,9 +151,27 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                         0, call_counts["generation"] - repair_calls
                     ),
                     "repair_calls": repair_calls,
+                    "claim_rejection_codes": (
+                        grounding[-1].get("claim_rejection_codes", ())
+                        if grounding
+                        else ()
+                    ),
                     "atom_coverage": tuple(
                         (event.get("atom_id"), event.get("status"))
                         for event in coverage
+                    ),
+                    "answer_support_count": (
+                        assembly[-1].get("answer_support_count")
+                        if assembly
+                        else None
+                    ),
+                    "model_candidate_count": (
+                        assembly[-1].get("model_evidence_candidate_count")
+                        if assembly
+                        else None
+                    ),
+                    "pre_generation_confidence": (
+                        confidence[-1].get("status") if confidence else None
                     ),
                     "correction_triggered": any(
                         event.get("correction_triggered")
@@ -147,6 +204,11 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
         latencies = [float(row["request_total_ms"]) for row in selected]
         fresh = [row for row in selected if not row["cache_hit"]]
         fresh_latencies = [float(row["request_total_ms"]) for row in fresh]
+        corrections = [
+            float(row["corrective_elapsed_ms"])
+            for row in selected
+            if row["correction_triggered"]
+        ]
         groups[group] = {
             "count": len(selected),
             "cache_hit_count": len(selected) - len(fresh),
@@ -177,6 +239,8 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
             "max_repair_calls": max(
                 (row["repair_calls"] for row in selected), default=0
             ),
+            "correction_triggered_count": len(corrections),
+            "p95_corrective_triggered_ms": _percentile(corrections, 0.95),
             "p95_corrective_ms": _percentile(
                 [float(row["corrective_elapsed_ms"]) for row in selected],
                 0.95,
