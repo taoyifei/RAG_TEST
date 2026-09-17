@@ -26,6 +26,11 @@ from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
 from rag_app.application.retrieval.evidence import EvidenceAssembler
+from rag_app.application.retrieval.evidence_groups import (
+    GroupCandidate,
+    build_evidence_groups,
+    pack_evidence_groups,
+)
 from rag_app.application.retrieval.exact import ExactChannel
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
 from rag_app.application.retrieval.filters import apply_candidate_filters
@@ -132,6 +137,24 @@ class _SelectionOutcome:
     confidence: ConfidenceDecision
 
 
+def _flatten_evidence_groups(
+    groups: tuple[GroupCandidate, ...],
+) -> tuple[RankedChunk, ...]:
+    """按组排序展开成员，保留原始 Chunk 与来源映射。"""
+    flattened: list[RankedChunk] = []
+    seen: set[str] = set()
+    for rank, group in enumerate(groups, start=1):
+        for member in group.members:
+            chunk_id = member.hydrated.chunk.chunk_id
+            if chunk_id in seen:
+                continue
+            seen.add(chunk_id)
+            flattened.append(
+                member.model_copy(update={"rerank_rank": rank})
+            )
+    return tuple(flattened)
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievalExecutionIdentity:
     """可在 Provider 前冻结的等价计算身份。"""
@@ -207,7 +230,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "wb08r-01-adaptive-catalog-v1",
+                "retrieval_implementation": "wb08r-02-contextual-groups-v1",
             }
         )
         self._egress = egress_policy
@@ -1907,15 +1930,92 @@ class RetrievalService:
         )
         rank_started = perf_counter()
         resolved_query = analysis.resolved_query or analysis.normalized_query
-        reranked = self._reranker.rerank(
-            resolved_query,
-            hydrated,
-            self._egress,
-            self._policy,
-            enabled=plan.use_reranker,
-            result_limit=max(request.limit, len(structural_closure_ids)),
-            required_candidate_ids=frozenset(structural_closure_ids),
-        )
+        if self._policy.group_rerank_enabled:
+            # 先闭合有界的 canonical 结构，再把整组交给同一 Reranker。
+            seed_limit = min(
+                self._policy.rerank_candidate_limit,
+                max(request.limit, len(structural_closure_ids)),
+            )
+            seeds = tuple(
+                {
+                    item.hydrated.chunk.chunk_id: item
+                    for index, item in enumerate(hydrated)
+                    if index < seed_limit
+                    or item.hydrated.chunk.chunk_id in structural_closure_ids
+                }.values()
+            )
+            closure = self._neighbors.expand(
+                snapshot,
+                seeds,
+                plan.neighbor_mode,
+                self._policy,
+                source_qualifier=analysis.semantics.source_qualifier,
+            )
+            group_inputs = tuple(
+                {
+                    item.hydrated.chunk.chunk_id: item
+                    for item in (*closure.candidates, *hydrated)
+                }.values()
+            )
+            groups = build_evidence_groups(
+                group_inputs,
+                max_groups=self._policy.rerank_candidate_limit,
+                max_member_chunks=self._policy.group_member_chunk_limit,
+                rerank_text_char_limit=self._policy.rerank_text_char_limit,
+            )
+            group_ranking = self._reranker.rerank_groups(
+                resolved_query,
+                groups,
+                self._egress,
+                self._policy,
+                enabled=plan.use_reranker,
+                result_limit=max(request.limit, len(structural_closure_ids)),
+                required_candidate_ids=frozenset(structural_closure_ids),
+            )
+            packed = pack_evidence_groups(
+                group_ranking.groups,
+                token_budget=self._policy.evidence_token_budget,
+                max_groups=self._policy.max_evidence_items,
+                max_chunks=self._policy.max_evidence_items,
+            )
+            reranked = RerankingOutcome(
+                candidates=_flatten_evidence_groups(packed),
+                mode=group_ranking.mode,
+                reason_code=group_ranking.reason_code,
+                provider_calls=group_ranking.provider_calls,
+                failure_category=group_ranking.failure_category,
+            )
+            expansion = ExpansionOutcome(
+                reranked.candidates, closure.degraded_reason_codes
+            )
+            self._record(
+                trace_id,
+                "evidence_groups",
+                {
+                    "pass": retrieval_phase,
+                    "formed": len(groups),
+                    "complete": sum(group.group.complete for group in groups),
+                    "packed": len(packed),
+                    "packed_chunks": len(reranked.candidates),
+                },
+            )
+        else:
+            reranked = self._reranker.rerank(
+                resolved_query,
+                hydrated,
+                self._egress,
+                self._policy,
+                enabled=plan.use_reranker,
+                result_limit=max(request.limit, len(structural_closure_ids)),
+                required_candidate_ids=frozenset(structural_closure_ids),
+            )
+            expansion = self._neighbors.expand(
+                snapshot,
+                reranked.candidates,
+                plan.neighbor_mode,
+                self._policy,
+                source_qualifier=analysis.semantics.source_qualifier,
+            )
         provider_calls.extend(reranked.provider_calls)
         self._record(
             trace_id,
@@ -1926,13 +2026,6 @@ class RetrievalService:
                 "reason_code": reranked.reason_code,
                 "candidate_count": len(reranked.candidates),
             },
-        )
-        expansion = self._neighbors.expand(
-            snapshot,
-            reranked.candidates,
-            plan.neighbor_mode,
-            self._policy,
-            source_qualifier=analysis.semantics.source_qualifier,
         )
         degraded.extend(expansion.degraded_reason_codes)
         self._record(

@@ -49,6 +49,8 @@ class RetrievalPolicy(FrozenModel):
     fusion_candidate_limit: StrictInt = Field(default=48, gt=0, le=200)
     rrf_k: StrictInt = Field(default=60, gt=0)
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
+    group_rerank_enabled: bool = True
+    group_member_chunk_limit: StrictInt = Field(default=8, gt=0, le=16)
     neighbor_count: StrictInt = Field(default=1, ge=0, le=4)
     section_chunk_limit: StrictInt = Field(default=2, ge=0, le=8)
     evidence_token_budget: StrictInt = Field(default=1024, gt=0)

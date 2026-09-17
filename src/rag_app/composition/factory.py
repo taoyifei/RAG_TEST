@@ -844,7 +844,7 @@ def _serving_fingerprint_input(  # noqa: PLR0913
         reranker_model=reranker_model,
         reranker_policy=freeze_json_object(reranker_policy),
         rerank_mode=(
-            "provider_or_explicit_bypass"
+            "evidence_group_provider_or_explicit_bypass_v1"
             if policy.rerank_enabled
             else "disabled"
         ),
@@ -853,11 +853,13 @@ def _serving_fingerprint_input(  # noqa: PLR0913
                 "enabled": policy.neighbor_expansion_enabled,
                 "neighbor_count": policy.neighbor_count,
                 "section_limit": policy.section_chunk_limit,
+                "group_member_chunk_limit": policy.group_member_chunk_limit,
             }
         ),
         evidence_policy=freeze_json_object(
             {
-                "id": "canonical-source-span-v1",
+                "id": "canonical-evidence-group-v1",
+                "group_rerank_enabled": policy.group_rerank_enabled,
                 "token_budget": policy.evidence_token_budget,
                 "per_document_cap": policy.per_document_cap,
                 "per_section_cap": policy.per_section_cap,

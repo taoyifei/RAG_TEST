@@ -65,6 +65,11 @@ from rag_app.core.models.document import (
     validate_document_ir,
     validate_document_ref_uniqueness,
 )
+from rag_app.core.models.evidence_group import (
+    EvidenceGroup,
+    EvidenceGroupKind,
+    GroupSourceMap,
+)
 from rag_app.core.models.jobs import DocumentEmbeddingBudget, IngestionJobState
 from rag_app.core.models.lexical import (
     AnalyzedLexicalDocument,
@@ -224,6 +229,9 @@ __all__ = [
     "BlobReference",
     "CacheScope",
     "CatalogCitation",
+    "EvidenceGroup",
+    "EvidenceGroupKind",
+    "GroupSourceMap",
     "CellGrid",
     "ChannelHit",
     "Chunk",

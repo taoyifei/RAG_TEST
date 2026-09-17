@@ -12,6 +12,7 @@ from rag_app.application.provider_health import (
     EgressGuard,
     ProviderCircuitBreaker,
 )
+from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.core.errors import PolicyDenied, ProviderInvalidResponse, RagError
 from rag_app.core.models import (
     ProviderCall,
@@ -30,6 +31,17 @@ class RerankingOutcome:
     """重排或显式旁路后的候选与实际模式。"""
 
     candidates: tuple[RankedChunk, ...]
+    mode: str
+    reason_code: str
+    provider_calls: tuple[ProviderCall, ...] = ()
+    failure_category: ProviderFailureCategory | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GroupRerankingOutcome:
+    """同一 Reranker 对完整结构组的排序结果。"""
+
+    groups: tuple[GroupCandidate, ...]
     mode: str
     reason_code: str
     provider_calls: tuple[ProviderCall, ...] = ()
@@ -179,6 +191,179 @@ class CircuitAwareReranker:
             reason_code="RERANK_EXECUTED",
             provider_calls=result.calls,
         )
+
+    def rerank_groups(  # noqa: PLR0913
+        self,
+        query: str,
+        groups: tuple[GroupCandidate, ...],
+        egress: EgressPolicy,
+        policy: RetrievalPolicy,
+        *,
+        enabled: bool,
+        result_limit: int,
+        required_candidate_ids: frozenset[str] = frozenset(),
+    ) -> GroupRerankingOutcome:
+        """复用当前 Provider 与 circuit，对有界完整组重排。"""
+        limited = groups[: policy.rerank_candidate_limit]
+        output_limit = min(result_limit, len(limited))
+        required = _required_groups(limited, required_candidate_ids)
+        if not enabled or not limited:
+            return _bypass_groups(
+                _restore_required_groups(
+                    limited[:output_limit], limited, required, output_limit
+                ),
+                "RERANK_DISABLED_BY_PLAN",
+            )
+        descriptor = self._reranker.descriptor
+        key = CircuitKey(descriptor.name, "reranking", descriptor.version)
+        if descriptor.capabilities.permits_network:
+            try:
+                EgressGuard.require_reranking(egress, descriptor.name)
+            except PolicyDenied:
+                if not policy.bypass_policy_denied:
+                    raise
+                return _bypass_groups(
+                    _restore_required_groups(
+                        limited[:output_limit], limited, required, output_limit
+                    ),
+                    "RERANK_BYPASSED_POLICY_DENIED",
+                )
+        if not self._circuit.allow_call(key):
+            return _bypass_groups(
+                _restore_required_groups(
+                    limited[:output_limit], limited, required, output_limit
+                ),
+                "RERANK_BYPASSED_CIRCUIT_OPEN",
+                category=_circuit_failure_category(
+                    self._circuit.snapshot(key).reason_code
+                ),
+            )
+        request = RerankRequest(
+            query=query,
+            candidates=tuple(
+                (group.group.group_id, group.rerank_text)
+                for group in limited
+            ),
+            limit=output_limit,
+        )
+        try:
+            result = self._reranker.rerank(request)
+            ordered = _validate_group_order(
+                result.items, limited, output_limit
+            )
+        except (RagError, ValueError) as error:
+            category = (
+                failure_category(error)
+                if isinstance(error, RagError)
+                else ProviderFailureCategory.RESPONSE_CONTRACT
+            )
+            self._circuit.record_failure(key, category)
+            return _bypass_groups(
+                _restore_required_groups(
+                    limited[:output_limit], limited, required, output_limit
+                ),
+                "RERANK_BYPASSED_PROVIDER_UNAVAILABLE",
+                category=category,
+            )
+        self._circuit.record_success(key)
+        return GroupRerankingOutcome(
+            groups=_restore_required_groups(
+                ordered, limited, required, output_limit
+            ),
+            mode=result.mode.value,
+            reason_code="RERANK_EXECUTED",
+            provider_calls=result.calls,
+        )
+
+
+def _required_groups(
+    groups: tuple[GroupCandidate, ...],
+    required_candidate_ids: frozenset[str],
+) -> frozenset[str]:
+    return frozenset(
+        group.group.group_id
+        for group in groups
+        if any(
+            item.hydrated.chunk.chunk_id in required_candidate_ids
+            or item.must_keep
+            for item in group.members
+        )
+    )
+
+
+def _restore_required_groups(
+    selected: tuple[GroupCandidate, ...],
+    all_groups: tuple[GroupCandidate, ...],
+    required_group_ids: frozenset[str],
+    limit: int,
+) -> tuple[GroupCandidate, ...]:
+    result = list(selected[:limit])
+    present = {group.group.group_id for group in result}
+    for group in all_groups:
+        group_id = group.group.group_id
+        if group_id not in required_group_ids or group_id in present:
+            continue
+        replace = next(
+            (
+                index for index in range(len(result) - 1, -1, -1)
+                if result[index].group.group_id not in required_group_ids
+            ),
+            None,
+        )
+        if replace is None:
+            break
+        present.discard(result[replace].group.group_id)
+        result[replace] = group
+        present.add(group_id)
+    return tuple(result)
+
+
+def _validate_group_order(
+    items: tuple[RerankItem, ...],
+    groups: tuple[GroupCandidate, ...],
+    limit: int,
+) -> tuple[GroupCandidate, ...]:
+    if len(items) != limit:
+        raise ProviderInvalidResponse(
+            "Reranker 返回结构组数量不完整。", stage="retrieval.rerank"
+        )
+    positions = {
+        group.group.group_id: index for index, group in enumerate(groups)
+    }
+    ids = [item.candidate_id for item in items]
+    if len(set(ids)) != len(ids) or any(item not in positions for item in ids):
+        raise ProviderInvalidResponse(
+            "Reranker 返回重复或越界结构组。", stage="retrieval.rerank"
+        )
+    scores = {item.candidate_id: float(item.score) for item in items}
+    if any(not math.isfinite(score) for score in scores.values()):
+        raise ProviderInvalidResponse(
+            "Reranker 返回非有限结构组分数。", stage="retrieval.rerank"
+        )
+    selected = [
+        group for group in groups if group.group.group_id in scores
+    ]
+    selected.sort(
+        key=lambda group: (
+            -scores[group.group.group_id],
+            positions[group.group.group_id],
+        )
+    )
+    return tuple(selected)
+
+
+def _bypass_groups(
+    groups: tuple[GroupCandidate, ...],
+    reason_code: str,
+    *,
+    category: ProviderFailureCategory | None = None,
+) -> GroupRerankingOutcome:
+    return GroupRerankingOutcome(
+        groups=groups,
+        mode=reason_code.casefold(),
+        reason_code=reason_code,
+        failure_category=category,
+    )
 
 
 def _bounded_text(candidate: RankedChunk, limit: int) -> str:
@@ -366,4 +551,8 @@ def _circuit_failure_category(
         return None
 
 
-__all__ = ["CircuitAwareReranker", "RerankingOutcome"]
+__all__ = [
+    "CircuitAwareReranker",
+    "GroupRerankingOutcome",
+    "RerankingOutcome",
+]
