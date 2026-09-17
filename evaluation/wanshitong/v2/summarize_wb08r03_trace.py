@@ -53,6 +53,7 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
             grounding = events.get("retrieval.atom_grounding", [])
             coverage = events.get("retrieval.atom_coverage", [])
             correction = events.get("retrieval.corrective_retrieval", [])
+            cache = events.get("retrieval.cache", [])
             provider_calls = tuple(
                 call
                 for event in generation
@@ -73,6 +74,12 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                 for event in route
                 if isinstance(event.get("call_count"), int)
             ]
+            repair_calls = (
+                int(grounding[-1].get("repair_calls", 0))
+                if grounding
+                else 0
+            )
+            cache_hit = any(event.get("result") == "hit" for event in cache)
             cases.append(
                 {
                     "run_id": record["run_id"],
@@ -86,7 +93,11 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                     ],
                     "verbatim_copy_ratio": record["verbatim_copy_ratio"],
                     "request_total_ms": record["request_total_ms"],
+                    "cache_hit": cache_hit,
                     "atom_count": plan[-1].get("atom_count") if plan else None,
+                    "planner_reason": (
+                        plan[-1].get("reason_code") if plan else None
+                    ),
                     "planner_calls": call_counts["query.interpret"],
                     "embedding_calls": (
                         sum(route_call_counts) if route_call_counts else None
@@ -97,10 +108,10 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                     "reranker_calls": sum(
                         event.get("mode") == "provider" for event in reranks
                     ),
-                    "generation_calls": call_counts["generation"],
-                    "repair_calls": (
-                        grounding[-1].get("repair_calls") if grounding else 0
+                    "generation_calls": max(
+                        0, call_counts["generation"] - repair_calls
                     ),
+                    "repair_calls": repair_calls,
                     "atom_coverage": tuple(
                         (event.get("atom_id"), event.get("status"))
                         for event in coverage
@@ -134,14 +145,23 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
     for group in ("formal54", "natural_complex18", "latency24"):
         selected = [row for row in cases if row["group"] == group]
         latencies = [float(row["request_total_ms"]) for row in selected]
+        fresh = [row for row in selected if not row["cache_hit"]]
+        fresh_latencies = [float(row["request_total_ms"]) for row in fresh]
         groups[group] = {
             "count": len(selected),
+            "cache_hit_count": len(selected) - len(fresh),
             "answerable": sum(
                 row["status"] == "ANSWERABLE" for row in selected
             ),
             "source_hit": sum(row["source_hit"] is True for row in selected),
             "p50_total_ms": statistics.median(latencies) if latencies else None,
             "p95_total_ms": _percentile(latencies, 0.95),
+            "p50_fresh_ms": (
+                statistics.median(fresh_latencies)
+                if fresh_latencies
+                else None
+            ),
+            "p95_fresh_ms": _percentile(fresh_latencies, 0.95),
             "max_planner_calls": max(
                 (row["planner_calls"] for row in selected), default=0
             ),

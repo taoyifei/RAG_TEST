@@ -313,6 +313,28 @@ def test_repair_prompt_contains_only_missing_atom_and_its_evidence() -> None:
     assert payload["accepted_claim_ids"] == ["C1"]
 
 
+def test_natural_prompt_omits_internal_coordinates() -> None:
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("甲部门")
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
+    request = GenerationRequest(
+        query=plan.standalone_query,
+        evidence=evidence,
+        citation_protocol="support-id-v2-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=matrix,
+    )
+
+    payload = json.loads(_natural_messages(request)[1].content)
+    projected = payload["evidence"][0]
+
+    assert projected["text"] == evidence[0].citation_text
+    assert projected["support_id"] == "S1"
+    assert "anchors" not in projected["source_structure"]
+    assert "document_version_id" not in projected["source_structure"]
+    assert evidence[0].source_spans
+
+
 def test_incomplete_enumeration_remains_limited() -> None:
     question = "哪些情况下无需审批直接归档？"
     intro = "对于以下情形，无需审批，提交后直接归档。"
