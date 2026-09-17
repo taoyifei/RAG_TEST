@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import unicodedata
 import uuid
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from contextlib import suppress
 from copy import copy
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from time import perf_counter
 from typing import Literal
 
@@ -171,6 +173,71 @@ class _AtomRetrievalOutcome:
     selected_slot: str | None
     selected_vector: str | None
     route_reason: str
+
+
+_CONFLICT_QUANTITY = re.compile(
+    r"(?<![\d.])(?P<value>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>％|%|毫秒|分钟|小时|秒|天|日|周|个月|月|年|"
+    r"万元|亿元|元|人|次|个|件|项)"
+)
+
+
+def _numeric_conflict(
+    atom: QueryAtom, evidence: tuple[EvidenceItem, ...]
+) -> tuple[EvidenceItem, EvidenceItem] | tuple[()]:
+    """仅识别不同文档对同一目标关系的明确单值、同单位冲突。"""
+    if atom.answer_shape not in {
+        AtomAnswerShape.FACT,
+        AtomAnswerShape.DURATION,
+        AtomAnswerShape.COUNT,
+    }:
+        return ()
+    comparable: list[tuple[EvidenceItem, Decimal, str]] = []
+    target = unicodedata.normalize("NFKC", atom.target).casefold()
+    relation = unicodedata.normalize("NFKC", atom.relation).casefold()
+    for item in evidence:
+        if (
+            not item.document_id
+            or not item.publishable
+            or not item.source_spans
+        ):
+            continue
+        text = unicodedata.normalize("NFKC", item.citation_text).casefold()
+        if target not in text or relation not in text:
+            continue
+        if atom.source_qualifier:
+            label = unicodedata.normalize(
+                "NFKC",
+                " ".join(
+                    (
+                        item.display_name or "",
+                        str(dict(item.metadata).get("document_title", "")),
+                    )
+                ),
+            ).casefold()
+            if (
+                unicodedata.normalize("NFKC", atom.source_qualifier).casefold()
+                not in label
+            ):
+                continue
+        values = tuple(_CONFLICT_QUANTITY.finditer(text))
+        if len(values) == 1:
+            comparable.append(
+                (
+                    item,
+                    Decimal(values[0]["value"]),
+                    values[0]["unit"],
+                )
+            )
+    for index, (left, left_value, left_unit) in enumerate(comparable):
+        for right, right_value, right_unit in comparable[index + 1 :]:
+            if (
+                left.document_id != right.document_id
+                and left_unit == right_unit
+                and left_value != right_value
+            ):
+                return left, right
+    return ()
 
 
 def _flatten_evidence_groups(
@@ -2341,7 +2408,7 @@ class RetrievalService:
             channels, links, selected_slot, selected_vector, route_reason
         )
 
-    def _ground_atoms(  # noqa: PLR0912, PLR0913
+    def _ground_atoms(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         *,
         request: SearchRequest,
@@ -2504,17 +2571,27 @@ class RetrievalService:
                         ),
                     )
                 )
+            conflicting = _numeric_conflict(atom, direct)
             status = (
-                AtomStatus.SUPPORTED
+                AtomStatus.CONTRADICTORY
+                if conflicting
+                else AtomStatus.SUPPORTED
                 if direct and all(passed for _name, passed in checks)
                 else AtomStatus.PARTIAL
                 if relevant
                 else AtomStatus.MISSING
             )
+            support_items = (
+                conflicting
+                if status is AtomStatus.CONTRADICTORY
+                else direct
+                if status is AtomStatus.SUPPORTED
+                else relevant
+            )
             groups_for_atom = tuple(
                 dict.fromkeys(
                     group_id
-                    for item in direct
+                    for item in support_items
                     if isinstance(
                         group_id := dict(item.metadata).get(
                             "evidence_group_id"
@@ -2527,32 +2604,15 @@ class RetrievalService:
                 AtomSupport(
                     atom_id=atom.atom_id,
                     status=status,
-                    supporting_group_ids=(
-                        groups_for_atom
-                        if status is AtomStatus.SUPPORTED
-                        else tuple(
-                            dict.fromkeys(
-                                group_id
-                                for item in relevant
-                                if isinstance(
-                                    group_id := dict(item.metadata).get(
-                                        "evidence_group_id"
-                                    ),
-                                    str,
-                                )
-                            )
-                        )
-                    ),
+                    supporting_group_ids=groups_for_atom,
                     supporting_support_ids=tuple(
-                        item.support_id
-                        for item in (
-                            direct
-                            if status is AtomStatus.SUPPORTED
-                            else relevant
-                        )
+                        item.support_id for item in support_items
                     ),
                     missing_aspects=tuple(
                         (name for name, passed in checks if not passed)
+                    ),
+                    contradictions=(
+                        ("NUMERIC_VALUE_CONFLICT",) if conflicting else ()
                     ),
                     deterministic_checks=tuple(checks),
                 )
@@ -2582,7 +2642,9 @@ class RetrievalService:
                     ),
                     status=status,
                     reason_codes=(
-                        ("DIRECT_SUPPORT",)
+                        ("CONTRADICTORY_SOURCES",)
+                        if status is AtomStatus.CONTRADICTORY
+                        else ("DIRECT_SUPPORT",)
                         if status is AtomStatus.SUPPORTED
                         else ("RELATED_EVIDENCE_ONLY",)
                         if status is AtomStatus.PARTIAL

@@ -7,17 +7,70 @@ from types import MethodType
 
 from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.retrieval.adaptive import AdaptivePlanOutcome
+from rag_app.application.retrieval.service import _numeric_conflict
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
 from rag_app.core.identifiers import deterministic_id
-from rag_app.core.models import DocumentRef, KnowledgeBaseScope, SearchRequest
+from rag_app.core.models import (
+    DocumentRef,
+    EvidenceItem,
+    KnowledgeBaseScope,
+    SearchRequest,
+)
 from rag_app.core.models.query_plan import AtomAnswerShape, QueryAtom
 from tests.adapters.parsers.docx_fixtures import build_docx
+from tests.application.retrieval.helpers import make_ranked_chunk
 
 _PROFILE = Path("configs/profiles/dev-p06-memory.json")
 _DOCX = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
+
+
+def test_conflicting_source_values_require_same_target_relation_and_unit() -> (
+    None
+):
+    """不同文档对同一关系的明确数值冲突保留两边原文。"""
+    atom = QueryAtom(
+        atom_id="A1",
+        target="甲设备",
+        relation="保管期限",
+        answer_shape=AtomAnswerShape.DURATION,
+    )
+
+    def evidence(number: int, text: str, document_number: int) -> EvidenceItem:
+        ranked = make_ranked_chunk(
+            number, text, document_number=document_number
+        )
+        chunk = ranked.hydrated.chunk
+        return EvidenceItem(
+            evidence_id=f"S{number}",
+            chunk_id=chunk.chunk_id,
+            citation_text=text,
+            source_label=f"文档{document_number}",
+            source_spans=chunk.source_spans,
+            document_id=chunk.version.document_id,
+            document_version_id=chunk.version.document_version_id,
+        )
+
+    first = evidence(1, "甲设备的保管期限为14天。", 2)
+    second = evidence(2, "甲设备的保管期限为7天。", 3)
+    unrelated = evidence(3, "乙设备的保管期限为5天。", 4)
+    other_unit = evidence(4, "甲设备的保管期限为7个月。", 5)
+
+    assert _numeric_conflict(atom, (first, second)) == (first, second)
+    assert _numeric_conflict(atom, (first, unrelated)) == ()
+    assert _numeric_conflict(atom, (first, other_unit)) == ()
+    assert (
+        _numeric_conflict(
+            atom,
+            (
+                first,
+                second.model_copy(update={"document_id": first.document_id}),
+            ),
+        )
+        == ()
+    )
 
 
 def test_atom_channels_merge_before_one_rerank(tmp_path: Path) -> None:

@@ -31,7 +31,10 @@ def _request(question: str) -> SearchRequest:
 
 
 def _planner_response(
-    question: str, atoms: list[dict[str, object]] | list[str]
+    question: str,
+    atoms: list[dict[str, object]] | list[str],
+    *,
+    raw_content: str | None = None,
 ) -> object:
     payload = {
         "standalone_query": question,
@@ -45,7 +48,9 @@ def _planner_response(
     class Adapter:
         def complete(self, *_args: object, **_kwargs: object) -> object:
             return SimpleNamespace(
-                content=json.dumps(payload, ensure_ascii=False),
+                content=raw_content
+                if raw_content is not None
+                else json.dumps(payload, ensure_ascii=False),
                 call=None,
             )
 
@@ -150,6 +155,44 @@ def test_planner_invalid_schema_falls_back_to_single_rule_atom() -> None:
     assert outcome.reason_code == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
     assert len(plan.atoms) == 1
     assert plan.atoms[0].atom_id == "A1"
+
+
+@pytest.mark.parametrize("invalid_json", ("{bad json", "[]"))
+def test_planner_invalid_json_falls_back_without_user_visible_error(
+    invalid_json: str,
+) -> None:
+    request = _request("甲和乙分别需要多久？")
+    model = _planner_response(request.text, [], raw_content=invalid_json)
+
+    outcome = model.plan_adaptive(  # type: ignore[union-attr]
+        request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
+    )
+
+    assert outcome.reason_code == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
+    assert outcome.atoms == ()
+
+
+def test_planner_more_than_four_atoms_falls_back() -> None:
+    request = _request("甲、乙、丙、丁、戊各自负责什么？")
+    atoms = [
+        {
+            "target": target,
+            "relation": "职责",
+            "answer_shape": "DUTIES",
+            "source_qualifier": None,
+            "constraints": [],
+            "original_fragment": None,
+        }
+        for target in "甲乙丙丁戊"
+    ]
+    model = _planner_response(request.text, atoms)
+
+    outcome = model.plan_adaptive(  # type: ignore[union-attr]
+        request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
+    )
+
+    assert outcome.reason_code == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
+    assert outcome.atoms == ()
 
 
 def test_duplicate_atoms_are_removed_without_answer_table() -> None:
