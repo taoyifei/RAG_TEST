@@ -76,7 +76,6 @@ from rag_app.core.models import (
     CatalogCitation,
     ChannelHit,
     Chunk,
-    ChunkRole,
     CircuitSnapshot,
     ConfidenceDecision,
     ConfidenceStatus,
@@ -1851,61 +1850,9 @@ class RetrievalService:
         snapshot: ActiveRevisionQuerySnapshot,
         candidates: tuple[RankedChunk, ...],
     ) -> ExpansionOutcome:
-        """沿 canonical 邻接链有界闭合初召回的列表和表格。"""
-        seeds: dict[ChunkRole, list[RankedChunk]] = {
-            ChunkRole.LIST: [],
-            ChunkRole.TABLE: [],
-        }
-        seen_groups: dict[ChunkRole, set[str]] = {
-            ChunkRole.LIST: set(),
-            ChunkRole.TABLE: set(),
-        }
-        for candidate in candidates:
-            chunk = candidate.hydrated.chunk
-            if chunk.role not in seeds:
-                continue
-            if (
-                chunk.role is ChunkRole.LIST
-                and chunk.neighbor_group_id in seen_groups[chunk.role]
-            ):
-                continue
-            if len(seeds[chunk.role]) >= self._policy.rerank_candidate_limit:
-                continue
-            seen_groups[chunk.role].add(chunk.neighbor_group_id)
-            seeds[chunk.role].append(candidate)
-        gathered: list[RankedChunk] = []
-        degraded: list[str] = []
-        list_seeds = tuple(seeds[ChunkRole.LIST])
-        if list_seeds:
-            current = list_seeds
-            cap = (
-                self._policy.rerank_candidate_limit
-                * self._policy.group_member_chunk_limit
-            )
-            for _ in range(self._policy.group_member_chunk_limit):
-                outcome = self._neighbors.expand(
-                    snapshot, current, "same_group", self._policy
-                )
-                degraded.extend(outcome.degraded_reason_codes)
-                next_candidates = outcome.candidates[:cap]
-                if len(next_candidates) <= len(current):
-                    break
-                current = next_candidates
-            gathered.extend(current)
-        table_seeds = tuple(seeds[ChunkRole.TABLE])
-        if table_seeds:
-            outcome = self._neighbors.expand(
-                snapshot, table_seeds, "table", self._policy
-            )
-            gathered.extend(outcome.candidates)
-            degraded.extend(outcome.degraded_reason_codes)
-        return ExpansionOutcome(
-            tuple(
-                {
-                    item.hydrated.chunk.chunk_id: item for item in gathered
-                }.values()
-            ),
-            tuple(dict.fromkeys(degraded)),
+        """沿 canonical 邻接链批量闭合有界结构候选。"""
+        return self._neighbors.close_structure(
+            snapshot, candidates, self._policy
         )
 
     def _rank_and_select(  # noqa: PLR0913, PLR0915

@@ -8,6 +8,7 @@ from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.errors import IndexCorrupt
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
+    ChunkRole,
     HydratedChunk,
     RankedChunk,
     RetrievalPolicy,
@@ -93,6 +94,88 @@ class NeighborExpander:
             return ExpansionOutcome(expanded)
         except IndexCorrupt:
             return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
+
+    def close_structure(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        policy: RetrievalPolicy,
+    ) -> ExpansionOutcome:
+        """批量沿双向链接补齐列表和表格，限制数据库往返次数。
+
+        Args:
+            snapshot: 请求固定的活动索引版本。
+            candidates: 一次重排及普通邻居扩展后的候选。
+            policy: 单组成员和总候选预算。
+
+        Returns:
+            原候选及有界结构邻居；损坏链接只产生降级标记。
+
+        """
+        try:
+            originals = _original_candidates(candidates)
+        except IndexCorrupt:
+            return ExpansionOutcome((), ("NEIGHBOR_INDEX_CORRUPT",))
+        roles = {ChunkRole.LIST, ChunkRole.TABLE}
+        seeds = tuple(
+            candidate
+            for candidate in originals.values()
+            if candidate.hydrated.chunk.role in roles
+        )[: policy.rerank_candidate_limit]
+        if not seeds:
+            return ExpansionOutcome(candidates)
+        cap = policy.rerank_candidate_limit * policy.group_member_chunk_limit
+        known = dict(originals)
+        context: dict[str, RankedChunk] = {}
+        frontier = seeds
+        try:
+            for _ in range(policy.group_member_chunk_limit):
+                if len(known) >= cap or not frontier:
+                    break
+                neighbor_ids = tuple(
+                    dict.fromkeys(
+                        neighbor_id
+                        for candidate in frontier
+                        for neighbor_id in (
+                            candidate.hydrated.chunk.previous_chunk_id,
+                            candidate.hydrated.chunk.next_chunk_id,
+                        )
+                        if neighbor_id is not None and neighbor_id not in known
+                    )
+                )[: cap - len(known)]
+                if not neighbor_ids:
+                    break
+                hydrated = _hydrated_candidates(
+                    self._source.hydrate_chunks(snapshot, neighbor_ids),
+                    originals,
+                )
+                next_frontier: list[RankedChunk] = []
+                for candidate in frontier:
+                    origin = candidate.hydrated.chunk
+                    for neighbor_id in (
+                        origin.previous_chunk_id,
+                        origin.next_chunk_id,
+                    ):
+                        item = hydrated.get(neighbor_id or "")
+                        if item is None or item.chunk.role is not origin.role:
+                            continue
+                        _validate_neighbor(origin, item.chunk)
+                        if item.chunk.chunk_id in known:
+                            continue
+                        _add_context(
+                            originals,
+                            context,
+                            item,
+                            seed_id=origin.chunk_id,
+                            reason="STRUCTURE_CONTINUITY",
+                        )
+                        expanded = context[item.chunk.chunk_id]
+                        known[item.chunk.chunk_id] = expanded
+                        next_frontier.append(expanded)
+                frontier = tuple(next_frontier)
+        except IndexCorrupt:
+            return ExpansionOutcome(candidates, ("NEIGHBOR_INDEX_CORRUPT",))
+        return ExpansionOutcome((*candidates, *context.values()))
 
     def _expand_table_context(
         self,
