@@ -4,7 +4,8 @@
   "work_branch": "codex/wb-08r-adaptive-rag",
   "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
   "current_phase": "WB08R-03",
-  "implementation_status": "paused_by_user_before_functional_gate",
+  "phase_status": "PAUSED",
+  "implementation_status": "wb08r03r_r0_terminal_gate_passed_r1_pending",
   "merge_allowed": false,
   "dataset_revision": "wanshitong-v2-20260917",
   "wb08r01_verification": {
@@ -48,5 +49,16 @@
     "latest_code_deployed_to_candidate": false,
     "functional_gate": "pending",
     "issue_log": "docs/progress/wb08r-03-issues.md"
+  },
+  "wb08r03r_verification": {
+    "production_deploy": false,
+    "candidate_port": 8289,
+    "r0_runtime_revision": "4390fabce88bd3858abb64b8f6bcb3d313892940",
+    "r0_image_id": "sha256:ae0a4a15723bb532e93ae44d21343312156902772245001194d27c5961b0b05b",
+    "terminal12_count": 12,
+    "terminal12_unique_final": 12,
+    "terminal12_first_event_timeout": 0,
+    "r0_gate": "passed",
+    "remaining_gates": ["R1", "R2", "R3", "R4", "R5", "R6", "Planner-24", "Ownership-16", "Claims-16", "Full-96"]
   }
 }

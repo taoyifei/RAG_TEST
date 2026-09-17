@@ -107,3 +107,10 @@ def test_transport_retry_is_explicit_and_bounded(
     assert result == 0
     assert calls == 2
     assert record["retry_count"] == 1
+
+
+def test_explicit_terminal_selection_includes_frozen_short_question() -> None:
+    selected = candidate._cases(frozenset({"WB08R-N-003"}))
+    assert len(selected) == 1
+    assert selected[0][0] == "natural_terminal12"
+    assert selected[0][1]["question_style"] == "short_ellipsis"

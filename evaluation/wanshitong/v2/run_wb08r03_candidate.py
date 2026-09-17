@@ -31,31 +31,52 @@ _BAD_GATEWAY = 502
 _SUPPORT_ID = re.compile(r"\[S\d+\]")
 
 
-def _cases() -> tuple[tuple[str, dict[str, Any]], ...]:
-    """读取 Formal-54、Natural 复合/多轮与 Latency-24。"""
+def _cases(
+    case_ids: frozenset[str] | None = None,
+) -> tuple[tuple[str, dict[str, Any]], ...]:
+    """默认读取 96 条；显式小样本可读取冻结 Natural 短问。"""
     selected: list[tuple[str, dict[str, Any]]] = []
     for group, filename in (
         ("formal54", "formal-54.ndjson"),
         ("natural_complex18", "natural-60.ndjson"),
         ("latency24", "latency-24.ndjson"),
     ):
+        if case_ids is not None and group == "latency24":
+            continue
         for line in (_ROOT / filename).read_text(encoding="utf-8").splitlines():
             if not line.strip():
                 continue
             row = json.loads(line)
-            if group == "natural_complex18" and row["question_style"] not in {
-                "compound",
-                "multi_turn",
-            }:
+            if case_ids is not None and row["case_id"] not in case_ids:
+                continue
+            if (
+                case_ids is None
+                and group == "natural_complex18"
+                and row["question_style"]
+                not in {
+                    "compound",
+                    "multi_turn",
+                }
+            ):
                 continue
             if (
                 hashlib.sha256(row["question"].encode()).hexdigest()
                 != row["question_sha256"]
             ):
                 raise ValueError(f"冻结问题摘要不一致：{row['case_id']}")
-            selected.append((group, row))
-    if len(selected) != _CASE_COUNT:
+            selected.append(
+                (
+                    "natural_terminal12"
+                    if group == "natural_complex18"
+                    and row["question_style"] not in {"compound", "multi_turn"}
+                    else group,
+                    row,
+                )
+            )
+    if case_ids is None and len(selected) != _CASE_COUNT:
         raise ValueError("WB08R-03 冻结候选集必须恰好为 96 条。")
+    if case_ids is not None and len(selected) != len(case_ids):
+        raise ValueError("指定的候选 case ID 不属于冻结集。")
     return tuple(selected)
 
 
@@ -122,7 +143,9 @@ def _chat(
         "terminal_type": (
             terminals[0][0].upper()
             if len(terminals) == 1
-            else "MISSING" if not terminals else "MULTIPLE"
+            else "MISSING"
+            if not terminals
+            else "MULTIPLE"
         ),
         "error_code": errors[0].get("code") if errors else None,
         "error_stage": errors[0].get("stage") if errors else None,
@@ -248,13 +271,7 @@ def run(
         if output.exists()
         else set()
     )
-    selected = tuple(
-        (group, row)
-        for group, row in _cases()
-        if case_ids is None or row["case_id"] in case_ids
-    )
-    if case_ids is not None and len(selected) != len(case_ids):
-        raise ValueError("指定的候选 case ID 不属于冻结集。")
+    selected = _cases(case_ids) if case_ids is not None else _cases()
     failed = False
     for group, row in selected:
         run_id = f"{group}/{row['case_id']}"
@@ -358,7 +375,7 @@ def run(
         for line in output.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    for group in ("formal54", "natural_complex18", "latency24"):
+    for group in sorted({row["group"] for row in rows}):
         group_rows = [row for row in rows if row["group"] == group]
         latencies = [
             row["request_total_ms"]
