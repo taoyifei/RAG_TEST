@@ -10,7 +10,13 @@ from contextlib import contextmanager
 from threading import RLock
 from typing import TypeVar
 
-from pydantic import Field, StrictInt, ValidationError, model_validator
+from pydantic import (
+    Field,
+    StrictBool,
+    StrictInt,
+    ValidationError,
+    model_validator,
+)
 
 from rag_app.adapters.providers.aliyun_chat import (
     AliyunChatAdapter,
@@ -27,6 +33,10 @@ from rag_app.adapters.providers.openai_compatible import (
     OpenAICompatibleChatConfig,
 )
 from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
+from rag_app.application.retrieval.adaptive import (
+    AdaptivePlanOutcome,
+    ReasoningEffort,
+)
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
     rewrite_constraint_reason,
@@ -71,6 +81,8 @@ _MAX_GROUNDED_INPUT_TOKENS = 6_144
 # 上下文窗口留出固定余量。证据候选由 Provider adapter 按重排顺序裁剪，
 # 不改变引用校验所能看到的完整有界证据包。
 _MAX_GROUNDED_OUTPUT_TOKENS = 1536
+_MAX_ADAPTIVE_ATOM_CHARS = 160
+_MAX_ADAPTIVE_HINT_CHARS = 80
 _RotationResult = TypeVar("_RotationResult")
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
@@ -142,6 +154,35 @@ class _InterpretPayload(FrozenModel):
             RequestedAnswerType.COUNT,
         }:
             raise ValueError("只有列举或计数问题可以返回 expected_count。")
+        return self
+
+
+class _AdaptivePlanPayload(FrozenModel):
+    """轻量 Planner 只能提交问题理解与检索提示。"""
+
+    standalone_query: str = Field(min_length=1, max_length=_MAX_REWRITE_CHARS)
+    intent: str = Field(
+        pattern=r"^(NAVIGATION|FACT|PROCEDURE|COMPARISON|COMPOUND|CLARIFICATION)$"
+    )
+    needs_clarification: StrictBool
+    clarification_question: str | None = Field(default=None, max_length=200)
+    atoms: tuple[str, ...] = Field(max_length=4)
+    route_hints: tuple[str, ...] = Field(max_length=4)
+
+    @model_validator(mode="after")
+    def _validate_clarification(self) -> _AdaptivePlanPayload:
+        if self.needs_clarification and not self.clarification_question:
+            raise ValueError("澄清问题不能为空。")
+        if any(
+            not atom.strip() or len(atom) > _MAX_ADAPTIVE_ATOM_CHARS
+            for atom in self.atoms
+        ):
+            raise ValueError("问题原子必须短且非空。")
+        if any(
+            not hint.strip() or len(hint) > _MAX_ADAPTIVE_HINT_CHARS
+            for hint in self.route_hints
+        ):
+            raise ValueError("路由提示必须短且非空。")
         return self
 
 
@@ -270,6 +311,9 @@ class ProductGroundedModel:
                 egress_allowed=True,
                 max_input_tokens=_MAX_GROUNDED_INPUT_TOKENS,
                 max_output_tokens=_MAX_GROUNDED_OUTPUT_TOKENS,
+                disable_thinking_supported=(
+                    self.settings.disable_thinking_supported
+                ),
             )
         return AliyunChatConfig(
             model=model,
@@ -416,6 +460,93 @@ class ProductGroundedModel:
                     )
                 hashes.add(str(row[0]))
         return tuple(sorted(hashes))
+
+    def plan_adaptive(
+        self,
+        request: SearchRequest,
+        analysis: QueryAnalysis,
+        effort: ReasoningEffort,
+    ) -> AdaptivePlanOutcome:
+        """在同一模型连接上至多发一次有三秒超时的 JSON 规划请求。"""
+        if effort is ReasoningEffort.DIRECT:
+            return AdaptivePlanOutcome()
+        if len(request.text) > _MAX_REWRITE_CHARS:
+            return AdaptivePlanOutcome(reason_code="ADAPTIVE_PLAN_INPUT_LIMIT")
+        messages = (
+            ChatMessage(
+                role="system",
+                content=(
+                    "你只理解资料检索问题，严禁回答或编造资料。只输出严格JSON对象，"
+                    "恰好包含standalone_query、intent、needs_clarification、"
+                    "clarification_question、atoms、route_hints六个字段。"
+                    "intent只可为NAVIGATION、FACT、PROCEDURE、COMPARISON、"
+                    "COMPOUND、CLARIFICATION；atoms最多4个，route_hints最多4个，"
+                    "路由提示仅供参考，不能作为过滤条件。保留问题中的实体、编号、"
+                    "数字、否定、条件与来源范围。无法确定时原样保留问题并要求澄清。"
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=json.dumps(
+                    {
+                        "question": request.text,
+                        "rule_answer_type": (
+                            analysis.semantics.answer_type.value
+                        ),
+                        "context": [
+                            value[:300]
+                            for value in request.conversation_context[-2:]
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+        calls: tuple[ProviderCall, ...] = ()
+        try:
+            with self._scope("query.interpret"):
+                completion = self.adapter.complete(
+                    messages,
+                    operation="query.interpret",
+                    max_output_tokens=256,
+                    timeout_seconds=3.0,
+                )
+            calls = (completion.call,)
+            payload = _AdaptivePlanPayload.model_validate(
+                json.loads(completion.content)
+            )
+            reason = rewrite_constraint_reason(
+                request, payload.standalone_query
+            )
+            if reason is not None:
+                return AdaptivePlanOutcome(
+                    calls=calls,
+                    reason_code=reason,
+                    attempted=True,
+                )
+            return AdaptivePlanOutcome(
+                standalone_query=payload.standalone_query,
+                intent=payload.intent,
+                needs_clarification=payload.needs_clarification,
+                clarification_question=payload.clarification_question,
+                atoms=payload.atoms,
+                route_hints=payload.route_hints,
+                calls=calls,
+                reason_code="ADAPTIVE_PLAN_APPLIED",
+                attempted=True,
+            )
+        except RagError as error:
+            return AdaptivePlanOutcome(
+                calls=_error_provider_calls(error),
+                reason_code=error.code,
+                attempted=True,
+            )
+        except (ValidationError, ValueError, TypeError):
+            return AdaptivePlanOutcome(
+                calls=calls,
+                reason_code="ADAPTIVE_PLAN_INVALID",
+                attempted=True,
+            )
 
     def interpret(  # noqa: PLR0911
         self, request: SearchRequest, analysis: QueryAnalysis

@@ -118,6 +118,7 @@ class OpenAICompatibleChatConfig(FrozenModel):
     max_output_tokens: StrictInt = Field(default=1536, gt=0, le=16384)
     max_messages: StrictInt = Field(default=6, gt=0, le=32)
     prompt_version: str = Field(default="grounded-chat-v8", max_length=64)
+    disable_thinking_supported: bool = False
 
 
 class OpenAICompatibleEmbeddingAdapter:
@@ -426,6 +427,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
             "generation", "query.interpret", "query.rewrite"
         ] = "generation",
         max_output_tokens: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> ChatCompletion:
         """执行一次标准同步 Chat Completions 请求。"""
         if not self._compatible_config.egress_allowed:
@@ -440,10 +442,12 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 messages,
                 self._compatible_config,
                 max_output_tokens=max_output_tokens,
+                disable_thinking=operation == "query.interpret",
             ),
             operation=operation,
             input_count=len(messages),
             estimated_tokens=message_token_estimate(messages),
+            timeout_seconds=timeout_seconds,
         )
 
     def complete_stream(
@@ -592,6 +596,7 @@ def openai_compatible_chat_payload(
     *,
     max_output_tokens: int | None = None,
     stream: bool = False,
+    disable_thinking: bool = False,
 ) -> dict[str, object]:
     """构造只含标准字段的有界 Chat Completions 请求。"""
     limit = (
@@ -611,13 +616,16 @@ def openai_compatible_chat_payload(
             "兼容 Chat 输入超过本地上限。",
             stage="provider.openai_compatible.chat",
         )
-    return {
+    payload: dict[str, object] = {
         "model": config.model,
         "messages": [message.model_dump() for message in messages],
         "temperature": 0,
         "max_tokens": limit,
         "stream": stream,
     }
+    if disable_thinking and config.disable_thinking_supported:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    return payload
 
 
 def _headers(api_key: str) -> dict[str, str]:

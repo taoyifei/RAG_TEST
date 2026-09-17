@@ -951,7 +951,7 @@ class ProductProfileResolver:
                 service = service.with_generation(
                     model,
                     serving_identity=generation_identity,
-                    interpreter=model if rewrite_enabled else None,
+                    adaptive_planner=model,
                     rewriter=model if rewrite_enabled else None,
                     critical_ocr_verifier=(
                         None

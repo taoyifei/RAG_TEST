@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
@@ -14,6 +15,13 @@ from time import perf_counter
 from typing import Literal
 
 from rag_app.application.answering.grounded import GroundedAnsweringService
+from rag_app.application.retrieval.adaptive import (
+    AdaptivePlannerPort,
+    ReasoningEffort,
+    catalog_matches,
+    is_navigation_query,
+    reasoning_effort,
+)
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
@@ -59,6 +67,7 @@ from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     AnswerClaim,
     BaseResultCacheKey,
+    CatalogCitation,
     ChannelHit,
     Chunk,
     CircuitSnapshot,
@@ -105,6 +114,7 @@ from rag_app.core.ports import (
     TracePort,
     VectorStorePort,
 )
+from rag_app.core.ports.evidence_source import CatalogDocument
 from rag_app.core.ports.query_rewrite import QueryRewritePort
 
 
@@ -188,6 +198,7 @@ class RetrievalService:
         self._default_generator_descriptor = generator.descriptor
         self._grounded: GroundedAnsweringService | None = None
         self._interpreter: QueryInterpretPort | None = None
+        self._adaptive_planner: AdaptivePlannerPort | None = None
         self._rewriter: QueryRewritePort | None = None
         self._generation_behavior = "model_required"
         self._trace = trace
@@ -196,7 +207,7 @@ class RetrievalService:
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "v3-07-grounded-answer-v17",
+                "retrieval_implementation": "wb08r-01-adaptive-catalog-v1",
             }
         )
         self._egress = egress_policy
@@ -242,12 +253,13 @@ class RetrievalService:
         """
         return self._data_plane_context
 
-    def with_generation(
+    def with_generation(  # noqa: PLR0913
         self,
         generator: GeneratorPort,
         *,
         serving_identity: str,
         interpreter: QueryInterpretPort | None = None,
+        adaptive_planner: AdaptivePlannerPort | None = None,
         rewriter: QueryRewritePort | None = None,
         critical_ocr_verifier: CriticalOcrVerifierPort | None = None,
     ) -> RetrievalService:
@@ -257,6 +269,7 @@ class RetrievalService:
             generator: 已绑定知识库与出站授权的生成器。
             serving_identity: 模型及查询策略缓存身份。
             interpreter: 可选的一次结构化问题解释端口。
+            adaptive_planner: 可选的一次轻量语义规划端口。
             rewriter: 可选的一次问题改写端口。
             critical_ocr_verifier: PDF 高风险事实的有界 PP-OCRv6 复核端口。
 
@@ -272,6 +285,7 @@ class RetrievalService:
             critical_ocr_verifier=critical_ocr_verifier,
         )
         configured._interpreter = interpreter
+        configured._adaptive_planner = adaptive_planner
         configured._rewriter = rewriter
         descriptor = getattr(
             generator, "descriptor", self._default_generator_descriptor
@@ -281,10 +295,14 @@ class RetrievalService:
             generation_provider_id=descriptor.name,
             generation_model=descriptor.version,
             interpret_provider_id=(
-                descriptor.name if interpreter is not None else None
+                descriptor.name
+                if interpreter is not None or adaptive_planner is not None
+                else None
             ),
             interpret_model=(
-                descriptor.version if interpreter is not None else None
+                descriptor.version
+                if interpreter is not None or adaptive_planner is not None
+                else None
             ),
             rewrite_provider_id=(
                 descriptor.name if rewriter is not None else None
@@ -315,6 +333,7 @@ class RetrievalService:
         configured = copy(self)
         configured._grounded = None
         configured._interpreter = None
+        configured._adaptive_planner = None
         configured._rewriter = None
         configured._generation_behavior = "grounded"
         configured._serving_fingerprint = canonical_sha256(
@@ -413,6 +432,9 @@ class RetrievalService:
         stage_started = _finish_timing(stage_timings, "snapshot", stage_started)
         _raise_if_cancelled(cancellation, provider_calls)
         analysis = self._analyzer.analyze(request)
+        effort = reasoning_effort(
+            analysis, has_context=bool(request.conversation_context)
+        )
         effective_analysis = analysis
         self._record(
             trace_id,
@@ -431,6 +453,7 @@ class RetrievalService:
                     item.kind.value for item in analysis.semantics.constraints
                 ),
                 "reason_codes": analysis.reason_codes,
+                "reasoning_effort": effort.value,
             },
         )
         stage_started = _finish_timing(stage_timings, "analyze", stage_started)
@@ -509,9 +532,79 @@ class RetrievalService:
             return cached_result
         self._record(trace_id, "cache", {"result": "miss"})
         stage_started = _finish_timing(stage_timings, "cache", stage_started)
+        if is_navigation_query(analysis.normalized_query):
+            catalog_result = self._catalog_fast_path(
+                request=request,
+                snapshot=snapshot,
+                analysis=analysis,
+                plan=plan,
+                cache_key=cache_key,
+                trace_id=trace_id,
+                stage_timings=stage_timings,
+                on_stage=on_stage,
+                on_final=on_final,
+                cancellation=cancellation,
+            )
+            if catalog_result is not None:
+                return catalog_result
+        adaptive_attempted = False
+        adaptive_reason = (
+            "ADAPTIVE_PLAN_NOT_NEEDED"
+            if self._adaptive_planner is not None
+            else "ADAPTIVE_PLAN_NOT_CONFIGURED"
+        )
+        if (
+            self._adaptive_planner is not None
+            and effort is not ReasoningEffort.DIRECT
+        ):
+            _raise_if_cancelled(cancellation, provider_calls)
+            adaptive = self._adaptive_planner.plan_adaptive(
+                request, analysis, effort
+            )
+            adaptive_attempted = adaptive.attempted
+            adaptive_reason = adaptive.reason_code
+            provider_calls.extend(adaptive.calls)
+            if adaptive.standalone_query and not adaptive.needs_clarification:
+                effective_analysis = self._analyzer.resolve(
+                    analysis, request, adaptive.standalone_query
+                )
+                adaptive_variant = QueryVariant(
+                    text=adaptive.standalone_query,
+                    kind="rewrite",
+                    identity=canonical_sha256(
+                        {
+                            "query": adaptive.standalone_query,
+                            "policy": "adaptive-plan-v1",
+                        }
+                    ),
+                )
+                plan = self._planner.plan(
+                    effective_analysis,
+                    (
+                        variants
+                        if adaptive.standalone_query
+                        in {variant.text for variant in variants}
+                        else (variants[0], adaptive_variant)
+                    ),
+                    self._policy,
+                    dense_required=request.dense_required,
+                )
+            self._record(
+                trace_id,
+                "interpret",
+                {
+                    "reason_code": adaptive_reason,
+                    "attempted": adaptive_attempted,
+                    "accepted": adaptive.standalone_query is not None,
+                    "reasoning_effort": effort.value,
+                    "intent": adaptive.intent,
+                    "atom_count": len(adaptive.atoms),
+                    "needs_clarification": adaptive.needs_clarification,
+                },
+            )
         interpret_attempted = False
         interpret_reason = "INTERPRET_NOT_CONFIGURED"
-        if self._interpreter is not None:
+        if self._interpreter is not None and self._adaptive_planner is None:
             _raise_if_cancelled(cancellation, provider_calls)
             interpreted = self._interpreter.interpret(request, analysis)
             interpret_attempted = interpreted.attempted
@@ -569,7 +662,11 @@ class RetrievalService:
             )
         rewrite_attempted = False
         rewrite_reason = "REWRITE_NOT_CONFIGURED"
-        if self._rewriter is not None and not interpret_attempted:
+        if (
+            self._rewriter is not None
+            and self._adaptive_planner is None
+            and not interpret_attempted
+        ):
             _raise_if_cancelled(cancellation, provider_calls)
             rewritten = self._rewriter.rewrite(request)
             rewrite_reason = rewritten.reason_code
@@ -780,6 +877,7 @@ class RetrievalService:
         _raise_if_cancelled(cancellation, provider_calls)
         if (
             self._rewriter is not None
+            and self._adaptive_planner is None
             and not rewrite_attempted
             and confidence.status
             in {
@@ -1194,7 +1292,12 @@ class RetrievalService:
             rerank_execution_mode=reranked.mode,
             generation_mode=generation_mode,
             generation_reason_code=generation_reason,
-            interpret_reason_code=interpret_reason,
+            interpret_reason_code=(
+                adaptive_reason
+                if self._adaptive_planner is not None
+                else interpret_reason
+            ),
+            reasoning_effort=effort.value,
             rewrite_reason_code=rewrite_reason,
             degraded_reason_codes=tuple(dict.fromkeys(degraded)),
             cache_key=cache_key,
@@ -1242,6 +1345,194 @@ class RetrievalService:
                     self.commit_result_cache(result)
         self._record(trace_id, "complete", {"status": result.status.value})
         return result
+
+    def _catalog_fast_path(  # noqa: PLR0913
+        self,
+        *,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        analysis: QueryAnalysis,
+        plan: RetrievalPlan,
+        cache_key: str,
+        trace_id: str,
+        stage_timings: list[StageTiming],
+        on_stage: Callable[[str, dict[str, object]], None] | None,
+        on_final: Callable[[SearchAnswerResult], None] | None,
+        cancellation: CancellationPort | None,
+    ) -> SearchAnswerResult | None:
+        """仅用活动版本的目录元数据回答文档导航问题。"""
+        catalog_reader = getattr(self._source, "catalog_documents", None)
+        if catalog_reader is None:
+            return None
+        # 角色或章节过滤必须经过普通 Chunk 检索，不能由文档目录代答。
+        if any(
+            key in {"role", "section_id"}
+            for key, _value in request.metadata_filters
+        ):
+            return None
+        apply_candidate_filters((), request)
+        started = perf_counter()
+        documents = catalog_reader(snapshot, limit=2000)
+        if documents is None:
+            self._record(trace_id, "catalog", {"reason_code": "CATALOG_LIMIT"})
+            return None
+        candidates = tuple(
+            ChannelHit(
+                revision_id=snapshot.revision.index_revision_id,
+                chunk_id=document.chunk_id,
+                document_id=document.document_id,
+                document_version_id=document.document_version_id,
+                role="catalog",
+                section_id="catalog",
+                content_sha256="0" * 64,
+                channel="catalog",
+                rank=index,
+                raw_score=0.0,
+            )
+            for index, document in enumerate(documents, start=1)
+            if document.document_id not in snapshot.excluded_document_ids
+        )
+        visible_ids = {
+            hit.document_id
+            for hit in apply_candidate_filters(candidates, request)
+        }
+        visible = tuple(
+            document
+            for document in documents
+            if document.document_id in visible_ids
+        )
+        matched = catalog_matches(analysis.normalized_query, visible)
+        citations = tuple(_catalog_citation(document) for document in matched)
+        if len(matched) == 1:
+            status = ConfidenceStatus.ANSWERABLE
+            answer = (
+                f"可参考《{matched[0].title}》。"
+                "此目录只证明文档存在；具体内容请查阅原件。"
+            )
+            reason = "CATALOG_UNIQUE"
+        elif matched:
+            status = ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION
+            options = "、".join(f"《{item.title}》" for item in matched)
+            answer = f"目录中找到可能相关的资料：{options}。请说明具体用途。"
+            reason = "CATALOG_MULTIPLE"
+        else:
+            status = ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION
+            answer = "尚未在已入库目录中确认对应资料。请补充主题或文档名称。"
+            reason = "CATALOG_NO_MATCH"
+        if matched:
+            self._validate_catalog_citations(matched, request, snapshot)
+        _finish_timing(stage_timings, "catalog", started)
+        self._record(
+            trace_id,
+            "catalog",
+            {"reason_code": reason, "candidate_count": len(matched)},
+        )
+        _emit_stage(
+            on_stage,
+            "retrieval",
+            {
+                "cache_hit": False,
+                "evidence_count": len(citations),
+                "status": status.value,
+            },
+            [],
+        )
+        _emit_stage(on_stage, "generation", {"mode": "catalog_fast_path"}, [])
+        _emit_stage(
+            on_stage,
+            "validation",
+            {"published": bool(matched), "generation_mode": "none"},
+            [],
+        )
+        self._record(
+            trace_id,
+            "generate",
+            {"mode": "none", "reason_code": reason, "provider_calls": []},
+        )
+        self._record(
+            trace_id,
+            "validate",
+            {"published": bool(matched), "support_count": len(citations)},
+        )
+        diagnostics = RetrievalDiagnostics(stage_timings=tuple(stage_timings))
+        result = SearchAnswerResult(
+            trace_id=trace_id,
+            status=status,
+            reason_code=status.value,
+            answer=answer,
+            catalog_citations=citations,
+            confidence=ConfidenceDecision(
+                status=status,
+                score=1.0 if len(matched) == 1 else 0.0,
+                reason_codes=(reason,),
+            ),
+            query_kind=plan.query_kind,
+            reasoning_effort=(
+                ReasoningEffort.DIRECT.value
+                if len(matched) == 1
+                else ReasoningEffort.ASSISTED.value
+            ),
+            requested_answer_type=analysis.semantics.answer_type,
+            query_semantic_source=analysis.semantics.source,
+            active_index_revision_id=snapshot.revision.index_revision_id,
+            index_fingerprint=snapshot.revision.index_fingerprint,
+            serving_fingerprint=snapshot.serving_fingerprint,
+            route_reason_code="CATALOG_METADATA",
+            rerank_execution_mode="catalog_fast_path",
+            generation_mode="none",
+            generation_reason_code=reason,
+            interpret_reason_code="CATALOG_FAST_PATH",
+            rewrite_reason_code="CATALOG_FAST_PATH",
+            cache_key=cache_key,
+            diagnostics=diagnostics,
+            diagnostics_summary=_diagnostics_summary(diagnostics),
+            data_plane=self._query_data_plane(
+                snapshot,
+                selected_slot=None,
+                rerank_mode="catalog_fast_path",
+                degraded=(),
+            ),
+        )
+        _raise_if_cancelled(cancellation)
+        if on_final is not None:
+            if matched:
+                self._validate_catalog_citations(matched, request, snapshot)
+            _emit_final(on_final, result, [])
+        self._record(trace_id, "complete", {"status": status.value})
+        return result
+
+    def _validate_catalog_citations(
+        self,
+        documents: tuple[CatalogDocument, ...],
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+    ) -> None:
+        """发布前复核目录版本、可见性和 canonical Chunk 身份。"""
+        current = self._source.catalog_documents(snapshot, limit=2000)
+        if current is None:
+            raise IndexCorrupt(
+                "Catalog 已超过可验证上限。", stage="retrieval.catalog"
+            )
+        by_id = {item.document_id: item for item in current}
+        if any(by_id.get(item.document_id) != item for item in documents):
+            raise IndexCorrupt(
+                "Catalog 来源已变更。", stage="retrieval.catalog"
+            )
+        rows = self._source.hydrate_chunks(
+            snapshot, tuple(item.chunk_id for item in documents)
+        )
+        by_chunk = {row.chunk.chunk_id: row for row in rows}
+        for item in documents:
+            row = by_chunk.get(item.chunk_id)
+            if row is None:
+                raise IndexCorrupt(
+                    "Catalog 来源不可用。", stage="retrieval.catalog"
+                )
+            validate_candidate(
+                RankedChunk(hydrated=row, fusion_rank=1),
+                request,
+                snapshot.revision.index_revision_id,
+            )
 
     def _query_data_plane(
         self,
@@ -1436,11 +1727,19 @@ class RetrievalService:
         plan: RetrievalPlan,
     ) -> BaseResultCacheKey:
         """构造不含正文但覆盖全部答案行为的规范缓存键。"""
+        normalized_variants = tuple(
+            dict.fromkeys(
+                " ".join(
+                    unicodedata.normalize("NFKC", variant.text)
+                    .strip()
+                    .split()
+                )
+                for variant in plan.variants
+            )
+        )
         rewrite_identity = canonical_sha256(
             {
-                "variants": tuple(
-                    variant.identity for variant in plan.variants
-                ),
+                "variants": normalized_variants,
                 "semantic_policy": "shared-query-semantics-v3-09",
                 "rewrite_policy": "bounded-rewrite-v3",
                 "answer_support_policy": "minimum-supported-set-v3-08",
@@ -1457,7 +1756,7 @@ class RetrievalService:
                 snapshot.profile_revision_id or "default-offline-profile"
             ),
             query_sha256=hashlib.sha256(
-                request.text.encode("utf-8")
+                analysis.normalized_query.encode("utf-8")
             ).hexdigest(),
             owner_identity_hash=hashlib.sha256(
                 request.owner_identity.encode("utf-8")
@@ -1471,9 +1770,7 @@ class RetrievalService:
             query_semantics_identity=canonical_sha256(
                 {
                     "semantics": analysis.semantics.model_dump(mode="json"),
-                    "plan_variants": tuple(
-                        variant.identity for variant in plan.variants
-                    ),
+                    "plan_variants": normalized_variants,
                 }
             ),
             cache_schema=self._policy.cache_schema_version,
@@ -1502,6 +1799,8 @@ class RetrievalService:
 
         """
         if result.result_origin != "fresh":
+            return
+        if result.rerank_execution_mode == "catalog_fast_path":
             return
         if (
             result.status is ConfidenceStatus.ANSWERABLE
@@ -2235,6 +2534,29 @@ def _model_capability_status(  # noqa: PLR0911
             "CONFIGURATION_REQUIRED",
         )
     return None
+
+
+def _catalog_citation(document: CatalogDocument) -> CatalogCitation:
+    """把已冻结的 canonical 文档元数据投影为目录来源。"""
+    metadata = dict(document.metadata)
+    department = metadata.get("department_name")
+    category = metadata.get("category_path")
+    path = metadata.get("source_relative_path")
+    return CatalogCitation(
+        document_id=document.document_id,
+        document_version_id=document.document_version_id,
+        chunk_id=document.chunk_id,
+        document_title=document.title,
+        source_relative_path=path if isinstance(path, str) else None,
+        department_name=(
+            department if isinstance(department, str) else None
+        ),
+        category_path=(
+            tuple(item for item in category if isinstance(item, str))
+            if isinstance(category, (tuple, list))
+            else ()
+        ),
+    )
 
 
 def _diagnostics(  # noqa: PLR0913

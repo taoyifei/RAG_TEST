@@ -479,6 +479,18 @@ class RelatedContent(FrozenModel):
     rerank_verified: bool = False
 
 
+class CatalogCitation(FrozenModel):
+    """活动文档版本的目录元数据引用，不冒充正文摘录。"""
+
+    document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
+    document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
+    document_title: str = Field(min_length=1)
+    source_relative_path: str | None = None
+    department_name: str | None = None
+    category_path: tuple[str, ...] = ()
+
+
 class SearchAnswerResult(FrozenModel):
     """实际 revision、route、证据、拒答与回答的统一结果。"""
 
@@ -487,12 +499,16 @@ class SearchAnswerResult(FrozenModel):
     reason_code: str = Field(min_length=1)
     answer: str | None = Field(default=None, repr=False)
     evidence: tuple[EvidenceItem, ...] = ()
+    catalog_citations: tuple[CatalogCitation, ...] = Field(
+        default=(), max_length=3
+    )
     related_contents: tuple[RelatedContent, ...] = Field(
         default=(), max_length=3
     )
     display_message: str | None = None
     confidence: ConfidenceDecision
     query_kind: QueryKind
+    reasoning_effort: Literal["DIRECT", "ASSISTED", "DEEP"] = "DIRECT"
     requested_answer_type: RequestedAnswerType = RequestedAnswerType.UNKNOWN
     query_semantic_source: Literal[
         "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
@@ -532,6 +548,7 @@ class SearchAnswerResult(FrozenModel):
 __all__ = [
     "ActiveRevisionQuerySnapshot",
     "BaseResultCacheKey",
+    "CatalogCitation",
     "ChannelHit",
     "DiagnosticEvidenceItem",
     "DiagnosticExpansionItem",

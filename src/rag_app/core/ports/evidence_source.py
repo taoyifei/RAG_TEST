@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from rag_app.core.models import (
@@ -10,6 +11,18 @@ from rag_app.core.models import (
     KnowledgeBaseScope,
     RetrievalPolicy,
 )
+from rag_app.core.models.common import JsonObject
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogDocument:
+    """活动索引版本中一个文档的可信目录身份。"""
+
+    document_id: str
+    document_version_id: str
+    chunk_id: str
+    title: str
+    metadata: JsonObject
 
 
 class EvidenceSourcePort(Protocol):
@@ -52,6 +65,15 @@ class EvidenceSourcePort(Protocol):
         """
         ...
 
+    def catalog_documents(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        limit: int,
+    ) -> tuple[CatalogDocument, ...] | None:
+        """读取全部有界活动目录；超过上限时返回 None，禁止部分命中。"""
+        ...
+
     def section_chunk_ids(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -75,4 +97,4 @@ class EvidenceSourcePort(Protocol):
         ...
 
 
-__all__ = ["EvidenceSourcePort"]
+__all__ = ["CatalogDocument", "EvidenceSourcePort"]

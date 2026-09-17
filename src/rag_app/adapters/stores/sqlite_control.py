@@ -65,6 +65,7 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.ports import MetadataRecord
+from rag_app.core.ports.evidence_source import CatalogDocument
 
 _TERMINAL_REVISION_STATES = {
     IndexRevisionState.ACTIVE,
@@ -73,6 +74,7 @@ _TERMINAL_REVISION_STATES = {
 }
 _MAX_HYDRATION_CHUNKS = 200
 _MAX_SECTION_CHUNKS = 20
+_MAX_CATALOG_DOCUMENTS = 5000
 _DEFAULT_LEASE_SECONDS = 300
 
 
@@ -1735,6 +1737,74 @@ class SqliteControlStore:
                 str(item[0]) for item in excluded_documents
             ),
         )
+
+    def catalog_documents(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        *,
+        limit: int,
+    ) -> tuple[CatalogDocument, ...] | None:
+        """从冻结 Revision 和 canonical Chunk 读取可信目录元数据。
+
+        超过上限时返回 None，避免将不完整目录误判为唯一命中。
+        """
+        if not 1 <= limit <= _MAX_CATALOG_DOCUMENTS:
+            raise ValueError("Catalog 文档上限必须位于 1 到 5000。")
+        revision = snapshot.revision
+        with self._connections.transaction() as connection:
+            rows = connection.execute(
+                "SELECT rd.document_id, rd.document_version_id, "
+                "d.display_name, c.chunk_id, c.chunk_json "
+                "FROM revision_documents rd JOIN documents d "
+                "ON d.document_id=rd.document_id "
+                "JOIN chunks c ON c.chunk_id=(SELECT c2.chunk_id "
+                "FROM chunks c2 "
+                "WHERE c2.revision_id=rd.revision_id "
+                "AND c2.document_id=rd.document_id "
+                "AND c2.document_version_id=rd.document_version_id "
+                "ORDER BY c2.chunk_id LIMIT 1) "
+                "WHERE rd.revision_id=? AND d.project_id=? "
+                "AND d.knowledge_base_id=? AND d.deleted_at IS NULL "
+                "AND d.status='active' AND d.lifecycle_status='active' "
+                "ORDER BY rd.document_id LIMIT ?",
+                (
+                    revision.index_revision_id,
+                    revision.project_id,
+                    revision.knowledge_base_id,
+                    limit + 1,
+                ),
+            ).fetchall()
+        if len(rows) > limit:
+            return None
+        documents: list[CatalogDocument] = []
+        for row in rows:
+            chunk = Chunk.model_validate_json(str(row["chunk_json"]))
+            if (
+                chunk.index_revision_id != revision.index_revision_id
+                or chunk.version.document_id != row["document_id"]
+                or chunk.version.document_version_id
+                != row["document_version_id"]
+            ):
+                raise IndexCorrupt(
+                    "Catalog 与 canonical Chunk 版本失配。",
+                    stage="retrieval.catalog",
+                )
+            metadata = dict(chunk.metadata)
+            title = metadata.get("document_title")
+            documents.append(
+                CatalogDocument(
+                    document_id=str(row["document_id"]),
+                    document_version_id=str(row["document_version_id"]),
+                    chunk_id=str(row["chunk_id"]),
+                    title=(
+                        title.strip()
+                        if isinstance(title, str) and title.strip()
+                        else str(row["display_name"])
+                    ),
+                    metadata=chunk.metadata,
+                )
+            )
+        return tuple(documents)
 
     def hydrate_chunks(
         self,

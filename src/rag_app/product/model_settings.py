@@ -27,6 +27,7 @@ class KnowledgeBaseModelSettings(FrozenModel):
         default=(), max_length=4
     )
     rewrite_enabled: bool = False
+    disable_thinking_supported: bool = False
     ocr_connection_id: str | None = None
     ocr_model: str | None = None
     ocr_enabled: bool = False
@@ -214,7 +215,7 @@ class ProductModelSettings:
                 }
             ),
             "prompt": "grounded-chat-v8",
-            "interpret": "bounded-interpret-v2",
+            "interpret": "adaptive-plan-v1",
             "rewrite": "bounded-rewrite-v3",
             "validation": "claim-support-v17",
             "answer_selection": "shared-query-semantics-v12",

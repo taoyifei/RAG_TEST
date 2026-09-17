@@ -104,6 +104,9 @@ def _bounded_stream_bytes(
         yield chunk
 
 
+_MAX_REQUEST_TIMEOUT_SECONDS = 30.0
+
+
 class ProviderHttpClient:
     """在一个固定 endpoint 上执行同步 JSON 请求。"""
 
@@ -190,7 +193,7 @@ class ProviderHttpClient:
         self._response_error_code = response_error_code
         self._closed = False
 
-    def request_json(  # noqa: PLR0913, PLR0915
+    def request_json(  # noqa: PLR0912, PLR0913, PLR0915
         self,
         method: str,
         path: str,
@@ -202,6 +205,7 @@ class ProviderHttpClient:
         model: str,
         input_count: int,
         estimated_tokens: int,
+        timeout_seconds: float | None = None,
     ) -> ProviderHttpResult:
         """发送 JSON 并严格限制重试、大小和内容类型。
 
@@ -215,6 +219,7 @@ class ProviderHttpClient:
             model: 固定模型身份。
             input_count: 本次输入条目数。
             estimated_tokens: 本地保守估算 Token 数。
+            timeout_seconds: 可选的单次 HTTP 请求时限。
 
         Returns:
             JSON payload 和脱敏调用审计。
@@ -227,12 +232,19 @@ class ProviderHttpClient:
         """
         if self._closed:
             raise RuntimeError("ProviderHttpClient 已关闭。")
+        if (
+            timeout_seconds is not None
+            and not 0 < timeout_seconds <= _MAX_REQUEST_TIMEOUT_SECONDS
+        ):
+            raise ValueError("单次 Provider 超时必须位于 0 到 30 秒。")
         if not path.startswith("/") or path.startswith("//") or "?" in path:
             raise ValueError("Provider path 必须是无 query 的单斜杠相对路径。")
         started = self._monotonic()
         last_retry_after_ms: int | None = None
         encountered_rate_limit = False
-        for attempt in range(1, self._max_attempts + 1):
+        # 有显式时限的轻量 Planner 只发送一次，避免重试放大整体时延。
+        max_attempts = 1 if timeout_seconds is not None else self._max_attempts
+        for attempt in range(1, max_attempts + 1):
             attempt_started = self._monotonic()
             try:
                 response = self._client.request(
@@ -242,7 +254,7 @@ class ProviderHttpClient:
                     headers=headers,
                     extensions={
                         "rag_provider_retry_index": attempt - 1,
-                        "rag_provider_max_attempts": self._max_attempts,
+                        "rag_provider_max_attempts": max_attempts,
                         **(
                             {"rag_chat_operation": operation}
                             if operation
@@ -255,6 +267,11 @@ class ProviderHttpClient:
                             else {}
                         ),
                     },
+                    **(
+                        {"timeout": httpx.Timeout(timeout_seconds)}
+                        if timeout_seconds is not None
+                        else {}
+                    ),
                 )
             except httpx.TransportError as error:
                 diagnostics, transport_category = self._transport_details(
@@ -281,7 +298,7 @@ class ProviderHttpClient:
                 )
                 if (
                     transport_category is not ProviderFailureCategory.TRANSIENT
-                    or attempt == self._max_attempts
+                    or attempt == max_attempts
                 ):
                     self._observe(call)
                     raise ProviderHttpError(
@@ -316,7 +333,7 @@ class ProviderHttpClient:
                     last_retry_after_ms,
                     encountered_rate_limit,
                 )
-                if attempt == self._max_attempts:
+                if attempt == max_attempts:
                     self._observe(call)
                     raise ProviderHttpError(
                         ProviderFailureCategory.TRANSIENT,

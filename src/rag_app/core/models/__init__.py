@@ -175,6 +175,7 @@ from rag_app.core.models.revisions import (
 from rag_app.core.models.search import (
     ActiveRevisionQuerySnapshot,
     BaseResultCacheKey,
+    CatalogCitation,
     ChannelHit,
     DiagnosticEvidenceItem,
     DiagnosticExpansionItem,
@@ -222,6 +223,7 @@ __all__ = [
     "BlobPhysicalState",
     "BlobReference",
     "CacheScope",
+    "CatalogCitation",
     "CellGrid",
     "ChannelHit",
     "Chunk",

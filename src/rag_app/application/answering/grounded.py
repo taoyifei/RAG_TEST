@@ -1665,6 +1665,12 @@ class GroundedAnsweringService:
             evidence if answer_support_set is None else answer_support_set
         )
         for attempt in range(2):
+            if attempt and not (
+                confidence.status is ConfidenceStatus.ANSWERABLE
+                and direct_support
+                and reason == "ANSWER_LIST_INCOMPLETE"
+            ):
+                break
             _raise_if_cancelled(cancellation)
             buffered: list[AnswerClaim] = []
             delivered: list[AnswerClaim] = []
