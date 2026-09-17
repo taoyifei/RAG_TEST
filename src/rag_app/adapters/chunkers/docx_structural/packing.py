@@ -10,6 +10,7 @@ from rag_app.adapters.chunkers.docx_structural.context import (
 from rag_app.adapters.chunkers.docx_structural.rendering import render_atoms
 from rag_app.adapters.chunkers.docx_structural.splitting import split_atom
 from rag_app.core.models import ChunkingPolicy
+from rag_app.core.models.common import JsonObject
 from rag_app.core.ports import TokenCounterPort
 
 
@@ -17,6 +18,7 @@ def pack_run(
     run: RunPlan,
     *,
     document_title: str,
+    document_metadata: JsonObject = (),
     policy: ChunkingPolicy,
     token_counter: TokenCounterPort,
 ) -> tuple[tuple[AtomicUnit, ...], ...]:
@@ -25,6 +27,7 @@ def pack_run(
     Args:
         run: 一个禁止跨越的有序 run。
         document_title: embedding-only 文档标题。
+        document_metadata: 已入库的文档级检索元数据。
         policy: provisional packing 参数。
         token_counter: 无网络 token 计数端口。
 
@@ -38,6 +41,7 @@ def pack_run(
         for segment in split_atom(
             atom,
             document_title=document_title,
+            document_metadata=document_metadata,
             policy=policy,
             token_counter=token_counter,
         )
@@ -48,14 +52,20 @@ def pack_run(
     current: tuple[AtomicUnit, ...] = (atoms[0],)
     for atom in atoms[1:]:
         joined = (*current, atom)
-        if _fits(joined, document_title, policy, token_counter):
+        if _fits(
+            joined, document_title, document_metadata, policy, token_counter
+        ):
             current_distance = abs(
                 policy.target_tokens
-                - _pack_size(current, document_title, token_counter)
+                - _pack_size(
+                    current, document_title, document_metadata, token_counter
+                )
             )
             joined_distance = abs(
                 policy.target_tokens
-                - _pack_size(joined, document_title, token_counter)
+                - _pack_size(
+                    joined, document_title, document_metadata, token_counter
+                )
             )
             if joined_distance < current_distance:
                 current = joined
@@ -67,9 +77,13 @@ def pack_run(
         tail = packs[-1]
         previous = packs[-2]
         if _pack_size(
-            tail, document_title, token_counter
+            tail, document_title, document_metadata, token_counter
         ) < policy.min_tail_tokens and _fits(
-            (*previous, *tail), document_title, policy, token_counter
+            (*previous, *tail),
+            document_title,
+            document_metadata,
+            policy,
+            token_counter,
         ):
             packs[-2:] = [(*previous, *tail)]
     return tuple(packs)
@@ -78,10 +92,13 @@ def pack_run(
 def _fits(
     atoms: tuple[AtomicUnit, ...],
     document_title: str,
+    document_metadata: JsonObject,
     policy: ChunkingPolicy,
     token_counter: TokenCounterPort,
 ) -> bool:
-    return _pack_size(atoms, document_title, token_counter) <= min(
+    return _pack_size(
+        atoms, document_title, document_metadata, token_counter
+    ) <= min(
         policy.hard_max_tokens, policy.effective_embedding_max
     )
 
@@ -89,6 +106,7 @@ def _fits(
 def _pack_size(
     atoms: tuple[AtomicUnit, ...],
     document_title: str,
+    document_metadata: JsonObject,
     token_counter: TokenCounterPort,
 ) -> int:
     rendered = render_atoms(atoms)
@@ -99,6 +117,7 @@ def _pack_size(
             atoms[0],
             rendered.text,
             structural_context=pack_structural_context(atoms),
+            document_metadata=document_metadata,
         )
     ).count
     return max(citation_count, embedding_count)
