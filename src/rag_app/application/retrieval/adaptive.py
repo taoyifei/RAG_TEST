@@ -97,6 +97,13 @@ def reasoning_effort(
     if analysis.identifiers or _TITLE.search(query):
         return ReasoningEffort.DIRECT
     if (
+        analysis.semantics.answer_type.value == "DUTIES"
+        and analysis.semantics.target
+        and re.search(r"负责|承担|需要|哪些|什么|啥", analysis.semantics.target)
+    ):
+        # 目标仍含职责问句谓语时，规则解析无法可靠区分主体和动作。
+        return ReasoningEffort.ASSISTED
+    if (
         analysis.semantics.source == "RULE"
         and not has_context
         and not is_navigation_query(query)
