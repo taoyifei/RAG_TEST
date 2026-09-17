@@ -157,6 +157,20 @@ class _WaitingSdk:
         raise QueryCancelled("synthetic timeout")
 
 
+class _SilentSdk:
+    """模拟连首个协议事件都未产生的上游等待。"""
+
+    def answer_stream(
+        self,
+        *_args: object,
+        cancellation: CancellationPort,
+        **_kwargs: object,
+    ) -> None:
+        while not cancellation.is_cancelled():
+            time.sleep(0.002)
+        raise QueryCancelled("synthetic timeout")
+
+
 class _PartialFailureSdk(_WaitingSdk):
     """首条合法 claim 后返回只含安全字段的应用错误。"""
 
@@ -282,6 +296,76 @@ class _FinalThenFailureSdk:
         )
 
 
+class _StagedFinalSdk:
+    """先交付协议进度，超过旧首内容时限后才发送 Final。"""
+
+    def answer_stream(  # noqa: PLR0913
+        self,
+        project_id: str,
+        knowledge_base_id: str,
+        text: str,
+        *,
+        emit: Callable[[object], None],
+        cancellation: CancellationPort,
+        trace_id: str,
+        **kwargs: object,
+    ) -> None:
+        del text, kwargs
+        emit(
+            AnswerStreamMetaEvent(
+                trace_id=trace_id,
+                sequence=0,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+            )
+        )
+        emit(
+            AnswerStreamStageEvent.create(
+                trace_id=trace_id,
+                sequence=1,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+                stage="generation",
+            )
+        )
+        time.sleep(0.07)
+        if cancellation.is_cancelled():
+            raise QueryCancelled("synthetic cancellation")
+        emit(
+            AnswerStreamFinalEvent(
+                trace_id=trace_id,
+                sequence=2,
+                project_id=project_id,
+                knowledge_base_id=knowledge_base_id,
+                result=SearchAnswerResult(
+                    trace_id=trace_id,
+                    status=ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="INSUFFICIENT_SUPPORT",
+                    confidence=ConfidenceDecision(
+                        status=ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+                        score=0.0,
+                    ),
+                    query_kind=QueryKind.SIMPLE_FACT,
+                    active_index_revision_id=_REVISION,
+                    index_fingerprint="sha256:" + "5" * 64,
+                    serving_fingerprint="sha256:" + "6" * 64,
+                    route_reason_code="LEXICAL_ONLY",
+                    rerank_execution_mode="bypass",
+                    generation_mode="none",
+                    cache_key="sha256:" + "7" * 64,
+                ),
+            )
+        )
+
+
+class _LateFinalSdk(_StagedFinalSdk):
+    """模拟超时后仍迟到的 Final。"""
+
+    def answer_stream(self, *args: object, **kwargs: object) -> None:
+        time.sleep(0.07)
+        super().answer_stream(*args, **kwargs)
+
+
 def _stream(
     executor: QueryExecutor,
     sdk: object,
@@ -321,15 +405,22 @@ def test_worker_waits_for_each_http_delivery_acknowledgement() -> None:
 
 def test_first_content_total_and_idle_timeouts_are_distinct() -> None:
     cases = (
-        (False, 0.04, 0.5, 1.0, "STREAM_FIRST_CONTENT_TIMEOUT"),
-        (False, 0.5, 0.5, 0.04, "STREAM_TOTAL_TIMEOUT"),
-        (True, 0.5, 0.04, 1.0, "STREAM_IDLE_TIMEOUT"),
+        (_SilentSdk(), 0.04, 0.5, 1.0, "STREAM_FIRST_CONTENT_TIMEOUT", False),
+        (
+            _WaitingSdk(claim=False),
+            0.5,
+            0.5,
+            0.04,
+            "STREAM_TOTAL_TIMEOUT",
+            False,
+        ),
+        (_WaitingSdk(claim=True), 0.5, 0.04, 1.0, "STREAM_IDLE_TIMEOUT", True),
     )
-    for claim, first, idle, total, expected in cases:
+    for sdk, first, idle, total, expected, partial in cases:
         executor = QueryExecutor(queue_wait_seconds=1.0)
         stream = _stream(
             executor,
-            _WaitingSdk(claim=claim),
+            sdk,
             first=first,
             idle=idle,
             total=total,
@@ -339,7 +430,7 @@ def test_first_content_total_and_idle_timeouts_are_distinct() -> None:
             while not events or events[-1][0] != "error":
                 events.append(_next_event(stream))
             assert events[-1][1]["code"] == expected
-            assert events[-1][1]["partial"] is claim
+            assert events[-1][1]["partial"] is partial
         finally:
             stream.close()
             _wait_for(lambda current=executor: current.in_flight == 0)
@@ -412,5 +503,87 @@ def test_failure_after_final_does_not_append_second_terminal() -> None:
             raise AssertionError("Final 后不应再出现第二个事件。")
     finally:
         stream.close()
+        _wait_for(lambda: executor.in_flight == 0)
+        executor.close()
+
+
+def test_final_only_route_stage_prevents_first_event_timeout() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    coordinator = _stream(
+        executor, _StagedFinalSdk(), first=0.04, idle=0.3, total=1.0
+    )
+    stream = coordinator.start()
+    try:
+        events = [_event_payload(frame) for frame in stream]
+        names = [event[0] for event in events if event is not None]
+        assert names == ["meta", "stage", "final"]
+        assert coordinator.first_protocol_event_delivered is True
+        assert coordinator.answer_content_delivered is True
+        assert coordinator.terminal_state == "FINAL"
+    finally:
+        _wait_for(lambda: executor.in_flight == 0)
+        executor.close()
+
+
+def test_timeout_emits_exactly_one_error_and_ignores_late_final() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    coordinator = _stream(
+        executor, _LateFinalSdk(), first=0.03, idle=0.3, total=1.0
+    )
+    stream = coordinator.start()
+    try:
+        events = [_event_payload(frame) for frame in stream]
+        names = [event[0] for event in events if event is not None]
+        assert names == ["error"]
+        assert coordinator.terminal_state == "ERROR"
+        _wait_for(lambda: executor.in_flight == 0)
+        assert coordinator.terminal_state == "ERROR"
+    finally:
+        executor.close()
+
+
+def test_worker_cancel_without_prior_terminal_emits_cancelled() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    coordinator = _stream(executor, _BackpressureSdk())
+    stream = coordinator.start()
+    try:
+        events = [_event_payload(frame) for frame in stream]
+        names = [event[0] for event in events if event is not None]
+        assert names == ["meta", "stage", "cancelled"]
+        assert coordinator.terminal_state == "CANCELLED"
+    finally:
+        _wait_for(lambda: executor.in_flight == 0)
+        executor.close()
+
+
+def test_provider_failure_emits_exactly_one_error() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    coordinator = _stream(executor, _PartialFailureSdk(claim=True))
+    stream = coordinator.start()
+    try:
+        events = [_event_payload(frame) for frame in stream]
+        names = [event[0] for event in events if event is not None]
+        assert names == ["meta", "claim", "error"]
+        assert coordinator.terminal_state == "ERROR"
+    finally:
+        _wait_for(lambda: executor.in_flight == 0)
+        executor.close()
+
+
+def test_final_render_failure_emits_exactly_one_error() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+
+    def _broken_render(_result: SearchAnswerResult) -> dict[str, object]:
+        raise ValueError("synthetic render failure")
+
+    coordinator = _stream(executor, _FinalThenFailureSdk())
+    coordinator.render_final = _broken_render
+    stream = coordinator.start()
+    try:
+        events = [_event_payload(frame) for frame in stream]
+        names = [event[0] for event in events if event is not None]
+        assert names == ["error"]
+        assert coordinator.terminal_state == "ERROR"
+    finally:
         _wait_for(lambda: executor.in_flight == 0)
         executor.close()

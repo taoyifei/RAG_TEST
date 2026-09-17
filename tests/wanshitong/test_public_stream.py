@@ -161,3 +161,29 @@ def test_projection_rejects_unknown_internal_event() -> None:
     frame = _sse("token", {"token": "未经验证正文"})
     with pytest.raises(ValueError, match="未知公共事件"):
         next(iter(project_public_stream(iter([frame]))))
+
+
+@pytest.mark.parametrize("terminal", ["final", "error", "cancelled"])
+def test_public_projection_preserves_one_terminal_event(terminal: str) -> None:
+    payload: dict[str, object] = {
+        "protocol": "rag-answer-sse-v1",
+        "type": terminal,
+        "trace_id": _TRACE_ID,
+        "sequence": 1,
+    }
+    if terminal == "final":
+        payload.update(status="INSUFFICIENT_EVIDENCE", answer="", citations=[])
+    elif terminal == "error":
+        payload.update(
+            code="SYNTHETIC", message="安全错误", stage="answer.stream"
+        )
+    else:
+        payload.update(
+            cancel_requested=True,
+            upstream_close_attempted=False,
+            upstream_stopped="confirmed",
+        )
+    frames = iter([_sse(terminal, payload), _sse("error", payload)])
+    projected = list(project_public_stream(frames))
+    assert len(projected) == 1
+    assert projected[0].startswith(f"event: {terminal}\n".encode())

@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import http.client
 import json
 import math
 import os
 import re
 import statistics
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -25,6 +27,7 @@ _ROOT = Path(__file__).resolve().parent
 _RESULTS = _ROOT / "results"
 _CASE_COUNT = 96
 _CANDIDATE_PORT = 8289
+_BAD_GATEWAY = 502
 _SUPPORT_ID = re.compile(r"\[S\d+\]")
 
 
@@ -63,7 +66,7 @@ def _chat(
     conversation_id: str,
     question: str,
 ) -> dict[str, Any]:
-    """解析公共 SSE 的唯一 Final，保留独立候选的真实墙钟时间。"""
+    """记录公共 SSE 的所有终态，语义失败也返回可审计结果。"""
     request = urllib.request.Request(  # noqa: S310
         base_url + "/api/public/chat",
         data=json.dumps(
@@ -100,14 +103,13 @@ def _chat(
                 event = "message"
                 data.clear()
     finals = [payload for name, payload, _ in events if name == "final"]
-    if len(finals) != 1:
-        errors = [
-            {"code": payload.get("code"), "stage": payload.get("stage")}
-            for name, payload, _ in events
-            if name == "error"
-        ]
-        raise RuntimeError(f"候选查询没有唯一 Final：{errors}")
-    final = finals[0]
+    terminals = [
+        (name, payload)
+        for name, payload, _ in events
+        if name in {"final", "error", "cancelled"}
+    ]
+    errors = [payload for name, payload in terminals if name == "error"]
+    final = finals[0] if len(finals) == 1 else {}
     citations = final.get("citations")
     citations = citations if isinstance(citations, list) else []
     answer = final.get("answer")
@@ -116,6 +118,16 @@ def _chat(
         "trace_id": final.get("trace_id") or trace_header,
         "status": final.get("status"),
         "reason_code": final.get("reason_code"),
+        "terminal_event_count": len(terminals),
+        "terminal_type": (
+            terminals[0][0].upper()
+            if len(terminals) == 1
+            else "MISSING" if not terminals else "MULTIPLE"
+        ),
+        "error_code": errors[0].get("code") if errors else None,
+        "error_stage": errors[0].get("stage") if errors else None,
+        "final_count": len(finals),
+        "claim_count": sum(name == "claim" for name, _, _ in events),
         "request_total_ms": round((time.perf_counter() - started) * 1000, 2),
         "stage_status_first_ms": next(
             (
@@ -128,6 +140,40 @@ def _chat(
         "claim_event_count": sum(name == "claim" for name, _, _ in events),
         "answer": answer,
         "citations": citations,
+    }
+
+
+def _transport_retryable(error: BaseException) -> bool:
+    """只对明确的连接复位或 502 允许一次重连。"""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == _BAD_GATEWAY
+    if isinstance(error, urllib.error.URLError):
+        return isinstance(error.reason, ConnectionResetError)
+    return isinstance(
+        error, (ConnectionResetError, http.client.RemoteDisconnected)
+    )
+
+
+def _failed_observation(error: BaseException) -> dict[str, Any]:
+    """保留失败类别，不把异常正文或请求内容写入公开结果。"""
+    retryable = _transport_retryable(error)
+    return {
+        "trace_id": None,
+        "status": None,
+        "reason_code": None,
+        "terminal_event_count": 0,
+        "terminal_type": "MISSING",
+        "error_code": "TRANSPORT_ERROR" if retryable else "RUNNER_ERROR",
+        "error_stage": (
+            "candidate.transport" if retryable else "candidate.runner"
+        ),
+        "final_count": 0,
+        "claim_count": 0,
+        "claim_event_count": 0,
+        "request_total_ms": None,
+        "stage_status_first_ms": None,
+        "answer": "",
+        "citations": [],
     }
 
 
@@ -172,7 +218,13 @@ def _p95(values: list[float]) -> float | None:
     return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1)]
 
 
-def run(base_url: str, output: Path, review_output: Path) -> None:
+def run(
+    base_url: str,
+    output: Path,
+    review_output: Path,
+    *,
+    case_ids: frozenset[str] | None = None,
+) -> int:
     """逐题创建会话，可从已写入结果的下一题继续。"""
     parsed = urllib.parse.urlsplit(base_url)
     if (
@@ -196,18 +248,51 @@ def run(base_url: str, output: Path, review_output: Path) -> None:
         if output.exists()
         else set()
     )
-    for group, row in _cases():
+    selected = tuple(
+        (group, row)
+        for group, row in _cases()
+        if case_ids is None or row["case_id"] in case_ids
+    )
+    if case_ids is not None and len(selected) != len(case_ids):
+        raise ValueError("指定的候选 case ID 不属于冻结集。")
+    failed = False
+    for group, row in selected:
         run_id = f"{group}/{row['case_id']}"
         if run_id in completed:
             continue
-        opener, csrf = _session(base_url)
         conversation_id = "wb08r03-" + row["case_id"].lower()
         context = row.get("context_question")
-        if isinstance(context, str) and context:
-            _chat(opener, csrf, base_url, conversation_id, context)
-        observed = _chat(
-            opener, csrf, base_url, conversation_id, row["question"]
-        )
+        retry_count = 0
+        while True:
+            try:
+                opener, csrf = _session(base_url)
+                if isinstance(context, str) and context:
+                    context_result = _chat(
+                        opener, csrf, base_url, conversation_id, context
+                    )
+                    if context_result["final_count"] != 1:
+                        observed = {
+                            **context_result,
+                            "error_code": "CONTEXT_NO_FINAL",
+                            "error_stage": "candidate.context",
+                        }
+                        break
+                observed = _chat(
+                    opener, csrf, base_url, conversation_id, row["question"]
+                )
+                break
+            except Exception as error:
+                if _transport_retryable(error) and retry_count == 0:
+                    retry_count = 1
+                    continue
+                observed = _failed_observation(error)
+                break
+        observed["retry_count"] = retry_count
+        if (
+            observed["terminal_event_count"] != 1
+            or observed["final_count"] != 1
+        ):
+            failed = True
         citations = observed.pop("citations")
         answer = observed.pop("answer")
         expected = row.get("expected_source_document")
@@ -275,7 +360,11 @@ def run(base_url: str, output: Path, review_output: Path) -> None:
     ]
     for group in ("formal54", "natural_complex18", "latency24"):
         group_rows = [row for row in rows if row["group"] == group]
-        latencies = [row["request_total_ms"] for row in group_rows]
+        latencies = [
+            row["request_total_ms"]
+            for row in group_rows
+            if isinstance(row.get("request_total_ms"), (int, float))
+        ]
         print(
             json.dumps(
                 {
@@ -296,6 +385,7 @@ def run(base_url: str, output: Path, review_output: Path) -> None:
                 ensure_ascii=False,
             )
         )
+    return 1 if failed else 0
 
 
 def main() -> None:
@@ -304,8 +394,16 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8289")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--review-output", type=Path, required=True)
+    parser.add_argument("--case-id", action="append", default=[])
     args = parser.parse_args()
-    run(args.base_url.rstrip("/"), args.output, args.review_output)
+    raise SystemExit(
+        run(
+            args.base_url.rstrip("/"),
+            args.output,
+            args.review_output,
+            case_ids=frozenset(args.case_id) if args.case_id else None,
+        )
+    )
 
 
 if __name__ == "__main__":

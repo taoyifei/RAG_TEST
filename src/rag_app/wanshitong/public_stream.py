@@ -100,6 +100,8 @@ def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:
             event_name, payload = _decode_sse(frame)
             projected = _project_event(event_name, payload)
             yield _encode_sse(event_name, projected)
+            if event_name in {"final", "error", "cancelled"}:
+                return
     finally:
         close = getattr(frames, "close", None)
         if callable(close):

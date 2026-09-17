@@ -32,6 +32,7 @@ _FIRST_CONTENT_SECONDS = 30.0
 _IDLE_SECONDS = 30.0
 _TOTAL_SECONDS = 120.0
 _QUEUE_CAPACITY = 16
+_TerminalState = Literal["OPEN", "FINAL", "ERROR", "CANCELLED"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +79,11 @@ class P09AnswerStream:
     started: float = field(default_factory=time.monotonic)
     last_sequence: int = -1
     delivered_claims: int = 0
-    terminal_delivered: threading.Event = field(default_factory=threading.Event)
+    first_protocol_event_delivered: bool = False
+    answer_content_delivered: bool = False
+    last_protocol_activity: float = field(default_factory=time.monotonic)
+    terminal_state: _TerminalState = "OPEN"
+    terminal_lock: threading.Lock = field(default_factory=threading.Lock)
     deadline_timer: threading.Timer | None = field(
         default=None,
         init=False,
@@ -138,7 +143,20 @@ class P09AnswerStream:
             无返回值；重复调用保持幂等。
 
         """
+        self._try_claim_terminal("CANCELLED")
         self.cancellation.cancel()
+
+    def _try_claim_terminal(self, kind: _TerminalState) -> bool:
+        """只允许一个线程占用当前流的终态。"""
+        with self.terminal_lock:
+            if self.terminal_state != "OPEN":
+                return False
+            self.terminal_state = kind
+            return True
+
+    def _terminal_is_open(self) -> bool:
+        with self.terminal_lock:
+            return self.terminal_state == "OPEN"
 
     def _put(self, event: AnswerStreamPublicEvent) -> None:
         """让慢消费者对 Provider 读取形成真实、有界背压。"""
@@ -183,7 +201,11 @@ class P09AnswerStream:
                 conversation_id=self.request.conversation_id,
             )
         except QueryCancelled:
-            return
+            if (
+                not self.cancellation.is_cancelled()
+                and self._terminal_is_open()
+            ):
+                self._put_cancelled()
         except RagError as error:
             self._put_error(
                 AnswerStreamErrorEvent(
@@ -211,6 +233,20 @@ class P09AnswerStream:
                     partial=self.delivered_claims > 0,
                 )
             )
+        else:
+            if self._terminal_is_open():
+                self._put_error(
+                    AnswerStreamErrorEvent(
+                        trace_id=self.request.trace_id,
+                        sequence=self.last_sequence + 1,
+                        project_id=self.request.project_id,
+                        knowledge_base_id=self.request.knowledge_base_id,
+                        code="STREAM_MISSING_TERMINAL",
+                        message="流式查询未能正常收束。",
+                        stage="answer.stream",
+                        partial=self.delivered_claims > 0,
+                    )
+                )
         finally:
             self._finish_queue()
             if self.deadline_timer is not None:
@@ -218,42 +254,56 @@ class P09AnswerStream:
 
     def _emit_authorized(self, event: AnswerStreamPublicEvent) -> None:
         """在每个 SDK 发布边界重查在途请求的授权。"""
+        if not self._terminal_is_open():
+            raise QueryCancelled("QUERY_CANCELLED")
         if self.authorization_guard is not None:
             self.authorization_guard()
         self._put(event)
 
     def _put_error(self, event: AnswerStreamErrorEvent) -> None:
         """禁止在 Final 已交付后追加第二个冲突终态。"""
-        if self.terminal_delivered.is_set():
+        if not self._terminal_is_open():
             return
         try:
             self._put(event)
         except QueryCancelled:
             return
 
-    def _iterate(self) -> Iterator[bytes]:
+    def _put_cancelled(self) -> None:
+        """Worker 自发取消时发布可观察的取消终态。"""
+        if not self._terminal_is_open():
+            return
+        try:
+            self._put(
+                AnswerStreamCancelledEvent(
+                    trace_id=self.request.trace_id,
+                    sequence=self.last_sequence + 1,
+                    project_id=self.request.project_id,
+                    knowledge_base_id=self.request.knowledge_base_id,
+                    upstream_close_attempted=False,
+                    upstream_stopped="confirmed",
+                )
+            )
+        except QueryCancelled:
+            return
+
+    def _iterate(self) -> Iterator[bytes]:  # noqa: PLR0912
         """序列化 SSE；心跳不占协议 sequence，也不携带业务内容。"""
-        last_activity = self.started
-        content_delivered = False
         try:
             while True:
+                if not self._terminal_is_open():
+                    break
                 now = time.monotonic()
-                total_remaining = self.total_seconds - (now - self.started)
-                first_remaining = self.first_content_seconds - (
-                    now - self.started
-                )
-                idle_remaining = self.idle_seconds - (now - last_activity)
-                deadline_remaining = min(
-                    total_remaining,
-                    idle_remaining,
-                    first_remaining if not content_delivered else math.inf,
-                )
+                deadline_remaining = self._deadline_remaining(now)
                 if deadline_remaining <= 0:
+                    if not self._try_claim_terminal("ERROR"):
+                        return
                     self.cancellation.cancel()
-                    self.terminal_delivered.set()
                     yield self._timeout_frame(
                         now=now,
-                        content_delivered=content_delivered,
+                        first_protocol_event_delivered=(
+                            self.first_protocol_event_delivered
+                        ),
                     )
                     return
                 try:
@@ -267,24 +317,56 @@ class P09AnswerStream:
                     yield f": heartbeat {elapsed_ms}\n\n".encode()
                     continue
                 if message is _END:
-                    return
+                    if self._try_claim_terminal("ERROR"):
+                        yield self._missing_terminal_frame()
+                    break
                 queued = cast(_QueuedEvent, message)
                 event = queued.event
-                frame = self._render_event(event)
+                if not self._terminal_is_open():
+                    self._acknowledge(queued)
+                    return
+                try:
+                    frame = self._render_event(event)
+                except Exception:
+                    if self._try_claim_terminal("ERROR"):
+                        self.cancellation.cancel()
+                        yield self._missing_terminal_frame()
+                    return
                 if frame is None:
                     self._acknowledge(queued)
-                    last_activity = time.monotonic()
                     continue
-                yield frame
-                self._acknowledge(queued)
-                last_activity = time.monotonic()
+                terminal_kind = _event_terminal_kind(event)
+                if terminal_kind is not None and not self._try_claim_terminal(
+                    terminal_kind
+                ):
+                    self._acknowledge(queued)
+                    return
+                self.first_protocol_event_delivered = True
+                self.last_protocol_activity = time.monotonic()
                 if isinstance(
                     event,
                     (AnswerStreamClaimEvent, AnswerStreamFinalEvent),
                 ):
-                    content_delivered = True
+                    self.answer_content_delivered = True
+                yield frame
+                self._acknowledge(queued)
+                if terminal_kind is not None:
+                    break
         finally:
             self.cancellation.cancel()
+
+    def _deadline_remaining(self, now: float) -> float:
+        """首事件、业务空闲和总时限分别计算。"""
+        first_remaining = (
+            self.first_content_seconds - (now - self.started)
+            if not self.first_protocol_event_delivered
+            else math.inf
+        )
+        return min(
+            self.total_seconds - (now - self.started),
+            self.idle_seconds - (now - self.last_protocol_activity),
+            first_remaining,
+        )
 
     def _acknowledge(self, queued: _QueuedEvent) -> None:
         """原子更新已交付统计，再允许 worker 进入下一阶段。"""
@@ -292,15 +374,6 @@ class P09AnswerStream:
         self.last_sequence = max(self.last_sequence, event.sequence)
         if isinstance(event, AnswerStreamClaimEvent):
             self.delivered_claims += 1
-        if isinstance(
-            event,
-            (
-                AnswerStreamFinalEvent,
-                AnswerStreamErrorEvent,
-                AnswerStreamCancelledEvent,
-            ),
-        ):
-            self.terminal_delivered.set()
         queued.delivered.set()
 
     def _render_event(self, event: AnswerStreamPublicEvent) -> bytes | None:
@@ -334,22 +407,24 @@ class P09AnswerStream:
                     "diagnostics_summary": None,
                 },
             )
-        if isinstance(event, AnswerStreamErrorEvent):
-            return _sse("error", event.model_dump(mode="json"))
+        if isinstance(
+            event, (AnswerStreamErrorEvent, AnswerStreamCancelledEvent)
+        ):
+            return _sse(event.type, event.model_dump(mode="json"))
         return None
 
     def _timeout_frame(
         self,
         *,
         now: float,
-        content_delivered: bool,
+        first_protocol_event_delivered: bool,
     ) -> bytes:
         """按总时限、首内容与空闲优先级构造唯一安全终态。"""
         if now - self.started >= self.total_seconds:
             code = "STREAM_TOTAL_TIMEOUT"
             message = "流式回答超过总时限。"
         elif (
-            not content_delivered
+            not first_protocol_event_delivered
             and now - self.started >= self.first_content_seconds
         ):
             code = "STREAM_FIRST_CONTENT_TIMEOUT"
@@ -369,6 +444,32 @@ class P09AnswerStream:
             partial=self.delivered_claims > 0,
         )
         return _sse("error", event.model_dump(mode="json"))
+
+    def _missing_terminal_frame(self) -> bytes:
+        """Worker 异常退出且未发布终态时安全收束。"""
+        event = AnswerStreamErrorEvent(
+            trace_id=self.request.trace_id,
+            sequence=self.last_sequence + 1,
+            project_id=self.request.project_id,
+            knowledge_base_id=self.request.knowledge_base_id,
+            code="STREAM_MISSING_TERMINAL",
+            message="流式查询未能正常收束。",
+            stage="answer.stream",
+            partial=self.delivered_claims > 0,
+        )
+        return _sse("error", event.model_dump(mode="json"))
+
+
+def _event_terminal_kind(
+    event: AnswerStreamPublicEvent,
+) -> _TerminalState | None:
+    if isinstance(event, AnswerStreamFinalEvent):
+        return "FINAL"
+    if isinstance(event, AnswerStreamErrorEvent):
+        return "ERROR"
+    if isinstance(event, AnswerStreamCancelledEvent):
+        return "CANCELLED"
+    return None
 
 
 def _sse(event: str, payload: object) -> bytes:
