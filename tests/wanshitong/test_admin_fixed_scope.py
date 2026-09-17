@@ -23,7 +23,7 @@ from rag_app.wanshitong.models import ScopeBinding
 from rag_app.wanshitong.upload_validation import DOCX_MEDIA_TYPE
 from tests.adapters.parsers.docx.fixtures import build_package
 from tests.product_support import build_product_harness
-from tests.wanshitong.support import PublicHarness
+from tests.wanshitong.support import PublicHarness, synthetic_answer
 
 
 def test_admin_facade_requires_existing_console_session(
@@ -50,6 +50,118 @@ def test_admin_facade_requires_existing_console_session(
             ADMIN_BASE_PATH + "/operational-traces:export",
             json={"trace_ids": [trace_id]},
         ).status_code == 401
+        assert anonymous.post(
+            ADMIN_BASE_PATH + "/history-traces:export",
+            json={"trace_ids": [trace_id]},
+        ).status_code == 401
+
+
+def test_history_batch_export_contains_original_answers_and_fixed_scope(
+    public_harness: PublicHarness,
+) -> None:
+    """同一批问答原文与技术 Trace 入包，越界或缺正文则整包失败。"""
+    runtime = public_harness.product.runtime
+    fixed = public_harness.scope_service.binding()
+    fixed_scope = KnowledgeBaseScope(
+        project_id=fixed.project_id,
+        knowledge_base_id=fixed.knowledge_base_id,
+    )
+    ids = []
+    for suffix in ("3", "4"):
+        trace_id, _ = _record_full_trace(
+            public_harness, suffix=suffix, scope=fixed_scope
+        )
+        runtime.history.start(
+            trace_id,
+            fixed_scope,
+            f"第 {suffix} 条原始问题？",
+            owner_id="public-test-owner",
+            save_body=True,
+        )
+        runtime.history.finish(
+            trace_id,
+            result=synthetic_answer(trace_id),
+            error=None,
+            cancelled=False,
+        )
+        ids.append(trace_id)
+
+    endpoint = ADMIN_BASE_PATH + "/history-traces:export"
+    denied_csrf = public_harness.client.post(
+        endpoint, json={"trace_ids": ids}
+    )
+    exported = public_harness.client.post(
+        endpoint,
+        json={"trace_ids": list(reversed(ids))},
+        headers=public_harness.product.write_headers,
+    )
+    assert denied_csrf.status_code == 403
+    assert exported.status_code == 200, exported.text
+    assert exported.headers["content-type"] == "application/zip"
+    with ZipFile(BytesIO(exported.content)) as archive:
+        manifest = json.loads(archive.read("MANIFEST.json"))
+        assert manifest["item_count"] == 2
+        assert all(item["body_included"] for item in manifest["items"])
+        for trace_id in ids:
+            history = json.loads(
+                archive.read(f"items/{trace_id}/history.json")
+            )
+            operation = json.loads(
+                archive.read(f"items/{trace_id}/operational-trace.json")
+            )
+            assert history["question"].endswith("条原始问题？")
+            assert history["answer"] == (
+                "办理材料应在五个工作日内完成核验。"
+            )
+            assert history["result"] is not None
+            assert operation["trace"]["trace_id"] == trace_id
+
+    other_project = runtime.sdk.create_project(
+        "越界导出项目", idempotency_key="history-export-other-project"
+    )
+    other_kb = runtime.sdk.create_knowledge_base(
+        other_project.project_id,
+        "越界导出知识库",
+        idempotency_key="history-export-other-kb",
+    )
+    outside_scope = KnowledgeBaseScope(
+        project_id=other_project.project_id,
+        knowledge_base_id=other_kb.knowledge_base_id,
+    )
+    outside, _ = _record_full_trace(
+        public_harness, suffix="5", scope=outside_scope
+    )
+    runtime.history.start(
+        outside,
+        outside_scope,
+        "越界原始问题",
+        owner_id="other-owner",
+        save_body=True,
+    )
+    outside_response = public_harness.client.post(
+        endpoint,
+        json={"trace_ids": [ids[0], outside]},
+        headers=public_harness.product.write_headers,
+    )
+    assert outside_response.status_code == 404
+
+    missing_body = "trace_" + "6" * 32
+    runtime.history.start(
+        missing_body,
+        fixed_scope,
+        "未保存原文的问题",
+        owner_id="public-test-owner",
+        save_body=False,
+    )
+    unavailable = public_harness.client.post(
+        endpoint,
+        json={"trace_ids": [ids[0], missing_body]},
+        headers=public_harness.product.write_headers,
+    )
+    assert unavailable.status_code == 409
+    assert unavailable.json()["error"]["code"] == (
+        "HISTORY_BODY_UNAVAILABLE"
+    )
 
 
 def test_admin_facade_uses_only_fixed_scope(

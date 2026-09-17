@@ -217,6 +217,7 @@ describe("湾事通管理员壳", () => {
       ).toBe(true),
     );
     expect(screen.queryByRole("button", { name: /清理已到期/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /导出已选/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "导出已选技术 Trace" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "前往问答历史批量下载" })).toBeVisible();
   });
 });

@@ -242,8 +242,16 @@ export function OperationalTracesPage({
         <div>
           <h2>Operational Trace</h2>
           <p>技术诊断只显示安全身份、时序、候选决定与显式调试制品。</p>
+          {fixedScope && (
+            <p>需要批量下载原问题、完整答案和引用？请到问答历史下载原文支持包。</p>
+          )}
         </div>
         <div className="row-actions">
+          {fixedScope && go && (
+            <button className="secondary" onClick={() => go("/history")}>
+              前往问答历史批量下载
+            </button>
+          )}
           {services.prune && (
             <button
               className="secondary"

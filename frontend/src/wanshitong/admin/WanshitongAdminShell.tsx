@@ -48,6 +48,7 @@ const historyServices: HistoryPageServices = {
   listHistory: wanshitongAdminApi.listHistory,
   historyDetail: wanshitongAdminApi.history,
   clearHistory: wanshitongAdminApi.clearHistory,
+  exportSupport: wanshitongAdminApi.exportHistoryTraces,
 };
 
 const traceServices: OperationalTraceServices = {

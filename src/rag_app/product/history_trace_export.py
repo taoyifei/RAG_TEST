@@ -8,7 +8,7 @@ import re
 import tempfile
 import zipfile
 import zlib
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import IO, Literal
@@ -58,6 +58,15 @@ class HistoryTraceExportLimitError(ValueError):
     ) -> None:
         self.reason_code = reason_code
         super().__init__(reason_code)
+
+
+class HistoryTraceBodyUnavailableError(ValueError):
+    """调用方要求完整问答原文，但至少一条记录不可恢复。"""
+
+    def __init__(self, trace_id: str, reason_code: str) -> None:
+        self.trace_id = trace_id
+        self.reason_code = reason_code
+        super().__init__(f"{trace_id}: {reason_code}")
 
 
 @dataclass(slots=True)
@@ -141,13 +150,17 @@ class HistoryTraceExportService:
         self._traces = traces
         self._source_revision = source_revision
 
-    def export(
+    def export(  # noqa: PLR0913
         self,
         trace_ids: Sequence[str],
         *,
         include_history_body: bool,
         body_authorized: bool,
         generated_at: datetime | None = None,
+        required_scope: tuple[str, str] | None = None,
+        require_history_body: bool = False,
+        authorize_trace: Callable[[OperationalTraceSnapshot], None]
+        | None = None,
     ) -> HistoryTraceArchive:
         """生成完整 ZIP；任何缺失或超限都在返回响应前失败。
 
@@ -156,6 +169,9 @@ class HistoryTraceExportService:
             include_history_body: 是否显式请求解密后的问答正文。
             body_authorized: 当前主体是否获准导出问答正文。
             generated_at: 可选冻结时钟；相同快照与时钟产生相同字节。
+            required_scope: 可选的固定 Project、KB 身份，逐条校验。
+            require_history_body: 原文缺失时整包失败，不生成部分包。
+            authorize_trace: 可选逐条技术 Trace 授权回调。
 
         Returns:
             已写完且通过实际 ZIP 大小校验的临时归档。
@@ -164,6 +180,7 @@ class HistoryTraceExportService:
             ValueError: ID 数量、格式、重复项或时钟无效。
             NotFound: 任一 ID 在 History、Trace 和 flat events 中都缺失。
             HistoryTraceExportLimitError: 任一公开容量上限被触发。
+            HistoryTraceBodyUnavailableError: 要求的原文不可用。
 
         """
         requested = tuple(trace_ids)
@@ -185,29 +202,47 @@ class HistoryTraceExportService:
                     max_item_bytes=MAX_HISTORY_TRACE_MEMBER_BYTES,
                     max_total_bytes=MAX_HISTORY_TRACE_TOTAL_BYTES,
                 ) as histories,
-                self._traces.export_snapshots(
+            ):
+                for trace_id in canonical_ids:
+                    history = histories[trace_id]
+                    if required_scope is not None and (
+                        history.project_id,
+                        history.knowledge_base_id,
+                    ) != required_scope:
+                        raise NotFound(
+                            "问答历史不存在或不属于当前知识范围。",
+                            stage="history_trace.export",
+                        )
+                    if require_history_body and not history.body_included:
+                        raise HistoryTraceBodyUnavailableError(
+                            trace_id,
+                            history.body_unavailable_reason
+                            or "BODY_UNAVAILABLE",
+                        )
+                with self._traces.export_snapshots(
                     canonical_ids,
                     max_total_payload_bytes=MAX_HISTORY_TRACE_TOTAL_BYTES,
-                ) as operations,
-            ):
-                missing = [
-                    snapshot.trace_id
-                    for snapshot in operations
-                    if snapshot.state == "missing"
-                    and histories[snapshot.trace_id].history_status == "MISSING"
-                ]
-                if missing:
-                    raise NotFound(
-                        "部分支持包记录不存在。",
-                        stage="history_trace.export",
-                        details={"missing_trace_ids": missing},
+                    authorize=authorize_trace,
+                ) as operations:
+                    missing = [
+                        snapshot.trace_id
+                        for snapshot in operations
+                        if snapshot.state == "missing"
+                        and histories[snapshot.trace_id].history_status
+                        == "MISSING"
+                    ]
+                    if missing:
+                        raise NotFound(
+                            "部分支持包记录不存在。",
+                            stage="history_trace.export",
+                            details={"missing_trace_ids": missing},
+                        )
+                    return self._build_archive(
+                        canonical_ids,
+                        histories=histories,
+                        operations=operations,
+                        generated_at=frozen_at,
                     )
-                return self._build_archive(
-                    canonical_ids,
-                    histories=histories,
-                    operations=operations,
-                    generated_at=frozen_at,
-                )
         except HistorySnapshotLimitError as error:
             reason: _LimitReason = (
                 "EXPORT_TOTAL_BYTES_EXCEEDED"
@@ -418,6 +453,7 @@ def _write_member(archive: zipfile.ZipFile, member: _Member) -> None:
 __all__ = [
     "MAX_HISTORY_TRACE_EXPORT_COUNT",
     "HistoryTraceArchive",
+    "HistoryTraceBodyUnavailableError",
     "HistoryTraceExportLimitError",
     "HistoryTraceExportService",
 ]
