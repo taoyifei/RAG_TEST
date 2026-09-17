@@ -193,7 +193,12 @@ class EvidenceAssembler:
                 item for item in model_candidates if _support_is_supported(item)
             )
         )
-        if groups:
+        structural_group_required = groups is not None and (
+            context is None
+            or context.analysis.semantics.answer_type
+            in _STRUCTURAL_ANSWER_TYPES
+        )
+        if structural_group_required:
             supported = tuple(
                 item for item in supported if _group_is_complete(item)
             )
@@ -223,7 +228,8 @@ class EvidenceAssembler:
                 if ambiguous and _support_is_supported(item)
                 else (
                     "INCOMPLETE_EVIDENCE_GROUP"
-                    if groups and not _group_is_complete(item)
+                    if structural_group_required
+                    and not _group_is_complete(item)
                     else (
                         "NOT_IN_MINIMUM_SUPPORT_SET"
                         if _support_is_supported(item)

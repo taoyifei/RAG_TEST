@@ -92,6 +92,25 @@ def _procedure_context() -> EvidenceSelectionContext:
     )
 
 
+def _fact_context() -> EvidenceSelectionContext:
+    """单一事实可由经逐 span 校验的局部来源支持。"""
+    question = "申请人提交什么？"
+    return EvidenceSelectionContext(
+        analysis=QueryAnalysis(
+            original_query=question,
+            normalized_query=question,
+            conversation_fingerprint=f"sha256:{'1' * 64}",
+            semantics=QuerySemantics(
+                target="申请人",
+                relation="提交",
+                answer_type=RequestedAnswerType.FACT,
+            ),
+        ),
+        query_kind=QueryKind.SIMPLE_FACT,
+        rerank_mode="fixture",
+    )
+
+
 def _supported(candidate: EvidenceItem) -> EvidenceItem:
     """仅为支持集筛选测试标记已由原文关系校验通过。"""
     return candidate.model_copy(
@@ -200,3 +219,30 @@ def test_procedure_support_requires_every_group_member(
     )
     assert len(incomplete.model_evidence_candidates) == 2
     assert incomplete.answer_support_set == ()
+
+
+def test_fact_support_keeps_valid_span_without_complete_group(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """事实问句不因其他成员未装入而丢弃已验证的引用。"""
+    members, group = _procedure()
+    assembler = EvidenceAssembler()
+    raw = assembler.assemble(members, _policy())
+    monkeypatch.setattr(
+        assembler,
+        "_assemble_candidates",
+        lambda *_args, **_kwargs: (_supported(raw[0]),),
+    )
+
+    selected = assembler.assemble_sets(
+        members,
+        _policy(),
+        context=_fact_context(),
+        groups=(group,),
+    )
+
+    assert len(selected.answer_support_set) == 1
+    assert selected.answer_support_set[0].citation_text == "申请人提交材料。"
+    assert (
+        dict(selected.answer_support_set[0].metadata)["group_complete"] is False
+    )

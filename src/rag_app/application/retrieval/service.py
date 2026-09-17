@@ -1996,7 +1996,15 @@ class RetrievalService:
                 selected_groups = packing.selected
                 rejected = packing.rejected
                 expansion = ExpansionOutcome(
-                    _flatten_evidence_groups(selected_groups),
+                    tuple(
+                        {
+                            item.hydrated.chunk.chunk_id: item
+                            for item in (
+                                *expansion.candidates,
+                                *_flatten_evidence_groups(selected_groups),
+                            )
+                        }.values()
+                    ),
                     tuple(
                         dict.fromkeys(
                             (

@@ -47,6 +47,22 @@ class _NeighborSource:
         )[:limit]
 
 
+class _CountingNeighborSource(_NeighborSource):
+    """记录结构闭合的批量 Hydration 次数。"""
+
+    def __init__(self, chunks: tuple[HydratedChunk, ...]) -> None:
+        super().__init__(chunks)
+        self.hydrate_calls = 0
+
+    def hydrate_chunks(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        chunk_ids: tuple[str, ...],
+    ) -> tuple[HydratedChunk, ...]:
+        self.hydrate_calls += 1
+        return super().hydrate_chunks(snapshot, chunk_ids)
+
+
 def _snapshot() -> ActiveRevisionQuerySnapshot:
     return cast(ActiveRevisionQuerySnapshot, object())
 
@@ -205,6 +221,36 @@ def test_list_chain_closes_from_middle_with_heading_intro() -> None:
     assert len(groups) == 1
     assert groups[0].complete
     assert groups[0].group.member_chunk_ids == chunk_ids
+
+
+def test_structure_closure_batches_multiple_table_chains() -> None:
+    """多个表格种子共享每层的一次 Hydration，仍保留各自来源。"""
+    first = _table_chain(
+        300,
+        document_number=30,
+        display_name="合成职责表一.docx",
+        length=5,
+    )
+    second = _table_chain(
+        400,
+        document_number=40,
+        display_name="合成职责表二.docx",
+        length=5,
+    )
+    source = _CountingNeighborSource(
+        tuple(item.hydrated for item in (*first, *second))
+    )
+    expander = NeighborExpander(cast(EvidenceSourcePort, source))
+
+    outcome = expander.close_structure(
+        _snapshot(),
+        (first[2], second[2]),
+        RetrievalPolicy(group_member_chunk_limit=8),
+    )
+
+    assert len(outcome.candidates) == 10
+    assert source.hydrate_calls == 2
+    assert not outcome.degraded_reason_codes
 
 
 def test_section_mode_closes_top_table_row_before_section_siblings() -> None:
