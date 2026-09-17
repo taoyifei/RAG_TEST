@@ -2482,9 +2482,9 @@ class RetrievalService:
                 AtomAnswerShape.DUTIES,
             }:
                 # 单事实不把整批仅相关候选送给模型；表格闭合最多保留
-                # 四个来源单元，引用仍由各自 citation_text 校验。
-                direct_keys = direct_keys[:4]
-                candidate_keys = candidate_keys[:4]
+                # 三个来源单元，引用仍由各自 citation_text 校验。
+                direct_keys = direct_keys[:3]
+                candidate_keys = candidate_keys[:3]
             elif not direct_keys:
                 # 不完整结构组只能支撑有限回答，避免用十余条宽候选
                 # 制造接近整份文档的 Generation 输入。
@@ -2492,19 +2492,32 @@ class RetrievalService:
             per_atom.append((atom, direct_keys, candidate_keys))
             for item in selection.model_evidence_candidates:
                 selected_by_key.setdefault(identity(item), item)
-        # 先保障各原子的直接支持，再把其余候选按原子公平补入有限上下文。
+        # 先轮流保障各原子的直接支持，再公平补入有限相关上下文。
         ordered_keys: list[tuple[object, ...]] = []
-        for _atom, direct_keys, _candidate_keys in per_atom:
-            for key in direct_keys:
-                if key not in ordered_keys:
-                    ordered_keys.append(key)
+        for index in range(self._policy.max_evidence_items):
+            for _atom, direct_keys, _candidate_keys in per_atom:
+                if index < len(direct_keys):
+                    key = direct_keys[index]
+                    if key not in ordered_keys:
+                        ordered_keys.append(key)
         for index in range(self._policy.max_evidence_items):
             for _atom, _direct_keys, candidate_keys in per_atom:
                 if index < len(candidate_keys):
                     key = candidate_keys[index]
                     if key not in ordered_keys:
                         ordered_keys.append(key)
-        max_items = min(16, self._policy.max_evidence_items * 2)
+        structural = any(
+            atom.answer_shape
+            in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.PROCEDURE,
+                AtomAnswerShape.DUTIES,
+            }
+            for atom, _direct_keys, _candidate_keys in per_atom
+        )
+        max_items = min(
+            12 if structural else 8, self._policy.max_evidence_items * 2
+        )
         ordered_keys = ordered_keys[:max_items]
         evidence = tuple(
             selected_by_key[key].model_copy(update={"evidence_id": f"S{index}"})
