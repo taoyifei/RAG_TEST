@@ -116,6 +116,14 @@ def test_catalog_uses_active_metadata_without_generation(
             "Catalog KB",
             profile_id="dev-p06-memory",
         )
+        if len(titles) > 1:
+            runtime.persistence.builder.build_and_activate(
+                project_id=project_id,
+                knowledge_base_id=scope.knowledge_base_id,
+                documents=_documents(scope, titles[:1]),
+                idempotency_key="wb08r-catalog-first-revision",
+                budgets=runtime.persistence.default_budgets(),
+            )
         runtime.persistence.builder.build_and_activate(
             project_id=project_id,
             knowledge_base_id=scope.knowledge_base_id,
