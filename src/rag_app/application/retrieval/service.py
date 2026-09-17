@@ -2409,6 +2409,19 @@ class RetrievalService:
             candidate_keys = tuple(
                 identity(item) for item in selection.model_evidence_candidates
             )
+            if atom.answer_shape not in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.PROCEDURE,
+                AtomAnswerShape.DUTIES,
+            }:
+                # 单事实不把整批仅相关候选送给模型；表格闭合最多保留
+                # 四个来源单元，引用仍由各自 citation_text 校验。
+                direct_keys = direct_keys[:4]
+                candidate_keys = candidate_keys[:4]
+            elif not direct_keys:
+                # 不完整结构组只能支撑有限回答，避免用十余条宽候选
+                # 制造接近整份文档的 Generation 输入。
+                candidate_keys = candidate_keys[:6]
             per_atom.append((atom, direct_keys, candidate_keys))
             for item in selection.model_evidence_candidates:
                 selected_by_key.setdefault(identity(item), item)

@@ -93,6 +93,10 @@ def test_atom_channels_merge_before_one_rerank(tmp_path: Path) -> None:
                 matrix = kwargs["atom_support_matrix"]
                 observed_plan.append(len(plan.atoms))
                 assert len(matrix.atoms) == len(plan.atoms)
+                assert all(
+                    len(item.supporting_support_ids) <= 4
+                    for item in matrix.atoms
+                )
                 return GroundedOutcome(
                     None, "none", reason_code="GENERATION_ABSTAINED"
                 )
