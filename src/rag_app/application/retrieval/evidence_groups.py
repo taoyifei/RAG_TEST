@@ -292,7 +292,10 @@ def _list_group(
     full_members = ((intro,) if intro is not None else ()) + ordered
     members = full_members[:max_member_chunks]
     reasons = list(_chain_reasons(ordered))
-    if intro is None:
+    # 章节标题是 canonical 结构中的真实导语；没有独立导语段落时，
+    # 仅在列表链确已到达章节起点后使用标题，不补写任何正文。
+    heading_intro = bool(first.heading_path) and first.previous_chunk_id is None
+    if intro is None and not heading_intro:
         reasons.append("MISSING_LIST_INTRO")
     if len(full_members) > max_member_chunks:
         reasons.append("MEMBER_LIMIT")

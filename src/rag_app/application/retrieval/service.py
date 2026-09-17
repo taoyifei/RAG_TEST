@@ -75,6 +75,7 @@ from rag_app.core.models import (
     CatalogCitation,
     ChannelHit,
     Chunk,
+    ChunkRole,
     CircuitSnapshot,
     ConfidenceDecision,
     ConfidenceStatus,
@@ -1901,6 +1902,65 @@ class RetrievalService:
             ordered, expanded.degraded_reason_codes, len(context_groups)
         )
 
+    def _close_structural_context(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+    ) -> ExpansionOutcome:
+        """沿 canonical 邻接链有界闭合初召回的列表和表格。"""
+        seeds: dict[ChunkRole, list[RankedChunk]] = {
+            ChunkRole.LIST: [],
+            ChunkRole.TABLE: [],
+        }
+        seen_groups: dict[ChunkRole, set[str]] = {
+            ChunkRole.LIST: set(),
+            ChunkRole.TABLE: set(),
+        }
+        for candidate in candidates:
+            chunk = candidate.hydrated.chunk
+            if chunk.role not in seeds:
+                continue
+            if chunk.neighbor_group_id in seen_groups[chunk.role]:
+                continue
+            if len(seeds[chunk.role]) >= self._policy.rerank_candidate_limit:
+                continue
+            seen_groups[chunk.role].add(chunk.neighbor_group_id)
+            seeds[chunk.role].append(candidate)
+        gathered: list[RankedChunk] = []
+        degraded: list[str] = []
+        list_seeds = tuple(seeds[ChunkRole.LIST])
+        if list_seeds:
+            current = list_seeds
+            cap = (
+                self._policy.rerank_candidate_limit
+                * self._policy.group_member_chunk_limit
+            )
+            for _ in range(self._policy.group_member_chunk_limit):
+                outcome = self._neighbors.expand(
+                    snapshot, current, "same_group", self._policy
+                )
+                degraded.extend(outcome.degraded_reason_codes)
+                next_candidates = outcome.candidates[:cap]
+                if len(next_candidates) <= len(current):
+                    break
+                current = next_candidates
+            gathered.extend(current)
+        table_seeds = tuple(seeds[ChunkRole.TABLE])
+        if table_seeds:
+            outcome = self._neighbors.expand(
+                snapshot, table_seeds, "table", self._policy
+            )
+            gathered.extend(outcome.candidates)
+            degraded.extend(outcome.degraded_reason_codes)
+        return ExpansionOutcome(
+            tuple(
+                {
+                    item.hydrated.chunk.chunk_id: item for item in gathered
+                }.values()
+            ),
+            tuple(dict.fromkeys(degraded)),
+        )
+
     def _rank_and_select(  # noqa: PLR0913
         self,
         *,
@@ -2013,10 +2073,15 @@ class RetrievalService:
                 self._policy,
                 source_qualifier=analysis.semantics.source_qualifier,
             )
+            structural = self._close_structural_context(snapshot, hydrated)
             group_inputs = tuple(
                 {
                     item.hydrated.chunk.chunk_id: item
-                    for item in (*closure.candidates, *hydrated)
+                    for item in (
+                        *closure.candidates,
+                        *structural.candidates,
+                        *hydrated,
+                    )
                 }.values()
             )
             groups = build_evidence_groups(
@@ -2062,6 +2127,7 @@ class RetrievalService:
                     dict.fromkeys(
                         (
                             *closure.degraded_reason_codes,
+                            *structural.degraded_reason_codes,
                             *group_context.degraded_reason_codes,
                         )
                     )
@@ -2074,6 +2140,7 @@ class RetrievalService:
                     "pass": retrieval_phase,
                     "formed": len(groups),
                     "complete": sum(group.group.complete for group in groups),
+                    "structural_chunks": len(structural.candidates),
                     "expanded_groups": group_context.added_count,
                     "packed": len(packed),
                     "packed_chunks": len(reranked.candidates),

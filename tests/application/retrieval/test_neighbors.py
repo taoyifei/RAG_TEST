@@ -4,7 +4,9 @@ from typing import cast
 
 import pytest
 
+from rag_app.application.retrieval.evidence_groups import build_evidence_groups
 from rag_app.application.retrieval.neighbors import NeighborExpander
+from rag_app.application.retrieval.service import RetrievalService
 from rag_app.core.models import (
     ActiveRevisionQuerySnapshot,
     ChunkRole,
@@ -151,6 +153,58 @@ def test_section_expansion_is_bounded() -> None:
 
     assert len(outcome.candidates) == 2
     assert outcome.candidates[1].expansion_reason == "SECTION_SIBLING"
+
+
+def test_list_chain_closes_from_middle_with_heading_intro() -> None:
+    """检索只命中中段时，结构组仍保留完整顺序和真实章节导语。"""
+    chunk_ids = tuple(f"chunk_{number:032x}" for number in range(100, 107))
+    chain = tuple(
+        make_ranked_chunk(
+            100 + index,
+            f"第 {index + 1} 项。",
+            role=ChunkRole.LIST,
+            neighbor_group_id="seven-steps",
+            previous_chunk_id=chunk_ids[index - 1] if index else None,
+            next_chunk_id=(
+                chunk_ids[index + 1] if index + 1 < len(chunk_ids) else None
+            ),
+        )
+        for index in range(len(chunk_ids))
+    )
+    chain = tuple(
+        item.model_copy(
+            update={
+                "hydrated": item.hydrated.model_copy(
+                    update={
+                        "chunk": item.hydrated.chunk.model_copy(
+                            update={"heading_path": ("办理流程",)}
+                        )
+                    }
+                )
+            }
+        )
+        for item in chain
+    )
+    source = cast(
+        EvidenceSourcePort,
+        _NeighborSource(tuple(item.hydrated for item in chain)),
+    )
+    service = object.__new__(RetrievalService)
+    service._neighbors = NeighborExpander(source)
+    service._policy = RetrievalPolicy(group_member_chunk_limit=8)
+
+    closed = service._close_structural_context(_snapshot(), (chain[3],))
+    groups = build_evidence_groups(
+        closed.candidates,
+        max_groups=8,
+        max_member_chunks=8,
+        rerank_text_char_limit=2400,
+    )
+
+    assert len(closed.candidates) == 7
+    assert len(groups) == 1
+    assert groups[0].complete
+    assert groups[0].group.member_chunk_ids == chunk_ids
 
 
 def test_section_mode_closes_top_table_row_before_section_siblings() -> None:
@@ -305,8 +359,7 @@ def test_table_expansion_closes_same_row_before_adjacent_rows() -> None:
     source = cast(EvidenceSourcePort, _NeighborSource(stored))
     # 目标行是索引 8..14；模拟 reranker 命中行尾和部分正文，但丢掉行首。
     seeds = tuple(
-        with_rows[index]
-        for index in (14, 10, 13, 0, 3, 5, 16, 18, 20, 21)
+        with_rows[index] for index in (14, 10, 13, 0, 3, 5, 16, 18, 20, 21)
     )
 
     outcome = NeighborExpander(source).expand(
@@ -322,9 +375,7 @@ def test_table_expansion_closes_same_row_before_adjacent_rows() -> None:
     candidate_ids = {
         item.hydrated.chunk.chunk_id for item in outcome.candidates
     }
-    target_row_ids = {
-        item.hydrated.chunk.chunk_id for item in with_rows[8:15]
-    }
+    target_row_ids = {item.hydrated.chunk.chunk_id for item in with_rows[8:15]}
     assert target_row_ids <= candidate_ids
     assert len(outcome.candidates) <= 16
 
