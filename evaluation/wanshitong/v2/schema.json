@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/taoyifei/RAG_TEST/evaluation/wanshitong/v2/schema.json",
+  "title": "湾事通 V2 冻结评测与统一指标合同",
+  "$ref": "#/$defs/case",
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dataset_revision",
+        "case_id",
+        "question",
+        "question_sha256",
+        "seed_case_id",
+        "question_style",
+        "persona",
+        "intent_identity",
+        "expected_source_document",
+        "expected_behavior",
+        "required_atoms"
+      ],
+      "properties": {
+        "dataset_revision": {"const": "wanshitong-v2-20260917"},
+        "case_id": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1},
+        "question_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "seed_case_id": {"type": "string", "minLength": 1},
+        "question_style": {"type": "string", "minLength": 1},
+        "persona": {
+          "enum": ["new_employee", "employee", "project_manager", "tech_operations"]
+        },
+        "intent_identity": {"type": "string", "minLength": 1},
+        "expected_source_document": {"type": ["string", "null"]},
+        "expected_behavior": {
+          "enum": ["ANSWER", "LIMITED", "CLARIFY", "REFUSE"]
+        },
+        "required_atoms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "source_identity", "actor", "action", "condition", "time_limit",
+              "quantity", "exception", "negation", "enumeration", "sequence",
+              "comparison", "existence", "reference", "scope", "ambiguity",
+              "refusal_boundary"
+            ]
+          }
+        },
+        "adversarial_category": {
+          "enum": [
+            "missing_or_current_source", "false_premise", "force_without_source",
+            "unindexed_template_body", "ambiguous_scope"
+          ]
+        },
+        "context_question": {"type": "string", "minLength": 1},
+        "latency_bucket": {
+          "enum": ["catalog_navigation", "single_fact", "compound_multi_turn"]
+        }
+      }
+    },
+    "metric_record": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_total_ms", "stage_status_first_ms", "first_validated_claim_ms",
+        "final_ms", "exact_ms", "lexical_ms", "embedding_ms", "dense_ms",
+        "rerank_ms", "planner_ms", "generation_ms", "repair_ms",
+        "planner_calls", "generation_calls", "repair_calls",
+        "prompt_tokens_estimated", "route_mode", "cache_hit",
+        "answer_naturalness", "citation_faithfulness",
+        "unsupported_detail_count", "official_term_preservation",
+        "number_condition_negation_preservation", "verbatim_copy_ratio",
+        "completion_tokens"
+      ],
+      "properties": {
+        "request_total_ms": {"type": ["number", "null"], "minimum": 0},
+        "stage_status_first_ms": {"type": ["number", "null"], "minimum": 0},
+        "first_validated_claim_ms": {"type": ["number", "null"], "minimum": 0},
+        "final_ms": {"type": ["number", "null"], "minimum": 0},
+        "exact_ms": {"type": ["number", "null"], "minimum": 0},
+        "lexical_ms": {"type": ["number", "null"], "minimum": 0},
+        "embedding_ms": {"type": ["number", "null"], "minimum": 0},
+        "dense_ms": {"type": ["number", "null"], "minimum": 0},
+        "rerank_ms": {"type": ["number", "null"], "minimum": 0},
+        "planner_ms": {"type": ["number", "null"], "minimum": 0},
+        "generation_ms": {"type": ["number", "null"], "minimum": 0},
+        "repair_ms": {"type": ["number", "null"], "minimum": 0},
+        "planner_calls": {"type": ["integer", "null"], "minimum": 0},
+        "generation_calls": {"type": ["integer", "null"], "minimum": 0},
+        "repair_calls": {"type": ["integer", "null"], "minimum": 0},
+        "prompt_tokens_estimated": {"type": ["integer", "null"], "minimum": 0},
+        "route_mode": {"type": ["string", "null"]},
+        "cache_hit": {"type": ["boolean", "null"]},
+        "answer_naturalness": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "citation_faithfulness": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "unsupported_detail_count": {"type": ["integer", "null"], "minimum": 0},
+        "official_term_preservation": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "number_condition_negation_preservation": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "verbatim_copy_ratio": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "completion_tokens": {"type": ["integer", "null"], "minimum": 0}
+      }
+    }
+  }
+}

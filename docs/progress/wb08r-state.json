@@ -1,0 +1,13 @@
+{
+  "base_sha": "746b030d0b63c937d9a17817596c0533f17eb966",
+  "work_branch": "codex/wb-08r-adaptive-rag",
+  "completed_phases": ["WB08R-00"],
+  "merge_allowed": false,
+  "dataset_revision": "wanshitong-v2-20260917",
+  "verification": {
+    "targeted_pytest": "5 passed",
+    "real_qa_rerun": false,
+    "production_deploy": false,
+    "current_60_trace_identity_verified": false
+  }
+}
