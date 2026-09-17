@@ -94,6 +94,24 @@ def test_duplicate_prefix_detected_only_before_citation() -> None:
     assert single["embedding_citation_ratio"] > 1.0
 
 
+def test_duplicate_prefix_ignores_heading_inside_longer_title() -> None:
+    row = audit_view(
+        ChunkView(
+            chunk_id="chunk_" + "a" * 32,
+            citation_text="可引用正文",
+            embedding_text="文档：企业管理办法\n位置：企业管理\n\n可引用正文",
+            lexical_text="可引用正文",
+            heading_path=("企业管理",),
+            role="text",
+            section_id="root",
+        ),
+        "企业管理办法",
+        {},
+    )
+
+    assert row["duplicate_prefix_detected"] is False
+
+
 def _create_fixture_database(path: Path) -> tuple[str, str]:
     active_revision = "irev_" + "a" * 32
     old_revision = "irev_" + "b" * 32

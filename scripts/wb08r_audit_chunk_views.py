@@ -73,8 +73,20 @@ def _duplicate_prefix(
 ) -> bool:
     """识别前缀中重复的文档或章节标签。"""
     prefix = _normalized(_embedding_prefix(embedding_text, citation_text))
-    labels = {label for label in (title, *heading_path) if label.strip()}
-    return any(prefix.count(_normalized(label)) > 1 for label in labels)
+    labels = {
+        _normalized(label) for label in (title, *heading_path) if label.strip()
+    }
+    if not labels:
+        return False
+    # 优先匹配较长标签，避免把标题的一部分误算成重复章节。
+    ordered_labels = sorted(labels, key=len, reverse=True)
+    escaped_labels = (re.escape(label) for label in ordered_labels)
+    expression = re.compile("|".join(escaped_labels))
+    occurrences: dict[str, int] = {}
+    for match in expression.finditer(prefix):
+        label = match.group()
+        occurrences[label] = occurrences.get(label, 0) + 1
+    return any(count > 1 for count in occurrences.values())
 
 
 def audit_view(
