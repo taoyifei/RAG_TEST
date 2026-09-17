@@ -28,6 +28,11 @@ _CONTENT_REQUEST = re.compile(
 _COMPOUND = re.compile(
     r"(?:同时|分别|并且|以及|此外)|(?:输入|前提|条件).{0,35}(?:流程|时限|步骤)"
     r"|(?:流程|步骤).{0,35}(?:时限|条件)|(?:谁|哪个部门).{0,35}(?:何时|多久)"
+    r"|(?:先|首先).{0,35}(?:再|然后|最后)"
+)
+_CONTEXT_REFERENCE = re.compile(r"这个|那个|上述|前者|后者|其中|它|这些|那些")
+_ROLE_ENUMERATION = re.compile(
+    r"[^，,；;。！？?!、]{1,24}(?:、[^，,；;。！？?!、]{1,24}){2,}"
 )
 _NAVIGATION_FILLER = re.compile(
     r"上哪找|哪找|有没有|是否有|哪份|哪些|什么|哪个|应该|应当|需要|可以|请问|请|"
@@ -35,7 +40,6 @@ _NAVIGATION_FILLER = re.compile(
     r"文件|模板|在哪|哪里|相关|有关|一下|一份|一张|一套|是|有|该|做|吗"
 )
 _PUNCTUATION = re.compile(r"[^0-9a-z\u3400-\u9fff]+")
-_SHORT_QUERY_CHARS = 36
 _MIN_SUBSTRING_CHARS = 3
 _MIN_OVERLAP = 2
 _FUZZY_TARGET_MIN_CHARS = 6
@@ -73,6 +77,9 @@ class AdaptivePlanOutcome:
     reason_code: str = "ADAPTIVE_PLAN_NOT_NEEDED"
     attempted: bool = False
     schema_fallback_detail: str | None = None
+    structured_output_mode: str = "none"
+    schema_revision: str | None = None
+    schema_sha256: str | None = None
 
 
 class AdaptivePlannerPort(Protocol):
@@ -93,26 +100,25 @@ def reasoning_effort(
 ) -> ReasoningEffort:
     """按通用问句形状决定是否值得调用模型 Planner。"""
     query = analysis.normalized_query
-    if _COMPOUND.search(query) or query.count("？") + query.count("?") > 1:
-        return ReasoningEffort.DEEP
-    if analysis.identifiers or _TITLE.search(query):
+    if is_navigation_query(query):
         return ReasoningEffort.DIRECT
     if (
+        _COMPOUND.search(query)
+        or _ROLE_ENUMERATION.search(query)
+        or query.count("？") + query.count("?") > 1
+    ):
+        return ReasoningEffort.DEEP
+    ambiguous_duties = (
         analysis.semantics.answer_type.value == "DUTIES"
         and analysis.semantics.target
         and re.search(r"负责|承担|需要|哪些|什么|啥", analysis.semantics.target)
-    ):
-        # 目标仍含职责问句谓语时，规则解析无法可靠区分主体和动作。
-        return ReasoningEffort.ASSISTED
+    )
     if (
-        analysis.semantics.source == "RULE"
-        and not has_context
-        and not is_navigation_query(query)
-    ):
-        return ReasoningEffort.DIRECT
-    if (
-        len(query) <= _SHORT_QUERY_CHARS
+        _CONTEXT_REFERENCE.search(query)
+        or ambiguous_duties
         or analysis.semantics.answer_type.value == "UNKNOWN"
+        or analysis.semantics.source == "ORIGINAL_FALLBACK"
+        or (has_context and not analysis.semantics.target)
     ):
         return ReasoningEffort.ASSISTED
     return ReasoningEffort.DIRECT

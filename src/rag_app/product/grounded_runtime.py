@@ -7,15 +7,14 @@ import re
 import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from threading import RLock
 from typing import TypeVar
 
 from pydantic import (
     Field,
-    StrictBool,
     StrictInt,
     ValidationError,
-    field_validator,
     model_validator,
 )
 
@@ -37,6 +36,10 @@ from rag_app.adapters.stores.sqlite_connection import SqliteConnectionFactory
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlanOutcome,
     ReasoningEffort,
+)
+from rag_app.application.retrieval.minimal_plan import (
+    MinimalPlanPayload,
+    build_query_atoms,
 )
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
@@ -62,18 +65,13 @@ from rag_app.core.models import (
     SearchRequest,
 )
 from rag_app.core.models.common import FrozenModel
-from rag_app.core.models.query_plan import (
-    AtomAnswerShape,
-    QueryAtom,
-)
-from rag_app.core.models.query_plan import (
-    QueryConstraint as AtomConstraint,
-)
+from rag_app.core.models.query_plan import QUERY_PLAN_SCHEMA_REVISION
 from rag_app.core.ports import CancellationPort, GenerationRequest
 from rag_app.core.ports.query_interpret import InterpretOutcome
 from rag_app.core.ports.query_rewrite import RewriteOutcome
 from rag_app.product.model_settings import KnowledgeBaseModelSettings
 from rag_app.product.provider_runtime import ProviderRuntimeRegistry
+from rag_app.product.structured_json import extract_json_object
 
 _REWRITE_SIGNAL = re.compile(
     r"这个|那个|它|其中|上述|前者|后者|具体干什么|干啥|干什么|咋|怎么说|说白了|那怎么办"
@@ -89,8 +87,6 @@ _MAX_GROUNDED_INPUT_TOKENS = 6_144
 # 上下文窗口留出固定余量。证据候选由 Provider adapter 按重排顺序裁剪，
 # 不改变引用校验所能看到的完整有界证据包。
 _MAX_GROUNDED_OUTPUT_TOKENS = 1536
-_MAX_ADAPTIVE_ATOM_CHARS = 160
-_MAX_ADAPTIVE_HINT_CHARS = 80
 _RotationResult = TypeVar("_RotationResult")
 _LOW_CONFIDENCE_RULE_REASONS = frozenset(
     {
@@ -165,61 +161,7 @@ class _InterpretPayload(FrozenModel):
         return self
 
 
-class _AdaptiveAtomPayload(FrozenModel):
-    """模型提出的单个可检索事实，不携带结论。"""
-
-    target: str = Field(min_length=1, max_length=160)
-    relation: str = Field(min_length=1, max_length=160)
-    answer_shape: AtomAnswerShape
-    source_qualifier: str | None = Field(default=None, max_length=160)
-    constraints: tuple[AtomConstraint, ...] = Field(default=(), max_length=12)
-    original_fragment: str | None = Field(default=None, max_length=320)
-
-
-class _AdaptivePlanPayload(FrozenModel):
-    """轻量 Planner 只能提交问题理解与检索提示。"""
-
-    standalone_query: str = Field(min_length=1, max_length=_MAX_REWRITE_CHARS)
-    intent: str = Field(
-        pattern=r"^(NAVIGATION|FACT|PROCEDURE|COMPARISON|COMPOUND|CLARIFICATION)$"
-    )
-    needs_clarification: StrictBool
-    clarification_question: str | None = Field(default=None, max_length=200)
-    atoms: tuple[_AdaptiveAtomPayload, ...] = Field(min_length=1, max_length=4)
-    route_hints: tuple[str, ...] = Field(max_length=4)
-
-    @field_validator("atoms", mode="before")
-    @classmethod
-    def _legacy_atom(cls, value: object) -> object:
-        """仅在边界把旧字符串原子解释为单项 FACT。"""
-        if isinstance(value, (list, tuple)) and len(value) == 1:
-            atom = value[0]
-            if isinstance(atom, str):
-                return ({
-                    "target": atom,
-                    "relation": "事实关系",
-                    "answer_shape": "FACT",
-                    "source_qualifier": None,
-                    "constraints": [],
-                    "original_fragment": None,
-                },)
-        return value
-
-    @model_validator(mode="after")
-    def _validate_clarification(self) -> _AdaptivePlanPayload:
-        if self.needs_clarification and not self.clarification_question:
-            raise ValueError("澄清问题不能为空。")
-        if any(
-            len(atom.target) + len(atom.relation) > _MAX_ADAPTIVE_ATOM_CHARS * 2
-            for atom in self.atoms
-        ):
-            raise ValueError("问题原子必须短且非空。")
-        if any(
-            not hint.strip() or len(hint) > _MAX_ADAPTIVE_HINT_CHARS
-            for hint in self.route_hints
-        ):
-            raise ValueError("路由提示必须短且非空。")
-        return self
+_AdaptivePlanPayload = MinimalPlanPayload
 
 
 class ProductGroundedModel:
@@ -498,35 +440,60 @@ class ProductGroundedModel:
                 hashes.add(str(row[0]))
         return tuple(sorted(hashes))
 
-    def plan_adaptive(  # noqa: PLR0911
+    def plan_adaptive(
         self,
         request: SearchRequest,
         analysis: QueryAnalysis,
         effort: ReasoningEffort,
     ) -> AdaptivePlanOutcome:
-        """在同一模型连接上至多发一次有限超时的 JSON 规划请求。"""
+        """在同一模型连接上至多发一次最小结构化规划请求。"""
         if effort is ReasoningEffort.DIRECT:
             return AdaptivePlanOutcome()
         if len(request.text) > _MAX_REWRITE_CHARS:
             return AdaptivePlanOutcome(reason_code="ADAPTIVE_PLAN_INPUT_LIMIT")
+        schema = _AdaptivePlanPayload.model_json_schema()
+        mode = (
+            self.adapter.config.structured_output_mode
+            if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+            else "none"
+        )
+        outcome = self._plan_adaptive_once(
+            request, analysis, schema=schema, mode=mode
+        )
+        return replace(
+            outcome,
+            structured_output_mode=mode,
+            schema_revision=QUERY_PLAN_SCHEMA_REVISION,
+            schema_sha256=canonical_sha256(schema),
+        )
+
+    def _plan_adaptive_once(
+        self,
+        request: SearchRequest,
+        analysis: QueryAnalysis,
+        *,
+        schema: dict[str, object],
+        mode: str,
+    ) -> AdaptivePlanOutcome:
+        """只解释原问；服务端重建所有硬约束与来源范围。"""
         messages = (
             ChatMessage(
                 role="system",
                 content=(
-                    "只拆分用户问题为1至4个可检索事实原子；不得回答、补条件或引用文档。"
-                    "保留数字、时限、否定、版本、来源。只输出JSON对象，字段："
-                    "standalone_query,intent,needs_clarification,"
-                    "clarification_question,atoms,route_hints。"
-                    "intent取NAVIGATION/FACT/PROCEDURE/COMPARISON/"
-                    "COMPOUND/CLARIFICATION。每个atom字段：target,relation,"
-                    "answer_shape,source_qualifier,constraints,original_fragment。"
-                    "answer_shape取FACT/DEFINITION/ENUMERATION/PROCEDURE/"
+                    "你只负责把用户问题整理为1至4个可检索事实原子，不得回答问题、"
+                    "引用文档或补充用户未提出的条件。必须保留数字、时限、否定、"
+                    "版本和来源限制。只输出JSON对象，字段为intent、"
+                    "needs_clarification、clarification_question、atoms。"
+                    "intent只可为SINGLE/COMPOUND/FOLLOW_UP/CLARIFICATION。"
+                    "每个atom只含fragment、target、relation、answer_shape。"
+                    "fragment必须是当前问题或最近上下文中的连续原文，尽量短；"
+                    "所有独立问句须由fragment覆盖。target从原文提取，"
+                    "relation只描述要查的关系。answer_shape只可为"
+                    "FACT/DEFINITION/ENUMERATION/PROCEDURE/"
                     "DUTIES/RESPONSIBLE_PARTY/DURATION/COUNT/COMPARISON/"
-                    "CATALOG_REFERENCE。constraints仅记录原问已有的NUMBER/"
-                    "DURATION/DATE_TIME/VERSION/NEGATION/SOURCE/ROLE，"
-                    "每项含kind,value，可含polarity,unit。无值用null或空数组。"
-                    "original_fragment只能是输入中的连续原文；route_hints最多4项。"
-                    "例如：甲何时提交，乙审核多久→甲的提交时间、乙的审核时限。"
+                    "CATALOG_REFERENCE。没有澄清问题时用null。"
+                    "虚构示例：甲什么时候提交，乙审核多久，分别拆成"
+                    "甲提交时间与乙审核时限两个原子。"
                 ),
             ),
             ChatMessage(
@@ -548,17 +515,30 @@ class ProductGroundedModel:
         )
         calls: tuple[ProviderCall, ...] = ()
         try:
+            schema_args = (
+                {
+                    "json_schema": schema,
+                    "schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                }
+                if isinstance(self.adapter, OpenAICompatibleChatAdapter)
+                else {}
+            )
             with self._scope("query.interpret"):
                 completion = self.adapter.complete(
                     messages,
                     operation="query.interpret",
-                    max_output_tokens=384,
-                    timeout_seconds=12.0,
+                    max_output_tokens=192,
+                    timeout_seconds=5.0,
+                    **schema_args,
                 )
             calls = (completion.call,)
             try:
-                payload_data = json.loads(completion.content)
-            except json.JSONDecodeError:
+                payload_data = (
+                    json.loads(completion.content)
+                    if mode != "none"
+                    else extract_json_object(completion.content)
+                )
+            except (json.JSONDecodeError, ValueError):
                 return AdaptivePlanOutcome(
                     calls=calls,
                     reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
@@ -574,64 +554,22 @@ class ProductGroundedModel:
                     attempted=True,
                     schema_fallback_detail="INVALID_SCHEMA",
                 )
-            reason = rewrite_constraint_reason(
-                request, payload.standalone_query
-            )
-            if reason is not None:
-                return AdaptivePlanOutcome(
-                    calls=calls,
-                    reason_code=reason,
-                    attempted=True,
-                )
-            original_context = " ".join(
-                (request.text, *request.conversation_context[-2:])
-            ).casefold()
-            if any(
-                constraint.value.casefold() not in original_context
-                or (
-                    constraint.unit is not None
-                    and constraint.unit.casefold() not in original_context
-                )
-                for atom in payload.atoms
-                for constraint in atom.constraints
-            ):
+            try:
+                atoms = build_query_atoms(payload, request, analysis)
+            except ValueError:
                 return AdaptivePlanOutcome(
                     calls=calls,
                     reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
                     attempted=True,
-                    schema_fallback_detail="CONSTRAINT_NOT_IN_QUERY",
-                )
-            if any(
-                (
-                    atom.source_qualifier is not None
-                    and atom.source_qualifier.casefold() not in original_context
-                )
-                or (
-                    atom.original_fragment is not None
-                    and atom.original_fragment.casefold()
-                    not in original_context
-                )
-                for atom in payload.atoms
-            ):
-                return AdaptivePlanOutcome(
-                    calls=calls,
-                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
-                    attempted=True,
-                    schema_fallback_detail="QUALIFIER_NOT_IN_QUERY",
+                    schema_fallback_detail="ATOM_VALIDATION_FAILED",
                 )
             return AdaptivePlanOutcome(
-                standalone_query=payload.standalone_query,
+                standalone_query=request.text,
                 intent=payload.intent,
                 needs_clarification=payload.needs_clarification,
                 clarification_question=payload.clarification_question,
-                atoms=tuple(
-                    QueryAtom(
-                        atom_id=f"A{index}",
-                        **atom.model_dump(),
-                    )
-                    for index, atom in enumerate(payload.atoms, 1)
-                ),
-                route_hints=payload.route_hints,
+                atoms=atoms,
+                route_hints=(),
                 calls=calls,
                 reason_code="ADAPTIVE_PLAN_APPLIED",
                 attempted=True,
@@ -639,8 +577,9 @@ class ProductGroundedModel:
         except RagError as error:
             return AdaptivePlanOutcome(
                 calls=_error_provider_calls(error),
-                reason_code=error.code,
+                reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
                 attempted=True,
+                schema_fallback_detail=error.code,
             )
         except (ValueError, TypeError):
             return AdaptivePlanOutcome(

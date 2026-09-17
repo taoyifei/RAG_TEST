@@ -31,19 +31,16 @@ def _request(question: str) -> SearchRequest:
 
 
 def _planner_response(
-    question: str,
     atoms: list[dict[str, object]] | list[str],
     *,
     raw_content: str | None = None,
     observed_calls: list[dict[str, object]] | None = None,
 ) -> object:
     payload = {
-        "standalone_query": question,
         "intent": "COMPOUND",
         "needs_clarification": False,
         "clarification_question": None,
         "atoms": atoms,
-        "route_hints": [],
     }
 
     class Adapter:
@@ -64,22 +61,29 @@ def _planner_response(
 
 
 @pytest.mark.parametrize(
-    ("question", "parts", "shapes"),
+    ("question", "parts", "shapes", "fragments"),
     (
         (
             "甲提交材料、乙审核材料，各自什么时候完成，同时审批要多久？",
             (("甲", "提交时间"), ("乙", "审核时间"), ("审批", "时限")),
             ("FACT", "FACT", "DURATION"),
+            (
+                "甲提交材料、乙审核材料，各自什么时候完成",
+                "乙审核材料，各自什么时候完成",
+                "同时审批要多久",
+            ),
         ),
         (
             "甲、乙、丙分别负责什么？",
             (("甲", "职责"), ("乙", "职责"), ("丙", "职责")),
             ("DUTIES", "DUTIES", "DUTIES"),
+            ("甲", "乙", "丙分别负责什么"),
         ),
         (
             "流程输入是什么，同时在什么条件下启动？",
             (("流程", "输入"), ("流程", "启动条件")),
             ("FACT", "FACT"),
+            ("流程输入是什么", "同时在什么条件下启动"),
         ),
     ),
 )
@@ -87,21 +91,22 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
     question: str,
     parts: tuple[tuple[str, str], ...],
     shapes: tuple[str, ...],
+    fragments: tuple[str, ...],
 ) -> None:
     request = _request(question)
     atoms = [
         {
+            "fragment": fragment,
             "target": target,
             "relation": relation,
             "answer_shape": shape,
-            "source_qualifier": None,
-            "constraints": [],
-            "original_fragment": None,
         }
-        for (target, relation), shape in zip(parts, shapes, strict=True)
+        for (target, relation), shape, fragment in zip(
+            parts, shapes, fragments, strict=True
+        )
     ]
     observed_calls: list[dict[str, object]] = []
-    model = _planner_response(question, atoms, observed_calls=observed_calls)
+    model = _planner_response(atoms, observed_calls=observed_calls)
 
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
@@ -112,42 +117,41 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
         f"A{index}" for index in range(1, len(parts) + 1)
     )
     assert tuple(atom.answer_shape.value for atom in outcome.atoms) == shapes
-    assert observed_calls[0]["timeout_seconds"] == 12.0
-    assert observed_calls[0]["max_output_tokens"] == 384
+    assert tuple(atom.original_fragment for atom in outcome.atoms) == fragments
+    assert observed_calls[0]["timeout_seconds"] == 5.0
+    assert observed_calls[0]["max_output_tokens"] == 192
 
 
 def test_constraint_and_source_qualifier_are_preserved() -> None:
-    question = "按甲制度V2，乙不得超过5天提交吗？"
+    question = "根据《甲制度V2》，乙不得超过5天提交吗？"
     request = _request(question)
     atom = {
+        "fragment": "根据《甲制度V2》，乙不得超过5天提交吗",
         "target": "乙",
         "relation": "提交时限",
         "answer_shape": "DURATION",
-        "source_qualifier": "甲制度V2",
-        "constraints": [
-            {"kind": "VERSION", "value": "V2"},
-            {"kind": "NUMBER", "value": "5", "unit": "天"},
-            {"kind": "NEGATION", "value": "不得", "polarity": "NEGATIVE"},
-        ],
-        "original_fragment": "乙不得超过5天提交",
     }
-    model = _planner_response(question, [atom])
+    model = _planner_response([atom])
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
     )
 
     assert outcome.reason_code == "ADAPTIVE_PLAN_APPLIED"
     assert outcome.atoms[0].source_qualifier == "甲制度V2"
-    assert tuple(item.kind.value for item in outcome.atoms[0].constraints) == (
-        "VERSION",
-        "NUMBER",
-        "NEGATION",
-    )
+    assert {
+        (item.kind.value, item.value)
+        for item in outcome.atoms[0].constraints
+    } == {
+        ("VERSION", "V2"),
+        ("DURATION", "5"),
+        ("NEGATION", "不得"),
+        ("SOURCE", "甲制度V2"),
+    }
 
 
 def test_planner_invalid_schema_falls_back_to_single_rule_atom() -> None:
     request = _request("甲和乙分别需要多久？")
-    model = _planner_response(request.text, ["甲多久", "乙多久"])
+    model = _planner_response(["甲多久", "乙多久"])
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
     )
@@ -168,7 +172,7 @@ def test_planner_invalid_json_falls_back_without_user_visible_error(
     invalid_json: str,
 ) -> None:
     request = _request("甲和乙分别需要多久？")
-    model = _planner_response(request.text, [], raw_content=invalid_json)
+    model = _planner_response([], raw_content=invalid_json)
 
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
@@ -182,16 +186,14 @@ def test_planner_more_than_four_atoms_falls_back() -> None:
     request = _request("甲、乙、丙、丁、戊各自负责什么？")
     atoms = [
         {
+            "fragment": target,
             "target": target,
             "relation": "职责",
             "answer_shape": "DUTIES",
-            "source_qualifier": None,
-            "constraints": [],
-            "original_fragment": None,
         }
         for target in "甲乙丙丁戊"
     ]
-    model = _planner_response(request.text, atoms)
+    model = _planner_response(atoms)
 
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP

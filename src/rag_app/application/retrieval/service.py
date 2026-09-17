@@ -821,6 +821,11 @@ class RetrievalService:
                     "schema_fallback_detail": (
                         adaptive.schema_fallback_detail
                     ),
+                    "structured_output_mode": (
+                        adaptive.structured_output_mode
+                    ),
+                    "schema_revision": adaptive.schema_revision,
+                    "schema_sha256": adaptive.schema_sha256,
                     "attempted": adaptive_attempted,
                     "accepted": adaptive.standalone_query is not None,
                     "reasoning_effort": effort.value,

@@ -53,3 +53,6 @@
 - Terminal-12 中 3 条预期可回答样本返回 `INSUFFICIENT_EVIDENCE`；复合样本最大总时延为 19.23 秒。R0 只证明终态合同，未证明回答准确率、逐原子归属或 R6 时延达标。R1～R6 和完整 96 仍待完成。
 - R1 使用当前 8289 容器环境和虚构最小 Schema 探测同一 vLLM：`enable_thinking=false` 可用；`response_format=json_schema` 与 `structured_outputs.json` 返回有效对象；`guided_json` 响应无效。四次探测分别约 556、353、353、494 毫秒，未打印 URL、凭据、Prompt 或响应正文。显式配置将选 `response_format`，候选环境更新与 Planner/Claim 实际接入留给后续候选镜像。
 - R1 在模型配置、兼容 Adapter 与通用 JSON 提取器中建立单一协议选择；无生产查询时轮询协议，也无格式错误后二次完整模型调用。配置升级路径已允许已锁定候选只更新已探测的 no-thinking/结构化模式。相关定向测试 `45 passed`，`ruff check` 与 `git diff --check` 通过。
+- R2 代码将 Planner 输出缩为 `intent/needs_clarification/clarification_question/atoms(fragment,target,relation,answer_shape)`；`standalone_query` 固定保留原问，来源和硬约束由服务端提取，非法 JSON/Schema/片段/新增字面值整份回退。短问本身不再触发 Planner。`QUERY_PLAN_SCHEMA_REVISION` 已升至 v2，Trace 记录 Schema 模式与摘要。
+- R2 发现现有 QueryAnalyzer 的数字模式在中文字符紧邻阿拉伯数字时漏提（例如“超过5天”）；最小 Planner 的校验和约束构建直接扫描原文数字、单位、日期、版本，避免依赖模型补足。这个问题仍可能影响主链其他 QueryAnalyzer 消费点，需在 R3 审计，但不能用某个评测问题的专用规则修复。
+- R2 相关定向测试 `38 passed`；Planner-24 真实 Gate 尚未运行。当前 8289 仍为 R0 的 `4390fab`，不能用其结果评价 R2。
