@@ -167,9 +167,12 @@ def test_contiguous_list_requires_intro_and_both_end_boundaries() -> None:
     )
     assert not incomplete.complete
     assert "MISSING_NEXT_NEIGHBOR" in incomplete.group.incomplete_reasons
-    assert pack_evidence_groups(
-        (incomplete,), token_budget=100, max_groups=2, max_chunks=8
-    ) == ()
+    assert (
+        pack_evidence_groups(
+            (incomplete,), token_budget=100, max_groups=2, max_chunks=8
+        )
+        == ()
+    )
 
 
 def test_procedure_preserves_order_and_is_not_split_by_budget() -> None:
@@ -278,3 +281,60 @@ def test_group_reranker_orders_complete_groups_and_preserves_chunks() -> None:
         relevant.hydrated.chunk.chunk_id,
     )
     assert result.groups[0].members[0].hydrated.chunk == relevant.hydrated.chunk
+
+
+def test_partial_section_falls_back_to_independent_paragraphs() -> None:
+    first = make_ranked_chunk(
+        50,
+        "本节第一段。",
+        neighbor_group_id="long-section",
+        previous_chunk_id=f"chunk_{49:032x}",
+        next_chunk_id=f"chunk_{51:032x}",
+    )
+    second = make_ranked_chunk(
+        51,
+        "本节第二段。",
+        neighbor_group_id="long-section",
+        previous_chunk_id=f"chunk_{50:032x}",
+        next_chunk_id=f"chunk_{52:032x}",
+    )
+
+    groups = _groups(second, first)
+
+    assert len(groups) == 2
+    assert all(group.complete for group in groups)
+    assert all(
+        group.group.kind is EvidenceGroupKind.PARAGRAPH_GROUP
+        for group in groups
+    )
+    assert tuple(group.group.member_chunk_ids for group in groups) == (
+        (first.hydrated.chunk.chunk_id,),
+        (second.hydrated.chunk.chunk_id,),
+    )
+
+
+def test_group_reranker_skips_incomplete_structure() -> None:
+    incomplete = _groups(
+        make_ranked_chunk(
+            60,
+            "列表首项。",
+            role=ChunkRole.LIST,
+            neighbor_group_id="open-list",
+            next_chunk_id=f"chunk_{61:032x}",
+        )
+    )[0]
+    paragraph = _groups(make_ranked_chunk(62, "办理时限为三日。"))[0]
+
+    result = CircuitAwareReranker(
+        LexicalOverlapRerankerAdapter()
+    ).rerank_groups(
+        "办理时限",
+        (incomplete, paragraph),
+        EgressPolicy(),
+        RetrievalPolicy(),
+        enabled=True,
+        result_limit=2,
+    )
+
+    assert not incomplete.complete
+    assert result.groups == (paragraph,)

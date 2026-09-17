@@ -204,10 +204,15 @@ class CircuitAwareReranker:
         required_candidate_ids: frozenset[str] = frozenset(),
     ) -> GroupRerankingOutcome:
         """复用当前 Provider 与 circuit，对有界完整组重排。"""
-        limited = groups[: policy.rerank_candidate_limit]
+        # 缺失表头、列表边界等组只能用于诊断，不能占用重排名额。
+        limited = tuple(group for group in groups if group.complete)[
+            : policy.rerank_candidate_limit
+        ]
         output_limit = min(result_limit, len(limited))
         required = _required_groups(limited, required_candidate_ids)
-        if not enabled or not limited:
+        if not limited:
+            return _bypass_groups((), "NO_COMPLETE_GROUP")
+        if not enabled:
             return _bypass_groups(
                 _restore_required_groups(
                     limited[:output_limit], limited, required, output_limit
@@ -241,16 +246,13 @@ class CircuitAwareReranker:
         request = RerankRequest(
             query=query,
             candidates=tuple(
-                (group.group.group_id, group.rerank_text)
-                for group in limited
+                (group.group.group_id, group.rerank_text) for group in limited
             ),
             limit=output_limit,
         )
         try:
             result = self._reranker.rerank(request)
-            ordered = _validate_group_order(
-                result.items, limited, output_limit
-            )
+            ordered = _validate_group_order(result.items, limited, output_limit)
         except (RagError, ValueError) as error:
             category = (
                 failure_category(error)
@@ -305,7 +307,8 @@ def _restore_required_groups(
             continue
         replace = next(
             (
-                index for index in range(len(result) - 1, -1, -1)
+                index
+                for index in range(len(result) - 1, -1, -1)
                 if result[index].group.group_id not in required_group_ids
             ),
             None,
@@ -340,9 +343,7 @@ def _validate_group_order(
         raise ProviderInvalidResponse(
             "Reranker 返回非有限结构组分数。", stage="retrieval.rerank"
         )
-    selected = [
-        group for group in groups if group.group.group_id in scores
-    ]
+    selected = [group for group in groups if group.group.group_id in scores]
     selected.sort(
         key=lambda group: (
             -scores[group.group.group_id],

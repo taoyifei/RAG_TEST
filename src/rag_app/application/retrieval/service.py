@@ -29,7 +29,7 @@ from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.application.retrieval.evidence_groups import (
     GroupCandidate,
     build_evidence_groups,
-    pack_evidence_groups,
+    pack_evidence_groups_with_diagnostics,
 )
 from rag_app.application.retrieval.exact import ExactChannel
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
@@ -149,9 +149,7 @@ def _flatten_evidence_groups(
             if chunk_id in seen:
                 continue
             seen.add(chunk_id)
-            flattened.append(
-                member.model_copy(update={"rerank_rank": rank})
-            )
+            flattened.append(member.model_copy(update={"rerank_rank": rank}))
     return tuple(flattened)
 
 
@@ -1753,9 +1751,7 @@ class RetrievalService:
         normalized_variants = tuple(
             dict.fromkeys(
                 " ".join(
-                    unicodedata.normalize("NFKC", variant.text)
-                    .strip()
-                    .split()
+                    unicodedata.normalize("NFKC", variant.text).strip().split()
                 )
                 for variant in plan.variants
             )
@@ -1972,12 +1968,13 @@ class RetrievalService:
                 result_limit=max(request.limit, len(structural_closure_ids)),
                 required_candidate_ids=frozenset(structural_closure_ids),
             )
-            packed = pack_evidence_groups(
+            packing = pack_evidence_groups_with_diagnostics(
                 group_ranking.groups,
                 token_budget=self._policy.evidence_token_budget,
                 max_groups=self._policy.max_evidence_items,
                 max_chunks=self._policy.max_evidence_items,
             )
+            packed = packing.selected
             reranked = RerankingOutcome(
                 candidates=_flatten_evidence_groups(packed),
                 mode=group_ranking.mode,
@@ -1997,6 +1994,11 @@ class RetrievalService:
                     "complete": sum(group.group.complete for group in groups),
                     "packed": len(packed),
                     "packed_chunks": len(reranked.candidates),
+                    "rejected_reasons": tuple(
+                        sorted(
+                            {reason for _group_id, reason in packing.rejected}
+                        )
+                    ),
                 },
             )
         else:
@@ -2641,9 +2643,7 @@ def _catalog_citation(document: CatalogDocument) -> CatalogCitation:
         chunk_id=document.chunk_id,
         document_title=document.title,
         source_relative_path=path if isinstance(path, str) else None,
-        department_name=(
-            department if isinstance(department, str) else None
-        ),
+        department_name=(department if isinstance(department, str) else None),
         category_path=(
             tuple(item for item in category if isinstance(item, str))
             if isinstance(category, (tuple, list))

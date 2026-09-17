@@ -133,30 +133,37 @@ def build_evidence_groups(
             )
         else:
             sorted_members = tuple(sorted(partition, key=_source_order))
-            kind = (
-                EvidenceGroupKind.SECTION_GROUP
-                if first.role is ChunkRole.TEXT and len(sorted_members) > 1
-                else EvidenceGroupKind.PARAGRAPH_GROUP
+            section_complete = (
+                first.role is ChunkRole.TEXT
+                and len(sorted_members) > 1
+                and len(sorted_members) <= max_member_chunks
+                and not _chain_reasons(sorted_members)
             )
-            members = sorted_members[:max_member_chunks]
-            reasons = (
-                list(_chain_reasons(members))
-                if kind is EvidenceGroupKind.SECTION_GROUP
-                else []
-            )
-            if len(sorted_members) > max_member_chunks:
-                reasons.append("MEMBER_LIMIT")
-            if input_truncated:
-                reasons.append("INPUT_LIMIT")
-            proposed = (
-                _group_candidate(
-                    kind,
-                    members,
-                    group_key=(first.neighbor_group_id,),
-                    reasons=tuple(reasons),
-                    rerank_text_char_limit=rerank_text_char_limit,
-                ),
-            )
+            if section_complete:
+                proposed = (
+                    _group_candidate(
+                        EvidenceGroupKind.SECTION_GROUP,
+                        sorted_members,
+                        group_key=(first.neighbor_group_id,),
+                        reasons=(),
+                        rerank_text_char_limit=rerank_text_char_limit,
+                    ),
+                )
+            else:
+                # 不完整章节仍可提供独立段落，不能标成完整章节证据。
+                proposed = tuple(
+                    _group_candidate(
+                        EvidenceGroupKind.PARAGRAPH_GROUP,
+                        (member,),
+                        group_key=(
+                            first.neighbor_group_id,
+                            member.hydrated.chunk.chunk_id,
+                        ),
+                        reasons=(),
+                        rerank_text_char_limit=rerank_text_char_limit,
+                    )
+                    for member in sorted_members
+                )
         groups.extend(proposed[: max_groups - len(groups)])
     return tuple(groups)
 
@@ -332,10 +339,9 @@ def _table_groups(
     headers = tuple(
         item for row in sorted(header_rows) for item in rows.get(row, ())
     )
-    data_rows = (
-        tuple(row for row in sorted(rows) if row not in header_rows)
-        or (min(rows),)
-    )
+    data_rows = tuple(
+        row for row in sorted(rows) if row not in header_rows
+    ) or (min(rows),)
     result: list[GroupCandidate] = []
     for row in data_rows:
         row_members = tuple(sorted(rows[row], key=_source_order))
