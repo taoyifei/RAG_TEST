@@ -512,27 +512,20 @@ class ProductGroundedModel:
             ChatMessage(
                 role="system",
                 content=(
-                    "你只负责把用户问题整理为可检索事实原子，不得回答问题，"
-                    "不得补充用户未提出的条件，不得输出文档内容或标准结论。"
-                    "必须保留数字、时限、否定、版本和来源限制。"
-                    "只输出严格JSON对象，"
-                    "恰好包含standalone_query、intent、needs_clarification、"
-                    "clarification_question、atoms、route_hints六个字段。"
-                    "intent只可为NAVIGATION、FACT、PROCEDURE、COMPARISON、"
-                    "COMPOUND、CLARIFICATION；atoms为1至4个对象，每项包含"
-                    "target、relation、answer_shape、source_qualifier、constraints、"
-                    "original_fragment。answer_shape只能为FACT、DEFINITION、"
-                    "ENUMERATION、PROCEDURE、DUTIES、RESPONSIBLE_PARTY、"
-                    "DURATION、COUNT、COMPARISON、CATALOG_REFERENCE。"
-                    "constraints只记录原问中已有的NUMBER、DURATION、DATE_TIME、"
-                    "VERSION、NEGATION、SOURCE、ROLE限制，包含kind和value，"
-                    "可选polarity和unit。route_hints最多4个，"
-                    "original_fragment必须是用户问题或会话中的连续原文片段，"
-                    "找不到则为null。"
-                    "路由提示仅供参考，不能作为过滤条件。保留问题中的实体、编号、"
-                    "数字、否定、条件与来源范围。无法确定时原样保留问题并要求澄清。"
-                    "示例：甲什么时候提交，乙审核多久，可拆为甲的提交时间、"
-                    "乙的审核时限两个原子；示例只是问题结构，不含答案。"
+                    "只拆分用户问题为1至4个可检索事实原子；不得回答、补条件或引用文档。"
+                    "保留数字、时限、否定、版本、来源。只输出JSON对象，字段："
+                    "standalone_query,intent,needs_clarification,"
+                    "clarification_question,atoms,route_hints。"
+                    "intent取NAVIGATION/FACT/PROCEDURE/COMPARISON/"
+                    "COMPOUND/CLARIFICATION。每个atom字段：target,relation,"
+                    "answer_shape,source_qualifier,constraints,original_fragment。"
+                    "answer_shape取FACT/DEFINITION/ENUMERATION/PROCEDURE/"
+                    "DUTIES/RESPONSIBLE_PARTY/DURATION/COUNT/COMPARISON/"
+                    "CATALOG_REFERENCE。constraints仅记录原问已有的NUMBER/"
+                    "DURATION/DATE_TIME/VERSION/NEGATION/SOURCE/ROLE，"
+                    "每项含kind,value，可含polarity,unit。无值用null或空数组。"
+                    "original_fragment只能是输入中的连续原文；route_hints最多4项。"
+                    "例如：甲何时提交，乙审核多久→甲的提交时间、乙的审核时限。"
                 ),
             ),
             ChatMessage(
@@ -558,7 +551,7 @@ class ProductGroundedModel:
                 completion = self.adapter.complete(
                     messages,
                     operation="query.interpret",
-                    max_output_tokens=512,
+                    max_output_tokens=384,
                     timeout_seconds=6.0,
                 )
             calls = (completion.call,)
