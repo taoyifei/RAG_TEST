@@ -137,6 +137,15 @@ class _SelectionOutcome:
     confidence: ConfidenceDecision
 
 
+@dataclass(frozen=True, slots=True)
+class _GroupContextOutcome:
+    """已重排组及其按来源关联的有界上下文组。"""
+
+    groups: tuple[GroupCandidate, ...]
+    degraded_reason_codes: tuple[str, ...]
+    added_count: int
+
+
 def _flatten_evidence_groups(
     groups: tuple[GroupCandidate, ...],
 ) -> tuple[RankedChunk, ...]:
@@ -1835,6 +1844,63 @@ class RetrievalService:
             _raise_if_cancelled(cancellation)
             self._cache.put(result.cache_key, result, ttl_seconds=30)
 
+    def _expand_group_context(
+        self,
+        snapshot: ActiveRevisionQuerySnapshot,
+        ranked_groups: tuple[GroupCandidate, ...],
+        mode: str,
+        source_qualifier: str | None,
+    ) -> _GroupContextOutcome:
+        """将原有邻居扩展作为完整组旁的有界上下文组。"""
+        ranked_chunks = _flatten_evidence_groups(ranked_groups)
+        expanded = self._neighbors.expand(
+            snapshot,
+            ranked_chunks,
+            mode,
+            self._policy,
+            source_qualifier=source_qualifier,
+        )
+        seed_ranks = {
+            member.hydrated.chunk.chunk_id: rank
+            for rank, group in enumerate(ranked_groups)
+            for member in group.members
+        }
+        context_chunks = tuple(
+            candidate
+            for candidate in expanded.candidates
+            if candidate.hydrated.chunk.chunk_id not in seed_ranks
+        )
+        if not context_chunks:
+            return _GroupContextOutcome(
+                ranked_groups, expanded.degraded_reason_codes, 0
+            )
+        context_groups = build_evidence_groups(
+            context_chunks,
+            max_groups=self._policy.rerank_candidate_limit,
+            max_member_chunks=self._policy.group_member_chunk_limit,
+            rerank_text_char_limit=self._policy.rerank_text_char_limit,
+        )
+        context_by_rank: dict[int, list[GroupCandidate]] = {}
+        for context_group in context_groups:
+            rank = min(
+                (
+                    seed_ranks[seed_id]
+                    for member in context_group.members
+                    for seed_id in member.expansion_seed_ids
+                    if seed_id in seed_ranks
+                ),
+                default=len(ranked_groups),
+            )
+            context_by_rank.setdefault(rank, []).append(context_group)
+        ordered = tuple(
+            group
+            for rank, ranked_group in enumerate(ranked_groups)
+            for group in (ranked_group, *context_by_rank.get(rank, ()))
+        ) + tuple(context_by_rank.get(len(ranked_groups), ()))
+        return _GroupContextOutcome(
+            ordered, expanded.degraded_reason_codes, len(context_groups)
+        )
+
     def _rank_and_select(  # noqa: PLR0913
         self,
         *,
@@ -1968,10 +2034,16 @@ class RetrievalService:
                 result_limit=self._policy.rerank_candidate_limit,
                 required_candidate_ids=frozenset(structural_closure_ids),
             )
+            group_context = self._expand_group_context(
+                snapshot,
+                group_ranking.groups,
+                plan.neighbor_mode,
+                analysis.semantics.source_qualifier,
+            )
             # 组预算约束检索候选；最终模型证据仍由 EvidenceAssembler
             # 使用独立的 evidence_token_budget 与来源校验收紧。
             packing = pack_evidence_groups_with_diagnostics(
-                group_ranking.groups,
+                group_context.groups,
                 token_budget=self._policy.group_retrieval_token_budget,
                 max_groups=self._policy.rerank_candidate_limit,
                 max_chunks=self._policy.group_retrieval_chunk_limit,
@@ -1985,7 +2057,15 @@ class RetrievalService:
                 failure_category=group_ranking.failure_category,
             )
             expansion = ExpansionOutcome(
-                reranked.candidates, closure.degraded_reason_codes
+                reranked.candidates,
+                tuple(
+                    dict.fromkeys(
+                        (
+                            *closure.degraded_reason_codes,
+                            *group_context.degraded_reason_codes,
+                        )
+                    )
+                ),
             )
             self._record(
                 trace_id,
@@ -1994,6 +2074,7 @@ class RetrievalService:
                     "pass": retrieval_phase,
                     "formed": len(groups),
                     "complete": sum(group.group.complete for group in groups),
+                    "expanded_groups": group_context.added_count,
                     "packed": len(packed),
                     "packed_chunks": len(reranked.candidates),
                     "rejected_reasons": tuple(

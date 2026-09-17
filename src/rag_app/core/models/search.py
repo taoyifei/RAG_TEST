@@ -51,8 +51,8 @@ class RetrievalPolicy(FrozenModel):
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
     group_rerank_enabled: bool = True
     group_member_chunk_limit: StrictInt = Field(default=8, gt=0, le=16)
-    group_retrieval_token_budget: StrictInt = Field(default=4096, gt=0, le=8192)
-    group_retrieval_chunk_limit: StrictInt = Field(default=24, gt=0, le=48)
+    group_retrieval_token_budget: StrictInt = Field(default=8192, gt=0, le=8192)
+    group_retrieval_chunk_limit: StrictInt = Field(default=48, gt=0, le=48)
     neighbor_count: StrictInt = Field(default=1, ge=0, le=4)
     section_chunk_limit: StrictInt = Field(default=2, ge=0, le=8)
     evidence_token_budget: StrictInt = Field(default=1024, gt=0)
