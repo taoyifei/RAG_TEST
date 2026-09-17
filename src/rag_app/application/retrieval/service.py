@@ -1965,14 +1965,16 @@ class RetrievalService:
                 self._egress,
                 self._policy,
                 enabled=plan.use_reranker,
-                result_limit=max(request.limit, len(structural_closure_ids)),
+                result_limit=self._policy.rerank_candidate_limit,
                 required_candidate_ids=frozenset(structural_closure_ids),
             )
+            # 组预算约束检索候选；最终模型证据仍由 EvidenceAssembler
+            # 使用独立的 evidence_token_budget 与来源校验收紧。
             packing = pack_evidence_groups_with_diagnostics(
                 group_ranking.groups,
-                token_budget=self._policy.evidence_token_budget,
-                max_groups=self._policy.max_evidence_items,
-                max_chunks=self._policy.max_evidence_items,
+                token_budget=self._policy.group_retrieval_token_budget,
+                max_groups=self._policy.rerank_candidate_limit,
+                max_chunks=self._policy.group_retrieval_chunk_limit,
             )
             packed = packing.selected
             reranked = RerankingOutcome(

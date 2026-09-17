@@ -854,6 +854,12 @@ def _serving_fingerprint_input(  # noqa: PLR0913
                 "neighbor_count": policy.neighbor_count,
                 "section_limit": policy.section_chunk_limit,
                 "group_member_chunk_limit": policy.group_member_chunk_limit,
+                "group_retrieval_token_budget": (
+                    policy.group_retrieval_token_budget
+                ),
+                "group_retrieval_chunk_limit": (
+                    policy.group_retrieval_chunk_limit
+                ),
             }
         ),
         evidence_policy=freeze_json_object(
