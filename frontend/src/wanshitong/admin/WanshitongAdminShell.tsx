@@ -54,6 +54,8 @@ const traceServices: OperationalTraceServices = {
   list: wanshitongAdminApi.listOperationalTraces,
   detail: wanshitongAdminApi.operationalTrace,
   artifact: wanshitongAdminApi.operationalTraceArtifact,
+  exportOne: wanshitongAdminApi.exportOperationalTrace,
+  exportMany: wanshitongAdminApi.exportOperationalTraces,
 };
 
 export function WanshitongAdminShell() {

@@ -1,6 +1,7 @@
 import {
   consoleRequest,
   consoleRawRequest,
+  downloadResponse,
   type HistoryEntry,
   type HistoryFilters,
   type HistoryPageResult,
@@ -312,6 +313,19 @@ export const wanshitongAdminApi = {
       `${BASE_PATH}/operational-traces/${encodeURIComponent(traceId)}`,
       { signal },
     ),
+  exportOperationalTrace: async (traceId: string) => {
+    const response = await consoleRawRequest(
+      `${BASE_PATH}/operational-traces/${encodeURIComponent(traceId)}/export`,
+    );
+    return downloadResponse(response, `${traceId}.json`);
+  },
+  exportOperationalTraces: async (traceIds: string[]) => {
+    const response = await consoleRawRequest(
+      `${BASE_PATH}/operational-traces:export`,
+      jsonInit("POST", { trace_ids: traceIds }),
+    );
+    return downloadResponse(response, "operational-traces.zip");
+  },
   operationalTraceArtifact: async (
     traceId: string,
     artifactId: string,

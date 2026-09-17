@@ -602,7 +602,7 @@ export function consoleRawRequest(
   return rawRequest(path, init);
 }
 
-async function downloadResponse(
+export async function downloadResponse(
   response: Response,
   fallbackFilename: string,
 ): Promise<DownloadFile> {

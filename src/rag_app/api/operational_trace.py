@@ -46,6 +46,7 @@ from rag_app.tracing.store import (
 
 _MAX_BATCH_COUNT = 100
 _MAX_BATCH_BYTES = 16 * 1024 * 1024
+MAX_TRACE_EXPORT_BYTES = _MAX_BATCH_BYTES
 _TraceId = Annotated[
     str,
     StringConstraints(pattern=r"^(?:trace_)?[0-9a-f]{32}$"),
@@ -447,7 +448,7 @@ def register_operational_trace_routes(  # noqa: PLR0915
                 "Trace Artifact 不存在或已过期。",
                 stage="trace.export",
             ) from error
-        archive_bytes = _trace_zip(payloads)
+        archive_bytes = build_trace_export_zip(payloads)
         if len(archive_bytes) > _MAX_BATCH_BYTES:
             raise _TechnicalTraceExportLimitError(
                 "TRACE_EXPORT_COMPRESSED_BYTES_EXCEEDED"
@@ -624,7 +625,8 @@ def _reauthorize_sources(
             ) from error
 
 
-def _trace_zip(payloads: list[tuple[str, bytes]]) -> bytes:
+def build_trace_export_zip(payloads: list[tuple[str, bytes]]) -> bytes:
+    """将已授权的 canonical Trace JSON 打包成可复现 ZIP。"""
     manifest = {
         "schema_version": "1",
         "items": [
