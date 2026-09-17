@@ -315,7 +315,7 @@ def test_invalid_adaptive_plan_returns_deterministic_fallback() -> None:
 
     assert adapter.calls == 1
     assert outcome.attempted
-    assert outcome.reason_code == "ADAPTIVE_PLAN_INVALID"
+    assert outcome.reason_code == "ADAPTIVE_PLAN_SCHEMA_FALLBACK"
     assert outcome.standalone_query is None
 
 

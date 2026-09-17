@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from rag_app.core.models import ProviderCall, QueryAnalysis, SearchRequest
+from rag_app.core.models.query_plan import QueryAtom
 from rag_app.core.ports.evidence_source import CatalogDocument
 
 _TITLE = re.compile(r"《([^》]{2,200})》")
@@ -66,7 +67,7 @@ class AdaptivePlanOutcome:
     intent: str | None = None
     needs_clarification: bool = False
     clarification_question: str | None = None
-    atoms: tuple[str, ...] = ()
+    atoms: tuple[QueryAtom, ...] = ()
     route_hints: tuple[str, ...] = ()
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str = "ADAPTIVE_PLAN_NOT_NEEDED"
@@ -197,8 +198,10 @@ def catalog_matches(
 ) -> tuple[CatalogDocument, ...]:
     """只依据活动文档元数据选出高置信目录项，最多返回三个。"""
     quoted = _TITLE.search(query)
-    target = _normalized(quoted[1]) if quoted else _normalized(
-        _NAVIGATION_FILLER.sub("", query)
+    target = (
+        _normalized(quoted[1])
+        if quoted
+        else _normalized(_NAVIGATION_FILLER.sub("", query))
     )
     if len(target) < _MIN_TARGET_CHARS:
         return ()

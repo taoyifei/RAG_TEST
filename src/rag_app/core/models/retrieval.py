@@ -129,15 +129,34 @@ class AnswerClaim(FrozenModel):
     supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
 
 
+class NaturalClaim(FrozenModel):
+    """模型只给出自然事实和证据身份，原文由服务端回填。"""
+
+    claim_id: str = Field(pattern=r"^C[1-9][0-9]{0,2}$")
+    text: str = Field(min_length=1, max_length=6000, repr=False)
+    atom_ids: tuple[str, ...] = Field(min_length=1, max_length=4)
+    support_ids: tuple[str, ...] = Field(min_length=1, max_length=8)
+
+
+class GeneratedAtomCoverage(FrozenModel):
+    """模型报告的覆盖状态；最终状态由应用根据已校验事实决定。"""
+
+    atom_id: str = Field(min_length=1)
+    status: str = Field(pattern=r"^(SUPPORTED|PARTIAL|MISSING|CONTRADICTORY)$")
+
+
 class AnswerDraft(FrozenModel):
     """GeneratorPort 的尚未发布回答草稿。"""
 
     text: str = Field(min_length=1, repr=False)
     cited_evidence_ids: tuple[str, ...]
     claims: tuple[AnswerClaim, ...] = Field(default=(), max_length=24)
+    natural_claims: tuple[NaturalClaim, ...] = Field(default=(), max_length=24)
+    atom_coverage: tuple[GeneratedAtomCoverage, ...] = ()
+    missing_atoms: tuple[str, ...] = ()
     provider_calls: tuple[ProviderCall, ...] = ()
     generation_mode: str = Field(
-        default="extractive", pattern=r"^(extractive|llm)$"
+        default="extractive", pattern=r"^(extractive|llm|natural)$"
     )
     reason_code: str | None = None
 

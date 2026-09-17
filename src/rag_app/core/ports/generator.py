@@ -14,6 +14,7 @@ from rag_app.core.models import (
     QuerySemantics,
 )
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.query_plan import AtomSupportMatrix, QueryPlan
 
 
 class GenerationRequest(FrozenModel):
@@ -26,6 +27,10 @@ class GenerationRequest(FrozenModel):
     typed_semantics: QuerySemantics | None = None
     answer_support_set: tuple[EvidenceItem, ...] = ()
     model_evidence_candidates: tuple[EvidenceItem, ...] = ()
+    query_plan: QueryPlan | None = None
+    atom_support_matrix: AtomSupportMatrix | None = None
+    repair_atom_ids: tuple[str, ...] = ()
+    accepted_claim_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _validate_evidence_sets(self) -> Self:
@@ -38,6 +43,21 @@ class GenerationRequest(FrozenModel):
             ids = [item.support_id for item in items]
             if len(ids) != len(set(ids)) or not set(ids) <= evidence_ids:
                 raise ValueError(f"{name} 必须是 evidence 的无重复子集。")
+        if (self.query_plan is None) != (self.atom_support_matrix is None):
+            raise ValueError("类型化生成必须同时提供计划和支持矩阵。")
+        if self.query_plan is not None:
+            atom_ids = {atom.atom_id for atom in self.query_plan.atoms}
+            if self.atom_support_matrix is None:
+                raise ValueError("类型化生成缺少支持矩阵。")
+            support_ids = {
+                support.atom_id for support in self.atom_support_matrix.atoms
+            }
+            if support_ids != atom_ids:
+                raise ValueError("支持矩阵必须与计划 Atom 一一对应。")
+            if not set(self.repair_atom_ids) <= atom_ids:
+                raise ValueError("局部修复只允许计划中的 Atom。")
+        elif self.repair_atom_ids or self.accepted_claim_ids:
+            raise ValueError("无计划请求不能执行逐原子修复。")
         return self
 
 

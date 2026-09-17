@@ -17,6 +17,7 @@ from typing import Literal
 from rag_app.application.answering.grounded import GroundedAnsweringService
 from rag_app.application.retrieval.adaptive import (
     AdaptivePlannerPort,
+    AdaptivePlanOutcome,
     ReasoningEffort,
     catalog_matches,
     is_navigation_query,
@@ -109,6 +110,24 @@ from rag_app.core.models import (
     StageTiming,
 )
 from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.query import RequestedAnswerType
+from rag_app.core.models.query_plan import (
+    CORRECTIVE_RETRIEVAL_REVISION,
+    EVIDENCE_GROUP_SCHEMA_REVISION,
+    GROUNDED_CLAIM_SCHEMA_REVISION,
+    NATURAL_RENDERER_REVISION,
+    QUERY_PLAN_SCHEMA_REVISION,
+    AtomAnswerShape,
+    AtomCandidateLink,
+    AtomCoverage,
+    AtomStatus,
+    AtomSupport,
+    AtomSupportMatrix,
+    QueryAtom,
+    QueryPlan,
+    fallback_query_plan,
+    make_query_plan,
+)
 from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports import (
     CancellationPort,
@@ -140,6 +159,18 @@ class _SelectionOutcome:
     evidence_decisions: tuple[tuple[str, str], ...]
     ambiguous_support: bool
     confidence: ConfidenceDecision
+    groups: tuple[GroupCandidate, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _AtomRetrievalOutcome:
+    """逐 Atom 初召回合并后的唯一通道包。"""
+
+    channels: dict[str, tuple[ChannelHit, ...]]
+    links: tuple[AtomCandidateLink, ...]
+    selected_slot: str | None
+    selected_vector: str | None
+    route_reason: str
 
 
 def _flatten_evidence_groups(
@@ -244,6 +275,15 @@ class RetrievalService:
                     and self._policy.contextual_rerank_mode == "off"
                     else "wb08r-02-post-rerank-groups-v1"
                 ),
+                "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "evidence_group_schema_revision": (
+                    EVIDENCE_GROUP_SCHEMA_REVISION
+                ),
+                "grounded_claim_schema_revision": (
+                    GROUNDED_CLAIM_SCHEMA_REVISION
+                ),
+                "natural_renderer_revision": NATURAL_RENDERER_REVISION,
+                "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
         )
         self._egress = egress_policy
@@ -582,6 +622,7 @@ class RetrievalService:
             )
             if catalog_result is not None:
                 return catalog_result
+        adaptive = AdaptivePlanOutcome()
         adaptive_attempted = False
         adaptive_reason = (
             "ADAPTIVE_PLAN_NOT_NEEDED"
@@ -734,10 +775,48 @@ class RetrievalService:
                     ),
                 },
             )
+        if adaptive.atoms and adaptive.standalone_query:
+            try:
+                query_plan = make_query_plan(
+                    standalone_query=adaptive.standalone_query,
+                    intent=adaptive.intent or "FACT",
+                    effort=effort.value,
+                    atoms=adaptive.atoms,
+                    reason_code=adaptive.reason_code,
+                    planner_called=adaptive.attempted,
+                    needs_clarification=adaptive.needs_clarification,
+                    clarification_question=adaptive.clarification_question,
+                    route_hints=adaptive.route_hints,
+                )
+            except ValueError:
+                query_plan = fallback_query_plan(
+                    effective_analysis,
+                    effort=effort.value,
+                    reason_code="ADAPTIVE_PLAN_SCHEMA_FALLBACK",
+                    planner_called=adaptive.attempted,
+                )
+        else:
+            query_plan = fallback_query_plan(
+                effective_analysis,
+                effort=effort.value,
+                reason_code=adaptive_reason,
+                planner_called=adaptive.attempted,
+            )
+        atom_mode = len(query_plan.atoms) > 1
+        self._record(
+            trace_id,
+            "query_plan",
+            {
+                "plan_id": query_plan.plan_id,
+                "atom_count": len(query_plan.atoms),
+                "planner_called": query_plan.planner_called,
+                "reason_code": query_plan.planner_reason_code,
+            },
+        )
         top_k = dict(plan.channel_top_k)
         channel_hits: dict[str, tuple[ChannelHit, ...]] = {}
         degraded: list[str] = []
-        if "exact" in plan.channels:
+        if "exact" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             try:
@@ -753,7 +832,7 @@ class RetrievalService:
             channel_hits["exact"] = hits
             self._record(trace_id, "exact", {"hit_count": len(hits)})
             _finish_timing(stage_timings, "exact_channel", channel_started)
-        if "structural" in plan.channels:
+        if "structural" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             try:
@@ -780,7 +859,7 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "structural_channel", channel_started)
-        if "lexical" in plan.channels:
+        if "lexical" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             for variant in plan.variants:
@@ -818,7 +897,7 @@ class RetrievalService:
         selected_slot: str | None = None
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
-        if "dense" in plan.channels:
+        if "dense" in plan.channels and not atom_mode:
             _raise_if_cancelled(cancellation, provider_calls)
             channel_started = perf_counter()
             route_attributes: dict[str, object] = {
@@ -889,6 +968,22 @@ class RetrievalService:
                 },
             )
             _finish_timing(stage_timings, "vector_channel", channel_started)
+        atom_links: tuple[AtomCandidateLink, ...] = ()
+        if atom_mode:
+            atom_retrieval = self._retrieve_atoms(
+                request=request,
+                snapshot=snapshot,
+                query_plan=query_plan,
+                provider_calls=provider_calls,
+                degraded=degraded,
+                trace_id=trace_id,
+                stage_timings=stage_timings,
+            )
+            channel_hits = atom_retrieval.channels
+            atom_links = atom_retrieval.links
+            selected_slot = atom_retrieval.selected_slot
+            selected_vector = atom_retrieval.selected_vector
+            route_reason = atom_retrieval.route_reason
         selection = self._rank_and_select(
             request=request,
             snapshot=snapshot,
@@ -901,6 +996,17 @@ class RetrievalService:
             degraded=degraded,
             stage_timings=stage_timings,
             retrieval_phase="original",
+            atom_required_ids=tuple(
+                next(
+                    (
+                        link.chunk_id
+                        for link in atom_links
+                        if link.atom_id == atom.atom_id
+                    ),
+                    "",
+                )
+                for atom in query_plan.atoms
+            ),
         )
         fused = selection.fused
         reranked = selection.reranked
@@ -1051,6 +1157,102 @@ class RetrievalService:
                     ),
                 },
             )
+        atom_matrix, atom_evidence, atom_coverage = self._ground_atoms(
+            request=request,
+            query_plan=query_plan,
+            candidates=selection.expansion.candidates,
+            groups=selection.groups,
+            links=atom_links,
+            selected_slot=selected_slot,
+            snapshot=snapshot,
+            rerank_mode=reranked.mode,
+        )
+        correction_started = perf_counter()
+        correction_triggered = atom_mode and any(
+            item.status in {AtomStatus.PARTIAL, AtomStatus.MISSING}
+            for item in atom_matrix.atoms
+        )
+        added_chunk_count = 0
+        added_group_count = 0
+        anchor_document_id: str | None = None
+        anchor_section_id: str | None = None
+        if correction_triggered:
+            (
+                corrected,
+                corrected_groups,
+                added_chunk_count,
+                anchor_document_id,
+                anchor_section_id,
+            ) = self._corrective_retrieval(
+                snapshot=snapshot,
+                candidates=selection.expansion.candidates,
+                groups=selection.groups,
+                links=atom_links,
+                matrix=atom_matrix,
+            )
+            added_group_count = len(corrected_groups) - len(selection.groups)
+            if added_chunk_count:
+                atom_matrix, atom_evidence, atom_coverage = self._ground_atoms(
+                    request=request,
+                    query_plan=query_plan,
+                    candidates=corrected,
+                    groups=corrected_groups,
+                    links=atom_links,
+                    selected_slot=selected_slot,
+                    snapshot=snapshot,
+                    rerank_mode=reranked.mode,
+                )
+        correction_elapsed_ms = (perf_counter() - correction_started) * 1000
+        _finish_timing(
+            stage_timings, "corrective_retrieval", correction_started
+        )
+        for coverage in atom_coverage:
+            self._record(
+                trace_id,
+                "atom_coverage",
+                {
+                    "atom_id": coverage.atom_id,
+                    "source_hit": coverage.source_hit,
+                    "reranker_hit": coverage.reranker_hit,
+                    "candidate_group_ids": coverage.candidate_group_ids,
+                    "status": coverage.status.value,
+                    "reason_codes": coverage.reason_codes,
+                },
+            )
+            self._record(
+                trace_id,
+                "corrective_retrieval",
+                {
+                    "atom_id": coverage.atom_id,
+                    "correction_triggered": correction_triggered,
+                    "correction_reason": (
+                        "PARTIAL_OR_MISSING_WITH_ANCHOR"
+                        if anchor_document_id
+                        else "NO_STRONG_ANCHOR"
+                        if correction_triggered
+                        else "NOT_NEEDED"
+                    ),
+                    "anchor_document_id": anchor_document_id,
+                    "anchor_section_id": anchor_section_id,
+                    "added_chunk_count": added_chunk_count,
+                    "added_group_count": added_group_count,
+                    "post_status": coverage.status.value,
+                    "elapsed_ms": round(correction_elapsed_ms, 3),
+                },
+            )
+        if atom_evidence and self._grounded is not None:
+            model_evidence_candidates = atom_evidence
+            supported_ids = {
+                support_id
+                for item in atom_matrix.atoms
+                if item.status is AtomStatus.SUPPORTED
+                for support_id in item.supporting_support_ids
+            }
+            evidence = tuple(
+                item
+                for item in atom_evidence
+                if item.support_id in supported_ids
+            )
         _emit_stage(
             on_stage,
             "retrieval",
@@ -1109,6 +1311,8 @@ class RetrievalService:
                     confidence,
                     answer_support_set=evidence,
                     analysis=effective_analysis,
+                    query_plan=query_plan,
+                    atom_support_matrix=atom_matrix,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -1116,6 +1320,20 @@ class RetrievalService:
                 generation_mode = generated.mode
                 generation_reason = generated.reason_code
                 provider_calls.extend(generated.calls)
+                self._record(
+                    trace_id,
+                    "atom_grounding",
+                    {
+                        "atom_count": len(query_plan.atoms),
+                        "atom_coverage": generated.atom_coverage,
+                        "repair_calls": generated.repair_calls,
+                        "generation_calls": sum(
+                            call.call_count
+                            for call in generated.calls
+                            if call.operation == "generation"
+                        ),
+                    },
+                )
                 if answer is not None:
                     published = _published_evidence(
                         generation_evidence,
@@ -1824,7 +2042,16 @@ class RetrievalService:
                 "semantic_policy": "shared-query-semantics-v3-09",
                 "rewrite_policy": "bounded-rewrite-v3",
                 "answer_support_policy": "minimum-supported-set-v3-08",
-                "answer_generation_policy": "model-grounded-claims-v1",
+                "answer_generation_policy": "model-grounded-claims-v2",
+                "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "evidence_group_schema_revision": (
+                    EVIDENCE_GROUP_SCHEMA_REVISION
+                ),
+                "grounded_claim_schema_revision": (
+                    GROUNDED_CLAIM_SCHEMA_REVISION
+                ),
+                "natural_renderer_revision": NATURAL_RENDERER_REVISION,
+                "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
         )
         return BaseResultCacheKey(
@@ -1907,6 +2134,552 @@ class RetrievalService:
             snapshot, candidates, self._policy
         )
 
+    def _analysis_for_atom(
+        self, request: SearchRequest, atom: QueryAtom
+    ) -> QueryAnalysis:
+        """继承请求边界，只替换当前原子的可检索语义。"""
+        analysis = self._analyzer.analyze(
+            request.model_copy(update={"text": atom.search_text})
+        )
+        answer_type = {
+            AtomAnswerShape.DEFINITION: RequestedAnswerType.DEFINITION,
+            AtomAnswerShape.ENUMERATION: RequestedAnswerType.ENUMERATION,
+            AtomAnswerShape.PROCEDURE: RequestedAnswerType.PROCEDURE,
+            AtomAnswerShape.DUTIES: RequestedAnswerType.DUTIES,
+            AtomAnswerShape.RESPONSIBLE_PARTY: (
+                RequestedAnswerType.RESPONSIBLE_PARTY
+            ),
+            AtomAnswerShape.COUNT: RequestedAnswerType.COUNT,
+        }.get(atom.answer_shape, RequestedAnswerType.FACT)
+        semantics = analysis.semantics.model_copy(
+            update={
+                "target": atom.target,
+                "relation": atom.relation,
+                "answer_type": answer_type,
+                "source_qualifier": atom.source_qualifier,
+            }
+        )
+        return analysis.model_copy(update={"semantics": semantics})
+
+    def _retrieve_atoms(  # noqa: PLR0912, PLR0913, PLR0915
+        self,
+        *,
+        request: SearchRequest,
+        snapshot: ActiveRevisionQuerySnapshot,
+        query_plan: QueryPlan,
+        provider_calls: list[ProviderCall],
+        degraded: list[str],
+        trace_id: str,
+        stage_timings: list[StageTiming],
+    ) -> _AtomRetrievalOutcome:
+        """顺序运行本地通道，批量 Embedding 后只合并一次候选。"""
+        started = perf_counter()
+        merged: dict[str, dict[str, ChannelHit]] = {}
+        provenance: dict[tuple[str, str], list[ChannelHit]] = {}
+        analyses = tuple(
+            self._analysis_for_atom(request, atom) for atom in query_plan.atoms
+        )
+
+        def add(
+            atom_id: str, channel: str, hits: tuple[ChannelHit, ...]
+        ) -> None:
+            channel_items = merged.setdefault(channel, {})
+            for hit in hits:
+                prior = channel_items.get(hit.chunk_id)
+                if prior is None or hit.rank < prior.rank:
+                    channel_items[hit.chunk_id] = hit.model_copy(
+                        update={"channel": channel}
+                    )
+                provenance.setdefault((atom_id, hit.chunk_id), []).append(hit)
+
+        for atom, analysis in zip(query_plan.atoms, analyses, strict=True):
+            if "exact" in self._policy.enabled_channels:
+                try:
+                    add(
+                        atom.atom_id,
+                        "exact",
+                        apply_candidate_filters(
+                            self._exact.search(
+                                snapshot,
+                                analysis,
+                                limit=self._policy.channel_top_k,
+                            ),
+                            request,
+                        ),
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+            if "structural" in self._policy.enabled_channels:
+                try:
+                    add(
+                        atom.atom_id,
+                        "structural",
+                        apply_candidate_filters(
+                            self._structural.search(
+                                snapshot,
+                                analysis,
+                                limit=self._policy.channel_top_k,
+                            ),
+                            request,
+                        ),
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+            if "lexical" in self._policy.enabled_channels:
+                variant = QueryVariant(
+                    text=atom.search_text,
+                    kind="original",
+                    identity=canonical_sha256(
+                        {
+                            "atom_query": atom.search_text,
+                            "schema": QUERY_PLAN_SCHEMA_REVISION,
+                        }
+                    ),
+                )
+                try:
+                    add(
+                        atom.atom_id,
+                        "lexical",
+                        apply_candidate_filters(
+                            self._lexical.search(
+                                snapshot,
+                                variant,
+                                limit=self._policy.channel_top_k,
+                                analysis=analysis,
+                            ),
+                            request,
+                        ),
+                    )
+                except (ChannelRateLimited, ChannelUnavailable) as error:
+                    degraded.append(error.code)
+        selected_slot: str | None = None
+        selected_vector: str | None = None
+        route_reason = "DENSE_DISABLED_BY_PLAN"
+        if "dense" in self._policy.enabled_channels:
+            try:
+                dense_results = self._dense.search_many(
+                    snapshot,
+                    tuple(atom.search_text for atom in query_plan.atoms),
+                    self._egress,
+                    limit=self._policy.channel_top_k,
+                )
+            except (DenseUnavailable, PolicyDenied) as error:
+                if request.dense_required:
+                    raise
+                degraded.append(error.code)
+                route_reason = error.code
+            except IndexCompatibilityError as error:
+                raise IndexCorrupt(
+                    "逐 Atom Dense route 与 Active Revision 不兼容。",
+                    stage="retrieval.dense",
+                ) from error
+            else:
+                for atom, dense in zip(
+                    query_plan.atoms, dense_results, strict=True
+                ):
+                    provider_calls.extend(dense.routed.provider_calls)
+                    if selected_slot is not None and (
+                        selected_slot != dense.routed.selected_slot_id
+                        or selected_vector != dense.routed.vector_name
+                    ):
+                        raise IndexCorrupt(
+                            "同一 QueryPlan 禁止切换 Dense slot。",
+                            stage="retrieval.dense",
+                        )
+                    selected_slot = dense.routed.selected_slot_id
+                    selected_vector = dense.routed.vector_name
+                    route_reason = dense.routed.fallback_reason
+                    add(
+                        atom.atom_id,
+                        f"dense:{selected_slot}",
+                        apply_candidate_filters(dense.hits, request),
+                    )
+                self._record(
+                    trace_id,
+                    "query_embedding_route",
+                    {
+                        "selected_slot": selected_slot,
+                        "vector_name": selected_vector,
+                        "reason_code": route_reason,
+                        "batch_size": len(query_plan.atoms),
+                        "call_count": sum(
+                            call.call_count
+                            for call in provider_calls
+                            if call.operation == "embedding"
+                        ),
+                    },
+                )
+        links = tuple(
+            AtomCandidateLink(
+                atom_id=atom_id,
+                chunk_id=chunk_id,
+                channels=tuple(dict.fromkeys(hit.channel for hit in hits)),
+                best_rank=min(hit.rank for hit in hits),
+                score=max(hit.raw_score for hit in hits),
+            )
+            for (atom_id, chunk_id), hits in provenance.items()
+        )
+        channels = {
+            channel: tuple(
+                sorted(items.values(), key=lambda hit: (hit.rank, hit.chunk_id))
+            )
+            for channel, items in merged.items()
+        }
+        self._record(
+            trace_id,
+            "atom_retrieval",
+            {
+                "atom_count": len(query_plan.atoms),
+                "channel_counts": tuple(
+                    (channel, len(hits)) for channel, hits in channels.items()
+                ),
+                "candidate_link_count": len(links),
+            },
+        )
+        _finish_timing(stage_timings, "atom_retrieval", started)
+        return _AtomRetrievalOutcome(
+            channels, links, selected_slot, selected_vector, route_reason
+        )
+
+    def _ground_atoms(  # noqa: PLR0912, PLR0913
+        self,
+        *,
+        request: SearchRequest,
+        query_plan: QueryPlan,
+        candidates: tuple[RankedChunk, ...],
+        groups: tuple[GroupCandidate, ...],
+        links: tuple[AtomCandidateLink, ...],
+        selected_slot: str | None,
+        snapshot: ActiveRevisionQuerySnapshot,
+        rerank_mode: str,
+    ) -> tuple[
+        AtomSupportMatrix,
+        tuple[EvidenceItem, ...],
+        tuple[AtomCoverage, ...],
+    ]:
+        """按每个原子的语义复用 EvidenceAssembler，不以相似命中冒充支持。"""
+
+        def identity(item: EvidenceItem) -> tuple[object, ...]:
+            return (
+                item.document_version_id,
+                item.chunk_id,
+                item.citation_text,
+                tuple(span.node_id for span in item.source_spans),
+            )
+
+        vector_space = (
+            snapshot.topology.slot(selected_slot).vector_space_identity
+            if selected_slot is not None
+            else None
+        )
+        selected_by_key: dict[tuple[object, ...], EvidenceItem] = {}
+        per_atom: list[
+            tuple[
+                QueryAtom,
+                tuple[tuple[object, ...], ...],
+                tuple[tuple[object, ...], ...],
+            ]
+        ] = []
+        for atom in query_plan.atoms:
+            atom_analysis = self._analysis_for_atom(request, atom)
+            atom_plan = self._planner.plan(
+                atom_analysis,
+                self._expander.expand(atom_analysis),
+                self._policy,
+                dense_required=request.dense_required,
+            )
+            selection = self._evidence.assemble_sets(
+                candidates,
+                self._policy,
+                include_model_candidates=True,
+                groups=groups
+                if self._policy.evidence_group_mode == "active"
+                else None,
+                context=EvidenceSelectionContext(
+                    analysis=atom_analysis,
+                    query_kind=atom_plan.query_kind,
+                    rerank_mode=rerank_mode,
+                    selected_slot=selected_slot,
+                    selected_vector_space=vector_space,
+                ),
+            )
+            direct_keys = tuple(
+                identity(item) for item in selection.answer_support_set
+            )
+            candidate_keys = tuple(
+                identity(item) for item in selection.model_evidence_candidates
+            )
+            per_atom.append((atom, direct_keys, candidate_keys))
+            for item in selection.model_evidence_candidates:
+                selected_by_key.setdefault(identity(item), item)
+        # 先保障各原子的直接支持，再把其余候选按原子公平补入有限上下文。
+        ordered_keys: list[tuple[object, ...]] = []
+        for _atom, direct_keys, _candidate_keys in per_atom:
+            for key in direct_keys:
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+        for index in range(self._policy.max_evidence_items):
+            for _atom, _direct_keys, candidate_keys in per_atom:
+                if index < len(candidate_keys):
+                    key = candidate_keys[index]
+                    if key not in ordered_keys:
+                        ordered_keys.append(key)
+        max_items = min(16, self._policy.max_evidence_items * 2)
+        ordered_keys = ordered_keys[:max_items]
+        evidence = tuple(
+            selected_by_key[key].model_copy(update={"evidence_id": f"S{index}"})
+            for index, key in enumerate(ordered_keys, 1)
+        )
+        by_key = dict(zip(ordered_keys, evidence, strict=True))
+        reranked_ids = {
+            item.hydrated.chunk.chunk_id
+            for item in candidates
+            if item.rerank_rank
+        }
+        supports: list[AtomSupport] = []
+        coverages: list[AtomCoverage] = []
+        for atom, direct_keys, candidate_keys in per_atom:
+            direct = tuple(by_key[key] for key in direct_keys if key in by_key)
+            relevant = tuple(
+                by_key[key] for key in candidate_keys if key in by_key
+            )
+            direct_text = "\n".join(
+                item.citation_text for item in direct
+            ).casefold()
+            checks: list[tuple[str, bool]] = []
+            for constraint in atom.constraints:
+                value = unicodedata.normalize(
+                    "NFKC", constraint.value
+                ).casefold()
+                source_text = "\n".join(
+                    "{} {}".format(
+                        item.display_name or "",
+                        dict(item.metadata).get("document_title", ""),
+                    )
+                    for item in direct
+                ).casefold()
+                text = (
+                    source_text
+                    if constraint.kind.value == "SOURCE"
+                    else direct_text
+                )
+                checks.append((constraint.kind.value, value in text))
+            if atom.source_qualifier:
+                source_text = "\n".join(
+                    "{} {}".format(
+                        item.display_name or "",
+                        dict(item.metadata).get("document_title", ""),
+                    )
+                    for item in direct
+                ).casefold()
+                checks.append(
+                    ("SOURCE", atom.source_qualifier.casefold() in source_text)
+                )
+            structural = atom.answer_shape in {
+                AtomAnswerShape.ENUMERATION,
+                AtomAnswerShape.PROCEDURE,
+                AtomAnswerShape.DUTIES,
+            }
+            if structural and self._policy.evidence_group_mode == "active":
+                checks.append(
+                    (
+                        "GROUP_COMPLETE",
+                        bool(direct)
+                        and all(
+                            dict(item.metadata).get("group_complete") is True
+                            for item in direct
+                        ),
+                    )
+                )
+            status = (
+                AtomStatus.SUPPORTED
+                if direct and all(passed for _name, passed in checks)
+                else AtomStatus.PARTIAL
+                if relevant
+                else AtomStatus.MISSING
+            )
+            groups_for_atom = tuple(
+                dict.fromkeys(
+                    group_id
+                    for item in direct
+                    if isinstance(
+                        group_id := dict(item.metadata).get(
+                            "evidence_group_id"
+                        ),
+                        str,
+                    )
+                )
+            )
+            supports.append(
+                AtomSupport(
+                    atom_id=atom.atom_id,
+                    status=status,
+                    supporting_group_ids=(
+                        groups_for_atom
+                        if status is AtomStatus.SUPPORTED
+                        else tuple(
+                            dict.fromkeys(
+                                group_id
+                                for item in relevant
+                                if isinstance(
+                                    group_id := dict(item.metadata).get(
+                                        "evidence_group_id"
+                                    ),
+                                    str,
+                                )
+                            )
+                        )
+                    ),
+                    supporting_support_ids=tuple(
+                        item.support_id
+                        for item in (
+                            direct
+                            if status is AtomStatus.SUPPORTED
+                            else relevant
+                        )
+                    ),
+                    missing_aspects=tuple(
+                        (name for name, passed in checks if not passed)
+                    ),
+                    deterministic_checks=tuple(checks),
+                )
+            )
+            linked = tuple(
+                link for link in links if link.atom_id == atom.atom_id
+            )
+            coverages.append(
+                AtomCoverage(
+                    atom_id=atom.atom_id,
+                    source_hit=bool(linked or relevant),
+                    reranker_hit=any(
+                        link.chunk_id in reranked_ids for link in linked
+                    )
+                    or any(item.chunk_id in reranked_ids for item in relevant),
+                    candidate_group_ids=tuple(
+                        dict.fromkeys(
+                            group_id
+                            for item in relevant
+                            if isinstance(
+                                group_id := dict(item.metadata).get(
+                                    "evidence_group_id"
+                                ),
+                                str,
+                            )
+                        )
+                    ),
+                    status=status,
+                    reason_codes=(
+                        ("DIRECT_SUPPORT",)
+                        if status is AtomStatus.SUPPORTED
+                        else ("RELATED_EVIDENCE_ONLY",)
+                        if status is AtomStatus.PARTIAL
+                        else ("NO_ATOM_EVIDENCE",)
+                    ),
+                )
+            )
+        return (
+            AtomSupportMatrix(atoms=tuple(supports)),
+            evidence,
+            tuple(coverages),
+        )
+
+    def _corrective_retrieval(
+        self,
+        *,
+        snapshot: ActiveRevisionQuerySnapshot,
+        candidates: tuple[RankedChunk, ...],
+        groups: tuple[GroupCandidate, ...],
+        links: tuple[AtomCandidateLink, ...],
+        matrix: AtomSupportMatrix,
+    ) -> tuple[
+        tuple[RankedChunk, ...],
+        tuple[GroupCandidate, ...],
+        int,
+        str | None,
+        str | None,
+    ]:
+        """只从已命中版本的一个章节回读，最多补十二 Chunk 和四组。"""
+        missing_ids = {
+            atom.atom_id
+            for atom in matrix.atoms
+            if atom.status in {AtomStatus.PARTIAL, AtomStatus.MISSING}
+        }
+        ranked = {item.hydrated.chunk.chunk_id: item for item in candidates}
+        anchor = next(
+            (
+                ranked[link.chunk_id]
+                for link in links
+                if link.atom_id in missing_ids and link.chunk_id in ranked
+            ),
+            None,
+        )
+        if anchor is None:
+            return candidates, groups, 0, None, None
+        chunk = anchor.hydrated.chunk
+        ids = self._source.section_chunk_ids(
+            snapshot,
+            document_version_id=chunk.version.document_version_id,
+            section_id=chunk.section_id,
+            limit=13,
+        )
+        missing = tuple(chunk_id for chunk_id in ids if chunk_id not in ranked)[
+            :12
+        ]
+        if not missing:
+            return (
+                candidates,
+                groups,
+                0,
+                chunk.version.document_id,
+                chunk.section_id,
+            )
+        hydrated = self._source.hydrate_chunks(snapshot, missing)
+        if len(hydrated) != len(missing) or any(
+            item.chunk.version.document_version_id
+            != chunk.version.document_version_id
+            or item.chunk.version.document_id != chunk.version.document_id
+            or item.chunk.section_id != chunk.section_id
+            for item in hydrated
+        ):
+            raise IndexCorrupt(
+                "闭库纠错回读跨越锚点文档或章节。",
+                stage="retrieval.corrective",
+            )
+        base_rank = max((item.fusion_rank for item in candidates), default=0)
+        added = tuple(
+            RankedChunk(
+                hydrated=item,
+                fusion_rank=base_rank + index,
+                expansion_reason="closed_correction",
+                expansion_seed_ids=(chunk.chunk_id,),
+            )
+            for index, item in enumerate(hydrated, 1)
+        )
+        corrected = (*candidates, *added)
+        rebuilt = rank_evidence_groups(
+            build_evidence_groups(
+                corrected,
+                max_groups=self._policy.rerank_candidate_limit,
+                max_member_chunks=self._policy.group_member_chunk_limit,
+                rerank_text_char_limit=self._policy.rerank_text_char_limit,
+            )
+        )
+        existing = {group.group_id for group in groups}
+        additions = tuple(
+            group
+            for group in rebuilt
+            if group.group_id not in existing
+            and group.group.document_version_id
+            == chunk.version.document_version_id
+        )[:4]
+        return (
+            corrected,
+            (*groups, *additions),
+            len(added),
+            chunk.version.document_id,
+            chunk.section_id,
+        )
+
     def _rank_and_select(  # noqa: PLR0913, PLR0915
         self,
         *,
@@ -1921,6 +2694,7 @@ class RetrievalService:
         degraded: list[str],
         stage_timings: list[StageTiming],
         retrieval_phase: str,
+        atom_required_ids: tuple[str, ...] = (),
     ) -> _SelectionOutcome:
         """融合、重排并按同一个语义对象选择证据。
 
@@ -1936,6 +2710,7 @@ class RetrievalService:
             degraded: 汇总稳定降级码的可变列表。
             stage_timings: 汇总实际耗时的可变列表。
             retrieval_phase: original 或 rewrite，用于区分有界补召回。
+            atom_required_ids: 每个原子初召回中需要保留的候选身份。
 
         Returns:
             最终融合、重排、扩展、证据和置信结果。
@@ -1953,8 +2728,13 @@ class RetrievalService:
         }
         channel_hits.clear()
         channel_hits.update(filtered_channels)
-        structural_closure_ids = _required_structural_candidate_ids(
-            channel_hits
+        structural_closure_ids = tuple(
+            dict.fromkeys(
+                (
+                    *_required_structural_candidate_ids(channel_hits),
+                    *(item for item in atom_required_ids if item),
+                )
+            )
         )
         fused = reciprocal_rank_fusion(
             channel_hits,
@@ -2263,6 +3043,7 @@ class RetrievalService:
             evidence_decisions=evidence_selection.rejected_candidate_reasons,
             ambiguous_support=evidence_selection.ambiguous,
             confidence=confidence,
+            groups=selected_groups,
         )
 
     def _validate_cached_sources(

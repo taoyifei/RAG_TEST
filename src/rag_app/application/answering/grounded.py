@@ -9,6 +9,10 @@ from dataclasses import dataclass
 from html import unescape
 from typing import Literal
 
+from rag_app.application.answering.natural_renderer import (
+    ValidatedNaturalClaim,
+    render_natural_answer,
+)
 from rag_app.application.answering.ocr_guard import (
     claim_pdf_visual_evidence,
     critical_ocr_atoms,
@@ -31,6 +35,14 @@ from rag_app.core.models import (
     QueryAnalysis,
     RequestedAnswerType,
 )
+from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
+    AtomStatus,
+    AtomSupportMatrix,
+    QueryAtom,
+    QueryPlan,
+)
+from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from rag_app.core.ports import (
     CancellationPort,
     CriticalOcrVerifierPort,
@@ -83,6 +95,14 @@ _NEGATION = re.compile(
     r"不得|禁止|严禁|不能|不可|不允许|不准|无需|不必|不需要|"
     r"尚未|没有|并非|不是|未(?!来)|无(?!线(?!索))|"
     r"不(?!同(?!意|步)|断(?!开|电|网|水|气)|仅|但)"
+)
+_STRONG_MODAL = re.compile(
+    r"必须|应当|应予|应由|应在|应向|应将|应按|应对|应及时|"
+    r"应(?=\s|[，。：；,;])|须"
+)
+_PERMISSIVE_MODAL = re.compile(
+    r"可以|允许|可由|可在|可按|可向|可将|可免|"
+    r"可(?=\s|[，。：；,;])"
 )
 _EXEMPTION_CONDITION_QUESTION = re.compile(
     r"(?:何种|哪些|什么)情况(?:下)?[^?？]{0,20}"
@@ -235,6 +255,8 @@ class GroundedOutcome:
     reason_code: str | None = None
     published_support_ids: tuple[str, ...] = ()
     ocr_verification_states: tuple[tuple[str, OcrVerificationState], ...] = ()
+    atom_coverage: tuple[tuple[str, str], ...] = ()
+    repair_calls: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -597,9 +619,10 @@ def _certified_list_exemption(
     """只有同组导语明确允许免除时，编号条目才继承该关系。"""
     for cited in cited_items:
         certificate = dict(cited.metadata).get("answer_support")
-        if not isinstance(certificate, dict) or certificate.get(
-            "support_reason"
-        ) != "STRUCTURED_LIST_RELATION":
+        if (
+            not isinstance(certificate, dict)
+            or certificate.get("support_reason") != "STRUCTURED_LIST_RELATION"
+        ):
             continue
         required = certificate.get("supporting_span_ids")
         if not isinstance(required, list) or not required:
@@ -609,17 +632,12 @@ def _certified_list_exemption(
             for item in evidence
             if item.document_version_id == cited.document_version_id
             and dict(item.metadata).get("answer_support") == certificate
-            and any(
-                span.node_id in required for span in item.source_spans
-            )
+            and any(span.node_id in required for span in item.source_spans)
         )
-        present = {
-            span.node_id for item in group for span in item.source_spans
-        }
-        if (
-            len(group) < _MIN_STRUCTURED_LIST_ITEMS
-            or not set(required).issubset(present)
-        ):
+        present = {span.node_id for item in group for span in item.source_spans}
+        if len(group) < _MIN_STRUCTURED_LIST_ITEMS or not set(
+            required
+        ).issubset(present):
             continue
         intro = min(
             group,
@@ -1630,6 +1648,8 @@ class GroundedAnsweringService:
         *,
         answer_support_set: tuple[EvidenceItem, ...] | None = None,
         analysis: QueryAnalysis | None = None,
+        query_plan: QueryPlan | None = None,
+        atom_support_matrix: AtomSupportMatrix | None = None,
         on_claim: Callable[[AnswerClaim], None] | None = None,
         cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
@@ -1641,6 +1661,8 @@ class GroundedAnsweringService:
             confidence: 检索置信状态，不允许越过硬性拒绝。
             answer_support_set: 已直接支持所问关系的最小集合，供模型核验使用。
             analysis: 检索、Evidence 与回答共同消费的最终查询分析。
+            query_plan: 可选的本次类型化事实原子计划。
+            atom_support_matrix: 可选的逐原子检索支持状态。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
@@ -1648,6 +1670,21 @@ class GroundedAnsweringService:
             已核验回答或明确拒答，包含真实调用和终态原因。
 
         """
+        if query_plan is not None or atom_support_matrix is not None:
+            if query_plan is None or atom_support_matrix is None:
+                raise ValueError(
+                    "类型化回答必须同时提供 QueryPlan 和支持矩阵。"
+                )
+            return self._answer_with_plan(
+                query,
+                evidence,
+                confidence,
+                query_plan=query_plan,
+                atom_support_matrix=atom_support_matrix,
+                analysis=analysis,
+                on_claim=on_claim,
+                cancellation=cancellation,
+            )
         if not evidence or confidence.status not in {
             ConfidenceStatus.ANSWERABLE,
             ConfidenceStatus.INSUFFICIENT_EVIDENCE,
@@ -1843,6 +1880,475 @@ class GroundedAnsweringService:
             tuple(calls),
             reason,
         )
+
+    def _answer_with_plan(  # noqa: PLR0912, PLR0913, PLR0915
+        self,
+        query: str,
+        evidence: tuple[EvidenceItem, ...],
+        confidence: ConfidenceDecision,
+        *,
+        query_plan: QueryPlan,
+        atom_support_matrix: AtomSupportMatrix,
+        analysis: QueryAnalysis | None,
+        on_claim: Callable[[AnswerClaim], None] | None,
+        cancellation: CancellationPort | None,
+    ) -> GroundedOutcome:
+        """单次自然生成、逐原子事实核验和仅缺项的局部修复。"""
+        if confidence.status not in {
+            ConfidenceStatus.ANSWERABLE,
+            ConfidenceStatus.INSUFFICIENT_EVIDENCE,
+        }:
+            return GroundedOutcome(
+                None, "none", reason_code=confidence.status.value
+            )
+        if {atom.atom_id for atom in query_plan.atoms} != {
+            atom.atom_id for atom in atom_support_matrix.atoms
+        }:
+            raise ValueError("逐原子支持矩阵与 QueryPlan 不一致。")
+        by_id = {item.support_id: item for item in evidence}
+        eligible = {
+            atom.atom_id
+            for atom in atom_support_matrix.atoms
+            if atom.status in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
+            and atom.supporting_support_ids
+        }
+        calls: list[ProviderCall] = []
+        accepted: list[ValidatedNaturalClaim] = []
+        reason: str | None = None
+        raw_covered: set[str] = set()
+        repair_calls = 0
+
+        def generate(
+            repair_atom_ids: tuple[str, ...] = (),
+        ) -> AnswerDraft:
+            """局部修复仅发送缺失 Atom 的证据和已通过 Claim 身份。"""
+            requested = set(repair_atom_ids) if repair_atom_ids else eligible
+            allowed = {
+                support_id
+                for atom_id in requested
+                for support_id in atom_support_matrix.for_atom(
+                    atom_id
+                ).supporting_support_ids
+            }
+            candidates = tuple(
+                item for item in evidence if item.support_id in allowed
+            )
+            request = GenerationRequest(
+                query=query,
+                evidence=candidates,
+                citation_protocol="support-id-v2-natural-claims",
+                typed_semantics=None
+                if analysis is None
+                else analysis.semantics,
+                model_evidence_candidates=candidates,
+                query_plan=query_plan,
+                atom_support_matrix=atom_support_matrix,
+                repair_atom_ids=repair_atom_ids,
+                accepted_claim_ids=tuple(item.claim_id for item in accepted),
+            )
+            stream_generate = getattr(self.generator, "generate_stream", None)
+            if (
+                on_claim is not None
+                and cancellation is not None
+                and callable(stream_generate)
+            ):
+                draft = stream_generate(
+                    request,
+                    on_claim=lambda _claim: None,
+                    cancellation=cancellation,
+                )
+                if not isinstance(draft, AnswerDraft):
+                    raise ValueError("流式生成未返回 AnswerDraft。")
+                return draft
+            return self.generator.generate(request)
+
+        def consume(draft: AnswerDraft) -> None:
+            """只保留本地核验通过的 Claim，原文由证据回填。"""
+            nonlocal reason
+            if draft.generation_mode != "natural":
+                raise ValidationFailed(
+                    "类型化生成返回错误协议。",
+                    stage="answer.validate",
+                    code="GENERATION_CLAIMS_INVALID",
+                )
+            calls.extend(draft.provider_calls)
+            if not draft.natural_claims:
+                reason = draft.reason_code or "GENERATION_ABSTAINED"
+            for natural in draft.natural_claims:
+                raw_covered.update(natural.atom_ids)
+                try:
+                    claim = _validated_natural_claim(
+                        natural,
+                        query_plan,
+                        atom_support_matrix,
+                        evidence,
+                        analysis,
+                    )
+                except (ValidationFailed, ValueError):
+                    reason = "CLAIM_NOT_SUPPORTED"
+                    continue
+                if natural.claim_id in {item.claim_id for item in accepted}:
+                    reason = "DUPLICATE_CLAIM"
+                    continue
+                accepted.append(
+                    ValidatedNaturalClaim(
+                        claim_id=natural.claim_id,
+                        atom_ids=natural.atom_ids,
+                        claim=claim,
+                    )
+                )
+
+        if eligible:
+            try:
+                _raise_if_cancelled(cancellation)
+                consume(generate())
+                # 修复只能补首次完全漏掉的、有证据支持的 Atom。
+                omitted = tuple(
+                    atom.atom_id
+                    for atom in query_plan.atoms
+                    if atom.atom_id in eligible
+                    and atom_support_matrix.for_atom(atom.atom_id).status
+                    is AtomStatus.SUPPORTED
+                    and atom.atom_id not in raw_covered
+                )
+                if omitted:
+                    _raise_if_cancelled(cancellation)
+                    repair_calls = 1
+                    consume(generate(omitted))
+            except QueryCancelled as error:
+                error.provider_calls = (*calls, *error.provider_calls)
+                raise
+            except RagError as error:
+                calls.extend(
+                    error.provider_calls
+                    or (
+                        ()
+                        if error.provider_call is None
+                        else (error.provider_call,)
+                    )
+                )
+                reason = error.code
+            except ValueError:
+                reason = "GENERATION_OUTPUT_INVALID"
+
+        accepted_claims = tuple(item.claim for item in accepted)
+        try:
+            verification_calls, verification_states = (
+                _verify_critical_ocr_claims(
+                    accepted_claims,
+                    evidence,
+                    self._critical_ocr_verifier,
+                    cancellation,
+                )
+            )
+            calls.extend(verification_calls)
+        except ValidationFailed as error:
+            calls.extend(error.provider_calls)
+            return GroundedOutcome(None, "none", tuple(calls), error.code)
+
+        covered = {atom_id for item in accepted for atom_id in item.atom_ids}
+        incomplete = {
+            atom.atom_id
+            for atom in query_plan.atoms
+            if atom.atom_id in covered
+            and not _natural_atom_complete(
+                atom,
+                atom_support_matrix,
+                tuple(accepted),
+                evidence,
+                analysis,
+            )
+        }
+        missing = frozenset(
+            atom.atom_id
+            for atom in query_plan.atoms
+            if atom_support_matrix.for_atom(atom.atom_id).status
+            is AtomStatus.MISSING
+            or atom.atom_id in incomplete
+            or (
+                atom_support_matrix.for_atom(atom.atom_id).status
+                in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
+                and atom.atom_id not in covered
+            )
+        )
+        coverage = tuple(
+            (
+                atom.atom_id,
+                (
+                    AtomStatus.CONTRADICTORY
+                    if atom_support_matrix.for_atom(atom.atom_id).status
+                    is AtomStatus.CONTRADICTORY
+                    else AtomStatus.SUPPORTED
+                    if atom.atom_id in covered
+                    and atom.atom_id not in incomplete
+                    else AtomStatus.PARTIAL
+                    if atom_support_matrix.for_atom(atom.atom_id).status
+                    is AtomStatus.PARTIAL
+                    or atom.atom_id in incomplete
+                    else AtomStatus.MISSING
+                ).value,
+            )
+            for atom in query_plan.atoms
+        )
+        answer = render_natural_answer(
+            query_plan,
+            atom_support_matrix,
+            tuple(accepted),
+            evidence,
+            missing_atom_ids=missing,
+        )
+        if answer is None:
+            return GroundedOutcome(
+                None,
+                "none",
+                tuple(calls),
+                reason or "GENERATION_ABSTAINED",
+                atom_coverage=coverage,
+                repair_calls=repair_calls,
+            )
+        published = [
+            support.support_id
+            for item in accepted
+            for support in item.claim.supports
+        ]
+        for atom in atom_support_matrix.atoms:
+            if atom.status is not AtomStatus.CONTRADICTORY:
+                continue
+            for support_id in atom.supporting_support_ids:
+                item = by_id.get(support_id)
+                if (
+                    item is not None
+                    and item.publishable
+                    and item.source_spans
+                    and all(span.is_citable for span in item.source_spans)
+                ):
+                    published.append(support_id)
+        published_ids = tuple(dict.fromkeys(published))
+        if on_claim is not None:
+            for accepted_item in accepted:
+                _raise_if_cancelled(cancellation)
+                on_claim(accepted_item.claim)
+        has_conflict = any(
+            item.status is AtomStatus.CONTRADICTORY
+            for item in atom_support_matrix.atoms
+        )
+        return GroundedOutcome(
+            answer,
+            "llm" if eligible else "none",
+            tuple(calls),
+            "CONTRADICTORY_EVIDENCE"
+            if has_conflict
+            else "LIMITED_ANSWER"
+            if missing
+            else "CLAIMS_VALIDATED",
+            published_ids,
+            verification_states,
+            coverage,
+            repair_calls,
+        )
+
+
+def _validated_natural_claim(
+    natural: NaturalClaim,
+    plan: QueryPlan,
+    matrix: AtomSupportMatrix,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> AnswerClaim:
+    """核对逐原子来源后复用既有事实与引用安全门。"""
+    atoms = {atom.atom_id: atom for atom in plan.atoms}
+    by_id = {item.support_id: item for item in evidence}
+    if (
+        len(set(natural.atom_ids)) != len(natural.atom_ids)
+        or len(set(natural.support_ids)) != len(natural.support_ids)
+        or not set(natural.atom_ids) <= atoms.keys()
+        or not set(natural.support_ids) <= by_id.keys()
+    ):
+        raise ValidationFailed(
+            "自然事实包含未知或重复 Atom/Support ID。",
+            stage="answer.validate",
+            code="CLAIM_NOT_SUPPORTED",
+        )
+    allowed = {
+        support_id
+        for atom_id in natural.atom_ids
+        for support_id in matrix.for_atom(atom_id).supporting_support_ids
+    }
+    if not set(natural.support_ids) <= allowed or any(
+        matrix.for_atom(atom_id).status
+        not in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
+        or not set(natural.support_ids)
+        & set(matrix.for_atom(atom_id).supporting_support_ids)
+        for atom_id in natural.atom_ids
+    ):
+        raise ValidationFailed(
+            "自然事实的来源与 Atom 不对应。",
+            stage="answer.validate",
+            code="CLAIM_NOT_SUPPORTED",
+        )
+    units = tuple(by_id[support_id] for support_id in natural.support_ids)
+    claim = AnswerClaim(
+        text=natural.text,
+        supports=tuple(
+            ClaimSupport(
+                support_id=item.support_id,
+                quote=item.citation_text,
+            )
+            for item in units
+        ),
+    )
+    for atom_id in natural.atom_ids:
+        atom = atoms[atom_id]
+        atom_units = tuple(
+            item
+            for item in units
+            if item.support_id
+            in matrix.for_atom(atom_id).supporting_support_ids
+        )
+        source_text = "\n".join(item.citation_text for item in atom_units)
+        if (
+            _STRONG_MODAL.search(natural.text)
+            and not _STRONG_MODAL.search(source_text)
+        ) or (
+            _PERMISSIVE_MODAL.search(natural.text)
+            and not _PERMISSIVE_MODAL.search(source_text)
+        ):
+            raise ValidationFailed(
+                "自然事实改变了来源中的义务强度。",
+                stage="answer.validate",
+                code="CLAIM_NOT_SUPPORTED",
+            )
+        source_labels = "\n".join(
+            " ".join(
+                (
+                    item.source_label,
+                    item.display_name or "",
+                    *item.heading_path,
+                )
+            )
+            for item in atom_units
+        )
+        if any(
+            title not in source_text and title not in source_labels
+            for title in _QUOTED_DOCUMENT_TITLE.findall(natural.text)
+        ):
+            raise ValidationFailed(
+                "自然事实引入来源没有的文档名称。",
+                stage="answer.validate",
+                code="CLAIM_NOT_SUPPORTED",
+            )
+        for constraint in atom.constraints:
+            value = unicodedata.normalize("NFKC", constraint.value).casefold()
+            source = unicodedata.normalize("NFKC", source_text).casefold()
+            if (
+                constraint.kind.value
+                in {"NUMBER", "DURATION", "DATE_TIME", "VERSION"}
+                and value not in source
+                and not (
+                    _number_tokens(value)
+                    and _number_tokens(value) <= _number_tokens(source)
+                )
+            ):
+                raise ValidationFailed(
+                    "Atom 的数字、时限或版本限制缺少来源。",
+                    stage="answer.validate",
+                    code="CLAIM_NOT_SUPPORTED",
+                )
+            if constraint.kind.value == "NEGATION" and not _NEGATION.search(
+                source_text
+            ):
+                raise ValidationFailed(
+                    "Atom 的否定限制缺少来源。",
+                    stage="answer.validate",
+                    code="CLAIM_NOT_SUPPORTED",
+                )
+        atom_analysis = _natural_atom_analysis(atom, analysis)
+        validate_grounded_draft(
+            AnswerDraft(
+                text=claim.text,
+                cited_evidence_ids=natural.support_ids,
+                claims=(claim,),
+                generation_mode="llm",
+            ),
+            evidence,
+            analysis=atom_analysis,
+            complete=False,
+        )
+    return claim
+
+
+def _natural_atom_analysis(
+    atom: QueryAtom,
+    analysis: QueryAnalysis | None,
+) -> QueryAnalysis | None:
+    """复用本次规则分析，并把对象和回答形状收窄到当前 Atom。"""
+    if analysis is None:
+        return None
+    answer_type = RequestedAnswerType.__members__.get(
+        atom.answer_shape.value, RequestedAnswerType.UNKNOWN
+    )
+    return analysis.model_copy(
+        update={
+            "semantics": analysis.semantics.model_copy(
+                update={
+                    "target": atom.target,
+                    "source_qualifier": atom.source_qualifier,
+                    "answer_type": answer_type,
+                }
+            )
+        }
+    )
+
+
+def _natural_atom_complete(
+    atom: QueryAtom,
+    matrix: AtomSupportMatrix,
+    claims: tuple[ValidatedNaturalClaim, ...],
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> bool:
+    """列表和流程还须通过来源集合完整性门，不能只看相关 Claim。"""
+    if atom.answer_shape not in {
+        AtomAnswerShape.ENUMERATION,
+        AtomAnswerShape.PROCEDURE,
+    }:
+        return True
+    support = matrix.for_atom(atom.atom_id)
+    if support.status is not AtomStatus.SUPPORTED:
+        return False
+    atom_analysis = _natural_atom_analysis(atom, analysis)
+    if atom_analysis is None:
+        return True
+    atom_claims = tuple(
+        item.claim for item in claims if atom.atom_id in item.atom_ids
+    )
+    if not atom_claims:
+        return False
+    atom_evidence = tuple(
+        item
+        for item in evidence
+        if item.support_id in support.supporting_support_ids
+    )
+    try:
+        _validate_structured_list_coverage(
+            AnswerDraft(
+                text="\n".join(item.text for item in atom_claims),
+                cited_evidence_ids=tuple(
+                    dict.fromkeys(
+                        cited.support_id
+                        for item in atom_claims
+                        for cited in item.supports
+                    )
+                ),
+                claims=atom_claims,
+                generation_mode="llm",
+            ),
+            atom_evidence,
+            atom_analysis,
+        )
+    except ValidationFailed:
+        return False
+    return True
 
 
 def _raise_if_cancelled(cancellation: CancellationPort | None) -> None:

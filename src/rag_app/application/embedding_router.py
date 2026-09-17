@@ -160,6 +160,182 @@ class QueryEmbeddingRouter:
             return self._embed_single(request, revision, egress)
         return self.embed_query_with_failover(request, revision, egress)
 
+    def embed_queries(
+        self,
+        texts: tuple[str, ...],
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> tuple[RoutedEmbeddingResult, ...]:
+        """一次选定 slot，并按输入顺序返回全部查询向量。
+
+        Args:
+            texts: 同一请求的非空 Atom 查询文本。
+            revision: Active Revision 的拓扑与覆盖证据。
+            egress: 请求作用域的出网策略。
+
+        Returns:
+            同一 named vector 空间的有序结果，审计只由首项携带。
+
+        """
+        if not texts:
+            raise ValueError("Query Embedding 批次不能为空。")
+        for item in texts:
+            QueryEmbeddingRequest(item)
+        if revision.topology.mode == "single":
+            return self._embed_single_batch(texts, revision, egress)
+        return self._embed_batch_with_failover(texts, revision, egress)
+
+    def _embed_single_batch(
+        self,
+        texts: tuple[str, ...],
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> tuple[RoutedEmbeddingResult, ...]:
+        if revision.topology.mode != "single":
+            raise IndexCompatibilityError(
+                "Single Router 收到非 Single topology。",
+                stage="embedding_router.revision",
+            )
+        slot = revision.topology.slot(revision.topology.primary_slot_id)
+        _require_complete_coverage(slot, revision.coverages)
+        _require_query_egress(slot, egress)
+        key = _circuit_key(slot)
+        before = (self._circuit.snapshot(key),)
+        if not self._circuit.allow_call(key):
+            raise _dense_unavailable((), (), "PRIMARY_CIRCUIT_OPEN")
+        try:
+            result = self._embed_slot_many(self._primary, slot, texts)
+        except RagError as error:
+            category = failure_category(error)
+            self._circuit.record_failure(key, category)
+            if category in {
+                ProviderFailureCategory.INPUT_INVALID,
+                ProviderFailureCategory.POLICY_DENIED,
+                ProviderFailureCategory.STORE_INCOMPATIBLE,
+            }:
+                raise
+            raise _dense_unavailable(
+                (slot.slot_id,), _error_calls(error), "PRIMARY_UNAVAILABLE"
+            ) from None
+        self._circuit.record_success(key)
+        return self._routed_batch(
+            result,
+            slot,
+            (slot.slot_id,),
+            "PRIMARY_SELECTED",
+            result.calls,
+            before,
+            (self._circuit.snapshot(key),),
+        )
+
+    def _embed_batch_with_failover(
+        self,
+        texts: tuple[str, ...],
+        revision: ActiveRevisionEmbeddingState,
+        egress: EgressPolicy,
+    ) -> tuple[RoutedEmbeddingResult, ...]:
+        if self._standby is None:
+            raise IndexCompatibilityError(
+                "Hot-Standby topology 缺少 standby Provider。",
+                stage="embedding_router.revision",
+            )
+        primary_slot, standby_slot = _slots(revision.topology)
+        _require_complete_coverage(primary_slot, revision.coverages)
+        _require_query_egress(primary_slot, egress)
+        primary_key = _circuit_key(primary_slot)
+        standby_key = _circuit_key(standby_slot)
+        before = (
+            self._circuit.snapshot(primary_key),
+            self._circuit.snapshot(standby_key),
+        )
+        attempted: list[str] = []
+        calls: list[ProviderCall] = []
+        if self._circuit.allow_call(primary_key):
+            attempted.append(primary_slot.slot_id)
+            try:
+                result = self._embed_slot_many(
+                    self._primary, primary_slot, texts
+                )
+            except RagError as error:
+                calls.extend(_error_calls(error))
+                category = failure_category(error)
+                self._circuit.record_failure(primary_key, category)
+                if category in {
+                    ProviderFailureCategory.INPUT_INVALID,
+                    ProviderFailureCategory.POLICY_DENIED,
+                    ProviderFailureCategory.STORE_INCOMPATIBLE,
+                }:
+                    raise
+                fallback_reason = _fallback_reason(category)
+            else:
+                self._circuit.record_success(primary_key)
+                calls.extend(result.calls)
+                return self._routed_batch(
+                    result,
+                    primary_slot,
+                    tuple(attempted),
+                    "PRIMARY_SELECTED",
+                    tuple(calls),
+                    before,
+                    (
+                        self._circuit.snapshot(primary_key),
+                        self._circuit.snapshot(standby_key),
+                    ),
+                )
+        else:
+            fallback_reason = "PRIMARY_CIRCUIT_OPEN"
+        _require_complete_coverage(standby_slot, revision.coverages)
+        _require_query_egress(standby_slot, egress)
+        if not self._circuit.allow_call(standby_key):
+            raise _dense_unavailable(
+                tuple(attempted), tuple(calls), "STANDBY_CIRCUIT_OPEN"
+            )
+        if standby_slot.provider_id.startswith("aliyun-qwen37"):
+            query_policy = dict(standby_slot.query_request_policy)
+            query_instruct = query_policy.get("query_instruct")
+            if (
+                not isinstance(query_instruct, str)
+                or not query_instruct.strip()
+            ):
+                raise IndexCompatibilityError(
+                    "阿里 Query slot 缺少实际 query_instruct。",
+                    stage="embedding_router.revision",
+                )
+            estimated_tokens = sum(
+                estimate_tokens(text) + estimate_tokens(query_instruct)
+                for text in texts
+            )
+            self._budget.reserve(
+                "aliyun-qwen37",
+                "embedding",
+                estimated_tokens,
+                daily_request_limit=egress.aliyun_daily_request_budget,
+                daily_estimated_token_limit=egress.aliyun_daily_token_budget,
+            )
+        attempted.append(standby_slot.slot_id)
+        try:
+            result = self._embed_slot_many(self._standby, standby_slot, texts)
+        except RagError as error:
+            calls.extend(_error_calls(error))
+            self._circuit.record_failure(standby_key, failure_category(error))
+            raise _dense_unavailable(
+                tuple(attempted), tuple(calls), "BOTH_UNAVAILABLE"
+            ) from None
+        self._circuit.record_success(standby_key)
+        calls.extend(result.calls)
+        return self._routed_batch(
+            result,
+            standby_slot,
+            tuple(attempted),
+            fallback_reason,
+            tuple(calls),
+            before,
+            (
+                self._circuit.snapshot(primary_key),
+                self._circuit.snapshot(standby_key),
+            ),
+        )
+
     def embed_query_with_failover(
         self,
         request: QueryEmbeddingRequest,
@@ -332,17 +508,64 @@ class QueryEmbeddingRouter:
         slot: EmbeddingSlotIdentity,
         text: str,
     ) -> EmbeddingResult:
-        result = provider.embed(
-            EmbeddingRequest(
+        return self._embed_slot_many(provider, slot, (text,))
+
+    def _embed_slot_many(
+        self,
+        provider: EmbeddingPort,
+        slot: EmbeddingSlotIdentity,
+        texts: tuple[str, ...],
+    ) -> EmbeddingResult:
+        if provider.capabilities.supports_batch or len(texts) == 1:
+            result = provider.embed(
+                EmbeddingRequest(
+                    slot_id=slot.slot_id,
+                    role=EmbeddingRequestRole.QUERY,
+                    texts=texts,
+                )
+            )
+        else:
+            vectors: list[tuple[float, ...]] = []
+            calls: list[ProviderCall] = []
+            for text in texts:
+                try:
+                    item = provider.embed(
+                        EmbeddingRequest(
+                            slot_id=slot.slot_id,
+                            role=EmbeddingRequestRole.QUERY,
+                            texts=(text,),
+                        )
+                    )
+                except RagError as error:
+                    error.provider_calls = (*calls, *_error_calls(error))
+                    raise
+                self._require_query_result(item, slot, 1)
+                vectors.extend(item.vectors)
+                calls.extend(item.calls)
+            result = EmbeddingResult(
                 slot_id=slot.slot_id,
                 role=EmbeddingRequestRole.QUERY,
-                texts=(text,),
+                vectors=tuple(vectors),
+                observed_dimension=slot.dimension,
+                request_policy_identity=_role_policy_identity(
+                    slot, EmbeddingRequestRole.QUERY
+                ),
+                calls=tuple(calls),
             )
-        )
+        self._require_query_result(result, slot, len(texts))
+        return result
+
+    @staticmethod
+    def _require_query_result(
+        result: EmbeddingResult,
+        slot: EmbeddingSlotIdentity,
+        expected_count: int,
+    ) -> None:
         if (
             result.slot_id != slot.slot_id
+            or result.role is not EmbeddingRequestRole.QUERY
             or result.observed_dimension != slot.dimension
-            or len(result.vectors) != 1
+            or len(result.vectors) != expected_count
             or result.request_policy_identity
             != _role_policy_identity(slot, EmbeddingRequestRole.QUERY)
         ):
@@ -351,7 +574,30 @@ class QueryEmbeddingRouter:
                 stage="embedding_router.result",
                 details={"slot_id": slot.slot_id},
             )
-        return result
+
+    @staticmethod
+    def _routed_batch(  # noqa: PLR0913, PLR0917
+        result: EmbeddingResult,
+        slot: EmbeddingSlotIdentity,
+        attempted: tuple[str, ...],
+        reason: str,
+        calls: tuple[ProviderCall, ...],
+        before: tuple[CircuitSnapshot, ...],
+        after: tuple[CircuitSnapshot, ...],
+    ) -> tuple[RoutedEmbeddingResult, ...]:
+        return tuple(
+            RoutedEmbeddingResult(
+                vector=vector,
+                selected_slot_id=slot.slot_id,
+                vector_name=slot.vector_name,
+                attempted_slot_ids=attempted,
+                fallback_reason=reason,
+                provider_calls=calls if index == 0 else (),
+                circuit_before=before,
+                circuit_after=after,
+            )
+            for index, vector in enumerate(result.vectors)
+        )
 
     def _routed(  # noqa: PLR0913, PLR0917
         self,
@@ -783,6 +1029,11 @@ def _fallback_reason(category: ProviderFailureCategory) -> str:
 
 
 def _error_calls(error: RagError) -> tuple[ProviderCall, ...]:
+    calls = getattr(error, "provider_calls", None)
+    if isinstance(calls, tuple) and all(
+        isinstance(item, ProviderCall) for item in calls
+    ):
+        return calls
     call = getattr(error, "provider_call", None)
     return (call,) if isinstance(call, ProviderCall) else ()
 
