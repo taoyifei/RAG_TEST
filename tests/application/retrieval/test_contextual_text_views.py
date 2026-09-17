@@ -31,16 +31,19 @@ def test_rerank_context_uses_trusted_metadata_without_reindexing() -> None:
     views = contextual_rerank_text(candidate)
 
     assert views.rerank_text.startswith(
-        "fixture.docx\nA类 / 办理流程\n部门：公共服务部"
+        "fixture.docx\nA类 / 办理流程\n申请人提交材料。"
+    )
+    assert views.rerank_text.index(original.citation_text) < (
+        views.rerank_text.index("部门：公共服务部")
     )
     assert "分类：办事 > 材料办理" in views.rerank_text
     assert "结构：TEXT" in views.rerank_text
-    assert views.rerank_text.endswith(original.citation_text)
+    assert original.citation_text in views.rerank_text
     assert views.embedding_text_override is None
     assert views.lexical_text_override is None
     assert chunk.embedding_text == original.embedding_text
     assert chunk.lexical_text == original.lexical_text
-    assert len(views.rerank_text.split("\n\n", 1)[0]) <= 600
+    assert len(views.rerank_text) - len(original.citation_text) <= 602
 
 
 def test_title_already_at_start_of_body_is_not_duplicated() -> None:
@@ -59,4 +62,4 @@ def test_title_already_at_start_of_body_is_not_duplicated() -> None:
     views = contextual_rerank_text(candidate)
 
     assert not views.rerank_text.startswith("申报指南\n")
-    assert views.rerank_text.endswith(chunk.citation_text)
+    assert chunk.citation_text in views.rerank_text

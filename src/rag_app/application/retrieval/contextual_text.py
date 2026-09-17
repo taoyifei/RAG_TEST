@@ -36,6 +36,7 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
     metadata = dict(chunk.metadata)
     citation = chunk.citation_text
     lines: list[str] = []
+    metadata_lines: list[str] = []
     fields: list[str] = []
     title = _normalized(candidate.hydrated.display_name)[:240]
     if title and title not in _normalized(citation[:_PREFIX_CHARACTER_LIMIT]):
@@ -55,7 +56,7 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
         lines.append(heading)
         fields.append("章节")
     _append_field(
-        lines,
+        metadata_lines,
         fields,
         label="部门",
         raw=metadata.get("department_name"),
@@ -73,7 +74,7 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
             )
         )
         _append_field(
-            lines,
+            metadata_lines,
             fields,
             label="分类",
             raw=" > ".join(parts),
@@ -81,7 +82,7 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
             citation=citation,
         )
     _append_field(
-        lines,
+        metadata_lines,
         fields,
         label="结构",
         raw=chunk.role.value.upper(),
@@ -89,8 +90,14 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
         citation=citation,
     )
     prefix = "\n".join(lines)[:_PREFIX_CHARACTER_LIMIT]
+    metadata_suffix = "\n".join(metadata_lines)[
+        : max(0, _PREFIX_CHARACTER_LIMIT - len(prefix))
+    ]
+    rerank_text = "\n".join(
+        value for value in (prefix, citation, metadata_suffix) if value
+    )
     return ContextualTextViews(
-        rerank_text=f"{prefix}\n\n{citation}" if prefix else citation,
+        rerank_text=rerank_text,
         lexical_text_override=None,
         embedding_text_override=None,
         context_fields=tuple(fields),
