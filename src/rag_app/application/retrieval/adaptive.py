@@ -15,6 +15,7 @@ from rag_app.core.ports.evidence_source import CatalogDocument
 _TITLE = re.compile(r"《([^》]{2,200})》")
 _NAVIGATION = re.compile(
     r"哪份(?:材料|资料|文档|文件|模板)|(?:什么|哪些)(?:材料|资料|文档|文件|模板)"
+    r"|(?:哪个|哪份)(?:纪要|记录|报告|方案|计划|规范|办法|制度|表格)"
     r"|有没有.{0,50}模板|是否有.{0,50}模板|找.{0,50}(?:文档|材料|模板)"
     r"|参考.{0,50}(?:文档|材料|模板)|(?:文档|材料|模板).{0,12}(?:在哪|哪里)"
     r"|(?:文档|材料|模板|模版).{0,12}(?:哪找|在哪|哪里|有吗|上哪找)"
@@ -43,6 +44,10 @@ _MIN_TARGET_CHARS = 2
 _MIN_CATALOG_SCORE = 0.78
 _MAX_SCORE_GAP = 0.12
 _MAX_CATALOG_CANDIDATES = 3
+_FRAGMENT_WIDTH = 2
+_FRAGMENT_MIN_CHARS = 4
+_FRAGMENT_MAX_CHARS = 10
+_MIN_FRAGMENT_COUNT = 2
 
 
 class ReasoningEffort(StrEnum):
@@ -123,6 +128,24 @@ def _bigrams(value: str) -> set[str]:
     return {value[index : index + 2] for index in range(len(value) - 1)}
 
 
+def _fragment_score(target: str, title: str) -> float:
+    """短语被标题前后修饰语隔开时，要求各片段仍全部出现。"""
+    if (
+        not _FRAGMENT_MIN_CHARS <= len(target) <= _FRAGMENT_MAX_CHARS
+        or len(target) % _FRAGMENT_WIDTH
+    ):
+        return 0.0
+    fragments = tuple(
+        target[index : index + _FRAGMENT_WIDTH]
+        for index in range(0, len(target), _FRAGMENT_WIDTH)
+    )
+    if len(set(fragments)) < _MIN_FRAGMENT_COUNT or not all(
+        fragment in title for fragment in fragments
+    ):
+        return 0.0
+    return 0.84
+
+
 def _match_score(target: str, document: CatalogDocument) -> float:
     metadata = dict(document.metadata)
     title = _normalized(document.title)
@@ -144,7 +167,7 @@ def _match_score(target: str, document: CatalogDocument) -> float:
     query_pairs = _bigrams(target)
     if not query_pairs:
         return 0.0
-    best = 0.0
+    best = _fragment_score(target, title)
     for value in values:
         pairs = _bigrams(value)
         if not pairs:

@@ -181,6 +181,38 @@ def test_internal_model_configurator_rejects_configuration_drift(
         harness.close()
 
 
+def test_internal_model_configurator_updates_verified_thinking_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端点能力确认后，只允许更新该能力位并保持配置幂等。"""
+    monkeypatch.setenv("RAG_PRODUCT_MODE", "wanshitong")
+    harness = build_product_harness(
+        tmp_path, transport_factory=_openai_mock_transport
+    )
+    configurator = InternalModelConfigurator(
+        harness.runtime, allow_mock_validation=True
+    )
+    try:
+        first = configurator.configure(_settings())
+        supported = InternalModelSettings(
+            embedding_base_url="https://embedding.internal.example/v1",
+            reranker_base_url="https://reranker.internal.example",
+            llm_base_url="https://llm.internal.example/v1",
+            llm_disable_thinking_supported=True,
+        )
+
+        second = configurator.configure(supported)
+        third = configurator.configure(supported)
+
+        assert second == third
+        assert first.knowledge_base_id == second.knowledge_base_id
+        assert harness.runtime.models.get(
+            first.knowledge_base_id
+        ).disable_thinking_supported
+    finally:
+        harness.close()
+
+
 def test_internal_model_configurator_fails_closed_on_corrupt_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

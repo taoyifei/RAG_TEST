@@ -512,6 +512,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         ],
         input_count: int,
         estimated_tokens: int,
+        timeout_seconds: float | None = None,
     ) -> ChatCompletion:
         """发送标准同步请求并校验可选 model、finish 和 usage。"""
         try:
@@ -525,6 +526,7 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
                 model=self._compatible_config.model,
                 input_count=input_count,
                 estimated_tokens=estimated_tokens,
+                timeout_seconds=timeout_seconds,
             )
         except ProviderHttpError as failure:
             raise provider_error(

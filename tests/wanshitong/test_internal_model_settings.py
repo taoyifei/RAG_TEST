@@ -42,6 +42,19 @@ def test_internal_model_settings_normalize_primary_contracts() -> None:
     assert settings.reranker_protocol == "tei"
     assert settings.reranker_path == "/rerank"
     assert settings.embedding_credential.source == "none"
+    assert not settings.llm_disable_thinking_supported
+
+
+def test_internal_settings_require_explicit_thinking_capability() -> None:
+    environment = _environment()
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"] = "true"
+    assert InternalModelSettings.from_environment(
+        environment
+    ).llm_disable_thinking_supported
+
+    environment["RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"] = "maybe"
+    with pytest.raises(ValueError, match="必须为 true 或 false"):
+        InternalModelSettings.from_environment(environment)
 
 
 def test_internal_model_settings_support_safe_credential_sources(

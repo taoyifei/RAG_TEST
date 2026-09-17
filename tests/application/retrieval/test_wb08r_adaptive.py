@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 from rag_app.adapters.providers.aliyun_chat import ChatMessage
 from rag_app.adapters.providers.openai_compatible import (
+    OpenAICompatibleChatAdapter,
     OpenAICompatibleChatConfig,
     openai_compatible_chat_payload,
 )
@@ -77,20 +79,23 @@ def _documents(
     ("titles", "question", "expected_status", "expected_count"),
     (
         (
-            ("项目发布阶段参考说明",),
-            "准备项目发布阶段时应该参考哪份材料",
+            ("2-部署阶段-设备部署方案模板",),
+            "准备设备部署阶段时应该参考哪份材料",
             ConfidenceStatus.ANSWERABLE,
             1,
         ),
         (
-            ("项目发布阶段参考说明", "项目发布操作手册"),
-            "准备项目发布阶段时应该参考哪份材料",
+            (
+                "2-部署阶段-设备部署方案模板",
+                "2-部署阶段-设备部署验收报告",
+            ),
+            "准备设备部署阶段时应该参考哪份材料",
             ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
             2,
         ),
         (
-            ("项目发布阶段参考说明",),
-            "准备实验室采购时应该参考哪份材料",
+            ("2-部署阶段-设备部署方案模板",),
+            "准备员工培训时应该参考哪份材料",
             ConfidenceStatus.AMBIGUOUS_NEEDS_CLARIFICATION,
             0,
         ),
@@ -201,6 +206,62 @@ def test_catalog_matches_colloquial_and_typo_without_answer_table() -> None:
 
     assert is_navigation_query(query)
     assert catalog_matches(query, (document,)) == (document,)
+    assert is_navigation_query("设备变更用哪个纪要？")
+    assert catalog_matches("设备变更用哪个纪要？", (document,)) == ()
+
+
+def test_catalog_matches_separated_title_fragments() -> None:
+    """目录短语可以跨标题修饰语匹配，仍须有全部关键片段。"""
+    titles = (
+        "2-安装阶段-设备安装验收报告",
+        "2-部署阶段-设备现场部署方案",
+        "2-部署阶段-现场调试计划",
+    )
+    documents = tuple(
+        CatalogDocument(
+            document_id=deterministic_id("doc", title),
+            document_version_id=deterministic_id("dver", title),
+            chunk_id=deterministic_id("chunk", title),
+            title=title,
+            metadata=(),
+        )
+        for title in titles
+    )
+
+    assert catalog_matches(
+        "准备设备部署阶段时应该参考哪份材料", documents
+    ) == (documents[1],)
+    assert catalog_matches("安装验收用哪个报告？", documents) == (
+        documents[0],
+    )
+
+
+def test_planner_timeout_reaches_provider_http_client() -> None:
+    """轻量 Planner 的单次超时必须穿透 Chat Adapter。"""
+    transport = Mock()
+    transport.request_json.side_effect = ValueError("sentinel")
+    adapter = OpenAICompatibleChatAdapter(
+        OpenAICompatibleChatConfig(
+            model="test-chat",
+            egress_allowed=True,
+            disable_thinking_supported=True,
+        ),
+        http_client=transport,
+        api_key_resolver=lambda: "",
+    )
+
+    with pytest.raises(ValueError, match="sentinel"):
+        adapter.complete(
+            (ChatMessage(role="user", content="只理解检索问题。"),),
+            operation="query.interpret",
+            max_output_tokens=256,
+            timeout_seconds=3.0,
+        )
+
+    assert transport.request_json.call_args.kwargs["timeout_seconds"] == 3.0
+    assert transport.request_json.call_args.kwargs["payload"][
+        "chat_template_kwargs"
+    ] == {"enable_thinking": False}
 
 
 def test_reasoning_effort_is_bounded_by_question_shape() -> None:

@@ -138,7 +138,18 @@ class InternalModelConfigurator:
             settings,
         )
         current_models = self._runtime.models.get(scope.knowledge_base_id)
-        if ready is not None and current_models != desired_models:
+        capability_only_change = current_models.model_copy(
+            update={
+                "disable_thinking_supported": (
+                    desired_models.disable_thinking_supported
+                )
+            }
+        ) == desired_models
+        if (
+            ready is not None
+            and current_models != desired_models
+            and not capability_only_change
+        ):
             raise InternalModelConfigurationError(
                 "湾事通已锁定的 Generation Model Settings 已发生漂移。",
                 stage="wanshitong.models.verify",
@@ -569,6 +580,9 @@ class InternalModelConfigurator:
                 "generation_model": settings.llm_model,
                 "generation_fallback_models": (),
                 "rewrite_enabled": False,
+                "disable_thinking_supported": (
+                    settings.llm_disable_thinking_supported
+                ),
             }
         )
 

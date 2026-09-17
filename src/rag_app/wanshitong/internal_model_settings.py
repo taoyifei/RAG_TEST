@@ -30,6 +30,9 @@ _RERANKER_MODEL = "RAG_WANSHITONG_RERANKER_MODEL"
 _RERANKER_PROTOCOL = "RAG_WANSHITONG_RERANKER_PROTOCOL"
 _RERANKER_PATH = "RAG_WANSHITONG_RERANKER_PATH"
 _LLM_MODEL = "RAG_WANSHITONG_LLM_MODEL"
+_LLM_DISABLE_THINKING_SUPPORTED = (
+    "RAG_WANSHITONG_LLM_DISABLE_THINKING_SUPPORTED"
+)
 _CREDENTIAL_ENV_SUFFIX = "_CREDENTIAL_ENV"
 _API_KEY_FILE_SUFFIX = "_API_KEY_FILE"
 _ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{1,127}$")
@@ -94,6 +97,7 @@ class InternalModelSettings:
     reranker_protocol: str = "tei"
     reranker_path: str = "/rerank"
     llm_model: str = "Qwen/Qwen3-8B-AWQ"
+    llm_disable_thinking_supported: bool = False
     embedding_credential: InternalCredentialSettings = field(
         default_factory=InternalCredentialSettings
     )
@@ -137,6 +141,10 @@ class InternalModelSettings:
                 source.get(_RERANKER_PROTOCOL, "tei"),
             ),
             llm_model=source.get(_LLM_MODEL, "Qwen/Qwen3-8B-AWQ"),
+            llm_disable_thinking_supported=_boolean(
+                source.get(_LLM_DISABLE_THINKING_SUPPORTED, "false"),
+                _LLM_DISABLE_THINKING_SUPPORTED,
+            ),
             embedding_credential=_credential(source, "EMBEDDING"),
             reranker_credential=_credential(source, "RERANKER"),
             llm_credential=_credential(source, "LLM"),
@@ -203,6 +211,13 @@ def _positive_int(value: str, key: str) -> int:
     if parsed <= 0:
         raise ValueError(f"{key} 必须为正整数。")
     return parsed
+
+
+def _boolean(value: str, key: str) -> bool:
+    normalized = value.strip().casefold()
+    if normalized not in {"true", "false"}:
+        raise ValueError(f"{key} 必须为 true 或 false。")
+    return normalized == "true"
 
 
 def _credential(
