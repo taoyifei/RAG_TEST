@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +42,14 @@ def test_admin_facade_requires_existing_console_session(
         ):
             response = anonymous.get(ADMIN_BASE_PATH + path)
             assert response.status_code == 401
+        trace_id = "trace_" + "a" * 32
+        assert anonymous.get(
+            ADMIN_BASE_PATH + f"/operational-traces/{trace_id}/export"
+        ).status_code == 401
+        assert anonymous.post(
+            ADMIN_BASE_PATH + "/operational-traces:export",
+            json={"trace_ids": [trace_id]},
+        ).status_code == 401
 
 
 def test_admin_facade_uses_only_fixed_scope(
@@ -323,6 +334,129 @@ def test_trace_artifact_rechecks_fixed_scope_and_live_source(
     assert deleted_source.status_code == 403
     assert deleted_source.json()["error"]["stage"] == "trace.source"
     assert cross_scope.status_code == 404
+
+
+def test_trace_download_restores_single_and_batch_with_fixed_scope(
+    public_harness: PublicHarness,
+) -> None:
+    runtime = public_harness.product.runtime
+    fixed = public_harness.scope_service.binding()
+    fixed_scope = KnowledgeBaseScope(
+        project_id=fixed.project_id,
+        knowledge_base_id=fixed.knowledge_base_id,
+    )
+    first, _ = _record_full_trace(public_harness, suffix="5", scope=fixed_scope)
+    second, _ = _record_full_trace(
+        public_harness, suffix="6", scope=fixed_scope
+    )
+    other_project = runtime.sdk.create_project(
+        "导出隔离项目", idempotency_key="export-isolation-project"
+    )
+    other_kb = runtime.sdk.create_knowledge_base(
+        other_project.project_id,
+        "导出隔离知识库",
+        idempotency_key="export-isolation-kb",
+    )
+    outside, _ = _record_full_trace(
+        public_harness,
+        suffix="7",
+        scope=KnowledgeBaseScope(
+            project_id=other_project.project_id,
+            knowledge_base_id=other_kb.knowledge_base_id,
+        ),
+    )
+    export_path = ADMIN_BASE_PATH + "/operational-traces:export"
+    first_path = ADMIN_BASE_PATH + f"/operational-traces/{first}/export"
+
+    single = public_harness.client.get(first_path)
+    missing_csrf = public_harness.client.post(
+        export_path, json={"trace_ids": [first]}
+    )
+    batch = public_harness.client.post(
+        export_path,
+        json={"trace_ids": [second, first]},
+        headers=public_harness.product.write_headers,
+    )
+    outside_single = public_harness.client.get(
+        ADMIN_BASE_PATH + f"/operational-traces/{outside}/export"
+    )
+    outside_batch = public_harness.client.post(
+        export_path,
+        json={"trace_ids": [first, outside]},
+        headers=public_harness.product.write_headers,
+    )
+    missing_batch = public_harness.client.post(
+        export_path,
+        json={"trace_ids": [first, "trace_" + "9" * 32]},
+        headers=public_harness.product.write_headers,
+    )
+
+    assert single.status_code == 200, single.text
+    assert single.headers["content-disposition"] == (
+        f'attachment; filename="{first}.json"'
+    )
+    assert single.headers["cache-control"] == "no-store"
+    assert single.content == runtime.traces.store.export_trace(first)
+    assert missing_csrf.status_code == 403
+    assert batch.status_code == 200, batch.text
+    assert batch.headers["content-type"] == "application/zip"
+    with ZipFile(BytesIO(batch.content)) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        assert [item["trace_id"] for item in manifest["items"]] == [
+            first,
+            second,
+        ]
+        assert archive.read(f"traces/{first}.json") == single.content
+        assert archive.read(f"traces/{second}.json") == (
+            runtime.traces.store.export_trace(second)
+        )
+    assert outside_single.status_code == 404
+    assert outside_batch.status_code == 404
+    assert missing_batch.status_code == 404
+
+
+def test_trace_download_rechecks_deleted_source(
+    public_harness: PublicHarness,
+) -> None:
+    runtime = public_harness.product.runtime
+    fixed = public_harness.scope_service.binding()
+    document_job = runtime.sdk.create_document(
+        fixed.project_id,
+        fixed.knowledge_base_id,
+        display_name="导出来源.docx",
+        content=build_package(
+            "<w:p><w:r><w:t>导出来源合成文本。</w:t></w:r></w:p>"
+        ),
+        media_type=DOCX_MEDIA_TYPE,
+        idempotency_key="trace-export-source",
+    )
+    assert document_job.document_id is not None
+    trace_id, _ = _record_full_trace(
+        public_harness,
+        suffix="8",
+        scope=KnowledgeBaseScope(
+            project_id=fixed.project_id,
+            knowledge_base_id=fixed.knowledge_base_id,
+        ),
+        document_id=document_job.document_id,
+    )
+    with runtime.connections.transaction(write=True) as connection:
+        connection.execute(
+            "UPDATE documents SET deleted_at=? WHERE document_id=?",
+            (datetime.now(UTC).isoformat(), document_job.document_id),
+        )
+    single = public_harness.client.get(
+        ADMIN_BASE_PATH + f"/operational-traces/{trace_id}/export"
+    )
+    batch = public_harness.client.post(
+        ADMIN_BASE_PATH + "/operational-traces:export",
+        json={"trace_ids": [trace_id]},
+        headers=public_harness.product.write_headers,
+    )
+
+    assert single.status_code == 403
+    assert batch.status_code == 403
+    assert single.json()["error"]["stage"] == "trace.source"
 
 
 def _record_full_trace(

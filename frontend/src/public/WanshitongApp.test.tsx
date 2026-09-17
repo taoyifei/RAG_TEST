@@ -108,9 +108,42 @@ async function ask(question = "材料多久完成核验？") {
 afterEach(() => {
   vi.restoreAllMocks();
   window.history.replaceState({}, "", "/");
+  window.localStorage.removeItem("wanshitong-theme");
 });
 
 describe("湾事通公共应用", () => {
+  it("外观切换始终位于公共页面右上角并跨首问保持", async () => {
+    installFetch(
+      streamResponse([
+        event("final", 0, { answer: "已完成回答。", citations: [] }),
+      ]),
+    );
+    const user = userEvent.setup();
+    await openHome();
+    const root = document.querySelector(".wst-root");
+    expect(root).toHaveAttribute("data-theme", "dark");
+    await user.click(screen.getByRole("button", { name: "切换到浅色模式" }));
+    expect(root).toHaveAttribute("data-theme", "light");
+    expect(window.localStorage.getItem("wanshitong-theme")).toBe("light");
+
+    await ask();
+    await screen.findByText("已完成回答。");
+    expect(root).toHaveAttribute("data-theme", "light");
+    await user.click(screen.getByRole("button", { name: "切换到深色模式" }));
+    expect(root).toHaveAttribute("data-theme", "dark");
+  });
+
+  it("重新打开页面后沿用保存的浅色外观", async () => {
+    window.localStorage.setItem("wanshitong-theme", "light");
+    installFetch(streamResponse([]));
+    await openHome();
+    expect(document.querySelector(".wst-root")).toHaveAttribute(
+      "data-theme",
+      "light",
+    );
+    expect(screen.getByRole("button", { name: "切换到深色模式" })).toBeVisible();
+  });
+
   it("初始化匿名 Session 后渲染无登录首屏", async () => {
     const fetchMock = installFetch(
       streamResponse([event("error", 0, { message: "未就绪" })]),

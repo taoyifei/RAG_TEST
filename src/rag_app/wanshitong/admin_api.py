@@ -7,19 +7,29 @@ from collections.abc import Mapping, Sequence
 from typing import Annotated, cast
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Header, Query, Request, Response
+from fastapi import FastAPI, Header, Path, Query, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
+from rag_app.api.operational_trace import (
+    MAX_TRACE_EXPORT_BYTES,
+    TraceExportRequest,
+    build_trace_export_zip,
+)
 from rag_app.composition.product_runtime import ProductRuntime
 from rag_app.core.errors import NotFound, PolicyDenied
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import Document, DocumentRef, Job
 from rag_app.product.models import ProviderConnection
+from rag_app.product.trace_coordinator import (
+    OperationalTracePayloadLimitError,
+    OperationalTraceSnapshot,
+)
 from rag_app.tracing.models import TraceListFilter
 from rag_app.tracing.store import (
     ArtifactExpiredError,
     ArtifactNotFoundError,
+    TraceArtifactLimitError,
     TraceNotFoundError,
 )
 from rag_app.wanshitong.admin_models import (
@@ -429,6 +439,56 @@ def _register_trace_routes(
         return _scoped_trace_detail(runtime, binding, trace_id)
 
     @app.get(
+        ADMIN_BASE_PATH + "/operational-traces/{trace_id}/export",
+        tags=["wanshitong-admin"],
+    )
+    def _export_trace(
+        trace_id: Annotated[
+            str, Path(pattern=r"^(?:trace_)?[0-9a-f]{32}$")
+        ],
+        request: Request,
+    ) -> Response:
+        binding = _admin_scope(request, scope_service)
+        payload = _scoped_trace_exports(runtime, binding, (trace_id,))[0][1]
+        return Response(
+            payload,
+            media_type="application/json",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{trace_id}.json"'
+                ),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.post(
+        ADMIN_BASE_PATH + "/operational-traces:export",
+        tags=["wanshitong-admin"],
+    )
+    def _export_traces(
+        body: TraceExportRequest, request: Request
+    ) -> Response:
+        binding = _admin_scope(request, scope_service)
+        payloads = _scoped_trace_exports(
+            runtime, binding, tuple(sorted(body.trace_ids))
+        )
+        archive = build_trace_export_zip(payloads)
+        if len(archive) > MAX_TRACE_EXPORT_BYTES:
+            raise _trace_export_limit()
+        return Response(
+            archive,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": (
+                    'attachment; filename="operational-traces.zip"'
+                ),
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get(
         ADMIN_BASE_PATH
         + "/operational-traces/{trace_id}/artifacts/{artifact_id}",
         tags=["wanshitong-admin"],
@@ -788,6 +848,93 @@ def _scoped_trace_detail(
             stage="wanshitong.trace.read",
         )
     return payload
+
+
+def _scoped_trace_exports(
+    runtime: ProductRuntime,
+    binding: ScopeBinding,
+    trace_ids: Sequence[str],
+) -> list[tuple[str, bytes]]:
+    """导出前统一核验全部 Trace 的固定范围及现存来源。"""
+    try:
+        with runtime.traces.export_snapshots(
+            trace_ids,
+            max_total_payload_bytes=MAX_TRACE_EXPORT_BYTES,
+            authorize=lambda snapshot: _authorize_export_snapshot(
+                runtime, binding, snapshot
+            ),
+        ) as snapshots:
+            if any(snapshot.state == "missing" for snapshot in snapshots):
+                raise AdminFacadeError(
+                    "NOT_FOUND",
+                    "Operational Trace 不存在。",
+                    status_code=404,
+                    stage="wanshitong.trace.export",
+                )
+            payloads: list[tuple[str, bytes]] = []
+            for snapshot in snapshots:
+                if snapshot.payload is None:
+                    raise AssertionError("Trace 导出快照缺少 payload。")
+                payloads.append((snapshot.trace_id, snapshot.payload))
+            return payloads
+    except (
+        TraceArtifactLimitError,
+        OperationalTracePayloadLimitError,
+    ) as error:
+        raise _trace_export_limit() from error
+    except (ArtifactExpiredError, ArtifactNotFoundError) as error:
+        raise AdminFacadeError(
+            "NOT_FOUND",
+            "Trace Artifact 不存在或已过期。",
+            status_code=404,
+            stage="wanshitong.trace.export",
+        ) from error
+
+
+def _authorize_export_snapshot(
+    runtime: ProductRuntime,
+    binding: ScopeBinding,
+    snapshot: OperationalTraceSnapshot,
+) -> None:
+    """在任何导出正文物化前校验固定范围和来源。"""
+    if snapshot.state == "missing":
+        raise AdminFacadeError(
+            "NOT_FOUND",
+            "Operational Trace 不存在。",
+            status_code=404,
+            stage="wanshitong.trace.export",
+        )
+    if (
+        snapshot.project_id != binding.project_id
+        or snapshot.knowledge_base_id != binding.knowledge_base_id
+    ):
+        raise AdminFacadeError(
+            "NOT_FOUND",
+            "Operational Trace 不存在。",
+            status_code=404,
+            stage="wanshitong.trace.export",
+        )
+    root: dict[str, object] = {
+        "project_id": snapshot.project_id,
+        "knowledge_base_id": snapshot.knowledge_base_id,
+    }
+    detail_root = (
+        None if snapshot.detail is None else snapshot.detail.get("trace")
+    )
+    if isinstance(detail_root, Mapping) and isinstance(
+        detail_root.get("document_id"), str
+    ):
+        root["document_id"] = detail_root["document_id"]
+    _reauthorize_trace_sources(runtime, {"trace": root})
+
+
+def _trace_export_limit() -> AdminFacadeError:
+    return AdminFacadeError(
+        "TRACE_EXPORT_LIMIT",
+        "Operational Trace 导出超过容量上限。",
+        status_code=413,
+        stage="wanshitong.trace.export",
+    )
 
 
 def _reauthorize_trace_sources(
