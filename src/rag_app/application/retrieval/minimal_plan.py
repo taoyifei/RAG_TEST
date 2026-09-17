@@ -31,6 +31,14 @@ _MAX_ATOMS = 4
 _MIN_TARGET_ANCHOR_CHARS = 1
 
 
+class MinimalPlanValidationError(ValueError):
+    """只暴露稳定失败类别，不把模型字段或用户原文写入 Trace。"""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 class MinimalAtomPayload(FrozenModel):
     """模型只能给出输入中的片段、目标、关系和回答形状。"""
 
@@ -72,11 +80,9 @@ def build_query_atoms(
         any(fragment in source for source in available)
         for fragment in fragments
     ):
-        raise ValueError("Planner 片段不属于输入。")
+        raise MinimalPlanValidationError("FRAGMENT_NOT_IN_INPUT")
     if not any(fragment in request.text for fragment in fragments):
-        raise ValueError("Planner 未覆盖当前问题。")
-    if len(fragments) > 1 and len(set(fragments)) == 1:
-        raise ValueError("复合问题不能重复同一个片段。")
+        raise MinimalPlanValidationError("CURRENT_QUERY_UNCOVERED")
     _validate_clause_coverage(request.text, fragments)
     analyzer = QueryAnalyzer()
     available_literals = _protected_literals(
@@ -88,12 +94,12 @@ def build_query_atoms(
     ):
         target = atom.target.strip()
         if not _target_anchored(target, normalized_available):
-            raise ValueError("Planner 目标不属于输入。")
+            raise MinimalPlanValidationError("TARGET_NOT_IN_INPUT")
         for literal in _protected_literals(
             f"{target} {atom.relation}", analyzer, request
         ):
             if literal not in available_literals:
-                raise ValueError("Planner 新增了受保护字面值。")
+                raise MinimalPlanValidationError("LITERAL_NOT_IN_INPUT")
         built.append(
             QueryAtom(
                 atom_id=f"A{index}",
@@ -155,7 +161,7 @@ def _validate_clause_coverage(
             for fragment in normalized_fragments
             if fragment
         ):
-            raise ValueError("Planner 未覆盖独立问句。")
+            raise MinimalPlanValidationError("CLAUSE_UNCOVERED")
 
 
 def _constraints_for_fragment(
@@ -208,4 +214,9 @@ def _constraints_for_fragment(
     return tuple(dict.fromkeys(constraints))[:12]
 
 
-__all__ = ["MinimalAtomPayload", "MinimalPlanPayload", "build_query_atoms"]
+__all__ = [
+    "MinimalAtomPayload",
+    "MinimalPlanPayload",
+    "MinimalPlanValidationError",
+    "build_query_atoms",
+]

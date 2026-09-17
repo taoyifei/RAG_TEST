@@ -56,3 +56,5 @@
 - R2 代码将 Planner 输出缩为 `intent/needs_clarification/clarification_question/atoms(fragment,target,relation,answer_shape)`；`standalone_query` 固定保留原问，来源和硬约束由服务端提取，非法 JSON/Schema/片段/新增字面值整份回退。短问本身不再触发 Planner。`QUERY_PLAN_SCHEMA_REVISION` 已升至 v2，Trace 记录 Schema 模式与摘要。
 - R2 发现现有 QueryAnalyzer 的数字模式在中文字符紧邻阿拉伯数字时漏提（例如“超过5天”）；最小 Planner 的校验和约束构建直接扫描原文数字、单位、日期、版本，避免依赖模型补足。这个问题仍可能影响主链其他 QueryAnalyzer 消费点，需在 R3 审计，但不能用某个评测问题的专用规则修复。
 - R2 相关定向测试 `38 passed`；Planner-24 真实 Gate 尚未运行。当前 8289 仍为 R0 的 `4390fab`，不能用其结果评价 R2。
+- R2 首次真实 Planner-24 使用精确镜像 `171ce3e996b274014a19f9e8758d773534f04142`（镜像 ID `sha256:e2e717714e25d40e66245f05a89060c07a758371fb6c5d7c943ee84dca0a20ab`，候选端口 8289），`response_format` 与 no-thinking 均已在容器内确认。24/24 留有记录，Planner 22 次，回退 5 次（3 次 Atom 校验、2 次 Provider 超时），p50 3.45 秒，p95 5.008 秒；R2 Gate 未通过。候选镜像部署只重建 `wanshitong-wb08r01-app`；18288 未动。
+- 脱敏诊断显示 3 次 Atom 校验回退中，1 次模型只引用上轮 Context、遗漏当前问句；另 2 次两个独立原子共用同一个连续原文片段。后者符合最小 Payload 合同，现已删除额外的“片段必须唯一”限制，并在 Prompt 明确允许共用。前者仍要求当前问句覆盖，不能为降低回退而放宽。两种受支持的结构化输出协议对两个长问题均触发约 5 秒 Provider 超时，因此切换协议本身不能解决。

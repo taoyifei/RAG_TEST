@@ -7,6 +7,7 @@ import pytest
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanPayload,
+    MinimalPlanValidationError,
     build_query_atoms,
 )
 from rag_app.core.identifiers import deterministic_id
@@ -116,8 +117,37 @@ def test_missing_independent_clause_rejects_entire_plan() -> None:
         ]
     )
 
-    with pytest.raises(ValueError, match="独立问句"):
+    with pytest.raises(MinimalPlanValidationError) as failure:
         build_query_atoms(payload, request, QueryAnalyzer().analyze(request))
+    assert failure.value.code == "CLAUSE_UNCOVERED"
+
+
+def test_shared_fragment_can_describe_two_distinct_relations() -> None:
+    request = _request("甲先审核什么再准备什么？")
+    shared = request.text[:-1]
+    payload = _payload(
+        [
+            {
+                "fragment": shared,
+                "target": "甲",
+                "relation": "审核对象",
+                "answer_shape": "FACT",
+            },
+            {
+                "fragment": shared,
+                "target": "甲",
+                "relation": "准备对象",
+                "answer_shape": "FACT",
+            },
+        ]
+    )
+
+    atoms = build_query_atoms(
+        payload, request, QueryAnalyzer().analyze(request)
+    )
+
+    assert len(atoms) == 2
+    assert atoms[0].original_fragment == atoms[1].original_fragment
 
 
 def test_recent_context_relation_is_allowed() -> None:
