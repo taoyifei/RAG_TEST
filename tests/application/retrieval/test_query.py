@@ -61,6 +61,25 @@ def test_analyzer_preserves_mixed_script_identifier() -> None:
 
 
 @pytest.mark.parametrize(
+    ("question", "relation"),
+    (
+        ("甲计划包括哪些类型？", "类型"),
+        ("甲计划包含什么种类？", "种类"),
+        ("甲计划有哪几种类别？", "类别"),
+    ),
+)
+def test_type_enumeration_is_directly_analyzed(
+    question: str, relation: str
+) -> None:
+    semantics = _analyze(question).semantics
+
+    assert semantics.target == "甲计划"
+    assert semantics.relation == relation
+    assert semantics.answer_type is RequestedAnswerType.ENUMERATION
+    assert semantics.source == "RULE"
+
+
+@pytest.mark.parametrize(
     ("text", "expected"),
     (
         ("订单号 ABC-123 是什么", QueryKind.EXACT_IDENTIFIER),

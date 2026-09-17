@@ -281,6 +281,7 @@ def test_reasoning_effort_is_bounded_by_question_shape() -> None:
         is ReasoningEffort.DIRECT
     )
     assert classify("项目发布有哪些职责？") is ReasoningEffort.DIRECT
+    assert classify("甲计划包括哪些类型？") is ReasoningEffort.DIRECT
     assert (
         classify("甲机构在乙项目中需要负责哪些具体职责？")
         is ReasoningEffort.ASSISTED

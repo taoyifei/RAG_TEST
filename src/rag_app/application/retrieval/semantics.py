@@ -145,6 +145,10 @@ _CONDITION_ENUMERATION = re.compile(
     r"(?:可以|可|需要|应当|应该|应|要|会|能够|能)?"
     r"(?P<target>.+)$"
 )
+_TYPE_ENUMERATION = re.compile(
+    r"^(?P<target>.+?)(?:包括|包含|有)"
+    r"(?:哪些|哪几种|什么)(?P<relation>类型|种类|类别)$"
+)
 _QUOTED_TABLE_CONTENT = re.compile(
     r"^(?:[“\"](?P<context>[^”\"]{1,120})[”\"][，,]\s*)?"
     r"[“\"](?P<target>[^”\"]{1,120})[”\"](?:所)?对应的"
@@ -336,6 +340,19 @@ def parse_query_semantics(  # noqa: PLR0911, PLR0912, PLR0915
                 answer_type=RequestedAnswerType.ENUMERATION,
                 source="RULE",
                 reason_codes=("CONDITION_ENUMERATION_QUESTION_SYNTAX",),
+            )
+
+    type_enumeration = _TYPE_ENUMERATION.fullmatch(core)
+    if type_enumeration is not None:
+        target, source = _target_and_source(type_enumeration["target"])
+        if target:
+            return QuerySemantics(
+                target=target,
+                source_qualifier=source or explicit_source,
+                relation=type_enumeration["relation"],
+                answer_type=RequestedAnswerType.ENUMERATION,
+                source="RULE",
+                reason_codes=("TYPE_ENUMERATION_QUESTION_SYNTAX",),
             )
 
     prohibition = _PROHIBITION_QUESTION.fullmatch(core)
