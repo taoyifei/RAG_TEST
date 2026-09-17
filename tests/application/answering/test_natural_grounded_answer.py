@@ -440,6 +440,30 @@ def test_supported_and_missing_atoms_make_limited_answer() -> None:
     assert generator.generate.call_count == 1
 
 
+def test_missing_list_atoms_do_not_repeat_the_same_disclaimer() -> None:
+    evidence = _evidence("甲类属于所问集合。")
+    plan = _plan(
+        "甲类", "乙类", "丙类", shape=AtomAnswerShape.ENUMERATION
+    )
+    matrix = _matrix(
+        plan,
+        (
+            (AtomStatus.SUPPORTED, ("S1",)),
+            (AtomStatus.MISSING, ()),
+            (AtomStatus.MISSING, ()),
+        ),
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", "甲类属于所问集合。", "A1", "S1"),), plan
+    )
+
+    outcome = _answer(generator, evidence, plan, matrix)
+
+    assert outcome.answer is not None
+    assert outcome.answer.count("该主题的完整列表") == 1
+
+
 def test_all_missing_atoms_refuse_without_generation() -> None:
     plan = _plan("甲部门")
     matrix = _matrix(plan, ((AtomStatus.MISSING, ()),))

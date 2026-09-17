@@ -32,18 +32,16 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
         payload = json.loads(request.content)
         data = json.loads(payload["messages"][1]["content"])
         candidates = data["evidence"]
+        atom_ids = [atom["atom_id"] for atom in data["atoms"]]
         claims = []
         if "手机号" not in data["question"]:
             evidence = candidates[0]
             claims = [
                 {
+                    "claim_id": "C1",
                     "text": evidence["text"],
-                    "supports": [
-                        {
-                            "support_id": evidence["support_id"],
-                            "quote": evidence["text"],
-                        }
-                    ],
+                    "atom_ids": atom_ids,
+                    "support_ids": [evidence["support_id"]],
                 }
             ]
         return httpx.Response(
@@ -56,7 +54,21 @@ def test_configured_generation_history_cache_failure_and_scope(  # noqa: PLR0915
                         "message": {
                             "role": "assistant",
                             "content": json.dumps(
-                                {"claims": claims},
+                                    {
+                                        "claims": claims,
+                                        "atom_coverage": [
+                                            {
+                                                "atom_id": atom_id,
+                                                "status": "SUPPORTED"
+                                                if claims
+                                                else "MISSING",
+                                            }
+                                            for atom_id in atom_ids
+                                        ],
+                                        "missing_atoms": (
+                                            [] if claims else atom_ids
+                                        ),
+                                    },
                                 ensure_ascii=False,
                             ),
                         },

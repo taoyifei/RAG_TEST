@@ -14,8 +14,8 @@ from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v1"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
-GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v1"
-NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v1"
+GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v2"
+NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v2"
 CORRECTIVE_RETRIEVAL_REVISION = "wb08r-closed-correction-v1"
 _MAX_ATOMS = 4
 ReasoningEffortValue = Literal["DIRECT", "ASSISTED", "DEEP"]

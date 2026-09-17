@@ -12,6 +12,8 @@ from rag_app.core.models.query_plan import (
 )
 from rag_app.core.models.retrieval import AnswerClaim, EvidenceItem
 
+_MIN_DESCRIPTIVE_FRAGMENT_CHARS = 5
+
 
 @dataclass(frozen=True, slots=True)
 class ValidatedNaturalClaim:
@@ -38,7 +40,11 @@ def _missing_description(shape: AtomAnswerShape, original: str) -> str:
         return "该角色的全部职责"
     if shape is AtomAnswerShape.PROCEDURE:
         return "完整的步骤和顺序"
-    return original
+    return (
+        original
+        if len(original) >= _MIN_DESCRIPTIVE_FRAGMENT_CHARS
+        else "该子问题的明确规定"
+    )
 
 
 def _conflict_lines(
@@ -142,13 +148,17 @@ def render_natural_answer(
         return None
     if missing_atom_ids:
         missing = "；".join(
-            _missing_description(
-                atom.answer_shape,
-                (atom.original_fragment or f"{atom.target}{atom.relation}")
-                .strip(),
+            dict.fromkeys(
+                _missing_description(
+                    atom.answer_shape,
+                    (
+                        atom.original_fragment
+                        or f"{atom.target}{atom.relation}"
+                    ).strip(),
+                )
+                for atom in plan.atoms
+                if atom.atom_id in missing_atom_ids
             )
-            for atom in plan.atoms
-            if atom.atom_id in missing_atom_ids
         )
         if claims:
             lines.insert(0, "当前资料能够确认的是：")
