@@ -25,9 +25,13 @@ from rag_app.application.retrieval.adaptive import (
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
-from rag_app.application.retrieval.evidence import EvidenceAssembler
+from rag_app.application.retrieval.evidence import (
+    EvidenceAssembler,
+    requires_complete_evidence_group,
+)
 from rag_app.application.retrieval.evidence_groups import (
     GroupCandidate,
+    build_catalog_evidence_group,
     build_evidence_groups,
     pack_evidence_groups_with_diagnostics,
     rank_evidence_groups,
@@ -1433,6 +1437,54 @@ class RetrievalService:
             if document.document_id in visible_ids
         )
         matched = catalog_matches(analysis.normalized_query, visible)
+        if matched and self._policy.evidence_group_mode != "off":
+            group_started = perf_counter()
+            catalog_groups = tuple(
+                build_catalog_evidence_group(
+                    document,
+                    index_revision_id=snapshot.revision.index_revision_id,
+                )
+                for document in matched
+            )
+            active = self._policy.evidence_group_mode == "active"
+            self._record(
+                trace_id,
+                "evidence_group_build",
+                {
+                    "pass": "catalog",
+                    "mode": self._policy.evidence_group_mode,
+                    "group_count": len(catalog_groups),
+                    "group_type_counts": (
+                        ("CATALOG_ENTRY", len(catalog_groups)),
+                    ),
+                    "complete_group_count": len(catalog_groups),
+                    "incomplete_group_count": 0,
+                    "members_per_group": tuple(0 for _ in catalog_groups),
+                    "build_elapsed_ms": round(
+                        (perf_counter() - group_started) * 1000, 3
+                    ),
+                    "selected_group_count": len(catalog_groups)
+                    if active
+                    else 0,
+                    "group_diagnostics": tuple(
+                        {
+                            "group_id": group.group_id,
+                            "group_type": "CATALOG_ENTRY",
+                            "member_count": 0,
+                            "complete": True,
+                            "completeness_reason": "COMPLETE",
+                            "best_rank": 0,
+                            "selected": active,
+                            "drop_reason": None if active else "SHADOW_ONLY",
+                            "token_cost": group.token_cost,
+                        }
+                        for group in catalog_groups
+                    ),
+                },
+            )
+            _finish_timing(
+                stage_timings, "catalog_evidence_group", group_started
+            )
         citations = tuple(_catalog_citation(document) for document in matched)
         if len(matched) == 1:
             status = ConfidenceStatus.ANSWERABLE
@@ -1995,13 +2047,20 @@ class RetrievalService:
                 )
                 selected_groups = packing.selected
                 rejected = packing.rejected
+                selected_members = (
+                    _flatten_evidence_groups(selected_groups)
+                    if requires_complete_evidence_group(
+                        analysis.semantics.answer_type
+                    )
+                    else ()
+                )
                 expansion = ExpansionOutcome(
                     tuple(
                         {
                             item.hydrated.chunk.chunk_id: item
                             for item in (
                                 *expansion.candidates,
-                                *_flatten_evidence_groups(selected_groups),
+                                *selected_members,
                             )
                         }.values()
                     ),

@@ -69,6 +69,15 @@ _STRUCTURAL_ANSWER_TYPES = frozenset(
         RequestedAnswerType.PROCEDURE,
     }
 )
+
+
+def requires_complete_evidence_group(
+    answer_type: RequestedAnswerType,
+) -> bool:
+    """判断答案形状是否必须由闭合结构组支持。"""
+    return answer_type in _STRUCTURAL_ANSWER_TYPES
+
+
 _DOCUMENT_METADATA_KEYS = frozenset(
     {
         "allowed_groups",
@@ -195,8 +204,9 @@ class EvidenceAssembler:
         )
         structural_group_required = groups is not None and (
             context is None
-            or context.analysis.semantics.answer_type
-            in _STRUCTURAL_ANSWER_TYPES
+            or requires_complete_evidence_group(
+                context.analysis.semantics.answer_type
+            )
         )
         if structural_group_required:
             supported = tuple(
