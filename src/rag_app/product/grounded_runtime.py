@@ -552,7 +552,7 @@ class ProductGroundedModel:
                     messages,
                     operation="query.interpret",
                     max_output_tokens=384,
-                    timeout_seconds=6.0,
+                    timeout_seconds=12.0,
                 )
             calls = (completion.call,)
             payload = _AdaptivePlanPayload.model_validate(

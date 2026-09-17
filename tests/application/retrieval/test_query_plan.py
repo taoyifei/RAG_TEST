@@ -112,7 +112,7 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
         f"A{index}" for index in range(1, len(parts) + 1)
     )
     assert tuple(atom.answer_shape.value for atom in outcome.atoms) == shapes
-    assert observed_calls[0]["timeout_seconds"] == 6.0
+    assert observed_calls[0]["timeout_seconds"] == 12.0
     assert observed_calls[0]["max_output_tokens"] == 384
 
 
