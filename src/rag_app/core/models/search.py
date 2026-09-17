@@ -52,6 +52,9 @@ class RetrievalPolicy(FrozenModel):
     unit_atom_seed_limit: StrictInt = Field(default=2, gt=0, le=8)
     unit_root_weight: float = Field(default=1.0, gt=0)
     unit_atom_total_weight: float = Field(default=1.0, gt=0)
+    atom_group_strong_anchor_threshold: float = Field(default=0.65, gt=0, le=1)
+    atom_group_weak_anchor_threshold: float = Field(default=0.45, gt=0, le=1)
+    atom_group_max_per_atom: StrictInt = Field(default=4, gt=0, le=8)
     rrf_k: StrictInt = Field(default=60, gt=0)
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
     evidence_group_mode: Literal["off", "shadow", "active"] = "off"
@@ -108,6 +111,11 @@ class RetrievalPolicy(FrozenModel):
 
     @model_validator(mode="after")
     def _validate_dense_requirements(self) -> Self:
+        if (
+            self.atom_group_weak_anchor_threshold
+            > self.atom_group_strong_anchor_threshold
+        ):
+            raise ValueError("Atom 结构组弱锚点阈值不能超过强锚点阈值。")
         if (
             self.unit_root_seed_limit + 4 * self.unit_atom_seed_limit
             > self.unit_fusion_candidate_limit

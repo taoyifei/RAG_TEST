@@ -26,6 +26,11 @@ from rag_app.application.retrieval.adaptive import (
     reasoning_effort,
 )
 from rag_app.application.retrieval.analyzer import QueryAnalyzer
+from rag_app.application.retrieval.atom_group_alignment import (
+    AlignmentQualification,
+    AtomGroupAlignment,
+    align_atom_to_groups,
+)
 from rag_app.application.retrieval.confidence import ConfidenceEvaluator
 from rag_app.application.retrieval.dense import DenseChannel
 from rag_app.application.retrieval.evidence import (
@@ -48,6 +53,10 @@ from rag_app.application.retrieval.lexical import LexicalChannel
 from rag_app.application.retrieval.neighbors import (
     ExpansionOutcome,
     NeighborExpander,
+)
+from rag_app.application.retrieval.per_atom_correction import (
+    PerAtomCorrectionOutcome,
+    correct_per_atom,
 )
 from rag_app.application.retrieval.planner import QueryPlanner
 from rag_app.application.retrieval.query_plan_retrieval import (
@@ -119,6 +128,7 @@ from rag_app.core.models import (
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query import RequestedAnswerType
 from rag_app.core.models.query_plan import (
+    ATOM_GROUP_ALIGNMENT_REVISION,
     CORRECTIVE_RETRIEVAL_REVISION,
     EVIDENCE_GROUP_SCHEMA_REVISION,
     GROUNDED_CLAIM_SCHEMA_REVISION,
@@ -189,87 +199,39 @@ _CONFLICT_QUANTITY = re.compile(
     r"(?P<unit>％|%|毫秒|分钟|小时|秒|天|日|周|个月|月|年|"
     r"万元|亿元|元|人|次|个|件|项)"
 )
-_MIN_TARGET_ANCHOR_CHARS = 4
 
 
-def _scope_enum_candidates_to_target_group(
-    atom: QueryAtom, items: tuple[EvidenceItem, ...]
-) -> tuple[EvidenceItem, ...]:
-    """有精确目标锚点时，只保留同一结构组的列举候选。"""
-    if atom.answer_shape is not AtomAnswerShape.ENUMERATION:
-        return items
-
-    def normalized(value: str) -> str:
-        return "".join(unicodedata.normalize("NFKC", value).casefold().split())
-
-    target = normalized(atom.target)
-    if len(target) < _MIN_TARGET_ANCHOR_CHARS:
-        return items
-    anchors = tuple(
-        item for item in items if target in normalized(item.citation_text)
-    )
-    if not anchors:
-        return items
-    anchor_keys = {
-        (item.document_version_id, item.chunk_id, item.citation_text)
-        for item in anchors
-    }
-    anchor_groups = {
-        (item.document_version_id, group_id)
-        for item in anchors
-        if isinstance(
-            group_id := dict(item.metadata).get("evidence_group_id"), str
-        )
-    }
-    return tuple(
-        item
-        for item in items
-        if (
-            item.document_version_id,
-            item.chunk_id,
-            item.citation_text,
-        )
-        in anchor_keys
-        or (
-            item.document_version_id,
-            dict(item.metadata).get("evidence_group_id"),
-        )
-        in anchor_groups
-    )
-
-
-def _atom_scoped_candidates(
-    atom_id: str,
+def _atom_scoped_candidates(  # noqa: PLR0913
+    atom: QueryAtom,
     candidates: tuple[RankedChunk, ...],
     groups: tuple[GroupCandidate, ...],
     links: tuple[AtomCandidateLink, ...],
     *,
+    policy: RetrievalPolicy,
     multi_atom: bool,
-) -> tuple[tuple[RankedChunk, ...], tuple[GroupCandidate, ...]]:
-    """按初召回来源隔离原子，同时保留其已闭合的结构成员。"""
-    if not multi_atom:
-        return candidates, groups
-    seeds = {link.chunk_id for link in links if link.atom_id == atom_id}
-    if not seeds:
-        return (), ()
-    scoped: dict[str, RankedChunk] = {
-        item.hydrated.chunk.chunk_id: item
-        for item in candidates
-        if item.hydrated.chunk.chunk_id in seeds
-        or seeds.intersection(item.expansion_seed_ids)
+) -> tuple[
+    tuple[RankedChunk, ...],
+    tuple[GroupCandidate, ...],
+    tuple[AtomGroupAlignment, ...],
+]:
+    """按目标和结构身份锁组；Root 强锚点可补足 Atom 召回失误。"""
+    if not groups and not multi_atom:
+        return candidates, (), ()
+    alignments = align_atom_to_groups(atom, groups, links, policy)
+    selected_ids = {
+        alignment.group_id
+        for alignment in alignments
+        if alignment.qualification is not AlignmentQualification.REJECTED
     }
     selected_groups = tuple(
-        group
-        for group in groups
-        if any(
-            member.hydrated.chunk.chunk_id in scoped
-            for member in group.members
-        )
-    )
-    for group in selected_groups:
-        for member in group.members:
-            scoped.setdefault(member.hydrated.chunk.chunk_id, member)
-    return tuple(scoped.values()), selected_groups
+        group for group in groups if group.group_id in selected_ids
+    )[: policy.atom_group_max_per_atom]
+    scoped = {
+        member.hydrated.chunk.chunk_id: member
+        for group in selected_groups
+        for member in group.members
+    }
+    return tuple(scoped.values()), selected_groups, alignments
 
 
 def _numeric_conflict(
@@ -434,6 +396,7 @@ class RetrievalService:
                 ),
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
                 "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
+                "atom_group_alignment_revision": ATOM_GROUP_ALIGNMENT_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
                 ),
@@ -1345,35 +1308,26 @@ class RetrievalService:
             rerank_mode=reranked.mode,
         )
         correction_started = perf_counter()
-        correction_triggered = atom_mode and any(
+        correction_triggered = any(
             item.status in {AtomStatus.PARTIAL, AtomStatus.MISSING}
             for item in atom_matrix.atoms
         )
-        added_chunk_count = 0
-        added_group_count = 0
-        anchor_document_id: str | None = None
-        anchor_section_id: str | None = None
+        correction_outcome: PerAtomCorrectionOutcome | None = None
         if correction_triggered:
-            (
-                corrected,
-                corrected_groups,
-                added_chunk_count,
-                anchor_document_id,
-                anchor_section_id,
-            ) = self._corrective_retrieval(
+            correction_outcome = self._corrective_retrieval(
                 snapshot=snapshot,
                 candidates=selection.expansion.candidates,
                 groups=selection.groups,
                 links=atom_links,
                 matrix=atom_matrix,
+                query_plan=query_plan,
             )
-            added_group_count = len(corrected_groups) - len(selection.groups)
-            if added_chunk_count:
+            if correction_outcome.added_chunk_count:
                 atom_matrix, atom_evidence, atom_coverage = self._ground_atoms(
                     request=request,
                     query_plan=query_plan,
-                    candidates=corrected,
-                    groups=corrected_groups,
+                    candidates=correction_outcome.candidates,
+                    groups=correction_outcome.groups,
                     links=atom_links,
                     selected_slot=selected_slot,
                     snapshot=snapshot,
@@ -1383,6 +1337,10 @@ class RetrievalService:
         _finish_timing(
             stage_timings, "corrective_retrieval", correction_started
         )
+        correction_by_atom = {
+            item.atom_id: item
+            for item in correction_outcome.atom_traces
+        } if correction_outcome is not None else {}
         for coverage in atom_coverage:
             self._record(
                 trace_id,
@@ -1401,18 +1359,34 @@ class RetrievalService:
                 "corrective_retrieval",
                 {
                     "atom_id": coverage.atom_id,
-                    "correction_triggered": correction_triggered,
+                    "correction_triggered": (
+                        coverage.atom_id in correction_by_atom
+                    ),
                     "correction_reason": (
-                        "PARTIAL_OR_MISSING_WITH_ANCHOR"
-                        if anchor_document_id
-                        else "NO_STRONG_ANCHOR"
-                        if correction_triggered
+                        correction_by_atom[coverage.atom_id].reason_code
+                        if coverage.atom_id in correction_by_atom
                         else "NOT_NEEDED"
                     ),
-                    "anchor_document_id": anchor_document_id,
-                    "anchor_section_id": anchor_section_id,
-                    "added_chunk_count": added_chunk_count,
-                    "added_group_count": added_group_count,
+                    "anchor_document_id": (
+                        correction_by_atom[coverage.atom_id].anchor_document_id
+                        if coverage.atom_id in correction_by_atom
+                        else None
+                    ),
+                    "anchor_section_id": (
+                        correction_by_atom[coverage.atom_id].anchor_section_id
+                        if coverage.atom_id in correction_by_atom
+                        else None
+                    ),
+                    "added_chunk_count": (
+                        correction_by_atom[coverage.atom_id].added_chunk_count
+                        if coverage.atom_id in correction_by_atom
+                        else 0
+                    ),
+                    "added_group_count": (
+                        correction_outcome.added_group_count
+                        if correction_outcome is not None
+                        else 0
+                    ),
                     "post_status": coverage.status.value,
                     "elapsed_ms": round(correction_elapsed_ms, 3),
                 },
@@ -2225,6 +2199,7 @@ class RetrievalService:
                 "answer_generation_policy": "model-grounded-claims-v2",
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
                 "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
+                "atom_group_alignment_revision": ATOM_GROUP_ALIGNMENT_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
                 ),
@@ -2613,14 +2588,20 @@ class RetrievalService:
                 tuple[tuple[object, ...], ...],
             ]
         ] = []
+        alignments_by_atom: dict[str, tuple[AtomGroupAlignment, ...]] = {}
         for atom in query_plan.atoms:
-            atom_candidates, atom_groups = _atom_scoped_candidates(
-                atom.atom_id,
+            atom_candidates, atom_groups, alignments = _atom_scoped_candidates(
+                atom,
                 candidates,
                 groups,
                 links,
-                multi_atom=len(query_plan.atoms) > 1,
+                policy=self._policy,
+                multi_atom=(
+                    len(query_plan.atoms) > 1
+                    or self._policy.evidence_group_mode == "active"
+                ),
             )
+            alignments_by_atom[atom.atom_id] = alignments
             atom_analysis = self._analysis_for_atom(request, atom)
             atom_plan = self._planner.plan(
                 atom_analysis,
@@ -2643,12 +2624,9 @@ class RetrievalService:
                     selected_vector_space=vector_space,
                 ),
             )
-            scoped_items = _scope_enum_candidates_to_target_group(
-                atom,
-                (
-                    *selection.answer_support_set,
-                    *selection.model_evidence_candidates,
-                ),
+            scoped_items = (
+                *selection.answer_support_set,
+                *selection.model_evidence_candidates,
             )
             allowed_keys = {identity(item) for item in scoped_items}
             direct_keys = tuple(
@@ -2769,6 +2747,22 @@ class RetrievalService:
                         ),
                     )
                 )
+            if self._policy.evidence_group_mode == "active" and groups:
+                strong_group_ids = {
+                    alignment.group_id
+                    for alignment in alignments_by_atom[atom.atom_id]
+                    if alignment.qualification is AlignmentQualification.STRONG
+                }
+                checks.append(
+                    (
+                        "GROUP_ANCHORED",
+                        any(
+                            dict(item.metadata).get("evidence_group_id")
+                            in strong_group_ids
+                            for item in direct
+                        ),
+                    )
+                )
             conflicting = _numeric_conflict(atom, direct)
             status = (
                 AtomStatus.CONTRADICTORY
@@ -2856,7 +2850,7 @@ class RetrievalService:
             tuple(coverages),
         )
 
-    def _corrective_retrieval(
+    def _corrective_retrieval(  # noqa: PLR0913
         self,
         *,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -2864,93 +2858,18 @@ class RetrievalService:
         groups: tuple[GroupCandidate, ...],
         links: tuple[AtomCandidateLink, ...],
         matrix: AtomSupportMatrix,
-    ) -> tuple[
-        tuple[RankedChunk, ...],
-        tuple[GroupCandidate, ...],
-        int,
-        str | None,
-        str | None,
-    ]:
-        """只从已命中版本的一个章节回读，最多补十二 Chunk 和四组。"""
-        missing_ids = {
-            atom.atom_id
-            for atom in matrix.atoms
-            if atom.status in {AtomStatus.PARTIAL, AtomStatus.MISSING}
-        }
-        ranked = {item.hydrated.chunk.chunk_id: item for item in candidates}
-        anchor = next(
-            (
-                ranked[link.chunk_id]
-                for link in links
-                if link.atom_id in missing_ids and link.chunk_id in ranked
-            ),
-            None,
-        )
-        if anchor is None:
-            return candidates, groups, 0, None, None
-        chunk = anchor.hydrated.chunk
-        ids = self._source.section_chunk_ids(
-            snapshot,
-            document_version_id=chunk.version.document_version_id,
-            section_id=chunk.section_id,
-            limit=13,
-        )
-        missing = tuple(chunk_id for chunk_id in ids if chunk_id not in ranked)[
-            :12
-        ]
-        if not missing:
-            return (
-                candidates,
-                groups,
-                0,
-                chunk.version.document_id,
-                chunk.section_id,
-            )
-        hydrated = self._source.hydrate_chunks(snapshot, missing)
-        if len(hydrated) != len(missing) or any(
-            item.chunk.version.document_version_id
-            != chunk.version.document_version_id
-            or item.chunk.version.document_id != chunk.version.document_id
-            or item.chunk.section_id != chunk.section_id
-            for item in hydrated
-        ):
-            raise IndexCorrupt(
-                "闭库纠错回读跨越锚点文档或章节。",
-                stage="retrieval.corrective",
-            )
-        base_rank = max((item.fusion_rank for item in candidates), default=0)
-        added = tuple(
-            RankedChunk(
-                hydrated=item,
-                fusion_rank=base_rank + index,
-                expansion_reason="closed_correction",
-                expansion_seed_ids=(chunk.chunk_id,),
-            )
-            for index, item in enumerate(hydrated, 1)
-        )
-        corrected = (*candidates, *added)
-        rebuilt = rank_evidence_groups(
-            build_evidence_groups(
-                corrected,
-                max_groups=self._policy.rerank_candidate_limit,
-                max_member_chunks=self._policy.group_member_chunk_limit,
-                rerank_text_char_limit=self._policy.rerank_text_char_limit,
-            )
-        )
-        existing = {group.group_id for group in groups}
-        additions = tuple(
-            group
-            for group in rebuilt
-            if group.group_id not in existing
-            and group.group.document_version_id
-            == chunk.version.document_version_id
-        )[:4]
-        return (
-            corrected,
-            (*groups, *additions),
-            len(added),
-            chunk.version.document_id,
-            chunk.section_id,
+        query_plan: QueryPlan,
+    ) -> PerAtomCorrectionOutcome:
+        """委托一次按 Atom 的结构纠错，不执行全章节回读。"""
+        return correct_per_atom(
+            source=self._source,
+            snapshot=snapshot,
+            candidates=candidates,
+            groups=groups,
+            links=links,
+            matrix=matrix,
+            query_plan=query_plan,
+            policy=self._policy,
         )
 
     def _rank_and_select(  # noqa: PLR0913, PLR0915
@@ -3089,6 +3008,7 @@ class RetrievalService:
             source_qualifier=analysis.semantics.source_qualifier,
         )
         selected_groups: tuple[GroupCandidate, ...] = ()
+        correction_groups: tuple[GroupCandidate, ...] = ()
         if self._policy.evidence_group_mode != "off":
             group_started = perf_counter()
             structural = self._close_structural_context(
@@ -3122,6 +3042,10 @@ class RetrievalService:
                     per_section_cap=self._policy.per_section_cap,
                 )
                 selected_groups = packing.selected
+                correction_groups = (
+                    *packing.selected,
+                    *packing.incomplete,
+                )
                 rejected = packing.rejected
                 selected_members = (
                     _flatten_evidence_groups(selected_groups)
@@ -3337,7 +3261,7 @@ class RetrievalService:
             evidence_decisions=evidence_selection.rejected_candidate_reasons,
             ambiguous_support=evidence_selection.ambiguous,
             confidence=confidence,
-            groups=selected_groups,
+            groups=correction_groups,
         )
 
     def _validate_cached_sources(

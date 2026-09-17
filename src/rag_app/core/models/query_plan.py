@@ -14,10 +14,11 @@ from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v2"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
+ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v1"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v3"
 NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v2"
-CORRECTIVE_RETRIEVAL_REVISION = "wb08r-closed-correction-v1"
+CORRECTIVE_RETRIEVAL_REVISION = "wb08r-per-atom-correction-v2"
 _MAX_ATOMS = 4
 ReasoningEffortValue = Literal["DIRECT", "ASSISTED", "DEEP"]
 

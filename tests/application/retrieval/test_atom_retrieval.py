@@ -7,11 +7,13 @@ from types import MethodType
 
 from rag_app.application.answering.grounded import GroundedOutcome
 from rag_app.application.retrieval.adaptive import AdaptivePlanOutcome
+from rag_app.application.retrieval.atom_group_alignment import (
+    AlignmentQualification,
+)
 from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.service import (
     _atom_scoped_candidates,
     _numeric_conflict,
-    _scope_enum_candidates_to_target_group,
 )
 from rag_app.application.revision_builder import IngestionDocument
 from rag_app.composition.p07_runtime import build_p07_runtime
@@ -24,6 +26,7 @@ from rag_app.core.models import (
     GroupSourceMap,
     KnowledgeBaseScope,
     RankedChunk,
+    RetrievalPolicy,
     SearchRequest,
 )
 from rag_app.core.models.query_plan import (
@@ -101,69 +104,114 @@ def test_atom_grounding_uses_own_hits_and_closed_group_members() -> None:
     candidates = (first, second, corrected)
     groups = (first_group, second_group)
 
-    scoped_first, groups_first = _atom_scoped_candidates(
-        "A1", candidates, groups, links, multi_atom=True
+    first_atom = QueryAtom(
+        atom_id="A1",
+        target="甲",
+        relation="提交材料",
+        answer_shape=AtomAnswerShape.FACT,
     )
-    scoped_second, groups_second = _atom_scoped_candidates(
-        "A2", candidates, groups, links, multi_atom=True
+    second_atom = first_atom.model_copy(
+        update={"atom_id": "A2", "target": "乙", "relation": "审核材料"}
+    )
+    scoped_first, groups_first, alignment_first = _atom_scoped_candidates(
+        first_atom,
+        candidates,
+        groups,
+        links,
+        policy=RetrievalPolicy(),
+        multi_atom=True,
+    )
+    scoped_second, groups_second, _alignment_second = _atom_scoped_candidates(
+        second_atom,
+        candidates,
+        groups,
+        links,
+        policy=RetrievalPolicy(),
+        multi_atom=True,
     )
 
     assert {item.hydrated.chunk.chunk_id for item in scoped_first} == {
         first.hydrated.chunk.chunk_id,
         first_member.hydrated.chunk.chunk_id,
-        corrected.hydrated.chunk.chunk_id,
     }
+    assert corrected not in scoped_first
     assert groups_first == (first_group,)
+    assert alignment_first[0].qualification is AlignmentQualification.STRONG
     assert scoped_second == (second,)
     assert groups_second == (second_group,)
     assert _atom_scoped_candidates(
-        "A3", candidates, groups, links, multi_atom=True
-    ) == ((), ())
+        second_atom.model_copy(update={"atom_id": "A3", "target": "丙"}),
+        candidates,
+        groups,
+        links,
+        policy=RetrievalPolicy(),
+        multi_atom=True,
+    )[:2] == ((), ())
 
 
 def test_enumeration_target_anchor_excludes_sibling_structure_groups() -> None:
-    """动态目标只闭合当前行，不能借同章节相邻类别作成员。"""
+    """目标无精确子串时，近似锚点只能锁定对应类别。"""
 
-    def item(
-        number: int,
-        text: str,
-        group_id: str,
-        *,
-        document_number: int = 1,
-    ) -> EvidenceItem:
-        chunk = make_ranked_chunk(
-            number, text, document_number=document_number
-        ).hydrated.chunk
-        return EvidenceItem(
-            evidence_id=f"S{number}",
-            chunk_id=chunk.chunk_id,
-            citation_text=text,
-            source_label="合成清单",
-            source_spans=chunk.source_spans,
-            document_id=chunk.version.document_id,
-            document_version_id=chunk.version.document_version_id,
-            metadata={"evidence_group_id": group_id},
+    def group(number: int, text: str) -> GroupCandidate:
+        member = make_ranked_chunk(number, text)
+        chunk = member.hydrated.chunk
+        return GroupCandidate(
+            group=EvidenceGroup(
+                group_id=f"egrp_{number:032x}",
+                kind=EvidenceGroupKind.SECTION_GROUP,
+                document_id=chunk.version.document_id,
+                document_version_id=chunk.version.document_version_id,
+                index_revision_id=chunk.index_revision_id,
+                section_id=chunk.section_id,
+                display_name="合成清单",
+                member_chunk_ids=(chunk.chunk_id,),
+                member_source_maps=(
+                    GroupSourceMap(
+                        chunk_id=chunk.chunk_id,
+                        citation_text=text,
+                        source_spans=chunk.source_spans,
+                    ),
+                ),
+                member_ranks=(number,),
+                group_text_for_model=text,
+                complete=True,
+                token_cost=chunk.token_count,
+            ),
+            members=(member,),
+            rerank_text=text,
         )
 
-    evidence = (
-        item(1, "甲类研究包含条目一。", "G1"),
-        item(2, "条目二。", "G1"),
-        item(3, "乙类研究包含条目三。", "G2"),
-        item(4, "其他文档的条目。", "G1", document_number=2),
+    groups = (
+        group(1, "甲类研究包含条目一。"),
+        group(2, "乙类研究包含条目三。"),
     )
     atom = QueryAtom(
         atom_id="A1",
         target="甲类研究项目",
-        relation="类型",
+        relation="包含",
         answer_shape=AtomAnswerShape.ENUMERATION,
     )
-    anchored = atom.model_copy(update={"target": "甲类研究"})
-
-    assert _scope_enum_candidates_to_target_group(anchored, evidence) == (
-        evidence[0],
-        evidence[1],
+    scoped, selected, alignments = _atom_scoped_candidates(
+        atom,
+        tuple(member for group_item in groups for member in group_item.members),
+        groups,
+        (),
+        policy=RetrievalPolicy(),
+        multi_atom=True,
     )
-    assert _scope_enum_candidates_to_target_group(atom, evidence) == evidence
+
+    assert len(scoped) == 1
+    assert selected == groups[:1]
+    assert alignments[0].qualification is AlignmentQualification.STRONG
+    assert alignments[1].qualification is AlignmentQualification.REJECTED
+    assert _atom_scoped_candidates(
+        atom.model_copy(update={"target": "丙类器材"}),
+        tuple(member for group_item in groups for member in group_item.members),
+        groups,
+        (),
+        policy=RetrievalPolicy(),
+        multi_atom=True,
+    )[:2] == ((), ())
 
 
 def test_conflicting_source_values_require_same_target_relation_and_unit() -> (
