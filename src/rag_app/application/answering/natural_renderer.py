@@ -30,6 +30,17 @@ def _cited_text(claim: AnswerClaim) -> str:
     return f"{claim.text.strip()} {citations}"
 
 
+def _missing_description(shape: AtomAnswerShape, original: str) -> str:
+    """结构问题只说明未闭合的范围，避免重复整个用户问句。"""
+    if shape is AtomAnswerShape.ENUMERATION:
+        return "该主题的完整列表"
+    if shape is AtomAnswerShape.DUTIES:
+        return "该角色的全部职责"
+    if shape is AtomAnswerShape.PROCEDURE:
+        return "完整的步骤和顺序"
+    return original
+
+
 def _conflict_lines(
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
@@ -85,14 +96,24 @@ def render_natural_answer(
     by_id = {item.support_id: item for item in evidence}
     lines: list[str] = []
     represented_claim_ids: set[str] = set()
+    represented_facts: set[tuple[str, tuple[str, ...]]] = set()
     for atom in plan.atoms:
-        atom_claims = tuple(
-            item
-            for item in claims
-            if atom.atom_id in item.atom_ids
-            and item.claim_id not in represented_claim_ids
-        )
-        represented_claim_ids.update(item.claim_id for item in atom_claims)
+        atom_claims: list[ValidatedNaturalClaim] = []
+        for item in claims:
+            if (
+                atom.atom_id not in item.atom_ids
+                or item.claim_id in represented_claim_ids
+            ):
+                continue
+            fact_key = (
+                " ".join(item.claim.text.split()),
+                tuple(support.support_id for support in item.claim.supports),
+            )
+            represented_claim_ids.add(item.claim_id)
+            if fact_key in represented_facts:
+                continue
+            represented_facts.add(fact_key)
+            atom_claims.append(item)
         shape = atom.answer_shape
         if shape in {AtomAnswerShape.ENUMERATION, AtomAnswerShape.DUTIES}:
             lines.extend(
@@ -121,7 +142,11 @@ def render_natural_answer(
         return None
     if missing_atom_ids:
         missing = "；".join(
-            (atom.original_fragment or f"{atom.target}{atom.relation}").strip()
+            _missing_description(
+                atom.answer_shape,
+                (atom.original_fragment or f"{atom.target}{atom.relation}")
+                .strip(),
+            )
             for atom in plan.atoms
             if atom.atom_id in missing_atom_ids
         )

@@ -372,8 +372,34 @@ def test_incomplete_enumeration_remains_limited() -> None:
     assert outcome.atom_coverage == (("A1", "PARTIAL"),)
     assert outcome.answer is not None
     assert "现有资料没有明确说明" in outcome.answer
+    assert "完整列表" in outcome.answer
+    assert "归档的规定" not in outcome.answer
     assert generator.generate.call_count == 1
-    assert generator.generate.call_count == 1
+
+
+def test_renderer_deduplicates_same_fact_and_support() -> None:
+    evidence = _evidence("甲部门负责审核材料。")
+    plan = _plan("甲部门", shape=AtomAnswerShape.DUTIES)
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
+    generator = Mock()
+    draft = _draft(
+        (
+            _claim("C1", "甲部门负责审核材料。", "A1", "S1"),
+            _claim("C2", "甲部门负责审核材料。", "A1", "S1"),
+        ),
+        plan,
+    )
+    generator.generate.return_value = draft
+    generator.generate_stream.return_value = draft
+
+    emitted: list[object] = []
+    outcome = _answer(
+        generator, evidence, plan, matrix, on_claim=emitted.append
+    )
+
+    assert outcome.answer is not None
+    assert outcome.answer.count("甲部门负责审核材料。") == 1
+    assert len(emitted) == 1
 
 
 def test_partial_candidate_can_be_upgraded_only_after_local_validation() -> (

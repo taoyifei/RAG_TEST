@@ -2125,7 +2125,18 @@ class GroundedAnsweringService:
                     published.append(support_id)
         published_ids = tuple(dict.fromkeys(published))
         if on_claim is not None:
+            streamed_facts: set[tuple[str, tuple[str, ...]]] = set()
             for accepted_item in accepted:
+                fact_key = (
+                    " ".join(accepted_item.claim.text.split()),
+                    tuple(
+                        support.support_id
+                        for support in accepted_item.claim.supports
+                    ),
+                )
+                if fact_key in streamed_facts:
+                    continue
+                streamed_facts.add(fact_key)
                 _raise_if_cancelled(cancellation)
                 on_claim(accepted_item.claim)
         has_conflict = any(
