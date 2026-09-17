@@ -578,6 +578,40 @@ def test_multi_atom_stream_keeps_claims_private_until_final() -> None:
     assert outcome.repair_calls == 0
 
 
+def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
+    """多个子问题不能仅凭一条笼统事实被标记为全部已回答。"""
+    evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门", "乙部门")
+    matrix = _matrix(
+        plan,
+        (
+            (AtomStatus.SUPPORTED, (by_text["甲部门保存记录 14 天。"],)),
+            (AtomStatus.SUPPORTED, (by_text["乙部门审核记录 3 天。"],)),
+        ),
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            NaturalClaim(
+                claim_id="C1",
+                text="甲部门保存记录 14 天。",
+                atom_ids=("A1", "A2"),
+                support_ids=tuple(item.support_id for item in evidence),
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer(generator, evidence, plan, matrix)
+
+    assert outcome.answer is None
+    assert outcome.claim_rejection_codes == (
+        ("CLAIM_ATOM_RELATION_UNCERTIFIED", 1),
+    )
+    assert outcome.repair_calls == 0
+
+
 def test_procedure_renderer_uses_source_order() -> None:
     evidence = _evidence("先登记申请。", "再审核材料。")
     by_text = {item.citation_text: item.support_id for item in evidence}

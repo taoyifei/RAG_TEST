@@ -2190,6 +2190,12 @@ def _validated_natural_claim(
     """核对逐原子来源后复用既有事实与引用安全门。"""
     atoms = {atom.atom_id: atom for atom in plan.atoms}
     by_id = {item.support_id: item for item in evidence}
+    if len(natural.atom_ids) != 1:
+        raise ValidationFailed(
+            "一条自然事实只能证明一个可独立检索的 Atom。",
+            stage="answer.validate",
+            code="CLAIM_ATOM_RELATION_UNCERTIFIED",
+        )
     if (
         len(set(natural.atom_ids)) != len(natural.atom_ids)
         or len(set(natural.support_ids)) != len(natural.support_ids)

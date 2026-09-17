@@ -48,6 +48,22 @@ _MEDIA_TYPE = (
 )
 
 
+@pytest.mark.parametrize(
+    ("question", "navigation"),
+    (
+        ("办理申请要备哪些材料、走哪些步骤？", False),
+        ("申请阶段要提交什么材料？", False),
+        ("申请阶段应参考哪份材料？", True),
+        ("申请阶段有哪些文档可参考？", True),
+    ),
+)
+def test_document_navigation_excludes_required_input_materials(
+    question: str, navigation: bool
+) -> None:
+    """输入材料和办理步骤属于内容问答，文件身份才走目录。"""
+    assert is_navigation_query(question) is navigation
+
+
 def _documents(
     scope: KnowledgeBaseScope, titles: tuple[str, ...]
 ) -> tuple[IngestionDocument, ...]:
