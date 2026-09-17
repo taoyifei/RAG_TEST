@@ -37,12 +37,23 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
     citation = chunk.citation_text
     lines: list[str] = []
     fields: list[str] = []
-    title = metadata.get("document_title")
-    if not isinstance(title, str) or not title.strip():
-        title = candidate.hydrated.display_name
-    _append_field(
-        lines, fields, label="文档", raw=title, limit=240, citation=citation
+    title = _normalized(candidate.hydrated.display_name)[:240]
+    if title and title not in _normalized(citation[:_PREFIX_CHARACTER_LIMIT]):
+        lines.append(title)
+        fields.append("文档")
+    headings = tuple(
+        dict.fromkeys(
+            normalized
+            for part in chunk.heading_path[:6]
+            if (normalized := _normalized(part))
+        )
     )
+    heading = " / ".join(headings)
+    if heading and heading not in _normalized(
+        citation[:_PREFIX_CHARACTER_LIMIT]
+    ):
+        lines.append(heading)
+        fields.append("章节")
     _append_field(
         lines,
         fields,
@@ -69,21 +80,6 @@ def contextual_rerank_text(candidate: RankedChunk) -> ContextualTextViews:
             limit=600,
             citation=citation,
         )
-    headings = tuple(
-        dict.fromkeys(
-            normalized
-            for part in chunk.heading_path[:6]
-            if (normalized := _normalized(part))
-        )
-    )
-    _append_field(
-        lines,
-        fields,
-        label="章节",
-        raw=" > ".join(headings),
-        limit=600,
-        citation=citation,
-    )
     _append_field(
         lines,
         fields,
