@@ -1,10 +1,10 @@
 # WB08R-03 阶段问题记录（2026-09-17）
 
-## 状态与边界
+## 2026-09-17 暂停时的状态与边界（历史快照）
 
 - 实际起始提交：`6e979f624c639d4316657daa4f6585455090b528`，工作分支始终为 `codex/wb-08r-adaptive-rag`。
-- 用户已要求暂停继续改代码。本阶段尚未完成真实功能 Gate，`merge_allowed` 保持 `false`；未合入 `feature/wanshitong`。
-- 真实测试只使用 60 服务器候选服务 8289。18288 的生产镜像和服务未改动。当前 8289 镜像仍是 `0ebc6b9628a64cd910cb3c2d6f74e41cc4539273`，因此后续本地提交没有取得真实运行证据。
+- 用户当时要求暂停继续改代码；2026-09-18 已用 WB08R-03R 新 Prompt 恢复。本阶段仍未完成真实功能 Gate，`merge_allowed` 保持 `false`；未合入 `feature/wanshitong`。
+- 当时真实测试只使用 60 服务器候选服务 8289。18288 的生产镜像和服务未改动。当时 8289 镜像仍是 `0ebc6b9628a64cd910cb3c2d6f74e41cc4539273`，因此该时点的后续本地提交没有取得真实运行证据；最新候选身份见文末恢复记录。
 - 不在生产代码中加入评测问题、答案表、文档专用正则或 case ID 特判。一次针对成员归属问法的未提交规则已撤回，补丁保存在本机 `/tmp/wb08r03-uncommitted-membership-rule.patch`，未推送。
 
 ## 已观察到的问题
@@ -63,3 +63,7 @@
 - R4 本地改造把 Root/Atom 候选与 canonical EvidenceGroup 按目标、组类型、行标签、列表导语和结构身份对齐；无锚点不再退回整批证据。共享章节标题不能单独给相邻兄弟组强锚点；短目标共享两个尾字也不能构成强锚点。纠错改为每个缺项选一个已对齐组，只读取该组成员的 previous/next Chunk，跨文档、版本、章节、结构组和表格行的候选不进入证据；全请求仍最多 12 Chunk、4 新组。相邻类别、职责列表、表格行、流程、无精确子串、无锚点及 Root 补救均有虚构合成测试。相关定向门禁 `53 passed`，Ruff 和 `git diff --check` 通过。仍须用 Ownership-16 人工核查真实组归属；当前组内的语义关系只作为诊断信号，不能凭这一轮合成测试宣称真实串答已解决。R2 Gate 仍未通过，阶段保持 PAUSED。
 - R5 将模型输出缩为 `claims[{atom_id,text,support_ids}]`，服务端在逐条通过本地校验后分配 Claim ID、回填引用原文并计算 Coverage；一个 Claim 只对应一个 Atom，拒绝一条无依据 Claim 不会删除其他已通过 Claim。结构化输出使用 R1 已选的唯一 Schema 协议；JSON 格式错误不触发第二次完整生成。Repair 只为强证据却无已接受 Claim 的 Atom 发送小证据包，失败后保留已通过 Claim 的 LIMITED 答案。相邻的自然回答、Provider 和归属/纠错定向测试 `61 passed`，Ruff 与 `git diff --check` 通过；真实 Claims-16 尚未运行，不能声称校验误拒或串答已解决。
 - 扩展检查中的 `test_product_api_real_loopback_grounded_qa_and_trace` 返回 `PROVIDER_UNAVAILABLE`，在只读归档的 R5 前提交 `7dddf6a` 上同样复现，属于当前环境/既有集成失败，未为通过门禁而改断言或关闭测试。`test_invalid_later_claim_is_buffered_and_never_publishes_a_prefix` 的既有断言预期两次 Provider Call，但同一基线实际只有一次；R5 将断言修正为不允许事实漂移触发第二次完整生成，未改该路径的生产行为。
+- R5 提交 `2b55116c98fbbef7c18954d61a7fb10a0c27609d` 已推送并在 8289 独立候选运行。Git 归档 SHA-256 `82fc51a8c64d7185c9c0ba1733f181edd24294ed6b3f0efeae8cd1b14627e1bb`，传输镜像归档 SHA-256 `e2a49c25d622a4d6c09df51a6302de2ea0bffa6a006bf3269b8dccd9bbdd49cb`；本机与 60 上的镜像 ID 都是 `sha256:df16e5f0d2ab2ea4a5913ce3e028e71f87edee0a93a5cb231385111d488086f1`。容器内 `SOURCE_REVISION` 与提交一致，QueryPlan/Claim Schema 分别为 v2/v4，候选健康检查 200，`response_format` 与 no-thinking 显式开启。只重建 8289 的 `wanshitong-wb08r01-app`，18288 未改动且只读健康检查为 200。
+- 该精确版本的 Terminal-12 协议 Gate 通过：12/12 恰好一个 `Final`，无首事件超时、静默结束或传输重试；首阶段事件最晚 123.77 ms。10 条预期可回答中只有 5 条返回 `ANSWERABLE`，另 5 条安全拒答；2 条预期拒答均安全拒答。总时延 p50/p95 为 4.56/9.67 秒。公开引用中缺预期来源的 5 条均落在预期可回答但拒答的集合，不能把终态合同通过当成功能通过。本机安全结果：`evaluation/wanshitong/v2/results/wb08r03r-2b55116-terminal12.ndjson`；私有正文审阅文件保持未跟踪，不推送。
+- 同一精确版本的 Planner-24 记录完整 24/24，Planner 实际调用 22 次，Schema Fallback 6 次（5 次 5 秒 Provider 超时、1 次 `TARGET_NOT_IN_INPUT`），p50/p95 为 4.462/5.010 秒，Gate 失败。两原子成功调用常在 4.0～4.8 秒；Terminal-12 Trace 中 110/120 个 completion token 分别耗时 3.91/4.27 秒，说明当前模型生成量已贴近 5 秒硬预算。一次极小虚构 Schema 探测的亚秒延迟不能代表真实 Planner；不能靠切换同样曾超时的结构化协议或掩盖回退来报通过。脱敏 Planner 结果保存在本机 `/tmp/wb08r03r-planner24-2b55116-results.ndjson`。
+- Terminal-12 Trace 显示 5 条非预期拒答都没有在公开引用中命中预期文档，逐原子归属返回 `NO_ATOM_EVIDENCE`/`NO_QUALIFIED_ANCHOR`，未生成 Claim。部分全局候选有模型候选或一般 `source_hit`，但这些指标不代表目标关系或预期来源正确；相邻类别安全门不能为了提高回答率而打开无锚点的兄弟组。多轮短问的 ROOT 只保留短原问，Planner 对上下文目标的输出也不稳定（同一冻结问在 Planner-only 与端到端分别得到 2/1 Atom）；这是检索上下文和原子归属的系统问题，需先统一可信上下文表达与组所有权，再考虑扩大功能 Gate。候选 Trace 安全摘要在本机 `/tmp/wb08r03r-2b55116-terminal12-trace.json`。本次 12 条仅观察到 Planner 0～1、Reranker 1、完整 Generation 0～1、Repair 0；未触发 Claim 拒绝，不能证明 Claims-16 通过。因 Planner-24 Gate 失败，Ownership-16、Claims-16、完整 96 和 R6 时延 Gate 均未作为验收运行，阶段保持 PAUSED。

@@ -5,7 +5,7 @@
   "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
   "current_phase": "WB08R-03",
   "phase_status": "PAUSED",
-  "implementation_status": "wb08r03r_r2_planner24_failed_r3_r4_r5_synthetic_passed_real_gates_pending",
+  "implementation_status": "wb08r03r_r2_planner24_failed_r3_r4_r5_synthetic_passed_candidate_terminal_passed_functional_gate_failed",
   "merge_allowed": false,
   "dataset_revision": "wanshitong-v2-20260917",
   "wb08r01_verification": {
@@ -67,6 +67,28 @@
     },
     "r5_targeted_pytest": "61 passed (natural claims and nearest answer/retrieval tests)",
     "r5_real_candidate_verified": false,
+    "candidate_runtime_revision": "2b55116c98fbbef7c18954d61a7fb10a0c27609d",
+    "candidate_image_id": "sha256:df16e5f0d2ab2ea4a5913ce3e028e71f87edee0a93a5cb231385111d488086f1",
+    "candidate_exact_sha_verified": true,
+    "terminal12_latest": {
+      "count": 12,
+      "unique_final": 12,
+      "first_event_timeout": 0,
+      "expected_answer_refused": 5,
+      "total_p50_ms": 4556.865,
+      "total_p95_ms": 9669.29,
+      "gate": "terminal_contract_passed_functional_quality_failed"
+    },
+    "planner24_latest": {
+      "count": 24,
+      "planner_calls": 22,
+      "schema_fallbacks": 6,
+      "provider_timeouts": 5,
+      "target_anchor_failures": 1,
+      "p50_ms": 4462.005,
+      "p95_ms": 5010.41,
+      "gate": "failed"
+    },
     "remaining_gates": ["R2", "R3", "R4", "R5", "R6", "Planner-24", "Ownership-16", "Claims-16", "Full-96"]
   }
 }
