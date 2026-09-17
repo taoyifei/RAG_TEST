@@ -35,6 +35,7 @@ def _planner_response(
     atoms: list[dict[str, object]] | list[str],
     *,
     raw_content: str | None = None,
+    observed_calls: list[dict[str, object]] | None = None,
 ) -> object:
     payload = {
         "standalone_query": question,
@@ -46,7 +47,9 @@ def _planner_response(
     }
 
     class Adapter:
-        def complete(self, *_args: object, **_kwargs: object) -> object:
+        def complete(self, *_args: object, **kwargs: object) -> object:
+            if observed_calls is not None:
+                observed_calls.append(kwargs)
             return SimpleNamespace(
                 content=raw_content
                 if raw_content is not None
@@ -97,7 +100,8 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
         }
         for (target, relation), shape in zip(parts, shapes, strict=True)
     ]
-    model = _planner_response(question, atoms)
+    observed_calls: list[dict[str, object]] = []
+    model = _planner_response(question, atoms, observed_calls=observed_calls)
 
     outcome = model.plan_adaptive(  # type: ignore[union-attr]
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
@@ -108,6 +112,8 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
         f"A{index}" for index in range(1, len(parts) + 1)
     )
     assert tuple(atom.answer_shape.value for atom in outcome.atoms) == shapes
+    assert observed_calls[0]["timeout_seconds"] == 6.0
+    assert observed_calls[0]["max_output_tokens"] == 512
 
 
 def test_constraint_and_source_qualifier_are_preserved() -> None:

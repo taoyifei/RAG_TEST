@@ -503,7 +503,7 @@ class ProductGroundedModel:
         analysis: QueryAnalysis,
         effort: ReasoningEffort,
     ) -> AdaptivePlanOutcome:
-        """在同一模型连接上至多发一次有三秒超时的 JSON 规划请求。"""
+        """在同一模型连接上至多发一次有限超时的 JSON 规划请求。"""
         if effort is ReasoningEffort.DIRECT:
             return AdaptivePlanOutcome()
         if len(request.text) > _MAX_REWRITE_CHARS:
@@ -559,7 +559,7 @@ class ProductGroundedModel:
                     messages,
                     operation="query.interpret",
                     max_output_tokens=512,
-                    timeout_seconds=3.0,
+                    timeout_seconds=6.0,
                 )
             calls = (completion.call,)
             payload = _AdaptivePlanPayload.model_validate(
