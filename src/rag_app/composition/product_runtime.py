@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Generic, TypeVar, cast
+from typing import Generic, Literal, TypeVar, cast
 from urllib.parse import urlparse
 
 import httpx
@@ -196,6 +196,8 @@ class ProductRuntimeSettings:
     )
     local_ocr_model: str = "pp-ocrv5-server"
     local_ocr_timeout_seconds: float = 35.0
+    evidence_group_mode: Literal["off", "shadow", "active"] = "off"
+    contextual_rerank_mode: Literal["off", "active"] = "off"
 
     @classmethod
     def from_environment(cls) -> ProductRuntimeSettings:
@@ -225,6 +227,16 @@ class ProductRuntimeSettings:
         manifest = os.environ.get("RAG_COMPATIBILITY_MANIFEST")
         migrations = os.environ.get("RAG_MIGRATIONS_DIR")
         local_ocr_token = os.environ.get("RAG_OCR_API_TOKEN_FILE")
+        evidence_group_mode = os.environ.get("RAG_EVIDENCE_GROUP_MODE", "off")
+        contextual_rerank_mode = os.environ.get(
+            "RAG_CONTEXTUAL_RERANK_MODE", "off"
+        )
+        if evidence_group_mode not in {"off", "shadow", "active"}:
+            raise ValueError(
+                "RAG_EVIDENCE_GROUP_MODE 必须为 off/shadow/active。"
+            )
+        if contextual_rerank_mode not in {"off", "active"}:
+            raise ValueError("RAG_CONTEXTUAL_RERANK_MODE 必须为 off/active。")
         return cls(
             data_dir=Path(os.environ.get("RAG_DATA_DIR", ".data/product")),
             frontend_dir=frontend,
@@ -281,6 +293,12 @@ class ProductRuntimeSettings:
             local_ocr_model=os.environ.get("RAG_OCR_MODEL", "pp-ocrv5-server"),
             local_ocr_timeout_seconds=float(
                 os.environ.get("RAG_OCR_TIMEOUT_SECONDS", "35")
+            ),
+            evidence_group_mode=cast(
+                Literal["off", "shadow", "active"], evidence_group_mode
+            ),
+            contextual_rerank_mode=cast(
+                Literal["off", "active"], contextual_rerank_mode
             ),
         )
 
@@ -612,6 +630,8 @@ class ProductProfileResolver:
             [RetrievalProfileRevision, EgressPolicy], EgressPolicy
         ]
         | None = None,
+        evidence_group_mode: Literal["off", "shadow", "active"] = "off",
+        contextual_rerank_mode: Literal["off", "active"] = "off",
     ) -> None:
         """保存产品控制面。
 
@@ -626,6 +646,8 @@ class ProductProfileResolver:
             content_identity: PDF、图片 OCR 与图关系的统一内容身份。
             circuit_factory: 仅测试可注入的 Circuit 工厂。
             acceptance_egress_resolver: 受信任验收入口的有效累计授权解析器。
+            evidence_group_mode: 当前实例的结构组 off/shadow/active 开关。
+            contextual_rerank_mode: 当前实例的确定性重排上下文开关。
 
         Returns:
             无返回值。
@@ -647,6 +669,8 @@ class ProductProfileResolver:
         ] = {}
         self._circuit_factory = circuit_factory
         self._acceptance_egress_resolver = acceptance_egress_resolver
+        self._evidence_group_mode = evidence_group_mode
+        self._contextual_rerank_mode = contextual_rerank_mode
         self._controlled_scope: ContextVar[_ControlledPilotScope | None] = (
             ContextVar("product_controlled_pilot", default=None)
         )
@@ -1713,6 +1737,8 @@ class ProductProfileResolver:
                 "dense_semantic_enabled": bool(spaces),
                 "dense_semantic_calibration_state": readiness,
                 "dense_calibrated_vector_spaces": spaces,
+                "evidence_group_mode": self._evidence_group_mode,
+                "contextual_rerank_mode": self._contextual_rerank_mode,
             }
         )
         egress = _product_egress(profile, self._control)
@@ -2173,6 +2199,8 @@ def build_product_runtime(  # noqa: PLR0915
         content_identity=_content_identity,
         circuit_factory=circuit_factory,
         acceptance_egress_resolver=acceptance_egress_resolver,
+        evidence_group_mode=settings.evidence_group_mode,
+        contextual_rerank_mode=settings.contextual_rerank_mode,
     )
 
     def _status_overlay(status: SystemStatus) -> SystemStatus:

@@ -86,8 +86,7 @@ def _paragraph(text: str) -> str:
     return f"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"
 
 
-def test_document_metadata_enters_search_views_without_changing_citation(
-) -> None:
+def test_existing_search_views_reuse_title_without_metadata_reindex() -> None:
     document_ir = parse_package(
         build_package(_paragraph("申请人应在三个工作日内提交材料。")),
         name="申请指南.docx",
@@ -110,12 +109,12 @@ def test_document_metadata_enters_search_views_without_changing_citation(
     assert contextual.citation_text == baseline.citation_text
     assert contextual.source_spans == baseline.source_spans
     assert contextual.content_sha256 == baseline.content_sha256
-    assert "文档：申请指南" in contextual.embedding_text
-    assert "部门：公共服务部" in contextual.embedding_text
-    assert "分类：办事服务 > 材料办理" in contextual.embedding_text
-    assert "部门：公共服务部" not in contextual.citation_text
-    assert "公共服务部" in contextual.lexical_text
-    assert "办事服务" in contextual.lexical_text
+    assert contextual.embedding_text == baseline.embedding_text
+    assert contextual.lexical_text == baseline.lexical_text
+    assert "文档：申请指南.docx" in contextual.embedding_text
+    assert "公共服务部" not in contextual.embedding_text
+    assert "办事服务" not in contextual.lexical_text
+    assert dict(contextual.metadata)["department_name"] == "公共服务部"
 
     analyzer = DeterministicCjkBigramAnalyzer()
     with sqlite3.connect(":memory:") as connection:
@@ -127,24 +126,27 @@ def test_document_metadata_enters_search_views_without_changing_citation(
             (
                 (
                     1,
-                    analyzer.analyze_document(baseline.lexical_text).fts_index_text,
+                    analyzer.analyze_document(
+                        baseline.lexical_text
+                    ).fts_index_text,
                 ),
                 (
                     2,
-                    analyzer.analyze_document(contextual.lexical_text).fts_index_text,
+                    analyzer.analyze_document(
+                        contextual.lexical_text
+                    ).fts_index_text,
                 ),
             ),
         )
-        for query in ("公共服务部", "办事服务"):
-            expression = build_fts_v2_query(analyzer.analyze_query(query))
-            matches = connection.execute(
-                "SELECT rowid FROM context_ab WHERE context_ab MATCH ?",
-                (expression,),
-            ).fetchall()
-            assert [row[0] for row in matches] == [2]
+        expression = build_fts_v2_query(analyzer.analyze_query("申请指南"))
+        matches = connection.execute(
+            "SELECT rowid FROM context_ab WHERE context_ab MATCH ?",
+            (expression,),
+        ).fetchall()
+        assert [row[0] for row in matches] == [1, 2]
 
 
-def test_context_prefix_is_bounded_and_index_semantics_are_versioned() -> None:
+def test_existing_prefix_is_bounded_and_index_identity_is_unchanged() -> None:
     document_ir = parse_package(
         build_package(_paragraph("按流程办理。")),
         name="流程.docx",
@@ -162,10 +164,10 @@ def test_context_prefix_is_bounded_and_index_semantics_are_versioned() -> None:
     chunk = _chunk(document_ir).chunks[0]
     prefix, citation = chunk.embedding_text.split("\n\n", 1)
 
-    assert len(prefix) <= 232
+    assert len(prefix) <= 160
     assert citation == chunk.citation_text
-    assert "部门：" in prefix
-    assert "分类：" in prefix
+    assert "部门：" not in prefix
+    assert "分类：" not in prefix
     chunker = DocxStructuralChunker()
     probe = chunker.token_counter.count("")
     old_fingerprint = canonical_sha256(
@@ -181,7 +183,7 @@ def test_context_prefix_is_bounded_and_index_semantics_are_versioned() -> None:
             },
         }
     )
-    assert chunker.fingerprint != old_fingerprint
+    assert chunker.fingerprint == old_fingerprint
 
 
 def test_all_p04_fixtures_respect_parser_boundary() -> None:

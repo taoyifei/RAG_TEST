@@ -49,7 +49,11 @@ class RetrievalPolicy(FrozenModel):
     fusion_candidate_limit: StrictInt = Field(default=48, gt=0, le=200)
     rrf_k: StrictInt = Field(default=60, gt=0)
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
-    group_rerank_enabled: bool = True
+    evidence_group_mode: Literal["off", "shadow", "active"] = "off"
+    contextual_rerank_mode: Literal["off", "active"] = "off"
+    retrieval_context_revision: str = Field(
+        default="wb08r-context-v1", min_length=1, max_length=64
+    )
     group_member_chunk_limit: StrictInt = Field(default=8, gt=0, le=16)
     group_retrieval_token_budget: StrictInt = Field(default=8192, gt=0, le=8192)
     group_retrieval_chunk_limit: StrictInt = Field(default=48, gt=0, le=48)

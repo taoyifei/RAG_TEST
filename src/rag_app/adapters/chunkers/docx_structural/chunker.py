@@ -65,7 +65,7 @@ class DocxStructuralChunker:
     descriptor = ComponentDescriptor(
         kind=ComponentKind.CHUNKER,
         name="docx-structural-v3",
-        version="3.3.0",
+        version="3.2.0",
         mode=ProviderMode.LOCAL,
         capabilities=ComponentCapabilities(),
     )
@@ -125,19 +125,12 @@ class DocxStructuralChunker:
         started = time.monotonic()
         planned = plan_sections(document_ir, self.policy)
         chunks: list[Chunk] = []
-        document_metadata = document_ir.metadata
-        metadata_title = dict(document_metadata).get("document_title")
-        document_title = (
-            metadata_title
-            if isinstance(metadata_title, str) and metadata_title.strip()
-            else document_ir.source.display_name
-        )
+        document_title = document_ir.source.display_name
         for section in planned:
             for run in section.runs:
                 packs = pack_run(
                     run,
                     document_title=document_title,
-                    document_metadata=document_metadata,
                     policy=self.policy,
                     token_counter=self.token_counter,
                 )
@@ -147,7 +140,6 @@ class DocxStructuralChunker:
                         context,
                         pack,
                         document_title,
-                        document_metadata,
                     )
                     for pack in packs
                 )
@@ -204,7 +196,6 @@ class DocxStructuralChunker:
         context: ChunkingContext,
         atoms: tuple[AtomicUnit, ...],
         document_title: str,
-        document_metadata: JsonObject,
     ) -> Chunk:
         rendered = render_atoms(atoms)
         first = atoms[0]
@@ -213,7 +204,6 @@ class DocxStructuralChunker:
             first,
             rendered.text,
             structural_context=pack_structural_context(atoms),
-            document_metadata=document_metadata,
         )
         lexical, identifiers = lexical_view(embedded)
         citation_count = self.token_counter.count(rendered.text)

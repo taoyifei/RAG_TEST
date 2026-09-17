@@ -2,27 +2,22 @@
 
 from __future__ import annotations
 
-from rag_app.adapters.providers.deterministic import (
-    LexicalOverlapRerankerAdapter,
-)
 from rag_app.application.retrieval.evidence_groups import (
     GroupCandidate,
     build_catalog_evidence_group,
     build_evidence_groups,
     pack_evidence_groups,
     pack_evidence_groups_with_diagnostics,
+    rank_evidence_groups,
 )
-from rag_app.application.retrieval.reranking import CircuitAwareReranker
 from rag_app.core.models import (
     ChunkRole,
     EvidenceGroupKind,
     RankedChunk,
-    RetrievalPolicy,
     SourceSpan,
     SourceSpanKind,
 )
 from rag_app.core.models.common import freeze_json_object
-from rag_app.core.policies import EgressPolicy
 from rag_app.core.ports.evidence_source import CatalogDocument
 from tests.application.retrieval.helpers import make_ranked_chunk
 
@@ -131,6 +126,34 @@ def test_table_row_group_keeps_header_row_label_cells_and_coordinates() -> None:
     assert "综合处" in group.rerank_text
     assert group.group.member_source_maps[1].citation_text == "申请 | 五日"
     assert len(group.group.member_source_maps[1].source_spans) == 3
+
+
+def test_unmarked_short_first_row_can_supply_column_headers() -> None:
+    header = _table_row(3, 0, ("事项", "时限"), header=False)
+    row = _table_row(4, 1, ("申请", "五日"), header=False)
+
+    group = _groups(row, header)[0]
+
+    assert group.complete
+    assert group.group.member_chunk_ids == (
+        header.hydrated.chunk.chunk_id,
+        row.hydrated.chunk.chunk_id,
+    )
+
+
+def test_unmarked_data_row_does_not_masquerade_as_header() -> None:
+    first = _table_row(
+        5,
+        0,
+        ("申请事项需要先提交完整的证明文件和申请表", "五日"),
+        header=False,
+    )
+    row = _table_row(6, 1, ("复核", "三日"), header=False)
+
+    group = _groups(row, first)[0]
+
+    assert not group.complete
+    assert "MISSING_TABLE_HEADER" in group.group.incomplete_reasons
 
 
 def test_contiguous_list_requires_intro_and_both_end_boundaries() -> None:
@@ -246,7 +269,8 @@ def test_catalog_group_only_metadata_and_standalone_paragraph() -> None:
             chunk_id=paragraph.hydrated.chunk.chunk_id,
             title="流程模板",
             metadata=freeze_json_object({"category_path": ["表单", "模板"]}),
-        )
+        ),
+        index_revision_id=paragraph.hydrated.chunk.index_revision_id,
     )
     assert catalog.group.kind is EvidenceGroupKind.CATALOG_ENTRY
     assert catalog.complete
@@ -256,31 +280,20 @@ def test_catalog_group_only_metadata_and_standalone_paragraph() -> None:
     assert "正文" not in catalog.rerank_text
 
 
-def test_group_reranker_orders_complete_groups_and_preserves_chunks() -> None:
+def test_group_order_reuses_member_rerank_rank_without_provider() -> None:
     unrelated = make_ranked_chunk(
         40, "通用说明。", neighbor_group_id="unrelated"
-    )
+    ).model_copy(update={"rerank_rank": 2, "rerank_score": 0.1})
     relevant = make_ranked_chunk(
         41, "办理时限为三日。", neighbor_group_id="relevant"
-    )
-    groups = _groups(unrelated, relevant)
-    result = CircuitAwareReranker(
-        LexicalOverlapRerankerAdapter()
-    ).rerank_groups(
-        "办理时限",
-        groups,
-        EgressPolicy(),
-        RetrievalPolicy(),
-        enabled=True,
-        result_limit=1,
-    )
+    ).model_copy(update={"rerank_rank": 1, "rerank_score": 0.9})
 
-    assert result.reason_code == "RERANK_EXECUTED"
-    assert len(result.groups) == 1
-    assert result.groups[0].group.member_chunk_ids == (
+    ranked = rank_evidence_groups(_groups(unrelated, relevant))
+
+    assert ranked[0].group.member_chunk_ids == (
         relevant.hydrated.chunk.chunk_id,
     )
-    assert result.groups[0].members[0].hydrated.chunk == relevant.hydrated.chunk
+    assert ranked[0].members[0].hydrated.chunk == relevant.hydrated.chunk
 
 
 def test_partial_section_falls_back_to_independent_paragraphs() -> None:
@@ -313,7 +326,7 @@ def test_partial_section_falls_back_to_independent_paragraphs() -> None:
     )
 
 
-def test_group_reranker_skips_incomplete_structure() -> None:
+def test_complete_group_orders_before_partial_structure() -> None:
     incomplete = _groups(
         make_ranked_chunk(
             60,
@@ -321,20 +334,27 @@ def test_group_reranker_skips_incomplete_structure() -> None:
             role=ChunkRole.LIST,
             neighbor_group_id="open-list",
             next_chunk_id=f"chunk_{61:032x}",
-        )
+        ).model_copy(update={"rerank_rank": 1})
     )[0]
     paragraph = _groups(make_ranked_chunk(62, "办理时限为三日。"))[0]
 
-    result = CircuitAwareReranker(
-        LexicalOverlapRerankerAdapter()
-    ).rerank_groups(
-        "办理时限",
-        (incomplete, paragraph),
-        EgressPolicy(),
-        RetrievalPolicy(),
-        enabled=True,
-        result_limit=2,
-    )
+    ranked = rank_evidence_groups((incomplete, paragraph))
 
     assert not incomplete.complete
-    assert result.groups == (paragraph,)
+    assert ranked == (paragraph, incomplete)
+
+
+def test_group_identity_changes_with_index_revision() -> None:
+    candidate = make_ranked_chunk(70, "同一来源。")
+    alternate_chunk = candidate.hydrated.chunk.model_copy(
+        update={"index_revision_id": f"irev_{'f' * 32}"}
+    )
+    alternate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(
+                update={"chunk": alternate_chunk}
+            )
+        }
+    )
+
+    assert _groups(candidate)[0].group_id != _groups(alternate)[0].group_id

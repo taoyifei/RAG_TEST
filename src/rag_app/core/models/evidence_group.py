@@ -8,7 +8,7 @@ from typing import Self
 from pydantic import Field, StrictInt, model_validator
 
 from rag_app.core.models.chunk import SourceSpan
-from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.common import FrozenModel, JsonObject
 
 
 class EvidenceGroupKind(StrEnum):
@@ -38,14 +38,20 @@ class EvidenceGroup(FrozenModel):
     kind: EvidenceGroupKind
     document_id: str = Field(pattern=r"^doc_[0-9a-f]{32}$")
     document_version_id: str = Field(pattern=r"^dver_[0-9a-f]{32}$")
+    index_revision_id: str = Field(pattern=r"^irev_[0-9a-f]{32}$")
     section_id: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
     heading_path: tuple[str, ...] = ()
     member_chunk_ids: tuple[str, ...] = ()
     member_source_maps: tuple[GroupSourceMap, ...] = ()
+    member_ranks: tuple[StrictInt, ...] = ()
     structural_coordinates: tuple[str, ...] = ()
+    group_text_for_model: str = Field(default="", repr=False)
+    group_text_for_rerank: str = Field(default="", repr=False)
     complete: bool
     incomplete_reasons: tuple[str, ...] = ()
     token_cost: StrictInt = Field(ge=0)
+    metadata: JsonObject = ()
     catalog_title: str | None = None
     category_path: tuple[str, ...] = ()
     reference_object: str | None = None
@@ -61,6 +67,8 @@ class EvidenceGroup(FrozenModel):
                 raise ValueError("Catalog 组必须保留标题。")
         elif not self.member_chunk_ids or mapped != self.member_chunk_ids:
             raise ValueError("证据组成员必须与原文映射一一对应。")
+        if len(self.member_ranks) != len(self.member_chunk_ids):
+            raise ValueError("成员排名必须与 Chunk 顺序一一对应。")
         if len(self.member_chunk_ids) != len(set(self.member_chunk_ids)):
             raise ValueError("证据组成员不能重复。")
         if self.complete and self.incomplete_reasons:

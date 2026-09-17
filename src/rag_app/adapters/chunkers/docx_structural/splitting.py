@@ -14,7 +14,6 @@ from rag_app.adapters.chunkers.docx_structural.atoms import (
 from rag_app.adapters.chunkers.docx_structural.context import embedding_text
 from rag_app.adapters.chunkers.docx_structural.rendering import render_fragments
 from rag_app.core.models import ChunkingPolicy, SourceSpanKind
-from rag_app.core.models.common import JsonObject
 from rag_app.core.ports import TokenCounterPort
 
 
@@ -22,7 +21,6 @@ def split_atom(
     atom: AtomicUnit,
     *,
     document_title: str,
-    document_metadata: JsonObject = (),
     policy: ChunkingPolicy,
     token_counter: TokenCounterPort,
 ) -> tuple[AtomicUnit, ...]:
@@ -31,7 +29,6 @@ def split_atom(
     Args:
         atom: 待检查的结构原子。
         document_title: embedding-only 文档标题。
-        document_metadata: 已入库的文档级检索元数据。
         policy: 冻结 token 和 overlap 参数。
         token_counter: 无网络计数端口。
 
@@ -59,7 +56,6 @@ def split_atom(
             atom,
             candidate,
             document_title,
-            document_metadata,
             limit,
             token_counter,
         )
@@ -68,7 +64,6 @@ def split_atom(
         atom,
         rendered.text,
         document_title,
-        document_metadata,
         policy.hard_max_tokens,
         token_counter,
     ):
@@ -163,22 +158,16 @@ def split_atom(
     return tuple(segments)
 
 
-def _fits(  # noqa: PLR0913, PLR0917
+def _fits(
     atom: AtomicUnit,
     citation_text: str,
     document_title: str,
-    document_metadata: JsonObject,
     limit: int,
     token_counter: TokenCounterPort,
 ) -> bool:
     citation = token_counter.count(citation_text).count
     embedded = token_counter.count(
-        embedding_text(
-            document_title,
-            atom,
-            citation_text,
-            document_metadata=document_metadata,
-        )
+        embedding_text(document_title, atom, citation_text)
     ).count
     return citation <= limit and embedded <= limit
 

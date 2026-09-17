@@ -143,6 +143,44 @@ def test_p07_offline_reopen_retrieves_but_requires_answer_model(
     assert "provider_body" not in serialized_trace
 
 
+def test_active_evidence_groups_keep_one_rerank_and_canonical_quotes(
+    tmp_path: Path,
+) -> None:
+    """组模式仍复用一次重排和原始来源跨度。"""
+    project_id, knowledge_base_id, _revision_id = _build_active_revision(
+        tmp_path
+    )
+    policy = RetrievalPolicy(
+        evidence_group_mode="active",
+        contextual_rerank_mode="active",
+    )
+    with build_p07_runtime(
+        _PROFILE, data_dir=tmp_path, policy=policy
+    ) as runtime:
+        result = runtime.retrieval.search_and_answer(
+            SearchRequest(
+                scope=KnowledgeBaseScope(
+                    project_id=project_id,
+                    knowledge_base_id=knowledge_base_id,
+                ),
+                text="ABC-123",
+            )
+        )
+        events = runtime.persistence.components.trace_sink.events(
+            result.trace_id
+        )
+
+    names = tuple(event.event_name for event in events)
+    assert names.count("retrieval.rerank") == 1
+    assert names.count("retrieval.evidence_group_build") == 1
+    assert result.evidence
+    assert all(item.source_spans for item in result.evidence)
+    assert all(
+        dict(item.metadata).get("group_complete") is True
+        for item in result.evidence
+    )
+
+
 def test_active_snapshot_remains_readable_after_concurrent_activation(
     tmp_path: Path,
 ) -> None:

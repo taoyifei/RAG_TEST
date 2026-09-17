@@ -30,6 +30,7 @@ from rag_app.application.retrieval.evidence_groups import (
     GroupCandidate,
     build_evidence_groups,
     pack_evidence_groups_with_diagnostics,
+    rank_evidence_groups,
 )
 from rag_app.application.retrieval.exact import ExactChannel
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
@@ -138,15 +139,6 @@ class _SelectionOutcome:
     confidence: ConfidenceDecision
 
 
-@dataclass(frozen=True, slots=True)
-class _GroupContextOutcome:
-    """已重排组及其按来源关联的有界上下文组。"""
-
-    groups: tuple[GroupCandidate, ...]
-    degraded_reason_codes: tuple[str, ...]
-    added_count: int
-
-
 def _flatten_evidence_groups(
     groups: tuple[GroupCandidate, ...],
 ) -> tuple[RankedChunk, ...]:
@@ -159,7 +151,11 @@ def _flatten_evidence_groups(
             if chunk_id in seen:
                 continue
             seen.add(chunk_id)
-            flattened.append(member.model_copy(update={"rerank_rank": rank}))
+            flattened.append(
+                member.model_copy(
+                    update={"rerank_rank": member.rerank_rank or rank}
+                )
+            )
     return tuple(flattened)
 
 
@@ -234,15 +230,20 @@ class RetrievalService:
         self._generation_behavior = "model_required"
         self._trace = trace
         self._cache = cache
+        self._policy = policy or RetrievalPolicy()
         # 检索实现演进仅改变 serving/query cache；文档索引与向量语义不变。
         self._serving_fingerprint = canonical_sha256(
             {
                 "configured_serving": serving_fingerprint,
-                "retrieval_implementation": "wb08r-02-contextual-groups-v1",
+                "retrieval_implementation": (
+                    "wb08r-01-adaptive-catalog-v1"
+                    if self._policy.evidence_group_mode == "off"
+                    and self._policy.contextual_rerank_mode == "off"
+                    else "wb08r-02-post-rerank-groups-v1"
+                ),
             }
         )
         self._egress = egress_policy
-        self._policy = policy or RetrievalPolicy()
         self._analyzer = QueryAnalyzer()
         self._expander = RuleBasedNormalizer()
         self._planner = QueryPlanner()
@@ -1845,63 +1846,6 @@ class RetrievalService:
             _raise_if_cancelled(cancellation)
             self._cache.put(result.cache_key, result, ttl_seconds=30)
 
-    def _expand_group_context(
-        self,
-        snapshot: ActiveRevisionQuerySnapshot,
-        ranked_groups: tuple[GroupCandidate, ...],
-        mode: str,
-        source_qualifier: str | None,
-    ) -> _GroupContextOutcome:
-        """将原有邻居扩展作为完整组旁的有界上下文组。"""
-        ranked_chunks = _flatten_evidence_groups(ranked_groups)
-        expanded = self._neighbors.expand(
-            snapshot,
-            ranked_chunks,
-            mode,
-            self._policy,
-            source_qualifier=source_qualifier,
-        )
-        seed_ranks = {
-            member.hydrated.chunk.chunk_id: rank
-            for rank, group in enumerate(ranked_groups)
-            for member in group.members
-        }
-        context_chunks = tuple(
-            candidate
-            for candidate in expanded.candidates
-            if candidate.hydrated.chunk.chunk_id not in seed_ranks
-        )
-        if not context_chunks:
-            return _GroupContextOutcome(
-                ranked_groups, expanded.degraded_reason_codes, 0
-            )
-        context_groups = build_evidence_groups(
-            context_chunks,
-            max_groups=self._policy.rerank_candidate_limit,
-            max_member_chunks=self._policy.group_member_chunk_limit,
-            rerank_text_char_limit=self._policy.rerank_text_char_limit,
-        )
-        context_by_rank: dict[int, list[GroupCandidate]] = {}
-        for context_group in context_groups:
-            rank = min(
-                (
-                    seed_ranks[seed_id]
-                    for member in context_group.members
-                    for seed_id in member.expansion_seed_ids
-                    if seed_id in seed_ranks
-                ),
-                default=len(ranked_groups),
-            )
-            context_by_rank.setdefault(rank, []).append(context_group)
-        ordered = tuple(
-            group
-            for rank, ranked_group in enumerate(ranked_groups)
-            for group in (ranked_group, *context_by_rank.get(rank, ()))
-        ) + tuple(context_by_rank.get(len(ranked_groups), ()))
-        return _GroupContextOutcome(
-            ordered, expanded.degraded_reason_codes, len(context_groups)
-        )
-
     def _close_structural_context(
         self,
         snapshot: ActiveRevisionQuerySnapshot,
@@ -1920,7 +1864,10 @@ class RetrievalService:
             chunk = candidate.hydrated.chunk
             if chunk.role not in seeds:
                 continue
-            if chunk.neighbor_group_id in seen_groups[chunk.role]:
+            if (
+                chunk.role is ChunkRole.LIST
+                and chunk.neighbor_group_id in seen_groups[chunk.role]
+            ):
                 continue
             if len(seeds[chunk.role]) >= self._policy.rerank_candidate_limit:
                 continue
@@ -1961,7 +1908,7 @@ class RetrievalService:
             tuple(dict.fromkeys(degraded)),
         )
 
-    def _rank_and_select(  # noqa: PLR0913
+    def _rank_and_select(  # noqa: PLR0913, PLR0915
         self,
         *,
         request: SearchRequest,
@@ -2052,121 +1999,138 @@ class RetrievalService:
         )
         rank_started = perf_counter()
         resolved_query = analysis.resolved_query or analysis.normalized_query
-        if self._policy.group_rerank_enabled:
-            # 先闭合有界的 canonical 结构，再把整组交给同一 Reranker。
-            seed_limit = min(
-                self._policy.rerank_candidate_limit,
-                max(request.limit, len(structural_closure_ids)),
+        reranked = self._reranker.rerank(
+            resolved_query,
+            hydrated,
+            self._egress,
+            self._policy,
+            enabled=plan.use_reranker,
+            result_limit=max(request.limit, len(structural_closure_ids)),
+            required_candidate_ids=frozenset(structural_closure_ids),
+        )
+        expansion = self._neighbors.expand(
+            snapshot,
+            reranked.candidates,
+            plan.neighbor_mode,
+            self._policy,
+            source_qualifier=analysis.semantics.source_qualifier,
+        )
+        selected_groups: tuple[GroupCandidate, ...] = ()
+        if self._policy.evidence_group_mode != "off":
+            group_started = perf_counter()
+            structural = self._close_structural_context(
+                snapshot, expansion.candidates
             )
-            seeds = tuple(
-                {
-                    item.hydrated.chunk.chunk_id: item
-                    for index, item in enumerate(hydrated)
-                    if index < seed_limit
-                    or item.hydrated.chunk.chunk_id in structural_closure_ids
-                }.values()
-            )
-            closure = self._neighbors.expand(
-                snapshot,
-                seeds,
-                plan.neighbor_mode,
-                self._policy,
-                source_qualifier=analysis.semantics.source_qualifier,
-            )
-            structural = self._close_structural_context(snapshot, hydrated)
             group_inputs = tuple(
                 {
                     item.hydrated.chunk.chunk_id: item
                     for item in (
-                        *closure.candidates,
+                        *expansion.candidates,
                         *structural.candidates,
-                        *hydrated,
                     )
                 }.values()
             )
-            groups = build_evidence_groups(
-                group_inputs,
-                max_groups=self._policy.rerank_candidate_limit,
-                max_member_chunks=self._policy.group_member_chunk_limit,
-                rerank_text_char_limit=self._policy.rerank_text_char_limit,
+            groups = rank_evidence_groups(
+                build_evidence_groups(
+                    group_inputs,
+                    max_groups=self._policy.rerank_candidate_limit,
+                    max_member_chunks=self._policy.group_member_chunk_limit,
+                    rerank_text_char_limit=self._policy.rerank_text_char_limit,
+                )
             )
-            group_ranking = self._reranker.rerank_groups(
-                resolved_query,
-                groups,
-                self._egress,
-                self._policy,
-                enabled=plan.use_reranker,
-                result_limit=self._policy.rerank_candidate_limit,
-                required_candidate_ids=frozenset(structural_closure_ids),
-            )
-            group_context = self._expand_group_context(
-                snapshot,
-                group_ranking.groups,
-                plan.neighbor_mode,
-                analysis.semantics.source_qualifier,
-            )
-            # 组预算约束检索候选；最终模型证据仍由 EvidenceAssembler
-            # 使用独立的 evidence_token_budget 与来源校验收紧。
-            packing = pack_evidence_groups_with_diagnostics(
-                group_context.groups,
-                token_budget=self._policy.group_retrieval_token_budget,
-                max_groups=self._policy.rerank_candidate_limit,
-                max_chunks=self._policy.group_retrieval_chunk_limit,
-            )
-            packed = packing.selected
-            reranked = RerankingOutcome(
-                candidates=_flatten_evidence_groups(packed),
-                mode=group_ranking.mode,
-                reason_code=group_ranking.reason_code,
-                provider_calls=group_ranking.provider_calls,
-                failure_category=group_ranking.failure_category,
-            )
-            expansion = ExpansionOutcome(
-                reranked.candidates,
-                tuple(
-                    dict.fromkeys(
-                        (
-                            *closure.degraded_reason_codes,
-                            *structural.degraded_reason_codes,
-                            *group_context.degraded_reason_codes,
+            rejected: tuple[tuple[str, str], ...] = ()
+            if self._policy.evidence_group_mode == "active":
+                packing = pack_evidence_groups_with_diagnostics(
+                    groups,
+                    token_budget=self._policy.group_retrieval_token_budget,
+                    max_groups=self._policy.rerank_candidate_limit,
+                    max_chunks=self._policy.group_retrieval_chunk_limit,
+                )
+                selected_groups = packing.selected
+                rejected = packing.rejected
+                expansion = ExpansionOutcome(
+                    _flatten_evidence_groups(selected_groups),
+                    tuple(
+                        dict.fromkeys(
+                            (
+                                *expansion.degraded_reason_codes,
+                                *structural.degraded_reason_codes,
+                            )
                         )
-                    )
-                ),
-            )
+                    ),
+                )
+            elapsed_ms = (perf_counter() - group_started) * 1000
+            selected_ids = {group.group_id for group in selected_groups}
+            rejected_by_id = dict(rejected)
+            drop_reasons = {
+                "INCOMPLETE_STRUCTURE": "GROUP_INCOMPLETE",
+                "GROUP_EXCEEDS_BUDGET": "GROUP_TOKEN_BUDGET",
+                "CHUNK_LIMIT": "GROUP_TOKEN_BUDGET",
+                "GROUP_LIMIT": "GROUP_COUNT_CAP",
+            }
             self._record(
                 trace_id,
-                "evidence_groups",
+                "evidence_group_build",
                 {
                     "pass": retrieval_phase,
-                    "formed": len(groups),
-                    "complete": sum(group.group.complete for group in groups),
-                    "structural_chunks": len(structural.candidates),
-                    "expanded_groups": group_context.added_count,
-                    "packed": len(packed),
-                    "packed_chunks": len(reranked.candidates),
-                    "rejected_reasons": tuple(
-                        sorted(
-                            {reason for _group_id, reason in packing.rejected}
+                    "mode": self._policy.evidence_group_mode,
+                    "group_count": len(groups),
+                    "group_type_counts": tuple(
+                        (
+                            kind,
+                            sum(
+                                group.group.kind.value == kind
+                                for group in groups
+                            ),
                         )
+                        for kind in sorted(
+                            {group.group.kind.value for group in groups}
+                        )
+                    ),
+                    "complete_group_count": sum(
+                        group.complete for group in groups
+                    ),
+                    "incomplete_group_count": sum(
+                        not group.complete for group in groups
+                    ),
+                    "members_per_group": tuple(
+                        len(group.members) for group in groups
+                    ),
+                    "build_elapsed_ms": round(elapsed_ms, 3),
+                    "selected_group_count": len(selected_groups),
+                    "dropped_group_reasons": rejected,
+                    "group_diagnostics": tuple(
+                        {
+                            "group_id": group.group_id,
+                            "group_type": group.group.kind.value,
+                            "member_count": len(group.members),
+                            "complete": group.complete,
+                            "completeness_reason": (
+                                ";".join(group.group.incomplete_reasons)
+                                if group.group.incomplete_reasons
+                                else "COMPLETE"
+                            ),
+                            "best_rank": min(
+                                group.group.member_ranks, default=0
+                            ),
+                            "selected": group.group_id in selected_ids,
+                            "drop_reason": (
+                                drop_reasons.get(
+                                    rejected_by_id.get(group.group_id, "")
+                                )
+                                if self._policy.evidence_group_mode == "active"
+                                else "SHADOW_ONLY"
+                            ),
+                            "token_cost": group.token_cost,
+                        }
+                        for group in groups
                     ),
                 },
             )
-        else:
-            reranked = self._reranker.rerank(
-                resolved_query,
-                hydrated,
-                self._egress,
-                self._policy,
-                enabled=plan.use_reranker,
-                result_limit=max(request.limit, len(structural_closure_ids)),
-                required_candidate_ids=frozenset(structural_closure_ids),
-            )
-            expansion = self._neighbors.expand(
-                snapshot,
-                reranked.candidates,
-                plan.neighbor_mode,
-                self._policy,
-                source_qualifier=analysis.semantics.source_qualifier,
+            _finish_timing(
+                stage_timings,
+                f"{retrieval_phase}_evidence_group_build",
+                group_started,
             )
         provider_calls.extend(reranked.provider_calls)
         self._record(
@@ -2198,6 +2162,11 @@ class RetrievalService:
             expansion.candidates,
             self._policy,
             include_model_candidates=True,
+            groups=(
+                selected_groups
+                if self._policy.evidence_group_mode == "active"
+                else None
+            ),
             context=EvidenceSelectionContext(
                 analysis=analysis,
                 query_kind=plan.query_kind,

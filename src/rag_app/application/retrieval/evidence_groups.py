@@ -16,7 +16,9 @@ from rag_app.core.models import (
     EvidenceGroupKind,
     GroupSourceMap,
     RankedChunk,
+    SourceSpan,
 )
+from rag_app.core.models.common import freeze_json_object
 
 if TYPE_CHECKING:
     from rag_app.core.ports.evidence_source import CatalogDocument
@@ -24,6 +26,10 @@ if TYPE_CHECKING:
 _PROCEDURE_HEADING = re.compile(r"流程|步骤|程序|办理|操作")
 _TABLE_ROW = re.compile(r"^tr:(\d+)$")
 _TABLE_COLUMN = re.compile(r"^tc:(\d+)$")
+_INFERRED_HEADER_CELL_CHAR_LIMIT = 16
+_MIN_HEADER_COLUMNS = 2
+_SECTION_MEMBER_CHUNK_LIMIT = 3
+_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +142,8 @@ def build_evidence_groups(
             section_complete = (
                 first.role is ChunkRole.TEXT
                 and len(sorted_members) > 1
-                and len(sorted_members) <= max_member_chunks
+                and len(sorted_members)
+                <= min(max_member_chunks, _SECTION_MEMBER_CHUNK_LIMIT)
                 and not _chain_reasons(sorted_members)
             )
             if section_complete:
@@ -182,6 +189,36 @@ def pack_evidence_groups(
         max_groups=max_groups,
         max_chunks=max_chunks,
     ).selected
+
+
+def rank_evidence_groups(
+    groups: tuple[GroupCandidate, ...],
+) -> tuple[GroupCandidate, ...]:
+    """沿用成员的一次 Chunk 重排结果，稳定排列完整结构组。"""
+    return tuple(
+        sorted(
+            groups,
+            key=lambda candidate: (
+                not candidate.complete,
+                min(
+                    member.rerank_rank or member.fusion_rank
+                    for member in candidate.members
+                )
+                if candidate.members
+                else 2**31,
+                -max(
+                    member.rerank_score
+                    if member.rerank_score is not None
+                    else float("-inf")
+                    for member in candidate.members
+                )
+                if candidate.members
+                else float("inf"),
+                -len(candidate.members),
+                candidate.group_id,
+            ),
+        )
+    )
 
 
 def pack_evidence_groups_with_diagnostics(
@@ -235,7 +272,9 @@ def pack_evidence_groups_with_diagnostics(
     )
 
 
-def build_catalog_evidence_group(document: CatalogDocument) -> GroupCandidate:
+def build_catalog_evidence_group(
+    document: CatalogDocument, *, index_revision_id: str
+) -> GroupCandidate:
     """目录组仅表示版本中存在的标题、分类和可参考对象。"""
     metadata = dict(document.metadata)
     raw_category = metadata.get("category_path")
@@ -253,17 +292,25 @@ def build_catalog_evidence_group(document: CatalogDocument) -> GroupCandidate:
     )
     group = EvidenceGroup(
         group_id=_group_id(
-            document.document_version_id, "catalog", document.chunk_id
+            document.document_version_id,
+            index_revision_id,
+            "catalog",
+            document.chunk_id,
         ),
         kind=EvidenceGroupKind.CATALOG_ENTRY,
         document_id=document.document_id,
         document_version_id=document.document_version_id,
+        index_revision_id=index_revision_id,
         section_id="catalog",
+        display_name=document.title,
+        group_text_for_model=rerank_text,
+        group_text_for_rerank=rerank_text,
         complete=True,
         token_cost=max(1, len(rerank_text)),
         catalog_title=document.title,
         category_path=category,
         reference_object=document.title,
+        metadata=freeze_json_object(metadata),
     )
     return GroupCandidate(group, (), rerank_text)
 
@@ -339,6 +386,8 @@ def _table_groups(
                 rerank_text_char_limit=rerank_text_char_limit,
             ),
         )
+    if not header_rows and _has_short_column_headers(rows.get(0, ())):
+        header_rows.add(0)
     headers = tuple(
         item for row in sorted(header_rows) for item in rows.get(row, ())
     )
@@ -435,24 +484,47 @@ def _group_candidate(
     group = EvidenceGroup(
         group_id=_group_id(
             first.version.document_version_id,
+            first.index_revision_id,
             first.section_id,
             kind.value,
             group_key,
             tuple(item.chunk_id for item in source_maps),
+            tuple(
+                (
+                    item.structural_coordinates,
+                    tuple(span.node_id for span in item.source_spans),
+                )
+                for item in source_maps
+            ),
         ),
         kind=kind,
         document_id=first.version.document_id,
         document_version_id=first.version.document_version_id,
+        index_revision_id=first.index_revision_id,
         section_id=first.section_id,
+        display_name=members[0].hydrated.display_name,
         heading_path=first.heading_path,
         member_chunk_ids=tuple(item.chunk_id for item in source_maps),
         member_source_maps=source_maps,
+        member_ranks=tuple(
+            item.rerank_rank or item.fusion_rank for item in members
+        ),
         structural_coordinates=coordinates,
+        group_text_for_model="\n".join(
+            item.hydrated.chunk.citation_text for item in members
+        ),
+        group_text_for_rerank=rerank_text,
         complete=not reasons,
         incomplete_reasons=tuple(dict.fromkeys(reasons)),
         token_cost=(
             sum(member.hydrated.chunk.token_count for member in members)
             + len(header_text)
+        ),
+        metadata=freeze_json_object(
+            {
+                "department_name": department,
+                "category_path": category,
+            }
         ),
     )
     return GroupCandidate(group, members, rerank_text)
@@ -510,21 +582,50 @@ def _last_ordinal(member: RankedChunk) -> int | None:
 def _coordinates(member: RankedChunk) -> tuple[tuple[int, int], ...]:
     result: list[tuple[int, int]] = []
     for span in member.hydrated.chunk.source_spans:
-        if not span.is_citable or span.source_anchor is None:
-            continue
-        anchor = span.source_anchor
-        row = anchor.row_index
-        column = anchor.cell_index
-        for part in span.structural_path:
-            row_match = _TABLE_ROW.fullmatch(part)
-            column_match = _TABLE_COLUMN.fullmatch(part)
-            if row_match is not None:
-                row = int(row_match[1])
-            if column_match is not None:
-                column = int(column_match[1])
-        if row is not None and column is not None:
-            result.append((row, column))
+        coordinate = _span_coordinate(span)
+        if coordinate is not None:
+            result.append(coordinate)
     return tuple(dict.fromkeys(result))
+
+
+def _span_coordinate(span: SourceSpan) -> tuple[int, int] | None:
+    """从可引用的 canonical 来源跨度提取行列坐标。"""
+    if not span.is_citable or span.source_anchor is None:
+        return None
+    row = span.source_anchor.row_index
+    column = span.source_anchor.cell_index
+    for part in span.structural_path:
+        row_match = _TABLE_ROW.fullmatch(part)
+        column_match = _TABLE_COLUMN.fullmatch(part)
+        if row_match is not None:
+            row = int(row_match[1])
+        if column_match is not None:
+            column = int(column_match[1])
+    if row is None or column is None:
+        return None
+    return row, column
+
+
+def _has_short_column_headers(members: list[RankedChunk]) -> bool:
+    """仅在首行多列均为短标签时推断未标记的 DOCX 表头。"""
+    columns: dict[int, list[str]] = defaultdict(list)
+    for member in members:
+        chunk = member.hydrated.chunk
+        for span in chunk.source_spans:
+            coordinate = _span_coordinate(span)
+            if coordinate is None or coordinate[0] != 0:
+                continue
+            value = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if value:
+                columns[coordinate[1]].append(value)
+    if 0 not in columns or len(columns) < _MIN_HEADER_COLUMNS:
+        return False
+    return all(
+        len(" ".join(values)) <= _INFERRED_HEADER_CELL_CHAR_LIMIT
+        for values in columns.values()
+    )
 
 
 def _coordinate_labels(member: RankedChunk) -> tuple[str, ...]:
@@ -564,7 +665,9 @@ def _unique_members(
 
 
 def _group_id(*parts: object) -> str:
-    digest = hashlib.sha256(canonical_json(parts).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        canonical_json((_GROUP_SCHEMA_REVISION, *parts)).encode("utf-8")
+    ).hexdigest()
     return f"egrp_{digest[:32]}"
 
 

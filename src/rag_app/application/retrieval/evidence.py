@@ -12,6 +12,7 @@ from rag_app.application.retrieval.answer_support import (
     evaluate_linked_support,
     evaluate_span_support,
 )
+from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.semantics import source_qualifier_matches
 from rag_app.core.models import (
     Chunk,
@@ -59,6 +60,15 @@ _STAGE_QUERY = re.compile(r"阶段|环节|全流程")
 _LIST_MARKER_ONLY = re.compile(r"^\s*(?:\d+(?:\.\d+)*|[A-Za-z])\s*[.)、）]\s*$")
 _MINIMUM_STAGE_MEMBER_COUNT = 2
 _FLOW_ARCHITECTURE_PATH_DEPTH = 2
+_STRUCTURAL_ANSWER_TYPES = frozenset(
+    {
+        RequestedAnswerType.ENUMERATION,
+        RequestedAnswerType.COUNT,
+        RequestedAnswerType.ORDINAL_ITEM,
+        RequestedAnswerType.DUTIES,
+        RequestedAnswerType.PROCEDURE,
+    }
+)
 _DOCUMENT_METADATA_KEYS = frozenset(
     {
         "allowed_groups",
@@ -151,6 +161,7 @@ class EvidenceAssembler:
         *,
         context: EvidenceSelectionContext | None = None,
         include_model_candidates: bool = False,
+        groups: tuple[GroupCandidate, ...] | None = None,
     ) -> EvidenceSelectionResult:
         """形成互不混淆的模型候选与最小充分支持集。
 
@@ -159,6 +170,7 @@ class EvidenceAssembler:
             policy: Evidence 数量、来源与 token 上限。
             context: 当前共享 QueryAnalysis 与路由身份。
             include_model_candidates: 是否保留相关但未直接支持的模型候选。
+            groups: 结构闭合后的候选组；空值保留原 Evidence 行为。
 
         Returns:
             包含候选淘汰原因和跨文档歧义状态的选择结果。
@@ -170,6 +182,10 @@ class EvidenceAssembler:
             context=context,
             allow_uncertain=include_model_candidates,
         )
+        if groups:
+            model_candidates = _annotate_group_evidence(
+                model_candidates, groups
+            )
         supported = (
             model_candidates
             if context is None
@@ -177,7 +193,18 @@ class EvidenceAssembler:
                 item for item in model_candidates if _support_is_supported(item)
             )
         )
+        if groups:
+            supported = tuple(
+                item for item in supported if _group_is_complete(item)
+            )
+            supported = _structurally_supported_group_items(
+                supported, groups, context
+            )
         support_set, ambiguous = _minimal_support_set(supported, context)
+        if groups and context is not None:
+            support_set = _complete_structural_support_set(
+                support_set, supported, context
+            )
         selected_keys = {_evidence_key(item) for item in support_set}
         ordered = (
             *support_set,
@@ -195,9 +222,13 @@ class EvidenceAssembler:
                 "AMBIGUOUS_SAME_TARGET_ACROSS_DOCUMENTS"
                 if ambiguous and _support_is_supported(item)
                 else (
-                    "NOT_IN_MINIMUM_SUPPORT_SET"
-                    if _support_is_supported(item)
-                    else "MODEL_EVIDENCE_NOT_DIRECTLY_SUPPORTED"
+                    "INCOMPLETE_EVIDENCE_GROUP"
+                    if groups and not _group_is_complete(item)
+                    else (
+                        "NOT_IN_MINIMUM_SUPPORT_SET"
+                        if _support_is_supported(item)
+                        else "MODEL_EVIDENCE_NOT_DIRECTLY_SUPPORTED"
+                    )
                 ),
             )
             for item in model_candidates
@@ -322,6 +353,134 @@ class EvidenceAssembler:
             evidence.append(item)
         # 相邻对象标签与属性必须同时装入预算，禁止只发布其中半个支持链。
         return _complete_supports(tuple(evidence))
+
+
+def _annotate_group_evidence(
+    evidence: tuple[EvidenceItem, ...],
+    groups: tuple[GroupCandidate, ...],
+) -> tuple[EvidenceItem, ...]:
+    """按最终 Evidence 成员覆盖率标注结构组完整性。
+
+    Args:
+        evidence: 已通过原有 span、cap 和 token 预算的模型候选。
+        groups: 按检索顺序排列的有界结构组。
+
+    Returns:
+        保持原引用与顺序，并补充结构组状态的模型候选。
+
+    """
+    owners: dict[str, tuple[GroupCandidate, int]] = {}
+    for group in groups:
+        for index, chunk_id in enumerate(group.group.member_chunk_ids, 1):
+            previous = owners.get(chunk_id)
+            if previous is None or len(group.group.member_chunk_ids) > len(
+                previous[0].group.member_chunk_ids
+            ):
+                # 列表导语可同时属于段落组，优先保留覆盖完整结构的组。
+                owners[chunk_id] = (group, index)
+    present_by_group: dict[str, set[str]] = defaultdict(set)
+    for item in evidence:
+        owner = owners.get(item.chunk_id)
+        if owner is not None:
+            present_by_group[owner[0].group_id].add(item.chunk_id)
+    annotated: list[EvidenceItem] = []
+    for item in evidence:
+        owner = owners.get(item.chunk_id)
+        if owner is None:
+            group_metadata: dict[str, object] = {
+                "evidence_group_id": None,
+                "evidence_group_type": None,
+                "group_member_index": 0,
+                "group_member_count": 0,
+                "group_complete": False,
+                "group_completeness_reason": "NO_GROUP_MEMBERSHIP",
+            }
+        else:
+            group, index = owner
+            missing_members = (
+                set(group.group.member_chunk_ids)
+                - (present_by_group[group.group_id])
+            )
+            reasons = (*group.group.incomplete_reasons,)
+            if missing_members:
+                reasons = (*reasons, "EVIDENCE_MEMBER_NOT_SELECTED")
+            group_metadata = {
+                "evidence_group_id": group.group_id,
+                "evidence_group_type": group.group.kind.value,
+                "group_member_index": index,
+                "group_member_count": len(group.group.member_chunk_ids),
+                "group_complete": group.complete and not missing_members,
+                "group_completeness_reason": (
+                    ";".join(dict.fromkeys(reasons)) if reasons else "COMPLETE"
+                ),
+            }
+        annotated.append(
+            item.model_copy(
+                update={
+                    "metadata": freeze_json_object(
+                        {**dict(item.metadata), **group_metadata}
+                    )
+                }
+            )
+        )
+    return tuple(annotated)
+
+
+def _group_is_complete(item: EvidenceItem) -> bool:
+    """只有完整组成员可以进入最终支持集。"""
+    return dict(item.metadata).get("group_complete") is True
+
+
+def _structurally_supported_group_items(
+    supported: tuple[EvidenceItem, ...],
+    groups: tuple[GroupCandidate, ...],
+    context: EvidenceSelectionContext | None,
+) -> tuple[EvidenceItem, ...]:
+    """结构问句要求同组全部成员各自具有直接支持。"""
+    if (
+        context is None
+        or context.analysis.semantics.answer_type
+        not in _STRUCTURAL_ANSWER_TYPES
+    ):
+        return supported
+    supported_by_group: dict[str, set[str]] = defaultdict(set)
+    for item in supported:
+        group_id = dict(item.metadata).get("evidence_group_id")
+        if isinstance(group_id, str):
+            supported_by_group[group_id].add(item.chunk_id)
+    complete_ids = {
+        group.group_id
+        for group in groups
+        if set(group.group.member_chunk_ids)
+        <= supported_by_group.get(group.group_id, set())
+    }
+    return tuple(
+        item
+        for item in supported
+        if dict(item.metadata).get("evidence_group_id") in complete_ids
+    )
+
+
+def _complete_structural_support_set(
+    selected: tuple[EvidenceItem, ...],
+    supported: tuple[EvidenceItem, ...],
+    context: EvidenceSelectionContext,
+) -> tuple[EvidenceItem, ...]:
+    """最小支持节点选中结构组时，保留该组所有直接支持成员。"""
+    if (
+        not selected
+        or context.analysis.semantics.answer_type
+        not in _STRUCTURAL_ANSWER_TYPES
+    ):
+        return selected
+    selected_groups = {
+        dict(item.metadata).get("evidence_group_id") for item in selected
+    }
+    return tuple(
+        item
+        for item in supported
+        if dict(item.metadata).get("evidence_group_id") in selected_groups
+    )
 
 
 def _strict_document_label_owner(
