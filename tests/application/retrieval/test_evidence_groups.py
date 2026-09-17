@@ -250,6 +250,51 @@ def test_procedure_preserves_order_and_is_not_split_by_budget() -> None:
     )
 
 
+def test_group_packing_reports_duplicate_document_and_section_caps() -> None:
+    """同一来源不得重复装包，文档和章节组数上限分别可诊断。"""
+    first, second = _groups(
+        make_ranked_chunk(51, "第一段。"),
+        make_ranked_chunk(52, "第二段。"),
+    )
+    budget = first.token_cost + second.token_cost
+    common = {
+        "token_budget": budget,
+        "max_groups": 2,
+        "max_chunks": 2,
+    }
+
+    duplicate = pack_evidence_groups_with_diagnostics((first, first), **common)
+    document_cap = pack_evidence_groups_with_diagnostics(
+        (first, second), per_document_cap=1, **common
+    )
+    section_cap = pack_evidence_groups_with_diagnostics(
+        (first, second), per_document_cap=2, per_section_cap=1, **common
+    )
+
+    assert duplicate.rejected == ((first.group_id, "GROUP_DUPLICATE"),)
+    assert document_cap.rejected == ((second.group_id, "GROUP_DOCUMENT_CAP"),)
+    assert section_cap.rejected == ((second.group_id, "GROUP_SECTION_CAP"),)
+
+
+def test_table_rows_may_share_one_header_without_duplicate_rejection() -> None:
+    """多行表格共同引用同一表头时，仍可按行原子装包。"""
+    header = _table_row(61, 0, ("事项", "时限"), header=True)
+    first = _table_row(62, 1, ("申请", "五日"), header=False)
+    second = _table_row(63, 2, ("复核", "三日"), header=False)
+    groups = _groups(header, first, second)
+    assert len(groups) == 2
+
+    packed = pack_evidence_groups_with_diagnostics(
+        groups,
+        token_budget=sum(group.token_cost for group in groups),
+        max_groups=2,
+        max_chunks=3,
+    )
+
+    assert len(packed.selected) == 2
+    assert not packed.rejected
+
+
 def test_catalog_group_only_metadata_and_standalone_paragraph() -> None:
     paragraph = make_ranked_chunk(
         30,

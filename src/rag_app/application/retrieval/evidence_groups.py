@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TYPE_CHECKING
@@ -42,17 +42,41 @@ class GroupCandidate:
 
     @property
     def group_id(self) -> str:
-        """返回稳定组身份。"""
+        """返回稳定组身份。
+
+        Args:
+            无参数；读取当前候选组。
+
+        Returns:
+            当前组的稳定身份。
+
+        """
         return self.group.group_id
 
     @property
     def complete(self) -> bool:
-        """返回结构闭合状态。"""
+        """返回结构闭合状态。
+
+        Args:
+            无参数；读取当前候选组。
+
+        Returns:
+            当前组是否闭合。
+
+        """
         return self.group.complete
 
     @property
     def token_cost(self) -> int:
-        """返回保守的组装包开销。"""
+        """返回保守的组装包开销。
+
+        Args:
+            无参数；读取当前候选组。
+
+        Returns:
+            当前组的估算 token 开销。
+
+        """
         return self.group.token_cost
 
 
@@ -182,7 +206,18 @@ def pack_evidence_groups(
     max_groups: int,
     max_chunks: int,
 ) -> tuple[GroupCandidate, ...]:
-    """按给定重排顺序原子选择完整组。"""
+    """按给定重排顺序原子选择完整组。
+
+    Args:
+        groups: 已按成员重排信号排序的候选组。
+        token_budget: 本轮组证据 token 上限。
+        max_groups: 最多选择的组数。
+        max_chunks: 最多选择的 Chunk 数。
+
+    Returns:
+        在三个预算内完整装入的组。
+
+    """
     return pack_evidence_groups_with_diagnostics(
         groups,
         token_budget=token_budget,
@@ -194,7 +229,15 @@ def pack_evidence_groups(
 def rank_evidence_groups(
     groups: tuple[GroupCandidate, ...],
 ) -> tuple[GroupCandidate, ...]:
-    """沿用成员的一次 Chunk 重排结果，稳定排列完整结构组。"""
+    """沿用成员的一次 Chunk 重排结果，稳定排列完整结构组。
+
+    Args:
+        groups: 原始候选组。
+
+    Returns:
+        优先完整组且按成员信号稳定排序的候选组。
+
+    """
     return tuple(
         sorted(
             groups,
@@ -221,20 +264,45 @@ def rank_evidence_groups(
     )
 
 
-def pack_evidence_groups_with_diagnostics(
+def pack_evidence_groups_with_diagnostics(  # noqa: PLR0913
     groups: tuple[GroupCandidate, ...],
     *,
     token_budget: int,
     max_groups: int,
     max_chunks: int,
+    per_document_cap: int | None = None,
+    per_section_cap: int | None = None,
 ) -> GroupPackingOutcome:
-    """记录结构缺失或预算不足，绝不打散组成员。"""
-    if min(token_budget, max_groups, max_chunks) <= 0:
+    """记录结构缺失或预算不足，绝不打散组成员。
+
+    Args:
+        groups: 已排序的候选组。
+        token_budget: 本轮组证据 token 上限。
+        max_groups: 最多选择的组数。
+        max_chunks: 最多选择的 Chunk 数。
+        per_document_cap: 单文档最多选择的组数；省略时不设额外上限。
+        per_section_cap: 单章节最多选择的组数；省略时不设额外上限。
+
+    Returns:
+        完整选中组及未选组的确定性原因。
+
+    Raises:
+        ValueError: 任一预算不是正数。
+
+    """
+    limits = (token_budget, max_groups, max_chunks)
+    if per_document_cap is not None:
+        limits = (*limits, per_document_cap)
+    if per_section_cap is not None:
+        limits = (*limits, per_section_cap)
+    if min(limits) <= 0:
         raise ValueError("EvidenceGroup 打包预算必须为正数。")
     selected: list[GroupCandidate] = []
     rejected: list[tuple[str, str]] = []
     incomplete: list[GroupCandidate] = []
     seen_chunks: set[str] = set()
+    documents: Counter[str] = Counter()
+    sections: Counter[tuple[str, str]] = Counter()
     remaining = token_budget
     for candidate in groups:
         group = candidate.group
@@ -245,6 +313,22 @@ def pack_evidence_groups_with_diagnostics(
             continue
         if len(selected) >= max_groups:
             rejected.append((group.group_id, "GROUP_LIMIT"))
+            continue
+        if member_ids <= seen_chunks:
+            rejected.append((group.group_id, "GROUP_DUPLICATE"))
+            continue
+        if (
+            per_document_cap is not None
+            and documents[group.document_id] >= per_document_cap
+        ):
+            rejected.append((group.group_id, "GROUP_DOCUMENT_CAP"))
+            continue
+        section_key = (group.document_id, group.section_id)
+        if (
+            per_section_cap is not None
+            and sections[section_key] >= per_section_cap
+        ):
+            rejected.append((group.group_id, "GROUP_SECTION_CAP"))
             continue
         if len(seen_chunks | member_ids) > max_chunks:
             rejected.append((group.group_id, "CHUNK_LIMIT"))
@@ -266,6 +350,8 @@ def pack_evidence_groups_with_diagnostics(
             continue
         selected.append(candidate)
         seen_chunks.update(member_ids)
+        documents[group.document_id] += 1
+        sections[section_key] += 1
         remaining -= group.token_cost
     return GroupPackingOutcome(
         tuple(selected), tuple(rejected), tuple(incomplete)
@@ -275,7 +361,16 @@ def pack_evidence_groups_with_diagnostics(
 def build_catalog_evidence_group(
     document: CatalogDocument, *, index_revision_id: str
 ) -> GroupCandidate:
-    """目录组仅表示版本中存在的标题、分类和可参考对象。"""
+    """目录组仅表示版本中存在的标题、分类和可参考对象。
+
+    Args:
+        document: 已通过权限过滤的可信目录项。
+        index_revision_id: 当前活动索引版本身份。
+
+    Returns:
+        不包含文档正文或模板字段的目录组。
+
+    """
     metadata = dict(document.metadata)
     raw_category = metadata.get("category_path")
     category = (

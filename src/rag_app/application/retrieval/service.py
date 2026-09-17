@@ -2044,6 +2044,8 @@ class RetrievalService:
                     token_budget=self._policy.group_retrieval_token_budget,
                     max_groups=self._policy.rerank_candidate_limit,
                     max_chunks=self._policy.group_retrieval_chunk_limit,
+                    per_document_cap=self._policy.per_document_cap,
+                    per_section_cap=self._policy.per_section_cap,
                 )
                 selected_groups = packing.selected
                 rejected = packing.rejected
@@ -2081,6 +2083,9 @@ class RetrievalService:
                 "GROUP_EXCEEDS_BUDGET": "GROUP_TOKEN_BUDGET",
                 "CHUNK_LIMIT": "GROUP_TOKEN_BUDGET",
                 "GROUP_LIMIT": "GROUP_COUNT_CAP",
+                "GROUP_DUPLICATE": "GROUP_DUPLICATE",
+                "GROUP_DOCUMENT_CAP": "GROUP_DOCUMENT_CAP",
+                "GROUP_SECTION_CAP": "GROUP_SECTION_CAP",
             }
             self._record(
                 trace_id,

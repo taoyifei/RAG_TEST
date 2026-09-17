@@ -74,7 +74,15 @@ _STRUCTURAL_ANSWER_TYPES = frozenset(
 def requires_complete_evidence_group(
     answer_type: RequestedAnswerType,
 ) -> bool:
-    """判断答案形状是否必须由闭合结构组支持。"""
+    """判断答案形状是否必须由闭合结构组支持。
+
+    Args:
+        answer_type: 原问题要求的答案形状。
+
+    Returns:
+        枚举、数量、顺序、职责或流程问题返回真。
+
+    """
     return answer_type in _STRUCTURAL_ANSWER_TYPES
 
 
@@ -591,6 +599,15 @@ def _evidence_packing_order(
     priorities = priority_keys or set()
 
     def interleave(*, priority: bool) -> tuple[_PackablePiece, ...]:
+        """按 Chunk 交错排列同优先级的可引用片段。
+
+        Args:
+            priority: 是否选择高优先级的来源片段。
+
+        Returns:
+            保持候选来源顺序的交错片段。
+
+        """
         groups = tuple(
             (
                 candidate,

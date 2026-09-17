@@ -149,8 +149,8 @@ def audit_chunks(
         document_titles: document_id 到展示标题的映射。
         document_metadata: document_id 到元数据的映射。
 
-    Yields:
-        与 SQLite 审计相同的脱敏记录。
+    Returns:
+        迭代产生与 SQLite 审计相同的脱敏记录。
 
     """
     for chunk in chunks:
@@ -223,8 +223,8 @@ def audit_sqlite(
         revision_id: 指定 Revision；省略时使用活动 Revision。
         knowledge_base_id: 多知识库时限定活动 Revision 的知识库。
 
-    Yields:
-        仅含安全审计字段的 NDJSON 兼容记录。
+    Returns:
+        迭代产生仅含安全审计字段的 NDJSON 兼容记录。
 
     """
     database_uri = database_path.resolve(strict=True).as_uri() + "?mode=ro"
@@ -267,7 +267,15 @@ def audit_sqlite(
 
 
 def main() -> int:
-    """读取指定数据库并将脱敏审计记录输出为 NDJSON。"""
+    """读取指定数据库并将脱敏审计记录输出为 NDJSON。
+
+    Args:
+        无参数；命令行选项从当前进程读取。
+
+    Returns:
+        成功输出返回零；审计失败返回一。
+
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--revision-id")
