@@ -26,4 +26,20 @@ describe("湾事通推荐问题", () => {
     expect(second.every((item) => !seen.has(item.caseId))).toBe(true);
     expect(new Set(second.map((item) => item.documentId)).size).toBe(5);
   });
+
+  it("暂不把模板相关问题放进任何一组推荐", () => {
+    const templates = SUGGESTED_QUESTIONS.filter((item) =>
+      item.question.includes("模板"),
+    );
+    expect(templates.length).toBeGreaterThan(0);
+    const seen = new Set<string>();
+    let previous: typeof templates = [];
+    for (let index = 0; index < 20; index += 1) {
+      const next = pickSuggestedQuestions([], previous, seen, () => 0.37);
+      expect(next).toHaveLength(5);
+      expect(next.every((item) => !templates.includes(item))).toBe(true);
+      next.forEach((item) => seen.add(item.caseId));
+      previous = next;
+    }
+  });
 });

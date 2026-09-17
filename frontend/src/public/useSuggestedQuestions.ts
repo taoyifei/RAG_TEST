@@ -8,6 +8,24 @@ import type { PublicTurn } from "./usePublicChat";
 
 const VISIBLE_COUNT = 5;
 
+// 暂不主动推荐模板问题；题池保留原题，用户仍可自行提问。
+const TEMPLATE_DOCUMENT_IDS = new Set([
+  "DOCX-028",
+  "DOCX-029",
+  "DOCX-030",
+  "DOCX-031",
+  "DOCX-032",
+  "DOCX-033",
+  "DOCX-034",
+  "DOCX-035",
+  "DOCX-036",
+  "DOCX-037",
+  "DOCX-038",
+  "DOCX-039",
+  "DOCX-040",
+  "LEGACY-TEMPLATE",
+]);
+
 function questionKey(question: string): string {
   return question
     .normalize("NFKC")
@@ -61,7 +79,9 @@ export function pickSuggestedQuestions(
   const previousIds = new Set(previous.map((item) => item.caseId));
   const available = SUGGESTED_QUESTIONS.filter(
     (item) =>
-      !asked.has(questionKey(item.question)) && !previousIds.has(item.caseId),
+      !TEMPLATE_DOCUMENT_IDS.has(item.documentId) &&
+      !asked.has(questionKey(item.question)) &&
+      !previousIds.has(item.caseId),
   );
   const fresh = available.filter((item) => !seenIds.has(item.caseId));
   const selected: SuggestedQuestion[] = [];
