@@ -243,5 +243,6 @@ def test_invalid_later_claim_is_buffered_and_never_publishes_a_prefix(
     assert emitted == []
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_FREQUENCY_UNSUPPORTED"
-    assert len(outcome.calls) == 2
+    # 事实漂移不能触发第二次完整生成。
+    assert len(outcome.calls) == 1
     assert all(call.reason_code.startswith("CLAIM_") for call in outcome.calls)

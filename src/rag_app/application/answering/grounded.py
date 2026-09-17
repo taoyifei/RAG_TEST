@@ -1928,7 +1928,6 @@ class GroundedAnsweringService:
         accepted: list[ValidatedNaturalClaim] = []
         claim_rejections: Counter[str] = Counter()
         reason: str | None = None
-        raw_covered: set[str] = set()
         repair_calls = 0
 
         def generate(
@@ -1989,7 +1988,6 @@ class GroundedAnsweringService:
             if not draft.natural_claims:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
             for natural in draft.natural_claims:
-                raw_covered.update(natural.atom_ids)
                 try:
                     claim = _validated_natural_claim(
                         natural,
@@ -2000,19 +1998,20 @@ class GroundedAnsweringService:
                     )
                 except (ValidationFailed, ValueError) as error:
                     claim_rejections[
-                        error.code
-                        if isinstance(error, ValidationFailed)
-                        else "NATURAL_CLAIM_INVALID"
+                        _natural_rejection_code(error)
                     ] += 1
                     reason = "CLAIM_NOT_SUPPORTED"
                     continue
-                if natural.claim_id in {item.claim_id for item in accepted}:
-                    reason = "DUPLICATE_CLAIM"
+                if any(
+                    item.atom_ids == (natural.atom_id,)
+                    and item.claim == claim
+                    for item in accepted
+                ):
                     continue
                 accepted.append(
                     ValidatedNaturalClaim(
-                        claim_id=natural.claim_id,
-                        atom_ids=natural.atom_ids,
+                        claim_id=f"C{len(accepted) + 1}",
+                        atom_ids=(natural.atom_id,),
                         claim=claim,
                     )
                 )
@@ -2021,14 +2020,16 @@ class GroundedAnsweringService:
             try:
                 _raise_if_cancelled(cancellation)
                 consume(generate())
-                # 修复只能补首次完全漏掉的、有证据支持的 Atom。
+                # 修复只能补首次没有任何已验 Claim 的强证据 Atom。
                 omitted = tuple(
                     atom.atom_id
                     for atom in query_plan.atoms
                     if atom.atom_id in eligible
                     and atom_support_matrix.for_atom(atom.atom_id).status
                     is AtomStatus.SUPPORTED
-                    and atom.atom_id not in raw_covered
+                    and not any(
+                        atom.atom_id in item.atom_ids for item in accepted
+                    )
                 )
                 if omitted:
                     _raise_if_cancelled(cancellation)
@@ -2190,39 +2191,34 @@ def _validated_natural_claim(
     """核对逐原子来源后复用既有事实与引用安全门。"""
     atoms = {atom.atom_id: atom for atom in plan.atoms}
     by_id = {item.support_id: item for item in evidence}
-    if len(natural.atom_ids) != 1:
+    if natural.atom_id not in atoms:
         raise ValidationFailed(
-            "一条自然事实只能证明一个可独立检索的 Atom。",
+            "自然事实引用未知 Atom。",
             stage="answer.validate",
-            code="CLAIM_ATOM_RELATION_UNCERTIFIED",
+            code="CLAIM_UNKNOWN_ATOM",
         )
+    if len(set(natural.support_ids)) != len(natural.support_ids):
+        raise ValidationFailed(
+            "自然事实重复引用同一 Support ID。",
+            stage="answer.validate",
+            code="CLAIM_UNKNOWN_SUPPORT",
+        )
+    if not set(natural.support_ids) <= by_id.keys():
+        raise ValidationFailed(
+            "自然事实引用未知 Support ID。",
+            stage="answer.validate",
+            code="CLAIM_UNKNOWN_SUPPORT",
+        )
+    support = matrix.for_atom(natural.atom_id)
     if (
-        len(set(natural.atom_ids)) != len(natural.atom_ids)
-        or len(set(natural.support_ids)) != len(natural.support_ids)
-        or not set(natural.atom_ids) <= atoms.keys()
-        or not set(natural.support_ids) <= by_id.keys()
-    ):
-        raise ValidationFailed(
-            "自然事实包含未知或重复 Atom/Support ID。",
-            stage="answer.validate",
-            code="CLAIM_NOT_SUPPORTED",
-        )
-    allowed = {
-        support_id
-        for atom_id in natural.atom_ids
-        for support_id in matrix.for_atom(atom_id).supporting_support_ids
-    }
-    if not set(natural.support_ids) <= allowed or any(
-        matrix.for_atom(atom_id).status
-        not in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
+        support.status not in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
         or not set(natural.support_ids)
-        & set(matrix.for_atom(atom_id).supporting_support_ids)
-        for atom_id in natural.atom_ids
+        <= set(support.supporting_support_ids)
     ):
         raise ValidationFailed(
             "自然事实的来源与 Atom 不对应。",
             stage="answer.validate",
-            code="CLAIM_NOT_SUPPORTED",
+            code="CLAIM_SUPPORT_OUTSIDE_ATOM",
         )
     units = tuple(by_id[support_id] for support_id in natural.support_ids)
     claim = AnswerClaim(
@@ -2235,84 +2231,112 @@ def _validated_natural_claim(
             for item in units
         ),
     )
-    for atom_id in natural.atom_ids:
-        atom = atoms[atom_id]
-        atom_units = tuple(
-            item
-            for item in units
-            if item.support_id
-            in matrix.for_atom(atom_id).supporting_support_ids
+    atom = atoms[natural.atom_id]
+    atom_units = units
+    if not all(
+        item.publishable and item.source_spans
+        and all(span.is_citable for span in item.source_spans)
+        for item in atom_units
+    ):
+        raise ValidationFailed(
+            "自然事实的来源不可发布。",
+            stage="answer.validate",
+            code="CLAIM_UNKNOWN_SUPPORT",
         )
-        source_text = "\n".join(item.citation_text for item in atom_units)
+    source_text = "\n".join(item.citation_text for item in atom_units)
+    if (
+        _STRONG_MODAL.search(natural.text)
+        and not _STRONG_MODAL.search(source_text)
+    ) or (
+        _PERMISSIVE_MODAL.search(natural.text)
+        and not _PERMISSIVE_MODAL.search(source_text)
+    ):
+        raise ValidationFailed(
+            "自然事实改变了来源中的义务强度。",
+            stage="answer.validate",
+            code="CLAIM_MODALITY_DRIFT",
+        )
+    source_labels = "\n".join(
+        " ".join(
+            (
+                item.source_label,
+                item.display_name or "",
+                *item.heading_path,
+            )
+        )
+        for item in atom_units
+    )
+    if any(
+        title not in source_text and title not in source_labels
+        for title in _QUOTED_DOCUMENT_TITLE.findall(natural.text)
+    ):
+        raise ValidationFailed(
+            "自然事实引入来源没有的文档名称。",
+            stage="answer.validate",
+            code="CLAIM_ENTITY_DRIFT",
+        )
+    for constraint in atom.constraints:
+        value = unicodedata.normalize("NFKC", constraint.value).casefold()
+        source = unicodedata.normalize("NFKC", source_text).casefold()
         if (
-            _STRONG_MODAL.search(natural.text)
-            and not _STRONG_MODAL.search(source_text)
-        ) or (
-            _PERMISSIVE_MODAL.search(natural.text)
-            and not _PERMISSIVE_MODAL.search(source_text)
+            constraint.kind.value
+            in {"NUMBER", "DURATION", "DATE_TIME", "VERSION"}
+            and value not in source
+            and not (
+                _number_tokens(value)
+                and _number_tokens(value) <= _number_tokens(source)
+            )
+        ):
+            code = (
+                "CLAIM_DATE_VERSION_DRIFT"
+                if constraint.kind.value in {"DATE_TIME", "VERSION"}
+                else "CLAIM_NUMBER_DRIFT"
+            )
+            raise ValidationFailed(
+                "Atom 的数字、时限或版本限制缺少来源。",
+                stage="answer.validate",
+                code=code,
+            )
+        if constraint.kind.value == "NEGATION" and not _NEGATION.search(
+            source_text
         ):
             raise ValidationFailed(
-                "自然事实改变了来源中的义务强度。",
+                "Atom 的否定限制缺少来源。",
                 stage="answer.validate",
-                code="CLAIM_NOT_SUPPORTED",
+                code="CLAIM_NEGATION_DRIFT",
             )
-        source_labels = "\n".join(
-            " ".join(
-                (
-                    item.source_label,
-                    item.display_name or "",
-                    *item.heading_path,
-                )
-            )
-            for item in atom_units
-        )
-        if any(
-            title not in source_text and title not in source_labels
-            for title in _QUOTED_DOCUMENT_TITLE.findall(natural.text)
-        ):
-            raise ValidationFailed(
-                "自然事实引入来源没有的文档名称。",
-                stage="answer.validate",
-                code="CLAIM_NOT_SUPPORTED",
-            )
-        for constraint in atom.constraints:
-            value = unicodedata.normalize("NFKC", constraint.value).casefold()
-            source = unicodedata.normalize("NFKC", source_text).casefold()
-            if (
-                constraint.kind.value
-                in {"NUMBER", "DURATION", "DATE_TIME", "VERSION"}
-                and value not in source
-                and not (
-                    _number_tokens(value)
-                    and _number_tokens(value) <= _number_tokens(source)
-                )
-            ):
-                raise ValidationFailed(
-                    "Atom 的数字、时限或版本限制缺少来源。",
-                    stage="answer.validate",
-                    code="CLAIM_NOT_SUPPORTED",
-                )
-            if constraint.kind.value == "NEGATION" and not _NEGATION.search(
-                source_text
-            ):
-                raise ValidationFailed(
-                    "Atom 的否定限制缺少来源。",
-                    stage="answer.validate",
-                    code="CLAIM_NOT_SUPPORTED",
-                )
-        atom_analysis = _natural_atom_analysis(atom, analysis)
-        validate_grounded_draft(
-            AnswerDraft(
-                text=claim.text,
-                cited_evidence_ids=natural.support_ids,
-                claims=(claim,),
-                generation_mode="llm",
-            ),
-            evidence,
-            analysis=atom_analysis,
-            complete=False,
-        )
+    atom_analysis = _natural_atom_analysis(atom, analysis)
+    validate_grounded_draft(
+        AnswerDraft(
+            text=claim.text,
+            cited_evidence_ids=natural.support_ids,
+            claims=(claim,),
+            generation_mode="llm",
+        ),
+        evidence,
+        analysis=atom_analysis,
+        complete=False,
+    )
     return claim
+
+
+def _natural_rejection_code(error: ValidationFailed | ValueError) -> str:
+    """把既有验证器的细分失败映射到逐 Claim 诊断合同。"""
+    if not isinstance(error, ValidationFailed):
+        return "CLAIM_SEMANTIC_SUPPORT_FAILED"
+    mapping = {
+        "CLAIM_QUERY_RELATION_UNSUPPORTED": "CLAIM_TARGET_RELATION_UNCERTIFIED",
+        "CLAIM_QUERY_TARGET_MISMATCH": "CLAIM_TARGET_RELATION_UNCERTIFIED",
+        "CLAIM_NEGATION_CHANGED": "CLAIM_NEGATION_DRIFT",
+        "CLAIM_OBJECT_CHANGED": "CLAIM_ENTITY_DRIFT",
+        "CLAIM_NUMBER_UNSUPPORTED": "CLAIM_NUMBER_DRIFT",
+        "CLAIM_FREQUENCY_UNSUPPORTED": "CLAIM_UNIT_DRIFT",
+        "CLAIM_TEXT_UNSUPPORTED": "CLAIM_SEMANTIC_SUPPORT_FAILED",
+        "CLAIM_SOURCE_MISMATCH": "CLAIM_SUPPORT_OUTSIDE_ATOM",
+        "ANSWER_LIST_INCOMPLETE": "CLAIM_STRUCTURE_INCOMPLETE",
+        "CATALOG_CLAIM_UNSUPPORTED": "CLAIM_SEMANTIC_SUPPORT_FAILED",
+    }
+    return mapping.get(error.code, error.code)
 
 
 def _natural_atom_analysis(
@@ -2330,6 +2354,7 @@ def _natural_atom_analysis(
             "semantics": analysis.semantics.model_copy(
                 update={
                     "target": atom.target,
+                    "relation": atom.relation,
                     "source_qualifier": atom.source_qualifier,
                     "answer_type": answer_type,
                 }
@@ -2349,6 +2374,7 @@ def _natural_atom_complete(
     if atom.answer_shape not in {
         AtomAnswerShape.ENUMERATION,
         AtomAnswerShape.PROCEDURE,
+        AtomAnswerShape.DUTIES,
     }:
         return True
     support = matrix.for_atom(atom.atom_id)

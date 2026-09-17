@@ -132,9 +132,8 @@ class AnswerClaim(FrozenModel):
 class NaturalClaim(FrozenModel):
     """模型只给出自然事实和证据身份，原文由服务端回填。"""
 
-    claim_id: str = Field(pattern=r"^C[1-9][0-9]{0,2}$")
+    atom_id: str = Field(pattern=r"^A[1-4]$")
     text: str = Field(min_length=1, max_length=6000, repr=False)
-    atom_ids: tuple[str, ...] = Field(min_length=1, max_length=4)
     support_ids: tuple[str, ...] = Field(min_length=1, max_length=8)
 
 

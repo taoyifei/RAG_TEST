@@ -15,6 +15,7 @@ from rag_app.adapters.providers.aliyun_chat import (
     ChatResponseError,
     _call_usage,
     _ChatStreamAccumulator,
+    _NaturalDraftPayload,
     _sse_data_events,
     decode_chat_content,
     message_token_estimate,
@@ -60,6 +61,7 @@ from rag_app.core.models import (
     RerankResult,
 )
 from rag_app.core.models.common import FrozenModel
+from rag_app.core.models.query_plan import GROUNDED_CLAIM_SCHEMA_REVISION
 from rag_app.core.models.retrieval import AnswerClaim, AnswerDraft
 from rag_app.core.ports import CancellationPort
 from rag_app.core.ports.generator import GenerationRequest
@@ -422,6 +424,16 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         """把共享事实闭合失败归入兼容 Provider 阶段。"""
         return "provider.openai_compatible.generation"
 
+    def _complete_natural(
+        self, messages: tuple[ChatMessage, ...]
+    ) -> ChatCompletion:
+        """按已探测的唯一 Schema 协议执行自然 Claim 生成。"""
+        return self.complete(
+            messages,
+            json_schema=_NaturalDraftPayload.model_json_schema(),
+            schema_revision=GROUNDED_CLAIM_SCHEMA_REVISION,
+        )
+
     def complete(  # noqa: PLR0913
         self,
         messages: tuple[ChatMessage, ...],
@@ -568,6 +580,10 @@ class OpenAICompatibleChatAdapter(AliyunChatAdapter):
         cancellation: CancellationPort,
     ) -> AnswerDraft:
         """上游明确不支持 SSE 时退回一次同步最终结果，不伪造增量。"""
+        if request.query_plan is not None:
+            return super().generate_stream(
+                request, on_claim=on_claim, cancellation=cancellation
+            )
         emitted = False
 
         def observe(claim: AnswerClaim) -> None:

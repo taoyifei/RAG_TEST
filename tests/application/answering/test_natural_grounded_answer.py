@@ -36,10 +36,7 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
     make_query_plan,
 )
-from rag_app.core.models.retrieval import (
-    GeneratedAtomCoverage,
-    NaturalClaim,
-)
+from rag_app.core.models.retrieval import NaturalClaim
 from rag_app.core.ports import GenerationRequest
 from tests.application.retrieval.test_descriptive_answers import (
     _POLICY,
@@ -97,28 +94,14 @@ def _matrix(
     )
 
 
-def _draft(claims: tuple[NaturalClaim, ...], plan: QueryPlan) -> AnswerDraft:
-    """模拟 v2 模型草稿，不提供逐字 quote。"""
+def _draft(claims: tuple[NaturalClaim, ...], _plan: QueryPlan) -> AnswerDraft:
+    """模拟 v4 最小模型草稿，不提供覆盖、Claim ID 或逐字 quote。"""
     return AnswerDraft(
         text="\n".join(item.text for item in claims) or "未找到明确规定。",
         cited_evidence_ids=tuple(
             support_id for item in claims for support_id in item.support_ids
         ),
         natural_claims=claims,
-        atom_coverage=tuple(
-            GeneratedAtomCoverage(
-                atom_id=atom.atom_id,
-                status="SUPPORTED"
-                if any(atom.atom_id in item.atom_ids for item in claims)
-                else "MISSING",
-            )
-            for atom in plan.atoms
-        ),
-        missing_atoms=tuple(
-            atom.atom_id
-            for atom in plan.atoms
-            if not any(atom.atom_id in item.atom_ids for item in claims)
-        ),
         generation_mode="natural",
     )
 
@@ -129,10 +112,11 @@ def _claim(
     atom_id: str,
     support_id: str,
 ) -> NaturalClaim:
+    """保留合成样本标签；模型协议本身不含 Claim ID。"""
+    assert claim_id.startswith("C")
     return NaturalClaim(
-        claim_id=claim_id,
+        atom_id=atom_id,
         text=text,
-        atom_ids=(atom_id,),
         support_ids=(support_id,),
     )
 
@@ -187,7 +171,7 @@ def test_supported_natural_paraphrase_keeps_server_quote() -> None:
     assert generator.generate.call_count == 1
 
 
-def test_changed_number_is_not_published_or_repaired() -> None:
+def test_changed_number_is_not_published_after_local_repair() -> None:
     evidence = _evidence("甲部门保存记录 14 天。")
     plan = _plan("甲部门")
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
@@ -201,7 +185,11 @@ def test_changed_number_is_not_published_or_repaired() -> None:
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
     assert outcome.atom_coverage == (("A1", "MISSING"),)
-    assert outcome.repair_calls == 0
+    assert outcome.repair_calls == 1
+    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_DRIFT", 2),)
+    assert generator.generate.call_args_list[1].args[0].repair_atom_ids == (
+        "A1",
+    )
 
 
 def test_changed_negation_is_not_published() -> None:
@@ -217,7 +205,8 @@ def test_changed_negation_is_not_published() -> None:
 
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
-    assert outcome.repair_calls == 0
+    assert outcome.repair_calls == 1
+    assert outcome.claim_rejection_codes == (("CLAIM_MODALITY_DRIFT", 2),)
 
 
 def test_permission_cannot_be_rewritten_as_obligation() -> None:
@@ -235,7 +224,7 @@ def test_permission_cannot_be_rewritten_as_obligation() -> None:
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
 
 
-def test_v2_adapter_rejects_model_supplied_quote() -> None:
+def test_v4_adapter_rejects_model_supplied_quote() -> None:
     evidence = _evidence("甲部门保存记录 14 天。")
     plan = _plan("甲部门")
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
@@ -249,15 +238,12 @@ def test_v2_adapter_rejects_model_supplied_quote() -> None:
     payload = {
         "claims": [
             {
-                "claim_id": "C1",
+                "atom_id": "A1",
                 "text": "甲部门保存记录 14 天。",
-                "atom_ids": ["A1"],
                 "support_ids": ["S1"],
                 "quote": "甲部门保存记录 14 天。",
             }
         ],
-        "atom_coverage": [{"atom_id": "A1", "status": "SUPPORTED"}],
-        "missing_atoms": [],
     }
     completion = ChatCompletion(
         content=json.dumps(payload, ensure_ascii=False),
@@ -594,9 +580,8 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
     generator.generate.return_value = _draft(
         (
             NaturalClaim(
-                claim_id="C1",
+                atom_id="A1",
                 text="甲部门保存记录 14 天。",
-                atom_ids=("A1", "A2"),
                 support_ids=tuple(item.support_id for item in evidence),
             ),
         ),
@@ -607,9 +592,10 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
 
     assert outcome.answer is None
     assert outcome.claim_rejection_codes == (
-        ("CLAIM_ATOM_RELATION_UNCERTIFIED", 1),
+        ("CLAIM_SUPPORT_OUTSIDE_ATOM", 2),
     )
-    assert outcome.repair_calls == 0
+    assert outcome.atom_coverage == (("A1", "MISSING"), ("A2", "MISSING"))
+    assert outcome.repair_calls == 1
 
 
 def test_procedure_renderer_uses_source_order() -> None:

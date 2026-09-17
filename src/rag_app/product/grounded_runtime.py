@@ -365,7 +365,8 @@ class ProductGroundedModel:
         hashes = self._source_hashes(request)
         with self._scope("generation", hashes):
             draft, failed_calls = self._call_with_rotation(
-                lambda adapter: adapter.generate(request)
+                lambda adapter: adapter.generate(request),
+                can_rotate=lambda: request.query_plan is None,
             )
         return draft.model_copy(
             update={
@@ -406,7 +407,9 @@ class ProductGroundedModel:
                     on_claim=_on_claim,
                     cancellation=cancellation,
                 ),
-                can_rotate=lambda: emitted_count == 0,
+                can_rotate=lambda: (
+                    request.query_plan is None and emitted_count == 0
+                ),
             )
         return draft.model_copy(
             update={
