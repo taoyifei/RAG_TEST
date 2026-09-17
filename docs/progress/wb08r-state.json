@@ -1,13 +1,13 @@
 {
   "base_sha": "746b030d0b63c937d9a17817596c0533f17eb966",
-  "phase_start_sha": "d6df0674f92570fe5724c99f28ce06c71104096f",
+  "phase_start_sha": "09f019a8cdb46e4e7e7ea20566b8491a235f70e4",
   "work_branch": "codex/wb-08r-adaptive-rag",
-  "completed_phases": ["WB08R-00", "WB08R-01"],
-  "current_phase": "WB08R-01",
+  "completed_phases": ["WB08R-00", "WB08R-01", "WB08R-02"],
+  "current_phase": "WB08R-02",
   "implementation_status": "submitted_for_verification",
   "merge_allowed": false,
   "dataset_revision": "wanshitong-v2-20260917",
-  "verification": {
+  "wb08r01_verification": {
     "targeted_pytest": "23 passed (three WB08R-01 targeted test files)",
     "real_qa_rerun": true,
     "production_deploy": false,
@@ -19,7 +19,23 @@
     "candidate_corpus_docx_retrievable": 46,
     "latency24_cases": 24,
     "natural_short_cases": 20,
-    "candidate_metrics": "evaluation/wanshitong/v2/results/wb08r01-92bbee1-summary.json",
+    "candidate_metrics": "evaluation/wanshitong/v2/results/wb08r01-92bbee1-summary.json"
+  },
+  "verification": {
+    "targeted_pytest": "49 passed (WB08R-02 targeted tests)",
+    "real_qa_rerun": true,
+    "production_deploy": false,
+    "candidate_port": 8289,
+    "candidate_runtime_revision": "01822083832f81f07f00575f1b1d32123ea468ec",
+    "candidate_image": "rag-test-wanshitong:wb08r02-0182208",
+    "evidence_group_mode": "active",
+    "contextual_rerank_mode": "off",
+    "candidate_corpus_docx_retrievable": 46,
+    "active_index_chunk_count": 2880,
+    "natural_structural_cases": 24,
+    "latency_structural_cases": 8,
+    "candidate_metrics": "evaluation/wanshitong/v2/results/wb08r02-summary.json",
+    "existing_8288_health_after_test": 200,
     "external_verification": "pending"
   }
 }
