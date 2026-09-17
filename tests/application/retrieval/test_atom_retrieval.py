@@ -295,15 +295,45 @@ def test_atom_channels_merge_before_one_rerank(tmp_path: Path) -> None:
 
         retrieval._grounded = GroundedSpy()  # type: ignore[assignment]
         rerank_calls = 0
+        rerank_queries: list[str] = []
+        lexical_texts: list[str] = []
+        dense_batches: list[tuple[str, ...]] = []
         original_rerank = retrieval._reranker.rerank
+        original_lexical = retrieval._lexical.search
+        original_dense_many = retrieval._dense.search_many
+
+        def trace_lexical(
+            _self: object, snapshot: object, variant: object, **kwargs: object
+        ) -> object:
+            lexical_texts.append(variant.text)  # type: ignore[attr-defined]
+            return original_lexical(snapshot, variant, **kwargs)  # type: ignore[arg-type]
+
+        def trace_dense_batch(
+            _self: object,
+            snapshot: object,
+            queries: tuple[str, ...],
+            egress: object,
+            **kwargs: object,
+        ) -> object:
+            dense_batches.append(queries)
+            return original_dense_many(  # type: ignore[arg-type]
+                snapshot, queries, egress, **kwargs
+            )
 
         def count_rerank(
             _self: object, *args: object, **kwargs: object
         ) -> object:
             nonlocal rerank_calls
             rerank_calls += 1
+            rerank_queries.append(args[0])  # type: ignore[arg-type]
             return original_rerank(*args, **kwargs)
 
+        retrieval._lexical.search = MethodType(  # type: ignore[method-assign]
+            trace_lexical, retrieval._lexical
+        )
+        retrieval._dense.search_many = MethodType(  # type: ignore[method-assign]
+            trace_dense_batch, retrieval._dense
+        )
         retrieval._reranker.rerank = MethodType(  # type: ignore[method-assign]
             count_rerank, retrieval._reranker
         )
@@ -312,6 +342,12 @@ def test_atom_channels_merge_before_one_rerank(tmp_path: Path) -> None:
         )
 
     assert rerank_calls == 1
+    assert question in lexical_texts
+    assert len(dense_batches) == 1
+    assert dense_batches[0][0] == question
+    assert len(dense_batches[0]) == 3
+    assert rerank_queries[0].startswith("原始问题：" + question)
+    assert "A1" in rerank_queries[0] and "A2" in rerank_queries[0]
     assert observed_plan == [2]
     assert result.reasoning_effort == "DEEP"
     assert result.diagnostics is not None

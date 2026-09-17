@@ -47,6 +47,11 @@ class RetrievalPolicy(FrozenModel):
     max_channels: StrictInt = Field(default=6, ge=1, le=8)
     channel_top_k: StrictInt = Field(default=24, gt=0, le=100)
     fusion_candidate_limit: StrictInt = Field(default=48, gt=0, le=200)
+    unit_fusion_candidate_limit: StrictInt = Field(default=32, gt=0, le=48)
+    unit_root_seed_limit: StrictInt = Field(default=6, gt=0, le=12)
+    unit_atom_seed_limit: StrictInt = Field(default=2, gt=0, le=8)
+    unit_root_weight: float = Field(default=1.0, gt=0)
+    unit_atom_total_weight: float = Field(default=1.0, gt=0)
     rrf_k: StrictInt = Field(default=60, gt=0)
     rerank_candidate_limit: StrictInt = Field(default=24, gt=0, le=100)
     evidence_group_mode: Literal["off", "shadow", "active"] = "off"
@@ -103,6 +108,11 @@ class RetrievalPolicy(FrozenModel):
 
     @model_validator(mode="after")
     def _validate_dense_requirements(self) -> Self:
+        if (
+            self.unit_root_seed_limit + 4 * self.unit_atom_seed_limit
+            > self.unit_fusion_candidate_limit
+        ):
+            raise ValueError("Query Unit 种子配额超过融合候选上限。")
         if self.max_channels < len(self.enabled_channels):
             raise ValueError("max_channels 不能小于 enabled channels 数量。")
         if self.minimum_support_items > self.max_evidence_items:

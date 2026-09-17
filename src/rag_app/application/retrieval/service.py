@@ -50,6 +50,11 @@ from rag_app.application.retrieval.neighbors import (
     NeighborExpander,
 )
 from rag_app.application.retrieval.planner import QueryPlanner
+from rag_app.application.retrieval.query_plan_retrieval import (
+    QueryUnit,
+    QueryUnitRetrieval,
+    fuse_query_units,
+)
 from rag_app.application.retrieval.related import (
     DISPLAY_POLICY,
     related_display_message,
@@ -119,6 +124,7 @@ from rag_app.core.models.query_plan import (
     GROUNDED_CLAIM_SCHEMA_REVISION,
     NATURAL_RENDERER_REVISION,
     QUERY_PLAN_SCHEMA_REVISION,
+    QUERY_UNIT_FUSION_REVISION,
     AtomAnswerShape,
     AtomCandidateLink,
     AtomCoverage,
@@ -166,13 +172,16 @@ class _SelectionOutcome:
 
 @dataclass(frozen=True, slots=True)
 class _AtomRetrievalOutcome:
-    """逐 Atom 初召回合并后的唯一通道包。"""
+    """Root 与 Atom 初召回经两级融合后的唯一通道包。"""
 
     channels: dict[str, tuple[ChannelHit, ...]]
     links: tuple[AtomCandidateLink, ...]
     selected_slot: str | None
     selected_vector: str | None
     route_reason: str
+    fused: tuple[FusedCandidate, ...]
+    seed_chunk_ids: tuple[str, ...]
+    rerank_query: str
 
 
 _CONFLICT_QUANTITY = re.compile(
@@ -424,6 +433,7 @@ class RetrievalService:
                     else "wb08r-02-post-rerank-groups-v1"
                 ),
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
                 ),
@@ -1125,10 +1135,15 @@ class RetrievalService:
             )
             _finish_timing(stage_timings, "vector_channel", channel_started)
         atom_links: tuple[AtomCandidateLink, ...] = ()
+        unit_fused: tuple[FusedCandidate, ...] | None = None
+        unit_seed_ids: tuple[str, ...] = ()
+        rerank_query: str | None = None
         if atom_mode:
             atom_retrieval = self._retrieve_atoms(
                 request=request,
                 snapshot=snapshot,
+                root_analysis=analysis,
+                plan=plan,
                 query_plan=query_plan,
                 provider_calls=provider_calls,
                 degraded=degraded,
@@ -1140,6 +1155,9 @@ class RetrievalService:
             selected_slot = atom_retrieval.selected_slot
             selected_vector = atom_retrieval.selected_vector
             route_reason = atom_retrieval.route_reason
+            unit_fused = atom_retrieval.fused
+            unit_seed_ids = atom_retrieval.seed_chunk_ids
+            rerank_query = atom_retrieval.rerank_query
         selection = self._rank_and_select(
             request=request,
             snapshot=snapshot,
@@ -1152,20 +1170,23 @@ class RetrievalService:
             degraded=degraded,
             stage_timings=stage_timings,
             retrieval_phase="original",
-            atom_required_ids=tuple(
-                next(
-                    (
-                        link.chunk_id
-                        for link in atom_links
-                        if link.atom_id == atom.atom_id
-                    ),
-                    "",
-                )
-                for atom in query_plan.atoms
-            ),
+            atom_required_ids=unit_seed_ids,
+            pre_fused=unit_fused,
+            rerank_query=rerank_query,
         )
         fused = selection.fused
         reranked = selection.reranked
+        if atom_links:
+            rerank_ranks = {
+                item.hydrated.chunk.chunk_id: index
+                for index, item in enumerate(reranked.candidates, 1)
+            }
+            atom_links = tuple(
+                link.model_copy(
+                    update={"rerank_rank": rerank_ranks.get(link.chunk_id)}
+                )
+                for link in atom_links
+            )
         expansion = selection.expansion
         evidence = selection.evidence
         model_evidence_candidates = selection.model_evidence_candidates
@@ -2203,6 +2224,7 @@ class RetrievalService:
                 "answer_support_policy": "minimum-supported-set-v3-08",
                 "answer_generation_policy": "model-grounded-claims-v2",
                 "query_plan_schema_revision": QUERY_PLAN_SCHEMA_REVISION,
+                "query_unit_fusion_revision": QUERY_UNIT_FUSION_REVISION,
                 "evidence_group_schema_revision": (
                     EVIDENCE_GROUP_SCHEMA_REVISION
                 ),
@@ -2325,105 +2347,147 @@ class RetrievalService:
         *,
         request: SearchRequest,
         snapshot: ActiveRevisionQuerySnapshot,
+        root_analysis: QueryAnalysis,
+        plan: RetrievalPlan,
         query_plan: QueryPlan,
         provider_calls: list[ProviderCall],
         degraded: list[str],
         trace_id: str,
         stage_timings: list[StageTiming],
     ) -> _AtomRetrievalOutcome:
-        """顺序运行本地通道，批量 Embedding 后只合并一次候选。"""
+        """Root 和原子分别召回，批量嵌入后执行两级有界融合。"""
         started = perf_counter()
         merged: dict[str, dict[str, ChannelHit]] = {}
-        provenance: dict[tuple[str, str], list[ChannelHit]] = {}
-        analyses = tuple(
-            self._analysis_for_atom(request, atom) for atom in query_plan.atoms
+        root_text = request.text
+        units = (
+            QueryUnit(
+                unit_id="ROOT",
+                atom_id=None,
+                text=root_text,
+                analysis=root_analysis,
+                weight=self._policy.unit_root_weight,
+            ),
+            *(
+                QueryUnit(
+                    unit_id=atom.atom_id,
+                    atom_id=atom.atom_id,
+                    text=atom.search_text,
+                    analysis=self._analysis_for_atom(request, atom),
+                    weight=(
+                        self._policy.unit_atom_total_weight
+                        / len(query_plan.atoms)
+                    ),
+                )
+                for atom in query_plan.atoms
+            ),
         )
+        unit_channels: dict[str, dict[str, tuple[ChannelHit, ...]]] = {
+            unit.unit_id: {} for unit in units
+        }
+        top_k = dict(plan.channel_top_k)
+        enabled = frozenset(self._policy.enabled_channels)
+
+        def limit_for(channel: str) -> int:
+            return top_k.get(channel, self._policy.channel_top_k)
 
         def add(
-            atom_id: str, channel: str, hits: tuple[ChannelHit, ...]
+            unit_id: str, channel: str, hits: tuple[ChannelHit, ...]
         ) -> None:
+            normalized_hits = tuple(
+                hit.model_copy(update={"channel": channel}) for hit in hits
+            )
+            unit_channels[unit_id][channel] = normalized_hits
             channel_items = merged.setdefault(channel, {})
-            for hit in hits:
+            for hit in normalized_hits:
                 prior = channel_items.get(hit.chunk_id)
                 if prior is None or hit.rank < prior.rank:
-                    channel_items[hit.chunk_id] = hit.model_copy(
-                        update={"channel": channel}
-                    )
-                provenance.setdefault((atom_id, hit.chunk_id), []).append(hit)
+                    channel_items[hit.chunk_id] = hit
 
-        for atom, analysis in zip(query_plan.atoms, analyses, strict=True):
-            if "exact" in self._policy.enabled_channels:
+        for unit in units:
+            if "exact" in enabled:
                 try:
                     add(
-                        atom.atom_id,
+                        unit.unit_id,
                         "exact",
                         apply_candidate_filters(
                             self._exact.search(
                                 snapshot,
-                                analysis,
-                                limit=self._policy.channel_top_k,
+                                unit.analysis,
+                                limit=limit_for("exact"),
                             ),
                             request,
                         ),
                     )
                 except (ChannelRateLimited, ChannelUnavailable) as error:
                     degraded.append(error.code)
-            if "structural" in self._policy.enabled_channels:
+            if "structural" in enabled:
                 try:
                     add(
-                        atom.atom_id,
+                        unit.unit_id,
                         "structural",
                         apply_candidate_filters(
                             self._structural.search(
                                 snapshot,
-                                analysis,
-                                limit=self._policy.channel_top_k,
+                                unit.analysis,
+                                limit=limit_for("structural"),
                             ),
                             request,
                         ),
                     )
                 except (ChannelRateLimited, ChannelUnavailable) as error:
                     degraded.append(error.code)
-            if "lexical" in self._policy.enabled_channels:
-                variant = QueryVariant(
-                    text=atom.search_text,
-                    kind="original",
-                    identity=canonical_sha256(
-                        {
-                            "atom_query": atom.search_text,
-                            "schema": QUERY_PLAN_SCHEMA_REVISION,
-                        }
-                    ),
+            if "lexical" in enabled:
+                variants = (
+                    plan.variants
+                    if unit.unit_id == "ROOT"
+                    else (
+                        QueryVariant(
+                            text=unit.text,
+                            kind="original",
+                            identity=canonical_sha256(
+                                {
+                                    "atom_query": unit.text,
+                                    "schema": QUERY_PLAN_SCHEMA_REVISION,
+                                }
+                            ),
+                        ),
+                    )
                 )
-                try:
-                    add(
-                        atom.atom_id,
-                        "lexical",
-                        apply_candidate_filters(
-                            self._lexical.search(
-                                snapshot,
-                                variant,
-                                limit=self._policy.channel_top_k,
-                                analysis=analysis,
-                            ),
-                            request,
-                        ),
+                for variant in variants:
+                    channel = (
+                        "lexical"
+                        if variant.kind == "original"
+                        else f"lexical:{variant.kind}"
                     )
-                except (ChannelRateLimited, ChannelUnavailable) as error:
-                    degraded.append(error.code)
+                    try:
+                        add(
+                            unit.unit_id,
+                            channel,
+                            apply_candidate_filters(
+                                self._lexical.search(
+                                    snapshot,
+                                    variant,
+                                    limit=limit_for("lexical"),
+                                    analysis=unit.analysis,
+                                ),
+                                request,
+                            ),
+                        )
+                    except (ChannelRateLimited, ChannelUnavailable) as error:
+                        degraded.append(error.code)
         selected_slot: str | None = None
         selected_vector: str | None = None
         route_reason = "DENSE_DISABLED_BY_PLAN"
-        if "dense" in self._policy.enabled_channels:
+        if "dense" in enabled:
             try:
                 dense_results = self._dense.search_many(
                     snapshot,
-                    tuple(atom.search_text for atom in query_plan.atoms),
+                    tuple(unit.text for unit in units),
                     self._egress,
-                    limit=self._policy.channel_top_k,
+                    limit=limit_for("dense"),
                 )
             except (DenseUnavailable, PolicyDenied) as error:
-                if request.dense_required:
+                if plan.dense_required:
                     raise
                 degraded.append(error.code)
                 route_reason = error.code
@@ -2433,9 +2497,7 @@ class RetrievalService:
                     stage="retrieval.dense",
                 ) from error
             else:
-                for atom, dense in zip(
-                    query_plan.atoms, dense_results, strict=True
-                ):
+                for unit, dense in zip(units, dense_results, strict=True):
                     provider_calls.extend(dense.routed.provider_calls)
                     if selected_slot is not None and (
                         selected_slot != dense.routed.selected_slot_id
@@ -2449,7 +2511,7 @@ class RetrievalService:
                     selected_vector = dense.routed.vector_name
                     route_reason = dense.routed.fallback_reason
                     add(
-                        atom.atom_id,
+                        unit.unit_id,
                         f"dense:{selected_slot}",
                         apply_candidate_filters(dense.hits, request),
                     )
@@ -2460,23 +2522,21 @@ class RetrievalService:
                         "selected_slot": selected_slot,
                         "vector_name": selected_vector,
                         "reason_code": route_reason,
-                        "batch_size": len(query_plan.atoms),
+                        "batch_size": len({unit.text for unit in units}),
                         "call_count": sum(
                             call.call_count
-                            for call in provider_calls
-                            if call.operation == "embedding"
+                            for result in dense_results
+                            for call in result.routed.provider_calls
                         ),
                     },
                 )
-        links = tuple(
-            AtomCandidateLink(
-                atom_id=atom_id,
-                chunk_id=chunk_id,
-                channels=tuple(dict.fromkeys(hit.channel for hit in hits)),
-                best_rank=min(hit.rank for hit in hits),
-                score=max(hit.raw_score for hit in hits),
-            )
-            for (atom_id, chunk_id), hits in provenance.items()
+        fusion = fuse_query_units(
+            tuple(
+                QueryUnitRetrieval(unit, unit_channels[unit.unit_id])
+                for unit in units
+            ),
+            revision_id=snapshot.revision.index_revision_id,
+            policy=self._policy,
         )
         channels = {
             channel: tuple(
@@ -2488,16 +2548,30 @@ class RetrievalService:
             trace_id,
             "atom_retrieval",
             {
+                "root_query_present": True,
                 "atom_count": len(query_plan.atoms),
                 "channel_counts": tuple(
                     (channel, len(hits)) for channel, hits in channels.items()
                 ),
-                "candidate_link_count": len(links),
+                "candidate_link_count": len(fusion.links),
+                "seed_chunk_count": len(fusion.seed_chunk_ids),
+                "fused_chunk_count": len(fusion.candidates),
             },
         )
         _finish_timing(stage_timings, "atom_retrieval", started)
+        rerank_query = "原始问题：" + root_text + "\n子问题：\n" + "\n".join(
+            f"- {atom.atom_id} {atom.target}｜{atom.relation}"
+            for atom in query_plan.atoms
+        )
         return _AtomRetrievalOutcome(
-            channels, links, selected_slot, selected_vector, route_reason
+            channels,
+            fusion.links,
+            selected_slot,
+            selected_vector,
+            route_reason,
+            fusion.candidates,
+            fusion.seed_chunk_ids,
+            rerank_query,
         )
 
     def _ground_atoms(  # noqa: PLR0912, PLR0913, PLR0915
@@ -2894,6 +2968,8 @@ class RetrievalService:
         stage_timings: list[StageTiming],
         retrieval_phase: str,
         atom_required_ids: tuple[str, ...] = (),
+        pre_fused: tuple[FusedCandidate, ...] | None = None,
+        rerank_query: str | None = None,
     ) -> _SelectionOutcome:
         """融合、重排并按同一个语义对象选择证据。
 
@@ -2910,6 +2986,8 @@ class RetrievalService:
             stage_timings: 汇总实际耗时的可变列表。
             retrieval_phase: original 或 rewrite，用于区分有界补召回。
             atom_required_ids: 每个原子初召回中需要保留的候选身份。
+            pre_fused: 已完成 Root/Atom 两级融合的候选，可跳过全局 RRF。
+            rerank_query: 一次统一重排使用的原问与原子关系。
 
         Returns:
             最终融合、重排、扩展、证据和置信结果。
@@ -2927,21 +3005,34 @@ class RetrievalService:
         }
         channel_hits.clear()
         channel_hits.update(filtered_channels)
-        structural_closure_ids = tuple(
-            dict.fromkeys(
-                (
-                    *_required_structural_candidate_ids(channel_hits),
-                    *(item for item in atom_required_ids if item),
+        if pre_fused is None:
+            structural_closure_ids = tuple(
+                dict.fromkeys(
+                    (
+                        *_required_structural_candidate_ids(channel_hits),
+                        *(item for item in atom_required_ids if item),
+                    )
                 )
             )
-        )
-        fused = reciprocal_rank_fusion(
-            channel_hits,
-            expected_revision_id=snapshot.revision.index_revision_id,
-            k=self._policy.rrf_k,
-            limit=self._policy.fusion_candidate_limit,
-            required_candidate_ids=frozenset(structural_closure_ids),
-        )
+            fused = reciprocal_rank_fusion(
+                channel_hits,
+                expected_revision_id=snapshot.revision.index_revision_id,
+                k=self._policy.rrf_k,
+                limit=self._policy.fusion_candidate_limit,
+                required_candidate_ids=frozenset(structural_closure_ids),
+            )
+        else:
+            fused = tuple(
+                candidate
+                for candidate in pre_fused
+                if candidate.document_id not in excluded_documents
+            )
+            fused_ids = {candidate.chunk_id for candidate in fused}
+            structural_closure_ids = tuple(
+                candidate_id
+                for candidate_id in atom_required_ids
+                if candidate_id in fused_ids
+            )
         self._record(
             trace_id,
             "fuse",
@@ -2976,7 +3067,11 @@ class RetrievalService:
             {"pass": retrieval_phase, "candidate_count": len(hydrated)},
         )
         rank_started = perf_counter()
-        resolved_query = analysis.resolved_query or analysis.normalized_query
+        resolved_query = (
+            rerank_query
+            or analysis.resolved_query
+            or analysis.normalized_query
+        )
         reranked = self._reranker.rerank(
             resolved_query,
             hydrated,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from rag_app.core.errors import IndexCompatibilityError
 from rag_app.core.models import (
@@ -88,20 +88,23 @@ class DenseChannel:
         """
         if not queries:
             raise ValueError("Dense 批量查询不能为空。")
+        unique_queries = tuple(dict.fromkeys(queries))
         revision = ActiveRevisionEmbeddingState(
             topology=snapshot.topology,
             coverages=snapshot.coverages,
         )
         if isinstance(self._router, BatchQueryEmbeddingPort):
-            routed_items = self._router.embed_queries(queries, revision, egress)
+            routed_items = self._router.embed_queries(
+                unique_queries, revision, egress
+            )
         else:
             routed_items = tuple(
                 self._router.embed_query(
                     QueryEmbeddingRequest(query), revision, egress
                 )
-                for query in queries
+                for query in unique_queries
             )
-        if len(routed_items) != len(queries):
+        if len(routed_items) != len(unique_queries):
             raise IndexCompatibilityError(
                 "Query router 批量结果数量不匹配。",
                 stage="retrieval.dense",
@@ -116,10 +119,16 @@ class DenseChannel:
                 "同一请求的 Atom 禁止跨 slot 检索。",
                 stage="retrieval.dense",
             )
-        return tuple(
-            self._search_routed(snapshot, routed, limit=limit)
-            for routed in routed_items
-        )
+        routed_by_query = dict(zip(unique_queries, routed_items, strict=True))
+        seen: set[str] = set()
+        results: list[DenseChannelResult] = []
+        for query in queries:
+            routed = routed_by_query[query]
+            if query in seen:
+                routed = replace(routed, provider_calls=())
+            seen.add(query)
+            results.append(self._search_routed(snapshot, routed, limit=limit))
+        return tuple(results)
 
     def _search_routed(
         self,

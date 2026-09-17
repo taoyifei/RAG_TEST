@@ -359,6 +359,50 @@ def test_dense_search_many_uses_batch_router_and_single_slot() -> None:
     assert results[1].routed.provider_calls == ()
 
 
+def test_dense_search_many_deduplicates_batch_texts() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    store = _VectorStoreFake()
+    dense = DenseChannel(
+        _router(primary, _EmbeddingFake(standby_slot)), store
+    )
+
+    results = dense.search_many(
+        _dense_snapshot(), ("root", "atom", "atom", "root"),
+        _egress(), limit=2
+    )
+
+    assert len(results) == 4
+    assert primary.calls == 1
+    assert primary.requests[0].texts == ("root", "atom")
+    assert len(results[0].routed.provider_calls) == 1
+    assert all(not item.routed.provider_calls for item in results[1:])
+    assert len(store.calls) == 4
+
+
+def test_root_and_three_atoms_use_one_embedding_batch_and_one_slot() -> None:
+    primary_slot, standby_slot = _slots()
+    primary = _AuditedEmbeddingFake(primary_slot)
+    store = _VectorStoreFake()
+    dense = DenseChannel(
+        _router(primary, _EmbeddingFake(standby_slot)), store
+    )
+    queries = ("root", "atom-one", "atom-two", "atom-three")
+
+    results = dense.search_many(
+        _dense_snapshot(), queries, _egress(), limit=2
+    )
+
+    assert primary.calls == 1
+    assert primary.requests[0].texts == queries
+    assert len(results) == len(queries)
+    assert {result.routed.selected_slot_id for result in results} == {
+        "primary"
+    }
+    assert len(results[0].routed.provider_calls) == 1
+    assert all(not result.routed.provider_calls for result in results[1:])
+
+
 def test_dense_legacy_router_sequential_fallback_keeps_one_slot() -> None:
     primary_slot, standby_slot = _slots()
     primary = _EmbeddingFake(primary_slot)

@@ -13,6 +13,7 @@ from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
 QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v2"
+QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"
 GROUNDED_CLAIM_SCHEMA_REVISION = "wb08r-grounded-claim-v3"
 NATURAL_RENDERER_REVISION = "wb08r-natural-renderer-v2"
@@ -149,11 +150,15 @@ class AtomStatus(StrEnum):
 class AtomCandidateLink(FrozenModel):
     """保留初召回的 atom 和通道来源。"""
 
-    atom_id: str = Field(pattern=r"^A[1-4]$")
+    atom_id: str | None = Field(pattern=r"^A[1-4]$")
+    unit_id: str | None = None
     chunk_id: str = Field(pattern=r"^chunk_[0-9a-f]{32}$")
     group_id: str | None = None
     channels: tuple[str, ...] = Field(min_length=1)
     best_rank: StrictInt = Field(gt=0)
+    unit_fusion_rank: StrictInt | None = Field(default=None, gt=0)
+    best_channel_rank: StrictInt | None = Field(default=None, gt=0)
+    rerank_rank: StrictInt | None = Field(default=None, gt=0)
     score: float
 
 
