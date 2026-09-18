@@ -335,6 +335,14 @@ def test_table_sibling_row_linked_to_atom_is_detected() -> None:
     admitted.append(
         {
             **admitted[0],
+            "support_id": "S_header",
+            "table_row_index": 0,
+            "linked_atom_ids": ["A1"],
+        }
+    )
+    admitted.append(
+        {
+            **admitted[0],
             "support_id": "S_wrong",
             "table_row_index": 3,
             "linked_atom_ids": ["A1"],

@@ -697,9 +697,15 @@ def score_observation(  # noqa: PLR0912, PLR0915
             ):
                 result["table_sibling_atom_conflict_count"] = sum(
                     source["table_row_index"]
-                    != gold_table_rows[
-                        (source["document_version_id"], source["table_node_id"])
-                    ]
+                    not in {
+                        0,  # 表头是目标行值的列语境，不是兄弟数据行。
+                        gold_table_rows[
+                            (
+                                source["document_version_id"],
+                                source["table_node_id"],
+                            )
+                        ],
+                    }
                     and bool(source["linked_atom_ids"])
                     for source in table_sources
                 )
