@@ -131,6 +131,20 @@ def test_table_row_group_keeps_header_row_label_cells_and_coordinates() -> None:
 def test_split_table_cell_uses_source_offset_before_retrieval_rank() -> None:
     """同一单元格的后半块排名更高时，完整行仍按原文顺序闭合。"""
     header = _table_row(91, 0, ("任务类型", "输入"), header=True)
+    header_spans = header.hydrated.chunk.source_spans
+    header = _with_chunk(
+        header,
+        source_spans=(
+            header_spans[0].model_copy(
+                update={
+                    "span_type": SourceSpanKind.DERIVED_NUMBERING,
+                    "source_start_char": None,
+                    "source_end_char": None,
+                }
+            ),
+            *header_spans[1:],
+        ),
+    )
     first = make_ranked_chunk(
         92,
         "需求快验",

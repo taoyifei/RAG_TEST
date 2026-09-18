@@ -648,7 +648,12 @@ def _connected(members: tuple[RankedChunk, ...]) -> bool:
 def _source_order(member: RankedChunk) -> tuple[int, int, int, str]:
     """同一来源节点被切块时，按原文偏移而非检索名次排列。"""
     positions = (
-        (span.source_anchor.ordinal, span.source_start_char)
+        (
+            span.source_anchor.ordinal,
+            span.source_start_char
+            if span.source_start_char is not None
+            else 0,
+        )
         for span in member.hydrated.chunk.source_spans
         if span.source_anchor is not None and span.is_citable
     )
