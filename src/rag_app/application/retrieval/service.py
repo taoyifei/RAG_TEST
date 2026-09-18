@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import traceback
 import unicodedata
 import uuid
 from collections import Counter
@@ -1847,6 +1848,20 @@ class RetrievalService:
                 }
             )
             answer = None
+        except Exception as error:
+            # 仅记录代码位置和异常类型，避免在诊断轨迹中写入问题或原文。
+            self._record(
+                trace_id,
+                "answer_unexpected_failure",
+                {
+                    "error_type": type(error).__name__,
+                    "frames": tuple(
+                        (frame.name, frame.lineno)
+                        for frame in traceback.extract_tb(error.__traceback__)
+                    ),
+                },
+            )
+            raise
         if answer is None:
             blocked_status = _model_capability_status(
                 self._data_plane_context,
