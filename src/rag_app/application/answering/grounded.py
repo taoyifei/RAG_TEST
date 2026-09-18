@@ -2969,8 +2969,15 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             and item.source_spans
             and all(span.is_citable for span in item.source_spans)
             and _FALLBACK_DURATION.search(item.citation_text)
-            and len(_terms(item.citation_text) & question_terms)
-            >= _FALLBACK_MIN_BIGRAM_OVERLAP
+            and _longest_common_han_run(
+                plan.original_query,
+                str(
+                    dict(item.metadata).get("document_title")
+                    or item.display_name
+                    or ""
+                ),
+            )
+            >= _CONTEXT_SOURCE_MIN_MATCH_CHARS
         ]
         if len(timed_cells) == 1:
             selected = timed_cells
@@ -3271,8 +3278,9 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         ]
     if not ids:
         return None
-    if not named_row_selected and not _fallback_has_question_anchor(
-        plan.original_query, selected
+    if (
+        not (named_row_selected or timed_cell_selected)
+        and not _fallback_has_question_anchor(plan.original_query, selected)
     ):
         return None
     covered_atoms = frozenset(

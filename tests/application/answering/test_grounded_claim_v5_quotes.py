@@ -638,6 +638,7 @@ def test_fallback_quotes_unique_duration_from_incomplete_level_row() -> None:
                 "metadata": freeze_json_object(
                     {
                         **dict(item.metadata),
+                        "document_title": "重大设备安全事件管理办法",
                         **(
                             {
                                 "evidence_group_id": "egrp_definition",
