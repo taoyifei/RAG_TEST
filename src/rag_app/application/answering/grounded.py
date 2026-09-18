@@ -166,6 +166,7 @@ _FALLBACK_DURATION = re.compile(
 _FALLBACK_LIST_MARKER = re.compile(
     r"^[（(]?[一二三四五六七八九十\d]+[）).、]?$"
 )
+_FALLBACK_ORPHAN_HEADING = re.compile(r"^[、，:：]\s*[^，。；;！？!?]{1,24}$")
 _DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
@@ -2804,6 +2805,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             or not item.publishable
             or not item.source_spans
             or any(not span.is_citable for span in item.source_spans)
+            or _FALLBACK_ORPHAN_HEADING.fullmatch(item.citation_text.strip())
         ):
             continue
         certified = (
@@ -2958,7 +2960,42 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             question_terms
             & _terms(" ".join(item.citation_text for item, _ in best_group))
         ) >= _FALLBACK_MIN_BIGRAM_OVERLAP:
-            selected = best_group
+            selected = list(best_group)
+            if len(plan.atoms) > 1 and all(
+                atom.answer_shape
+                not in {
+                    AtomAnswerShape.ENUMERATION,
+                    AtomAnswerShape.PROCEDURE,
+                    AtomAnswerShape.DUTIES,
+                }
+                for atom in plan.atoms
+            ):
+                # 复合事实问句可取同一章节内第二组原句；要求它有完整
+                # 句尾，避免把半句或相邻标题当成额外答案。
+                source = (
+                    best_group[0][0].document_version_id,
+                    best_group[0][0].section_id,
+                )
+                for _, members in ranked_groups[1:]:
+                    if (
+                        (
+                            members[0][0].document_version_id,
+                            members[0][0].section_id,
+                        )
+                        != source
+                        or not any(
+                            sentence.rstrip().endswith(("。", "；", ";"))
+                            for _, sentence in members
+                        )
+                        or len(
+                            question_terms
+                            & _terms(" ".join(text for _, text in members))
+                        )
+                        < _FALLBACK_MIN_BIGRAM_OVERLAP
+                    ):
+                        continue
+                    selected.extend(members)
+                    break
     if not selected:
         selected = ordinary_selection
     if not selected:

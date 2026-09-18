@@ -776,6 +776,54 @@ def test_short_question_uses_relevant_member_of_complete_group() -> None:
     assert "不可多次报销" not in result[0]
 
 
+def test_compound_reimbursement_omits_orphan_heading() -> None:
+    """半句条件和跨年条款各自引用，不能把相邻标题拼成事实。"""
+    evidence = _evidence(
+        "员工通过认证拿到证书后，在部门认证费用额度内集中报销，",
+        "、其他注意事项",
+        "跨年领到证书的，请在证书领取年份报销，占用本部门该年度额度；",
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": (
+                            "egrp_conditions"
+                            if index < 2
+                            else "egrp_cross_year"
+                        ),
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                )
+            }
+        )
+        for index, item in enumerate(evidence)
+    )
+    plan = _plan("认证费跨年报销", "报销条件").model_copy(
+        update={
+            "original_query": "认证费能跨年报吗，什么条件下才行？",
+            "resolved_root_query": "认证费能跨年报吗，什么条件下才行？",
+        }
+    )
+    links = {
+        atom.atom_id: tuple(item.support_id for item in grouped)
+        for atom in plan.atoms
+    }
+
+    result = _safe_extractive_fallback(
+        plan, grouped, links, ("egrp_conditions", "egrp_cross_year")
+    )
+
+    assert result is not None
+    assert "员工通过认证拿到证书后" in result[0]
+    assert "证书领取年份报销" in result[0]
+    assert "其他注意事项" not in result[0]
+    assert "，、" not in result[0]
+
+
 def test_single_atom_fallback_restores_one_split_source_paragraph() -> None:
     """单一材料问句也可拼回同一原文节点的两个片段。"""
     evidence = _evidence(
