@@ -128,6 +128,60 @@ def test_table_row_group_keeps_header_row_label_cells_and_coordinates() -> None:
     assert len(group.group.member_source_maps[1].source_spans) == 3
 
 
+def test_split_table_cell_uses_source_offset_before_retrieval_rank() -> None:
+    """同一单元格的后半块排名更高时，完整行仍按原文顺序闭合。"""
+    header = _table_row(91, 0, ("任务类型", "输入"), header=True)
+    first = make_ranked_chunk(
+        92,
+        "需求快验",
+        role=ChunkRole.TABLE,
+        neighbor_group_id="table-1",
+        next_chunk_id=f"chunk_{93:032x}",
+    )
+    second = make_ranked_chunk(
+        93,
+        "输入及启动",
+        role=ChunkRole.TABLE,
+        neighbor_group_id="table-1",
+        previous_chunk_id=f"chunk_{92:032x}",
+    )
+    path = ("body", "tbl:1", "tr:1", "tc:0", "p:0")
+    for index, candidate in enumerate((first, second)):
+        span = candidate.hydrated.chunk.source_spans[0]
+        offset = index * len(first.hydrated.chunk.citation_text)
+        anchor = span.source_anchor
+        assert anchor is not None
+        adjusted = span.model_copy(
+            update={
+                "source_anchor": anchor.model_copy(
+                    update={"ordinal": 29, "structural_path": path}
+                ),
+                "structural_path": path,
+                "source_start_char": offset,
+                "source_end_char": offset
+                + len(candidate.hydrated.chunk.citation_text),
+            }
+        )
+        updated = _with_chunk(
+            candidate,
+            heading_path=("事项表",),
+            source_spans=(adjusted,),
+        )
+        if index == 0:
+            first = updated.model_copy(update={"fusion_rank": 9})
+        else:
+            second = updated.model_copy(update={"fusion_rank": 1})
+
+    group = _groups(second, first, header)[0]
+
+    assert group.complete
+    assert group.group.member_chunk_ids == (
+        header.hydrated.chunk.chunk_id,
+        first.hydrated.chunk.chunk_id,
+        second.hydrated.chunk.chunk_id,
+    )
+
+
 def test_group_budget_excludes_repeated_chunk_prefix() -> None:
     """检索用 Chunk 前缀不应占用实际未渲染的组预算。"""
     header = _with_chunk(

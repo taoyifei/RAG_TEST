@@ -645,10 +645,16 @@ def _connected(members: tuple[RankedChunk, ...]) -> bool:
     )
 
 
-def _source_order(member: RankedChunk) -> tuple[int, int, str]:
-    ordinal = _first_ordinal(member)
+def _source_order(member: RankedChunk) -> tuple[int, int, int, str]:
+    """同一来源节点被切块时，按原文偏移而非检索名次排列。"""
+    positions = (
+        (span.source_anchor.ordinal, span.source_start_char)
+        for span in member.hydrated.chunk.source_spans
+        if span.source_anchor is not None and span.is_citable
+    )
+    position = min(positions, default=(2**31, 2**31))
     return (
-        ordinal if ordinal is not None else 2**31,
+        *position,
         member.fusion_rank,
         member.hydrated.chunk.chunk_id,
     )
