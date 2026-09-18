@@ -2960,8 +2960,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             question_terms
             & _terms(" ".join(item.citation_text for item, _ in best_group))
         ) >= _FALLBACK_MIN_BIGRAM_OVERLAP:
-            selected = list(best_group)
-            if len(plan.atoms) > 1 and all(
+            factual = all(
                 atom.answer_shape
                 not in {
                     AtomAnswerShape.ENUMERATION,
@@ -2969,7 +2968,26 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
                     AtomAnswerShape.DUTIES,
                 }
                 for atom in plan.atoms
-            ):
+            )
+
+            def focused_members(
+                members: list[tuple[EvidenceItem, str]],
+                uncovered: set[str],
+            ) -> list[tuple[EvidenceItem, str]]:
+                if not factual or len(plan.atoms) == 1:
+                    return list(members)
+                return [
+                    max(
+                        members,
+                        key=lambda pair: (
+                            len(_terms(pair[1]) & uncovered),
+                            len(_terms(pair[1]) & question_terms),
+                        ),
+                    )
+                ]
+
+            selected = focused_members(best_group, question_terms)
+            if len(plan.atoms) > 1 and factual:
                 # 复合事实问句可取同一章节内第二组原句；要求它有完整
                 # 句尾，避免把半句或相邻标题当成额外答案。
                 source = (
@@ -2994,7 +3012,10 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
                         < _FALLBACK_MIN_BIGRAM_OVERLAP
                     ):
                         continue
-                    selected.extend(members)
+                    uncovered = question_terms - _terms(
+                        " ".join(sentence for _, sentence in selected)
+                    )
+                    selected.extend(focused_members(members, uncovered))
                     break
     if not selected:
         selected = ordinary_selection

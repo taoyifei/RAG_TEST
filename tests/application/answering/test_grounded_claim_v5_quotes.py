@@ -782,6 +782,7 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
         "员工通过认证拿到证书后，在部门认证费用额度内集中报销，",
         "、其他注意事项",
         "跨年领到证书的，请在证书领取年份报销，占用本部门该年度额度；",
+        "若在认证目录内，部分认证项目通过后需要年检的，也可报销；",
     )
     grouped = tuple(
         item.model_copy(
@@ -821,6 +822,7 @@ def test_compound_reimbursement_omits_orphan_heading() -> None:
     assert "员工通过认证拿到证书后" in result[0]
     assert "证书领取年份报销" in result[0]
     assert "其他注意事项" not in result[0]
+    assert "部分认证项目" not in result[0]
     assert "，、" not in result[0]
 
 
