@@ -195,8 +195,7 @@ class _AuditedEmbeddingFake(_EmbeddingFake):
         return result.model_copy(
             update={
                 "vectors": tuple(
-                    (float(len(text)),)
-                    + (0.0,) * (self.slot.dimension - 1)
+                    (float(len(text)),) + (0.0,) * (self.slot.dimension - 1)
                     for text in request.texts
                 ),
                 "calls": (
@@ -208,7 +207,7 @@ class _AuditedEmbeddingFake(_EmbeddingFake):
                         elapsed_ms=1,
                         input_count=len(request.texts),
                     ),
-                )
+                ),
             }
         )
 
@@ -217,17 +216,15 @@ class _VectorStoreFake:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, tuple[float, ...]]] = []
 
-    def search_named(  # noqa: PLR0913
+    def search_named(
         self,
         spec: object,
-        *,
-        slot_id: str,
-        vector_name: str,
-        query_vector: tuple[float, ...],
-        limit: int,
-        excluded_document_ids: tuple[str, ...] = (),
+        **kwargs: object,
     ) -> tuple[()]:
-        del spec, limit, excluded_document_ids
+        del spec
+        slot_id = cast(str, kwargs["slot_id"])
+        vector_name = cast(str, kwargs["vector_name"])
+        query_vector = cast(tuple[float, ...], kwargs["query_vector"])
         self.calls.append((slot_id, vector_name, query_vector))
         return ()
 
@@ -363,13 +360,10 @@ def test_dense_search_many_deduplicates_batch_texts() -> None:
     primary_slot, standby_slot = _slots()
     primary = _AuditedEmbeddingFake(primary_slot)
     store = _VectorStoreFake()
-    dense = DenseChannel(
-        _router(primary, _EmbeddingFake(standby_slot)), store
-    )
+    dense = DenseChannel(_router(primary, _EmbeddingFake(standby_slot)), store)
 
     results = dense.search_many(
-        _dense_snapshot(), ("root", "atom", "atom", "root"),
-        _egress(), limit=2
+        _dense_snapshot(), ("root", "atom", "atom", "root"), _egress(), limit=2
     )
 
     assert len(results) == 4
@@ -384,21 +378,15 @@ def test_root_and_three_atoms_use_one_embedding_batch_and_one_slot() -> None:
     primary_slot, standby_slot = _slots()
     primary = _AuditedEmbeddingFake(primary_slot)
     store = _VectorStoreFake()
-    dense = DenseChannel(
-        _router(primary, _EmbeddingFake(standby_slot)), store
-    )
+    dense = DenseChannel(_router(primary, _EmbeddingFake(standby_slot)), store)
     queries = ("root", "atom-one", "atom-two", "atom-three")
 
-    results = dense.search_many(
-        _dense_snapshot(), queries, _egress(), limit=2
-    )
+    results = dense.search_many(_dense_snapshot(), queries, _egress(), limit=2)
 
     assert primary.calls == 1
     assert primary.requests[0].texts == queries
     assert len(results) == len(queries)
-    assert {result.routed.selected_slot_id for result in results} == {
-        "primary"
-    }
+    assert {result.routed.selected_slot_id for result in results} == {"primary"}
     assert len(results[0].routed.provider_calls) == 1
     assert all(not result.routed.provider_calls for result in results[1:])
 

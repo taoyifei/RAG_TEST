@@ -103,7 +103,12 @@ def test_group_certificate_requires_lead_in_in_claim_citations() -> None:
             NaturalClaim(
                 atom_id="A1",
                 text="甲类文具包括钢笔。",
-                support_ids=(fact.support_id,),
+                supports=(
+                    ClaimSupport(
+                        support_id=fact.support_id,
+                        quote=fact.citation_text,
+                    ),
+                ),
             ),
             plan,
             matrix,
@@ -120,7 +125,13 @@ def test_group_certificate_requires_lead_in_in_claim_citations() -> None:
         NaturalClaim(
             atom_id="A1",
             text="甲类文具包括钢笔。",
-            support_ids=(lead.support_id, fact.support_id),
+            supports=tuple(
+                ClaimSupport(
+                    support_id=item.support_id,
+                    quote=item.citation_text,
+                )
+                for item in (lead, fact)
+            ),
         ),
         plan,
         matrix,

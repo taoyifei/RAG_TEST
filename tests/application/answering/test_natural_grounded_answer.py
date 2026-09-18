@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from unittest.mock import Mock
 
 import pytest
@@ -36,7 +37,7 @@ from rag_app.core.models.query_plan import (
     QueryPlan,
     make_query_plan,
 )
-from rag_app.core.models.retrieval import NaturalClaim
+from rag_app.core.models.retrieval import ClaimSupport, NaturalClaim
 from rag_app.core.ports import GenerationRequest
 from tests.application.retrieval.test_descriptive_answers import (
     _POLICY,
@@ -95,11 +96,11 @@ def _matrix(
 
 
 def _draft(claims: tuple[NaturalClaim, ...], _plan: QueryPlan) -> AnswerDraft:
-    """模拟 v4 最小模型草稿，不提供覆盖、Claim ID 或逐字 quote。"""
+    """模拟带逐字 Quote 的自然事实草稿，不提供覆盖或 Claim ID。"""
     return AnswerDraft(
         text="\n".join(item.text for item in claims) or "未找到明确规定。",
         cited_evidence_ids=tuple(
-            support_id for item in claims for support_id in item.support_ids
+            support.support_id for item in claims for support in item.supports
         ),
         natural_claims=claims,
         generation_mode="natural",
@@ -111,33 +112,42 @@ def _claim(
     text: str,
     atom_id: str,
     support_id: str,
+    quote: str | None = None,
 ) -> NaturalClaim:
     """保留合成样本标签；模型协议本身不含 Claim ID。"""
     assert claim_id.startswith("C")
     return NaturalClaim(
         atom_id=atom_id,
         text=text,
-        support_ids=(support_id,),
+        supports=(ClaimSupport(support_id=support_id, quote=quote or text),),
     )
 
 
-def _answer(  # noqa: PLR0913
+@dataclass(frozen=True)
+class _AnswerOptions:
+    """可选的模拟流回调与共享分析。"""
+
+    on_claim: Callable[..., None] | None = None
+    analysis: QueryAnalysis | None = None
+
+
+def _answer(
     generator: Mock,
     evidence: tuple[EvidenceItem, ...],
     plan: QueryPlan,
     matrix: AtomSupportMatrix,
     *,
-    on_claim: Callable[..., None] | None = None,
-    analysis: QueryAnalysis | None = None,
+    options: _AnswerOptions | None = None,
 ) -> GroundedOutcome:
+    options = options or _AnswerOptions()
     return GroundedAnsweringService(generator).answer(
         plan.standalone_query,
         evidence,
         ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
         query_plan=plan,
         atom_support_matrix=matrix,
-        analysis=analysis,
-        on_claim=on_claim,
+        analysis=options.analysis,
+        on_claim=options.on_claim,
         cancellation=Mock(is_cancelled=Mock(return_value=False)),
     )
 
@@ -156,6 +166,7 @@ def test_supported_natural_paraphrase_keeps_server_quote() -> None:
                 "甲部门负责人负责核对标准、协调资源和组织验收。",
                 "A1",
                 "S1",
+                "甲部门负责人负责核对交付标准，协调维护资源并组织最终验收。",
             ),
         ),
         plan,
@@ -180,7 +191,16 @@ def test_changed_number_is_not_published_after_local_repair() -> None:
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
     generator = Mock()
     generator.generate.return_value = _draft(
-        (_claim("C1", "甲部门保存记录 15 天。", "A1", "S1"),), plan
+        (
+            _claim(
+                "C1",
+                "甲部门保存记录 15 天。",
+                "A1",
+                "S1",
+                "甲部门保存记录 14 天。",
+            ),
+        ),
+        plan,
     )
 
     outcome = _answer(generator, evidence, plan, matrix)
@@ -188,11 +208,9 @@ def test_changed_number_is_not_published_after_local_repair() -> None:
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
     assert outcome.atom_coverage == (("A1", "MISSING"),)
-    assert outcome.repair_calls == 1
-    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_MISMATCH", 2),)
-    assert generator.generate.call_args_list[1].args[0].repair_atom_ids == (
-        "A1",
-    )
+    assert outcome.repair_calls == 0
+    assert outcome.claim_rejection_codes == (("CLAIM_NUMBER_MISMATCH", 1),)
+    assert generator.generate.call_count == 1
 
 
 def test_changed_negation_is_not_published() -> None:
@@ -201,15 +219,24 @@ def test_changed_negation_is_not_published() -> None:
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
     generator = Mock()
     generator.generate.return_value = _draft(
-        (_claim("C1", "甲部门可以自行销毁记录。", "A1", "S1"),), plan
+        (
+            _claim(
+                "C1",
+                "甲部门可以自行销毁记录。",
+                "A1",
+                "S1",
+                "甲部门不得自行销毁记录。",
+            ),
+        ),
+        plan,
     )
 
     outcome = _answer(generator, evidence, plan, matrix)
 
     assert outcome.answer is None
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
-    assert outcome.repair_calls == 1
-    assert outcome.claim_rejection_codes == (("CLAIM_MODALITY_MISMATCH", 2),)
+    assert outcome.repair_calls == 0
+    assert outcome.claim_rejection_codes == (("CLAIM_MODALITY_MISMATCH", 1),)
 
 
 def test_permission_cannot_be_rewritten_as_obligation() -> None:
@@ -218,7 +245,12 @@ def test_permission_cannot_be_rewritten_as_obligation() -> None:
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
     generator = Mock()
     generator.generate.return_value = _draft(
-        (_claim("C1", "甲部门必须延后提交。", "A1", "S1"),), plan
+        (
+            _claim(
+                "C1", "甲部门必须延后提交。", "A1", "S1", "甲部门可以延后提交。"
+            ),
+        ),
+        plan,
     )
 
     outcome = _answer(generator, evidence, plan, matrix)
@@ -227,7 +259,7 @@ def test_permission_cannot_be_rewritten_as_obligation() -> None:
     assert outcome.reason_code == "CLAIM_NOT_SUPPORTED"
 
 
-def test_v4_adapter_rejects_model_supplied_quote() -> None:
+def test_v7_adapter_rejects_quote_outside_supports() -> None:
     evidence = _evidence("甲部门保存记录 14 天。")
     plan = _plan("甲部门")
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
@@ -243,7 +275,9 @@ def test_v4_adapter_rejects_model_supplied_quote() -> None:
             {
                 "atom_id": "A1",
                 "text": "甲部门保存记录 14 天。",
-                "support_ids": ["S1"],
+                "supports": [
+                    {"support_id": "S1", "quote": "甲部门保存记录 14 天。"}
+                ],
                 "quote": "甲部门保存记录 14 天。",
             }
         ],
@@ -355,12 +389,12 @@ def test_incomplete_enumeration_remains_limited() -> None:
         evidence,
         plan,
         matrix,
-        analysis=_context(question).analysis,
+        options=_AnswerOptions(analysis=_context(question).analysis),
     )
 
     assert outcome.atom_coverage == (("A1", "PARTIAL"),)
     assert outcome.answer is not None
-    assert "本次未能完整核验全部条目" in outcome.answer
+    assert "已检索到相关资料，但本次未能完整组织全部内容" in outcome.answer
     assert "现有资料没有明确说明" not in outcome.answer
     assert outcome.missing_atom_reasons == (("A1", "GENERATION_INCOMPLETE"),)
     assert outcome.generation_gap_count == 1
@@ -386,7 +420,11 @@ def test_renderer_deduplicates_same_fact_and_support() -> None:
 
     emitted: list[object] = []
     outcome = _answer(
-        generator, evidence, plan, matrix, on_claim=emitted.append
+        generator,
+        evidence,
+        plan,
+        matrix,
+        options=_AnswerOptions(on_claim=emitted.append),
     )
 
     assert outcome.answer is not None
@@ -434,9 +472,7 @@ def test_supported_and_missing_atoms_make_limited_answer() -> None:
 
 def test_missing_list_atoms_do_not_repeat_the_same_disclaimer() -> None:
     evidence = _evidence("甲类属于所问集合。")
-    plan = _plan(
-        "甲类", "乙类", "丙类", shape=AtomAnswerShape.ENUMERATION
-    )
+    plan = _plan("甲类", "乙类", "丙类", shape=AtomAnswerShape.ENUMERATION)
     matrix = _matrix(
         plan,
         (
@@ -561,7 +597,11 @@ def test_multi_atom_stream_keeps_claims_private_until_final() -> None:
     generator.generate.return_value = draft
 
     outcome = _answer(
-        generator, evidence, plan, matrix, on_claim=emitted.append
+        generator,
+        evidence,
+        plan,
+        matrix,
+        options=_AnswerOptions(on_claim=emitted.append),
     )
 
     assert outcome.answer is not None
@@ -588,7 +628,13 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
             NaturalClaim(
                 atom_id="A1",
                 text="甲部门保存记录 14 天。",
-                support_ids=tuple(item.support_id for item in evidence),
+                supports=tuple(
+                    ClaimSupport(
+                        support_id=item.support_id,
+                        quote=item.citation_text,
+                    )
+                    for item in evidence
+                ),
             ),
         ),
         plan,
@@ -597,11 +643,9 @@ def test_one_generic_claim_cannot_certify_multiple_atoms() -> None:
     outcome = _answer(generator, evidence, plan, matrix)
 
     assert outcome.answer is None
-    assert outcome.claim_rejection_codes == (
-        ("CLAIM_SUPPORT_NOT_OWNED", 2),
-    )
+    assert outcome.claim_rejection_codes == (("CLAIM_SUPPORT_NOT_OWNED", 1),)
     assert outcome.atom_coverage == (("A1", "MISSING"), ("A2", "MISSING"))
-    assert outcome.repair_calls == 1
+    assert outcome.repair_calls == 0
 
 
 def test_procedure_renderer_uses_source_order() -> None:

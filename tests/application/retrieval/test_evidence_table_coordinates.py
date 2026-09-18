@@ -16,6 +16,7 @@ from rag_app.application.retrieval.evidence import EvidenceAssembler
 from rag_app.core.errors import ValidationFailed
 from rag_app.core.models import (
     ChunkRole,
+    ClaimSupport,
     EvidenceSelectionContext,
     KnowledgeBaseScope,
     QueryKind,
@@ -292,7 +293,12 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
             NaturalClaim(
                 atom_id="A1",
                 text="白桦泵的上限温度为 82 ℃。",
-                support_ids=(value.support_id,),
+                supports=(
+                    ClaimSupport(
+                        support_id=value.support_id,
+                        quote=value.citation_text,
+                    ),
+                ),
             ),
             plan,
             matrix,
@@ -304,7 +310,13 @@ def test_atom_table_intersection_requires_citable_row_header_and_value() -> (
         NaturalClaim(
             atom_id="A1",
             text="白桦泵的上限温度为 82 ℃。",
-            support_ids=tuple(item.support_id for item in supports),
+            supports=tuple(
+                ClaimSupport(
+                    support_id=item.support_id,
+                    quote=item.citation_text,
+                )
+                for item in supports
+            ),
         ),
         plan,
         matrix,

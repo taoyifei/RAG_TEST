@@ -1,0 +1,804 @@
+"""把可引用检索结果组成有界生成证据包，保留发布前独立核验。"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from enum import StrEnum
+
+from rag_app.application.retrieval.atom_group_alignment import (
+    AlignmentQualification,
+    align_atom_to_groups,
+)
+from rag_app.application.retrieval.evidence import (
+    _evidence_item,
+    group_source_maps_covered,
+)
+from rag_app.application.retrieval.evidence_groups import GroupCandidate
+from rag_app.application.retrieval.filters import apply_candidate_filters
+from rag_app.core.models import (
+    ChannelHit,
+    EvidenceItem,
+    RankedChunk,
+    RetrievalPolicy,
+    SearchRequest,
+)
+from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.query_plan import (
+    AtomCandidateLink,
+    AtomStatus,
+    AtomSupportMatrix,
+    QueryAtom,
+    QueryPlan,
+)
+
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v1"
+_STRUCTURED_GROUP_TYPES = frozenset(
+    {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
+)
+_TABLE_ROW = re.compile(r"^tr:(\d+)$")
+_TABLE_NODE_ID = re.compile(r"^node_[0-9a-f]{32}$")
+_TEMPLATE_BODY = re.compile(r"正文|具体内容|具体字段|怎么填|如何填写|填写方法")
+_LITERAL_QUANTITY = re.compile(
+    r"(?<!\d)(\d+(?:\.\d+)?)\s*"
+    r"(毫秒|分钟|小时|秒|天|日|周|个月|月|年|%|％|元|人|次|个|件|项)"
+)
+
+
+class EvidenceAdmissionStatus(StrEnum):
+    """区分可阅读证据、结构部分证据和硬性排除。"""
+
+    ADMITTED = "ADMITTED"
+    ADMITTED_STRUCTURED_PARTIAL = "ADMITTED_STRUCTURED_PARTIAL"
+    REJECTED_HARD = "REJECTED_HARD"
+
+
+class EvidenceAdmissionReason(StrEnum):
+    """可审计的准入依据与硬拒原因。"""
+
+    ACTIVE_CITABLE = "ACTIVE_CITABLE"
+    ROOT_RETRIEVAL = "ROOT_RETRIEVAL"
+    ATOM_RETRIEVAL = "ATOM_RETRIEVAL"
+    RERANK_TOP = "RERANK_TOP"
+    COMPLETE_GROUP = "COMPLETE_GROUP"
+    PARTIAL_GROUP = "PARTIAL_GROUP"
+    TARGET_SOFT_MISMATCH = "TARGET_SOFT_MISMATCH"
+    RELATION_SOFT_MISMATCH = "RELATION_SOFT_MISMATCH"
+    NON_CITABLE = "NON_CITABLE"
+    INACTIVE_VERSION = "INACTIVE_VERSION"
+    SCOPE_MISMATCH = "SCOPE_MISMATCH"
+    EXPLICIT_SOURCE_MISMATCH = "EXPLICIT_SOURCE_MISMATCH"
+    TEMPLATE_BODY_UNAVAILABLE = "TEMPLATE_BODY_UNAVAILABLE"
+    TABLE_ROW_CONFLICT = "TABLE_ROW_CONFLICT"
+    STRUCTURAL_SIBLING_CONFLICT = "STRUCTURAL_SIBLING_CONFLICT"
+    HARD_LITERAL_CONTRADICTION = "HARD_LITERAL_CONTRADICTION"
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationEvidenceEntry:
+    """一个 SourceSpan 的准入结果，不表示其能证明任何具体 Claim。"""
+
+    support_id: str
+    evidence_item: EvidenceItem
+    source_group_id: str | None
+    linked_atom_ids: tuple[str, ...]
+    admission_status: EvidenceAdmissionStatus
+    hard_reject_reasons: tuple[EvidenceAdmissionReason, ...]
+    soft_signals: tuple[EvidenceAdmissionReason, ...]
+    rerank_rank: int | None
+    source_order: int | None
+    table_node_id: str | None = None
+    table_group_id: str | None = None
+    table_row_index: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationEvidencePack:
+    """只把 admitted entries 交给模型；拒绝项供 Trace 诊断。"""
+
+    original_query: str
+    resolved_root_query: str
+    entries: tuple[GenerationEvidenceEntry, ...]
+    rejected_entries: tuple[GenerationEvidenceEntry, ...]
+    per_atom_candidate_support_ids: tuple[tuple[str, tuple[str, ...]], ...]
+    complete_group_ids: tuple[str, ...]
+    partial_group_ids: tuple[str, ...]
+    missing_atom_ids: tuple[str, ...]
+    pack_revision: str = GENERATION_EVIDENCE_PACK_REVISION
+
+    @property
+    def evidence(self) -> tuple[EvidenceItem, ...]:
+        """返回按包内稳定 Support ID 编号的可生成证据。"""
+        return tuple(entry.evidence_item for entry in self.entries)
+
+    def pre_generation_availability(
+        self, matrix: AtomSupportMatrix
+    ) -> dict[str, str]:
+        """按每个 Atom 的包内候选和结构闭合状态给出生成前可用性。"""
+        by_support_id = {entry.support_id: entry for entry in self.entries}
+        available: dict[str, str] = {}
+        for atom_id, support_ids in self.per_atom_candidate_support_ids:
+            if matrix.for_atom(atom_id).status is AtomStatus.CONTRADICTORY:
+                available[atom_id] = "HARD_CONFLICT"
+                continue
+            entries = tuple(
+                by_support_id[support_id]
+                for support_id in support_ids
+                if support_id in by_support_id
+            )
+            if not entries:
+                available[atom_id] = "NO_CANDIDATE"
+            elif any(
+                entry.source_group_id in self.complete_group_ids
+                for entry in entries
+            ):
+                available[atom_id] = "STRUCTURED_COMPLETE"
+            elif any(
+                entry.source_group_id in self.partial_group_ids
+                or entry.evidence_item.table_context
+                for entry in entries
+            ):
+                available[atom_id] = "STRUCTURED_PARTIAL"
+            else:
+                available[atom_id] = "EVIDENCE_AVAILABLE"
+        return available
+
+    @property
+    def hard_rejected_sources(self) -> tuple[dict[str, object], ...]:
+        """仅给评测和 Trace 提供来源身份及硬拒原因。"""
+        return tuple(
+            {
+                "document_version_id": entry.evidence_item.document_version_id,
+                "chunk_id": entry.evidence_item.chunk_id,
+                "node_ids": tuple(
+                    span.node_id
+                    for span in entry.evidence_item.source_spans
+                    if span.node_id is not None
+                ),
+                "reasons": tuple(
+                    reason.value for reason in entry.hard_reject_reasons
+                ),
+            }
+            for entry in self.rejected_entries
+        )
+
+    def structural_sibling_observation(
+        self, groups: tuple[GroupCandidate, ...]
+    ) -> dict[str, object]:
+        """核对结构归属与表格行；无法辨别同表兄弟行时保留 PARTIAL。"""
+        members_by_group = {
+            group.group_id: frozenset(group.group.member_chunk_ids)
+            for group in groups
+        }
+        unknown_structural_count = 0
+        unknown_table_coordinate_count = 0
+        rows_by_table: dict[tuple[str | None, str], set[int]] = defaultdict(set)
+        for entry in self.entries:
+            group_type = dict(entry.evidence_item.metadata).get(
+                "evidence_group_type"
+            )
+            structured = (
+                entry.evidence_item.table_context
+                or entry.table_row_index is not None
+                or group_type in _STRUCTURED_GROUP_TYPES
+                or entry.source_group_id is not None
+            )
+            if structured and (
+                entry.source_group_id is None
+                or entry.source_group_id not in members_by_group
+            ):
+                unknown_structural_count += 1
+            if entry.evidence_item.table_context:
+                if entry.table_node_id is None or entry.table_row_index is None:
+                    unknown_table_coordinate_count += 1
+                else:
+                    rows_by_table[
+                        (
+                            entry.evidence_item.document_version_id,
+                            entry.table_node_id,
+                        )
+                    ].add(entry.table_row_index)
+        unknown_group_count = sum(
+            1
+            for entry in self.entries
+            if entry.source_group_id is not None
+            and entry.source_group_id not in members_by_group
+        )
+        conflict_count = sum(
+            1
+            for entry in self.entries
+            if entry.source_group_id in members_by_group
+            and entry.evidence_item.chunk_id
+            not in members_by_group[entry.source_group_id]
+        )
+        ambiguous_table_count = sum(
+            1 for rows in rows_by_table.values() if len(rows) > 1
+        )
+        return {
+            "structural_sibling_pollution_count": conflict_count,
+            "structural_sibling_observation_status": (
+                "PARTIAL"
+                if (
+                    unknown_structural_count
+                    or unknown_table_coordinate_count
+                    or ambiguous_table_count
+                )
+                else "COMPLETE"
+            ),
+            "structural_sibling_unknown_group_count": unknown_group_count,
+            "structural_sibling_unknown_structural_count": (
+                unknown_structural_count
+            ),
+            "structural_sibling_unknown_table_coordinate_count": (
+                unknown_table_coordinate_count
+            ),
+            "structural_sibling_ambiguous_table_count": (ambiguous_table_count),
+            "structural_sibling_observation_scope": (
+                "ADMITTED_STRUCTURAL_GROUP_AND_TABLE_ROW"
+            ),
+        }
+
+
+def _normalized(value: str) -> str:
+    return "".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _identity(item: EvidenceItem) -> tuple[object, ...]:
+    """一个来源片段跨 Root/Atom/Group 的稳定去重键。"""
+    return (
+        item.document_version_id,
+        item.chunk_id,
+        item.citation_text,
+        tuple(
+            (span.node_id, span.source_start_char, span.source_end_char)
+            for span in item.source_spans
+        ),
+    )
+
+
+def _rank(item: EvidenceItem) -> tuple[int, int, int, str]:
+    """统一 Rerank 优先，扩展项保留原融合顺序。"""
+    return (
+        0 if item.rerank_rank is not None else 1,
+        item.rerank_rank or 2**31 - 1,
+        item.fusion_rank or 2**31 - 1,
+        item.chunk_id,
+    )
+
+
+def _source_order(item: EvidenceItem) -> int | None:
+    ordinals = (
+        span.source_anchor.ordinal
+        for span in item.source_spans
+        if span.source_anchor is not None
+    )
+    return min(ordinals, default=None)
+
+
+def _source_matches(atom: QueryAtom, item: EvidenceItem) -> bool:
+    if not atom.source_qualifier:
+        return True
+    metadata = dict(item.metadata)
+    identity = " ".join(
+        (item.display_name or "", str(metadata.get("document_title", "")))
+    )
+    return _normalized(atom.source_qualifier) in _normalized(identity)
+
+
+def _candidate_visible(
+    candidate: RankedChunk,
+    request: SearchRequest,
+    active_revision_id: str,
+    excluded_document_ids: frozenset[str],
+) -> bool:
+    chunk = candidate.hydrated.chunk
+    if (
+        chunk.project_id != request.scope.project_id
+        or chunk.knowledge_base_id != request.scope.knowledge_base_id
+        or chunk.index_revision_id != active_revision_id
+        or chunk.version.document_id in excluded_document_ids
+    ):
+        return False
+    hit = ChannelHit(
+        revision_id=active_revision_id,
+        chunk_id=chunk.chunk_id,
+        document_id=chunk.version.document_id,
+        document_version_id=chunk.version.document_version_id,
+        role=chunk.role.value,
+        section_id=chunk.section_id,
+        content_sha256=chunk.content_sha256,
+        channel="generation-admission",
+        rank=1,
+        raw_score=0.0,
+    )
+    return bool(apply_candidate_filters((hit,), request))
+
+
+def _table_rows(item: EvidenceItem) -> frozenset[str]:
+    rows = set()
+    for span in item.source_spans:
+        rows.update(
+            part for part in span.structural_path if _TABLE_ROW.fullmatch(part)
+        )
+    return frozenset(rows)
+
+
+def _table_row_index(item: EvidenceItem) -> int | None:
+    """从 SourceSpan 读取唯一表格行，冲突或缺失时不猜测。"""
+    rows: set[int] = set()
+    for span in item.source_spans:
+        if not span.is_citable:
+            continue
+        if span.source_anchor is not None:
+            anchor_row = span.source_anchor.row_index
+            if anchor_row is not None:
+                rows.add(anchor_row)
+        rows.update(
+            int(match[1])
+            for part in span.structural_path
+            if (match := _TABLE_ROW.fullmatch(part)) is not None
+        )
+    return next(iter(rows)) if len(rows) == 1 else None
+
+
+def _table_node_id(
+    candidate: RankedChunk | None, row_index: int | None
+) -> str | None:
+    """用 canonical Chunk atom 的行身份定位原表节点。"""
+    if candidate is None or row_index is None:
+        return None
+    atoms = dict(candidate.hydrated.chunk.metadata).get("atoms")
+    if not isinstance(atoms, (list, tuple)):
+        return None
+    node_ids: set[str] = set()
+    for atom in atoms:
+        if not isinstance(atom, dict):
+            continue
+        metadata = atom.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        node_id = metadata.get("table_node_id")
+        row = metadata.get("row_index")
+        if (
+            isinstance(node_id, str)
+            and _TABLE_NODE_ID.fullmatch(node_id)
+            and isinstance(row, int)
+            and not isinstance(row, bool)
+            and row == row_index
+        ):
+            node_ids.add(node_id)
+    return next(iter(node_ids)) if len(node_ids) == 1 else None
+
+
+def _hard_literal_conflict(
+    atom: QueryAtom, item: EvidenceItem, certificate: object
+) -> bool:
+    """仅在同一目标关系已被来源认证时识别单值、同单位的直接矛盾。"""
+    if not isinstance(certificate, dict) or (
+        certificate.get("status") != "SUPPORTED"
+        or _normalized(str(certificate.get("query_target") or ""))
+        != _normalized(atom.target)
+        or _normalized(
+            str(certificate.get("requested_relation_or_attribute") or "")
+        )
+        != _normalized(atom.relation)
+    ):
+        return False
+    source_values = _LITERAL_QUANTITY.findall(
+        unicodedata.normalize("NFKC", item.citation_text)
+    )
+    if len(source_values) != 1:
+        return False
+    for constraint in atom.constraints:
+        if constraint.kind.value not in {"NUMBER", "DURATION"}:
+            continue
+        requested = _LITERAL_QUANTITY.findall(
+            unicodedata.normalize("NFKC", constraint.value)
+        )
+        if (
+            len(requested) == 1
+            and requested[0][1] == source_values[0][1]
+            and requested[0][0] != source_values[0][0]
+        ):
+            return True
+    return False
+
+
+def _hard_reasons(  # noqa: PLR0913
+    item: EvidenceItem,
+    *,
+    candidate: RankedChunk | None,
+    groups_by_id: dict[str, GroupCandidate],
+    possible_atoms: tuple[QueryAtom, ...],
+    request: SearchRequest,
+    active_revision_id: str,
+    excluded_document_ids: frozenset[str],
+) -> tuple[EvidenceAdmissionReason, ...]:
+    """只检查来源身份、显式范围和明确结构冲突。"""
+    reasons: list[EvidenceAdmissionReason] = []
+    if (
+        not item.publishable
+        or not item.source_spans
+        or any(not span.is_citable for span in item.source_spans)
+    ):
+        reasons.append(EvidenceAdmissionReason.NON_CITABLE)
+    if candidate is None or not _candidate_visible(
+        candidate, request, active_revision_id, excluded_document_ids
+    ):
+        reasons.append(EvidenceAdmissionReason.SCOPE_MISMATCH)
+    elif (item.document_id, item.document_version_id) != (
+        candidate.hydrated.chunk.version.document_id,
+        candidate.hydrated.chunk.version.document_version_id,
+    ):
+        reasons.append(EvidenceAdmissionReason.INACTIVE_VERSION)
+    if possible_atoms and all(
+        atom.source_qualifier and not _source_matches(atom, item)
+        for atom in possible_atoms
+    ):
+        reasons.append(EvidenceAdmissionReason.EXPLICIT_SOURCE_MISMATCH)
+    metadata = dict(item.metadata)
+    if any(
+        _hard_literal_conflict(atom, item, metadata.get("answer_support"))
+        for atom in possible_atoms
+    ):
+        reasons.append(EvidenceAdmissionReason.HARD_LITERAL_CONTRADICTION)
+    group_id = metadata.get("evidence_group_id")
+    group = groups_by_id.get(group_id) if isinstance(group_id, str) else None
+    if group is not None and item.chunk_id not in group.group.member_chunk_ids:
+        reasons.append(EvidenceAdmissionReason.STRUCTURAL_SIBLING_CONFLICT)
+    if item.table_context and len(_table_rows(item)) > 1:
+        reasons.append(EvidenceAdmissionReason.TABLE_ROW_CONFLICT)
+    if metadata.get(
+        "evidence_group_type"
+    ) == "CATALOG_ENTRY" and _TEMPLATE_BODY.search(request.text):
+        reasons.append(EvidenceAdmissionReason.TEMPLATE_BODY_UNAVAILABLE)
+    return tuple(dict.fromkeys(reasons))
+
+
+def _group_items(group: GroupCandidate) -> tuple[EvidenceItem, ...]:
+    """只从已检索的真实组成员 SourceSpan 物化引用，不拼接原文。"""
+    items: list[EvidenceItem] = []
+    for index, member in enumerate(group.members, 1):
+        chunk = member.hydrated.chunk
+        for span in chunk.source_spans:
+            if not span.is_citable:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if not quote:
+                continue
+            item = _evidence_item(member, span, quote, "S0")
+            items.append(
+                item.model_copy(
+                    update={
+                        "metadata": freeze_json_object(
+                            {
+                                **dict(item.metadata),
+                                "evidence_group_id": group.group_id,
+                                "evidence_group_type": group.group.kind.value,
+                                "group_member_index": index,
+                                "group_member_count": len(group.members),
+                                "group_complete": group.complete,
+                            }
+                        )
+                    }
+                )
+            )
+    return tuple(items)
+
+
+def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
+    *,
+    query_plan: QueryPlan,
+    root_evidence: tuple[EvidenceItem, ...],
+    atom_evidence: tuple[EvidenceItem, ...],
+    atom_candidates_by_atom: tuple[
+        tuple[str, tuple[EvidenceItem, ...]], ...
+    ] = (),
+    ranked_candidates: tuple[RankedChunk, ...],
+    groups: tuple[GroupCandidate, ...],
+    links: tuple[AtomCandidateLink, ...],
+    request: SearchRequest,
+    active_revision_id: str,
+    excluded_document_ids: tuple[str, ...],
+    policy: RetrievalPolicy,
+) -> GenerationEvidencePack:
+    """先取 Rerank Top，再公平补 Atom 与完整结构组。"""
+    candidate_by_id = {
+        item.hydrated.chunk.chunk_id: item
+        for item in (
+            *ranked_candidates,
+            *(member for group in groups for member in group.members),
+        )
+    }
+    groups_by_id = {group.group_id: group for group in groups}
+    root_keys = {_identity(item) for item in root_evidence}
+    atom_keys = {_identity(item) for item in atom_evidence}
+    member_keys_by_atom = {
+        atom_id: {_identity(item) for item in items}
+        for atom_id, items in atom_candidates_by_atom
+    }
+    candidates: dict[tuple[object, ...], EvidenceItem] = {}
+    for item in (*root_evidence, *atom_evidence):
+        key = _identity(item)
+        previous = candidates.get(key)
+        if previous is None or (
+            not dict(previous.metadata).get("evidence_group_id")
+            and dict(item.metadata).get("evidence_group_id")
+        ):
+            candidates[key] = item
+    linked_ids_by_chunk: dict[str, set[str]] = defaultdict(set)
+    root_chunk_ids: set[str] = set()
+    for link in links:
+        if link.atom_id is None:
+            root_chunk_ids.add(link.chunk_id)
+        else:
+            linked_ids_by_chunk[link.chunk_id].add(link.atom_id)
+    atoms_by_id = {atom.atom_id: atom for atom in query_plan.atoms}
+    excluded = frozenset(excluded_document_ids)
+
+    def reasons_for(item: EvidenceItem) -> tuple[EvidenceAdmissionReason, ...]:
+        linked = linked_ids_by_chunk.get(item.chunk_id, set())
+        possible = tuple(
+            atoms_by_id[atom_id]
+            for atom_id in sorted(linked)
+            if atom_id in atoms_by_id
+        )
+        if _identity(item) in root_keys or not possible:
+            possible = query_plan.atoms
+        return _hard_reasons(
+            item,
+            candidate=candidate_by_id.get(item.chunk_id),
+            groups_by_id=groups_by_id,
+            possible_atoms=possible,
+            request=request,
+            active_revision_id=active_revision_id,
+            excluded_document_ids=excluded,
+        )
+
+    ordered = sorted(candidates, key=lambda key: _rank(candidates[key]))
+    admitted = [key for key in ordered if not reasons_for(candidates[key])]
+    chosen: list[tuple[object, ...]] = []
+    ordinary_counts: Counter[str] = Counter()
+    ordinary_tokens = 0
+
+    def add_ordinary(key: tuple[object, ...]) -> None:
+        nonlocal ordinary_tokens
+        if key in chosen or len(chosen) >= policy.generation_max_ordinary_items:
+            return
+        item = candidates[key]
+        document_id = item.document_id or ""
+        if ordinary_counts[document_id] >= policy.generation_per_document_cap:
+            return
+        cost = max(1, (len(item.citation_text) + 3) // 4)
+        if ordinary_tokens + cost > policy.generation_evidence_token_budget:
+            return
+        chosen.append(key)
+        ordinary_counts[document_id] += 1
+        ordinary_tokens += cost
+
+    root_top = [key for key in admitted if key in root_keys]
+    for key in root_top[: policy.generation_root_top_k]:
+        add_ordinary(key)
+    for atom in query_plan.atoms:
+        member_keys = member_keys_by_atom.get(atom.atom_id, set())
+        linked = [
+            key
+            for key in admitted
+            if key in atom_keys
+            and (
+                key in member_keys
+                or atom.atom_id
+                in linked_ids_by_chunk.get(candidates[key].chunk_id, set())
+            )
+            and _source_matches(atom, candidates[key])
+        ]
+        for key in linked[: policy.generation_atom_top_k]:
+            add_ordinary(key)
+    for key in admitted:
+        add_ordinary(key)
+
+    # 已选中的完整结构组按 SourceSpan 补齐；组预算与总预算保持有界。
+    selected_chunk_ids = {candidates[key].chunk_id for key in chosen}
+    group_keys: list[tuple[object, ...]] = []
+    group_tokens = 0
+    complete_group_ids: list[str] = []
+    for group in groups:
+        if not group.complete or not selected_chunk_ids.intersection(
+            group.group.member_chunk_ids
+        ):
+            continue
+        items = _group_items(group)
+        if not items:
+            continue
+        for item in items:
+            key = _identity(item)
+            if key not in candidates:
+                candidates[key] = item
+                ordered.append(key)
+        if any(reasons_for(item) for item in items):
+            continue
+        new_items = tuple(
+            item
+            for item in items
+            if _identity(item) not in chosen
+            and _identity(item) not in group_keys
+        )
+        added_tokens = sum(
+            max(1, (len(item.citation_text) + 3) // 4) for item in new_items
+        )
+        if (
+            len(group_keys) + len(new_items) > policy.generation_max_group_items
+            or ordinary_tokens + group_tokens + added_tokens
+            > policy.generation_evidence_token_budget
+        ):
+            continue
+        for item in items:
+            key = _identity(item)
+            if key not in candidates or not dict(candidates[key].metadata).get(
+                "evidence_group_id"
+            ):
+                candidates[key] = item
+            if key not in chosen and key not in group_keys:
+                group_keys.append(key)
+        group_tokens += added_tokens
+        covered = tuple(candidates[key] for key in (*chosen, *group_keys))
+        if group_source_maps_covered(group, covered):
+            complete_group_ids.append(group.group_id)
+    selected = tuple(dict.fromkeys((*chosen, *group_keys)))
+    complete = frozenset(complete_group_ids)
+    selected_groups = {
+        group_id
+        for key in selected
+        if isinstance(
+            group_id := dict(candidates[key].metadata).get("evidence_group_id"),
+            str,
+        )
+    }
+    partial_group_ids = tuple(sorted(selected_groups - complete))
+
+    def entry(
+        key: tuple[object, ...], support_id: str, *, rejected: bool = False
+    ) -> GenerationEvidenceEntry:
+        item = candidates[key].model_copy(update={"evidence_id": support_id})
+        metadata = dict(item.metadata)
+        group_id = metadata.get("evidence_group_id")
+        group_id = group_id if isinstance(group_id, str) else None
+        linked = tuple(sorted(linked_ids_by_chunk.get(item.chunk_id, set())))
+        soft = [EvidenceAdmissionReason.ACTIVE_CITABLE]
+        if key in root_keys or item.chunk_id in root_chunk_ids:
+            soft.append(EvidenceAdmissionReason.ROOT_RETRIEVAL)
+        if key in atom_keys or linked:
+            soft.append(EvidenceAdmissionReason.ATOM_RETRIEVAL)
+        if item.rerank_rank is not None:
+            soft.append(EvidenceAdmissionReason.RERANK_TOP)
+        if group_id is not None:
+            soft.append(
+                EvidenceAdmissionReason.COMPLETE_GROUP
+                if group_id in complete
+                else EvidenceAdmissionReason.PARTIAL_GROUP
+            )
+        certificate = metadata.get("answer_support")
+        if isinstance(certificate, dict):
+            if certificate.get("status") != "SUPPORTED":
+                soft.append(EvidenceAdmissionReason.RELATION_SOFT_MISMATCH)
+            if not any(
+                _normalized(atom.target) in _normalized(item.citation_text)
+                for atom in query_plan.atoms
+            ):
+                soft.append(EvidenceAdmissionReason.TARGET_SOFT_MISMATCH)
+        table_row_index = _table_row_index(item)
+        return GenerationEvidenceEntry(
+            support_id=support_id,
+            evidence_item=item,
+            source_group_id=group_id,
+            linked_atom_ids=linked,
+            admission_status=(
+                EvidenceAdmissionStatus.REJECTED_HARD
+                if rejected
+                else EvidenceAdmissionStatus.ADMITTED_STRUCTURED_PARTIAL
+                if group_id in partial_group_ids
+                and metadata.get("evidence_group_type")
+                in _STRUCTURED_GROUP_TYPES
+                else EvidenceAdmissionStatus.ADMITTED
+            ),
+            hard_reject_reasons=reasons_for(item) if rejected else (),
+            soft_signals=tuple(dict.fromkeys(soft)),
+            rerank_rank=item.rerank_rank,
+            source_order=_source_order(item),
+            table_node_id=_table_node_id(
+                candidate_by_id.get(item.chunk_id), table_row_index
+            ),
+            table_group_id=item.table_locator,
+            table_row_index=table_row_index,
+        )
+
+    entries = tuple(
+        entry(key, f"S{index}") for index, key in enumerate(selected, 1)
+    )
+    rejected_entries = tuple(
+        entry(key, f"R{index}", rejected=True)
+        for index, key in enumerate(ordered, 1)
+        if reasons_for(candidates[key])
+    )
+    root_ids = {
+        item.support_id
+        for item in entries
+        if _identity(item.evidence_item) in root_keys
+    }
+    root_group_ids = {
+        group.group_id
+        for group in groups
+        if any(
+            candidates[key].chunk_id in group.group.member_chunk_ids
+            for key in selected
+            if key in root_keys
+        )
+    }
+    per_atom: list[tuple[str, tuple[str, ...]]] = []
+    missing: list[str] = []
+    atom_group_ids: dict[str, set[str]] = defaultdict(set)
+    for atom_id, items in atom_candidates_by_atom:
+        atom_group_ids[atom_id].update(
+            group_id
+            for item in items
+            if isinstance(
+                group_id := dict(item.metadata).get("evidence_group_id"),
+                str,
+            )
+        )
+    for item in atom_evidence:
+        group_id = dict(item.metadata).get("evidence_group_id")
+        if isinstance(group_id, str):
+            for atom_id in linked_ids_by_chunk.get(item.chunk_id, set()):
+                atom_group_ids[atom_id].add(group_id)
+    for atom in query_plan.atoms:
+        atom_group_ids[atom.atom_id].update(
+            alignment.group_id
+            for alignment in align_atom_to_groups(atom, groups, links, policy)
+            if alignment.qualification is not AlignmentQualification.REJECTED
+        )
+    for atom in query_plan.atoms:
+        member_keys = member_keys_by_atom.get(atom.atom_id, set())
+        # Root Top 可供任一 Atom 选择；有明确来源限定时仍须满足该来源。
+        ids = tuple(
+            item.support_id
+            for item in entries
+            if _source_matches(atom, item.evidence_item)
+            and (
+                item.support_id in root_ids
+                or item.source_group_id in root_group_ids
+                or _identity(item.evidence_item) in member_keys
+                or atom.atom_id in item.linked_atom_ids
+                or (
+                    item.source_group_id is not None
+                    and item.source_group_id in atom_group_ids[atom.atom_id]
+                )
+            )
+        )
+        per_atom.append((atom.atom_id, ids))
+        if not ids:
+            missing.append(atom.atom_id)
+    return GenerationEvidencePack(
+        original_query=query_plan.original_query,
+        resolved_root_query=query_plan.resolved_root_query,
+        entries=entries,
+        rejected_entries=rejected_entries,
+        per_atom_candidate_support_ids=tuple(per_atom),
+        complete_group_ids=tuple(complete_group_ids),
+        partial_group_ids=partial_group_ids,
+        missing_atom_ids=tuple(missing),
+    )
+
+
+__all__ = [
+    "GENERATION_EVIDENCE_PACK_REVISION",
+    "EvidenceAdmissionReason",
+    "EvidenceAdmissionStatus",
+    "GenerationEvidenceEntry",
+    "GenerationEvidencePack",
+    "build_generation_evidence_pack",
+]

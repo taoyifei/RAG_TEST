@@ -29,6 +29,7 @@ class GenerationRequest(FrozenModel):
     model_evidence_candidates: tuple[EvidenceItem, ...] = ()
     query_plan: QueryPlan | None = None
     atom_support_matrix: AtomSupportMatrix | None = None
+    per_atom_candidate_support_ids: tuple[tuple[str, tuple[str, ...]], ...] = ()
     repair_atom_ids: tuple[str, ...] = ()
     accepted_claim_ids: tuple[str, ...] = ()
 
@@ -56,7 +57,24 @@ class GenerationRequest(FrozenModel):
                 raise ValueError("支持矩阵必须与计划 Atom 一一对应。")
             if not set(self.repair_atom_ids) <= atom_ids:
                 raise ValueError("局部修复只允许计划中的 Atom。")
-        elif self.repair_atom_ids or self.accepted_claim_ids:
+            linked_atoms = [
+                atom_id for atom_id, _ in self.per_atom_candidate_support_ids
+            ]
+            if (
+                len(linked_atoms) != len(set(linked_atoms))
+                or not set(linked_atoms) <= atom_ids
+            ):
+                raise ValueError("逐原子候选必须绑定唯一计划 Atom。")
+            if any(
+                len(ids) != len(set(ids)) or not set(ids) <= evidence_ids
+                for _, ids in self.per_atom_candidate_support_ids
+            ):
+                raise ValueError("逐原子候选必须来自本次无重复 Evidence。")
+        elif (
+            self.repair_atom_ids
+            or self.accepted_claim_ids
+            or self.per_atom_candidate_support_ids
+        ):
             raise ValueError("无计划请求不能执行逐原子修复。")
         return self
 

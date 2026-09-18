@@ -180,20 +180,18 @@ def render_natural_answer(  # noqa: PLR0912
                 continue
             subject = "；".join(descriptions)
             if reason is MissingAtomReason.SOURCE_MISSING:
-                lines.append(f"但现有资料没有明确说明：{subject}。")
+                lines.append(f"现有资料中没有找到该部分的明确规定：{subject}。")
             elif reason is MissingAtomReason.EVIDENCE_NOT_DIRECT:
                 lines.append(
                     f"已检索到相关资料，但尚未确认{subject}的直接依据。"
                 )
             elif reason is MissingAtomReason.STRUCTURE_INCOMPLETE:
-                lines.append(f"已检索到相关资料，但尚无法确认{subject}。")
+                lines.append(f"当前资料只检索到部分条目，尚无法确认{subject}。")
             elif reason is MissingAtomReason.GENERATION_INCOMPLETE:
-                lines.append(
-                    "已检索到相关资料，但本次未能完整核验全部条目。"
-                )
+                lines.append("已检索到相关资料，但本次未能完整组织全部内容。")
             elif reason is MissingAtomReason.CLAIM_REJECTED:
                 lines.append(
-                    f"已检索到相关资料，但{subject}未通过引用核验。"
+                    f"检索到了相关资料，但其中部分表述未能通过引用核验：{subject}。"
                 )
             else:
                 lines.append("当前问题的指代对象尚不明确。")

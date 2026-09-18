@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from html import unescape
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from rag_app.application.answering.natural_renderer import (
     MissingAtomReason,
@@ -36,6 +36,7 @@ from rag_app.core.models import (
     ProviderCall,
     QueryAnalysis,
     RequestedAnswerType,
+    SourceSpanKind,
 )
 from rag_app.core.models.query_plan import (
     AtomAnswerShape,
@@ -57,6 +58,11 @@ from rag_app.core.query_text import (
     normalize_semantic_text,
     section_heading_path_owns_target,
 )
+
+if TYPE_CHECKING:
+    from rag_app.application.retrieval.generation_evidence import (
+        GenerationEvidencePack,
+    )
 
 _QUANTITY_UNIT_ATOM = (
     r"(?:%|％|万元|亿元|元|毫秒|分钟|小时|秒|天|周|个月|年|月|"
@@ -136,6 +142,9 @@ _SAME_RELATION = re.compile(r"相同|一样|一致")
 _DIFFERENT_RELATION = re.compile(r"不同(?!意|步)")
 _STOP = re.compile(r"[\W_]|的|了|和|与|及|在|将|其|以|并|为|是", re.UNICODE)
 _MIN_QUOTE_CHARS = 2
+_FALLBACK_MIN_BIGRAM_OVERLAP = 2
+_FALLBACK_MAX_ORDINARY_EXCERPTS = 3
+_DIRECT_EXTRACT_MAX_CHARS = 500
 # 引用、对象、数字、频率与否定另有独立硬门。这里仅要求自然改写与
 # 来源谓语保留基本词面联系，避免把同义概括误判成无支持事实。
 _MIN_SUPPORTED_BIGRAM_RATIO = 0.20
@@ -270,7 +279,7 @@ class GroundedOutcome:
     """供检索与历史真实记录的生成结果。"""
 
     answer: str | None
-    mode: Literal["llm", "none"]
+    mode: Literal["llm", "extractive", "extractive_fallback", "none"]
     calls: tuple[ProviderCall, ...] = ()
     reason_code: str | None = None
     published_support_ids: tuple[str, ...] = ()
@@ -1298,9 +1307,7 @@ def _joined_table_intersection(
     if len({table for table, _row, _column, _text in cells}) != 1:
         return ()
     labels = [
-        text
-        for _table, row, column, text in cells
-        if row > 0 and column == 0
+        text for _table, row, column, text in cells if row > 0 and column == 0
     ]
     headers = [
         (column, text)
@@ -1734,6 +1741,7 @@ class GroundedAnsweringService:
         analysis: QueryAnalysis | None = None,
         query_plan: QueryPlan | None = None,
         atom_support_matrix: AtomSupportMatrix | None = None,
+        generation_evidence_pack: GenerationEvidencePack | None = None,
         on_claim: Callable[[AnswerClaim], None] | None = None,
         cancellation: CancellationPort | None = None,
     ) -> GroundedOutcome:
@@ -1747,6 +1755,7 @@ class GroundedAnsweringService:
             analysis: 检索、Evidence 与回答共同消费的最终查询分析。
             query_plan: 可选的本次类型化事实原子计划。
             atom_support_matrix: 可选的逐原子检索支持状态。
+            generation_evidence_pack: 可选的有界生成准入证据包。
             on_claim: 可选的已校验完整 claim 发布回调。
             cancellation: 可选协作取消端口。
 
@@ -1765,6 +1774,7 @@ class GroundedAnsweringService:
                 confidence,
                 query_plan=query_plan,
                 atom_support_matrix=atom_support_matrix,
+                generation_evidence_pack=generation_evidence_pack,
                 analysis=analysis,
                 on_claim=on_claim,
                 cancellation=cancellation,
@@ -1973,6 +1983,7 @@ class GroundedAnsweringService:
         *,
         query_plan: QueryPlan,
         atom_support_matrix: AtomSupportMatrix,
+        generation_evidence_pack: GenerationEvidencePack | None,
         analysis: QueryAnalysis | None,
         on_claim: Callable[[AnswerClaim], None] | None,
         cancellation: CancellationPort | None,
@@ -1989,7 +2000,37 @@ class GroundedAnsweringService:
             atom.atom_id for atom in atom_support_matrix.atoms
         }:
             raise ValueError("逐原子支持矩阵与 QueryPlan 不一致。")
+        if generation_evidence_pack is not None:
+            evidence = generation_evidence_pack.evidence
+        linked_ids = (
+            dict(generation_evidence_pack.per_atom_candidate_support_ids)
+            if generation_evidence_pack is not None
+            else {}
+        )
         by_id = {item.support_id: item for item in evidence}
+        if (
+            generation_evidence_pack is not None
+            and not any(
+                item.status is AtomStatus.CONTRADICTORY
+                for item in atom_support_matrix.atoms
+            )
+            and (direct := _direct_extract(query_plan, evidence, analysis))
+            is not None
+        ):
+            claim, item = direct
+            _raise_if_cancelled(cancellation)
+            if on_claim is not None:
+                on_claim(claim)
+            return GroundedOutcome(
+                answer=f"根据资料：{claim.text} [{item.support_id}]",
+                mode="extractive",
+                reason_code="DIRECT_EXTRACT",
+                published_support_ids=(item.support_id,),
+                atom_coverage=((query_plan.atoms[0].atom_id, "SUPPORTED"),),
+                accepted_claim_count=1,
+                published_claim_count=1,
+                accepted_support_ids=(item.support_id,),
+            )
         stream_claims = (
             query_plan.effort == "DIRECT"
             and len(query_plan.atoms) == 1
@@ -2002,43 +2043,65 @@ class GroundedAnsweringService:
         )
         eligible = {
             atom.atom_id
-            for atom in atom_support_matrix.atoms
-            if atom.status in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
-            and atom.supporting_support_ids
+            for atom in query_plan.atoms
+            if evidence
+            and atom_support_matrix.for_atom(atom.atom_id).status
+            is not AtomStatus.CONTRADICTORY
         }
         calls: list[ProviderCall] = []
         accepted: list[ValidatedNaturalClaim] = []
         claim_rejections: Counter[str] = Counter()
         rejected_atoms: Counter[str] = Counter()
         generated_claim_count = 0
+        generation_returned = False
         reason: str | None = None
         repair_calls = 0
 
         def generate(
             repair_atom_ids: tuple[str, ...] = (),
         ) -> AnswerDraft:
-            """局部修复仅发送缺失 Atom 的证据和已通过 Claim 身份。"""
+            """从准入证据中选出本次 Atom 的候选，不以发布许可过滤。"""
             requested = set(repair_atom_ids) if repair_atom_ids else eligible
             allowed = {
                 support_id
                 for atom_id in requested
-                for support_id in atom_support_matrix.for_atom(
-                    atom_id
-                ).supporting_support_ids
+                for support_id in linked_ids.get(
+                    atom_id,
+                    atom_support_matrix.for_atom(atom_id).supporting_support_ids
+                    or tuple(by_id),
+                )
             }
             candidates = tuple(
                 item for item in evidence if item.support_id in allowed
             )
+            candidate_ids = {item.support_id for item in candidates}
             request = GenerationRequest(
                 query=query,
                 evidence=candidates,
-                citation_protocol="support-id-v2-natural-claims",
+                citation_protocol="support-id-v3-quoted-natural-claims",
                 typed_semantics=None
                 if analysis is None
                 else analysis.semantics,
                 model_evidence_candidates=candidates,
                 query_plan=query_plan,
                 atom_support_matrix=atom_support_matrix,
+                per_atom_candidate_support_ids=tuple(
+                    (
+                        atom_id,
+                        tuple(
+                            support_id
+                            for support_id in linked_ids.get(
+                                atom_id,
+                                atom_support_matrix.for_atom(
+                                    atom_id
+                                ).supporting_support_ids
+                                or tuple(by_id),
+                            )
+                            if support_id in candidate_ids
+                        ),
+                    )
+                    for atom_id in requested
+                ),
                 repair_atom_ids=repair_atom_ids,
                 accepted_claim_ids=tuple(item.claim_id for item in accepted),
             )
@@ -2061,7 +2124,7 @@ class GroundedAnsweringService:
 
         def consume(draft: AnswerDraft) -> None:
             """只保留本地核验通过的 Claim，原文由证据回填。"""
-            nonlocal generated_claim_count, reason
+            nonlocal generated_claim_count, generation_returned, reason
             if draft.generation_mode != "natural":
                 raise ValidationFailed(
                     "类型化生成返回错误协议。",
@@ -2069,6 +2132,7 @@ class GroundedAnsweringService:
                     code="GENERATION_CLAIMS_INVALID",
                 )
             calls.extend(draft.provider_calls)
+            generation_returned = True
             generated_claim_count += len(draft.natural_claims)
             if not draft.natural_claims:
                 reason = draft.reason_code or "GENERATION_ABSTAINED"
@@ -2116,9 +2180,10 @@ class GroundedAnsweringService:
                         tuple(accepted),
                         evidence,
                         analysis,
+                        generation_evidence_pack=generation_evidence_pack,
                     )
                 )
-                if omitted:
+                if omitted and accepted:
                     _raise_if_cancelled(cancellation)
                     repair_calls = 1
                     consume(generate(omitted))
@@ -2153,6 +2218,49 @@ class GroundedAnsweringService:
             calls.extend(error.provider_calls)
             return GroundedOutcome(None, "none", tuple(calls), error.code)
 
+        if (
+            generation_evidence_pack is not None
+            and generation_returned
+            and not accepted
+        ):
+            fallback = _safe_extractive_fallback(
+                query_plan,
+                evidence,
+                linked_ids,
+            )
+            if fallback is not None:
+                fallback_answer, fallback_ids, fallback_atoms = fallback
+                return GroundedOutcome(
+                    answer=fallback_answer,
+                    mode="extractive_fallback",
+                    calls=tuple(calls),
+                    reason_code="EXTRACTIVE_FALLBACK",
+                    published_support_ids=fallback_ids,
+                    atom_coverage=tuple(
+                        (
+                            atom.atom_id,
+                            (
+                                AtomStatus.PARTIAL
+                                if atom.atom_id in fallback_atoms
+                                else AtomStatus.MISSING
+                            ).value,
+                        )
+                        for atom in query_plan.atoms
+                    ),
+                    repair_calls=repair_calls,
+                    claim_rejection_codes=tuple(
+                        sorted(claim_rejections.items())
+                    ),
+                    generated_claim_count=generated_claim_count,
+                    accepted_claim_count=0,
+                    published_claim_count=0,
+                    missing_atom_reasons=tuple(
+                        (atom.atom_id, "GENERATION_INCOMPLETE")
+                        for atom in query_plan.atoms
+                        if atom.atom_id not in fallback_atoms
+                    ),
+                )
+
         covered = {atom_id for item in accepted for atom_id in item.atom_ids}
         coverage: list[tuple[str, str]] = []
         missing: dict[str, MissingAtomReason] = {}
@@ -2160,44 +2268,59 @@ class GroundedAnsweringService:
         false_limited_detected = False
         for atom in query_plan.atoms:
             pre = atom_support_matrix.for_atom(atom.atom_id)
+            candidate_ids = linked_ids.get(
+                atom.atom_id,
+                pre.supporting_support_ids
+                if generation_evidence_pack is None
+                else (),
+            )
             if pre.status is AtomStatus.CONTRADICTORY:
                 final = AtomStatus.CONTRADICTORY
-            elif pre.status is AtomStatus.MISSING:
-                final = AtomStatus.MISSING
-                missing[atom.atom_id] = MissingAtomReason.SOURCE_MISSING
             elif atom.atom_id in covered and _natural_atom_complete(
                 atom,
                 atom_support_matrix,
                 tuple(accepted),
                 evidence,
                 analysis,
+                generation_evidence_pack=generation_evidence_pack,
             ):
                 final = AtomStatus.SUPPORTED
                 if pre.status is AtomStatus.PARTIAL:
                     false_limited_detected = True
-            elif pre.status is AtomStatus.PARTIAL:
+            elif atom.atom_id in covered:
                 final = AtomStatus.PARTIAL
-                if rejected_atoms[atom.atom_id] and atom.atom_id not in covered:
-                    missing[atom.atom_id] = MissingAtomReason.CLAIM_REJECTED
-                elif atom.answer_shape in {
-                    AtomAnswerShape.ENUMERATION,
-                    AtomAnswerShape.DUTIES,
-                    AtomAnswerShape.PROCEDURE,
-                    AtomAnswerShape.COMPARISON,
-                }:
+                source_complete = pre.status is AtomStatus.SUPPORTED or (
+                    generation_evidence_pack is not None
+                    and any(
+                        entry.source_group_id
+                        in generation_evidence_pack.complete_group_ids
+                        and entry.support_id in candidate_ids
+                        for entry in generation_evidence_pack.entries
+                    )
+                )
+                if (
+                    atom.answer_shape
+                    in {
+                        AtomAnswerShape.ENUMERATION,
+                        AtomAnswerShape.DUTIES,
+                        AtomAnswerShape.PROCEDURE,
+                    }
+                    and not source_complete
+                ):
                     missing[atom.atom_id] = (
                         MissingAtomReason.STRUCTURE_INCOMPLETE
                     )
                 else:
                     missing[atom.atom_id] = (
-                        MissingAtomReason.EVIDENCE_NOT_DIRECT
+                        MissingAtomReason.GENERATION_INCOMPLETE
                     )
+                if source_complete:
+                    generation_gap_count += 1
+            elif not candidate_ids:
+                final = AtomStatus.MISSING
+                missing[atom.atom_id] = MissingAtomReason.SOURCE_MISSING
             else:
-                final = (
-                    AtomStatus.PARTIAL
-                    if atom.atom_id in covered
-                    else AtomStatus.MISSING
-                )
+                final = AtomStatus.MISSING
                 generation_gap_count += 1
                 missing[atom.atom_id] = (
                     MissingAtomReason.CLAIM_REJECTED
@@ -2305,6 +2428,176 @@ class GroundedAnsweringService:
         )
 
 
+def _direct_extract(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    analysis: QueryAnalysis | None,
+) -> tuple[AnswerClaim, EvidenceItem] | None:
+    """单一标量事实已有直接证书时，复制最小原句形成服务端回答。"""
+    if len(plan.atoms) != 1:
+        return None
+    atom = plan.atoms[0]
+    if atom.answer_shape not in {
+        AtomAnswerShape.FACT,
+        AtomAnswerShape.DURATION,
+        AtomAnswerShape.COUNT,
+        AtomAnswerShape.RESPONSIBLE_PARTY,
+        AtomAnswerShape.DEFINITION,
+    }:
+        return None
+    for item in evidence:
+        metadata = dict(item.metadata)
+        certificate = metadata.get("answer_support")
+        fact = item.citation_text.strip()
+        if (
+            not isinstance(certificate, dict)
+            or certificate.get("status") != "SUPPORTED"
+            or certificate.get("support_reason")
+            not in {"SOURCE_RELATION_AND_VALUE", "LINKED_SUBJECT_ATTRIBUTE"}
+            or normalize_semantic_text(
+                str(certificate.get("query_target") or "")
+            )
+            != normalize_semantic_text(atom.target)
+            or normalize_semantic_text(
+                str(certificate.get("requested_relation_or_attribute") or "")
+            )
+            != normalize_semantic_text(atom.relation)
+            or item.table_context
+            or item.source_kind is not SourceSpanKind.ORIGINAL_TEXT
+            or item.pdf_block_id is not None
+            or not item.publishable
+            or len(item.source_spans) != 1
+            or not item.source_spans[0].is_citable
+            or len(fact) > _DIRECT_EXTRACT_MAX_CHARS
+            or len(re.findall(r"[。！？.!?]", fact)) != 1
+        ):
+            continue
+        claim = AnswerClaim(
+            text=fact,
+            supports=(ClaimSupport(support_id=item.support_id, quote=fact),),
+        )
+        try:
+            _validate_natural_entailment(claim)
+            validate_grounded_draft(
+                AnswerDraft(
+                    text=fact,
+                    cited_evidence_ids=(item.support_id,),
+                    claims=(claim,),
+                    generation_mode="extractive",
+                ),
+                (item,),
+                analysis=_natural_atom_analysis(atom, analysis),
+                complete=False,
+            )
+        except ValidationFailed:
+            continue
+        return claim, item
+    return None
+
+
+def _safe_extractive_fallback(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    linked_ids: dict[str, tuple[str, ...]],
+) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
+    """模型未形成可发布事实时，仅展示相关且可引用的来源原句。"""
+    if not linked_ids:
+        return None
+    related = {
+        support_id
+        for support_ids in linked_ids.values()
+        for support_id in support_ids
+    }
+    question_terms = _terms(plan.original_query + plan.resolved_root_query)
+    selected: list[tuple[EvidenceItem, str]] = []
+    for item in evidence:
+        if (
+            item.support_id not in related
+            or not item.publishable
+            or not item.source_spans
+            or any(not span.is_citable for span in item.source_spans)
+        ):
+            continue
+        metadata = dict(item.metadata)
+        certified = (
+            isinstance(support := metadata.get("answer_support"), dict)
+            and support.get("status") == "SUPPORTED"
+        )
+        structured = metadata.get("group_complete") is True
+        sentences = tuple(
+            sentence.strip()
+            for sentence in re.findall(
+                r"[^。！？.!?\n]+[。！？.!?]", item.citation_text
+            )
+            if sentence.strip()
+        )
+        if not sentences and structured:
+            sentences = (item.citation_text.strip(),)
+        if not sentences:
+            continue
+        matched = max(
+            sentences,
+            key=lambda sentence: len(_terms(sentence) & question_terms),
+        )
+        if (
+            not certified
+            and not structured
+            and len(_terms(matched) & question_terms)
+            < _FALLBACK_MIN_BIGRAM_OVERLAP
+        ):
+            continue
+        selected.append((item, matched))
+        if len(selected) >= _FALLBACK_MAX_ORDINARY_EXCERPTS and not structured:
+            break
+    if not selected:
+        return None
+    selected.sort(
+        key=lambda pair: min(
+            (
+                span.source_anchor.ordinal
+                for span in pair[0].source_spans
+                if span.source_anchor is not None
+            ),
+            default=2**31 - 1,
+        )
+    )
+    lines = ["资料中与该问题直接相关的规定如下："]
+    ids: list[str] = []
+    for item, sentence in selected:
+        lines.append(f"- {sentence} [{item.support_id}]")
+        ids.append(item.support_id)
+    covered_atoms = frozenset(
+        atom_id
+        for atom_id, support_ids in linked_ids.items()
+        if any(support_id in ids for support_id in support_ids)
+    )
+    return "\n".join(lines), tuple(ids), covered_atoms
+
+
+def _validate_natural_support_structure(
+    units: tuple[EvidenceItem, ...],
+) -> None:
+    """单条事实的多个引用必须属于同一结构组或认证表格交点。"""
+    if len(units) <= 1:
+        return
+    group_ids = {dict(item.metadata).get("evidence_group_id") for item in units}
+    certificates = tuple(
+        dict(item.metadata).get("answer_support") for item in units
+    )
+    same_group = len(group_ids) == 1 and None not in group_ids
+    same_table_fact = (
+        all(isinstance(item, dict) for item in certificates)
+        and all(item == certificates[0] for item in certificates)
+        and certificates[0].get("support_reason") == "TABLE_INTERSECTION"
+    )
+    if not same_group and not same_table_fact:
+        raise ValidationFailed(
+            "单条事实不能拼接互不相属的证据。",
+            stage="answer.validate",
+            code="CLAIM_SOURCE_MISMATCH",
+        )
+
+
 def _validated_natural_claim(
     natural: NaturalClaim,
     plan: QueryPlan,
@@ -2321,38 +2614,25 @@ def _validated_natural_claim(
             stage="answer.validate",
             code="CLAIM_UNKNOWN_ATOM",
         )
-    if len(set(natural.support_ids)) != len(natural.support_ids):
+    support_ids = tuple(item.support_id for item in natural.supports)
+    if len(set(support_ids)) != len(support_ids):
         raise ValidationFailed(
             "自然事实重复引用同一 Support ID。",
             stage="answer.validate",
             code="CLAIM_UNKNOWN_SUPPORT",
         )
-    if not set(natural.support_ids) <= by_id.keys():
+    if not set(support_ids) <= by_id.keys():
         raise ValidationFailed(
             "自然事实引用未知 Support ID。",
             stage="answer.validate",
             code="CLAIM_UNKNOWN_SUPPORT",
         )
     support = matrix.for_atom(natural.atom_id)
-    if support.status not in {
-        AtomStatus.SUPPORTED,
-        AtomStatus.PARTIAL,
-    } or not set(natural.support_ids) <= set(support.supporting_support_ids):
-        raise ValidationFailed(
-            "自然事实的来源与 Atom 不对应。",
-            stage="answer.validate",
-            code="CLAIM_SUPPORT_OUTSIDE_ATOM",
-        )
-    units = tuple(by_id[support_id] for support_id in natural.support_ids)
+    units = tuple(by_id[support_id] for support_id in support_ids)
+    _validate_natural_support_structure(units)
     claim = AnswerClaim(
         text=natural.text,
-        supports=tuple(
-            ClaimSupport(
-                support_id=item.support_id,
-                quote=item.citation_text,
-            )
-            for item in units
-        ),
+        supports=natural.supports,
     )
     atom = atoms[natural.atom_id]
     atom_units = units
@@ -2367,8 +2647,20 @@ def _validated_natural_claim(
             stage="answer.validate",
             code="CLAIM_UNKNOWN_SUPPORT",
         )
-    source_text = "\n".join(item.citation_text for item in atom_units)
-    _validate_table_claim_certificate(atoms[natural.atom_id], atom_units)
+    source_text = "\n".join(item.quote for item in claim.supports)
+    claim_subject = _leading_explicit_subject(natural.text)
+    if (
+        claim_subject is not None
+        and _STANDALONE_SUBJECT.fullmatch(atom.target.strip()) is not None
+        and _STANDALONE_SUBJECT.fullmatch(claim_subject) is not None
+        and not _same_subject(claim_subject, atom.target)
+    ):
+        raise ValidationFailed(
+            "事实明确断言的职责主体与本次提问对象不同。",
+            stage="answer.validate",
+            code="CLAIM_TARGET_UNSUPPORTED",
+        )
+    _validate_table_claim_certificate(atom_units)
     direct_relation = any(
         isinstance(
             certificate := dict(item.metadata).get("answer_support"), dict
@@ -2403,9 +2695,7 @@ def _validated_natural_claim(
             stage="answer.validate",
             code="CLAIM_RELATION_UNSUPPORTED",
         )
-    _validate_natural_entailment(
-        atom, natural.text, atom_units, group_certified=group_certified
-    )
+    _validate_natural_entailment(claim)
     source_labels = "\n".join(
         " ".join(
             (
@@ -2472,7 +2762,7 @@ def _validated_natural_claim(
     validate_grounded_draft(
         AnswerDraft(
             text=claim.text,
-            cited_evidence_ids=natural.support_ids,
+            cited_evidence_ids=support_ids,
             claims=(claim,),
             generation_mode="llm",
         ),
@@ -2483,9 +2773,7 @@ def _validated_natural_claim(
     return claim
 
 
-def _validate_table_claim_certificate(
-    atom: QueryAtom, units: tuple[EvidenceItem, ...]
-) -> None:
+def _validate_table_claim_certificate(units: tuple[EvidenceItem, ...]) -> None:
     """表格 Claim 必须同时引用同表行名、列头和交点值。"""
     for item in units:
         certificate = dict(item.metadata).get("answer_support")
@@ -2511,19 +2799,9 @@ def _validate_table_claim_certificate(
             and dict(unit.metadata).get("answer_support") == certificate
             for span in unit.source_spans
         }
-        if (
-            not set(required) <= cited
-            or normalize_semantic_text(
-                str(certificate.get("query_target") or "")
-            )
-            != normalize_semantic_text(atom.target)
-            or normalize_semantic_text(
-                str(certificate.get("requested_relation_or_attribute") or "")
-            )
-            != normalize_semantic_text(atom.relation)
-        ):
+        if not set(required) <= cited:
             raise ValidationFailed(
-                "表格事实缺少当前原子的对象或关系来源。",
+                "表格事实缺少同一行的对象、列头或交点来源。",
                 stage="answer.validate",
                 code="CLAIM_RELATION_UNSUPPORTED",
             )
@@ -2538,37 +2816,12 @@ def _modality_class(text: str) -> str | None:
 
 
 def _validate_natural_entailment(
-    atom: QueryAtom,
-    text: str,
-    units: tuple[EvidenceItem, ...],
-    *,
-    group_certified: bool = False,
+    claim: AnswerClaim,
 ) -> None:
-    """要求 Claim 的对象、关系和逻辑算子由同一组真实引用直接支持。"""
-    source = "\n".join(item.citation_text for item in units)
+    """核对 Claim 的动作、条件与逻辑算子是否由所选引文支持。"""
+    text = claim.text
+    source = "\n".join(item.quote for item in claim.supports)
     claim_subject = _leading_explicit_subject(text)
-    if claim_subject and not _same_subject(claim_subject, atom.target):
-        raise ValidationFailed(
-            "事实陈述的主体不是所问对象。",
-            stage="answer.validate",
-            code="CLAIM_TARGET_UNSUPPORTED",
-        )
-    certificates = tuple(
-        dict(item.metadata).get("answer_support") for item in units
-    )
-    if (
-        not group_certified
-        and any(isinstance(item, dict) for item in certificates)
-        and not any(
-            isinstance(item, dict) and item.get("status") == "SUPPORTED"
-            for item in certificates
-        )
-    ):
-        raise ValidationFailed(
-            "引用只与问题相关，未直接证明所问关系。",
-            stage="answer.validate",
-            code="CLAIM_RELATION_UNSUPPORTED",
-        )
     source_with_subjects = _clauses_with_subject(source)
     source_clauses = [clause for clause, _subject in source_with_subjects]
     for operator in _INFERENCE_OPERATOR.findall(text):
@@ -2685,12 +2938,14 @@ def _natural_atom_analysis(
     )
 
 
-def _natural_atom_complete(  # noqa: PLR0911
+def _natural_atom_complete(  # noqa: PLR0911, PLR0913
     atom: QueryAtom,
     matrix: AtomSupportMatrix,
     claims: tuple[ValidatedNaturalClaim, ...],
     evidence: tuple[EvidenceItem, ...],
     analysis: QueryAnalysis | None,
+    *,
+    generation_evidence_pack: GenerationEvidencePack | None = None,
 ) -> bool:
     """列表和流程还须通过来源集合完整性门，不能只看相关 Claim。"""
     atom_claims = tuple(
@@ -2705,14 +2960,28 @@ def _natural_atom_complete(  # noqa: PLR0911
     }:
         return True
     support = matrix.for_atom(atom.atom_id)
-    if support.status is not AtomStatus.SUPPORTED:
+    if (
+        generation_evidence_pack is None
+        and support.status is not AtomStatus.SUPPORTED
+    ):
         return False
+    linked = (
+        dict(generation_evidence_pack.per_atom_candidate_support_ids)
+        if (generation_evidence_pack is not None)
+        else {}
+    )
     atom_evidence = tuple(
         item
         for item in evidence
-        if item.support_id in support.supporting_support_ids
+        if item.support_id
+        in linked.get(
+            atom.atom_id,
+            support.supporting_support_ids,
+        )
     )
     group_complete = _structural_member_coverage(atom_evidence, atom_claims)
+    if generation_evidence_pack is not None and group_complete is not True:
+        return False
     if group_complete is False:
         return False
     atom_analysis = _natural_atom_analysis(atom, analysis)

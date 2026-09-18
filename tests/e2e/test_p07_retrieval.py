@@ -16,6 +16,7 @@ from rag_app.core.errors import (
     IndexNotReady,
     ProviderUnavailable,
 )
+from rag_app.core.events import TraceEvent
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import (
     ConfidenceStatus,
@@ -86,6 +87,41 @@ def _build_active_revision(data_dir: Path) -> tuple[str, str, str]:
     return project_id, knowledge_base_id, result.revision_id
 
 
+def _assert_f7_trace_fields(trace_events: tuple[TraceEvent, ...]) -> None:
+    """核对检索、生成及发布阶段的安全计数可观测。"""
+    trace_by_name = {
+        event.event_name: dict(event.attributes) for event in trace_events
+    }
+    evidence_trace = trace_by_name["retrieval.generation_evidence"]
+    assert isinstance(evidence_trace["structural_sibling_pollution_count"], int)
+    assert evidence_trace["structural_sibling_observation_status"] in {
+        "COMPLETE",
+        "PARTIAL",
+    }
+    assert evidence_trace["root_candidate_count"] >= 0
+    assert evidence_trace["atom_candidate_count"] >= 0
+    assert evidence_trace["pre_generation_availability_by_atom"]
+    assert all(
+        {
+            "source_group_id",
+            "table_node_id",
+            "table_group_id",
+            "table_row_index",
+            "linked_atom_ids",
+        }.issubset(source)
+        for source in evidence_trace["admitted_sources"]
+    )
+    assert isinstance(evidence_trace["hard_reject_reason_distribution"], dict)
+    assert isinstance(evidence_trace["soft_signal_distribution"], dict)
+    generate_trace = trace_by_name["retrieval.generate"]
+    assert generate_trace["generation_called"] is False
+    assert generate_trace["provider_call_count_by_operation"]["generation"] == 0
+    assert generate_trace["final_coverage_by_atom"]
+    claim_trace = trace_by_name["retrieval.claim_publication"]
+    assert claim_trace["generation_called"] is False
+    assert claim_trace["final_coverage_by_atom"]
+
+
 def test_p07_offline_reopen_retrieves_but_requires_answer_model(
     tmp_path: Path,
 ) -> None:
@@ -111,6 +147,8 @@ def test_p07_offline_reopen_retrieves_but_requires_answer_model(
         )
         trace_sink = runtime.persistence.components.trace_sink
         trace_events = trace_sink.events(first.trace_id)
+
+    _assert_f7_trace_fields(trace_events)
 
     assert first.status is ConfidenceStatus.CONFIGURATION_REQUIRED
     assert first.active_index_revision_id == revision_id

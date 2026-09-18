@@ -1,0 +1,305 @@
+"""生成准入与逐字 Quote 发布分离后的定向回归。"""
+
+from __future__ import annotations
+
+from unittest.mock import Mock
+
+import pytest
+
+from rag_app.application.answering.grounded import (
+    GroundedAnsweringService,
+    GroundedOutcome,
+)
+from rag_app.application.retrieval.generation_evidence import (
+    EvidenceAdmissionReason,
+    EvidenceAdmissionStatus,
+    GenerationEvidenceEntry,
+    GenerationEvidencePack,
+)
+from rag_app.core.models import (
+    ConfidenceDecision,
+    ConfidenceStatus,
+    EvidenceItem,
+    SourceSpanKind,
+)
+from rag_app.core.models.common import freeze_json_object
+from rag_app.core.models.query_plan import AtomStatus, QueryPlan
+from tests.application.answering.test_natural_grounded_answer import (
+    _claim,
+    _draft,
+    _evidence,
+    _matrix,
+    _plan,
+)
+
+
+def _pack(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    *,
+    atom_ids_by_support: dict[str, tuple[str, ...]] | None = None,
+) -> GenerationEvidencePack:
+    """用真实合成 SourceSpan 构造已通过硬性来源检查的包。"""
+    mapping = atom_ids_by_support or {
+        item.support_id: tuple(atom.atom_id for atom in plan.atoms)
+        for item in evidence
+    }
+    entries = tuple(
+        GenerationEvidenceEntry(
+            support_id=item.support_id,
+            evidence_item=item,
+            source_group_id=None,
+            linked_atom_ids=mapping[item.support_id],
+            admission_status=EvidenceAdmissionStatus.ADMITTED,
+            hard_reject_reasons=(),
+            soft_signals=(EvidenceAdmissionReason.ACTIVE_CITABLE,),
+            rerank_rank=index,
+            source_order=index,
+        )
+        for index, item in enumerate(evidence, 1)
+    )
+    per_atom = tuple(
+        (
+            atom.atom_id,
+            tuple(
+                item.support_id
+                for item in evidence
+                if atom.atom_id in mapping[item.support_id]
+            ),
+        )
+        for atom in plan.atoms
+    )
+    return GenerationEvidencePack(
+        original_query=plan.original_query,
+        resolved_root_query=plan.resolved_root_query,
+        entries=entries,
+        rejected_entries=(),
+        per_atom_candidate_support_ids=per_atom,
+        complete_group_ids=(),
+        partial_group_ids=(),
+        missing_atom_ids=tuple(atom_id for atom_id, ids in per_atom if not ids),
+    )
+
+
+def _answer_with_pack(
+    generator: Mock,
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    matrix_statuses: tuple[tuple[AtomStatus, tuple[str, ...]], ...],
+    *,
+    pack: GenerationEvidencePack | None = None,
+) -> GroundedOutcome:
+    """执行真实应用回答链，矩阵可故意与准入结果不同。"""
+    return GroundedAnsweringService(generator).answer(
+        plan.standalone_query,
+        evidence,
+        ConfidenceDecision(status=ConfidenceStatus.ANSWERABLE, score=1.0),
+        query_plan=plan,
+        atom_support_matrix=_matrix(plan, matrix_statuses),
+        generation_evidence_pack=pack or _pack(plan, evidence),
+    )
+
+
+def test_soft_atom_mismatch_still_reaches_generation_and_publishes_quote() -> (
+    None
+):
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("甲部门")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", "甲部门保存记录 14 天。", "A1", "S1"),), plan
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert generator.generate.call_count == 1
+    assert outcome.answer == "甲部门保存记录 14 天。 [S1]"
+    assert outcome.atom_coverage == (("A1", "SUPPORTED"),)
+    assert outcome.accepted_claim_count == 1
+
+
+def test_certified_single_fact_uses_direct_extract_without_model() -> None:
+    source = _evidence("甲部门保存记录 14 天。")[0]
+    certified = source.model_copy(
+        update={
+            "source_kind": SourceSpanKind.ORIGINAL_TEXT,
+            "metadata": freeze_json_object(
+                {
+                    **dict(source.metadata),
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "support_reason": "SOURCE_RELATION_AND_VALUE",
+                        "query_target": "甲部门",
+                        "requested_relation_or_attribute": "规定",
+                    },
+                }
+            ),
+        }
+    )
+    plan = _plan("甲部门")
+    generator = Mock()
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        (certified,),
+        ((AtomStatus.SUPPORTED, ("S1",)),),
+    )
+
+    assert outcome.mode == "extractive"
+    assert outcome.answer == "根据资料：甲部门保存记录 14 天。 [S1]"
+    generator.generate.assert_not_called()
+
+
+def test_invalid_model_quote_cannot_publish_claim_and_uses_excerpt() -> None:
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("甲部门")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "甲部门保存记录 14 天。",
+                "A1",
+                "S1",
+                "甲部门保存记录 15 天。",
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert outcome.mode == "extractive_fallback"
+    assert outcome.accepted_claim_count == 0
+    assert outcome.claim_rejection_codes == (("CLAIM_QUOTE_INVALID", 1),)
+    assert outcome.answer is not None
+    assert "甲部门保存记录 14 天。 [S1]" in outcome.answer
+    assert "15 天" not in outcome.answer
+
+
+def test_zero_model_claims_uses_one_safe_extractive_fallback() -> None:
+    evidence = _evidence("甲部门保存记录 14 天。")
+    plan = _plan("甲部门")
+    generator = Mock()
+    generator.generate.return_value = _draft((), plan)
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert generator.generate.call_count == 1
+    assert outcome.mode == "extractive_fallback"
+    assert outcome.reason_code == "EXTRACTIVE_FALLBACK"
+    assert outcome.published_support_ids == ("S1",)
+
+
+def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
+    evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
+    by_text = {item.citation_text: item.support_id for item in evidence}
+    plan = _plan("甲部门", "乙部门")
+    pack = _pack(
+        plan,
+        evidence,
+        atom_ids_by_support={
+            by_text["甲部门保存记录 14 天。"]: ("A1",),
+            by_text["乙部门审核记录 3 天。"]: ("A2",),
+        },
+    )
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "甲部门保存记录 14 天。",
+                "A1",
+                by_text["甲部门保存记录 14 天。"],
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
+        pack=pack,
+    )
+
+    assert outcome.answer is not None
+    assert "甲部门保存记录 14 天" in outcome.answer
+    assert "现有资料中没有找到" not in outcome.answer
+    assert outcome.reason_code == "LIMITED_ANSWER"
+    assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
+    assert outcome.missing_atom_reasons == (("A2", "GENERATION_INCOMPLETE"),)
+
+
+def test_empty_pack_does_not_call_generator() -> None:
+    plan = _plan("甲部门")
+    generator = Mock()
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        (),
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert outcome.answer is None
+    generator.generate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("source", "claim_text", "expected_rejection"),
+    [
+        (
+            "甲部门保存记录 14 天。",
+            "甲部门保存记录 15 天。",
+            "CLAIM_NUMBER_MISMATCH",
+        ),
+        (
+            "甲部门可以检查材料。",
+            "甲部门必须检查材料。",
+            "CLAIM_MODALITY_MISMATCH",
+        ),
+        (
+            "甲部门负责核对材料；乙部门负责归档材料。",
+            "乙部门负责归档材料。",
+            "CLAIM_TARGET_UNSUPPORTED",
+        ),
+    ],
+)
+def test_high_risk_claim_drift_is_rejected_after_admission(
+    source: str, claim_text: str, expected_rejection: str
+) -> None:
+    evidence = _evidence(source)
+    plan = _plan("甲部门")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", claim_text, "A1", "S1", source),), plan
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()),),
+    )
+
+    assert outcome.accepted_claim_count == 0
+    assert (expected_rejection, 1) in outcome.claim_rejection_codes
+    assert generator.generate.call_count == 1

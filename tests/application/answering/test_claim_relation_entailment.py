@@ -21,13 +21,13 @@ def _rejected(source: str, claim_text: str) -> tuple[str, ...]:
     matrix = _matrix(plan, ((AtomStatus.SUPPORTED, ("S1",)),))
     generator = Mock()
     generator.generate.return_value = _draft(
-        (_claim("C1", claim_text, "A1", "S1"),), plan
+        (_claim("C1", claim_text, "A1", "S1", source),), plan
     )
 
     result = _answer(generator, evidence, plan, matrix)
 
     assert result.answer is None
-    assert generator.generate.call_count == 2
+    assert generator.generate.call_count == 1
     return tuple(code for code, _count in result.claim_rejection_codes)
 
 

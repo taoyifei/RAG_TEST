@@ -31,7 +31,7 @@ def _complete_group() -> tuple[EvidenceItem, ...]:
                         "group_member_count": 3,
                         "group_member_index": index,
                     }
-                )
+                ),
             }
         )
         for index, item in enumerate(items, 1)
@@ -66,7 +66,7 @@ def test_complete_group_omission_is_generation_gap_after_one_repair() -> None:
     assert outcome.generation_gap_count == 1
     assert outcome.repair_calls == 1
     assert outcome.answer is not None
-    assert "本次未能完整核验全部条目" in outcome.answer
+    assert "已检索到相关资料，但本次未能完整组织全部内容" in outcome.answer
     assert "现有资料没有明确说明" not in outcome.answer
 
 
@@ -92,7 +92,8 @@ def test_complete_group_all_members_closes_without_repair() -> None:
                 "2.归档记录。",
                 "A1",
                 by_text["2.归档记录。"],
-            )),
+            ),
+        ),
         plan,
     )
 

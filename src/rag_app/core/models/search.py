@@ -70,6 +70,14 @@ class RetrievalPolicy(FrozenModel):
     evidence_token_budget: StrictInt = Field(default=1024, gt=0)
     max_evidence_items: StrictInt = Field(default=8, gt=0, le=50)
     max_evidence_items_per_chunk: StrictInt = Field(default=1, gt=0, le=8)
+    generation_root_top_k: StrictInt = Field(default=4, gt=0, le=8)
+    generation_atom_top_k: StrictInt = Field(default=2, gt=0, le=4)
+    generation_max_ordinary_items: StrictInt = Field(default=12, gt=0, le=24)
+    generation_max_group_items: StrictInt = Field(default=16, gt=0, le=32)
+    generation_per_document_cap: StrictInt = Field(default=4, gt=0, le=16)
+    generation_evidence_token_budget: StrictInt = Field(
+        default=4096, gt=0, le=6144
+    )
     minimum_support_items: StrictInt = Field(default=1, gt=0, le=8)
     minimum_span_overlap: float = Field(default=0.2, ge=0.0, le=1.0)
     per_document_cap: StrictInt = Field(default=4, gt=0)

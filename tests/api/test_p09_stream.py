@@ -6,6 +6,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator
+from typing import cast
 
 from rag_app.api.p09_stream import P09AnswerStream, P09AnswerStreamRequest
 from rag_app.core.errors import QueryCancelled, RagError
@@ -299,18 +300,17 @@ class _FinalThenFailureSdk:
 class _StagedFinalSdk:
     """先交付协议进度，超过旧首内容时限后才发送 Final。"""
 
-    def answer_stream(  # noqa: PLR0913
+    def answer_stream(
         self,
         project_id: str,
         knowledge_base_id: str,
         text: str,
-        *,
-        emit: Callable[[object], None],
-        cancellation: CancellationPort,
-        trace_id: str,
         **kwargs: object,
     ) -> None:
-        del text, kwargs
+        del text
+        emit = cast(Callable[[object], None], kwargs["emit"])
+        cancellation = cast(CancellationPort, kwargs["cancellation"])
+        trace_id = cast(str, kwargs["trace_id"])
         emit(
             AnswerStreamMetaEvent(
                 trace_id=trace_id,

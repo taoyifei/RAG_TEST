@@ -55,7 +55,7 @@ def test_model_schema_contains_only_single_atom_claims() -> None:
     assert set(NaturalClaim.model_fields) == {
         "atom_id",
         "text",
-        "support_ids",
+        "supports",
     }
 
 
@@ -95,7 +95,9 @@ def test_model_cannot_report_coverage_or_repeat_quote() -> None:
             {
                 "atom_id": "A1",
                 "text": "甲部门保存记录 14 天。",
-                "support_ids": ["S1"],
+                "supports": [
+                    {"support_id": "S1", "quote": "甲部门保存记录 14 天。"}
+                ],
             }
         ]
     }
@@ -130,7 +132,13 @@ def test_bad_claim_does_not_delete_valid_claim_after_repair_failure() -> None:
         _draft(
             (
                 _claim("C1", "甲部门保存记录 14 天。", "A1", first_id),
-                _claim("C2", "乙部门审核记录 4 天。", "A2", second_id),
+                _claim(
+                    "C2",
+                    "乙部门审核记录 4 天。",
+                    "A2",
+                    second_id,
+                    "乙部门审核记录 3 天。",
+                ),
             ),
             plan,
         ),

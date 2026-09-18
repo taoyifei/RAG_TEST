@@ -61,6 +61,10 @@ from rag_app.application.retrieval.exact import ExactChannel
 from rag_app.application.retrieval.expansion import RuleBasedNormalizer
 from rag_app.application.retrieval.filters import apply_candidate_filters
 from rag_app.application.retrieval.fusion import reciprocal_rank_fusion
+from rag_app.application.retrieval.generation_evidence import (
+    GENERATION_EVIDENCE_PACK_REVISION,
+    build_generation_evidence_pack,
+)
 from rag_app.application.retrieval.hydration import CandidateHydrator
 from rag_app.application.retrieval.lexical import LexicalChannel
 from rag_app.application.retrieval.neighbors import (
@@ -436,6 +440,10 @@ class RetrievalService:
                 "grounded_claim_schema_revision": (
                     GROUNDED_CLAIM_SCHEMA_REVISION
                 ),
+                "generation_evidence_pack_revision": (
+                    GENERATION_EVIDENCE_PACK_REVISION
+                ),
+                "answer_pipeline_revision": "wb08r-evidence-first-v1",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -1450,7 +1458,12 @@ class RetrievalService:
                     ),
                 },
             )
-        atom_matrix, atom_evidence, atom_coverage = self._ground_atoms(
+        (
+            atom_matrix,
+            atom_evidence,
+            atom_coverage,
+            atom_candidate_membership,
+        ) = self._ground_atoms(
             request=request,
             query_plan=query_plan,
             candidates=selection.expansion.candidates,
@@ -1467,6 +1480,8 @@ class RetrievalService:
             for item in atom_matrix.atoms
         )
         correction_outcome: PerAtomCorrectionOutcome | None = None
+        generation_ranked_candidates = selection.expansion.candidates
+        generation_groups = selection.groups
         if correction_triggered:
             correction_outcome = self._corrective_retrieval(
                 snapshot=snapshot,
@@ -1477,7 +1492,14 @@ class RetrievalService:
                 query_plan=query_plan,
             )
             if correction_outcome.added_chunk_count:
-                atom_matrix, atom_evidence, atom_coverage = self._ground_atoms(
+                generation_ranked_candidates = correction_outcome.candidates
+                generation_groups = correction_outcome.groups
+                (
+                    atom_matrix,
+                    atom_evidence,
+                    atom_coverage,
+                    atom_candidate_membership,
+                ) = self._ground_atoms(
                     request=request,
                     query_plan=query_plan,
                     candidates=correction_outcome.candidates,
@@ -1547,18 +1569,126 @@ class RetrievalService:
                     "elapsed_ms": round(correction_elapsed_ms, 3),
                 },
             )
-        if atom_evidence and self._grounded is not None:
-            model_evidence_candidates = atom_evidence
+        generation_evidence_pack = build_generation_evidence_pack(
+            query_plan=query_plan,
+            root_evidence=selection.model_evidence_candidates,
+            atom_evidence=atom_evidence,
+            atom_candidates_by_atom=atom_candidate_membership,
+            ranked_candidates=generation_ranked_candidates,
+            groups=generation_groups,
+            links=atom_links,
+            request=request,
+            active_revision_id=snapshot.revision.index_revision_id,
+            excluded_document_ids=snapshot.excluded_document_ids,
+            policy=self._policy,
+        )
+        self._record(
+            trace_id,
+            "generation_evidence",
+            {
+                "pack_revision": generation_evidence_pack.pack_revision,
+                "rerank_candidate_count": len(reranked.candidates),
+                "root_candidate_count": len(
+                    selection.model_evidence_candidates
+                ),
+                "atom_candidate_count": len(atom_evidence),
+                "generation_evidence_count": len(
+                    generation_evidence_pack.entries
+                ),
+                **generation_evidence_pack.structural_sibling_observation(
+                    generation_groups
+                ),
+                "admitted_sources": tuple(
+                    {
+                        "support_id": item.support_id,
+                        "document_version_id": (
+                            item.evidence_item.document_version_id
+                        ),
+                        "chunk_id": item.evidence_item.chunk_id,
+                        "source_group_id": item.source_group_id,
+                        "table_node_id": item.table_node_id,
+                        "table_group_id": item.table_group_id,
+                        "table_row_index": item.table_row_index,
+                        "linked_atom_ids": tuple(
+                            atom_id
+                            for atom_id, support_ids in (
+                                generation_evidence_pack.per_atom_candidate_support_ids
+                            )
+                            if item.support_id in support_ids
+                        ),
+                        "node_ids": tuple(
+                            span.node_id
+                            for span in item.evidence_item.source_spans
+                            if span.node_id is not None
+                        ),
+                    }
+                    for item in generation_evidence_pack.entries
+                ),
+                "hard_rejected_sources": (
+                    generation_evidence_pack.hard_rejected_sources
+                ),
+                "per_atom_candidate_count": {
+                    atom_id: len(support_ids)
+                    for atom_id, support_ids in (
+                        generation_evidence_pack.per_atom_candidate_support_ids
+                    )
+                },
+                "pre_generation_availability_by_atom": (
+                    generation_evidence_pack.pre_generation_availability(
+                        atom_matrix
+                    )
+                ),
+                "complete_group_ids": (
+                    generation_evidence_pack.complete_group_ids
+                ),
+                "partial_group_ids": (
+                    generation_evidence_pack.partial_group_ids
+                ),
+                "missing_atom_ids": generation_evidence_pack.missing_atom_ids,
+                "hard_reject_reason_distribution": dict(
+                    Counter(
+                        reason.value
+                        for item in generation_evidence_pack.rejected_entries
+                        for reason in item.hard_reject_reasons
+                    )
+                ),
+                "soft_signal_distribution": dict(
+                    Counter(
+                        signal.value
+                        for item in generation_evidence_pack.entries
+                        for signal in item.soft_signals
+                    )
+                ),
+            },
+        )
+        if self._grounded is not None:
+            model_evidence_candidates = generation_evidence_pack.evidence
             supported_ids = {
                 support_id
                 for item in atom_matrix.atoms
                 if item.status is AtomStatus.SUPPORTED
                 for support_id in item.supporting_support_ids
             }
-            evidence = tuple(
-                item
+            supported_sources = {
+                (
+                    item.document_version_id,
+                    item.chunk_id,
+                    item.citation_text,
+                    tuple(span.node_id for span in item.source_spans),
+                )
                 for item in atom_evidence
                 if item.support_id in supported_ids
+            }
+            evidence = tuple(
+                item
+                for item in generation_evidence_pack.evidence
+                if (
+                    item.document_version_id,
+                    item.chunk_id,
+                    item.citation_text,
+                    tuple(span.node_id for span in item.source_spans),
+                )
+                in supported_sources
             )
         if query_plan.needs_clarification:
             confidence = confidence.model_copy(
@@ -1632,6 +1762,7 @@ class RetrievalService:
                     analysis=effective_analysis,
                     query_plan=query_plan,
                     atom_support_matrix=atom_matrix,
+                    generation_evidence_pack=generation_evidence_pack,
                     on_claim=None if on_claim is None else publish_claim,
                     cancellation=cancellation,
                 )
@@ -1762,10 +1893,38 @@ class RetrievalService:
             for item in evidence
             if item.support_id in published_ids
         )
+        generation_called = any(
+            call.operation == "generation" and call.call_count > 0
+            for call in provider_calls
+        )
+        answer_path = {
+            "extractive": "DIRECT_EXTRACT",
+            "extractive_fallback": "EXTRACTIVE_FALLBACK",
+            "llm": "LLM_CLAIM_VALIDATED" if answer else "LLM_ABSTAINED",
+        }.get(generation_mode, "NO_ANSWER")
+        observed_coverage = dict(generated.atom_coverage) if generated else {}
+        coverage_labels = {
+            "SUPPORTED": "ANSWERED",
+            "PARTIAL": "PARTIALLY_ANSWERED",
+            "MISSING": "NOT_ANSWERED",
+            "CONTRADICTORY": "CONFLICTING",
+        }
+        final_coverage_by_atom = {
+            atom.atom_id: coverage_labels.get(
+                observed_coverage.get(atom.atom_id), "NOT_OBSERVED"
+            )
+            for atom in query_plan.atoms
+        }
         self._record(
             trace_id,
             "claim_publication",
             {
+                "answer_path": answer_path,
+                "generation_called": generation_called,
+                "extractive_fallback_used": (
+                    generation_mode == "extractive_fallback"
+                ),
+                "final_coverage_by_atom": final_coverage_by_atom,
                 "generated_claim_count": generated.generated_claim_count
                 if generated
                 else 0,
@@ -1822,7 +1981,22 @@ class RetrievalService:
             "generate",
             {
                 "mode": generation_mode,
+                "answer_path": answer_path,
+                "generation_called": generation_called,
+                "extractive_fallback_used": (
+                    generation_mode == "extractive_fallback"
+                ),
+                "final_coverage_by_atom": final_coverage_by_atom,
                 "reason_code": generation_reason,
+                "provider_call_count_by_operation": (
+                    _provider_call_count_by_operation(provider_calls)
+                ),
+                "provider_call_count_observation_status": (
+                    "CAPTURED_PROVIDER_CALLS"
+                ),
+                "provider_call_operation_aliases": {
+                    "embedding.query": ("embedding", "embedding.query")
+                },
                 "provider_calls": [
                     call.model_dump(mode="json")
                     for call in provider_calls
@@ -2117,7 +2291,21 @@ class RetrievalService:
         self._record(
             trace_id,
             "generate",
-            {"mode": "none", "reason_code": reason, "provider_calls": []},
+            {
+                "mode": "none",
+                "answer_path": "CATALOG_FAST_PATH",
+                "generation_called": False,
+                "extractive_fallback_used": False,
+                "final_coverage_by_atom": {"A1": "NOT_OBSERVED"},
+                "reason_code": reason,
+                "provider_call_count_by_operation": (
+                    _provider_call_count_by_operation(())
+                ),
+                "provider_call_count_observation_status": (
+                    "CAPTURED_PROVIDER_CALLS"
+                ),
+                "provider_calls": [],
+            },
         )
         self._record(
             trace_id,
@@ -2429,6 +2617,10 @@ class RetrievalService:
                 "grounded_claim_schema_revision": (
                     GROUNDED_CLAIM_SCHEMA_REVISION
                 ),
+                "generation_evidence_pack_revision": (
+                    GENERATION_EVIDENCE_PACK_REVISION
+                ),
+                "answer_pipeline_revision": "wb08r-evidence-first-v1",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -2795,6 +2987,7 @@ class RetrievalService:
         AtomSupportMatrix,
         tuple[EvidenceItem, ...],
         tuple[AtomCoverage, ...],
+        tuple[tuple[str, tuple[EvidenceItem, ...]], ...],
     ]:
         """按每个原子的语义复用 EvidenceAssembler，不以相似命中冒充支持。"""
 
@@ -3008,10 +3201,16 @@ class RetrievalService:
         }
         supports: list[AtomSupport] = []
         coverages: list[AtomCoverage] = []
+        atom_candidate_membership: list[
+            tuple[str, tuple[EvidenceItem, ...]]
+        ] = []
         for atom, direct_keys, candidate_keys in per_atom:
             direct = tuple(by_key[key] for key in direct_keys if key in by_key)
             relevant = tuple(
                 by_key[key] for key in candidate_keys if key in by_key
+            )
+            atom_candidate_membership.append(
+                (atom.atom_id, (*direct, *relevant))
             )
             atom_qualifications = qualifications_by_atom[atom.atom_id]
             direct_text = "\n".join(
@@ -3259,6 +3458,7 @@ class RetrievalService:
             AtomSupportMatrix(atoms=tuple(supports)),
             evidence,
             tuple(coverages),
+            tuple(atom_candidate_membership),
         )
 
     def _corrective_retrieval(  # noqa: PLR0913
@@ -3841,10 +4041,34 @@ class RetrievalService:
             },
         )
         support_ids = tuple(item.support_id for item in result.evidence)
+        if origin == "CACHE_REPLAY":
+            self._record(
+                trace_id,
+                "generate",
+                {
+                    "mode": result.generation_mode,
+                    "answer_path": origin,
+                    "generation_called": False,
+                    "extractive_fallback_used": False,
+                    "final_coverage_by_atom": {"A1": "NOT_OBSERVED"},
+                    "reason_code": result.generation_reason_code,
+                    "provider_call_count_by_operation": (
+                        _provider_call_count_by_operation(())
+                    ),
+                    "provider_call_count_observation_status": (
+                        "CAPTURED_PROVIDER_CALLS"
+                    ),
+                    "provider_calls": [],
+                },
+            )
         self._record(
             trace_id,
             "claim_publication",
             {
+                "answer_path": origin,
+                "generation_called": False,
+                "extractive_fallback_used": False,
+                "final_coverage_by_atom": {"A1": "NOT_OBSERVED"},
                 "generated_claim_count": 0,
                 "accepted_claim_count": 0,
                 "published_claim_count": 0,
@@ -3863,6 +4087,33 @@ class RetrievalService:
                 "shortcut_origin": origin,
             },
         )
+
+
+def _provider_call_count_by_operation(
+    calls: tuple[ProviderCall, ...] | list[ProviderCall],
+) -> dict[str, int]:
+    """按实际记录汇总；旧 embedding 操作在检索请求中即查询向量。"""
+    counts: Counter[str] = Counter(
+        dict.fromkeys(
+            (
+                "embedding.query",
+                "reranking",
+                "generation",
+                "query.interpret",
+                "query.rewrite",
+                "image.ocr.verify",
+            ),
+            0,
+        )
+    )
+    for call in calls:
+        operation = (
+            "embedding.query"
+            if call.operation == "embedding"
+            else call.operation
+        )
+        counts[operation] += call.call_count
+    return dict(counts)
 
 
 def _required_structural_candidate_ids(

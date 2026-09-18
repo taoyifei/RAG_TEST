@@ -130,11 +130,11 @@ class AnswerClaim(FrozenModel):
 
 
 class NaturalClaim(FrozenModel):
-    """模型只给出自然事实和证据身份，原文由服务端回填。"""
+    """模型给出自然事实，并逐字摘取每个所选证据的最小引文。"""
 
     atom_id: str = Field(pattern=r"^A[1-4]$")
     text: str = Field(min_length=1, max_length=6000, repr=False)
-    support_ids: tuple[str, ...] = Field(min_length=1, max_length=8)
+    supports: tuple[ClaimSupport, ...] = Field(min_length=1, max_length=8)
 
 
 class GeneratedAtomCoverage(FrozenModel):
