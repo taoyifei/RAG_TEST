@@ -2697,6 +2697,45 @@ def _fallback_prior_stage_excerpts(
     return [*preceding, *selected]
 
 
+def _fallback_continues_fragment(
+    previous: EvidenceItem,
+    current: EvidenceItem,
+    previous_excerpt: str,
+    current_sentence: str,
+    complete_ids: frozenset[str],
+) -> bool:
+    """仅拼回同一完整来源组中因分块截断的相邻原文。"""
+    if not previous_excerpt.endswith(("，", "、")):
+        return False
+    if _LEADING_SECTION_MARKER.match(current_sentence):
+        return False
+    previous_metadata = dict(previous.metadata)
+    current_metadata = dict(current.metadata)
+    group_id = previous_metadata.get("evidence_group_id")
+    if (
+        group_id not in complete_ids
+        or group_id != current_metadata.get("evidence_group_id")
+        or previous.document_version_id != current.document_version_id
+        or previous.section_id != current.section_id
+    ):
+        return False
+    previous_positions = {
+        span.source_anchor.ordinal
+        for span in previous.source_spans
+        if span.source_anchor is not None and span.is_citable
+    }
+    current_positions = {
+        span.source_anchor.ordinal
+        for span in current.source_spans
+        if span.source_anchor is not None and span.is_citable
+    }
+    return bool(
+        previous_positions
+        and current_positions
+        and 0 <= min(current_positions) - max(previous_positions) <= 1
+    )
+
+
 def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -2889,14 +2928,31 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     lines = ["资料中与该问题直接相关的规定如下："]
     ids: list[str] = []
     seen_excerpts: set[tuple[str | None, str]] = set()
+    pending_item: EvidenceItem | None = None
+    pending_excerpt = ""
+    pending_ids: list[str] = []
     for item, sentence in selected:
         excerpt = _LEADING_SECTION_MARKER.sub("", sentence).strip()
         excerpt_key = (item.document_version_id, excerpt)
         if not excerpt or excerpt_key in seen_excerpts:
             continue
         seen_excerpts.add(excerpt_key)
-        lines.append(f"- {excerpt} [{item.support_id}]")
+        if pending_item is not None and _fallback_continues_fragment(
+            pending_item, item, pending_excerpt, sentence, complete_ids
+        ):
+            pending_excerpt += excerpt
+            pending_ids.append(item.support_id)
+        else:
+            if pending_ids:
+                refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
+                lines.append(f"- {pending_excerpt} {refs}")
+            pending_excerpt = excerpt
+            pending_ids = [item.support_id]
+        pending_item = item
         ids.append(item.support_id)
+    if pending_ids:
+        refs = " ".join(f"[{support_id}]" for support_id in pending_ids)
+        lines.append(f"- {pending_excerpt} {refs}")
     if not ids:
         return None
     if not _fallback_has_question_anchor(plan.original_query, selected):

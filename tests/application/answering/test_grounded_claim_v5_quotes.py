@@ -598,6 +598,8 @@ def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
     assert len(result[1]) == 4
     assert "立项决策阶段" in result[0]
     assert "附件须签字盖章" in result[0]
+    assert "实施计划，并附上相关材料" in result[0]
+    assert "- 并附上相关材料" not in result[0]
     assert "- （二）" not in result[0]
 
 
