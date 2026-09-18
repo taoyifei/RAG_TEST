@@ -590,6 +590,59 @@ def test_fallback_resolves_unique_short_name_of_table_row() -> None:
     assert "提交项目计划" not in result[0]
 
 
+def test_fallback_quotes_unique_duration_from_incomplete_level_row() -> None:
+    """等级表格缺行名时，仅引用唯一已检索的时限单元格。"""
+    evidence = _evidence(
+        "重大设备安全事件（Ⅱ级）指影响较大的故障。",
+        "电话及邮件方式报送设备安全部。 | 30分钟",
+    )
+    items = tuple(
+        item.model_copy(
+            update={
+                "table_context": "30分钟" in item.citation_text,
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        **(
+                            {
+                                "evidence_group_id": "egrp_definition",
+                                "evidence_group_type": "LIST_GROUP",
+                                "group_complete": True,
+                            }
+                            if "指影响较大" in item.citation_text
+                            else {}
+                        ),
+                    }
+                ),
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("报送方式", "时限", shape=AtomAnswerShape.FACT).model_copy(
+        update={
+            "original_query": (
+                "重大设备安全事件（Ⅱ级）从疑似到确认如何报送，多长时间？"
+            ),
+            "resolved_root_query": (
+                "重大设备安全事件（Ⅱ级）从疑似到确认如何报送、多长时间？"
+            ),
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan,
+        items,
+        {
+            atom.atom_id: tuple(item.support_id for item in items)
+            for atom in plan.atoms
+        },
+        ("egrp_definition",),
+    )
+
+    assert result is not None
+    assert "30分钟" in result[0]
+    assert "指影响较大" not in result[0]
+
+
 def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
     """同一原文段落分成数块后仍能展示完整人工成本核算步骤。"""
     evidence = _evidence(

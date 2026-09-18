@@ -170,6 +170,7 @@ _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
     r"\d+(?:\.\d+)?\s*(?:个工作日|工作日|天|日|周|个月|月|年|小时|分钟)"
 )
+_FALLBACK_DURATION_QUESTION = re.compile(r"多久|多长时间|时限|期限")
 _FALLBACK_LIST_MARKER = re.compile(
     r"^[（(]?[一二三四五六七八九十\d]+[）).、]?$"
 )
@@ -2876,7 +2877,12 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             if sentence.strip()
         )
         if not sentences and (
-            structured or item.citation_text.rstrip().endswith(("；", ";"))
+            structured
+            or item.citation_text.rstrip().endswith(("；", ";"))
+            or (
+                item.table_context
+                and _FALLBACK_DURATION.search(item.citation_text)
+            )
         ):
             sentences = (item.citation_text.strip(),)
         if not sentences:
@@ -2920,6 +2926,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
     named_row_selected = False
+    timed_cell_selected = False
     if direct_duration and ordinary:
         _, _, item, sentence = max(ordinary, key=lambda row: (row[0], -row[1]))
         selected = [(item, sentence)]
@@ -2935,6 +2942,31 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     if not selected and multi_part:
         selected = _fallback_table_row(plan, grouped)
         named_row_selected = bool(selected)
+    if (
+        not selected
+        and multi_part
+        and _PARENTHETICAL_LEVEL.search(plan.original_query)
+        and _FALLBACK_DURATION_QUESTION.search(plan.original_query)
+    ):
+        # 表格未闭合时只摘录唯一的时限单元格，不代填缺失的等级行名。
+        timed_cells = [
+            (item, item.citation_text.strip())
+            for item in evidence
+            if item.support_id in related
+            and (
+                scoped_versions is None
+                or item.document_version_id in scoped_versions
+            )
+            and item.table_context
+            and item.source_spans
+            and all(span.is_citable for span in item.source_spans)
+            and _FALLBACK_DURATION.search(item.citation_text)
+            and len(_terms(item.citation_text) & question_terms)
+            >= _FALLBACK_MIN_BIGRAM_OVERLAP
+        ]
+        if len(timed_cells) == 1:
+            selected = timed_cells
+            timed_cell_selected = True
     ordinary_selection = [
         (item, sentence)
         for _, _, item, sentence in sorted(
@@ -3090,6 +3122,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             for atom in plan.atoms
         )
         and grouped
+        and not (named_row_selected or timed_cell_selected)
     ):
         # 复合事实可从同版资料中的邻近完整条款补一条尚未覆盖的问意。
         # 保持独立摘录和引用，不跨来源组拼成单句。
