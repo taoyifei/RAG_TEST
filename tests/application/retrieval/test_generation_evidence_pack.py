@@ -26,6 +26,7 @@ from rag_app.core.models import (
     RankedChunk,
     RetrievalPolicy,
     SearchRequest,
+    SourceSpan,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
@@ -162,8 +163,9 @@ def test_root_candidate_without_atom_provenance_is_available() -> None:
 def test_compound_question_keeps_prior_stage_within_document_cap() -> None:
     """同文档的高排名片段不能耗尽前序阶段的生成证据名额。"""
     seeds = tuple(
-        make_ranked_chunk(number, f"立项阶段{number}。")
-        .model_copy(update={"rerank_rank": number})
+        make_ranked_chunk(number, f"立项阶段{number}。").model_copy(
+            update={"rerank_rank": number}
+        )
         for number in range(1, 5)
     )
     predecessors = tuple(
@@ -451,6 +453,97 @@ def test_source_node_closure_keeps_cross_chunk_continuation() -> None:
     assert {item.citation_text for item in pack.evidence} == set(texts)
     assert pack.per_atom_candidate_support_ids == (
         ("A1", tuple(item.support_id for item in pack.evidence)),
+    )
+
+
+def test_table_row_closure_keeps_mapped_duration_without_other_row() -> None:
+    """表格行的合并单元格与时限须同包，未映射的兄弟行不可混入。"""
+    report = "电话及邮件方式报送信息安全部。"
+    duration = "30分钟"
+    other_row = "1小时"
+    text = f"{report} | {duration} | {other_row}"
+    candidate = make_ranked_chunk(1, text, role=ChunkRole.TABLE)
+    original = candidate.hydrated.chunk.source_spans[0]
+    anchor = original.source_anchor
+    assert anchor is not None
+    table_node = f"node_{90:032x}"
+    report_node = f"node_{91:032x}"
+    duration_node = f"node_{92:032x}"
+    other_node = f"node_{93:032x}"
+
+    def cell_span(
+        node_id: str, row: int, column: int, start: int, value: str
+    ) -> SourceSpan:
+        path = ("body", "tbl:1", f"tr:{row}", f"tc:{column}")
+        return original.model_copy(
+            update={
+                "node_id": node_id,
+                "structural_path": path,
+                "chunk_start_char": start,
+                "chunk_end_char": start + len(value),
+                "source_start_char": 0,
+                "source_end_char": len(value),
+                "source_anchor": anchor.model_copy(
+                    update={
+                        "structural_path": path,
+                        "ordinal": row * 10 + column,
+                        "row_index": row,
+                        "column_index": column,
+                        "source_start_char": 0,
+                        "source_end_char": len(value),
+                    }
+                ),
+            }
+        )
+
+    spans = (
+        cell_span(report_node, 1, 1, 0, report),
+        cell_span(duration_node, 2, 2, len(report) + 3, duration),
+        cell_span(other_node, 3, 2, len(report) + len(duration) + 6, other_row),
+    )
+    chunk = candidate.hydrated.chunk.model_copy(
+        update={
+            "source_spans": spans,
+            "metadata": freeze_json_object(
+                {
+                    "atoms": [
+                        {
+                            "metadata": {
+                                "row_index": 2,
+                                "table_node_id": table_node,
+                                "cell_source_node_ids": {
+                                    "1": [report_node],
+                                    "2": [duration_node],
+                                },
+                            }
+                        }
+                    ]
+                }
+            ),
+        }
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(update={"chunk": chunk})
+        }
+    )
+    evidence = _evidence_item(candidate, spans[0], report, "S1")
+    atom = QueryAtom(
+        atom_id="A1",
+        target="信息安全事件",
+        relation="报告方式和时限",
+        answer_shape=AtomAnswerShape.PROCEDURE,
+    )
+
+    pack = _pack(_plan(atom), (candidate,), root=(evidence,))
+
+    assert {item.citation_text for item in pack.evidence} == {report, duration}
+    assert all(item.source_spans[0].is_citable for item in pack.evidence)
+    assert (
+        pack.structural_sibling_observation(())[
+            "structural_sibling_pollution_count"
+        ]
+        == 0
     )
 
 

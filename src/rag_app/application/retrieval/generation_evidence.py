@@ -618,8 +618,62 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     node_spans: dict[
         tuple[str, str], list[tuple[RankedChunk, SourceSpan, str]]
     ] = defaultdict(list)
+    table_spans: dict[str, list[tuple[RankedChunk, SourceSpan, str]]] = (
+        defaultdict(list)
+    )
     for candidate in candidate_by_id.values():
         chunk = candidate.hydrated.chunk
+        if chunk.role is ChunkRole.TABLE:
+            atoms = dict(chunk.metadata).get("atoms")
+            if not isinstance(atoms, (list, tuple)) or not atoms:
+                continue
+            rows: set[int] = set()
+            allowed_nodes: set[str] = set()
+            valid_mapping = True
+            for atom in atoms:
+                metadata = (
+                    atom.get("metadata") if isinstance(atom, dict) else None
+                )
+                if not isinstance(metadata, dict):
+                    valid_mapping = False
+                    break
+                row = metadata.get("row_index")
+                mapping = metadata.get("cell_source_node_ids")
+                if (
+                    not isinstance(row, int)
+                    or isinstance(row, bool)
+                    or not isinstance(mapping, dict)
+                ):
+                    valid_mapping = False
+                    break
+                rows.add(row)
+                for values in mapping.values():
+                    if not isinstance(values, (list, tuple)):
+                        valid_mapping = False
+                        break
+                    allowed_nodes.update(
+                        node_id
+                        for node_id in values
+                        if isinstance(node_id, str)
+                    )
+                if not valid_mapping:
+                    break
+            # 只补同一个逻辑表格行中、由单元格节点映射明确列出的原文。
+            if not valid_mapping or len(rows) != 1 or not allowed_nodes:
+                continue
+            for span in chunk.source_spans:
+                if (
+                    not span.is_citable
+                    or span.is_repeated
+                    or span.node_id not in allowed_nodes
+                ):
+                    continue
+                quote = chunk.citation_text[
+                    span.chunk_start_char : span.chunk_end_char
+                ]
+                if quote.strip():
+                    table_spans[chunk.chunk_id].append((candidate, span, quote))
+            continue
         if chunk.role not in {ChunkRole.TEXT, ChunkRole.LIST}:
             continue
         for span in chunk.source_spans:
@@ -637,8 +691,10 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             continue
         item_key = _identity(item)
         node_id = next(iter(node_ids))
-        same_node = node_spans.get(
-            (item.document_version_id or "", node_id), ()
+        same_node = (
+            table_spans.get(item.chunk_id, ())
+            if item.table_context
+            else node_spans.get((item.document_version_id or "", node_id), ())
         )
         for candidate, span, quote in sorted(
             same_node,
@@ -683,8 +739,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 primary_version.document_version_id,
             )
             anchored = any(
-                (item.document_id, item.document_version_id)
-                == primary_source
+                (item.document_id, item.document_version_id) == primary_source
                 for item in (*root_evidence, *atom_evidence)
             )
             if anchored:
@@ -788,9 +843,8 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 for key in admitted
                 if key in root_keys
                 and candidates[key].document_id == primary_document_id
-                and (
-                    candidate := candidate_by_id.get(candidates[key].chunk_id)
-                ) is not None
+                and (candidate := candidate_by_id.get(candidates[key].chunk_id))
+                is not None
                 and candidate.expansion_reason == "SECTION_PREDECESSOR"
             )
             # 多子问题保留同一来源中紧邻的前序阶段，后续仍受每文档、
