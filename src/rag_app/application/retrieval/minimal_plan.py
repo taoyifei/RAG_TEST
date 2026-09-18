@@ -83,6 +83,11 @@ def planner_json_schema(
     if not clause_ids or not target_ids or not relation_ids:
         raise MinimalPlanValidationError("PLANNER_SPAN_INPUT_INVALID")
     schema = MinimalPlanPayload.model_json_schema()
+    # 澄清已由可信 Root 决定；输出仍兼容旧 c 字段，但不再要求模型重复 null。
+    schema["properties"].pop("c")
+    schema["required"] = [
+        field for field in schema["required"] if field != "c"
+    ]
     atom_definition = schema["$defs"]["MinimalAtomPayload"]
     properties = atom_definition["properties"]
     properties["f"]["items"]["enum"] = clause_ids

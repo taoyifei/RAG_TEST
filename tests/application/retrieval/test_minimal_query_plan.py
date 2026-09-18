@@ -145,6 +145,8 @@ def test_planner_schema_references_only_trusted_ids_of_each_kind() -> None:
         _request("乙什么时候提交？", context=("上一问：甲由谁审核？",))
     )
     schema = planner_json_schema(spans)
+    assert set(schema["properties"]) == {"i", "a"}
+    assert "c" not in schema["required"]
     atom = schema["$defs"]["MinimalAtomPayload"]["properties"]
     by_kind = {
         "f": ("CLAUSE", "CURRENT"),
