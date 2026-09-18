@@ -610,16 +610,16 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
     evidence = _evidence(
         "项目立项包括准备、申报、审核、决策和系统立项。",
         "立项准备阶段开展可行性分析并编制项目材料。",
-        "立项申报阶段提交目标材料和实施计划。",
-        "立项审核阶段审查材料并确认步骤。",
-        "立项决策阶段提交会议审议。",
+        "（二）立项申报阶段提交目标材料和实施计划。",
+        "（三）立项审核阶段审查材料并确认步骤。",
+        "（四）立项决策阶段提交会议审议。",
     )
     source_positions = {
         "项目立项包括准备": ("egrp_overview", 113),
         "立项准备阶段": ("egrp_preparation", 114),
-        "立项申报阶段": ("egrp_later", 117),
-        "立项审核阶段": ("egrp_later", 118),
-        "立项决策阶段": ("egrp_later", 119),
+        "（二）立项申报阶段": ("egrp_later", 117),
+        "（三）立项审核阶段": ("egrp_later", 118),
+        "（四）立项决策阶段": ("egrp_later", 119),
     }
 
     def locate(item: EvidenceItem) -> tuple[str, int]:
@@ -661,7 +661,8 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
         for item in evidence
     )
     assert len({item.chunk_id for item in grouped}) == 5
-    plan = _plan("项目立项", "材料和步骤", shape=AtomAnswerShape.PROCEDURE)
+    # 规划器把复合流程误标成 FACT 时，也要遵守问句中的步骤请求。
+    plan = _plan("项目立项", "材料和步骤")
     result = _safe_extractive_fallback(
         plan,
         grouped,

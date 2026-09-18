@@ -3080,10 +3080,13 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             and complement[0] >= 1
         ):
             selected.append((complement[2], complement[3]))
-    if grouped and any(
+    sequence_requested = any(
         atom.answer_shape in {AtomAnswerShape.PROCEDURE, AtomAnswerShape.DUTIES}
         for atom in plan.atoms
-    ):
+    ) or any(
+        term in plan.original_query for term in ("步骤", "流程", "阶段")
+    )
+    if grouped and sequence_requested:
         selected = _fallback_prior_stage_excerpts(
             selected, grouped, complete_ids, question_terms
         )
@@ -3109,12 +3112,8 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         )
         if (
             (
-                any(
-                    atom.answer_shape is AtomAnswerShape.PROCEDURE
-                    for atom in plan.atoms
-                )
-                and numbered_members
-                >= _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS
+                sequence_requested
+                and numbered_members >= _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS
             )
             or (
                 len(_han_text(plan.original_query))
