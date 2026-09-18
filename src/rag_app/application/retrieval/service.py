@@ -2947,6 +2947,11 @@ class RetrievalService:
                 ),
                 "candidate_link_count": len(fusion.links),
                 "seed_chunk_count": len(fusion.seed_chunk_ids),
+                "seed_chunk_ids": fusion.seed_chunk_ids,
+                "root_lexical_top_chunk_ids": tuple(
+                    hit.chunk_id
+                    for hit in unit_channels["ROOT"].get("lexical", ())[:6]
+                ),
                 "fused_chunk_count": len(fusion.candidates),
             },
         )
@@ -3767,6 +3772,10 @@ class RetrievalService:
                 "mode": reranked.mode,
                 "reason_code": reranked.reason_code,
                 "candidate_count": len(reranked.candidates),
+                "candidate_chunk_ids": tuple(
+                    item.hydrated.chunk.chunk_id
+                    for item in reranked.candidates
+                ),
             },
         )
         degraded.extend(expansion.degraded_reason_codes)

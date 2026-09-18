@@ -377,7 +377,7 @@ def test_fallback_uses_named_complete_table_row() -> None:
         plan,
         items,
         {
-            atom.atom_id: tuple(item.support_id for item in items)
+            atom.atom_id: (generic.support_id,)
             for atom in plan.atoms
         },
         (group_id,),

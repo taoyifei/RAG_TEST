@@ -2626,14 +2626,21 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     grouped: dict[str, list[tuple[EvidenceItem, str]]] = {}
     ordinary: list[tuple[int, int, EvidenceItem, str]] = []
     for index, item in enumerate(evidence):
+        metadata = dict(item.metadata)
+        group_id = metadata.get("evidence_group_id")
+        complete_table_row = (
+            metadata.get("evidence_group_type") == "TABLE_ROW_GROUP"
+            and metadata.get("group_complete") is True
+            and isinstance(group_id, str)
+            and group_id in complete_ids
+        )
         if (
-            item.support_id not in related
+            (item.support_id not in related and not complete_table_row)
             or not item.publishable
             or not item.source_spans
             or any(not span.is_citable for span in item.source_spans)
         ):
             continue
-        metadata = dict(item.metadata)
         certified = (
             isinstance(support := metadata.get("answer_support"), dict)
             and support.get("status") == "SUPPORTED"
@@ -2660,7 +2667,6 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             normalized_sentence[position : position + 3]
             for position in range(len(normalized_sentence) - 2)
         }
-        group_id = metadata.get("evidence_group_id")
         if (
             structured
             and isinstance(group_id, str)
