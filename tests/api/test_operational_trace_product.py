@@ -42,6 +42,7 @@ def _grounded_response(request: httpx.Request) -> httpx.Response:
         evidence = candidates[0]
         claims = [
             {
+                "atom_id": grounded["atoms"][0]["atom_id"],
                 "text": evidence["text"],
                 "supports": [
                     {
