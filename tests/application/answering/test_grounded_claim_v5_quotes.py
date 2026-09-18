@@ -647,7 +647,11 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
                     {
                         **dict(item.metadata),
                         "evidence_group_id": locate(item)[0],
-                        "evidence_group_type": "LIST_GROUP",
+                        "evidence_group_type": (
+                            "SECTION_GROUP"
+                            if locate(item)[0] == "egrp_later"
+                            else "LIST_GROUP"
+                        ),
                         "group_complete": True,
                     }
                 ),
@@ -793,7 +797,7 @@ def test_short_question_keeps_complete_numbered_decision_sequence() -> None:
                     {
                         **dict(item.metadata),
                         "evidence_group_id": "egrp_decision",
-                        "evidence_group_type": "LIST_GROUP",
+                        "evidence_group_type": "PARAGRAPH_GROUP",
                         "group_complete": True,
                     }
                 )
@@ -812,6 +816,55 @@ def test_short_question_keeps_complete_numbered_decision_sequence() -> None:
     assert result is not None
     assert "主管机构审批调整方案" in result[0]
     assert "审批通过后执行调整" in result[0]
+
+
+def test_compound_facts_keep_nearby_complete_source_groups() -> None:
+    """跨章节的条件与时间规则各自保留原句和引用。"""
+    evidence = _evidence(
+        "各部门员工通过认证拿到证书后，在费用额度内提交发票报销。",
+        "员工跨年领到证书的，请在证书领取年份报销，占用该年度费用额度；",
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "section_id": (
+                    "section_notice"
+                    if "跨年" in item.citation_text
+                    else "section_process"
+                ),
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": (
+                            "egrp_notice"
+                            if "跨年" in item.citation_text
+                            else "egrp_process"
+                        ),
+                        "evidence_group_type": "PARAGRAPH_GROUP",
+                        "group_complete": True,
+                    }
+                ),
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("认证费跨年报销", "报销条件").model_copy(
+        update={
+            "original_query": "员工跨年领证后，认证费报销条件是什么？",
+            "resolved_root_query": "员工跨年领证后，认证费报销条件是什么？",
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {atom.atom_id: tuple(item.support_id for item in grouped)
+         for atom in plan.atoms},
+        ("egrp_process", "egrp_notice"),
+    )
+
+    assert result is not None
+    assert "费用额度内提交发票报销" in result[0]
+    assert "证书领取年份报销" in result[0]
 
 
 def test_compound_reimbursement_omits_orphan_heading() -> None:

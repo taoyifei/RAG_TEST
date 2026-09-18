@@ -157,6 +157,7 @@ _FALLBACK_PREDECESSOR_LIMIT = 2
 _FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
 _FALLBACK_LONG_QUESTION_CHARS = 10
 _FALLBACK_SHORT_QUESTION_CHARS = 14
+_FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS = 2
 _FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS = 3
 _FALLBACK_FOCUSED_MIN_CHARS = 6
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
@@ -2645,7 +2646,7 @@ def _fallback_prior_stage_excerpts(
         if (group_id := dict(item.metadata).get("evidence_group_id"))
         in complete_ids
         and dict(item.metadata).get("evidence_group_type")
-        in {"LIST_GROUP", "PROCEDURE_GROUP"}
+        not in {"TABLE_ROW_GROUP", "CATALOG_ENTRY"}
     }
     if len(selected_groups) != 1:
         return selected
@@ -2683,7 +2684,7 @@ def _fallback_prior_stage_excerpts(
             if (
                 (item.document_version_id, item.section_id) != origin
                 or dict(item.metadata).get("evidence_group_type")
-                not in {"LIST_GROUP", "PROCEDURE_GROUP"}
+                in {"TABLE_ROW_GROUP", "CATALOG_ENTRY"}
                 or ordinal is None
                 or not 0 < first - ordinal <= _FALLBACK_PREDECESSOR_MAX_GAP
                 or len(_terms(sentence) & question_terms)
@@ -3033,22 +3034,25 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             }
             for atom in plan.atoms
         )
-        and any(
-            sentence.rstrip().endswith(("，", "、"))
-            for _, sentence in selected
-        )
         and grouped
     ):
-        # 同一来源节点的条件长句若被切块，再补同章节与剩余问意相符的
-        # 完整条款；其它章节及只有标题的结构成员均不能补入。
-        source = (
-            selected[0][0].document_version_id,
-            selected[0][0].section_id,
-        )
+        # 复合事实可从同版资料中的邻近完整条款补一条尚未覆盖的问意。
+        # 保持独立摘录和引用，不跨来源组拼成单句。
+        source_version = selected[0][0].document_version_id
+        selected_positions = [
+            span.source_anchor.ordinal
+            for item, _ in selected
+            for span in item.source_spans
+            if span.source_anchor is not None
+        ]
         uncovered = question_terms - _terms(
             " ".join(sentence for _, sentence in selected)
         )
         existing_ids = {item.support_id for item, _ in selected}
+        existing_groups = {
+            dict(item.metadata).get("evidence_group_id")
+            for item, _ in selected
+        }
         complements = (
             (
                 len(_terms(sentence) & uncovered),
@@ -3059,17 +3063,29 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             for members in grouped.values()
             for item, sentence in members
             if item.support_id not in existing_ids
-            and (item.document_version_id, item.section_id) == source
+            and item.document_version_id == source_version
+            and dict(item.metadata).get("evidence_group_id")
+            not in existing_groups
+            and selected_positions
+            and any(
+                abs(span.source_anchor.ordinal - position)
+                <= _FALLBACK_PREDECESSOR_MAX_GAP * 2
+                for span in item.source_spans
+                if span.source_anchor is not None
+                for position in selected_positions
+            )
             and sentence.rstrip().endswith(("。", "；", ";"))
         )
         complement = max(complements, key=lambda row: row[:2], default=None)
         if (
             complement is not None
             and complement[0] >= 1
-            and complement[1] >= _FALLBACK_MIN_BIGRAM_OVERLAP
         ):
             selected.append((complement[2], complement[3]))
-    if multi_part and grouped:
+    if grouped and any(
+        atom.answer_shape in {AtomAnswerShape.PROCEDURE, AtomAnswerShape.DUTIES}
+        for atom in plan.atoms
+    ):
         selected = _fallback_prior_stage_excerpts(
             selected, grouped, complete_ids, question_terms
         )
@@ -3081,19 +3097,26 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             not isinstance(group_id, str)
             or group_id not in complete_ids
             or metadata.get("evidence_group_type")
-            not in {"LIST_GROUP", "PROCEDURE_GROUP"}
+            in {"TABLE_ROW_GROUP", "CATALOG_ENTRY"}
             or group_id not in grouped
         ):
             continue
         members = grouped[group_id]
         numbered_members = sum(
-            bool(_LEADING_LIST_MARKER.match(sentence))
+            bool(
+                _LEADING_LIST_MARKER.match(sentence)
+                or _LEADING_SECTION_MARKER.match(sentence)
+            )
             for _, sentence in members
         )
         if (
-            any(
-                atom.answer_shape is AtomAnswerShape.PROCEDURE
-                for atom in plan.atoms
+            (
+                any(
+                    atom.answer_shape is AtomAnswerShape.PROCEDURE
+                    for atom in plan.atoms
+                )
+                and numbered_members
+                >= _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS
             )
             or (
                 len(_han_text(plan.original_query))
