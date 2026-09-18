@@ -12,7 +12,7 @@ from rag_app.core.identifiers import canonical_sha256
 from rag_app.core.models.common import FrozenModel
 from rag_app.core.models.query import QueryAnalysis, RequestedAnswerType
 
-QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v3"
+QUERY_PLAN_SCHEMA_REVISION = "wb08r-query-plan-v4"
 QUERY_UNIT_FUSION_REVISION = "wb08r-root-atom-fusion-v1"
 ATOM_GROUP_ALIGNMENT_REVISION = "wb08r-atom-group-alignment-v2"
 EVIDENCE_GROUP_SCHEMA_REVISION = "wb08r-evidence-group-v1"

@@ -118,7 +118,7 @@ def test_typed_adaptive_plan_preserves_independent_atoms(
     assert tuple(atom.answer_shape.value for atom in outcome.atoms) == shapes
     assert len(outcome.atoms) == len(atoms)
     assert observed_calls[0]["timeout_seconds"] == 8.0
-    assert observed_calls[0]["max_output_tokens"] == 192
+    assert observed_calls[0]["max_output_tokens"] == 160
     assert outcome.planner_output_tokens == 40
 
 
@@ -183,3 +183,23 @@ def test_planner_more_than_four_atoms_falls_back() -> None:
         request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
     )
     assert outcome.reason_code == "PLANNER_INVALID_SCHEMA"
+
+
+def test_schema_failure_trace_records_only_shape_not_question_body() -> None:
+    request = _request("甲什么时候提交？")
+    malformed = json.dumps(
+        {
+            "i": "CLARIFICATION",
+            "c": "MISSING_TARGET",
+            "a": [_atom("Q.C1", "Q.T1", "Q.R1", "FACT")],
+        },
+        ensure_ascii=False,
+    )
+    outcome = _planner_response([], raw_content=malformed).plan_adaptive(
+        request, QueryAnalyzer().analyze(request), ReasoningEffort.DEEP
+    )
+    assert outcome.reason_code == "PLANNER_INVALID_SCHEMA"
+    assert "intent=CLARIFICATION:atoms=1:reason=SET" in (
+        outcome.schema_fallback_detail or ""
+    )
+    assert "甲" not in (outcome.schema_fallback_detail or "")

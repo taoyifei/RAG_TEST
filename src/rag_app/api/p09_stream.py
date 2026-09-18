@@ -84,6 +84,7 @@ class P09AnswerStream:
     last_protocol_activity: float = field(default_factory=time.monotonic)
     terminal_state: _TerminalState = "OPEN"
     terminal_lock: threading.Lock = field(default_factory=threading.Lock)
+    final_acknowledged: threading.Event = field(default_factory=threading.Event)
     deadline_timer: threading.Timer | None = field(
         default=None,
         init=False,
@@ -122,7 +123,7 @@ class P09AnswerStream:
         )
         self.deadline_timer = threading.Timer(
             remaining,
-            self.cancellation.cancel,
+            self.cancel,
         )
         self.deadline_timer.daemon = True
         self.deadline_timer.start()
@@ -143,6 +144,10 @@ class P09AnswerStream:
             无返回值；重复调用保持幂等。
 
         """
+        # Final 已完成 HTTP 发送确认后，worker 仍需完成历史和会话提交。
+        # 正常响应收尾不能把已交付的结果追记为取消。
+        if self.final_acknowledged.is_set():
+            return
         self._try_claim_terminal("CANCELLED")
         self.cancellation.cancel()
 
@@ -353,7 +358,7 @@ class P09AnswerStream:
                 if terminal_kind is not None:
                     break
         finally:
-            self.cancellation.cancel()
+            self.cancel()
 
     def _deadline_remaining(self, now: float) -> float:
         """首事件、业务空闲和总时限分别计算。"""
@@ -374,6 +379,8 @@ class P09AnswerStream:
         self.last_sequence = max(self.last_sequence, event.sequence)
         if isinstance(event, AnswerStreamClaimEvent):
             self.delivered_claims += 1
+        if isinstance(event, AnswerStreamFinalEvent):
+            self.final_acknowledged.set()
         queued.delivered.set()
 
     def _render_event(self, event: AnswerStreamPublicEvent) -> bytes | None:

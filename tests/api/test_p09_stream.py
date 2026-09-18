@@ -520,6 +520,26 @@ def test_final_only_route_stage_prevents_first_event_timeout() -> None:
         assert coordinator.first_protocol_event_delivered is True
         assert coordinator.answer_content_delivered is True
         assert coordinator.terminal_state == "FINAL"
+        assert coordinator.final_acknowledged.is_set()
+        assert not coordinator.cancellation.is_cancelled()
+        coordinator.cancel()
+        assert not coordinator.cancellation.is_cancelled()
+    finally:
+        _wait_for(lambda: executor.in_flight == 0)
+        executor.close()
+
+
+def test_unacknowledged_final_disconnect_cancels_worker() -> None:
+    executor = QueryExecutor(queue_wait_seconds=1.0)
+    coordinator = _stream(executor, _StagedFinalSdk())
+    stream = coordinator.start()
+    try:
+        assert _next_event(stream)[0] == "meta"
+        assert _next_event(stream)[0] == "stage"
+        assert _next_event(stream)[0] == "final"
+        assert not coordinator.final_acknowledged.is_set()
+        stream.close()
+        assert coordinator.cancellation.is_cancelled()
     finally:
         _wait_for(lambda: executor.in_flight == 0)
         executor.close()

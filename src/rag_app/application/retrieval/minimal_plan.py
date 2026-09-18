@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from rag_app.application.retrieval.context_resolution import (
     QueryInputSpan,
@@ -38,21 +38,32 @@ class MinimalPlanValidationError(ValueError):
 class MinimalAtomPayload(FrozenModel):
     """模型只选择服务端给定的片段身份和回答形状。"""
 
-    fragment_span_ids: tuple[str, ...] = Field(min_length=1, max_length=2)
-    target_span_id: str
-    relation_span_id: str
-    answer_shape: AtomAnswerShape
+    model_config = ConfigDict(populate_by_name=True)
+
+    fragment_span_ids: tuple[str, ...] = Field(
+        alias="f", min_length=1, max_length=2
+    )
+    target_span_id: str = Field(alias="t")
+    relation_span_id: str = Field(alias="r")
+    answer_shape: AtomAnswerShape = Field(alias="s")
 
 
 class MinimalPlanPayload(FrozenModel):
     """无自由文本事实字段的单次 Planner 输出。"""
 
-    intent: str = Field(pattern=r"^(SINGLE|COMPOUND|FOLLOW_UP|CLARIFICATION)$")
+    model_config = ConfigDict(populate_by_name=True)
+
+    intent: str = Field(
+        alias="i", pattern=r"^(SINGLE|COMPOUND|FOLLOW_UP|CLARIFICATION)$"
+    )
     clarification_reason: str | None = Field(
         default=None,
+        alias="c",
         pattern=r"^(MISSING_TARGET|AMBIGUOUS_REFERENCE|MULTIPLE_TARGETS|CONFLICTING_CONTEXT)$",
     )
-    atoms: tuple[MinimalAtomPayload, ...] = Field(default=(), max_length=4)
+    atoms: tuple[MinimalAtomPayload, ...] = Field(
+        default=(), alias="a", max_length=4
+    )
 
     @model_validator(mode="after")
     def _consistent(self) -> MinimalPlanPayload:

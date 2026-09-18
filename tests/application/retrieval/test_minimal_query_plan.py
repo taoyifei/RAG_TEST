@@ -122,3 +122,18 @@ def test_recent_context_relation_is_not_substituted_for_current_relation() -> (
     with pytest.raises(MinimalPlanValidationError) as failure:
         _build(_payload(_atom(("Q.C1",), "P1.T1", "P1.R1")), request)
     assert failure.value.code == "PLANNER_INVALID_SPAN_KIND"
+
+
+def test_planner_wire_schema_uses_compact_ids_and_preserves_old_parser() -> (
+    None
+):
+    payload = _payload(_atom(("Q.C1",), "Q.T1", "Q.R1"))
+    wire = payload.model_dump(by_alias=True)
+    assert set(wire) == {"i", "c", "a"}
+    assert set(wire["a"][0]) == {"f", "t", "r", "s"}
+    assert MinimalPlanPayload.model_validate(wire) == payload
+    assert set(MinimalPlanPayload.model_json_schema()["properties"]) == {
+        "i",
+        "c",
+        "a",
+    }

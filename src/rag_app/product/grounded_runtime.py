@@ -511,6 +511,10 @@ class ProductGroundedModel:
                     "只选择给定 Span ID，将用户问题拆成至多四个可检索事实原子。"
                     "不得回答问题、创造 Span、补充条件或引用文档。"
                     "每个独立当前问句都须覆盖；relation 必须来自当前问句。"
+                    "输出键 i=意图、c=澄清原因、a=原子；"
+                    "a 非空时 c 为 null，澄清时 a 为空。"
+                    "原子键 f=Clause ID 列表、t=Target ID、"
+                    "r=当前 Relation ID、s=回答形状。"
                     "无法唯一确定对象时选择澄清意图。"
                     "只输出符合 JSON Schema 的对象。"
                 ),
@@ -589,12 +593,43 @@ class ProductGroundedModel:
             except ValidationError as error:
                 first = error.errors(include_input=False)[0]
                 location = ".".join(str(part) for part in first["loc"])
+                shape = ""
+                if isinstance(payload_data, dict):
+                    raw_atoms = payload_data.get(
+                        "a", payload_data.get("atoms")
+                    )
+                    raw_intent = payload_data.get(
+                        "i", payload_data.get("intent")
+                    )
+                    intent_kind = (
+                        raw_intent
+                        if raw_intent
+                        in {"SINGLE", "COMPOUND", "FOLLOW_UP", "CLARIFICATION"}
+                        else "OTHER"
+                    )
+                    atom_count = (
+                        str(len(raw_atoms))
+                        if isinstance(raw_atoms, list)
+                        else "INVALID"
+                    )
+                    reason_kind = (
+                        "SET"
+                        if payload_data.get(
+                            "c", payload_data.get("clarification_reason")
+                        )
+                        is not None
+                        else "NONE"
+                    )
+                    shape = (
+                        f":intent={intent_kind}:atoms={atom_count}"
+                        f":reason={reason_kind}"
+                    )
                 return AdaptivePlanOutcome(
                     calls=calls,
                     reason_code="PLANNER_INVALID_SCHEMA",
                     attempted=True,
                     schema_fallback_detail=(
-                        f"INVALID_SCHEMA:{location}:{first['type']}"
+                        f"INVALID_SCHEMA:{location}:{first['type']}{shape}"
                     ),
                     failure_category="PLANNER_INVALID_SCHEMA",
                     **telemetry,
