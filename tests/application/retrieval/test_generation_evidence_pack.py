@@ -645,3 +645,30 @@ def test_catalog_entry_cannot_supply_template_body() -> None:
     assert EvidenceAdmissionReason.TEMPLATE_BODY_UNAVAILABLE in (
         pack.rejected_entries[0].hard_reject_reasons
     )
+
+
+def test_catalog_entry_cannot_validate_placeholder_as_requirement() -> None:
+    candidate, evidence = _item(1, "模板目录列有会议纪要模板。")
+    evidence = evidence.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {"evidence_group_type": "CATALOG_ENTRY"}
+            )
+        }
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="会议纪要模板",
+        relation="占位内容是否正式要求",
+        answer_shape=AtomAnswerShape.FACT,
+    )
+    pack = _pack(
+        _plan(atom),
+        (candidate,),
+        root=(evidence,),
+        request=_request("会议纪要模板的占位或示例能当正式要求吗？"),
+    )
+    assert not pack.entries
+    assert EvidenceAdmissionReason.TEMPLATE_BODY_UNAVAILABLE in (
+        pack.rejected_entries[0].hard_reject_reasons
+    )

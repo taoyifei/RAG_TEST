@@ -41,7 +41,9 @@ _STRUCTURED_GROUP_TYPES = frozenset(
 )
 _TABLE_ROW = re.compile(r"^tr:(\d+)$")
 _TABLE_NODE_ID = re.compile(r"^node_[0-9a-f]{32}$")
-_TEMPLATE_BODY = re.compile(r"正文|具体内容|具体字段|怎么填|如何填写|填写方法")
+_TEMPLATE_BODY = re.compile(
+    r"正文|具体内容|具体字段|怎么填|如何填写|填写方法|占位|示例|正式要求"
+)
 _LITERAL_QUANTITY = re.compile(
     r"(?<!\d)(\d+(?:\.\d+)?)\s*"
     r"(毫秒|分钟|小时|秒|天|日|周|个月|月|年|%|％|元|人|次|个|件|项)"
