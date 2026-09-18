@@ -38,7 +38,7 @@ from rag_app.core.models.query_plan import (
 )
 from rag_app.core.query_text import named_table_label_in_query
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v3"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v4"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
@@ -47,6 +47,7 @@ _TABLE_ROW = re.compile(r"^tr:(\d+)$")
 _TABLE_NODE_ID = re.compile(r"^node_[0-9a-f]{32}$")
 _MIN_TABLE_SUBJECT_CHARS = 3
 _MIN_TABLE_ACTION_CHARS = 12
+_MIN_QUESTION_SOURCE_RUN = 4
 _TEMPLATE_BODY = re.compile(
     r"正文|具体内容|具体字段|怎么填|如何填写|填写方法|占位|示例|正式要求"
 )
@@ -259,6 +260,17 @@ class GenerationEvidencePack:
 
 def _normalized(value: str) -> str:
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
+
+
+def _question_source_run(query: str, source: str) -> bool:
+    """要求原问与原文单元格有连续对象锚点，避免泛主题补证。"""
+    words = "".join(char for char in query if "\u4e00" <= char <= "\u9fff")
+    normalized_source = _normalized(source)
+    return any(
+        words[index : index + _MIN_QUESTION_SOURCE_RUN]
+        in normalized_source
+        for index in range(len(words) - _MIN_QUESTION_SOURCE_RUN + 1)
+    )
 
 
 def _identity(item: EvidenceItem) -> tuple[object, ...]:
@@ -765,8 +777,14 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
                 for atom in query_plan.atoms
                 if column > 0
                 and atom.answer_shape in duty_shapes
-                and len(_normalized(atom.target)) >= _MIN_TABLE_SUBJECT_CHARS
-                and _normalized(atom.target) in _normalized(quote)
+                and (
+                    (
+                        len(_normalized(atom.target))
+                        >= _MIN_TABLE_SUBJECT_CHARS
+                        and _normalized(atom.target) in _normalized(quote)
+                    )
+                    or _question_source_run(query_plan.original_query, quote)
+                )
                 and len(quote) >= _MIN_TABLE_ACTION_CHARS
             )
             if not named and not subject_atoms:

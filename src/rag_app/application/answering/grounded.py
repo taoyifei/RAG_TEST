@@ -3120,10 +3120,15 @@ def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
                 and len(item.citation_text.strip())
                 >= _FALLBACK_TABLE_ACTION_MIN_CHARS
                 and any(
-                    len(normalize_semantic_text(atom.target))
-                    >= _FALLBACK_TABLE_SUBJECT_MIN_CHARS
-                    and normalize_semantic_text(atom.target)
-                    in normalize_semantic_text(item.citation_text)
+                    (
+                        len(normalize_semantic_text(atom.target))
+                        >= _FALLBACK_TABLE_SUBJECT_MIN_CHARS
+                        and normalize_semantic_text(atom.target)
+                        in normalize_semantic_text(item.citation_text)
+                    )
+                    or _longest_common_han_run(
+                        plan.original_query, item.citation_text
+                    ) >= _FALLBACK_MIN_QUESTION_ANCHOR_CHARS + 1
                     for atom in plan.atoms
                     if atom.answer_shape
                     in {

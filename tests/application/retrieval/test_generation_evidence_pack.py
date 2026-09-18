@@ -102,6 +102,48 @@ def _pack(
     )
 
 
+def test_table_action_reenters_pack_from_bounded_rerank_pool() -> None:
+    """原问中的职责主体直接命中表格原文时，旧装配配额不应造成空包。"""
+    source = "甲团队负责编制项目实施计划并提交审核"
+    candidate = make_ranked_chunk(1, source, role=ChunkRole.TABLE)
+    chunk = candidate.hydrated.chunk
+    span = chunk.source_spans[0]
+    path = ("body", "tbl:1", "tr:1", "tc:1", "p:1")
+    table_span = span.model_copy(
+        update={
+            "structural_path": path,
+            "source_anchor": span.source_anchor.model_copy(
+                update={"structural_path": path}
+            ),
+        }
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(
+                update={
+                    "chunk": chunk.model_copy(
+                        update={"source_spans": (table_span,)}
+                    )
+                }
+            )
+        }
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="团队任务",
+        relation="职责",
+        answer_shape=AtomAnswerShape.DUTIES,
+    )
+    plan = _plan(atom).model_copy(
+        update={
+            "original_query": "甲团队负责哪些工作？",
+            "resolved_root_query": "甲团队负责哪些工作？",
+        }
+    )
+    pack = _pack(plan, (candidate,))
+    assert [item.citation_text for item in pack.evidence] == [source]
+
+
 def test_direct_support_mismatch_remains_generation_candidate() -> None:
     candidate, evidence = _item(1, "检修记录应在三天内归档。")
     evidence = evidence.model_copy(
