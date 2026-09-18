@@ -282,6 +282,11 @@ def test_fallback_ignores_group_with_only_generic_query_overlap() -> None:
         {"A1": (item.support_id,)},
         ("egrp_unrelated",),
     ) is None
+    assert _safe_extractive_fallback(
+        plan,
+        (_evidence("为员工的专业提升提供更有针对性的指引。")[0],),
+        {"A1": (item.support_id,)},
+    ) is None
 
 
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:

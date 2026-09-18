@@ -193,7 +193,10 @@ def test_ordinary_chunk_keeps_adjacent_source_paragraph() -> None:
             "hydrated": candidate.hydrated.model_copy(
                 update={
                     "chunk": candidate.hydrated.chunk.model_copy(
-                        update={"source_spans": (earlier, later)}
+                        update={
+                            "source_spans": (earlier, later),
+                            "role": ChunkRole.LIST,
+                        }
                     )
                 }
             )
@@ -659,6 +662,43 @@ def test_catalog_entry_cannot_validate_placeholder_as_requirement() -> None:
     atom = QueryAtom(
         atom_id="A1",
         target="会议纪要模板",
+        relation="占位内容是否正式要求",
+        answer_shape=AtomAnswerShape.FACT,
+    )
+    pack = _pack(
+        _plan(atom),
+        (candidate,),
+        root=(evidence,),
+        request=_request("会议纪要模板的占位或示例能当正式要求吗？"),
+    )
+    assert not pack.entries
+    assert EvidenceAdmissionReason.TEMPLATE_BODY_UNAVAILABLE in (
+        pack.rejected_entries[0].hard_reject_reasons
+    )
+
+
+def test_catalog_title_certificate_cannot_validate_template_body() -> None:
+    """目录条目即使以普通检索结果入包，也不能证明模板正文。"""
+    title = "需求阶段-需求变更评审会议纪要模板"
+    candidate, evidence = _item(
+        1,
+        f"模板目录项：{title}（模板）。模板正文未入库；请参考原始模板。",
+    )
+    evidence = evidence.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "support_reason": "CATALOG_TITLE_EXISTS",
+                    }
+                }
+            )
+        }
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target=title,
         relation="占位内容是否正式要求",
         answer_shape=AtomAnswerShape.FACT,
     )

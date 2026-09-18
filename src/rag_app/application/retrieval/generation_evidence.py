@@ -20,6 +20,7 @@ from rag_app.application.retrieval.evidence_groups import GroupCandidate
 from rag_app.application.retrieval.filters import apply_candidate_filters
 from rag_app.core.models import (
     ChannelHit,
+    ChunkRole,
     EvidenceItem,
     RankedChunk,
     RetrievalPolicy,
@@ -460,9 +461,16 @@ def _hard_reasons(  # noqa: PLR0913
         reasons.append(EvidenceAdmissionReason.STRUCTURAL_SIBLING_CONFLICT)
     if item.table_context and len(_table_rows(item)) > 1:
         reasons.append(EvidenceAdmissionReason.TABLE_ROW_CONFLICT)
-    if metadata.get(
-        "evidence_group_type"
-    ) == "CATALOG_ENTRY" and _TEMPLATE_BODY.search(request.text):
+    certificate = metadata.get("answer_support")
+    catalog_title_only = (
+        metadata.get("evidence_group_type") == "CATALOG_ENTRY"
+        or (
+            isinstance(certificate, dict)
+            and certificate.get("support_reason") == "CATALOG_TITLE_EXISTS"
+        )
+        or item.citation_text.startswith("模板目录项：")
+    )
+    if catalog_title_only and _TEMPLATE_BODY.search(request.text):
         reasons.append(EvidenceAdmissionReason.TEMPLATE_BODY_UNAVAILABLE)
     return tuple(dict.fromkeys(reasons))
 
@@ -532,6 +540,9 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         for atom_id, items in atom_candidates_by_atom
     }
     candidates: dict[tuple[object, ...], EvidenceItem] = {}
+    sibling_keys_by_parent: dict[
+        tuple[object, ...], set[tuple[object, ...]]
+    ] = defaultdict(set)
     for item in (*root_evidence, *atom_evidence):
         key = _identity(item)
         previous = candidates.get(key)
@@ -540,12 +551,15 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             and dict(item.metadata).get("evidence_group_id")
         ):
             candidates[key] = item
-    # 普通 Chunk 可能把两个相邻段落装在一起。原有 span 选择受每 Chunk
+    # 文本或列表 Chunk 可能把两个相邻段落装在一起。原有 span 选择受每 Chunk
     # 配额约束；给已入选的段落补一个最近的独立来源节点，避免漏掉同块的时限。
     for item in (*root_evidence, *atom_evidence):
         item_key = _identity(item)
         candidate = candidate_by_id.get(item.chunk_id)
-        if candidate is None or candidate.hydrated.chunk.role.value != "text":
+        if candidate is None or candidate.hydrated.chunk.role not in {
+            ChunkRole.TEXT,
+            ChunkRole.LIST,
+        }:
             continue
         chunk = candidate.hydrated.chunk
         owned_nodes = {span.node_id for span in item.source_spans}
@@ -586,6 +600,7 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         )
         sibling_key = _identity(sibling)
         candidates.setdefault(sibling_key, sibling)
+        sibling_keys_by_parent[item_key].add(sibling_key)
         if item_key in root_keys:
             root_keys.add(sibling_key)
         if item_key in atom_keys:
@@ -646,6 +661,13 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     root_top = [key for key in admitted if key in root_keys]
     for key in root_top[: policy.generation_root_top_k]:
         add_ordinary(key)
+        if key in chosen:
+            for sibling_key in sorted(
+                sibling_keys_by_parent.get(key, ()),
+                key=lambda candidate_key: _rank(candidates[candidate_key]),
+            ):
+                if sibling_key in admitted:
+                    add_ordinary(sibling_key)
     for atom in query_plan.atoms:
         member_keys = member_keys_by_atom.get(atom.atom_id, set())
         linked = [
@@ -661,6 +683,13 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         ]
         for key in linked[: policy.generation_atom_top_k]:
             add_ordinary(key)
+            if key in chosen:
+                for sibling_key in sorted(
+                    sibling_keys_by_parent.get(key, ()),
+                    key=lambda candidate_key: _rank(candidates[candidate_key]),
+                ):
+                    if sibling_key in admitted:
+                        add_ordinary(sibling_key)
     for key in admitted:
         add_ordinary(key)
 

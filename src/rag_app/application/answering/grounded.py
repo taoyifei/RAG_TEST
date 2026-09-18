@@ -2519,6 +2519,11 @@ def _safe_extractive_fallback(
             )
         )
     )
+    original_text = _STOP.sub("", plan.original_query.casefold())
+    original_trigrams = {
+        original_text[index : index + 3]
+        for index in range(len(original_text) - 2)
+    }
     complete_ids = frozenset(complete_group_ids)
     grouped: dict[str, list[tuple[EvidenceItem, str]]] = {}
     ordinary: list[tuple[int, int, EvidenceItem, str]] = []
@@ -2552,6 +2557,11 @@ def _safe_extractive_fallback(
             key=lambda sentence: len(_terms(sentence) & question_terms),
         )
         overlap = len(_terms(matched) & question_terms)
+        normalized_sentence = _STOP.sub("", matched.casefold())
+        sentence_trigrams = {
+            normalized_sentence[position : position + 3]
+            for position in range(len(normalized_sentence) - 2)
+        }
         group_id = metadata.get("evidence_group_id")
         if (
             structured
@@ -2559,7 +2569,10 @@ def _safe_extractive_fallback(
             and group_id in complete_ids
         ):
             grouped.setdefault(group_id, []).append((item, matched))
-        elif certified or overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+        elif (
+            (certified or overlap >= _FALLBACK_MIN_BIGRAM_OVERLAP)
+            and original_trigrams & sentence_trigrams
+        ):
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
     if grouped:
