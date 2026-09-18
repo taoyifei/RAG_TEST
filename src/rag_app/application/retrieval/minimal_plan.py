@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field
 
 from rag_app.application.retrieval.context_resolution import (
     QueryInputSpan,
@@ -25,6 +25,9 @@ _NUMBER = re.compile(r"-?\d+(?:\.\d+)?")
 _NEGATION = re.compile(r"不得|无需|不必|禁止|严禁|没有|未|不")
 _UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年|万元|元|%|％|千克|公斤|米)")
 _DURATION_UNIT = re.compile(r"^(秒|分钟|小时|日|天|周|月|年)")
+_CONTEXT_MODIFIER = re.compile(
+    r"^(?:(?:根据|依据|按照)《[^》]+》|.+从.+到.+(?:后|前|期间))$"
+)
 
 
 class MinimalPlanValidationError(ValueError):
@@ -53,26 +56,11 @@ class MinimalPlanPayload(FrozenModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-    intent: str = Field(
-        alias="i", pattern=r"^(SINGLE|COMPOUND|FOLLOW_UP|CLARIFICATION)$"
-    )
-    clarification_reason: str | None = Field(
-        default=None,
-        alias="c",
-        pattern=r"^(MISSING_TARGET|AMBIGUOUS_REFERENCE|MULTIPLE_TARGETS|CONFLICTING_CONTEXT)$",
-    )
+    intent: str = Field(alias="i", pattern=r"^(SINGLE|COMPOUND|FOLLOW_UP)$")
+    clarification_reason: None = Field(default=None, alias="c")
     atoms: tuple[MinimalAtomPayload, ...] = Field(
-        default=(), alias="a", max_length=4
+        alias="a", min_length=1, max_length=4
     )
-
-    @model_validator(mode="after")
-    def _consistent(self) -> MinimalPlanPayload:
-        if self.intent == "CLARIFICATION":
-            if self.clarification_reason is None or self.atoms:
-                raise ValueError("澄清只允许返回原因。")
-        elif not self.atoms or self.clarification_reason is not None:
-            raise ValueError("非澄清规划须包含 1 至 4 个 Atom。")
-        return self
 
 
 def build_query_atoms(
@@ -82,11 +70,19 @@ def build_query_atoms(
 ) -> tuple[QueryAtom, ...]:
     """仅解引用服务端受信片段；不存在的 ID 拒绝整份计划。"""
     by_id = {span.span_id: span for span in spans}
-    current_clauses = {
-        span.span_id
+    current_clauses = tuple(
+        span
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.CLAUSE
-    }
+    )
+    modifier_clauses = tuple(
+        span
+        for span in current_clauses
+        if _CONTEXT_MODIFIER.fullmatch(span.text)
+    )
+    required_clauses = tuple(
+        span for span in current_clauses if span not in modifier_clauses
+    ) or current_clauses
     referenced_clauses: set[str] = set()
     atoms: list[QueryAtom] = []
     for index, item in enumerate(payload.atoms, 1):
@@ -113,7 +109,14 @@ def build_query_atoms(
         referenced_clauses.update(
             span.span_id for span in fragments if span.turn == "CURRENT"
         )
-        fragment = " ".join(dict.fromkeys(span.text for span in fragments))
+        fragment = " ".join(
+            dict.fromkeys(
+                (
+                    *(span.text for span in modifier_clauses),
+                    *(span.text for span in fragments),
+                )
+            )
+        )
         source = analysis.semantics.source_qualifier
         atoms.append(
             QueryAtom(
@@ -126,14 +129,16 @@ def build_query_atoms(
                 original_fragment=fragment[:320],
             )
         )
-    if current_clauses - referenced_clauses:
+    if {span.span_id for span in required_clauses} - referenced_clauses:
         raise MinimalPlanValidationError("PLANNER_CLAUSE_UNCOVERED")
     literal_values = {
         span.text
         for span in spans
         if span.turn == "CURRENT" and span.kind is SpanKind.LITERAL
     }
-    atom_text = " ".join(atom.search_text for atom in atoms)
+    atom_text = " ".join(
+        (analysis.normalized_query, *(atom.search_text for atom in atoms))
+    )
     if any(value not in atom_text for value in literal_values):
         raise MinimalPlanValidationError("PLANNER_LITERAL_VIOLATION")
     return tuple(atoms)

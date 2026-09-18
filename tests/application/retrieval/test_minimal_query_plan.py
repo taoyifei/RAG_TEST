@@ -137,3 +137,39 @@ def test_planner_wire_schema_uses_compact_ids_and_preserves_old_parser() -> (
         "c",
         "a",
     }
+
+
+def test_trusted_root_keeps_modifier_without_hiding_question_clauses() -> (
+    None
+):
+    request = _request("甲方案从申请到结束后，如何报送，多久完成？")
+    atoms = _build(
+        _payload(
+            _atom(("Q.C2",), "Q.T1", "Q.R2", "PROCEDURE"),
+            _atom(("Q.C3",), "Q.T1", "Q.R3", "DURATION"),
+        ),
+        request,
+    )
+    assert len(atoms) == 2
+    assert all(
+        "甲方案从申请到结束后" in atom.original_fragment for atom in atoms
+    )
+
+
+def test_planner_cannot_clarify_a_server_resolved_question() -> None:
+    with pytest.raises(ValueError):
+        MinimalPlanPayload.model_validate(
+            {"i": "CLARIFICATION", "c": "AMBIGUOUS_REFERENCE", "a": []}
+        )
+
+
+def test_source_modifier_is_inherited_without_model_repeating_its_clause() -> (
+    None
+):
+    request = _request("根据《甲制度V2》，乙需要多久提交？")
+    atom = _build(
+        _payload(_atom(("Q.C2",), "Q.T1", "Q.R2", "DURATION")),
+        request,
+    )[0]
+    assert "甲制度V2" in atom.original_fragment
+    assert atom.source_qualifier == "甲制度V2"

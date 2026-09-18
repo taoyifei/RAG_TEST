@@ -101,6 +101,9 @@ def project_public_stream(frames: Iterator[bytes]) -> Iterator[bytes]:
             projected = _project_event(event_name, payload)
             yield _encode_sse(event_name, projected)
             if event_name in {"final", "error", "cancelled"}:
+                # 外层 HTTP 已确认发送终态；再推进内部迭代器一次，允许
+                # P09 完成终态确认。直接 close 会把成功 Final 误记为取消。
+                next(frames, None)
                 return
     finally:
         close = getattr(frames, "close", None)

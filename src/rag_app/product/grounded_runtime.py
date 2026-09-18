@@ -493,7 +493,7 @@ class ProductGroundedModel:
             schema_sha256=canonical_sha256(schema),
         )
 
-    def _plan_adaptive_once(  # noqa: PLR0911, PLR0913
+    def _plan_adaptive_once(  # noqa: PLR0913
         self,
         request: SearchRequest,
         analysis: QueryAnalysis,
@@ -510,12 +510,13 @@ class ProductGroundedModel:
                 content=(
                     "只选择给定 Span ID，将用户问题拆成至多四个可检索事实原子。"
                     "不得回答问题、创造 Span、补充条件或引用文档。"
-                    "每个独立当前问句都须覆盖；relation 必须来自当前问句。"
+                    "每个独立问句的 Clause ID 至少出现在一个原子 f 中；"
+                    "修饰 Clause 可与问句共用，多个原子也可共用 f。"
+                    "r 必须引用当前问句的 Relation ID。"
                     "输出键 i=意图、c=澄清原因、a=原子；"
-                    "a 非空时 c 为 null，澄清时 a 为空。"
+                    "受信上下文已由服务端消歧，c 固定为 null。"
                     "原子键 f=Clause ID 列表、t=Target ID、"
                     "r=当前 Relation ID、s=回答形状。"
-                    "无法唯一确定对象时选择澄清意图。"
                     "只输出符合 JSON Schema 的对象。"
                 ),
             ),
@@ -643,17 +644,6 @@ class ProductGroundedModel:
                     attempted=True,
                     schema_fallback_detail=error.code,
                     failure_category=error.code,
-                    **telemetry,
-                )
-            if payload.intent == "CLARIFICATION":
-                return AdaptivePlanOutcome(
-                    standalone_query=root_query,
-                    intent=payload.intent,
-                    needs_clarification=True,
-                    clarification_question="请明确您所指的对象和要查询的事项。",
-                    calls=calls,
-                    reason_code="PLANNER_CONTEXT_UNRESOLVED",
-                    attempted=True,
                     **telemetry,
                 )
             return AdaptivePlanOutcome(

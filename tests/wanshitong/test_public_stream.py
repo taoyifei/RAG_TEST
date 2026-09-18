@@ -187,3 +187,32 @@ def test_public_projection_preserves_one_terminal_event(terminal: str) -> None:
     projected = list(project_public_stream(frames))
     assert len(projected) == 1
     assert projected[0].startswith(f"event: {terminal}\n".encode())
+
+
+def test_public_final_acknowledges_upstream_before_close() -> None:
+    acknowledged = False
+    closed = False
+
+    def _frames() -> Iterator[bytes]:
+        nonlocal acknowledged, closed
+        try:
+            yield _sse(
+                "final",
+                {
+                    "protocol": "rag-answer-sse-v1",
+                    "type": "final",
+                    "trace_id": _TRACE_ID,
+                    "sequence": 0,
+                    "status": "INSUFFICIENT_EVIDENCE",
+                    "answer": "",
+                    "citations": [],
+                },
+            )
+            acknowledged = True
+        finally:
+            closed = True
+
+    projected = list(project_public_stream(_frames()))
+    assert len(projected) == 1
+    assert acknowledged
+    assert closed
