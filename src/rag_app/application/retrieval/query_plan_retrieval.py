@@ -16,6 +16,8 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.query_plan import AtomCandidateLink
 
+_ROOT_LEXICAL_SEED_LIMIT = 3
+
 
 @dataclass(frozen=True, slots=True)
 class QueryUnit:
@@ -43,6 +45,32 @@ class QueryPlanRetrievalOutcome:
     candidates: tuple[FusedCandidate, ...]
     seed_chunk_ids: tuple[str, ...]
     links: tuple[AtomCandidateLink, ...]
+
+
+def _root_seeds(
+    candidates: tuple[FusedCandidate, ...],
+    channels: Mapping[str, tuple[ChannelHit, ...]],
+    limit: int,
+) -> tuple[FusedCandidate, ...]:
+    """保留原问高位词面命中，避免被其它通道挤出重排窗口。"""
+    by_id = {candidate.chunk_id: candidate for candidate in candidates}
+    lexical = channels.get("lexical", ())
+    selected = tuple(
+        by_id[hit.chunk_id]
+        for hit in sorted(lexical, key=lambda hit: hit.rank)[
+            : min(_ROOT_LEXICAL_SEED_LIMIT, limit)
+        ]
+        if hit.chunk_id in by_id
+    )
+    selected_ids = {candidate.chunk_id for candidate in selected}
+    return (
+        *selected,
+        *(
+            candidate
+            for candidate in candidates
+            if candidate.chunk_id not in selected_ids
+        ),
+    )[:limit]
 
 
 def _atom_seeds(
@@ -93,7 +121,7 @@ def fuse_query_units(
             else policy.unit_atom_seed_limit
         )
         seeds = (
-            fused[:seed_limit]
+            _root_seeds(fused, item.channels, seed_limit)
             if item.unit.unit_id == "ROOT"
             else _atom_seeds(fused, seed_limit)
         )

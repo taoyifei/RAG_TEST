@@ -154,6 +154,29 @@ def test_atom_seed_keeps_diverse_source_after_dominant_document() -> None:
     assert len(outcome.seed_chunk_ids) <= 10
 
 
+def test_root_seeds_keep_third_lexical_hit_under_dense_pressure() -> None:
+    """复合原问的高位词面段落不因其它通道重合而丢失。"""
+    root_unit = _unit("ROOT", (), atom_count=1).unit
+    root = QueryUnitRetrieval(
+        root_unit,
+        {
+            "lexical": tuple(_hit(number, number) for number in (1, 2, 3)),
+            "dense:primary": tuple(
+                _hit(number, number - 10, channel="dense:primary")
+                for number in range(11, 19)
+            ),
+            "structural": tuple(
+                _hit(number, number - 10, channel="structural")
+                for number in range(11, 19)
+            ),
+        },
+    )
+    outcome = fuse_query_units(
+        (root,), revision_id=_REVISION, policy=RetrievalPolicy()
+    )
+    assert f"chunk_{3:032x}" in outcome.seed_chunk_ids
+
+
 def test_repeated_atom_hit_does_not_gain_linear_score() -> None:
     def score(atom_count: int) -> float:
         root = _unit("ROOT", (_hit(1, 1),), atom_count=atom_count)

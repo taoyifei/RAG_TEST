@@ -362,7 +362,9 @@ def test_fallback_uses_named_complete_table_row() -> None:
         )
         for item in row
     ]
-    plan = _plan("需求快验", shape=AtomAnswerShape.PROCEDURE).model_copy(
+    plan = _plan(
+        "需求快验", "输入和启动", shape=AtomAnswerShape.FACT
+    ).model_copy(
         update={
             "original_query": "需求快验模式需要哪些输入内容，启动条件是什么？",
             "resolved_root_query": (
@@ -374,7 +376,10 @@ def test_fallback_uses_named_complete_table_row() -> None:
     result = _safe_extractive_fallback(
         plan,
         items,
-        {"A1": tuple(item.support_id for item in items)},
+        {
+            atom.atom_id: tuple(item.support_id for item in items)
+            for atom in plan.atoms
+        },
         (group_id,),
     )
     assert result is not None

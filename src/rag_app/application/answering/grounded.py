@@ -2679,7 +2679,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             ordinary, key=lambda row: (row[0], -row[1])
         )
         selected = [(item, sentence)]
-    multi_part = any(
+    multi_part = len(plan.atoms) > 1 or any(
         atom.answer_shape in {
             AtomAnswerShape.ENUMERATION,
             AtomAnswerShape.PROCEDURE,
