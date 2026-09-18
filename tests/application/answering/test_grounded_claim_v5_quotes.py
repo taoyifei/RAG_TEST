@@ -156,6 +156,50 @@ def test_soft_atom_mismatch_still_reaches_generation_and_publishes_quote() -> (
     assert outcome.accepted_claim_count == 1
 
 
+def test_pack_publishes_full_source_instead_of_paraphrase() -> None:
+    source = "对于员工跨年领到证书的情况，请在证书领取年份进行报销。"
+    evidence = _evidence(source)
+    plan = _plan("费用跨年还能报吗？")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (
+            _claim(
+                "C1",
+                "员工跨年领到证书，在证书领取年份进行报销。",
+                "A1",
+                "S1",
+                source,
+            ),
+        ),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert outcome.mode == "llm"
+    assert outcome.answer == f"{source} [S1]"
+
+
+def test_pack_expands_selected_fragment_to_full_source_sentence() -> None:
+    source = "各指标牵头部门负责制定考核标准、考核分数和考核频次。"
+    evidence = _evidence(source)
+    plan = _plan("谁负责制定考核标准和频次？")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", "考核分数和考核频次", "A1", "S1", "考核分数和考核频次"),),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator, plan, evidence, ((AtomStatus.MISSING, ()),)
+    )
+
+    assert outcome.mode == "llm"
+    assert outcome.answer == f"{source} [S1]"
+
+
 def test_yes_no_answer_uses_source_about_asked_action() -> None:
     """同主题的交付句不能替代问题所问的重新启动规则。"""
     evidence = _evidence(
@@ -196,6 +240,21 @@ def test_yes_no_answer_uses_source_about_asked_action() -> None:
     assert outcome.answer is not None
     assert "重新启动流程" in outcome.answer
     assert "提交验收材料" not in outcome.answer
+
+
+def test_yes_no_fallback_prefers_same_source_action_sentence() -> None:
+    evidence = _evidence(
+        "有明确合同、需一次性正式交付验收的项目交付任务。",
+        "若任务后续需转为项目交付模式，需另行满足准入要求，重新启动流程。",
+    )
+    plan = _plan("转正式交付要重启吗？")
+    linked = {"A1": tuple(item.support_id for item in evidence)}
+
+    result = _safe_extractive_fallback(plan, evidence, linked)
+
+    assert result is not None
+    assert "重新启动流程" in result[0]
+    assert "一次性正式交付验收" not in result[0]
 
 
 def test_certified_single_fact_uses_direct_extract_without_model() -> None:

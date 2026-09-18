@@ -137,6 +137,7 @@ _YES_NO_ACTION_FOCUS = re.compile(
     r"(?:是否|需不需要|要不要|需要|应当|应该|必须|可以|要|能)"
     r"(?P<focus>[\u4e00-\u9fff]{2,8})(?:吗|么)[？?]?$"
 )
+_SOURCE_SENTENCE_END = re.compile(r"[。！？!?；;]")
 _SHORT_QUERY_FOCUS_LENGTH = 2
 _EXEMPTION_CONDITION_QUESTION = re.compile(
     r"(?:何种|哪些|什么)情况(?:下)?[^?？]{0,20}"
@@ -2235,6 +2236,14 @@ class GroundedAnsweringService:
                         evidence,
                         analysis,
                     )
+                    if generation_evidence_pack is not None:
+                        claim = _source_faithful_claim(
+                            claim,
+                            tuple(
+                                by_id[item.support_id]
+                                for item in claim.supports
+                            ),
+                        )
                 except (ValidationFailed, ValueError) as error:
                     claim_rejections[_natural_rejection_code(error)] += 1
                     rejected_atoms[natural.atom_id] += 1
@@ -3275,6 +3284,33 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
                 if item.support_id not in selected_ids:
                     selected.append((item, sentence))
                     selected_ids.add(item.support_id)
+    focus_match = (
+        _YES_NO_ACTION_FOCUS.search(plan.original_query.strip())
+        if len(plan.atoms) == 1
+        else None
+    )
+    if focus_match is not None and selected and not any(
+        _query_focus_in_source(focus_match["focus"], sentence)
+        for _, sentence in selected
+    ):
+        # 是非问已有同版、同动作原句时，不用仅同主题的摘录代答。
+        selected_versions = {item.document_version_id for item, _ in selected}
+        focused = [
+            (item, sentence.strip())
+            for item in evidence
+            if item.document_version_id in selected_versions
+            and item.source_spans
+            and all(span.is_citable for span in item.source_spans)
+            for sentence in re.findall(
+                r"[^。！？!?；;]+[。！？!?；;]?", item.citation_text
+            )
+            if _query_focus_in_source(focus_match["focus"], sentence)
+        ]
+        unique_focused = {
+            (item.document_version_id, sentence) for item, sentence in focused
+        }
+        if len(unique_focused) == 1:
+            selected = [focused[0]]
     selected.sort(
         key=lambda pair: min(
             (
@@ -3542,6 +3578,31 @@ def _validate_natural_support_structure(
             stage="answer.validate",
             code="CLAIM_SOURCE_MISMATCH",
         )
+
+
+def _complete_source_sentence(source: str, quote: str) -> str:
+    """把模型选中的逐字片段扩展到同一来源中的完整原句。"""
+    position = source.find(quote)
+    if position < 0:
+        return quote.strip()
+    previous = tuple(_SOURCE_SENTENCE_END.finditer(source, 0, position))
+    start = previous[-1].end() if previous else 0
+    ending = _SOURCE_SENTENCE_END.search(source, position + len(quote))
+    end = ending.end() if ending else len(source)
+    return source[start:end].strip()
+
+
+def _source_faithful_claim(
+    claim: AnswerClaim, units: tuple[EvidenceItem, ...]
+) -> AnswerClaim:
+    """发布被引用的完整原句，避免模型只回显问题或裁掉事实主体。"""
+    excerpts = tuple(
+        dict.fromkeys(
+            _complete_source_sentence(item.citation_text, support.quote)
+            for support, item in zip(claim.supports, units, strict=True)
+        )
+    )
+    return claim.model_copy(update={"text": "\n".join(excerpts)})
 
 
 def _validated_natural_claim(
