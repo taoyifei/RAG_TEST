@@ -1298,6 +1298,11 @@ class RetrievalService:
             atom_required_ids=unit_seed_ids,
             pre_fused=unit_fused,
             rerank_query=rerank_query,
+            broad_rerank=any(
+                atom.answer_shape
+                in {AtomAnswerShape.DUTIES, AtomAnswerShape.ENUMERATION}
+                for atom in query_plan.atoms
+            ),
         )
         fused = selection.fused
         reranked = selection.reranked
@@ -1433,6 +1438,11 @@ class RetrievalService:
                     degraded=degraded,
                     stage_timings=stage_timings,
                     retrieval_phase="rewrite",
+                    broad_rerank=any(
+                        atom.answer_shape
+                        in {AtomAnswerShape.DUTIES, AtomAnswerShape.ENUMERATION}
+                        for atom in query_plan.atoms
+                    ),
                 )
                 fused = selection.fused
                 reranked = selection.reranked
@@ -3537,6 +3547,7 @@ class RetrievalService:
         atom_required_ids: tuple[str, ...] = (),
         pre_fused: tuple[FusedCandidate, ...] | None = None,
         rerank_query: str | None = None,
+        broad_rerank: bool = False,
     ) -> _SelectionOutcome:
         """融合、重排并按同一个语义对象选择证据。
 
@@ -3555,6 +3566,7 @@ class RetrievalService:
             atom_required_ids: 每个原子初召回中需要保留的候选身份。
             pre_fused: 已完成 Root/Atom 两级融合的候选，可跳过全局 RRF。
             rerank_query: 一次统一重排使用的原问与原子关系。
+            broad_rerank: 职责或枚举需要跨段取更多重排候选。
 
         Returns:
             最终融合、重排、扩展、证据和置信结果。
@@ -3643,12 +3655,12 @@ class RetrievalService:
             self._egress,
             self._policy,
             enabled=plan.use_reranker,
-            # 生成证据需要保留重排池中的低位候选；用户请求的返回条数
-            # 仍由后续证据装配预算控制，不能在此提前截断来源跨度。
+            # 广泛职责/枚举需跨段保留较多候选；普通事实与复合事实
+            # 仍用已验证的请求预算，避免低位同主题内容淹没精确来源。
             result_limit=max(
                 request.limit,
                 len(structural_closure_ids),
-                self._policy.rerank_candidate_limit,
+                self._policy.rerank_candidate_limit if broad_rerank else 0,
             ),
             required_candidate_ids=frozenset(structural_closure_ids),
         )
