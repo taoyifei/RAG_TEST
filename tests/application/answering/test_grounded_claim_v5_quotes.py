@@ -637,7 +637,18 @@ def test_fallback_quotes_unique_duration_from_incomplete_level_row() -> None:
         },
         ("egrp_definition",),
     )
+    premature = _safe_extractive_fallback(
+        plan,
+        items,
+        {
+            atom.atom_id: tuple(item.support_id for item in items)
+            for atom in plan.atoms
+        },
+        ("egrp_definition",),
+        require_named_row=True,
+    )
 
+    assert premature is None
     assert result is not None
     assert "30分钟" in result[0]
     assert "指影响较大" not in result[0]

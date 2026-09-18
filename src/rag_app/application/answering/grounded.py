@@ -2083,6 +2083,7 @@ class GroundedAnsweringService:
                 evidence,
                 linked_ids,
                 generation_evidence_pack.complete_group_ids,
+                require_named_row=True,
             )
             if named_row is not None:
                 row_answer, row_ids, row_atoms = named_row
@@ -2809,6 +2810,8 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
     complete_group_ids: tuple[str, ...] = (),
+    *,
+    require_named_row: bool = False,
 ) -> tuple[str, tuple[str, ...], frozenset[str]] | None:
     """模型未形成可发布事实时，仅展示相关且可引用的来源原句。"""
     if not linked_ids:
@@ -2942,6 +2945,8 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     if not selected and multi_part:
         selected = _fallback_table_row(plan, grouped)
         named_row_selected = bool(selected)
+    if require_named_row and not named_row_selected:
+        return None
     if (
         not selected
         and multi_part
