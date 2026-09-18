@@ -124,6 +124,9 @@ _CONDITION_SCOPE = re.compile(
     r"(?:在|当)(?P<temporal>[^，,。；;]{2,48}?)"
     r"(?:情况下|时)(?=[，,。；;]|可以|应|须|需|必|即|则)"
 )
+_PARENTHETICAL_LEVEL = re.compile(
+    r"[（(]\s*[IVXivxⅠⅡⅢⅣⅤⅥ\d一二三四五六七八九十]+\s*级\s*[）)]"
+)
 _MODALITY_CLASSES = (
     ("MUST", re.compile(r"必须|(?<!不)须(?!要)")),
     ("SHOULD", re.compile(r"应当|应予|应该|应(?=\s|[，。：；,;])")),
@@ -2053,9 +2056,7 @@ class GroundedAnsweringService:
                 for item in atom_support_matrix.atoms
             )
             and (
-                direct := _direct_extract(
-                    query_plan, direct_evidence, analysis
-                )
+                direct := _direct_extract(query_plan, direct_evidence, analysis)
             )
             is not None
         ):
@@ -2560,10 +2561,7 @@ def _fallback_table_row(
             for item, _ in items
         ):
             continue
-        labels = (
-            _STOP.sub("", sentence.casefold())
-            for _, sentence in items
-        )
+        labels = (_STOP.sub("", sentence.casefold()) for _, sentence in items)
         label_length = max(
             (
                 len(label)
@@ -2589,9 +2587,7 @@ def _fallback_source_node(
 ) -> list[tuple[EvidenceItem, str]]:
     """把同一原文段落分块后的步骤重新按来源位置展示。"""
     query_terms = _terms(plan.resolved_root_query)
-    nodes: dict[
-        tuple[str | None, str], list[tuple[EvidenceItem, str]]
-    ] = {}
+    nodes: dict[tuple[str | None, str], list[tuple[EvidenceItem, str]]] = {}
     for item in evidence:
         if (
             item.support_id not in related
@@ -2650,8 +2646,7 @@ def _fallback_prior_stage_excerpts(
     if len(selected_groups) != 1:
         return selected
     origins = {
-        (item.document_version_id, item.section_id)
-        for item, _ in selected
+        (item.document_version_id, item.section_id) for item, _ in selected
     }
     if len(origins) != 1 or None in next(iter(origins)):
         return selected
@@ -2668,8 +2663,11 @@ def _fallback_prior_stage_excerpts(
         )
 
     first = min(
-        (ordinal for item, _ in selected if (ordinal := source_ordinal(item))
-         is not None),
+        (
+            ordinal
+            for item, _ in selected
+            if (ordinal := source_ordinal(item)) is not None
+        ),
         default=None,
     )
     if first is None:
@@ -2867,12 +2865,11 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             ordinary.append((overlap, index, item, matched))
     selected: list[tuple[EvidenceItem, str]] = []
     if direct_duration and ordinary:
-        _, _, item, sentence = max(
-            ordinary, key=lambda row: (row[0], -row[1])
-        )
+        _, _, item, sentence = max(ordinary, key=lambda row: (row[0], -row[1]))
         selected = [(item, sentence)]
     multi_part = len(plan.atoms) > 1 or any(
-        atom.answer_shape in {
+        atom.answer_shape
+        in {
             AtomAnswerShape.ENUMERATION,
             AtomAnswerShape.PROCEDURE,
             AtomAnswerShape.DUTIES,
@@ -2956,10 +2953,13 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             ),
         )
         best_group = ranked_groups[0][1]
-        if len(
-            question_terms
-            & _terms(" ".join(item.citation_text for item, _ in best_group))
-        ) >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+        if (
+            len(
+                question_terms
+                & _terms(" ".join(item.citation_text for item, _ in best_group))
+            )
+            >= _FALLBACK_MIN_BIGRAM_OVERLAP
+        ):
             factual = all(
                 atom.answer_shape
                 not in {
@@ -3048,8 +3048,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         )
         existing_ids = {item.support_id for item, _ in selected}
         existing_groups = {
-            dict(item.metadata).get("evidence_group_id")
-            for item, _ in selected
+            dict(item.metadata).get("evidence_group_id") for item, _ in selected
         }
         complements = (
             (
@@ -3075,17 +3074,12 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             and sentence.rstrip().endswith(("。", "；", ";"))
         )
         complement = max(complements, key=lambda row: row[:2], default=None)
-        if (
-            complement is not None
-            and complement[0] >= 1
-        ):
+        if complement is not None and complement[0] >= 1:
             selected.append((complement[2], complement[3]))
     sequence_requested = any(
         atom.answer_shape in {AtomAnswerShape.PROCEDURE, AtomAnswerShape.DUTIES}
         for atom in plan.atoms
-    ) or any(
-        term in plan.original_query for term in ("步骤", "流程", "阶段")
-    )
+    ) or any(term in plan.original_query for term in ("步骤", "流程", "阶段"))
     if grouped and sequence_requested:
         selected = _fallback_prior_stage_excerpts(
             selected, grouped, complete_ids, question_terms
@@ -3111,15 +3105,12 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             for _, sentence in members
         )
         if (
-            (
-                sequence_requested
-                and numbered_members >= _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS
-            )
-            or (
-                len(_han_text(plan.original_query))
-                <= _FALLBACK_SHORT_QUESTION_CHARS
-                and numbered_members >= _FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS
-            )
+            sequence_requested
+            and numbered_members >= _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS
+        ) or (
+            len(_han_text(plan.original_query))
+            <= _FALLBACK_SHORT_QUESTION_CHARS
+            and numbered_members >= _FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS
         ):
             complete_selected_groups.add(group_id)
     if complete_selected_groups:
@@ -3178,9 +3169,7 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         lines.append(f"- {pending_excerpt} {refs}")
     elif pending_ids:
         ids = [
-            support_id
-            for support_id in ids
-            if support_id not in pending_ids
+            support_id for support_id in ids if support_id not in pending_ids
         ]
     if not ids:
         return None
@@ -3294,10 +3283,14 @@ def _query_focus_in_source(focus: str, text: str) -> bool:
     )
     if focus in normalized:
         return True
-    return len(focus) == _SHORT_QUERY_FOCUS_LENGTH and re.search(
-        rf"{re.escape(focus[0])}.{{0,2}}{re.escape(focus[1])}",
-        normalized,
-    ) is not None
+    return (
+        len(focus) == _SHORT_QUERY_FOCUS_LENGTH
+        and re.search(
+            rf"{re.escape(focus[0])}.{{0,2}}{re.escape(focus[1])}",
+            normalized,
+        )
+        is not None
+    )
 
 
 def _validate_short_question_source_anchor(
@@ -3632,6 +3625,16 @@ def _validate_natural_entailment(
     normalized_source = "".join(
         unicodedata.normalize("NFKC", source).casefold().split()
     )
+    for level in _PARENTHETICAL_LEVEL.findall(text):
+        normalized_level = "".join(
+            unicodedata.normalize("NFKC", level).casefold().split()
+        )
+        if normalized_level not in normalized_source:
+            raise ValidationFailed(
+                "事实新增了引用原文没有的事件或对象等级。",
+                stage="answer.validate",
+                code="CLAIM_CONDITION_UNSUPPORTED",
+            )
     for condition in _CONDITION_SCOPE.finditer(text):
         scope = condition["scope"] or condition["temporal"]
         normalized_scope = "".join(

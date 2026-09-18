@@ -409,6 +409,110 @@ def test_natural_prompt_prunes_complete_groups_within_budget() -> None:
         assert members <= selected or members.isdisjoint(selected)
 
 
+def test_natural_prompt_protects_named_table_row_when_budget_is_tight() -> None:
+    """较晚的同名表格行不能被较早的无关正文挤出模型输入。"""
+    evidence = _evidence(
+        "通用模式的维护说明。" * 12,
+        "通用模式的归档说明。" * 12,
+        "快捷模式",
+        "输入：提交任务说明和验收标准。",
+        "启动：经会议评审通过后启动。",
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": (
+                            "egrp_unrelated" if index < 2 else "egrp_named_row"
+                        ),
+                        "evidence_group_type": (
+                            "PARAGRAPH_GROUP"
+                            if index < 2
+                            else "TABLE_ROW_GROUP"
+                        ),
+                        "group_complete": True,
+                        "group_member_index": (
+                            index + 1 if index < 2 else index - 1
+                        ),
+                        "group_member_count": 2 if index < 2 else 3,
+                    }
+                )
+            }
+        )
+        for index, item in enumerate(evidence)
+    )
+    plan = _plan("快捷模式输入和启动").model_copy(
+        update={
+            "original_query": "快捷模式需要哪些输入，如何启动？",
+            "resolved_root_query": "快捷模式需要哪些输入，如何启动？",
+        }
+    )
+    matrix = _matrix(plan, ((AtomStatus.MISSING, ()),))
+    request = GenerationRequest(
+        query=plan.standalone_query,
+        evidence=grouped,
+        model_evidence_candidates=grouped,
+        citation_protocol="support-id-v2-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=matrix,
+    )
+    full_estimate = message_token_estimate(_natural_messages(request))
+
+    messages = _natural_messages(request, max_input_tokens=full_estimate - 1)
+    selected = {
+        item["support_id"]
+        for item in json.loads(messages[1].content)["evidence"]
+    }
+
+    assert {item.support_id for item in grouped[2:]} <= selected
+    assert {item.support_id for item in grouped[:2]}.isdisjoint(selected)
+
+
+def test_natural_prompt_protects_direct_support_without_group() -> None:
+    """直接支持即使没有闭合组，也优先保留给模型核验。"""
+    evidence = _evidence(
+        "无关项目的归档记录。" * 16,
+        "负责人以电话报送值班人员，须在30分钟内完成。",
+    )
+    grouped = (
+        evidence[0].model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(evidence[0].metadata),
+                        "evidence_group_id": "egrp_unrelated",
+                        "group_complete": True,
+                    }
+                )
+            }
+        ),
+        evidence[1],
+    )
+    plan = _plan("报送方式和时限")
+    matrix = _matrix(plan, ((AtomStatus.SUPPORTED, (evidence[1].support_id,)),))
+    request = GenerationRequest(
+        query=plan.standalone_query,
+        evidence=grouped,
+        model_evidence_candidates=grouped,
+        citation_protocol="support-id-v2-natural-claims",
+        query_plan=plan,
+        atom_support_matrix=matrix,
+    )
+    full_estimate = message_token_estimate(_natural_messages(request))
+
+    payload = json.loads(
+        _natural_messages(request, max_input_tokens=full_estimate - 1)[
+            1
+        ].content
+    )
+
+    assert [item["support_id"] for item in payload["evidence"]] == [
+        evidence[1].support_id
+    ]
+
+
 def test_incomplete_enumeration_remains_limited() -> None:
     question = "哪些情况下无需审批直接归档？"
     intro = "对于以下情形，无需审批，提交后直接归档。"

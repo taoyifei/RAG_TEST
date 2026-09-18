@@ -67,6 +67,15 @@ def test_claim_cannot_replace_the_applicability_condition() -> None:
     assert "CLAIM_CONDITION_UNSUPPORTED" in codes
 
 
+def test_claim_cannot_add_an_event_level_from_the_question() -> None:
+    codes = _rejected(
+        "事件完成归档后正式关闭项目。",
+        "重大事件（Ⅱ级）完成归档后正式关闭项目。",
+    )
+
+    assert "CLAIM_CONDITION_UNSUPPORTED" in codes
+
+
 def test_claim_cannot_answer_for_another_explicit_subject() -> None:
     codes = _rejected(
         "甲部门负责核对材料；乙部门负责归档材料。",

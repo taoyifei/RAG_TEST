@@ -62,6 +62,8 @@ _MAX_USAGE = (1 << 63) - 1
 _MAX_CONTENT_CHARS = 32_768
 _MAX_CLAIMS = 24
 _TABLE_INTERSECTION_SPAN_COUNT = 3
+_ROW_LABEL_MIN_CHARS = 2
+_ROW_LABEL_MAX_CHARS = 24
 _MESSAGE_OVERHEAD = 16
 _COMPLEX_QUERY_CHARS = 48
 _MAX_SSE_BUFFER_CHARS = 256 * 1024
@@ -124,8 +126,9 @@ _NATURAL_GROUNDED_SYSTEM = (
     "逐个理解Atom所问的事实关系，允许与证据使用不同的同义表达。"
     "同一文档中的背景或相邻条款不能代替所问关系；列举题只能列出所问集合的成员。"
     "问题带有限定时，来源必须明确覆盖该限定，不能用一般规定回答特殊情形。"
-    "每条事实尽量用简短自然中文概括一个独立结论，不整段复制证据；"
-    "专名和不可改动的事实值保持原样。"
+    "每条事实优先采用能够直接回答问题的证据原句；只在原句之间加入必要的"
+    "简短过渡语，不重写主体、动作、条件或时限。"
+    "避免照抄与问题无关的整段背景，也不要只摘录标题或表头。"
     "相同事实及相同引用只输出一次。每条claim只对应一个atom_id；"
     "不同Atom需要分别给出由引用直接支持的事实。"
     "允许改变语序和合并重复措辞，但必须保留数字、单位、日期、时限、版本、"
@@ -712,6 +715,45 @@ def _natural_messages(  # noqa: PLR0915
         if group_id := complete_group_id(item):
             complete_groups.setdefault(group_id, set()).add(item.support_id)
 
+    focus = " ".join(
+        (
+            plan.original_query,
+            plan.resolved_root_query,
+            *(atom.search_text for atom in atoms),
+        )
+    )
+    focus = re.sub(r"\s+", "", focus).casefold()
+
+    def focus_score(item: EvidenceItem) -> tuple[int, int]:
+        """用问题本身优先保留同名来源行及其所问列，不读取评测答案。"""
+        metadata = dict(item.metadata)
+        title = metadata.get("document_title") or item.display_name or ""
+        text = item.citation_text
+
+        def bigrams(value: str) -> set[str]:
+            return {
+                run[index : index + 2]
+                for run in re.findall(r"[\u4e00-\u9fff]+", value)
+                for index in range(len(run) - 1)
+            }
+
+        question_bigrams = bigrams(focus)
+        overlap = len(bigrams(text) & question_bigrams)
+        title_overlap = len(bigrams(title) & question_bigrams)
+        row_label = text.split("|", 1)[0].strip()
+        row_match = (
+            metadata.get("evidence_group_type") == "TABLE_ROW_GROUP"
+            and _ROW_LABEL_MIN_CHARS <= len(row_label) <= _ROW_LABEL_MAX_CHARS
+            and (
+                row_label in focus
+                or any(
+                    row_label[index : index + 2] in focus
+                    for index in range(len(row_label) - 1)
+                )
+            )
+        )
+        return (int(row_match), overlap + 2 * title_overlap)
+
     protected_ids: set[str] = set()
     for atom in atoms:
         atom_allowed = set(linked_ids.get(atom.atom_id, admitted_ids))
@@ -723,21 +765,14 @@ def _natural_messages(  # noqa: PLR0915
         preferred_ids = set(
             matrix.for_atom(atom.atom_id).supporting_support_ids
         )
-        chosen = next(
-            (
-                item
-                for item in atom_candidates
-                if item.support_id in preferred_ids
-                and complete_group_id(item) is not None
+        chosen = max(
+            atom_candidates,
+            key=lambda item: (
+                item.support_id in preferred_ids,
+                *focus_score(item),
+                complete_group_id(item) is not None,
+                -atom_candidates.index(item),
             ),
-            None,
-        ) or next(
-            (
-                item
-                for item in atom_candidates
-                if complete_group_id(item) is not None
-            ),
-            atom_candidates[0],
         )
         group_id = complete_group_id(chosen)
         protected_ids.update(
