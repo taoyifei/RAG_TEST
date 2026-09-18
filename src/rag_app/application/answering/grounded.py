@@ -2595,7 +2595,6 @@ def _fallback_source_node(
     for item in evidence:
         if (
             item.support_id not in related
-            or not item.publishable
             or item.table_context
             or not item.source_spans
             or any(not span.is_citable for span in item.source_spans)
@@ -2804,7 +2803,6 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         )
         if (
             (item.support_id not in related and not complete_table_row)
-            or not item.publishable
             or not item.source_spans
             or any(not span.is_citable for span in item.source_spans)
             or _FALLBACK_ORPHAN_HEADING.fullmatch(item.citation_text.strip())

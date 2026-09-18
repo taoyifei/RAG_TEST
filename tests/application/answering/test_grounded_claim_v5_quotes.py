@@ -632,6 +632,7 @@ def test_fallback_keeps_adjacent_preparation_and_stage_overview() -> None:
         item.model_copy(
             update={
                 "chunk_id": f"chunk_{locate(item)[1]:032x}",
+                "publishable": locate(item)[1] < 118,
                 "source_spans": tuple(
                     span.model_copy(
                         update={
