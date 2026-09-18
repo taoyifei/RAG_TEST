@@ -66,6 +66,86 @@ def _row_label_coordinate(item: EvidenceItem, row: int) -> EvidenceItem:
     )
 
 
+def _table_cell(item: EvidenceItem, row: int, column: int) -> EvidenceItem:
+    """给通用表格回归设置可验证的行列与来源位置。"""
+    path = ("body", "tbl:1", f"tr:{row}", f"tc:{column}", "p:1")
+    return item.model_copy(
+        update={
+            "table_context": True,
+            "section_id": "section_00000000000000000000000000000001",
+            "source_spans": tuple(
+                span.model_copy(
+                    update={
+                        "structural_path": path,
+                        "source_anchor": span.source_anchor.model_copy(
+                            update={"structural_path": path}
+                        ),
+                    }
+                )
+                for span in item.source_spans
+                if span.source_anchor is not None
+            ),
+        }
+    )
+
+
+def test_fallback_keeps_explicit_table_level_and_its_duration() -> None:
+    """相邻等级都有时限时，只从明确点名的行取行名和值。"""
+    source = _evidence(
+        "严重事件（Ⅰ级）",
+        "10分钟",
+        "严重事件（Ⅱ级）",
+        "30分钟",
+    )
+    evidence = tuple(
+        _table_cell(item, row, column)
+        for item, row, column in zip(
+            source,
+            (1, 1, 2, 2),
+            (0, 2, 0, 2),
+            strict=True,
+        )
+    )
+    plan = _plan("严重事件", shape=AtomAnswerShape.DURATION).model_copy(
+        update={
+            "original_query": "确认后多久报？",
+            "resolved_root_query": "严重事件Ⅱ级确认后多久报？",
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan, evidence, {"A1": tuple(item.support_id for item in evidence)}
+    )
+    assert result is not None
+    assert "严重事件（Ⅱ级）" in result[0]
+    assert "30分钟" in result[0]
+    assert "严重事件（Ⅰ级）" not in result[0]
+    assert "10分钟" not in result[0]
+
+
+def test_fallback_reads_citable_table_actions_without_punctuation() -> None:
+    """表格职责单元格本来没有句号，也能逐字摘录并分别引用。"""
+    source = _evidence(
+        "开发团队编制项目实施方案",
+        "开发团队负责完成系统联调和缺陷修复",
+    )
+    evidence = tuple(
+        _table_cell(item, row, 1)
+        for item, row in zip(source, (1, 2), strict=True)
+    )
+    plan = _plan("开发团队", shape=AtomAnswerShape.DUTIES).model_copy(
+        update={
+            "original_query": "开发团队负责哪些？",
+            "resolved_root_query": "开发团队负责哪些？",
+        }
+    )
+    result = _safe_extractive_fallback(
+        plan, evidence, {"A1": tuple(item.support_id for item in evidence)}
+    )
+    assert result is not None
+    assert "开发团队编制项目实施方案" in result[0]
+    assert "开发团队负责完成系统联调和缺陷修复" in result[0]
+
+
 def _pack(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],

@@ -444,7 +444,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v1",
+                "answer_pipeline_revision": "wb08r-evidence-first-v2",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -2652,7 +2652,7 @@ class RetrievalService:
                 "generation_evidence_pack_revision": (
                     GENERATION_EVIDENCE_PACK_REVISION
                 ),
-                "answer_pipeline_revision": "wb08r-evidence-first-v1",
+                "answer_pipeline_revision": "wb08r-evidence-first-v2",
                 "natural_renderer_revision": NATURAL_RENDERER_REVISION,
                 "corrective_retrieval_revision": CORRECTIVE_RETRIEVAL_REVISION,
             }
@@ -3643,7 +3643,13 @@ class RetrievalService:
             self._egress,
             self._policy,
             enabled=plan.use_reranker,
-            result_limit=max(request.limit, len(structural_closure_ids)),
+            # 生成证据需要保留重排池中的低位候选；用户请求的返回条数
+            # 仍由后续证据装配预算控制，不能在此提前截断来源跨度。
+            result_limit=max(
+                request.limit,
+                len(structural_closure_ids),
+                self._policy.rerank_candidate_limit,
+            ),
             required_candidate_ids=frozenset(structural_closure_ids),
         )
         expansion = self._neighbors.expand(

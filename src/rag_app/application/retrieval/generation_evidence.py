@@ -29,20 +29,24 @@ from rag_app.core.models import (
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
+    AtomAnswerShape,
     AtomCandidateLink,
     AtomStatus,
     AtomSupportMatrix,
     QueryAtom,
     QueryPlan,
 )
+from rag_app.core.query_text import named_table_label_in_query
 
-GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v2"
+GENERATION_EVIDENCE_PACK_REVISION = "wb08r-generation-evidence-v3"
 _MAX_RESERVED_PREDECESSOR_CHUNKS = 2
 _STRUCTURED_GROUP_TYPES = frozenset(
     {"LIST_GROUP", "PROCEDURE_GROUP", "SECTION_GROUP", "TABLE_ROW_GROUP"}
 )
 _TABLE_ROW = re.compile(r"^tr:(\d+)$")
 _TABLE_NODE_ID = re.compile(r"^node_[0-9a-f]{32}$")
+_MIN_TABLE_SUBJECT_CHARS = 3
+_MIN_TABLE_ACTION_CHARS = 12
 _TEMPLATE_BODY = re.compile(
     r"正文|具体内容|具体字段|怎么填|如何填写|填写方法|占位|示例|正式要求"
 )
@@ -720,6 +724,62 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             for keys in member_keys_by_atom.values():
                 if item_key in keys:
                     keys.add(sibling_key)
+    # 表格行名和职责主体可能已进入 Rerank 池，却被旧证据装配配额丢弃。
+    # 只从同一个有界池恢复逐字命中的原文单元格，再走统一硬边界与预算。
+    exact_table_keys: list[tuple[object, ...]] = []
+    duty_shapes = {
+        AtomAnswerShape.DUTIES,
+        AtomAnswerShape.ENUMERATION,
+        AtomAnswerShape.PROCEDURE,
+    }
+    for ranked in ranked_candidates:
+        chunk = ranked.hydrated.chunk
+        if chunk.role is not ChunkRole.TABLE:
+            continue
+        for span in chunk.source_spans:
+            if not span.is_citable or span.is_repeated:
+                continue
+            path = span.structural_path
+            if not any(part.startswith("tbl:") for part in path):
+                continue
+            column = next(
+                (
+                    int(part[3:])
+                    for part in path
+                    if re.fullmatch(r"tc:\d+", part)
+                ),
+                None,
+            )
+            if column is None:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ].strip()
+            if not quote:
+                continue
+            named = column == 0 and named_table_label_in_query(
+                query_plan.resolved_root_query, quote
+            )
+            subject_atoms = tuple(
+                atom
+                for atom in query_plan.atoms
+                if column > 0
+                and atom.answer_shape in duty_shapes
+                and len(_normalized(atom.target)) >= _MIN_TABLE_SUBJECT_CHARS
+                and _normalized(atom.target) in _normalized(quote)
+                and len(quote) >= _MIN_TABLE_ACTION_CHARS
+            )
+            if not named and not subject_atoms:
+                continue
+            item = _evidence_item(ranked, span, quote, "S0")
+            key = _identity(item)
+            candidates.setdefault(key, item)
+            exact_table_keys.append(key)
+            if named:
+                root_keys.add(key)
+            for atom in subject_atoms:
+                atom_keys.add(key)
+                member_keys_by_atom.setdefault(atom.atom_id, set()).add(key)
     # 旧证据装配器可能因软语义判断丢掉同文档的高排名正文。
     # 多子问题保留少量真实 Rerank 正文候选，仍由下面的硬边界和预算把关。
     supplemental_keys: list[tuple[object, ...]] = []
@@ -825,6 +885,10 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         chosen.append(key)
         ordinary_counts[document_id] += 1
         ordinary_tokens += cost
+
+    for key in dict.fromkeys(exact_table_keys):
+        if key in admitted:
+            add_ordinary(key)
 
     if len(query_plan.atoms) > 1:
         first_seed = min(

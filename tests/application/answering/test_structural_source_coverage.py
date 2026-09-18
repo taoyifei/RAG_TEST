@@ -116,7 +116,7 @@ def test_group_certificate_requires_lead_in_in_claim_citations() -> None:
             None,
         )
 
-    assert failure.value.code == "CLAIM_RELATION_UNSUPPORTED"
+    assert failure.value.code == "CLAIM_QUERY_RELATION_UNSUPPORTED"
 
     lead = next(
         item for item in grouped if item.citation_text == "甲类文具包括："

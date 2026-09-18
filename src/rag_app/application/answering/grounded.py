@@ -54,6 +54,7 @@ from rag_app.core.ports import (
 )
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
+    named_table_label_in_query,
     normalize_catalog_label,
     normalize_semantic_text,
     section_heading_path_owns_target,
@@ -127,6 +128,7 @@ _CONDITION_SCOPE = re.compile(
 _PARENTHETICAL_LEVEL = re.compile(
     r"[（(]\s*[IVXivxⅠⅡⅢⅣⅤⅥ\d一二三四五六七八九十]+\s*级\s*[）)]"
 )
+_EXPLICIT_LEVEL = re.compile(r"[IVXivxⅠⅡⅢⅣⅤⅥ一二三四五六七八九十]{1,4}级")
 _MODALITY_CLASSES = (
     ("MUST", re.compile(r"必须|(?<!不)须(?!要)")),
     ("SHOULD", re.compile(r"应当|应予|应该|应(?=\s|[，。：；,;])")),
@@ -167,6 +169,8 @@ _FALLBACK_SHORT_QUESTION_CHARS = 14
 _FALLBACK_SEQUENCE_MIN_PROCEDURE_MEMBERS = 2
 _FALLBACK_SEQUENCE_MIN_NUMBERED_MEMBERS = 3
 _FALLBACK_FOCUSED_MIN_CHARS = 6
+_FALLBACK_TABLE_ACTION_MIN_CHARS = 12
+_FALLBACK_TABLE_SUBJECT_MIN_CHARS = 3
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
 _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
@@ -2699,6 +2703,92 @@ def _fallback_table_row(
     return winners[0] if len(winners) == 1 else []
 
 
+def _fallback_named_table_cells(
+    plan: QueryPlan,
+    evidence: tuple[EvidenceItem, ...],
+    related: set[str],
+) -> list[tuple[EvidenceItem, str]]:
+    """按明确行名取同一表格行的原文；合并单元格只展示重复原文。"""
+    labels: list[tuple[tuple[object, ...], int, EvidenceItem]] = []
+    for item in evidence:
+        coordinate = _table_cell_coordinate(item)
+        if (
+            item.support_id in related
+            and coordinate is not None
+            and coordinate[1] > 0
+            and coordinate[2] == 0
+            and item.source_spans
+            and all(span.is_citable for span in item.source_spans)
+            and named_table_label_in_query(
+                plan.resolved_root_query, item.citation_text.strip(" |")
+            )
+        ):
+            labels.append((coordinate[0], coordinate[1], item))
+    rows = {(table, row) for table, row, _ in labels}
+    if len(rows) != 1:
+        return []
+    table, row = next(iter(rows))
+    members = [
+        (item, item.citation_text.strip())
+        for item in evidence
+        if item.support_id in related
+        and (coordinate := _table_cell_coordinate(item)) is not None
+        and coordinate[0] == table
+        and coordinate[1] == row
+        and item.source_spans
+        and all(span.is_citable for span in item.source_spans)
+    ]
+    if not members:
+        return []
+    # 被纵向合并的单元格可能位于上一行，只有同一 canonical Chunk
+    # 明确复用该原文时才把它作为本行的共同说明。
+    member_chunks = {item.chunk_id for item, _ in members}
+    shared_nodes = {
+        span.node_id
+        for item in evidence
+        if item.chunk_id in member_chunks
+        for span in item.source_spans
+        if span.is_repeated and span.node_id
+    }
+    repeated = [
+        (item, item.citation_text.strip())
+        for item in evidence
+        if item.support_id in related
+        and item.source_spans
+        and all(span.is_citable for span in item.source_spans)
+        and any(
+            span.is_repeated and span.node_id in shared_nodes
+            for span in item.source_spans
+        )
+        and (coordinate := _table_cell_coordinate(item)) is not None
+        and coordinate[0] == table
+    ]
+    selected: list[tuple[EvidenceItem, str]] = []
+    seen_ids: set[str] = set()
+    for item, excerpt in (*repeated, *members):
+        if item.support_id not in seen_ids:
+            selected.append((item, excerpt))
+            seen_ids.add(item.support_id)
+    if (
+        len(plan.atoms) == 1
+        and plan.atoms[0].answer_shape is AtomAnswerShape.DURATION
+    ):
+        label_ids = {label.support_id for _, _, label in labels}
+        selected = [
+            pair
+            for pair in selected
+            if pair[0].support_id in label_ids
+            or _FALLBACK_DURATION.search(pair[1])
+        ]
+        if not any(
+            _FALLBACK_DURATION.search(excerpt)
+            and item.support_id not in label_ids
+            for item, excerpt in selected
+        ):
+            return []
+    return selected
+
+
 def _fallback_partial_table_row(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -2944,7 +3034,7 @@ def _fallback_continues_fragment(
     )
 
 
-def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
+def _safe_extractive_fallback(  # noqa: PLR0911, PLR0912, PLR0915
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
     linked_ids: dict[str, tuple[str, ...]],
@@ -3025,6 +3115,24 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
                 item.table_context
                 and _FALLBACK_DURATION.search(item.citation_text)
             )
+            or (
+                item.table_context
+                and len(item.citation_text.strip())
+                >= _FALLBACK_TABLE_ACTION_MIN_CHARS
+                and any(
+                    len(normalize_semantic_text(atom.target))
+                    >= _FALLBACK_TABLE_SUBJECT_MIN_CHARS
+                    and normalize_semantic_text(atom.target)
+                    in normalize_semantic_text(item.citation_text)
+                    for atom in plan.atoms
+                    if atom.answer_shape
+                    in {
+                        AtomAnswerShape.DUTIES,
+                        AtomAnswerShape.ENUMERATION,
+                        AtomAnswerShape.PROCEDURE,
+                    }
+                )
+            )
         ):
             sentences = (item.citation_text.strip(),)
         if not sentences:
@@ -3069,7 +3177,9 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     selected: list[tuple[EvidenceItem, str]] = []
     named_row_selected = False
     partial_table_selected = False
-    if direct_duration and ordinary:
+    selected = _fallback_named_table_cells(plan, evidence, related)
+    named_row_selected = bool(selected)
+    if not selected and direct_duration and ordinary:
         _, _, item, sentence = max(ordinary, key=lambda row: (row[0], -row[1]))
         selected = [(item, sentence)]
     multi_part = len(plan.atoms) > 1 or any(
@@ -3233,6 +3343,17 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
     if not selected:
         selected = ordinary_selection
     if not selected:
+        return None
+    requested_levels = {
+        unicodedata.normalize("NFKC", match.group()).casefold()
+        for match in _EXPLICIT_LEVEL.finditer(plan.resolved_root_query)
+    }
+    selected_levels = {
+        unicodedata.normalize("NFKC", match.group()).casefold()
+        for _, sentence in selected
+        for match in _EXPLICIT_LEVEL.finditer(sentence)
+    }
+    if requested_levels and selected_levels - requested_levels:
         return None
     if (
         len(plan.atoms) > 1

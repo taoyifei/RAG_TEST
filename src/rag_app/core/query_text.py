@@ -17,6 +17,11 @@ _PRIVATE_USE_CHARACTER = re.compile(r"[\ue000-\uf8ff]")
 _APPROXIMATE_LABEL_MINIMUM_LENGTH = 6
 _APPROXIMATE_LABEL_MINIMUM_SCORE = 0.8
 _APPROXIMATE_LABEL_MINIMUM_MARGIN = 0.15
+_TABLE_LABEL_QUALIFIER = re.compile(r"[（(]([^）)]+)[）)]")
+_TABLE_LEVEL = re.compile(r"(?<![a-z0-9])[ivx\d一二三四五六七八九十]+级")
+_MIN_NAMED_LABEL_CHARS = 6
+_MIN_LABEL_BASE_CHARS = 4
+_MIN_LABEL_QUALIFIER_CHARS = 2
 _STRUCTURAL_NUMBER_PREFIX = re.compile(
     r"^\s*(?:(?:第[零一二三四五六七八九十百两\d]+(?:章|节|条|项)\s*)|"
     r"(?:(?:[1-9]\d{0,3}(?:[.．][1-9]\d{0,2}){0,5})|"
@@ -43,6 +48,40 @@ def normalize_semantic_text(value: str) -> str:
 
     """
     return unicodedata.normalize("NFKC", value).translate(_ASCII_CASEFOLD)
+
+
+def named_table_label_in_query(query: str, label: str) -> bool:
+    """同时核对表格行名及其限定词，容纳问句把两者换序。"""
+    normalized_query = "".join(normalize_semantic_text(query).split())
+    qualifier = _TABLE_LABEL_QUALIFIER.search(label)
+    if qualifier is None:
+        normalized_label = "".join(normalize_semantic_text(label).split())
+        return (
+            len(normalized_label) >= _MIN_NAMED_LABEL_CHARS
+            and normalized_label in normalized_query
+        )
+    base = "".join(
+        normalize_semantic_text(_TABLE_LABEL_QUALIFIER.sub("", label)).split()
+    )
+    scoped = "".join(normalize_semantic_text(qualifier[1]).split())
+    if _TABLE_LEVEL.fullmatch(scoped):
+        qualifier_matches = scoped in {
+            match.group() for match in _TABLE_LEVEL.finditer(normalized_query)
+        }
+    else:
+        qualifier_matches = scoped in normalized_query
+    return (
+        len(base) >= _MIN_LABEL_BASE_CHARS
+        and len(scoped) >= _MIN_LABEL_QUALIFIER_CHARS
+        and (
+            base in normalized_query
+            or (
+                len(base) >= _MIN_NAMED_LABEL_CHARS
+                and base[-_MIN_LABEL_BASE_CHARS:] in normalized_query
+            )
+        )
+        and qualifier_matches
+    )
 
 
 def normalize_identifier(identifier: str) -> str:
@@ -244,6 +283,7 @@ def select_unique_label_owner(
 __all__ = [
     "context_label_variants",
     "duty_heading_path_owns_target",
+    "named_table_label_in_query",
     "normalize_document_label",
     "normalize_duty_heading_label",
     "normalize_identifier",
