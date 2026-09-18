@@ -425,7 +425,10 @@ def test_short_followup_rejects_other_document_duration() -> None:
     plan = _plan("给供应商留几天？", shape=AtomAnswerShape.DURATION).model_copy(
         update={
             "original_query": "给供应商留几天？",
-            "resolved_root_query": "直接采购文件 应答截止时限 给供应商留几天？",
+            "resolved_root_query": (
+                "文件 我们在准备直接采购文件 给供应商留几天 "
+                "给供应商留几天?"
+            ),
             "context_resolution_mode": "RULE_CONTEXT",
         }
     )

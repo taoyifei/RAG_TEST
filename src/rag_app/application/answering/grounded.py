@@ -2858,12 +2858,15 @@ def _contextual_source_versions(
     plan: QueryPlan, evidence: tuple[EvidenceItem, ...]
 ) -> frozenset[str] | None:
     """短追问的历史语境若唯一指向资料标题，则约束发布来源。"""
+    normalized_original = unicodedata.normalize(
+        "NFKC", plan.original_query
+    ).strip()
     if (
         plan.context_resolution_mode != "RULE_CONTEXT"
-        or not plan.resolved_root_query.endswith(plan.original_query)
+        or not plan.resolved_root_query.endswith(normalized_original)
     ):
         return None
-    context = plan.resolved_root_query.removesuffix(plan.original_query).strip()
+    context = plan.resolved_root_query.removesuffix(normalized_original).strip()
     if not context:
         return None
     scores: dict[str, int] = {}
