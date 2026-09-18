@@ -21,6 +21,7 @@ _TABLE_ROW_LABEL = re.compile(r"r(?P<row>\d+):c0$")
 _RELATION_ANCHOR_THRESHOLD = 0.35
 _MIN_BIGRAM_CHARS = 2
 _MIN_FUZZY_TARGET_CHARS = 5
+_TABLE_CERTIFICATE_SPAN_COUNT = 3
 _STRUCTURAL_RELATIONS = {
     AtomAnswerShape.ENUMERATION: re.compile(
         r"包括|包含|分为|分成|列为|组成|如下"
@@ -102,6 +103,77 @@ _SCALAR_SHAPES = frozenset(
 )
 
 
+def _certified_table_items(
+    item: EvidenceItem, supporting_items: tuple[EvidenceItem, ...]
+) -> tuple[EvidenceItem, ...]:
+    """只接受同文档、同表且行列交点闭合的三个真实片段。"""
+    support = dict(item.metadata).get("answer_support")
+    if not isinstance(support, dict) or support.get("support_reason") != (
+        "TABLE_INTERSECTION"
+    ):
+        return ()
+    ids = support.get("supporting_span_ids")
+    if (
+        not isinstance(ids, list)
+        or len(ids) != _TABLE_CERTIFICATE_SPAN_COUNT
+        or len(set(ids)) != _TABLE_CERTIFICATE_SPAN_COUNT
+    ):
+        return ()
+    by_node: dict[str, tuple[EvidenceItem, tuple[object, int, int]]] = {}
+    for proof in supporting_items:
+        proof_support = dict(proof.metadata).get("answer_support")
+        if (
+            proof.document_version_id != item.document_version_id
+            or not isinstance(proof_support, dict)
+            or proof_support.get("support_reason") != "TABLE_INTERSECTION"
+            or proof_support.get("supporting_span_ids") != ids
+        ):
+            continue
+        for span in proof.source_spans:
+            path = span.structural_path
+            if not span.is_citable or span.source_anchor is None:
+                continue
+            for index in range(len(path) - 2):
+                row = re.fullmatch(r"tr:(\d+)", path[index + 1])
+                column = re.fullmatch(r"tc:(\d+)", path[index + 2])
+                if (
+                    not path[index].startswith("tbl:")
+                    or row is None
+                    or column is None
+                ):
+                    continue
+                table_identity = (
+                    proof.document_version_id,
+                    span.source_anchor.part_uri,
+                    path[: index + 1],
+                )
+                if span.node_id in ids:
+                    by_node[span.node_id] = (
+                        proof,
+                        (table_identity, int(row[1]), int(column[1])),
+                    )
+                break
+    if set(ids) != set(by_node):
+        return ()
+    row_label, header, value = (by_node[node] for node in ids)
+    label_table, label_row, label_column = row_label[1]
+    header_table, header_row, header_column = header[1]
+    value_table, value_row, value_column = value[1]
+    if (
+        label_table != header_table
+        or label_table != value_table
+        or label_row <= 0
+        or label_column != 0
+        or header_row != 0
+        or header_column <= 0
+        or value_row != label_row
+        or value_column != header_column
+        or item not in (row_label[0], header[0], value[0])
+    ):
+        return ()
+    return row_label[0], header[0], value[0]
+
+
 def qualify_atom_evidence(  # noqa: PLR0913
     atom: QueryAtom,
     item: EvidenceItem,
@@ -111,6 +183,7 @@ def qualify_atom_evidence(  # noqa: PLR0913
     resolved_root_query: str,
     context_resolution_confidence: str = "HIGH",
     single_atom_direct: bool = False,
+    supporting_items: tuple[EvidenceItem, ...] = (),
 ) -> AtomEvidenceQualification:
     """对一个真实 SourceSpan 建立逐原子发布资格。
 
@@ -121,16 +194,31 @@ def qualify_atom_evidence(  # noqa: PLR0913
     group_id = metadata.get("evidence_group_id")
     group_id = group_id if isinstance(group_id, str) else None
     direct_support = metadata.get("answer_support")
+    table_items = _certified_table_items(item, supporting_items)
     direct_relation_supported = (
         isinstance(direct_support, dict)
         and direct_support.get("status") == "SUPPORTED"
+        and _normalized(str(direct_support.get("query_target") or ""))
+        == _normalized(atom.target)
+        and _normalized(
+            str(direct_support.get("requested_relation_or_attribute") or "")
+        )
+        == _normalized(atom.relation)
+        and (
+            direct_support.get("support_reason") != "TABLE_INTERSECTION"
+            or bool(table_items)
+        )
     )
+    table_certificate = bool(table_items and direct_relation_supported)
+    proof_items = table_items or (item,)
     own_link = any(
-        link.atom_id == atom.atom_id and link.chunk_id == item.chunk_id
+        link.atom_id == atom.atom_id
+        and any(proof.chunk_id == link.chunk_id for proof in proof_items)
         for link in links
     ) or (single_atom_direct and not links and direct_relation_supported)
     root_link = any(
-        link.atom_id is None and link.chunk_id == item.chunk_id
+        link.atom_id is None
+        and any(proof.chunk_id == link.chunk_id for proof in proof_items)
         for link in links
     )
     provenance = (
@@ -149,12 +237,16 @@ def qualify_atom_evidence(  # noqa: PLR0913
             str(metadata.get("document_title", "")),
         )
     )
-    source_scope_supported = (
-        not atom.source_qualifier
-        or _normalized(atom.source_qualifier) in _normalized(source_text)
-    )
+    source_scope_supported = not atom.source_qualifier or _normalized(
+        atom.source_qualifier
+    ) in _normalized(source_text)
     direct_constraints_supported = all(
-        _constraint_supported(constraint.kind.value, constraint.value, item)
+        any(
+            _constraint_supported(
+                constraint.kind.value, constraint.value, proof
+            )
+            for proof in proof_items
+        )
         for constraint in atom.constraints
     )
     group_constraints_supported = (
@@ -173,7 +265,10 @@ def qualify_atom_evidence(  # noqa: PLR0913
     )
     direct_target = bool(
         _normalized(atom.target)
-        and _normalized(atom.target) in _normalized(item.citation_text)
+        and any(
+            _normalized(atom.target) in _normalized(proof.citation_text)
+            for proof in proof_items
+        )
     )
     group_owned = (
         alignment is not None
@@ -189,9 +284,11 @@ def qualify_atom_evidence(  # noqa: PLR0913
             and metadata.get("group_complete") is True
         )
     ) and (
-        not group_owned or bool(alignment and alignment.relation_compatible)
+        not group_owned
+        or table_certificate
+        or bool(alignment and alignment.relation_compatible)
     )
-    target_owned = direct_target or group_owned
+    target_owned = direct_target or group_owned or table_certificate
     root_trusted = (
         context_resolution_confidence in {"HIGH", "MEDIUM"}
         and bool(_normalized(atom.target))
@@ -208,6 +305,7 @@ def qualify_atom_evidence(  # noqa: PLR0913
         else alignment is None
         or group_gate
         or group_id is None
+        or table_certificate
     )
     retrieval_relevant = cited and (own_link or root_link or group_owned)
     direct_allowed = (
@@ -253,7 +351,7 @@ def qualify_atom_evidence(  # noqa: PLR0913
             reasons.append(code)
     if provenance is EvidenceProvenance.ROOT and not root_trusted:
         reasons.append("ROOT_RESCUE_UNTRUSTED")
-    if group_owned and not group_gate:
+    if group_owned and not group_gate and not table_certificate:
         reasons.append("ATOM_ALIGNMENT_NOT_PUBLISHABLE")
     if support_mode is None:
         reasons.append("NO_PUBLISHABLE_SUPPORT_MODE")
@@ -330,8 +428,7 @@ def align_atom_to_groups(
         if not compatible:
             reasons.append("GROUP_SHAPE_INCOMPATIBLE")
         heading_is_unique = (
-            heading_counts[(group.document_version_id, group.heading_path)]
-            == 1
+            heading_counts[(group.document_version_id, group.heading_path)] == 1
         )
         anchor_texts = _primary_anchors(
             candidate, include_heading=heading_is_unique
@@ -499,9 +596,9 @@ def _anchor_score(target: str, anchor: str) -> float:
     right = {anchor[index : index + 2] for index in range(len(anchor) - 1)}
     dice = 2 * len(left & right) / (len(left) + len(right))
     overlap = (
-        SequenceMatcher(None, target, anchor).find_longest_match(
-            0, len(target), 0, len(anchor)
-        ).size
+        SequenceMatcher(None, target, anchor)
+        .find_longest_match(0, len(target), 0, len(anchor))
+        .size
         / len(target)
         if len(target) >= _MIN_FUZZY_TARGET_CHARS
         else 0.0

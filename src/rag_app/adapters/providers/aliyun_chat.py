@@ -62,6 +62,7 @@ CHAT_COMPLETIONS_PATH = "/compatible-mode/v1/chat/completions"
 _MAX_USAGE = (1 << 63) - 1
 _MAX_CONTENT_CHARS = 32_768
 _MAX_CLAIMS = 24
+_TABLE_INTERSECTION_SPAN_COUNT = 3
 _MESSAGE_OVERHEAD = 16
 _COMPLEX_QUERY_CHARS = 48
 _MAX_SSE_BUFFER_CHARS = 256 * 1024
@@ -130,6 +131,7 @@ _NATURAL_GROUNDED_SYSTEM = (
     "不同Atom需要分别给出直接回答其target与relation的事实。"
     "允许改变语序和合并重复措辞，但必须保留数字、单位、日期、时限、版本、"
     "否定和义务强度。每条事实只绑定能直接证明它的Atom和support_id。"
+    "若提供joint_support_sets，表格交点事实必须同时引用该组全部support_id。"
     "列表和流程须按来源顺序逐项表达，不把未给出的成员补齐。"
     "目录项只可证明标题、存在性、分类和参考对象，不能证明模板正文。"
     '仅输出JSON对象：{"claims":[{"atom_id":"A1",'
@@ -750,6 +752,31 @@ def _natural_messages(
             ],
             "evidence": evidence_payloads,
         }
+        by_node = {
+            (item.document_version_id, span.node_id): item.support_id
+            for item in items
+            for span in item.source_spans
+            if span.node_id
+        }
+        joint_support_sets = {
+            tuple(
+                by_node[item.document_version_id, node_id]
+                for node_id in required
+            )
+            for item in items
+            if isinstance(
+                support := dict(item.metadata).get("answer_support"), dict
+            )
+            and support.get("support_reason") == "TABLE_INTERSECTION"
+            and isinstance(required := support.get("supporting_span_ids"), list)
+            and len(required) == _TABLE_INTERSECTION_SPAN_COUNT
+            and all(
+                (item.document_version_id, node_id) in by_node
+                for node_id in required
+            )
+        }
+        if joint_support_sets:
+            payload["joint_support_sets"] = sorted(joint_support_sets)
         if request.repair_atom_ids:
             payload["repair_only"] = True
             payload["accepted_claim_ids"] = request.accepted_claim_ids

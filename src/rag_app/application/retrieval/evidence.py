@@ -136,6 +136,14 @@ class EvidenceSelectionResult:
     ambiguous: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _TableIntersectionResult:
+    """同表行名、列头和交点值的真实来源片段。"""
+
+    spans: dict[str, set[_SpanKey]]
+    supports: dict[_SpanKey, AnswerSupport]
+
+
 class EvidenceAssembler:
     """只发布可映射到真实来源的单 span quote。"""
 
@@ -266,7 +274,7 @@ class EvidenceAssembler:
             ambiguous=ambiguous,
         )
 
-    def _assemble_candidates(
+    def _assemble_candidates(  # noqa: PLR0915
         self,
         candidates: tuple[RankedChunk, ...],
         policy: RetrievalPolicy,
@@ -289,10 +297,12 @@ class EvidenceAssembler:
         )
         if descriptive_list is not None:
             return descriptive_list
-        table_spans = _table_intersections(unique_chunks, context)
+        table_result = _table_intersections(unique_chunks, context)
+        table_spans = table_result.spans
         support_overrides = _context_supports(
             unique_chunks, context, table_spans
         )
+        support_overrides.update(table_result.supports)
         documents: Counter[str] = Counter()
         sections: Counter[tuple[str, str]] = Counter()
         chunks: Counter[str] = Counter()
@@ -334,7 +344,12 @@ class EvidenceAssembler:
                 continue
             document_id = chunk.version.document_id
             section_key = (document_id, chunk.section_id)
-            if chunks[chunk.chunk_id] >= policy.max_evidence_items_per_chunk:
+            chunk_cap = (
+                max(3, policy.max_evidence_items_per_chunk)
+                if span_key in table_result.supports
+                else policy.max_evidence_items_per_chunk
+            )
+            if chunks[chunk.chunk_id] >= chunk_cap:
                 continue
             if documents[document_id] >= policy.per_document_cap:
                 continue
@@ -403,9 +418,9 @@ def _annotate_group_evidence(
                 # 列表导语可同时属于段落组，优先保留覆盖完整结构的组。
                 owners[chunk_id] = (group, index)
     present_by_group: dict[str, set[str]] = defaultdict(set)
-    present_spans_by_group: dict[
-        str, set[tuple[object, ...]]
-    ] = defaultdict(set)
+    present_spans_by_group: dict[str, set[tuple[object, ...]]] = defaultdict(
+        set
+    )
     for item in evidence:
         owner = owners.get(item.chunk_id)
         if owner is not None:
@@ -809,10 +824,55 @@ def _span_key(chunk: Chunk, span: SourceSpan) -> _SpanKey:
     )
 
 
-def _table_intersections(  # noqa: PLR0912
+def _table_intersection_certificate(
+    context: EvidenceSelectionContext,
+    cells: _TableCells,
+    row: int,
+    column: int,
+) -> tuple[tuple[_SpanKey, _SpanKey, _SpanKey], AnswerSupport] | None:
+    """只有真实且唯一的行名、列头和值才能组成 Atom 支持。"""
+    row_label = cells.get((row, 0), {})
+    column_header = cells.get((0, column), {})
+    value = cells.get((row, column), {})
+    if any(
+        len(parts) != 1 or len(set(parts.values())) != 1
+        for parts in (row_label, column_header, value)
+    ):
+        return None
+    proof = evaluate_span_support(
+        context.analysis,
+        next(iter(value.values())),
+        table_relation=True,
+        table_header=next(iter(column_header.values())),
+    )
+    keys = (
+        next(iter(row_label)),
+        next(iter(column_header)),
+        next(iter(value)),
+    )
+    node_ids = tuple(key[1] for key in keys)
+    if (
+        proof.status is not SupportStatus.SUPPORTED
+        or any(
+            not isinstance(node_id, str) or not node_id for node_id in node_ids
+        )
+        or len(set(node_ids)) != len(node_ids)
+    ):
+        return None
+    return keys, AnswerSupport(
+        status=SupportStatus.SUPPORTED,
+        query_target=proof.query_target,
+        requested_relation_or_attribute=proof.requested_relation_or_attribute,
+        answer_type=proof.answer_type,
+        support_reason="TABLE_INTERSECTION",
+        supporting_span_ids=node_ids,
+    )
+
+
+def _table_intersections(  # noqa: PLR0912, PLR0915
     candidates: tuple[RankedChunk, ...],
     context: EvidenceSelectionContext | None,
-) -> dict[str, set[_SpanKey]]:
+) -> _TableIntersectionResult:
     """在同表候选中用唯一行名和列头定位原始单元格。
 
     只识别具有第零行表头和第零列行名的规则表。标签必须完整出现在
@@ -820,7 +880,7 @@ def _table_intersections(  # noqa: PLR0912
     仅共享结构信息，不拼接或重写引用；输出仍受现有 cap 和预算约束。
     """
     if context is None or context.query_kind is QueryKind.AMBIGUOUS:
-        return {}
+        return _TableIntersectionResult({}, {})
     tables: dict[_TableKey, dict[tuple[int, int], dict[_SpanKey, str]]] = (
         defaultdict(lambda: defaultdict(dict))
     )
@@ -846,6 +906,7 @@ def _table_intersections(  # noqa: PLR0912
                 tables[table_key][row, column][_span_key(chunk, span)] = quote
     query = normalize_semantic_text(context.analysis.normalized_query)
     selected: dict[str, set[_SpanKey]] = {}
+    certificates: dict[_SpanKey, AnswerSupport] = {}
     for table_key, cells in tables.items():
         context_qualifier = context.analysis.semantics.context_qualifier
         if context_qualifier and not any(
@@ -889,6 +950,15 @@ def _table_intersections(  # noqa: PLR0912
             selected_values.update(values)
         if not selected_values:
             continue
+        if context.include_table_context and not whole_row:
+            certificate = _table_intersection_certificate(
+                context, cells, row, next(iter(columns))
+            )
+            if certificate is None:
+                continue
+            proof_keys, proof = certificate
+            selected_values.update(proof_keys)
+            certificates.update(dict.fromkeys(proof_keys, proof))
         # “对应内容”不是一组失去语义的裸值：行名证明所问对象，最近的
         # 完整前置表头证明每个值的列含义。标题行可以位于表头之前。
         if whole_row:
@@ -905,7 +975,7 @@ def _table_intersections(  # noqa: PLR0912
                     selected_values.update(cells[header_row, column])
         for chunk_id in members[table_key]:
             selected.setdefault(chunk_id, set()).update(selected_values)
-    return selected
+    return _TableIntersectionResult(selected, certificates)
 
 
 def _stage_hierarchy_evidence(  # noqa: PLR0911, PLR0912
@@ -2018,10 +2088,10 @@ def _complete_supports(
     complete: list[EvidenceItem] = []
     for item in evidence:
         support = dict(item.metadata).get("answer_support")
-        if (
-            isinstance(support, dict)
-            and support.get("support_reason") == "LINKED_SUBJECT_ATTRIBUTE"
-        ):
+        if isinstance(support, dict) and support.get("support_reason") in {
+            "LINKED_SUBJECT_ATTRIBUTE",
+            "TABLE_INTERSECTION",
+        }:
             nodes = support.get("supporting_span_ids", [])
             if not isinstance(nodes, list) or any(
                 node not in present for node in nodes

@@ -46,7 +46,10 @@ def _linked(
                     "answer_support": {
                         "status": "SUPPORTED"
                         if relation_supported
-                        else "UNSUPPORTED"
+                        else "UNSUPPORTED",
+                        "query_target": "甲设备",
+                        "requested_relation_or_attribute": "维护期限",
+                        "support_reason": "SOURCE_RELATION_AND_VALUE",
                     }
                 }
             )
@@ -112,6 +115,36 @@ def test_direct_atom_rescue_keeps_candidate_on_failure() -> None:
     assert "ATOM_RELATION_UNSUPPORTED" in failed.reason_codes
     assert passed.publishable
     assert passed.support_mode is EvidenceSupportMode.DIRECT_ATOM_SPAN
+
+
+def test_direct_support_for_another_relation_cannot_publish() -> None:
+    item, link = _linked(root=False)
+    item = item.model_copy(
+        update={
+            "metadata": freeze_json_object(
+                {
+                    "answer_support": {
+                        "status": "SUPPORTED",
+                        "query_target": "甲设备",
+                        "requested_relation_or_attribute": "购置价格",
+                        "support_reason": "SOURCE_RELATION_AND_VALUE",
+                    }
+                }
+            )
+        }
+    )
+
+    qualified = qualify_atom_evidence(
+        _atom(),
+        item,
+        (link,),
+        alignment=None,
+        resolved_root_query="甲设备 维护期限",
+    )
+
+    assert qualified.retrieval_relevant
+    assert not qualified.publishable
+    assert "ATOM_RELATION_UNSUPPORTED" in qualified.reason_codes
 
 
 def test_single_atom_direct_evidence_has_no_link_requirement() -> None:

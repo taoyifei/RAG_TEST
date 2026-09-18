@@ -322,6 +322,7 @@ class EvidenceSelectionContext(FrozenModel):
     rerank_mode: str = Field(min_length=1)
     selected_slot: str | None = None
     selected_vector_space: str | None = None
+    include_table_context: bool = False
 
 
 class DiagnosticRerankItem(FrozenModel):

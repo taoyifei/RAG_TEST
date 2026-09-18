@@ -36,6 +36,7 @@ class RequestedAnswerType(StrEnum):
     PURPOSE = "PURPOSE"
     ENUMERATION = "ENUMERATION"
     COUNT = "COUNT"
+    DURATION = "DURATION"
     ORDINAL_ITEM = "ORDINAL_ITEM"
     DUTIES = "DUTIES"
     RESPONSIBLE_PARTY = "RESPONSIBLE_PARTY"
@@ -77,7 +78,11 @@ class QuerySemantics(FrozenModel):
     ordinal: StrictInt | None = Field(default=None, gt=0)
     constraints: tuple[QueryConstraint, ...] = ()
     source: Literal[
-        "RULE", "LLM_INTERPRET", "LLM_REWRITE", "ORIGINAL_FALLBACK"
+        "RULE",
+        "LLM_INTERPRET",
+        "LLM_REWRITE",
+        "ORIGINAL_FALLBACK",
+        "SPAN_REFERENCED",
     ] = "ORIGINAL_FALLBACK"
     reason_codes: tuple[str, ...] = ()
 

@@ -54,6 +54,7 @@ from rag_app.core.ports import (
 from rag_app.core.query_text import (
     duty_heading_path_owns_target,
     normalize_catalog_label,
+    normalize_semantic_text,
     section_heading_path_owns_target,
 )
 
@@ -63,6 +64,7 @@ _QUANTITY_UNIT_ATOM = (
     r"台|件|人|双|套|副|只|张|支|瓶|组|批|份|条|顶|块|辆|"
     r"艘|架|门|床|℃|[A-Za-zμµΩ°]+)"
 )
+_TABLE_INTERSECTION_SPAN_COUNT = 3
 _QUANTITY_UNIT = (
     rf"(?:{_QUANTITY_UNIT_ATOM})(?:\s*/\s*(?:{_QUANTITY_UNIT_ATOM}))*"
 )
@@ -840,6 +842,21 @@ def _source_groups(item: EvidenceItem) -> set[tuple[object, ...]]:
         )
     }
     if (
+        isinstance(support, dict)
+        and support.get("support_reason") == "TABLE_INTERSECTION"
+        and isinstance(support.get("supporting_span_ids"), list)
+        and table_node_ids.intersection(support["supporting_span_ids"])
+    ):
+        return {
+            (
+                "table-intersection",
+                item.document_version_id,
+                item.section_id,
+                item.table_locator,
+                tuple(support["supporting_span_ids"]),
+            )
+        }
+    if (
         item.table_locator is not None
         and item.table_context
         and isinstance(support, dict)
@@ -1209,6 +1226,10 @@ def _claim_source_groups(
         tuple[object, ...],
         dict[tuple[object, ...], dict[int, list[str]]],
     ] = {}
+    intersection_cells: dict[
+        tuple[object, ...],
+        list[tuple[tuple[object, ...], int, int, str]],
+    ] = {}
     for support, item in zip(claim.supports, units, strict=True):
         groups = _source_groups(item)
         if len(groups) != 1:
@@ -1227,6 +1248,11 @@ def _claim_source_groups(
         )
         table_contexts = _trusted_table_contexts(item, analysis)
         coordinate = _table_cell_coordinate(item)
+        if group[0] == "table-intersection" and coordinate is not None:
+            table, row, column = coordinate
+            intersection_cells.setdefault(group, []).append(
+                (table, row, column, support.quote)
+            )
         if group[0] == "table-row-content" and coordinate is not None:
             table, row, column = coordinate
             table_columns.setdefault(group, {}).setdefault(
@@ -1248,6 +1274,9 @@ def _claim_source_groups(
         table_context, table_terms = _closed_table_contexts(
             table_cells.get(group, [])
         )
+        intersection_columns = _joined_table_intersection(
+            intersection_cells.get(group, [])
+        )
         result.append(
             _ClaimSourceGroup(
                 support_text="\n".join(quotes),
@@ -1255,12 +1284,41 @@ def _claim_source_groups(
                 trusted_contexts=frozenset(contexts.get(group, set()))
                 | table_context,
                 trusted_term_contexts=table_terms,
-                table_columns=_joined_table_columns(
-                    table_columns.get(group, {})
-                ),
+                table_columns=intersection_columns
+                or _joined_table_columns(table_columns.get(group, {})),
             )
         )
     return tuple(result)
+
+
+def _joined_table_intersection(
+    cells: list[tuple[tuple[object, ...], int, int, str]],
+) -> tuple[str, ...]:
+    """只将已被共同引用的唯一交点用于本地数值与关系核验。"""
+    if len({table for table, _row, _column, _text in cells}) != 1:
+        return ()
+    labels = [
+        text
+        for _table, row, column, text in cells
+        if row > 0 and column == 0
+    ]
+    headers = [
+        (column, text)
+        for _table, row, column, text in cells
+        if row == 0 and column > 0
+    ]
+    values = [
+        (row, column, text)
+        for _table, row, column, text in cells
+        if row > 0 and column > 0
+    ]
+    if len(labels) != 1 or len(headers) != 1 or len(values) != 1:
+        return ()
+    _row, value_column, value = values[0]
+    header_column, header = headers[0]
+    if value_column != header_column:
+        return ()
+    return (" ".join((labels[0], header, value)),)
 
 
 def _strip_trusted_context_prefix(
@@ -2024,15 +2082,12 @@ class GroundedAnsweringService:
                         analysis,
                     )
                 except (ValidationFailed, ValueError) as error:
-                    claim_rejections[
-                        _natural_rejection_code(error)
-                    ] += 1
+                    claim_rejections[_natural_rejection_code(error)] += 1
                     rejected_atoms[natural.atom_id] += 1
                     reason = "CLAIM_NOT_SUPPORTED"
                     continue
                 if any(
-                    item.atom_ids == (natural.atom_id,)
-                    and item.claim == claim
+                    item.atom_ids == (natural.atom_id,) and item.claim == claim
                     for item in accepted
                 ):
                     continue
@@ -2244,9 +2299,7 @@ class GroundedAnsweringService:
             len(accepted),
             published_claim_count,
             generation_gap_count,
-            tuple(
-                (atom_id, value.value) for atom_id, value in missing.items()
-            ),
+            tuple((atom_id, value.value) for atom_id, value in missing.items()),
             false_limited_detected,
             accepted_support_ids,
         )
@@ -2281,11 +2334,10 @@ def _validated_natural_claim(
             code="CLAIM_UNKNOWN_SUPPORT",
         )
     support = matrix.for_atom(natural.atom_id)
-    if (
-        support.status not in {AtomStatus.SUPPORTED, AtomStatus.PARTIAL}
-        or not set(natural.support_ids)
-        <= set(support.supporting_support_ids)
-    ):
+    if support.status not in {
+        AtomStatus.SUPPORTED,
+        AtomStatus.PARTIAL,
+    } or not set(natural.support_ids) <= set(support.supporting_support_ids):
         raise ValidationFailed(
             "自然事实的来源与 Atom 不对应。",
             stage="answer.validate",
@@ -2305,7 +2357,8 @@ def _validated_natural_claim(
     atom = atoms[natural.atom_id]
     atom_units = units
     if not all(
-        item.publishable and item.source_spans
+        item.publishable
+        and item.source_spans
         and all(span.is_citable for span in item.source_spans)
         for item in atom_units
     ):
@@ -2315,6 +2368,7 @@ def _validated_natural_claim(
             code="CLAIM_UNKNOWN_SUPPORT",
         )
     source_text = "\n".join(item.citation_text for item in atom_units)
+    _validate_table_claim_certificate(atoms[natural.atom_id], atom_units)
     direct_relation = any(
         isinstance(
             certificate := dict(item.metadata).get("answer_support"), dict
@@ -2429,6 +2483,52 @@ def _validated_natural_claim(
     return claim
 
 
+def _validate_table_claim_certificate(
+    atom: QueryAtom, units: tuple[EvidenceItem, ...]
+) -> None:
+    """表格 Claim 必须同时引用同表行名、列头和交点值。"""
+    for item in units:
+        certificate = dict(item.metadata).get("answer_support")
+        if (
+            not isinstance(certificate, dict)
+            or certificate.get("support_reason") != "TABLE_INTERSECTION"
+        ):
+            continue
+        required = certificate.get("supporting_span_ids")
+        if (
+            not isinstance(required, list)
+            or len(required) != _TABLE_INTERSECTION_SPAN_COUNT
+        ):
+            raise ValidationFailed(
+                "表格事实缺少完整交点来源。",
+                stage="answer.validate",
+                code="CLAIM_RELATION_UNSUPPORTED",
+            )
+        cited = {
+            span.node_id
+            for unit in units
+            if unit.document_version_id == item.document_version_id
+            and dict(unit.metadata).get("answer_support") == certificate
+            for span in unit.source_spans
+        }
+        if (
+            not set(required) <= cited
+            or normalize_semantic_text(
+                str(certificate.get("query_target") or "")
+            )
+            != normalize_semantic_text(atom.target)
+            or normalize_semantic_text(
+                str(certificate.get("requested_relation_or_attribute") or "")
+            )
+            != normalize_semantic_text(atom.relation)
+        ):
+            raise ValidationFailed(
+                "表格事实缺少当前原子的对象或关系来源。",
+                stage="answer.validate",
+                code="CLAIM_RELATION_UNSUPPORTED",
+            )
+
+
 def _modality_class(text: str) -> str | None:
     """保留强制、应当、需要和许可四种不同义务强度。"""
     return next(
@@ -2456,11 +2556,13 @@ def _validate_natural_entailment(
     certificates = tuple(
         dict(item.metadata).get("answer_support") for item in units
     )
-    if not group_certified and any(
-        isinstance(item, dict) for item in certificates
-    ) and not any(
-        isinstance(item, dict) and item.get("status") == "SUPPORTED"
-        for item in certificates
+    if (
+        not group_certified
+        and any(isinstance(item, dict) for item in certificates)
+        and not any(
+            isinstance(item, dict) and item.get("status") == "SUPPORTED"
+            for item in certificates
+        )
     ):
         raise ValidationFailed(
             "引用只与问题相关，未直接证明所问关系。",
@@ -2524,8 +2626,10 @@ def _validate_natural_entailment(
             stage="answer.validate",
             code="CLAIM_MODALITY_MISMATCH",
         )
-    if claim_modality is None and matched and all(
-        _modality_class(clause) is not None for clause in matched
+    if (
+        claim_modality is None
+        and matched
+        and all(_modality_class(clause) is not None for clause in matched)
     ):
         raise ValidationFailed(
             "事实遗漏了来源中的义务强度。",
@@ -2665,8 +2769,9 @@ def _structural_member_coverage(
     if not groups:
         return False if saw_group else None
     for group_id, members in groups.items():
-        if len({item.chunk_id for item in members.values()}) != (
-            expected_counts[group_id]
+        if (
+            len({item.chunk_id for item in members.values()})
+            != (expected_counts[group_id])
         ):
             continue
         required = {
@@ -2687,9 +2792,7 @@ def _structural_lead_in(item: EvidenceItem) -> bool:
     text = item.citation_text.strip()
     if _LEADING_LIST_MARKER.match(text):
         return False
-    return text.endswith(("：", ":")) or bool(
-        re.search(r"以下|如下", text)
-    )
+    return text.endswith(("：", ":")) or bool(re.search(r"以下|如下", text))
 
 
 def _raise_if_cancelled(cancellation: CancellationPort | None) -> None:

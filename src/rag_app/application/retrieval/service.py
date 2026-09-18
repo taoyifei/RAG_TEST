@@ -2529,6 +2529,7 @@ class RetrievalService:
                 RequestedAnswerType.RESPONSIBLE_PARTY
             ),
             AtomAnswerShape.COUNT: RequestedAnswerType.COUNT,
+            AtomAnswerShape.DURATION: RequestedAnswerType.DURATION,
         }.get(atom.answer_shape, RequestedAnswerType.FACT)
         semantics = analysis.semantics.model_copy(
             update={
@@ -2536,6 +2537,7 @@ class RetrievalService:
                 "relation": atom.relation,
                 "answer_type": answer_type,
                 "source_qualifier": atom.source_qualifier,
+                "source": "SPAN_REFERENCED",
             }
         )
         return analysis.model_copy(update={"semantics": semantics})
@@ -2857,6 +2859,7 @@ class RetrievalService:
                     rerank_mode=rerank_mode,
                     selected_slot=selected_slot,
                     selected_vector_space=vector_space,
+                    include_table_context=True,
                 ),
             )
             scoped_items = (
@@ -2910,6 +2913,7 @@ class RetrievalService:
                     ),
                     single_atom_direct=len(query_plan.atoms) == 1
                     and not query_plan.needs_clarification,
+                    supporting_items=scoped_items,
                 )
                 for item in scoped_items
             }
@@ -2927,11 +2931,15 @@ class RetrievalService:
             )
             if selection.ambiguous:
                 direct_keys = ()
-            elif atom.answer_shape in {
-                AtomAnswerShape.ENUMERATION,
-                AtomAnswerShape.DUTIES,
-                AtomAnswerShape.PROCEDURE,
-            } and not atom.source_qualifier:
+            elif (
+                atom.answer_shape
+                in {
+                    AtomAnswerShape.ENUMERATION,
+                    AtomAnswerShape.DUTIES,
+                    AtomAnswerShape.PROCEDURE,
+                }
+                and not atom.source_qualifier
+            ):
                 direct_documents = {
                     item.document_id
                     for item in scoped_items
