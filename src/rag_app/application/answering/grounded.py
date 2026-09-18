@@ -2609,7 +2609,10 @@ def _fallback_table_row(
         ):
             continue
         score = 0
-        for _, sentence in items:
+        for item, sentence in items:
+            coordinate = _table_cell_coordinate(item)
+            if coordinate is None or coordinate[1] == 0 or coordinate[2] != 0:
+                continue
             label, separator, remainder = sentence.partition("|")
             if separator and remainder.strip():
                 continue

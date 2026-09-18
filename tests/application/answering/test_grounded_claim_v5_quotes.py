@@ -43,6 +43,27 @@ from tests.application.answering.test_natural_grounded_answer import (
 )
 
 
+def _row_label_coordinate(item: EvidenceItem, row: int) -> EvidenceItem:
+    """为合成来源标记已核验的表格行名位置。"""
+    path = ("body", "tbl:1", f"tr:{row}", "tc:0", "p:1")
+    return item.model_copy(
+        update={
+            "source_spans": tuple(
+                span.model_copy(
+                    update={
+                        "structural_path": path,
+                        "source_anchor": span.source_anchor.model_copy(
+                            update={"structural_path": path}
+                        ),
+                    }
+                )
+                for span in item.source_spans
+                if span.source_anchor is not None
+            )
+        }
+    )
+
+
 def _pack(
     plan: QueryPlan,
     evidence: tuple[EvidenceItem, ...],
@@ -493,6 +514,12 @@ def test_fallback_uses_named_complete_table_row() -> None:
         if item.citation_text.startswith("开发中心模式包括")
     )
     row = [item for item in evidence if item is not generic]
+    row = [
+        _row_label_coordinate(item, 1)
+        if item.citation_text == "需求快验"
+        else item
+        for item in row
+    ]
     group_id = "egrp_mode_row"
     row = [
         item.model_copy(
@@ -567,6 +594,14 @@ def test_fallback_resolves_unique_short_name_of_table_row() -> None:
             }
         )
         for item in evidence
+    )
+    grouped = tuple(
+        _row_label_coordinate(item, 1)
+        if "临时快捷" in item.citation_text
+        else _row_label_coordinate(item, 2)
+        if "标准模式" in item.citation_text
+        else item
+        for item in grouped
     )
     plan = _plan("快捷", "输入和启动", shape=AtomAnswerShape.FACT).model_copy(
         update={
