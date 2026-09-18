@@ -742,6 +742,40 @@ def test_short_question_fallback_keeps_semicolon_terminated_source() -> None:
     assert "不可多次报销" not in result[0]
 
 
+def test_short_question_uses_relevant_member_of_complete_group() -> None:
+    """短问只摘录对应条款，不附带同组其它事项。"""
+    evidence = _evidence(
+        "所有认证不可多次报销；",
+        "对于员工跨年领到证书的情况，请在证书领取年份进行报销，该费用占用本部门该年度的费用额度；",
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": "egrp_reimbursement",
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                )
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("费用跨年还能报吗？")
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {"A1": tuple(item.support_id for item in grouped)},
+        ("egrp_reimbursement",),
+    )
+
+    assert result is not None
+    assert "证书领取年份进行报销" in result[0]
+    assert "不可多次报销" not in result[0]
+
+
 def test_single_atom_fallback_restores_one_split_source_paragraph() -> None:
     """单一材料问句也可拼回同一原文节点的两个片段。"""
     evidence = _evidence(
@@ -774,6 +808,54 @@ def test_single_atom_fallback_restores_one_split_source_paragraph() -> None:
         plan,
         joined,
         {"A1": tuple(item.support_id for item in joined)},
+    )
+
+    assert result is not None
+    assert "目标、计划、考核指标" in result[0]
+    assert "立项决策阶段" not in result[0]
+
+
+def test_material_enumeration_does_not_expand_into_later_stages() -> None:
+    """材料清单已由同一原文节点闭合时，不附带其它立项阶段。"""
+    evidence = _evidence(
+        "立项申报阶段，项目立项材料正式报送，项目申报材料应包括目标、计划、",
+        "考核指标等内容，并附上签字盖章的相关附件。",
+        "立项决策阶段，审议项目目标和实施计划。",
+    )
+    material_node = next(
+        item.source_spans[0].node_id
+        for item in evidence
+        if item.citation_text.startswith("立项申报阶段")
+    )
+    grouped = tuple(
+        item.model_copy(
+            update={
+                "source_spans": tuple(
+                    span.model_copy(update={"node_id": material_node})
+                    for span in item.source_spans
+                )
+                if item.citation_text.startswith(
+                    ("立项申报阶段", "考核指标等内容")
+                )
+                else item.source_spans,
+                "metadata": freeze_json_object(
+                    {
+                        **dict(item.metadata),
+                        "evidence_group_id": "egrp_stages",
+                        "evidence_group_type": "LIST_GROUP",
+                        "group_complete": True,
+                    }
+                ),
+            }
+        )
+        for item in evidence
+    )
+    plan = _plan("立项材料还得补哪些？", shape=AtomAnswerShape.ENUMERATION)
+    result = _safe_extractive_fallback(
+        plan,
+        grouped,
+        {"A1": tuple(item.support_id for item in grouped)},
+        ("egrp_stages",),
     )
 
     assert result is not None

@@ -157,6 +157,7 @@ _FALLBACK_PREDECESSOR_LIMIT = 2
 _FALLBACK_MIN_QUESTION_ANCHOR_CHARS = 3
 _FALLBACK_LONG_QUESTION_CHARS = 10
 _FALLBACK_SHORT_QUESTION_CHARS = 14
+_FALLBACK_FOCUSED_MIN_CHARS = 6
 _CONTEXT_SOURCE_MIN_MATCH_CHARS = 4
 _CONTEXT_SOURCE_MIN_LEAD_CHARS = 2
 _FALLBACK_DURATION = re.compile(
@@ -2894,22 +2895,47 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             or item.document_version_id in scoped_versions
         )
         selected = _fallback_source_node(plan, scoped_evidence, related)
-        # 段落片段若属于已闭合的列表或流程，展示同组后续步骤。
-        # 只沿当前选中片段的组扩展，避免借用别的文档的相似流程。
-        source_groups = {
-            group_id
-            for item, _ in selected
-            if (group_id := dict(item.metadata).get("evidence_group_id"))
-            and dict(item.metadata).get("evidence_group_type")
-            in {"LIST_GROUP", "PROCEDURE_GROUP"}
-        }
-        for group_id in source_groups:
-            members = grouped.get(group_id, ())
-            if len({item.support_id for item, _ in members}) > len(
-                {item.support_id for item, _ in selected}
-            ):
-                selected = list(members)
-                break
+        if any(
+            atom.answer_shape
+            in {AtomAnswerShape.PROCEDURE, AtomAnswerShape.DUTIES}
+            for atom in plan.atoms
+        ):
+            # 只有流程或职责问题需要把已命中段落扩展到同组后续步骤。
+            source_groups = {
+                group_id
+                for item, _ in selected
+                if (group_id := dict(item.metadata).get("evidence_group_id"))
+                and dict(item.metadata).get("evidence_group_type")
+                in {"LIST_GROUP", "PROCEDURE_GROUP"}
+            }
+            for group_id in source_groups:
+                members = grouped.get(group_id, ())
+                if len({item.support_id for item, _ in members}) > len(
+                    {item.support_id for item, _ in selected}
+                ):
+                    selected = list(members)
+                    break
+    if (
+        not selected
+        and len(plan.atoms) == 1
+        and _FALLBACK_FOCUSED_MIN_CHARS
+        <= len(_han_text(plan.original_query))
+        <= _FALLBACK_SHORT_QUESTION_CHARS
+        and grouped
+    ):
+        focused = max(
+            (
+                (len(_terms(sentence) & question_terms), -index, item, sentence)
+                for index, item in enumerate(evidence)
+                for members in grouped.values()
+                for member, sentence in members
+                if member.support_id == item.support_id
+            ),
+            key=lambda row: row[:2],
+            default=None,
+        )
+        if focused is not None and focused[0] >= _FALLBACK_MIN_BIGRAM_OVERLAP:
+            selected = [(focused[2], focused[3])]
     if not selected and grouped:
         ranked_groups = sorted(
             grouped.items(),
