@@ -1,0 +1,281 @@
+{
+  "baseline_head_sha": "399cf2184c4b3f47f6f4b274c4333913f610f1d2",
+  "candidate_code_sha": "2b55116c98fbbef7c18954d61a7fb10a0c27609d",
+  "source_artifact_sha256": {
+    "terminal12": "417e76c784acf195f581d7d24aa788ca56dab4a7a527aac821e7987e80efb315",
+    "planner24": "c83ce0eb11ec19f894c911eb0f498fd1c3824d0bb9f86b8364052304c5443de5",
+    "terminal12_trace_summary": "2abffee43b732361286eb9c42b4b0fae45ef1e0033e3b22963c92e2170d8b367"
+  },
+  "terminal12": {
+    "record_count": 12,
+    "exactly_one_final_count": 12,
+    "claim_event_count_total": 0,
+    "accepted_claim_count": "NOT_OBSERVED",
+    "expected_answer_refused_count": 5,
+    "direct_answer_support_present_but_refused_count": 2,
+    "cases": [
+      {
+        "run_id": "formal54/WB08R-F-001",
+        "expected_behavior": "ANSWER",
+        "status": "ANSWERABLE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "formal54/WB08R-F-009",
+        "expected_behavior": "ANSWER",
+        "status": "ANSWERABLE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "formal54/WB08R-F-014",
+        "expected_behavior": "ANSWER",
+        "status": "ANSWERABLE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 0
+      },
+      {
+        "run_id": "formal54/WB08R-F-020",
+        "expected_behavior": "REFUSE",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 1
+      },
+      {
+        "run_id": "formal54/WB08R-F-021",
+        "expected_behavior": "REFUSE",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 1
+      },
+      {
+        "run_id": "natural_terminal12/WB08R-N-003",
+        "expected_behavior": "ANSWER",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 1,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_terminal12/WB08R-N-004",
+        "expected_behavior": "ANSWER",
+        "status": "ANSWERABLE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_complex18/WB08R-N-043",
+        "expected_behavior": "ANSWER",
+        "status": "ANSWERABLE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_complex18/WB08R-N-044",
+        "expected_behavior": "ANSWER",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 1,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_complex18/WB08R-N-053",
+        "expected_behavior": "ANSWER",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_complex18/WB08R-N-055",
+        "expected_behavior": "ANSWER",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      },
+      {
+        "run_id": "natural_complex18/WB08R-N-056",
+        "expected_behavior": "ANSWER",
+        "status": "INSUFFICIENT_EVIDENCE",
+        "final_count": 1,
+        "claim_event_count": 0,
+        "answer_support_count": 0,
+        "model_candidate_count": 16
+      }
+    ]
+  },
+  "planner24": {
+    "record_count": 24,
+    "planner_called_count": 22,
+    "fallback_count": 6,
+    "cases": [
+      {
+        "case_id": "WB08R-N-043",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2930.3
+      },
+      {
+        "case_id": "WB08R-N-044",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4153.2
+      },
+      {
+        "case_id": "WB08R-N-045",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2581.31
+      },
+      {
+        "case_id": "WB08R-N-046",
+        "failure_category": null,
+        "planner_called": false,
+        "latency_ms": 0.02
+      },
+      {
+        "case_id": "WB08R-N-047",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2793.23
+      },
+      {
+        "case_id": "WB08R-N-048",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2583.92
+      },
+      {
+        "case_id": "WB08R-N-049",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2698.88
+      },
+      {
+        "case_id": "WB08R-N-050",
+        "failure_category": null,
+        "planner_called": false,
+        "latency_ms": 0.03
+      },
+      {
+        "case_id": "WB08R-N-051",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 2732.04
+      },
+      {
+        "case_id": "WB08R-N-052",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4578.3
+      },
+      {
+        "case_id": "WB08R-N-053",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 3944.27
+      },
+      {
+        "case_id": "WB08R-N-054",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4370.33
+      },
+      {
+        "case_id": "WB08R-N-055",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4292.82
+      },
+      {
+        "case_id": "WB08R-N-056",
+        "failure_category": "PROVIDER_UNAVAILABLE",
+        "planner_called": true,
+        "latency_ms": 5009.05
+      },
+      {
+        "case_id": "WB08R-N-057",
+        "failure_category": "PROVIDER_UNAVAILABLE",
+        "planner_called": true,
+        "latency_ms": 5010.41
+      },
+      {
+        "case_id": "WB08R-N-058",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4772.85
+      },
+      {
+        "case_id": "WB08R-N-059",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4649.07
+      },
+      {
+        "case_id": "WB08R-N-060",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4085.02
+      },
+      {
+        "case_id": "WB08R-F-015",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4553.68
+      },
+      {
+        "case_id": "WB08R-F-017",
+        "failure_category": "TARGET_NOT_IN_INPUT",
+        "planner_called": true,
+        "latency_ms": 4876.51
+      },
+      {
+        "case_id": "WB08R-F-037",
+        "failure_category": "PROVIDER_UNAVAILABLE",
+        "planner_called": true,
+        "latency_ms": 5009.93
+      },
+      {
+        "case_id": "WB08R-F-040",
+        "failure_category": "PROVIDER_UNAVAILABLE",
+        "planner_called": true,
+        "latency_ms": 5010.22
+      },
+      {
+        "case_id": "WB08R-F-041",
+        "failure_category": "PROVIDER_UNAVAILABLE",
+        "planner_called": true,
+        "latency_ms": 5010.57
+      },
+      {
+        "case_id": "WB08R-F-048",
+        "failure_category": null,
+        "planner_called": true,
+        "latency_ms": 4725.28
+      }
+    ]
+  },
+  "unsupported_accepted_inference_count": "NOT_OBSERVED",
+  "false_limited_count": "NOT_OBSERVED",
+  "observation_limit": "旧 SAFE Trace 未记录 accepted claim 和发布完整性；公共 claim_event_count=0 不代表 accepted_claim_count=0。"
+}

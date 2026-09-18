@@ -22,6 +22,7 @@ from evaluation.wanshitong.v2.run_wb08r01_candidate import (
     _normalized,
     _session,
 )
+from evaluation.wanshitong.v2.trace_gate import audit_trace
 
 _ROOT = Path(__file__).resolve().parent
 _RESULTS = _ROOT / "results"
@@ -40,8 +41,11 @@ def _cases(
         ("formal54", "formal-54.ndjson"),
         ("natural_complex18", "natural-60.ndjson"),
         ("latency24", "latency-24.ndjson"),
+        ("adversarial_audit", "adversarial-30.ndjson"),
     ):
         if case_ids is not None and group == "latency24":
+            continue
+        if case_ids is None and group == "adversarial_audit":
             continue
         for line in (_ROOT / filename).read_text(encoding="utf-8").splitlines():
             if not line.strip():
@@ -152,6 +156,10 @@ def _chat(
         "final_count": len(finals),
         "claim_count": sum(name == "claim" for name, _, _ in events),
         "request_total_ms": round((time.perf_counter() - started) * 1000, 2),
+        "first_protocol_event_ms": (
+            round(events[0][2] * 1000, 2) if events else None
+        ),
+        "first_protocol_event_type": events[0][0] if events else None,
         "stage_status_first_ms": next(
             (
                 round(elapsed * 1000, 2)
@@ -194,6 +202,8 @@ def _failed_observation(error: BaseException) -> dict[str, Any]:
         "claim_count": 0,
         "claim_event_count": 0,
         "request_total_ms": None,
+        "first_protocol_event_ms": None,
+        "first_protocol_event_type": None,
         "stage_status_first_ms": None,
         "answer": "",
         "citations": [],
@@ -241,14 +251,41 @@ def _p95(values: list[float]) -> float | None:
     return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1)]
 
 
-def run(
+def _expected_behavior_match(
+    expected: str,
+    status: object,
+    reason_code: object,
+    citation_count: int,
+) -> bool:
+    """只按冻结行为合同判定，不根据问题文本猜答案。"""
+    if expected == "ANSWER":
+        return (
+            status == "ANSWERABLE"
+            and reason_code != "LIMITED_ANSWER"
+            and citation_count > 0
+        )
+    if expected == "LIMITED":
+        return (
+            status == "ANSWERABLE"
+            and reason_code == "LIMITED_ANSWER"
+            and citation_count > 0
+        )
+    if expected == "REFUSE":
+        return status == "INSUFFICIENT_EVIDENCE"
+    if expected == "CLARIFY":
+        return status == "AMBIGUOUS_NEEDS_CLARIFICATION"
+    return False
+
+
+def run(  # noqa: PLR0912, PLR0915
     base_url: str,
     output: Path,
     review_output: Path,
+    trace_db: Path,
     *,
     case_ids: frozenset[str] | None = None,
 ) -> int:
-    """逐题创建会话，可从已写入结果的下一题继续。"""
+    """逐题创建会话并核验 SAFE Trace，失败后继续后续题。"""
     parsed = urllib.parse.urlsplit(base_url)
     if (
         parsed.scheme != "http"
@@ -312,6 +349,23 @@ def run(
             failed = True
         citations = observed.pop("citations")
         answer = observed.pop("answer")
+        trace_audit = audit_trace(
+            trace_db,
+            observed["trace_id"],
+            answer=answer,
+            citations=citations,
+            claim_event_count=observed["claim_event_count"],
+        )
+        if not trace_audit["trace_contract_ok"]:
+            failed = True
+        behavior_match = _expected_behavior_match(
+            row["expected_behavior"],
+            observed["status"],
+            observed["reason_code"],
+            len(citations),
+        )
+        if not behavior_match:
+            failed = True
         expected = row.get("expected_source_document")
         source_match = (
             any(
@@ -329,6 +383,15 @@ def run(
             if isinstance(expected, str) and expected
             else None
         )
+        source_contract_match = (
+            source_match is True
+            if row["expected_behavior"] in {"ANSWER", "LIMITED"}
+            and isinstance(expected, str)
+            and expected
+            else True
+        )
+        if not source_contract_match:
+            failed = True
         record = {
             "run_id": run_id,
             "case_id": row["case_id"],
@@ -336,7 +399,9 @@ def run(
             "question_sha256": row["question_sha256"],
             "question_style": row["question_style"],
             "expected_behavior": row["expected_behavior"],
+            "expected_behavior_match": behavior_match,
             "expected_source_match": source_match,
+            "expected_source_contract_match": source_contract_match,
             "answer_chars": len(answer),
             "citation_count": len(citations),
             "public_citations_have_quotes": all(
@@ -347,6 +412,7 @@ def run(
             ),
             "verbatim_copy_ratio": _verbatim_ratio(answer, citations),
             **observed,
+            **trace_audit,
         }
         _append_private(
             review_output,
@@ -375,6 +441,15 @@ def run(
         for line in output.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+    if any(
+        row.get("terminal_event_count") != 1
+        or row.get("final_count") != 1
+        or row.get("trace_contract_ok") is not True
+        or row.get("expected_behavior_match") is not True
+        or row.get("expected_source_contract_match") is not True
+        for row in rows
+    ):
+        failed = True
     for group in sorted({row["group"] for row in rows}):
         group_rows = [row for row in rows if row["group"] == group]
         latencies = [
@@ -411,6 +486,7 @@ def main() -> None:
     parser.add_argument("--base-url", default="http://127.0.0.1:8289")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--review-output", type=Path, required=True)
+    parser.add_argument("--trace-db", type=Path, required=True)
     parser.add_argument("--case-id", action="append", default=[])
     args = parser.parse_args()
     raise SystemExit(
@@ -418,6 +494,7 @@ def main() -> None:
             args.base_url.rstrip("/"),
             args.output,
             args.review_output,
+            args.trace_db,
             case_ids=frozenset(args.case_id) if args.case_id else None,
         )
     )

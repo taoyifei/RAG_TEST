@@ -50,9 +50,17 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
             analysis = events.get("retrieval.analyze", [])
             retrieval_plan = events.get("retrieval.plan", [])
             route = events.get("retrieval.query_embedding_route", [])
+            embedding_accounting = events.get(
+                "retrieval.embedding_accounting", []
+            )
             reranks = events.get("retrieval.rerank", [])
             generation = events.get("retrieval.generate", [])
             grounding = events.get("retrieval.atom_grounding", [])
+            publication = events.get("retrieval.claim_publication", [])
+            ownership = events.get("retrieval.ownership_summary", [])
+            context_resolution = events.get(
+                "retrieval.context_resolution", []
+            )
             interpretation = events.get("retrieval.interpret", [])
             assembly = events.get("retrieval.assemble_evidence", [])
             confidence = events.get("retrieval.confidence", [])
@@ -79,11 +87,6 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                     for operation in ("generation", "query.interpret")
                 }
             )
-            route_call_counts = [
-                int(event["call_count"])
-                for event in route
-                if isinstance(event.get("call_count"), int)
-            ]
             repair_calls = (
                 int(grounding[-1].get("repair_calls", 0))
                 if grounding
@@ -127,6 +130,16 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                         else None
                     ),
                     "planner_calls": call_counts["query.interpret"],
+                    "planner_failure_category": (
+                        plan[-1].get("planner_failure_category")
+                        if plan
+                        else None
+                    ),
+                    "planner_fallback_mode": (
+                        plan[-1].get("planner_fallback_mode")
+                        if plan
+                        else None
+                    ),
                     "planner_provider_reasons": tuple(
                         call.get("reason_code")
                         for call in planner_provider_calls
@@ -136,10 +149,25 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                         for call in planner_provider_calls
                     ),
                     "embedding_calls": (
-                        sum(route_call_counts) if route_call_counts else None
+                        embedding_accounting[-1].get(
+                            "query_embedding_provider_call_count"
+                        )
+                        if embedding_accounting
+                        else "NOT_OBSERVED"
+                    ),
+                    "embedding_not_observed_reason": (
+                        embedding_accounting[-1].get(
+                            "query_embedding_not_observed_reason"
+                        )
+                        if embedding_accounting
+                        else "LEGACY_TRACE_NO_ACCOUNTING"
                     ),
                     "embedding_batch_size": (
-                        route[-1].get("batch_size") if route else None
+                        embedding_accounting[-1].get(
+                            "query_embedding_batch_size"
+                        )
+                        if embedding_accounting
+                        else route[-1].get("batch_size") if route else None
                     ),
                     "embedding_route_reason": (
                         route[-1].get("reason_code") if route else None
@@ -155,6 +183,50 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                         grounding[-1].get("claim_rejection_codes", ())
                         if grounding
                         else ()
+                    ),
+                    "accepted_claim_count": (
+                        publication[-1].get("accepted_claim_count")
+                        if publication
+                        else "NOT_OBSERVED"
+                    ),
+                    "published_claim_count": (
+                        publication[-1].get("published_claim_count")
+                        if publication
+                        else "NOT_OBSERVED"
+                    ),
+                    "claim_rejection_code_distribution": (
+                        publication[-1].get(
+                            "claim_rejection_code_distribution"
+                        )
+                        if publication
+                        else "NOT_OBSERVED"
+                    ),
+                    "generation_gap_count": (
+                        publication[-1].get("generation_gap_count")
+                        if publication
+                        else "NOT_OBSERVED"
+                    ),
+                    "false_limited_detected": (
+                        publication[-1].get("false_limited_detected")
+                        if publication
+                        else "NOT_OBSERVED"
+                    ),
+                    "context_resolution_mode": (
+                        context_resolution[-1].get(
+                            "context_resolution_mode"
+                        )
+                        if context_resolution
+                        else "NOT_OBSERVED"
+                    ),
+                    "ownership_qualified_count": (
+                        ownership[-1].get("ownership_qualified_count")
+                        if ownership
+                        else "NOT_OBSERVED"
+                    ),
+                    "evidence_present_but_rejected": (
+                        ownership[-1].get("evidence_present_but_rejected")
+                        if ownership
+                        else "NOT_OBSERVED"
                     ),
                     "atom_coverage": tuple(
                         (event.get("atom_id"), event.get("status"))
@@ -199,7 +271,7 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
     finally:
         connection.close()
     groups: dict[str, dict[str, Any]] = {}
-    for group in ("formal54", "natural_complex18", "latency24"):
+    for group in sorted({row["group"] for row in cases}):
         selected = [row for row in cases if row["group"] == group]
         latencies = [float(row["request_total_ms"]) for row in selected]
         fresh = [row for row in selected if not row["cache_hit"]]
@@ -228,7 +300,21 @@ def summarize(results: Path, trace_db: Path) -> dict[str, Any]:
                 (row["planner_calls"] for row in selected), default=0
             ),
             "max_embedding_calls_observed": max(
-                (row["embedding_calls"] or 0 for row in selected), default=0
+                (
+                    row["embedding_calls"]
+                    for row in selected
+                    if isinstance(row["embedding_calls"], int)
+                ),
+                default=0,
+            ),
+            "embedding_not_observed_count": sum(
+                row["embedding_calls"] == "NOT_OBSERVED"
+                for row in selected
+            ),
+            "accepted_claims_observed": sum(
+                row["accepted_claim_count"]
+                for row in selected
+                if isinstance(row["accepted_claim_count"], int)
             ),
             "max_reranker_calls": max(
                 (row["reranker_calls"] for row in selected), default=0

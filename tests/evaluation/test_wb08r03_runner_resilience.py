@@ -24,8 +24,12 @@ def _observed(*, final: bool) -> dict[str, object]:
         "request_total_ms": 10.0,
         "stage_status_first_ms": None,
         "answer": "合成答案" if final else "",
-        "citations": [],
+        "citations": [{"quote": "合成来源原文。"}] if final else [],
     }
+
+
+def _trace_audit(*_args: object, **_kwargs: object) -> dict[str, object]:
+    return {"trace_contract_ok": True, "trace_contract_errors": ()}
 
 
 def test_runner_records_all_cases_after_semantic_failure(
@@ -39,7 +43,7 @@ def test_runner_records_all_cases_after_semantic_failure(
                 "question": "合成问题",
                 "question_sha256": "synthetic",
                 "question_style": "single",
-                "expected_behavior": "ANSWERABLE",
+                "expected_behavior": "ANSWER",
             },
         )
         for index in range(3)
@@ -57,9 +61,14 @@ def test_runner_records_all_cases_after_semantic_failure(
         return _observed(final=calls != 1)
 
     monkeypatch.setattr(candidate, "_chat", _chat)  # type: ignore[attr-defined]
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        candidate, "audit_trace", _trace_audit
+    )
     output = tmp_path / "public.ndjson"
     review = tmp_path / "private.ndjson"
-    result = candidate.run("http://127.0.0.1:8289", output, review)
+    result = candidate.run(
+        "http://127.0.0.1:8289", output, review, tmp_path / "trace.db"
+    )
     records = [json.loads(line) for line in output.read_text().splitlines()]
 
     assert result == 1
@@ -77,7 +86,7 @@ def test_transport_retry_is_explicit_and_bounded(
         "question": "合成问题",
         "question_sha256": "synthetic",
         "question_style": "single",
-        "expected_behavior": "ANSWERABLE",
+        "expected_behavior": "ANSWER",
     }
     monkeypatch.setattr(candidate, "_RESULTS", tmp_path)  # type: ignore[attr-defined]
     monkeypatch.setattr(  # type: ignore[attr-defined]
@@ -98,9 +107,15 @@ def test_transport_retry_is_explicit_and_bounded(
         return _observed(final=True)
 
     monkeypatch.setattr(candidate, "_chat", _chat)  # type: ignore[attr-defined]
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        candidate, "audit_trace", _trace_audit
+    )
     output = tmp_path / "public.ndjson"
     result = candidate.run(
-        "http://127.0.0.1:8289", output, tmp_path / "private.ndjson"
+        "http://127.0.0.1:8289",
+        output,
+        tmp_path / "private.ndjson",
+        tmp_path / "trace.db",
     )
     record = json.loads(output.read_text().strip())
 
@@ -109,8 +124,80 @@ def test_transport_retry_is_explicit_and_bounded(
     assert record["retry_count"] == 1
 
 
+def test_runner_continues_after_missing_trace(
+    monkeypatch: object, tmp_path: Path
+) -> None:
+    rows = tuple(
+        (
+            "formal54",
+            {
+                "case_id": f"SYN-{index}",
+                "question": "合成问题",
+                "question_sha256": "synthetic",
+                "question_style": "single",
+                "expected_behavior": "ANSWER",
+            },
+        )
+        for index in range(2)
+    )
+    monkeypatch.setattr(candidate, "_RESULTS", tmp_path)  # type: ignore[attr-defined]
+    monkeypatch.setattr(candidate, "_cases", lambda: rows)  # type: ignore[attr-defined]
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        candidate, "_session", lambda _url: (object(), "csrf")
+    )
+    monkeypatch.setattr(  # type: ignore[attr-defined]
+        candidate, "_chat", lambda *_args: _observed(final=True)
+    )
+    calls = 0
+
+    def _audit(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {
+            "trace_contract_ok": calls == 2,
+            "trace_contract_errors": (
+                () if calls == 2 else ("TRACE_EVENT_MISSING",)
+            ),
+        }
+
+    monkeypatch.setattr(candidate, "audit_trace", _audit)  # type: ignore[attr-defined]
+    output = tmp_path / "public.ndjson"
+    result = candidate.run(
+        "http://127.0.0.1:8289",
+        output,
+        tmp_path / "private.ndjson",
+        tmp_path / "trace.db",
+    )
+    records = [json.loads(line) for line in output.read_text().splitlines()]
+
+    assert result == 1
+    assert calls == 2
+    assert len(records) == 2
+    assert records[0]["trace_contract_errors"] == [
+        "TRACE_EVENT_MISSING"
+    ]
+    assert records[1]["trace_contract_ok"] is True
+
+
 def test_explicit_terminal_selection_includes_frozen_short_question() -> None:
     selected = candidate._cases(frozenset({"WB08R-N-003"}))
     assert len(selected) == 1
     assert selected[0][0] == "natural_terminal12"
     assert selected[0][1]["question_style"] == "short_ellipsis"
+
+
+def test_explicit_claim_gate_selection_includes_frozen_adversarial() -> None:
+    selected = candidate._cases(frozenset({"WB08R-A-007"}))
+    assert len(selected) == 1
+    assert selected[0][0] == "adversarial_audit"
+    assert selected[0][1]["expected_behavior"] == "ANSWER"
+
+
+def test_runner_uses_frozen_behavior_without_answer_table() -> None:
+    check = candidate._expected_behavior_match
+    assert check("ANSWER", "ANSWERABLE", "CLAIMS_VALIDATED", 1)
+    assert not check("ANSWER", "ANSWERABLE", "LIMITED_ANSWER", 1)
+    assert check("LIMITED", "ANSWERABLE", "LIMITED_ANSWER", 1)
+    assert check("REFUSE", "INSUFFICIENT_EVIDENCE", None, 0)
+    assert not check("REFUSE", "PROVIDER_UNAVAILABLE", None, 0)
+    assert check("CLARIFY", "AMBIGUOUS_NEEDS_CLARIFICATION", None, 0)
