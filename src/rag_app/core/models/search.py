@@ -67,6 +67,8 @@ class RetrievalPolicy(FrozenModel):
     group_retrieval_chunk_limit: StrictInt = Field(default=48, gt=0, le=48)
     neighbor_count: StrictInt = Field(default=1, ge=0, le=4)
     section_chunk_limit: StrictInt = Field(default=2, ge=0, le=8)
+    section_search_limit: StrictInt = Field(default=20, ge=1, le=20)
+    section_predecessor_max_gap: StrictInt = Field(default=4, ge=1, le=16)
     evidence_token_budget: StrictInt = Field(default=1024, gt=0)
     max_evidence_items: StrictInt = Field(default=8, gt=0, le=50)
     max_evidence_items_per_chunk: StrictInt = Field(default=1, gt=0, le=8)

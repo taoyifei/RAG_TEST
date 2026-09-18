@@ -171,6 +171,68 @@ def test_section_expansion_is_bounded() -> None:
     assert outcome.candidates[1].expansion_reason == "SECTION_SIBLING"
 
 
+def test_section_expansion_recovers_preceding_list_stages() -> None:
+    """命中中段列表时，优先补同章节前一组的准备段落。"""
+    section = "section-stages"
+    chunks = (
+        make_ranked_chunk(
+            10,
+            "无关早期段落。",
+            role=ChunkRole.LIST,
+            section_id=section,
+            neighbor_group_id="group-earlier",
+        ),
+        make_ranked_chunk(
+            11,
+            "流程包含准备、申报和审核。",
+            role=ChunkRole.LIST,
+            section_id=section,
+            neighbor_group_id="group-intro",
+        ),
+        make_ranked_chunk(
+            12,
+            "（一）准备阶段应编制材料。",
+            role=ChunkRole.LIST,
+            section_id=section,
+            neighbor_group_id="group-prep",
+        ),
+        make_ranked_chunk(
+            13,
+            "夹在阶段之间的正文。",
+            role=ChunkRole.TEXT,
+            section_id=section,
+            neighbor_group_id="group-text",
+        ),
+        make_ranked_chunk(
+            14,
+            "（二）申报阶段提交材料。",
+            role=ChunkRole.LIST,
+            section_id=section,
+            neighbor_group_id="group-current",
+        ),
+    )
+    source = cast(
+        EvidenceSourcePort,
+        _NeighborSource(tuple(item.hydrated for item in chunks)),
+    )
+    outcome = NeighborExpander(source).expand(
+        _snapshot(),
+        (chunks[-1],),
+        "section",
+        RetrievalPolicy(
+            section_chunk_limit=2,
+            section_search_limit=5,
+            section_predecessor_max_gap=4,
+        ),
+    )
+
+    assert [item.hydrated.chunk.chunk_id for item in outcome.candidates] == [
+        chunks[-1].hydrated.chunk.chunk_id,
+        chunks[2].hydrated.chunk.chunk_id,
+        chunks[1].hydrated.chunk.chunk_id,
+    ]
+
+
 def test_list_chain_closes_from_middle_with_heading_intro() -> None:
     """检索只命中中段时，结构组仍保留完整顺序和真实章节导语。"""
     chunk_ids = tuple(f"chunk_{number:032x}" for number in range(100, 107))

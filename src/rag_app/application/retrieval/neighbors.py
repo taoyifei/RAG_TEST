@@ -303,12 +303,42 @@ class NeighborExpander:
                 snapshot,
                 document_version_id=chunk.version.document_version_id,
                 section_id=chunk.section_id,
-                limit=policy.section_chunk_limit,
+                limit=policy.section_search_limit,
             )
             hydrated = self._source.hydrate_chunks(
-                snapshot, ids[: policy.section_chunk_limit]
+                snapshot, ids
             )
-            for item in _hydrated_candidates(hydrated, originals).values():
+            section_items = tuple(
+                _hydrated_candidates(hydrated, originals).values()
+            )
+            selected = section_items[: policy.section_chunk_limit]
+            if chunk.role is ChunkRole.LIST:
+                origin_ordinal = _source_ordinal(chunk)
+                if origin_ordinal is not None:
+                    predecessors = tuple(
+                        sorted(
+                            (
+                                item
+                                for item in section_items
+                                if item.chunk.role is ChunkRole.LIST
+                                and item.chunk.neighbor_group_id
+                                != chunk.neighbor_group_id
+                                and (
+                                    item_ordinal := _source_ordinal(item.chunk)
+                                )
+                                is not None
+                                and 0 < origin_ordinal - item_ordinal
+                                <= policy.section_predecessor_max_gap
+                            ),
+                            key=lambda item: (
+                                -(_source_ordinal(item.chunk) or 0),
+                                item.chunk.chunk_id,
+                            ),
+                        )
+                    )
+                    if predecessors:
+                        selected = predecessors[: policy.section_chunk_limit]
+            for item in selected:
                 _validate_boundary(chunk, item.chunk, require_group=False)
                 _add_context(
                     originals,
@@ -318,6 +348,18 @@ class NeighborExpander:
                     reason="SECTION_SIBLING",
                 )
         return (*candidates, *context.values())
+
+
+def _source_ordinal(chunk: Chunk) -> int | None:
+    """读取可引用来源节点的最早序号，忽略重复上下文。"""
+    ordinals = (
+        span.source_anchor.ordinal
+        for span in chunk.source_spans
+        if span.is_citable
+        and not span.is_repeated
+        and span.source_anchor is not None
+    )
+    return min(ordinals, default=None)
 
 
 def _original_candidates(

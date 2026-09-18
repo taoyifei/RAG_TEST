@@ -87,6 +87,7 @@ def test_type_enumeration_is_directly_analyzed(
         ("表格第几行是 12 kg", QueryKind.TABLE_NUMERIC),
         ("它", QueryKind.AMBIGUOUS),
         ("比较方案一和方案二的影响", QueryKind.COMPLEX),
+        ("立项要备哪些材料、走哪些步骤？", QueryKind.COMPLEX),
     ),
 )
 def test_planner_covers_five_query_kinds(

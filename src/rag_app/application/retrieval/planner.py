@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from rag_app.core.models import (
     QueryAnalysis,
     QueryKind,
@@ -24,6 +26,9 @@ _COMPLEX_TERMS = (
 )
 _AMBIGUOUS_TERMS = ("这个", "那个", "它", "哪一个", "this", "that", "it")
 _MAX_AMBIGUOUS_QUERY_LENGTH = 2
+_MIN_COMPOUND_FACETS = 2
+_QUESTION_FACET = re.compile(r"哪些|哪(?:个|步|项|些)|什么|谁|如何|怎么|多少")
+_FACET_SEPARATORS = "、，,；;"
 
 
 class QueryPlanner:
@@ -115,6 +120,10 @@ def _classify(analysis: QueryAnalysis) -> tuple[QueryKind, str]:
         return QueryKind.EXACT_IDENTIFIER, "IDENTIFIER_PLAN"
     if any(term in folded for term in _COMPLEX_TERMS):
         return QueryKind.COMPLEX, "COMPLEX_PLAN"
+    if any(separator in folded for separator in _FACET_SEPARATORS) and len(
+        _QUESTION_FACET.findall(folded)
+    ) >= _MIN_COMPOUND_FACETS:
+        return QueryKind.COMPLEX, "COMPOUND_FACETS_PLAN"
     if len(folded) <= _MAX_AMBIGUOUS_QUERY_LENGTH or folded in _AMBIGUOUS_TERMS:
         return QueryKind.AMBIGUOUS, "BALANCED_AMBIGUOUS_FALLBACK"
     return QueryKind.SIMPLE_FACT, "SIMPLE_FACT_PLAN"
