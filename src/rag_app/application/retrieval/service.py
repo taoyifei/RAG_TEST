@@ -2822,6 +2822,7 @@ class RetrievalService:
         qualifications_by_atom: dict[
             str, dict[tuple[object, ...], AtomEvidenceQualification]
         ] = {}
+        atom_evidence_audit: list[dict[str, object]] = []
         for atom in query_plan.atoms:
             atom_candidates, atom_groups, alignments = _atom_scoped_candidates(
                 atom,
@@ -2861,6 +2862,31 @@ class RetrievalService:
             scoped_items = (
                 *selection.answer_support_set,
                 *selection.model_evidence_candidates,
+            )
+            atom_evidence_audit.append(
+                {
+                    "atom_id": atom.atom_id,
+                    "answer_shape": atom.answer_shape.value,
+                    "scoped_candidate_count": len(atom_candidates),
+                    "selected_group_count": len(atom_groups),
+                    "direct_support_count": len(selection.answer_support_set),
+                    "model_candidate_count": len(
+                        selection.model_evidence_candidates
+                    ),
+                    "support_status_distribution": dict(
+                        Counter(
+                            str(support.get("status", "NOT_EVALUATED"))
+                            if isinstance(
+                                support := dict(item.metadata).get(
+                                    "answer_support"
+                                ),
+                                dict,
+                            )
+                            else "NOT_EVALUATED"
+                            for item in scoped_items
+                        )
+                    ),
+                }
             )
             alignment_by_group = {
                 alignment.group_id: alignment for alignment in alignments
@@ -3215,6 +3241,11 @@ class RetrievalService:
             ),
         }
         if trace_id is not None:
+            self._record(
+                trace_id,
+                "atom_evidence_audit",
+                {"atoms": atom_evidence_audit},
+            )
             self._record(trace_id, "ownership_summary", ownership_summary)
         return (
             AtomSupportMatrix(atoms=tuple(supports)),
