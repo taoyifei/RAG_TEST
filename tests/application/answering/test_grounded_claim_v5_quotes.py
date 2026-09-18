@@ -353,7 +353,7 @@ def test_fallback_uses_named_complete_table_row() -> None:
                 "metadata": freeze_json_object(
                     {
                         **dict(item.metadata),
-                        "group_complete": True,
+                        "group_complete": False,
                         "evidence_group_id": group_id,
                         "evidence_group_type": "TABLE_ROW_GROUP",
                     }

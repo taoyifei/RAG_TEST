@@ -2515,6 +2515,7 @@ def _fallback_table_row(
     for items in grouped.values():
         if not any(
             dict(item.metadata).get("evidence_group_type") == "TABLE_ROW_GROUP"
+            or item.table_context
             for item, _ in items
         ):
             continue
@@ -2629,8 +2630,10 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         metadata = dict(item.metadata)
         group_id = metadata.get("evidence_group_id")
         complete_table_row = (
-            metadata.get("evidence_group_type") == "TABLE_ROW_GROUP"
-            and metadata.get("group_complete") is True
+            (
+                metadata.get("evidence_group_type") == "TABLE_ROW_GROUP"
+                or item.table_context
+            )
             and isinstance(group_id, str)
             and group_id in complete_ids
         )
@@ -2645,7 +2648,9 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
             isinstance(support := metadata.get("answer_support"), dict)
             and support.get("status") == "SUPPORTED"
         )
-        structured = metadata.get("group_complete") is True
+        structured = metadata.get("group_complete") is True or (
+            isinstance(group_id, str) and group_id in complete_ids
+        )
         sentences = tuple(
             sentence.strip()
             for sentence in re.findall(

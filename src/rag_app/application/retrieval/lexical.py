@@ -34,6 +34,26 @@ _TYPED_SEARCH_TYPES = frozenset(
         RequestedAnswerType.SECTION_SUMMARY,
     }
 )
+_ORIGINAL_QUERY_PRIORITY_HITS = 3
+
+
+def _merge_question_term_hits(
+    original: tuple[ChannelHit, ...],
+    supplemental: tuple[ChannelHit, ...],
+    limit: int,
+) -> tuple[ChannelHit, ...]:
+    """保留原问前三条命中，再由对象词补齐检索窗口。"""
+    merged: dict[str, ChannelHit] = {}
+    for hit in (
+        *original[:_ORIGINAL_QUERY_PRIORITY_HITS],
+        *supplemental,
+        *original,
+    ):
+        merged.setdefault(hit.chunk_id, hit)
+    return tuple(
+        hit.model_copy(update={"rank": rank})
+        for rank, hit in enumerate(tuple(merged.values())[:limit], 1)
+    )
 
 
 def question_search_terms(
@@ -128,12 +148,9 @@ class LexicalChannel:
                     limit=limit,
                 )
             )
-            # 原问句仍实际检索；补充对象词命中避免英文标题独占候选窗口。
-            merged = {hit.chunk_id: hit for hit in (*supplemental, *hits)}
-            hits = tuple(
-                hit.model_copy(update={"rank": rank})
-                for rank, hit in enumerate(tuple(merged.values())[:limit], 1)
-            )
+            # 原问前列直接命中优先；补充对象词只填充剩余窗口。
+            # 否则泛化后的对象词可能把更精确的原问证据挤出重排。
+            hits = _merge_question_term_hits(hits, supplemental, limit)
             used_question_terms = True
         channel = (
             "lexical:fts5"
