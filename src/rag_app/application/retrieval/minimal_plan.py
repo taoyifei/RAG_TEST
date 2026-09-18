@@ -63,6 +63,32 @@ class MinimalPlanPayload(FrozenModel):
     )
 
 
+def planner_json_schema(
+    spans: tuple[QueryInputSpan, ...],
+) -> dict[str, object]:
+    """把本请求受信 Span 的类型约束加入模型输出 Schema。"""
+    clause_ids = [
+        span.span_id for span in spans if span.kind is SpanKind.CLAUSE
+    ]
+    target_ids = [
+        span.span_id for span in spans if span.kind is SpanKind.TARGET
+    ]
+    relation_ids = [
+        span.span_id
+        for span in spans
+        if span.turn == "CURRENT" and span.kind is SpanKind.RELATION
+    ]
+    if not clause_ids or not target_ids or not relation_ids:
+        raise MinimalPlanValidationError("PLANNER_SPAN_INPUT_INVALID")
+    schema = MinimalPlanPayload.model_json_schema()
+    atom_definition = schema["$defs"]["MinimalAtomPayload"]
+    properties = atom_definition["properties"]
+    properties["f"]["items"]["enum"] = clause_ids
+    properties["t"]["enum"] = target_ids
+    properties["r"]["enum"] = relation_ids
+    return schema
+
+
 def build_query_atoms(
     payload: MinimalPlanPayload,
     spans: tuple[QueryInputSpan, ...],
@@ -193,4 +219,5 @@ __all__ = [
     "MinimalPlanPayload",
     "MinimalPlanValidationError",
     "build_query_atoms",
+    "planner_json_schema",
 ]

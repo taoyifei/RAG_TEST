@@ -47,6 +47,7 @@ from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanPayload,
     MinimalPlanValidationError,
     build_query_atoms,
+    planner_json_schema,
 )
 from rag_app.application.retrieval.rewrite_constraints import (
     interpretation_constraint_reason,
@@ -472,7 +473,13 @@ class ProductGroundedModel:
                 reason_code="PLANNER_CONTEXT_UNRESOLVED",
                 failure_category="PLANNER_CONTEXT_UNRESOLVED",
             )
-        schema = _AdaptivePlanPayload.model_json_schema()
+        try:
+            schema = planner_json_schema(spans)
+        except MinimalPlanValidationError as error:
+            return AdaptivePlanOutcome(
+                reason_code=error.code,
+                failure_category=error.code,
+            )
         mode = (
             self.adapter.config.structured_output_mode
             if isinstance(self.adapter, OpenAICompatibleChatAdapter)

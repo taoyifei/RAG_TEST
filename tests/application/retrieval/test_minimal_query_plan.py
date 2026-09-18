@@ -10,6 +10,7 @@ from rag_app.application.retrieval.minimal_plan import (
     MinimalPlanPayload,
     MinimalPlanValidationError,
     build_query_atoms,
+    planner_json_schema,
 )
 from rag_app.core.identifiers import deterministic_id
 from rag_app.core.models import KnowledgeBaseScope, SearchRequest
@@ -137,6 +138,37 @@ def test_planner_wire_schema_uses_compact_ids_and_preserves_old_parser() -> (
         "c",
         "a",
     }
+
+
+def test_planner_schema_references_only_trusted_ids_of_each_kind() -> None:
+    spans = build_input_spans(
+        _request("乙什么时候提交？", context=("上一问：甲由谁审核？",))
+    )
+    schema = planner_json_schema(spans)
+    atom = schema["$defs"]["MinimalAtomPayload"]["properties"]
+    by_kind = {
+        "f": ("CLAUSE", None),
+        "t": ("TARGET", None),
+        "r": ("RELATION", "CURRENT"),
+    }
+    for field, (kind, turn) in by_kind.items():
+        allowed = (
+            atom[field]["items"]["enum"]
+            if field == "f"
+            else atom[field]["enum"]
+        )
+        assert allowed
+        assert allowed == [
+            span.span_id
+            for span in spans
+            if span.kind.value == kind and (turn is None or span.turn == turn)
+        ]
+    assert "Q.R1" not in atom["f"]["items"]["enum"]
+    assert all(
+        span.turn == "CURRENT"
+        for span in spans
+        if span.span_id in atom["r"]["enum"]
+    )
 
 
 def test_trusted_root_keeps_modifier_without_hiding_question_clauses() -> (
