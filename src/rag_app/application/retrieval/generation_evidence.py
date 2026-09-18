@@ -1049,26 +1049,6 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
     group_keys: list[tuple[object, ...]] = []
     group_tokens = 0
     complete_group_ids: list[str] = []
-    # 同一原文节点的后半段优先于无关结构组使用额外预算；普通证据的
-    # 每文档配额不应截断已命中段落，但总条数与 token 上限仍生效。
-    for parent_key in chosen:
-        for key in sorted(
-            node_sibling_keys_by_parent.get(parent_key, ()),
-            key=lambda sibling_key: _rank(candidates[sibling_key]),
-        ):
-            if key in chosen or key in group_keys:
-                continue
-            item = candidates[key]
-            cost = max(1, (len(item.citation_text) + 3) // 4)
-            if (
-                reasons_for(item)
-                or len(group_keys) >= policy.generation_max_group_items
-                or ordinary_tokens + group_tokens + cost
-                > policy.generation_evidence_token_budget
-            ):
-                continue
-            group_keys.append(key)
-            group_tokens += cost
     for group in groups:
         if not group.complete or not selected_chunk_ids.intersection(
             group.group.member_chunk_ids
@@ -1111,6 +1091,26 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         covered = tuple(candidates[key] for key in (*chosen, *group_keys))
         if group_source_maps_covered(group, covered):
             complete_group_ids.append(group.group_id)
+    # 完整结构组先占有界预算，再补同一原文节点的后半段。
+    # 否则无关的续片会挤掉已经命中的表格行或列表成员。
+    for parent_key in chosen:
+        for key in sorted(
+            node_sibling_keys_by_parent.get(parent_key, ()),
+            key=lambda sibling_key: _rank(candidates[sibling_key]),
+        ):
+            if key in chosen or key in group_keys:
+                continue
+            item = candidates[key]
+            cost = max(1, (len(item.citation_text) + 3) // 4)
+            if (
+                reasons_for(item)
+                or len(group_keys) >= policy.generation_max_group_items
+                or ordinary_tokens + group_tokens + cost
+                > policy.generation_evidence_token_budget
+            ):
+                continue
+            group_keys.append(key)
+            group_tokens += cost
     selected = tuple(dict.fromkeys((*chosen, *group_keys)))
     complete = frozenset(complete_group_ids)
     selected_groups = {

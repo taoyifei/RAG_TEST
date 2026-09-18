@@ -921,6 +921,66 @@ def test_complete_group_fills_real_member_spans() -> None:
     }
 
 
+def test_complete_group_precedes_node_continuation() -> None:
+    """来源续片不能占掉已命中完整步骤组的唯一剩余名额。"""
+    first, evidence = _item(1, "检查事项包括，")
+    continuation, _ = _item(2, "附加说明。")
+    member, _ = _item(3, "第一步：检查设备。")
+    first_span = first.hydrated.chunk.source_spans[0]
+    next_span = continuation.hydrated.chunk.source_spans[0]
+    assert first_span.source_anchor is not None
+    assert next_span.source_anchor is not None
+    continued = next_span.model_copy(
+        update={
+            "node_id": first_span.node_id,
+            "structural_path": first_span.structural_path,
+            "source_start_char": len(first.hydrated.chunk.citation_text),
+            "source_end_char": len(first.hydrated.chunk.citation_text)
+            + len(continuation.hydrated.chunk.citation_text),
+            "source_anchor": next_span.source_anchor.model_copy(
+                update={
+                    "ordinal": first_span.source_anchor.ordinal,
+                    "structural_path": first_span.structural_path,
+                }
+            ),
+        }
+    )
+    continuation = continuation.model_copy(
+        update={
+            "hydrated": continuation.hydrated.model_copy(
+                update={
+                    "chunk": continuation.hydrated.chunk.model_copy(
+                        update={"source_spans": (continued,)}
+                    )
+                }
+            )
+        }
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="检查事项",
+        relation="步骤",
+        answer_shape=AtomAnswerShape.PROCEDURE,
+    )
+    group = _complete_group((first, member))
+    pack = _pack(
+        _plan(atom),
+        (first, continuation),
+        root=(evidence,),
+        groups=(group,),
+        policy=RetrievalPolicy(
+            generation_per_document_cap=1,
+            generation_max_ordinary_items=1,
+            generation_max_group_items=1,
+        ),
+    )
+    assert group.group_id in pack.complete_group_ids
+    assert {item.chunk_id for item in pack.evidence} == {
+        first.hydrated.chunk.chunk_id,
+        member.hydrated.chunk.chunk_id,
+    }
+
+
 def test_later_complete_group_keeps_its_source_spans() -> None:
     """多个完整组同时入包时，末组仍须包含行内的全部事实。"""
     groups: list[GroupCandidate] = []
