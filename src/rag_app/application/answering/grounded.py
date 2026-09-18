@@ -2702,6 +2702,22 @@ def _safe_extractive_fallback(  # noqa: PLR0912, PLR0915
         selected = _fallback_table_row(plan, grouped)
     if not selected and multi_part:
         selected = _fallback_source_node(plan, evidence, related)
+        # 段落片段若属于已闭合的列表或流程，展示同组后续步骤。
+        # 只沿当前选中片段的组扩展，避免借用别的文档的相似流程。
+        source_groups = {
+            group_id
+            for item, _ in selected
+            if (group_id := dict(item.metadata).get("evidence_group_id"))
+            and dict(item.metadata).get("evidence_group_type")
+            in {"LIST_GROUP", "PROCEDURE_GROUP"}
+        }
+        for group_id in source_groups:
+            members = grouped.get(group_id, ())
+            if len({item.support_id for item, _ in members}) > len(
+                {item.support_id for item, _ in selected}
+            ):
+                selected = list(members)
+                break
     if not selected and grouped:
         ranked_groups = sorted(
             grouped.items(),

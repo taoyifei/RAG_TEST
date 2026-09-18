@@ -608,6 +608,56 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
         for keys in member_keys_by_atom.values():
             if item_key in keys:
                 keys.add(sibling_key)
+    # 同一原文段落可能跨多个 canonical Chunk。沿 node_id 补齐有界片段，
+    # 让原句的后半段进入生成包，同时保持每段独立的 SourceSpan 和引用。
+    node_spans: dict[
+        tuple[str, str], list[tuple[RankedChunk, SourceSpan, str]]
+    ] = defaultdict(list)
+    for candidate in candidate_by_id.values():
+        chunk = candidate.hydrated.chunk
+        if chunk.role not in {ChunkRole.TEXT, ChunkRole.LIST}:
+            continue
+        for span in chunk.source_spans:
+            if not span.is_citable or span.is_repeated or not span.node_id:
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if quote.strip():
+                node_key = (chunk.version.document_version_id, span.node_id)
+                node_spans[node_key].append((candidate, span, quote))
+    for item in (*root_evidence, *atom_evidence):
+        node_ids = {span.node_id for span in item.source_spans}
+        if len(node_ids) != 1 or None in node_ids:
+            continue
+        item_key = _identity(item)
+        node_id = next(iter(node_ids))
+        same_node = node_spans.get(
+            (item.document_version_id or "", node_id), ()
+        )
+        for candidate, span, quote in sorted(
+            same_node,
+            key=lambda row: (
+                row[1].source_anchor.ordinal
+                if row[1].source_anchor is not None
+                else 2**31,
+                row[1].source_start_char or 0,
+                row[0].fusion_rank,
+            ),
+        )[: policy.group_member_chunk_limit]:
+            sibling = _evidence_item(candidate, span, quote, item.support_id)
+            sibling_key = _identity(sibling)
+            if sibling_key == item_key:
+                continue
+            candidates.setdefault(sibling_key, sibling)
+            sibling_keys_by_parent[item_key].add(sibling_key)
+            if item_key in root_keys:
+                root_keys.add(sibling_key)
+            if item_key in atom_keys:
+                atom_keys.add(sibling_key)
+            for keys in member_keys_by_atom.values():
+                if item_key in keys:
+                    keys.add(sibling_key)
     linked_ids_by_chunk: dict[str, set[str]] = defaultdict(set)
     root_chunk_ids: set[str] = set()
     for link in links:

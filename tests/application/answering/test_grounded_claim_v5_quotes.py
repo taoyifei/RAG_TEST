@@ -419,6 +419,51 @@ def test_fallback_rejoins_one_source_paragraph_across_chunks() -> None:
     assert "财务岗审核入账" in result[0]
 
 
+def test_fallback_extends_selected_paragraph_to_complete_list() -> None:
+    """段落命中完整流程组时，回退摘录保留同组后续阶段。"""
+    evidence = _evidence(
+        "立项申报阶段，提交项目目标和实施计划，",
+        "并附上相关材料。",
+        "立项审核阶段，审查材料完整性。",
+        "立项决策阶段，提交会议审议。",
+    )
+    node_id = evidence[0].source_spans[0].node_id
+    grouped: list[EvidenceItem] = []
+    for index, item in enumerate(evidence):
+        spans = item.source_spans
+        if index < 2:
+            spans = tuple(
+                span.model_copy(update={"node_id": node_id})
+                for span in spans
+            )
+        grouped.append(
+            item.model_copy(
+                update={
+                    "source_spans": spans,
+                    "metadata": freeze_json_object(
+                        {
+                            **dict(item.metadata),
+                            "evidence_group_id": "egrp_stages",
+                            "evidence_group_type": "LIST_GROUP",
+                            "group_complete": True,
+                        }
+                    ),
+                }
+            )
+        )
+    plan = _plan("立项", "材料和步骤", shape=AtomAnswerShape.PROCEDURE)
+    result = _safe_extractive_fallback(
+        plan,
+        tuple(grouped),
+        {"A1": tuple(item.support_id for item in grouped)},
+        ("egrp_stages",),
+    )
+
+    assert result is not None
+    assert len(result[1]) == 4
+    assert "立项决策阶段" in result[0]
+
+
 def test_one_accepted_atom_keeps_limited_answer_for_unanswered_atom() -> None:
     evidence = _evidence("甲部门保存记录 14 天。", "乙部门审核记录 3 天。")
     by_text = {item.citation_text: item.support_id for item in evidence}

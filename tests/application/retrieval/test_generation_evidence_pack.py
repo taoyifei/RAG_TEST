@@ -213,6 +213,61 @@ def test_ordinary_chunk_keeps_adjacent_source_paragraph() -> None:
     assert {item.citation_text for item in pack.evidence} == {first, second}
 
 
+def test_source_node_closure_keeps_cross_chunk_continuation() -> None:
+    """原文段落跨块时，不能只把逗号前的片段交给生成器。"""
+    texts = (
+        "研发人员记录项目工时，",
+        "人力资源岗按工时归集人工成本，",
+        "财务岗审核入账。",
+    )
+    candidates: list[RankedChunk] = []
+    offset = 0
+    for number, text in enumerate(texts, start=1):
+        candidate = make_ranked_chunk(number, text)
+        span = candidate.hydrated.chunk.source_spans[0]
+        anchor = span.source_anchor
+        assert anchor is not None
+        adjusted = span.model_copy(
+            update={
+                "node_id": f"node_{1:032x}",
+                "source_anchor": anchor.model_copy(update={"ordinal": 1}),
+                "source_start_char": offset,
+                "source_end_char": offset + len(text),
+            }
+        )
+        candidates.append(
+            candidate.model_copy(
+                update={
+                    "hydrated": candidate.hydrated.model_copy(
+                        update={
+                            "chunk": candidate.hydrated.chunk.model_copy(
+                                update={"source_spans": (adjusted,)}
+                            )
+                        }
+                    )
+                }
+            )
+        )
+        offset += len(text)
+    first = candidates[0]
+    evidence = _evidence_item(
+        first, first.hydrated.chunk.source_spans[0], texts[0], "S1"
+    )
+    atom = QueryAtom(
+        atom_id="A1",
+        target="研发人工成本核算",
+        relation="参与步骤",
+        answer_shape=AtomAnswerShape.PROCEDURE,
+    )
+
+    pack = _pack(_plan(atom), tuple(candidates), root=(evidence,))
+
+    assert {item.citation_text for item in pack.evidence} == set(texts)
+    assert pack.per_atom_candidate_support_ids == (
+        ("A1", tuple(item.support_id for item in pack.evidence)),
+    )
+
+
 def test_explicit_source_mismatch_is_hard_rejected() -> None:
     candidate, evidence = _item(1, "检修记录应在三天内归档。")
     atom = QueryAtom(
