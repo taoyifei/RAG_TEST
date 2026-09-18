@@ -1,5 +1,14 @@
 # WB08R-03 阶段问题记录（2026-09-17）
 
+## 2026-09-18 候选 `8337bdb` 复核与停止点
+
+- 本轮代码提交为 `8337bdbc73c721744cf63e36127925bf7064beb6`。将 Atom 支持绑定到可引用的 SourceSpan，给表格行名、列头和值建立同文档、同版本、同表的交点证明，并让 Claim 校验核对完整引用组合；没有引入题目答案表或放宽数字、否定和引用校验。相关定向测试 `226 passed`，Ruff 与 `git diff --check` 通过。生产代码硬编码扫描未发现本轮评测题号、题目全文或指定业务词。
+- 独立 8289 候选镜像 ID 为 `sha256:860e24fdb168ad7e77b608d92d442bb9666fb8e878ab83033a280f316b3989b3`；容器 `SOURCE_REVISION` 与代码提交一致，378 个运行时 Python 文件的树摘要为 `19934ac62ea20295fc589f68ff327d8aa616a3b7fce4ba34c2c884f1ba187bc0`，与 Git 归档一致。8289 `/live` 返回 200；18288 仅做只读健康检查，返回 200，未替换其镜像或服务。
+- 精确候选 Planner-24 首轮 runner 误将 `/data/product-traces.sqlite3` 指为 Trace DB，使公开结果误报 24 个 `TRACE_READ_FAILED`。正确 Trace DB 是 `/data/universal-rag.sqlite3`；对**同一批 24 个 trace_id** 重新审计，没有重发用户请求。修正后的安全结果在 60 服务器 `/tmp/wb08r03r2-eval/evaluation/wanshitong/v2/results/wb08r03r2-planner24-8337bdb-reaudited.ndjson`，正文留在私有文件，均未提交。重审结果为 24/24 Trace 合同通过、Planner 失败类 0；Formal 6 与 Natural 18 **全部** `INSUFFICIENT_EVIDENCE`，可发布 Atom 支持和 accepted Claim 均为 0。Formal 总时延 p50/p95 为 5.213/6.163 秒，Natural 为 4.992/7.948 秒；全拒答时延不能代表正常生成时延。
+- 原因不能概括为“正确答案全被复杂校验卡住”。有些 Atom 的局部候选为 0，属于检索或上下文目标未接通；有候选的 Atom 中，一部分只具有主题相关性，尚未证明目标关系；另一些已形成直接支持，却仍被 Group 归属和关系发布门拒绝。诊断样本 F015 两个 Atom 的局部候选各 12 个，直接支持分别为 3 和 0，但可发布支持仍为 0、未进入 Generation。不能断言 24 题都已有正确答案；也不能通过关闭门禁把相关证据当成正确答案。
+- S5 证据归属与支持发布的真实功能 Gate 仍失败。Context-12 冻结输入及来源真值不完整；Evidence-Ownership-12 的直接支持样本失败；Ownership-16、Claims-16、AnswerShape-12、当前 SHA 的 Terminal-12 和 Full-96 未运行或不报通过。阶段保持 `PAUSED`，`merge_allowed=false`。用户要求解决不了就记录并推送，因此停止继续逐点修改支持门；下一轮应先统一 Atom 的检索目标、SourceSpan 证明、Group 归属和发布合同，并用真实来源跨度逐项验证。
+- **根因与规格边界**：当前只能定位跨层合同断点，尚不能判定是 Planner 目标、局部召回、Group 组装、关系校验中的单一缺陷，也不能断言全部正确答案已在候选中。最新 Prompt 强调严格逐原子蕴含和不放宽校验，但未给出复杂语义关系通用可执行的判定合同；冻结 Gate 也缺部分逐题来源跨度和 Claim 真值。这些是实现与验收所需的规格空缺，可能是持续误拒的核心原因之一，需要先用真实样本明确“什么证据足以证明该 Atom”，再整体调整主链；在此之前不继续按个案添加规则或声称已解决。
+
 ## WB08R-03R2 对照最新 Prompt 的系统审计（2026-09-18）
 
 本轮以 `399cf2184c4b3f47f6f4b274c4333913f610f1d2` 为阶段起点，先核对 S0～S8 的数据流和真实候选，再成组修改。下表的“代码已改”只说明本地实现及定向测试，不能替代 8289 的真实功能 Gate。
