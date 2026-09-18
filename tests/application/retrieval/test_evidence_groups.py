@@ -128,6 +128,41 @@ def test_table_row_group_keeps_header_row_label_cells_and_coordinates() -> None:
     assert len(group.group.member_source_maps[1].source_spans) == 3
 
 
+def test_table_rows_do_not_exhaust_group_budget_before_later_list() -> None:
+    """较早分区的多行表格不能挤掉排名更高的后续列表组。"""
+    header = _table_row(81, 0, ("事项", "时限"), header=True)
+    rows = tuple(
+        _table_row(
+            82 + index,
+            index + 1,
+            (f"事项{index}", "三日"),
+            header=False,
+        )
+        for index in range(3)
+    )
+    stage = _with_chunk(
+        make_ranked_chunk(
+            85,
+            "立项准备阶段需编制项目材料。",
+            role=ChunkRole.LIST,
+            neighbor_group_id="stage-list",
+        ),
+        heading_path=("项目立项",),
+    ).model_copy(update={"rerank_rank": 1})
+    groups = build_evidence_groups(
+        (header, *rows, stage),
+        max_groups=2,
+        max_member_chunks=8,
+        rerank_text_char_limit=2400,
+    )
+
+    assert len(groups) == 2
+    assert any(
+        stage.hydrated.chunk.chunk_id in group.group.member_chunk_ids
+        for group in groups
+    )
+
+
 def test_split_table_cell_uses_source_offset_before_retrieval_rank() -> None:
     """同一单元格的后半块排名更高时，完整行仍按原文顺序闭合。"""
     header = _table_row(91, 0, ("任务类型", "输入"), header=True)

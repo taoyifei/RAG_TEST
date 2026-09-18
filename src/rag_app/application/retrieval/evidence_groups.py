@@ -141,8 +141,6 @@ def build_evidence_groups(
     ordered = tuple(sorted(bounded, key=_source_order))
     groups: list[GroupCandidate] = []
     for partition in partitions.values():
-        if len(groups) >= max_groups:
-            break
         first = partition[0].hydrated.chunk
         if first.role is ChunkRole.TABLE:
             proposed = _table_groups(
@@ -195,8 +193,12 @@ def build_evidence_groups(
                     )
                     for member in sorted_members
                 )
-        groups.extend(proposed[: max_groups - len(groups)])
-    return tuple(groups)
+        groups.extend(proposed)
+    if len(groups) <= max_groups:
+        return tuple(groups)
+    # 单个表格可拆出许多行组；先构建所有有界输入的组，再按成员排名
+    # 裁剪，避免表格占满构建名额而吞掉后面的同章节列表阶段。
+    return rank_evidence_groups(tuple(groups))[:max_groups]
 
 
 def pack_evidence_groups(
