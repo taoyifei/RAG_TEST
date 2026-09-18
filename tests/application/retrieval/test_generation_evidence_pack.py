@@ -155,6 +155,61 @@ def test_root_candidate_without_atom_provenance_is_available() -> None:
     }
 
 
+def test_ordinary_chunk_keeps_adjacent_source_paragraph() -> None:
+    """同块首选段落提到供应商时，前一段的时限仍可入包。"""
+    first = "发布采购文件到应答截止时间，不得少于3日。"
+    second = "潜在供应商在截止时间前提交应答。"
+    candidate = make_ranked_chunk(1, first + "\n" + second)
+    original = candidate.hydrated.chunk.source_spans[0]
+    assert original.source_anchor is not None
+    earlier = original.model_copy(
+        update={
+            "chunk_end_char": len(first),
+            "source_end_char": len(first),
+            "source_anchor": original.source_anchor.model_copy(
+                update={"source_end_char": len(first)}
+            ),
+        }
+    )
+    later = original.model_copy(
+        update={
+            "node_id": f"node_{2:032x}",
+            "structural_path": ("body", "p:2"),
+            "chunk_start_char": len(first) + 1,
+            "chunk_end_char": len(first) + 1 + len(second),
+            "source_end_char": len(second),
+            "source_anchor": original.source_anchor.model_copy(
+                update={
+                    "structural_path": ("body", "p:2"),
+                    "ordinal": 2,
+                    "paragraph_index": 2,
+                    "source_end_char": len(second),
+                }
+            ),
+        }
+    )
+    candidate = candidate.model_copy(
+        update={
+            "hydrated": candidate.hydrated.model_copy(
+                update={
+                    "chunk": candidate.hydrated.chunk.model_copy(
+                        update={"source_spans": (earlier, later)}
+                    )
+                }
+            )
+        }
+    )
+    evidence = _evidence_item(candidate, later, second, "S1")
+    atom = QueryAtom(
+        atom_id="A1",
+        target="供应商",
+        relation="应答期限",
+        answer_shape=AtomAnswerShape.DURATION,
+    )
+    pack = _pack(_plan(atom), (candidate,), root=(evidence,))
+    assert {item.citation_text for item in pack.evidence} == {first, second}
+
+
 def test_explicit_source_mismatch_is_hard_rejected() -> None:
     candidate, evidence = _item(1, "检修记录应在三天内归档。")
     atom = QueryAtom(

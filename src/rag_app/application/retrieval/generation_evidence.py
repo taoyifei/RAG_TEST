@@ -24,6 +24,7 @@ from rag_app.core.models import (
     RankedChunk,
     RetrievalPolicy,
     SearchRequest,
+    SourceSpan,
 )
 from rag_app.core.models.common import freeze_json_object
 from rag_app.core.models.query_plan import (
@@ -537,6 +538,59 @@ def build_generation_evidence_pack(  # noqa: PLR0912, PLR0913, PLR0915
             and dict(item.metadata).get("evidence_group_id")
         ):
             candidates[key] = item
+    # 普通 Chunk 可能把两个相邻段落装在一起。原有 span 选择受每 Chunk
+    # 配额约束；给已入选的段落补一个最近的独立来源节点，避免漏掉同块的时限。
+    for item in (*root_evidence, *atom_evidence):
+        item_key = _identity(item)
+        candidate = candidate_by_id.get(item.chunk_id)
+        if candidate is None or candidate.hydrated.chunk.role.value != "text":
+            continue
+        chunk = candidate.hydrated.chunk
+        owned_nodes = {span.node_id for span in item.source_spans}
+        alternatives: dict[str, tuple[SourceSpan, str]] = {}
+        for span in chunk.source_spans:
+            if (
+                not span.is_citable
+                or not span.node_id
+                or span.node_id in owned_nodes
+            ):
+                continue
+            quote = chunk.citation_text[
+                span.chunk_start_char : span.chunk_end_char
+            ]
+            if not quote.strip():
+                continue
+            previous = alternatives.get(span.node_id)
+            if previous is None or len(quote) > len(previous[1]):
+                alternatives[span.node_id] = (span, quote)
+        if not alternatives:
+            continue
+        source_order = _source_order(item)
+        sibling_span, sibling_quote = min(
+            alternatives.values(),
+            key=lambda pair: (
+                abs(pair[0].source_anchor.ordinal - source_order)
+                if (
+                    pair[0].source_anchor is not None
+                    and source_order is not None
+                )
+                else 2**31 - 1,
+                -len(pair[1]),
+                pair[0].chunk_start_char,
+            ),
+        )
+        sibling = _evidence_item(
+            candidate, sibling_span, sibling_quote, item.support_id
+        )
+        sibling_key = _identity(sibling)
+        candidates.setdefault(sibling_key, sibling)
+        if item_key in root_keys:
+            root_keys.add(sibling_key)
+        if item_key in atom_keys:
+            atom_keys.add(sibling_key)
+        for keys in member_keys_by_atom.values():
+            if item_key in keys:
+                keys.add(sibling_key)
     linked_ids_by_chunk: dict[str, set[str]] = defaultdict(set)
     root_chunk_ids: set[str] = set()
     for link in links:
