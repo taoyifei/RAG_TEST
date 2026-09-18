@@ -229,7 +229,7 @@ class ProductModelSettings:
             "prompt": "grounded-chat-v9",
             "interpret": "adaptive-plan-v1",
             "rewrite": "bounded-rewrite-v3",
-            "validation": "claim-support-v17",
+            "validation": "claim-support-v18",
             "answer_selection": "shared-query-semantics-v12",
             "generation_output": "grounded-output-4096-v1",
         }

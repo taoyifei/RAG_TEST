@@ -200,6 +200,47 @@ def test_pack_expands_selected_fragment_to_full_source_sentence() -> None:
     assert outcome.answer == f"{source} [S1]"
 
 
+def test_one_verified_sentence_covers_each_supported_scalar_atom() -> None:
+    source = "各指标牵头部门负责制定考核标准、考核分数和考核频次。"
+    evidence = _evidence(source)
+    plan = _plan("考核标准", "考核分数和频次")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", "考核分数和考核频次", "A2", "S1", "考核分数和考核频次"),),
+        plan,
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
+    )
+
+    assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "SUPPORTED"))
+    assert outcome.answer == f"{source} [S1]"
+    assert outcome.accepted_claim_count == 1
+
+
+def test_shared_sentence_does_not_cover_unrelated_scalar_atom() -> None:
+    source = "甲部门负责保存研发记录。"
+    evidence = _evidence(source)
+    plan = _plan("甲部门保存记录", "乙部门审批采购")
+    generator = Mock()
+    generator.generate.return_value = _draft(
+        (_claim("C1", source, "A1", "S1"),), plan
+    )
+
+    outcome = _answer_with_pack(
+        generator,
+        plan,
+        evidence,
+        ((AtomStatus.MISSING, ()), (AtomStatus.MISSING, ())),
+    )
+
+    assert outcome.atom_coverage == (("A1", "SUPPORTED"), ("A2", "MISSING"))
+
+
 def test_yes_no_answer_uses_source_about_asked_action() -> None:
     """同主题的交付句不能替代问题所问的重新启动规则。"""
     evidence = _evidence(

@@ -2310,6 +2310,56 @@ class GroundedAnsweringService:
             except ValueError:
                 reason = "GENERATION_OUTPUT_INVALID"
 
+        if generation_evidence_pack is not None and len(query_plan.atoms) > 1:
+            # 同一条已核验的原句可回答多个标量子问；逐 Atom 重新核验后
+            # 才扩展覆盖，不要求模型重复输出相同句子。
+            scalar_shapes = {
+                AtomAnswerShape.FACT,
+                AtomAnswerShape.DURATION,
+                AtomAnswerShape.COUNT,
+                AtomAnswerShape.RESPONSIBLE_PARTY,
+                AtomAnswerShape.DEFINITION,
+            }
+            for atom in query_plan.atoms:
+                if (
+                    atom.answer_shape not in scalar_shapes
+                    or any(atom.atom_id in item.atom_ids for item in accepted)
+                ):
+                    continue
+                linked = set(linked_ids.get(atom.atom_id, ()))
+                for index, item in enumerate(accepted):
+                    if (
+                        not all(
+                            support.support_id in linked
+                            for support in item.claim.supports
+                        )
+                        or len(
+                            _terms(atom.search_text) & _terms(item.claim.text)
+                        )
+                        < _FALLBACK_MIN_BIGRAM_OVERLAP
+                    ):
+                        continue
+                    try:
+                        _validated_natural_claim(
+                            NaturalClaim(
+                                atom_id=atom.atom_id,
+                                text=item.claim.text,
+                                supports=item.claim.supports,
+                            ),
+                            query_plan,
+                            atom_support_matrix,
+                            evidence,
+                            analysis,
+                        )
+                    except (ValidationFailed, ValueError):
+                        continue
+                    accepted[index] = ValidatedNaturalClaim(
+                        claim_id=item.claim_id,
+                        atom_ids=(*item.atom_ids, atom.atom_id),
+                        claim=item.claim,
+                    )
+                    break
+
         accepted_claims = tuple(item.claim for item in accepted)
         try:
             verification_calls, verification_states = (
@@ -3596,13 +3646,17 @@ def _source_faithful_claim(
     claim: AnswerClaim, units: tuple[EvidenceItem, ...]
 ) -> AnswerClaim:
     """发布被引用的完整原句，避免模型只回显问题或裁掉事实主体。"""
-    excerpts = tuple(
-        dict.fromkeys(
-            _complete_source_sentence(item.citation_text, support.quote)
-            for support, item in zip(claim.supports, units, strict=True)
+    supports = tuple(
+        ClaimSupport(
+            support_id=support.support_id,
+            quote=_complete_source_sentence(item.citation_text, support.quote),
         )
+        for support, item in zip(claim.supports, units, strict=True)
     )
-    return claim.model_copy(update={"text": "\n".join(excerpts)})
+    excerpts = tuple(dict.fromkeys(support.quote for support in supports))
+    return claim.model_copy(
+        update={"text": "\n".join(excerpts), "supports": supports}
+    )
 
 
 def _validated_natural_claim(
